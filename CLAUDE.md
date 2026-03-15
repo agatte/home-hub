@@ -4,88 +4,102 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Home Hub — a unified local web app that controls Philips Hue lights and a Sonos Era 100 speaker, with a game-day mode (Phase 2) that will show a retro pixel-art football field during Colts games with dynamic light celebrations and TTS announcements.
+Home Hub is a unified home automation dashboard controlling Philips Hue lights and a Sonos Era 100 speaker. It runs as a single FastAPI server that also serves the React frontend. The system includes intelligent lighting automation based on time of day and PC activity detection, a morning routine with weather/traffic TTS, native Hue bridge scene/effect support, and a planned game-day mode for Colts games with dynamic light celebrations.
 
-## Architecture
-
-```
-Browser / Android Tablet (kiosk)
-        |  WebSocket + REST
-        v
-   FastAPI Backend (port 8000)
-   ├── HueService ──> Hue Bridge (192.168.1.50, phue2 library)
-   ├── SonosService ──> Sonos Era 100 (SoCo library, UPnP :1400)
-   ├── TTSService ──> edge-tts generates MP3 ──> Sonos plays URL
-   ├── SQLite (scenes, settings, play tracking)
-   └── Serves React static build from frontend/dist/
-```
-
-Single command to start: `cd home-hub && python run.py` (or `venv/Scripts/python run.py`)
-
-## Tech Stack
-
-- **Backend**: FastAPI + Uvicorn (async), Python 3.13
-- **Frontend**: React 18 + Vite
-- **Hue**: phue2 package (imports as `from phue import Bridge`)
-- **Sonos**: SoCo package (zero-auth local UPnP)
-- **TTS**: edge-tts (free Microsoft voices), fallback gTTS
-- **Database**: SQLite via aiosqlite + SQLAlchemy async
-- **Config**: pydantic-settings reading `.env`
-
-## Running Locally
+## Commands
 
 ```bash
-cd home-hub
+# Start the server
+python run.py
+
+# Start with uvicorn directly
+python -c "import uvicorn; uvicorn.run('backend.main:app', host='0.0.0.0', port=8000)"
+
+# PC activity detector (separate terminal)
+python -m backend.services.pc_agent.activity_detector
+
+# Ambient noise monitor (separate terminal, requires Blue Yeti + PyAudio)
+python -m backend.services.pc_agent.ambient_monitor
+
+# Frontend dev server (hot reload, proxies API to :8000)
+cd frontend && npm run dev
+
+# Build frontend (outputs to frontend/dist/, served by FastAPI)
+cd frontend && npm run build
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Install frontend dependencies
+cd frontend && npm install
 
 # First time setup
 python -m venv venv
 venv/Scripts/pip install -r requirements.txt
 cp .env.example .env  # Edit with your values
-
-# Start server
-venv/Scripts/python run.py
-# or with venv activated:
-python run.py
+cd frontend && npm install && npm run build
 ```
 
-Server runs at http://localhost:8000. Frontend dev server (with HMR): `cd frontend && npm run dev` on port 3000 (proxies API to 8000).
+Server runs at http://localhost:8000. Frontend dev server: `cd frontend && npm run dev` on port 3000 (proxies API to 8000).
 
-## Key Endpoints
+## Architecture
 
-- `GET /health` — device connectivity status
-- `GET /api/lights` — all light states
-- `PUT /api/lights/{id}` — set light state (on, bri, hue, sat)
-- `POST /api/lights/all` — set all lights at once
-- `GET /api/scenes` — list scene presets
-- `POST /api/scenes/{name}/activate` — activate a scene
-- `GET /api/sonos/status` — now playing info
-- `POST /api/sonos/play|pause|next|previous` — playback control
-- `POST /api/sonos/volume` — set volume `{"volume": 50}`
-- `POST /api/sonos/tts` — speak text `{"text": "Hello", "volume": 80}`
-- `ws://localhost:8000/ws` — real-time state sync
+```
+Browser / Android Tablet (kiosk) / Phone (PWA)
+        |  WebSocket + REST
+        v
+   FastAPI Backend (port 8000)
+   ├── HueService (v1/phue2) ──> Hue Bridge (basic light control, 1s polling)
+   ├── HueV2Service (CLIP API) ──> Hue Bridge (native scenes, dynamic effects)
+   ├── SonosService (SoCo) ──> Sonos Era 100 (UPnP, zero-auth)
+   ├── TTSService ──> edge-tts generates MP3 ──> Sonos plays URL
+   ├── AutomationEngine ──> time + activity → light state
+   ├── Scheduler ──> morning routine (weather + traffic TTS)
+   ├── SQLite (aiosqlite + SQLAlchemy async)
+   └── Serves React static build from frontend/dist/
+```
 
-## WebSocket Protocol
+### Backend (FastAPI + async)
 
-Server pushes `light_update`, `sonos_update`, `connection_status` events. Clients send `light_command`, `sonos_command` messages. All JSON with `type` + `data` fields.
+- **`backend/main.py`** — App lifespan initializes all services, registers routes, starts background tasks (Hue polling, Sonos polling, automation loop, scheduler). WebSocket endpoint at `/ws` handles bidirectional light/sonos commands and broadcasts state changes.
+- **Two Hue APIs**: `hue_service.py` (v1/phue2) for basic light control + polling; `hue_v2_service.py` (CLIP API v2/httpx) for native scenes and dynamic effects. Both talk to the same bridge. v2 uses UUIDs, v1 uses integers — a mapping cache bridges them.
+- **`automation_engine.py`** — Background loop (60s interval) applies time-based lighting rules. Accepts activity reports from PC agent and ambient monitor. Manual overrides from dashboard have 4-hour auto-timeout.
+- **`scheduler.py`** — Async cron scheduler (no external deps). Drives the morning routine at 6:40 AM weekdays.
+- **`morning_routine.py`** — Fetches weather (OpenWeatherMap) + traffic (Google Maps Directions), generates TTS, plays on Sonos.
+- **`pc_agent/`** — Standalone scripts that POST mode changes to `/api/automation/activity`. `activity_detector.py` uses psutil for game/media process detection. `ambient_monitor.py` uses PyAudio for Blue Yeti mic RMS measurement (party detection).
 
-## Project Structure
+### Frontend (React 18 + Vite)
 
-All application code lives in `home-hub/`:
-- `backend/services/` — device control (hue_service, sonos_service, tts_service)
-- `backend/api/routes/` — REST endpoints
-- `backend/api/schemas/` — Pydantic request/response models
-- `frontend/src/` — React app (pages, components, hooks, context)
-- `backend/api/routes/scenes.py` — `SCENE_PRESETS` dict defines built-in scenes
+- **`context/HubContext.jsx`** — Single context provider manages all state (lights, sonos, automation mode). WebSocket connection handles real-time updates. Exposes `setLight`, `sonosCommand`, `activateScene`, `setManualMode`.
+- **`pages/Home.jsx`** — Main dashboard: Mode indicator/override → Lights grid → Scene presets → Native Hue scenes → Effects → Sonos player → Routines.
+- **`components/lights/NativeSceneGrid.jsx`** — Fetches bridge scenes (deduplicated by name across rooms) and dynamic effects. Clicking a scene activates it in all rooms.
+- Built frontend is served by FastAPI via `/{path:path}` catch-all (must come after API routes).
+
+### WebSocket Protocol
+
+Server pushes `light_update`, `sonos_update`, `connection_status`, `mode_update` events. Clients send `light_command`, `sonos_command` messages. All JSON with `type` + `data` fields.
+
+### Key Patterns
+
+- **Optimistic updates**: Light commands update local state immediately, then send via WebSocket.
+- **Polling + WebSocket hybrid**: Hue polled every 1s, Sonos every 2s. Changes detected by polling are broadcast to all WebSocket clients. This catches external changes (Alexa, Hue app).
+- **API route prefix**: All REST endpoints use `/api/` prefix. Health is at `/health` (no prefix).
+- **Scene routing**: `POST /api/scenes/{id}/activate` checks if ID is a preset name or UUID, routes to v1 or v2 API accordingly.
+- **Config**: All settings via `pydantic-settings` loading from `.env`. See `.env.example`.
 
 ## Important Notes
 
-- phue2 pip package imports as `from phue import Bridge` (not `from phue2`)
-- `.env` contains all secrets (Hue username, bridge IP) — never committed (public repo)
-- Sonos auto-discovers via SSDP; override with `SONOS_IP` in `.env`
-- TTS generates MP3 in `backend/static/tts/`, served at `http://{LOCAL_IP}:8000/static/tts/`, Sonos fetches it. `LOCAL_IP` must be the PC's LAN IP (not localhost).
-- Frontend build (`npm run build` in `frontend/`) outputs to `frontend/dist/`, served by FastAPI catch-all route
-- Hue bridge first-time pairing requires pressing the physical bridge button
+- The Hue bridge uses a self-signed SSL cert — httpx calls use `verify=False`.
+- `phue2` pip package imports as `from phue import Bridge` (not `from phue2`).
+- Sonos TTS requires the server's LAN IP (`LOCAL_IP` in .env) because Sonos fetches the MP3 from the server.
+- Sonos auto-discovers via SSDP; override with `SONOS_IP` in `.env`.
+- The `/{path:path}` frontend catch-all in main.py MUST be registered after all API routes.
+- PC agent scripts are standalone processes, not part of the FastAPI server — they communicate via HTTP POST.
+- Timezone is `America/Indiana/Indianapolis` (Indiana has unique DST rules).
+- `aiosqlite` is required at runtime for SQLAlchemy async SQLite.
+- Hue bridge first-time pairing requires pressing the physical bridge button.
 
-## Phase 2 (Not Yet Built)
+## Future Phases
 
-Game-day mode: local ESPN API poller replaces the old Lambda+ngrok+DynamoDB system. Celebration orchestration (lights + TTS) for touchdowns, sacks, INTs, etc. Retro pixel-art football field UI.
+- **Game Day Engine** (Phase 2, ~August pre-season): ESPN API polling, play detection (touchdown, field goal, big play), celebration orchestration (lights + TTS), GameDay.jsx live scoreboard.
+- **Pixel Art Field** (Phase 3): PixiJS/Canvas retro football field with animated sprites showing plays.

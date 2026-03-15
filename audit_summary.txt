@@ -3,8 +3,8 @@
                         Updated: 2026-03-15
 ================================================================================
 
-PROJECT PATH: C:\Users\antho\Desktop\ColtsTouchdown\home-hub\
-ENTRY POINT:  cd home-hub && python run.py
+PROJECT PATH: C:\Users\antho\Desktop\home-hub\
+ENTRY POINT:  python run.py
 SERVER URL:   http://localhost:8000 (LAN: http://192.168.1.30:8000)
 GITHUB REPO:  https://github.com/agatte/home-hub (pushed to master)
 
@@ -295,10 +295,12 @@ TECH STACK
 FILE STRUCTURE
 ================================================================================
 
-  home-hub/
+  home-hub/                                (repo root)
   ├── run.py
   ├── .env / .env.example
   ├── requirements.txt
+  ├── CLAUDE.md
+  ├── audit_summary.txt
   ├── backend/
   │   ├── main.py                         # FastAPI app, lifespan, WebSocket
   │   ├── config.py                       # Pydantic Settings (all .env vars)
@@ -385,18 +387,18 @@ HOW TO RUN
 ================================================================================
 
   Server:
-    cd home-hub && python run.py
+    python run.py
 
   PC Activity Detector (separate terminal):
-    cd home-hub && python -m backend.services.pc_agent.activity_detector
+    python -m backend.services.pc_agent.activity_detector
 
   Ambient Monitor (separate terminal, requires Blue Yeti):
-    cd home-hub && python -m backend.services.pc_agent.ambient_monitor
+    python -m backend.services.pc_agent.ambient_monitor
 
   Frontend dev mode:
-    cd home-hub/frontend && npm run dev
+    cd frontend && npm run dev
 
   Build frontend:
-    cd home-hub/frontend && npm run build
+    cd frontend && npm run build
 
 ================================================================================
