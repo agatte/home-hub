@@ -1,0 +1,42 @@
+"""
+Health check endpoint.
+"""
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+
+@router.get("/health")
+async def health_check(request: Request) -> dict:
+    """
+    Returns service status for all connected devices.
+
+    Useful for monitoring and debugging connectivity issues.
+    """
+    app = request.app
+
+    hue_connected = False
+    sonos_connected = False
+
+    if hasattr(app.state, "hue"):
+        hue_connected = app.state.hue.connected
+
+    if hasattr(app.state, "sonos"):
+        sonos_connected = app.state.sonos.connected
+
+    ws_count = 0
+    if hasattr(app.state, "ws_manager"):
+        ws_count = app.state.ws_manager.connection_count
+
+    return {
+        "status": "healthy",
+        "service": "Home Hub",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "devices": {
+            "hue_bridge": hue_connected,
+            "sonos": sonos_connected,
+        },
+        "websocket_clients": ws_count,
+    }
