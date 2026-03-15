@@ -1,0 +1,402 @@
+================================================================================
+                        HOME HUB — AUDIT SUMMARY
+                        Updated: 2026-03-15
+================================================================================
+
+PROJECT PATH: C:\Users\antho\Desktop\ColtsTouchdown\home-hub\
+ENTRY POINT:  cd home-hub && python run.py
+SERVER URL:   http://localhost:8000 (LAN: http://192.168.1.30:8000)
+GITHUB REPO:  https://github.com/agatte/home-hub (pushed to master)
+
+================================================================================
+WHAT WAS BUILT
+================================================================================
+
+PHASE 1 — HOME HUB FOUNDATION (Complete)
+─────────────────────────────────────────
+  ✅ FastAPI backend with async lifespan
+  ✅ WebSocket real-time state sync (/ws endpoint)
+  ✅ Hue v1 light control (phue2): on/off, brightness, color, 1s polling
+  ✅ Sonos control (SoCo): play/pause/skip/volume, 2s polling, now-playing
+  ✅ TTS (edge-tts → MP3 → Sonos play_uri with duck-and-resume)
+  ✅ 7 built-in scene presets
+  ✅ React 18 + Vite dark theme dashboard
+  ✅ SQLite database, Pydantic Settings, structured logging
+  ✅ Verified: all 4 lights, Sonos TTS, desktop + phone
+
+PHASE 1.5 — SMART AUTOMATION (Just Built)
+──────────────────────────────────────────
+
+  BACKEND:
+  ✅ Hue CLIP API v2 service (hue_v2_service.py)
+     - Direct HTTPS calls to bridge for native scene management
+     - Native scenes visible to Alexa and Hue app
+     - Dynamic effects: candlelight, fireplace, sparkle, prism, glisten, opal
+     - v1↔v2 light ID mapping cache
+     - GET /api/scenes now returns both presets AND native bridge scenes
+     - POST /api/scenes/effects/{name} activates dynamic effects
+     - POST /api/scenes/effects/{name}/light/{id} per-light effects
+
+  ✅ Automation engine (automation_engine.py)
+     - Time-based light rules:
+       6-8am: gradual warm→daylight ramp (interpolated)
+       8am-6pm: daylight
+       6-9pm: warm evening
+       9pm-midnight: dim warm
+       midnight+: ultra dim
+     - Activity overrides: gaming, working, watching, social, relax, movie
+     - Manual override from dashboard (4-hour auto-timeout)
+     - Alexa coexistence: detects external "all off" (geofence), won't override
+     - WebSocket broadcasts mode_update to all clients
+     - Background loop checks every 60 seconds
+
+  ✅ PC activity detector (pc_agent/activity_detector.py)
+     - Standalone script, runs alongside server
+     - psutil process detection every 15 seconds
+     - Gaming: LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes
+     - No Discord dependency (user uses in-game voice chat)
+     - Watching: VLC, Plex, media players
+     - Working: browser late at night
+     - Away: Win32 GetLastInputInfo idle >10 min
+     - Reports mode changes only to /api/automation/activity
+
+  ✅ Ambient noise monitor (pc_agent/ambient_monitor.py)
+     - Blue Yeti microphone via PyAudio
+     - Measures RMS volume only — never records or saves audio
+     - Party detection: sustained noise >2 min + no game running = "social"
+     - No false positives during gaming (headset isolates audio)
+     - Auto-calibrates noise floor on startup
+     - POST /api/automation/mic/calibrate endpoint
+
+  ✅ Morning routine (morning_routine.py + scheduler.py)
+     - Replaces Alexa 6:40 AM weekday routine
+     - Fetches weather (OpenWeatherMap API)
+     - Fetches commute traffic (Google Maps Directions API)
+     - Generates TTS: "Good morning Anthony. It's 45 degrees..."
+     - Plays on Sonos, triggers morning light ramp
+     - AsyncScheduler: cron-like async scheduling, no external deps
+     - POST /api/routines/morning/test for instant testing
+     - Configurable time/volume via PUT /api/routines/morning/config
+
+  ✅ Music mapper (music_mapper.py)
+     - Maps activity modes to Sonos favorites (Apple Music playlists)
+     - User creates playlists per mood, maps in Home Hub
+     - Auto-play or suggest on mode change
+     - GET /api/sonos/favorites lists available playlists
+     - GET/PUT /api/sonos/music-map for mapping configuration
+
+  ✅ Automation API routes (automation.py + routines.py)
+     - POST /api/automation/activity — receive activity reports
+     - GET /api/automation/status — full engine state
+     - POST /api/automation/override — manual mode from dashboard
+     - GET/PUT /api/automation/config — engine settings
+
+  FRONTEND:
+  ✅ Mode indicator — shows current mode (gaming/working/etc.) with icon + color
+  ✅ Mode override bar — manual mode buttons (Gaming, Working, Movie, etc.)
+  ✅ Native scene grid — Hue bridge scenes + dynamic effect buttons
+  ✅ Routine card — morning routine status, toggle, test button
+  ✅ HubContext extended with automation state + mode_update WebSocket handler
+  ✅ Home page updated with Mode, Lights, Sonos, and Routines sections
+
+  PWA:
+  ✅ manifest.json for "Add to Home Screen" on phone
+  ✅ Service worker (sw.js) for app-like experience
+  ✅ Apple touch icon meta tags
+  ✅ Network-first strategy for API, cache-first for static assets
+
+================================================================================
+WHAT STILL NEEDS TO BE DONE
+================================================================================
+
+MANUAL SETUP (User Action Required)
+────────────────────────────────────
+  ☐ Delete AWS resources (us-east-2 region)
+     - Lambda: ColtsTouchdownDetector
+     - DynamoDB: ColtsScoreTracker
+     - CloudWatch: /aws/lambda/ColtsTouchdownDetector
+
+  ☐ Delete Home Assistant VirtualBox VM
+
+  ☐ Rotate OpenAI API key at platform.openai.com/api-keys
+
+  ✅ API keys configured:
+     - OpenWeatherMap API key in .env
+     - Google Maps Directions API key in .env
+     - HOME_ADDRESS and WORK_ADDRESS in .env
+
+  ☐ Install PyAudio for Blue Yeti mic support:
+     - pip install pyaudio (may need Visual C++ Build Tools on Windows)
+     - If install fails: pip install pipwin && pipwin install pyaudio
+
+  ☐ Set up Tailscale for remote access:
+     - Install on PC: tailscale.com/download/windows
+     - Install on phone: App Store / Play Store
+     - Access Home Hub via Tailscale IP from anywhere
+
+  ☐ Create Apple Music playlists for each mood:
+     - Gaming, Working, Chill/Relax, Party
+     - Add to Sonos favorites in the Sonos app
+     - Map in Home Hub via PUT /api/sonos/music-map
+
+TESTING (Verified 2026-03-15)
+─────────────────────────────
+  ✅ Server starts, health endpoint returns healthy
+  ✅ GET /api/scenes returns 7 presets + 19 native bridge scenes (deduplicated)
+  ✅ Dynamic effects work: candlelight, fireplace, sparkle, prism, glisten, opal
+  ✅ Morning routine test: weather (73°F broken clouds) + traffic (19 min) TTS generated
+  ✅ Manual mode override: Gaming button → lights change to Colts blue, Auto clears
+  ✅ Automation engine running: time-based idle mode active
+  ✅ WebSocket sync: mode changes broadcast to all clients in real-time
+  ✅ Frontend renders all new sections: Mode, Hue Scenes, Effects, Routines
+  ✅ PWA icons generated (192x192, 512x512)
+  ☐ Add to Home Screen on phone → verify PWA launches fullscreen
+  ☐ Run PC agent: python -m backend.services.pc_agent.activity_detector
+  ☐ Open a game → verify "gaming" mode appears on dashboard
+
+NICE-TO-HAVE
+─────────────
+  ☐ Fix Android tablet blank page (deferred)
+  ☐ Custom scene creation/saving via SQLite
+  ☐ Settings page (device status, config, TTS test)
+  ☐ Hue bridge pairing endpoint (/api/lights/pair)
+  ☐ Windows Firewall inbound rule for port 8000
+  ☐ Scene room labels (show which room a bridge scene targets)
+
+PHASE 2: GAME DAY ENGINE (~August, Pre-Season)
+───────────────────────────────────────────────
+  ☐ ESPN API polling service (async, every 5 seconds during games)
+  ☐ Play detection engine (touchdown, field goal, safety, big play)
+  ☐ Player name extraction from play descriptions
+  ☐ Celebration service (lights + TTS per play type)
+  ☐ GameDay.jsx page with live scoreboard
+  ☐ Play-by-play feed + celebration overlay
+
+PHASE 3: PIXEL ART FIELD (Pre-Season)
+──────────────────────────────────────
+  ☐ PixiJS or Canvas retro football field
+  ☐ 32-bit animated player sprites
+  ☐ Ball movement animation showing previous play
+  ☐ Score, time, down & distance display
+
+================================================================================
+API ENDPOINTS (Complete)
+================================================================================
+
+  Core:
+  GET  /health                              — Service status
+  WS   /ws                                  — Real-time state sync
+
+  Lights:
+  GET  /api/lights                          — All lights state
+  GET  /api/lights/{id}                     — Single light state
+  PUT  /api/lights/{id}                     — Update light
+  POST /api/lights/all                      — Update all lights
+
+  Scenes & Effects:
+  GET  /api/scenes                          — Presets + native bridge scenes
+  POST /api/scenes/{id}/activate            — Activate scene (preset or native)
+  GET  /api/scenes/effects                  — List dynamic effects
+  POST /api/scenes/effects/{name}           — Activate effect on all lights
+  POST /api/scenes/effects/{name}/light/{id} — Effect on specific light
+
+  Sonos:
+  GET  /api/sonos/status                    — Now-playing info
+  POST /api/sonos/play|pause|next|previous  — Playback controls
+  POST /api/sonos/volume                    — Set volume
+  POST /api/sonos/tts                       — Text-to-speech
+  GET  /api/sonos/favorites                 — List Sonos favorites
+  POST /api/sonos/favorites/{title}/play    — Play a favorite
+  GET  /api/sonos/music-map                 — Mode→playlist mapping
+  PUT  /api/sonos/music-map                 — Update a mapping
+
+  Automation:
+  POST /api/automation/activity             — Report detected activity
+  GET  /api/automation/activity             — Current mode
+  GET  /api/automation/status               — Full engine state
+  POST /api/automation/override             — Manual mode override
+  POST /api/automation/mic/calibrate        — Calibrate mic baseline
+  GET  /api/automation/config               — Get automation config
+  PUT  /api/automation/config               — Update automation config
+
+  Routines:
+  GET  /api/routines                        — List scheduled routines
+  POST /api/routines/morning/test           — Test morning routine
+  PUT  /api/routines/morning/config         — Update morning config
+  POST /api/routines/morning/toggle         — Enable/disable
+
+================================================================================
+CONFIGURATION REFERENCE
+================================================================================
+
+.env FILE
+─────────
+  APP_ENV=development
+  LOCAL_IP=192.168.1.30
+  HUE_BRIDGE_IP=192.168.1.50
+  HUE_USERNAME=VklWYonFVpyD0eGl9Ot5xJWPrW57TrbwPMKV7TCi
+  TTS_VOICE=en-US-GuyNeural
+  TTS_VOLUME=80
+  LOG_LEVEL=INFO
+  OPENWEATHER_API_KEY=...       (configured)
+  GOOGLE_MAPS_API_KEY=...       (configured)
+  HOME_ADDRESS=...              (configured)
+  WORK_ADDRESS=...              (configured)
+  MORNING_ROUTINE_HOUR=6
+  MORNING_ROUTINE_MINUTE=40
+  MORNING_VOLUME=40
+
+NETWORK DEVICES
+───────────────
+  PC (server):      192.168.1.30
+  Hue Bridge:       192.168.1.50
+  Sonos Era 100:    192.168.1.157 ("Bedroom")
+  Android Tablet:   192.168.1.209
+
+AUTOMATION MODES
+────────────────
+  gaming   — Colts blue, medium brightness (detected: game process running)
+  working  — Cool daylight (detected: browser, late night, no game)
+  watching — Movie night dim warm (detected: media player)
+  social   — Party mode with dynamic effects (detected: sustained ambient noise)
+  relax    — Warm relaxation
+  movie    — Dim warm (manual alias for watching)
+  idle     — Falls through to time-based rules
+  away     — Falls through to time-based (PC idle >10 min)
+
+DYNAMIC EFFECTS (Hue v2 API)
+─────────────────────────────
+  candle   — Warm flickering candle effect
+  fire     — Shifting oranges and reds
+  sparkle  — Random bright flashes
+  prism    — Slow color cycling
+  glisten  — Gentle shimmering glow
+  opal     — Soft pastel transitions
+
+================================================================================
+TECH STACK
+================================================================================
+
+  Backend:      FastAPI + Uvicorn (async)
+  Frontend:     React 18 + Vite (PWA)
+  Database:     SQLite + aiosqlite + SQLAlchemy
+  Hue v1:       phue2 (pip: phue2, import: from phue import Bridge)
+  Hue v2:       httpx direct HTTPS calls to CLIP API v2
+  Sonos:        SoCo (UPnP, zero-auth)
+  TTS:          edge-tts (fallback: gTTS)
+  Config:       pydantic-settings + .env
+  HTTP:         httpx (async)
+  PC Detection: psutil (process monitoring)
+  Ambient:      PyAudio (Blue Yeti mic)
+  Python:       3.13
+  Node:         (for Vite build only)
+
+================================================================================
+FILE STRUCTURE
+================================================================================
+
+  home-hub/
+  ├── run.py
+  ├── .env / .env.example
+  ├── requirements.txt
+  ├── backend/
+  │   ├── main.py                         # FastAPI app, lifespan, WebSocket
+  │   ├── config.py                       # Pydantic Settings (all .env vars)
+  │   ├── database.py                     # SQLite async setup
+  │   ├── models.py                       # SQLAlchemy models
+  │   ├── api/
+  │   │   ├── routes/
+  │   │   │   ├── health.py
+  │   │   │   ├── lights.py
+  │   │   │   ├── scenes.py              # Presets + native scenes + effects
+  │   │   │   ├── sonos.py              # Playback + favorites + music map
+  │   │   │   ├── automation.py         # Activity reports + mode control
+  │   │   │   └── routines.py           # Morning routine control
+  │   │   └── schemas/
+  │   │       ├── lights.py
+  │   │       ├── sonos.py
+  │   │       └── automation.py
+  │   ├── services/
+  │   │   ├── hue_service.py             # v1 API (phue2) — basic control
+  │   │   ├── hue_v2_service.py          # v2 API (CLIP) — scenes + effects
+  │   │   ├── sonos_service.py           # SoCo wrapper + favorites
+  │   │   ├── tts_service.py             # edge-tts → Sonos
+  │   │   ├── websocket_manager.py       # WS broadcast
+  │   │   ├── automation_engine.py       # Time + activity → light state
+  │   │   ├── scheduler.py              # Async cron scheduler
+  │   │   ├── morning_routine.py        # Weather + traffic TTS
+  │   │   ├── music_mapper.py           # Mode → playlist mapping
+  │   │   └── pc_agent/
+  │   │       ├── activity_detector.py  # Process monitoring (standalone)
+  │   │       ├── ambient_monitor.py    # Blue Yeti mic (standalone)
+  │   │       └── game_list.py          # Game/media process lists
+  │   ├── static/tts/
+  │   └── utils/logger.py
+  ├── frontend/
+  │   ├── index.html                     # PWA meta + service worker
+  │   ├── vite.config.js
+  │   ├── package.json
+  │   ├── public/
+  │   │   ├── manifest.json             # PWA manifest
+  │   │   └── sw.js                     # Service worker
+  │   └── src/
+  │       ├── main.jsx
+  │       ├── App.jsx
+  │       ├── index.css
+  │       ├── hooks/useWebSocket.js
+  │       ├── context/HubContext.jsx     # Extended with automation state
+  │       ├── pages/Home.jsx            # Mode + Lights + Sonos + Routines
+  │       └── components/
+  │           ├── lights/
+  │           │   ├── LightCard.jsx, LightGrid.jsx, SceneButton.jsx
+  │           │   └── NativeSceneGrid.jsx  # Bridge scenes + effects
+  │           ├── sonos/SonosCard.jsx
+  │           ├── automation/
+  │           │   ├── ModeIndicator.jsx    # Current mode display
+  │           │   ├── ModeOverrideBar.jsx  # Manual mode buttons
+  │           │   └── RoutineCard.jsx      # Morning routine card
+  │           └── layout/Header.jsx
+  ├── data/                              # SQLite DB (gitignored)
+  └── logs/                              # Log files (gitignored)
+
+================================================================================
+KNOWN ISSUES
+================================================================================
+
+  1. Android tablet blank page (deferred)
+  2. phue2 import quirk: pip package "phue2" installs as module "phue"
+  3. Sonos TTS requires LAN IP (not localhost)
+  4. Hue v2 API uses self-signed HTTPS cert (SSL verify disabled)
+  5. PyAudio may need Visual C++ Build Tools on Windows
+  6. Morning routine requires API keys (OpenWeatherMap + Google Maps)
+
+================================================================================
+ALEXA COEXISTENCE
+================================================================================
+
+  - Alexa geofencing routines (leave/arrive) continue unchanged
+  - Native Hue scenes (via v2 API) are visible to both Alexa and Home Hub
+  - Dashboard auto-syncs when Alexa changes lights (1s polling)
+  - Automation engine respects external "all off" (doesn't fight geofence)
+  - Alexa voice commands work for any native Hue scene
+
+================================================================================
+HOW TO RUN
+================================================================================
+
+  Server:
+    cd home-hub && python run.py
+
+  PC Activity Detector (separate terminal):
+    cd home-hub && python -m backend.services.pc_agent.activity_detector
+
+  Ambient Monitor (separate terminal, requires Blue Yeti):
+    cd home-hub && python -m backend.services.pc_agent.ambient_monitor
+
+  Frontend dev mode:
+    cd home-hub/frontend && npm run dev
+
+  Build frontend:
+    cd home-hub/frontend && npm run build
+
+================================================================================

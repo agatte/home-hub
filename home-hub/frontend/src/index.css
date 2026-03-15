@@ -440,6 +440,200 @@ body {
   z-index: 100;
 }
 
+/* Mode indicator */
+.mode-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.mode-icon {
+  font-size: 24px;
+}
+
+.mode-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.mode-label {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mode-source {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mode-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* Mode override bar */
+.mode-override-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.mode-btn-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.mode-btn-active:hover {
+  background: #3a5ce6;
+  color: white;
+}
+
+.mode-btn-icon {
+  font-size: 14px;
+}
+
+.mode-btn-label {
+  white-space: nowrap;
+}
+
+/* Native scenes & effects */
+.native-scene-section {
+  margin-top: 16px;
+}
+
+.subsection-title {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  margin-top: 12px;
+}
+
+.scene-btn-active {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: white !important;
+}
+
+/* Routine card */
+.routine-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.routine-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.routine-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.routine-icon {
+  font-size: 24px;
+}
+
+.routine-name {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.routine-time {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.routine-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.routine-toggle {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.routine-enabled {
+  background: var(--success);
+  border-color: var(--success);
+  color: white;
+}
+
+.routine-test-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.routine-test-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.routine-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.routine-next {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* Tablet / kiosk optimizations */
 @media (max-width: 768px) {
   .app {

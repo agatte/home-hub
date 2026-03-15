@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Morning routine
+    OPENWEATHER_API_KEY: Optional[str] = None
+    GOOGLE_MAPS_API_KEY: Optional[str] = None
+    HOME_ADDRESS: str = ""
+    WORK_ADDRESS: str = ""
+    MORNING_ROUTINE_HOUR: int = 6
+    MORNING_ROUTINE_MINUTE: int = 40
+    MORNING_VOLUME: int = 40
+    TIMEZONE: str = "America/Indiana/Indianapolis"
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5

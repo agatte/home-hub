@@ -1,29 +1,35 @@
 """
 Home Hub — FastAPI application.
 
-Single backend that controls Hue lights, Sonos speaker, and serves the React frontend.
+Single backend that controls Hue lights, Sonos speaker, runs automation engine,
+and serves the React frontend.
 """
 import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 
-from pathlib import Path
-
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.api.routes.automation import router as automation_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.lights import router as lights_router
+from backend.api.routes.routines import router as routines_router
 from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 from backend.database import init_db
+from backend.services.automation_engine import AutomationEngine
 from backend.services.hue_service import HueService
+from backend.services.hue_v2_service import HueV2Service
+from backend.services.morning_routine import MorningRoutineService
+from backend.services.music_mapper import MusicMapper
+from backend.services.scheduler import AsyncScheduler, ScheduledTask
 from backend.services.sonos_service import SonosService
 from backend.services.tts_service import TTSService
 from backend.services.websocket_manager import WebSocketManager
@@ -45,7 +51,7 @@ async def lifespan(app: FastAPI):
     ws_manager = WebSocketManager()
     app.state.ws_manager = ws_manager
 
-    # Hue Bridge
+    # Hue Bridge (v1 — basic light control)
     hue = HueService(
         bridge_ip=settings.HUE_BRIDGE_IP,
         username=settings.HUE_USERNAME,
@@ -53,6 +59,18 @@ async def lifespan(app: FastAPI):
     await hue.connect()
     app.state.hue = hue
     app_logger.info(f"Hue bridge: {'connected' if hue.connected else 'NOT connected'}")
+
+    # Hue v2 API (native scenes + dynamic effects)
+    hue_v2 = HueV2Service(
+        bridge_ip=settings.HUE_BRIDGE_IP,
+        username=settings.HUE_USERNAME,
+    )
+    if hue.connected:
+        await hue_v2.connect()
+    app.state.hue_v2 = hue_v2
+    app_logger.info(
+        f"Hue v2 API: {'connected' if hue_v2.connected else 'NOT connected'}"
+    )
 
     # Sonos speaker
     sonos = SonosService(sonos_ip=settings.SONOS_IP)
@@ -71,7 +89,39 @@ async def lifespan(app: FastAPI):
     )
     app.state.tts = tts
 
-    # Background tasks for state polling
+    # Automation engine
+    automation = AutomationEngine(hue=hue, hue_v2=hue_v2, ws_manager=ws_manager)
+    app.state.automation = automation
+
+    # Music mapper
+    music_mapper = MusicMapper(sonos_service=sonos)
+    app.state.music_mapper = music_mapper
+
+    # Morning routine
+    morning = MorningRoutineService(
+        tts_service=tts,
+        automation_engine=automation,
+        openweather_key=settings.OPENWEATHER_API_KEY,
+        google_maps_key=settings.GOOGLE_MAPS_API_KEY,
+        home_address=settings.HOME_ADDRESS,
+        work_address=settings.WORK_ADDRESS,
+        morning_volume=settings.MORNING_VOLUME,
+    )
+    app.state.morning_routine = morning
+
+    # Scheduler
+    scheduler = AsyncScheduler()
+    scheduler.add_task(ScheduledTask(
+        name="morning_routine",
+        hour=settings.MORNING_ROUTINE_HOUR,
+        minute=settings.MORNING_ROUTINE_MINUTE,
+        weekdays=[0, 1, 2, 3, 4],  # Monday-Friday
+        callback=morning.execute,
+        enabled=bool(settings.OPENWEATHER_API_KEY),  # Only if API key is set
+    ))
+    app.state.scheduler = scheduler
+
+    # Background tasks
     tasks: list[asyncio.Task] = []
 
     if hue.connected:
@@ -79,6 +129,9 @@ async def lifespan(app: FastAPI):
 
     if sonos.connected:
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
+
+    tasks.append(asyncio.create_task(automation.run_loop()))
+    tasks.append(asyncio.create_task(scheduler.run_loop()))
 
     app_logger.info("Home Hub is ready")
 
@@ -92,12 +145,13 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
+    await hue_v2.close()
 
 
 app = FastAPI(
     title="Home Hub",
-    description="Unified home automation dashboard — Hue lights, Sonos, game day celebrations.",
-    version="1.0.0",
+    description="Unified home automation dashboard — Hue lights, Sonos, smart automation.",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -120,6 +174,8 @@ app.include_router(health_router)
 app.include_router(lights_router)
 app.include_router(scenes_router)
 app.include_router(sonos_router)
+app.include_router(automation_router)
+app.include_router(routines_router)
 
 # Serve React frontend build (must come after API routes)
 if FRONTEND_DIST.exists():
@@ -139,8 +195,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     """
     WebSocket endpoint for real-time state sync.
 
-    Clients receive light_update, sonos_update, connection_status events.
-    Clients can send light_command, sonos_command messages.
+    Clients receive light_update, sonos_update, connection_status,
+    mode_update events. Clients can send light_command, sonos_command messages.
     """
     ws_manager: WebSocketManager = websocket.app.state.ws_manager
 
@@ -149,11 +205,22 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     # Send initial connection status
     hue = websocket.app.state.hue
     sonos = websocket.app.state.sonos
+    automation = websocket.app.state.automation
     await websocket.send_text(json.dumps({
         "type": "connection_status",
         "data": {
             "hue": hue.connected,
             "sonos": sonos.connected,
+        },
+    }))
+
+    # Send current automation mode
+    await websocket.send_text(json.dumps({
+        "type": "mode_update",
+        "data": {
+            "mode": automation.current_mode,
+            "source": automation.mode_source,
+            "manual_override": automation.manual_override,
         },
     }))
 

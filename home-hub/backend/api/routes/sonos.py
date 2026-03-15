@@ -1,7 +1,8 @@
 """
-Sonos speaker control endpoints.
+Sonos speaker control endpoints — playback, volume, TTS, favorites, music mapping.
 """
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 
@@ -85,3 +86,62 @@ async def speak_text(body: TTSRequest, request: Request) -> dict:
         "status": "ok" if success else "error",
         "text": body.text,
     }
+
+
+# ------------------------------------------------------------------
+# Favorites & music mapping
+# ------------------------------------------------------------------
+
+class MusicMappingEntry(BaseModel):
+    """A single mode-to-playlist mapping."""
+
+    mode: str = Field(..., description="Activity mode name")
+    favorite_title: str = Field(..., description="Sonos favorite name")
+    auto_play: bool = Field(default=False, description="Auto-play on mode change")
+
+
+@router.get("/favorites")
+async def get_favorites(request: Request) -> dict:
+    """List all Sonos favorites (playlists, stations, etc.)."""
+    sonos = request.app.state.sonos
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    favorites = await sonos.get_favorites()
+    return {"favorites": favorites}
+
+
+@router.post("/favorites/{title}/play")
+async def play_favorite(title: str, request: Request) -> dict:
+    """Play a Sonos favorite by title."""
+    sonos = request.app.state.sonos
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    success = await sonos.play_favorite(title)
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Favorite '{title}' not found or playback failed",
+        )
+    return {"status": "ok", "playing": title}
+
+
+@router.get("/music-map")
+async def get_music_map(request: Request) -> dict:
+    """Get the current mode-to-playlist mapping."""
+    mapper = getattr(request.app.state, "music_mapper", None)
+    if not mapper:
+        return {"mapping": {}}
+    return {"mapping": mapper.mapping}
+
+
+@router.put("/music-map")
+async def update_music_map(entry: MusicMappingEntry, request: Request) -> dict:
+    """Update a single mode-to-playlist mapping."""
+    mapper = getattr(request.app.state, "music_mapper", None)
+    if not mapper:
+        raise HTTPException(status_code=503, detail="Music mapper not initialized")
+
+    mapper.set_mapping(entry.mode, entry.favorite_title, entry.auto_play)
+    return {"status": "ok", "mapping": mapper.mapping}

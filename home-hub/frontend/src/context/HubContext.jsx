@@ -15,6 +15,11 @@ export function HubProvider({ children }) {
     mute: false,
   })
   const [deviceStatus, setDeviceStatus] = useState({ hue: false, sonos: false })
+  const [automationMode, setAutomationMode] = useState({
+    mode: 'idle',
+    source: 'time',
+    manual_override: false,
+  })
 
   const handleMessage = useCallback((message) => {
     const { type, data } = message
@@ -28,6 +33,9 @@ export function HubProvider({ children }) {
         break
       case 'connection_status':
         setDeviceStatus(data)
+        break
+      case 'mode_update':
+        setAutomationMode(data)
         break
       default:
         break
@@ -53,6 +61,17 @@ export function HubProvider({ children }) {
       .then((r) => r.json())
       .then(setSonos)
       .catch(() => {})
+
+    fetch('/api/automation/status')
+      .then((r) => r.json())
+      .then((data) =>
+        setAutomationMode({
+          mode: data.current_mode,
+          source: data.mode_source,
+          manual_override: data.manual_override,
+        })
+      )
+      .catch(() => {})
   }, [])
 
   const setLight = useCallback(
@@ -74,8 +93,8 @@ export function HubProvider({ children }) {
     [send]
   )
 
-  const activateScene = useCallback(async (sceneName) => {
-    await fetch(`/api/scenes/${sceneName}/activate`, { method: 'POST' })
+  const activateScene = useCallback(async (sceneId) => {
+    await fetch(`/api/scenes/${sceneId}/activate`, { method: 'POST' })
   }, [])
 
   const speakText = useCallback(async (text, volume) => {
@@ -83,6 +102,14 @@ export function HubProvider({ children }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, volume }),
+    })
+  }, [])
+
+  const setManualMode = useCallback(async (mode) => {
+    await fetch('/api/automation/override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
     })
   }, [])
 
@@ -97,6 +124,8 @@ export function HubProvider({ children }) {
         sonosCommand,
         activateScene,
         speakText,
+        automationMode,
+        setManualMode,
       }}
     >
       {children}

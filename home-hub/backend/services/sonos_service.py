@@ -212,6 +212,55 @@ class SonosService:
         except Exception as e:
             logger.error(f"Error restoring playback: {e}")
 
+    async def get_favorites(self) -> list[dict[str, str]]:
+        """
+        List Sonos favorites (playlists, stations, etc.).
+
+        Returns:
+            List of dicts with title and uri.
+        """
+        if not self._connected or not self._device:
+            return []
+
+        try:
+            favorites = await asyncio.to_thread(
+                self._device.music_library.get_sonos_favorites
+            )
+            return [
+                {
+                    "title": fav.title,
+                    "uri": getattr(fav, "resources", [{}])[0].uri
+                    if hasattr(fav, "resources") and fav.resources
+                    else getattr(fav, "uri", ""),
+                }
+                for fav in favorites
+            ]
+        except Exception as e:
+            logger.error(f"Error getting Sonos favorites: {e}")
+            return []
+
+    async def play_favorite(self, title: str) -> bool:
+        """
+        Play a Sonos favorite by title.
+
+        Args:
+            title: The favorite's display name (case-insensitive match).
+
+        Returns:
+            True if the favorite was found and playback started.
+        """
+        favorites = await self.get_favorites()
+        target = title.lower()
+
+        for fav in favorites:
+            if fav["title"].lower() == target:
+                uri = fav.get("uri", "")
+                if uri:
+                    return await self.play_uri(uri)
+
+        logger.warning(f"Sonos favorite '{title}' not found")
+        return False
+
     async def poll_state_loop(self, ws_manager) -> None:
         """
         Continuously poll Sonos state and broadcast changes via WebSocket.

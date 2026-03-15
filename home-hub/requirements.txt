@@ -22,5 +22,9 @@ python-dotenv>=1.0.0
 # HTTP
 httpx>=0.27.0             # Async HTTP client for ESPN API
 
+# PC activity detection
+psutil>=5.9.0             # Process monitoring for activity detection
+pyaudio>=0.2.14           # Blue Yeti mic ambient noise detection
+
 # Utilities
 aiofiles>=23.0.0          # Async file operations
