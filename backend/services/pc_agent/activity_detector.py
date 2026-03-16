@@ -25,6 +25,7 @@ from backend.services.pc_agent.game_list import (
     BROWSER_PROCESSES,
     GAME_PROCESSES,
     MEDIA_PROCESSES,
+    WORK_PROCESSES,
 )
 
 logging.basicConfig(
@@ -42,6 +43,11 @@ IDLE_THRESHOLD = 600  # 10 minutes
 # Late-night threshold for "working" detection (hour, 24h format)
 LATE_NIGHT_START = 21  # 9 PM
 
+# Sleep detection: no input for 15 min after 10:30 PM while media/browser is running
+SLEEP_DETECT_HOUR = 22    # 10 PM
+SLEEP_DETECT_MINUTE = 30  # :30
+SLEEP_IDLE_THRESHOLD = 900  # 15 minutes
+
 
 class ActivityDetector:
     """
@@ -57,6 +63,7 @@ class ActivityDetector:
 
     def __init__(self) -> None:
         self._last_mode: Optional[str] = None
+        self._media_paused: bool = False  # Track if we already paused media this sleep cycle
 
     def _get_running_process_names(self) -> set[str]:
         """Get lowercase names of all running processes."""
@@ -93,19 +100,59 @@ class ActivityDetector:
             pass
         return 0
 
+    def _pause_media(self) -> None:
+        """
+        Send a media play/pause key via Win32 to pause YouTube or other media.
+
+        Only fires once per sleep cycle to avoid toggling play/pause repeatedly.
+        """
+        if self._media_paused:
+            return
+        try:
+            VK_MEDIA_PLAY_PAUSE = 0xB3
+            ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
+            ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
+            self._media_paused = True
+            logger.info("Sent media pause key (sleep detected)")
+        except Exception as e:
+            logger.error(f"Failed to send media pause key: {e}")
+
+    def _is_sleep_window(self) -> bool:
+        """Check if current time is past the sleep detection threshold (10:30 PM)."""
+        now = datetime.now()
+        return (
+            (now.hour > SLEEP_DETECT_HOUR)
+            or (now.hour == SLEEP_DETECT_HOUR and now.minute >= SLEEP_DETECT_MINUTE)
+            or (now.hour < 6)  # Also covers past midnight
+        )
+
     def detect(self) -> str:
         """
         Determine the current activity mode based on running processes.
 
         Returns:
-            One of: "gaming", "watching", "working", "idle", "away".
+            One of: "gaming", "watching", "working", "idle", "away", "sleeping".
         """
-        # Check idle time first
         idle_seconds = self._get_idle_seconds()
+        processes = self._get_running_process_names()
+
+        # Sleep detection: no input for 15 min after 10:30 PM with media/browser running
+        if (
+            idle_seconds > SLEEP_IDLE_THRESHOLD
+            and self._is_sleep_window()
+            and (processes & MEDIA_PROCESSES or processes & BROWSER_PROCESSES)
+        ):
+            self._pause_media()
+            return "sleeping"
+
+        # Standard away detection (idle >10 min, no special context)
         if idle_seconds > IDLE_THRESHOLD:
             return "away"
 
-        processes = self._get_running_process_names()
+        # Reset media pause flag when user is active again
+        if self._media_paused:
+            self._media_paused = False
+            logger.info("User active again — media pause flag reset")
 
         # Gaming takes highest priority
         if processes & GAME_PROCESSES:
@@ -114,6 +161,10 @@ class ActivityDetector:
         # Media player = watching
         if processes & MEDIA_PROCESSES:
             return "watching"
+
+        # Dev/terminal processes = working
+        if processes & WORK_PROCESSES:
+            return "working"
 
         # Browser running late at night = working
         current_hour = datetime.now().hour

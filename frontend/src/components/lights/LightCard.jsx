@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { memo, useCallback, useRef } from 'react'
 import { Slider } from '../common/Slider'
 
 const COLOR_PRESETS = [
@@ -18,7 +18,7 @@ function hueToHsl(hue, sat, bri) {
   return `hsl(${h}, ${s}%, ${Math.max(l, 20)}%)`
 }
 
-export function LightCard({ light, onUpdate }) {
+export const LightCard = memo(function LightCard({ light, onUpdate }) {
   const debounceRef = useRef(null)
 
   const debouncedUpdate = useCallback(
@@ -94,4 +94,4 @@ export function LightCard({ light, onUpdate }) {
       {!light.reachable && <div className="light-unreachable">Unreachable</div>}
     </div>
   )
-}
+})

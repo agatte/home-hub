@@ -1,4 +1,6 @@
-export function Slider({ value, min = 0, max = 100, onChange, label, className = '' }) {
+import { memo } from 'react'
+
+export const Slider = memo(function Slider({ value, min = 0, max = 100, onChange, label, className = '' }) {
   return (
     <div className={`slider-container ${className}`}>
       {label && <label className="slider-label">{label}</label>}
@@ -13,4 +15,4 @@ export function Slider({ value, min = 0, max = 100, onChange, label, className =
       <span className="slider-value">{value}</span>
     </div>
   )
-}
+})

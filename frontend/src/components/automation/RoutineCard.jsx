@@ -1,9 +1,9 @@
 /**
  * RoutineCard — morning routine status and controls.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, memo } from 'react'
 
-export function RoutineCard() {
+export const RoutineCard = memo(function RoutineCard() {
   const [routines, setRoutines] = useState([])
   const [testing, setTesting] = useState(false)
 
@@ -77,4 +77,4 @@ export function RoutineCard() {
       )}
     </div>
   )
-}
+})

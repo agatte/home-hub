@@ -25,6 +25,7 @@ from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 from backend.database import init_db
 from backend.services.automation_engine import AutomationEngine
+from backend.services.screen_sync import ScreenSyncService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
 from backend.services.morning_routine import MorningRoutineService
@@ -89,8 +90,13 @@ async def lifespan(app: FastAPI):
     )
     app.state.tts = tts
 
+    # Screen sync service (syncs dominant screen color to bedroom lamp)
+    screen_sync = ScreenSyncService(hue_service=hue, target_light_id="2")
+    app.state.screen_sync = screen_sync
+
     # Automation engine
     automation = AutomationEngine(hue=hue, hue_v2=hue_v2, ws_manager=ws_manager)
+    automation.screen_sync = screen_sync
     app.state.automation = automation
 
     # Music mapper

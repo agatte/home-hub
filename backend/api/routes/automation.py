@@ -97,6 +97,81 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
     return {"status": "ok", "mode": override.mode, "source": "manual"}
 
 
+@router.get("/social-styles")
+async def get_social_styles(request: Request) -> dict:
+    """List available party sub-modes for social mode."""
+    from backend.services.automation_engine import SOCIAL_STYLES
+
+    engine = getattr(request.app.state, "automation", None)
+    current = engine.social_style if engine else "color_cycle"
+
+    return {
+        "styles": [
+            {
+                "id": style_id,
+                "display_name": style["display_name"],
+                "description": style["description"],
+            }
+            for style_id, style in SOCIAL_STYLES.items()
+        ],
+        "active": current,
+    }
+
+
+@router.post("/social-style")
+async def set_social_style(request: Request) -> dict:
+    """Switch the active party sub-mode."""
+    engine = getattr(request.app.state, "automation", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail="Automation engine not initialized")
+
+    body = await request.json()
+    style = body.get("style", "")
+
+    from backend.services.automation_engine import SOCIAL_STYLES
+    if style not in SOCIAL_STYLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown style: {style}. Options: {list(SOCIAL_STYLES.keys())}",
+        )
+
+    await engine.set_social_style(style)
+    return {"status": "ok", "style": style}
+
+
+@router.get("/screen-sync/status")
+async def get_screen_sync_status(request: Request) -> dict:
+    """Check if screen sync is running."""
+    engine = getattr(request.app.state, "automation", None)
+    sync = engine.screen_sync if engine else None
+    running = sync._running if sync else False
+    return {"running": running}
+
+
+@router.post("/screen-sync/start")
+async def start_screen_sync(request: Request) -> dict:
+    """Manually start screen sync."""
+    engine = getattr(request.app.state, "automation", None)
+    sync = engine.screen_sync if engine else None
+    if not sync:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+
+    await sync.start()
+    return {"status": "ok", "running": True}
+
+
+@router.post("/screen-sync/stop")
+async def stop_screen_sync(request: Request) -> dict:
+    """Manually stop screen sync."""
+    engine = getattr(request.app.state, "automation", None)
+    sync = engine.screen_sync if engine else None
+    if not sync:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+
+    await sync.stop()
+    return {"status": "ok", "running": False}
+
+
 @router.post("/mic/calibrate")
 async def calibrate_mic(request: Request) -> MicCalibrationResult:
     """

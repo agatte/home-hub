@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # TTS
     TTS_VOICE: str = "en-US-GuyNeural"
-    TTS_VOLUME: int = 80
+    TTS_VOLUME: int = 10
 
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     WORK_ADDRESS: str = ""
     MORNING_ROUTINE_HOUR: int = 6
     MORNING_ROUTINE_MINUTE: int = 40
-    MORNING_VOLUME: int = 40
+    MORNING_VOLUME: int = 10
     TIMEZONE: str = "America/Indiana/Indianapolis"
 
     # Phase 2 — Game Day

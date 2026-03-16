@@ -1,9 +1,9 @@
 /**
  * NativeSceneGrid — displays native Hue bridge scenes and dynamic effects.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, memo } from 'react'
 
-export function NativeSceneGrid({ onActivateScene }) {
+export const NativeSceneGrid = memo(function NativeSceneGrid({ onActivateScene }) {
   const [bridgeScenes, setBridgeScenes] = useState([])
   const [effects, setEffects] = useState([])
   const [activeEffect, setActiveEffect] = useState(null)
@@ -86,4 +86,4 @@ export function NativeSceneGrid({ onActivateScene }) {
       )}
     </div>
   )
-}
+})

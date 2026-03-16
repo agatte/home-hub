@@ -1,8 +1,13 @@
+import { memo, useMemo } from 'react'
 import { LightCard } from './LightCard'
 
-export function LightGrid({ lights, onUpdate }) {
-  const lightList = Object.values(lights).sort(
-    (a, b) => Number(a.light_id) - Number(b.light_id)
+export const LightGrid = memo(function LightGrid({ lights, onUpdate }) {
+  const lightList = useMemo(
+    () =>
+      Object.values(lights).sort(
+        (a, b) => Number(a.light_id) - Number(b.light_id)
+      ),
+    [lights]
   )
 
   if (lightList.length === 0) {
@@ -16,4 +21,4 @@ export function LightGrid({ lights, onUpdate }) {
       ))}
     </div>
   )
-}
+})

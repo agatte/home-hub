@@ -1,7 +1,10 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 
-const HubContext = createContext(null)
+const LightsContext = createContext(null)
+const SonosContext = createContext(null)
+const AutomationContext = createContext(null)
+const ConnectionContext = createContext(null)
 
 export function HubProvider({ children }) {
   const [lights, setLights] = useState({})
@@ -19,6 +22,7 @@ export function HubProvider({ children }) {
     mode: 'idle',
     source: 'time',
     manual_override: false,
+    social_style: 'color_cycle',
   })
 
   const handleMessage = useCallback((message) => {
@@ -106,6 +110,12 @@ export function HubProvider({ children }) {
   }, [])
 
   const setManualMode = useCallback(async (mode) => {
+    // Optimistic update — highlight the button immediately
+    setAutomationMode((prev) => ({
+      ...prev,
+      mode: mode === 'auto' ? prev.mode : mode,
+      manual_override: mode !== 'auto',
+    }))
     await fetch('/api/automation/override', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -113,28 +123,80 @@ export function HubProvider({ children }) {
     })
   }, [])
 
+  const setSocialStyle = useCallback(async (style) => {
+    await fetch('/api/automation/social-style', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ style }),
+    })
+  }, [])
+
+  // Split into separate context values so updates to one don't re-render consumers of another
+  const lightsValue = useMemo(() => ({ lights, setLight }), [lights, setLight])
+  const sonosValue = useMemo(() => ({ sonos, sonosCommand, speakText }), [sonos, sonosCommand, speakText])
+  const automationValue = useMemo(
+    () => ({ automationMode, setManualMode, setSocialStyle, activateScene }),
+    [automationMode, setManualMode, setSocialStyle, activateScene]
+  )
+  const connectionValue = useMemo(
+    () => ({ connected, deviceStatus }),
+    [connected, deviceStatus]
+  )
+
   return (
-    <HubContext.Provider
-      value={{
-        connected,
-        deviceStatus,
-        lights,
-        setLight,
-        sonos,
-        sonosCommand,
-        activateScene,
-        speakText,
-        automationMode,
-        setManualMode,
-      }}
-    >
-      {children}
-    </HubContext.Provider>
+    <ConnectionContext.Provider value={connectionValue}>
+      <AutomationContext.Provider value={automationValue}>
+        <SonosContext.Provider value={sonosValue}>
+          <LightsContext.Provider value={lightsValue}>
+            {children}
+          </LightsContext.Provider>
+        </SonosContext.Provider>
+      </AutomationContext.Provider>
+    </ConnectionContext.Provider>
   )
 }
 
-export function useHub() {
-  const context = useContext(HubContext)
-  if (!context) throw new Error('useHub must be used within HubProvider')
+export function useLights() {
+  const context = useContext(LightsContext)
+  if (!context) throw new Error('useLights must be used within HubProvider')
   return context
+}
+
+export function useSonos() {
+  const context = useContext(SonosContext)
+  if (!context) throw new Error('useSonos must be used within HubProvider')
+  return context
+}
+
+export function useAutomation() {
+  const context = useContext(AutomationContext)
+  if (!context) throw new Error('useAutomation must be used within HubProvider')
+  return context
+}
+
+export function useConnection() {
+  const context = useContext(ConnectionContext)
+  if (!context) throw new Error('useConnection must be used within HubProvider')
+  return context
+}
+
+// Backward-compatible hook — returns everything (still causes full re-renders if used)
+export function useHub() {
+  const { lights, setLight } = useLights()
+  const { sonos, sonosCommand, speakText } = useSonos()
+  const { automationMode, setManualMode, setSocialStyle, activateScene } = useAutomation()
+  const { connected, deviceStatus } = useConnection()
+  return {
+    connected,
+    deviceStatus,
+    lights,
+    setLight,
+    sonos,
+    sonosCommand,
+    activateScene,
+    speakText,
+    automationMode,
+    setManualMode,
+    setSocialStyle,
+  }
 }

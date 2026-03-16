@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/scenes", tags=["scenes"])
 SCENE_PRESETS: dict[str, dict[str, Any]] = {
     "movie_night": {
         "on": True,
-        "bri": 50,
+        "bri": 30,
         "hue": 8000,
         "sat": 200,
     },
@@ -28,17 +28,23 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         "hue": 8000,
         "sat": 140,
     },
-    "colts_blue": {
+    "bias_light": {
         "on": True,
-        "bri": 254,
-        "hue": 46920,
-        "sat": 254,
+        "bri": 55,
+        "hue": 8000,
+        "sat": 160,
     },
     "relax": {
         "on": True,
-        "bri": 120,
-        "hue": 8000,
-        "sat": 180,
+        "bri": 80,
+        "hue": 6500,
+        "sat": 220,
+    },
+    "wind_down": {
+        "on": True,
+        "bri": 40,
+        "hue": 5000,
+        "sat": 220,
     },
     "all_off": {
         "on": False,

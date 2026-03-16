@@ -1,7 +1,36 @@
+import { memo, useState, useCallback, useEffect, useRef } from 'react'
 import { Slider } from '../common/Slider'
 
-export function SonosCard({ sonos, onCommand }) {
+export const SonosCard = memo(function SonosCard({ sonos, onCommand }) {
   const isPlaying = sonos.state === 'PLAYING'
+  const [localVolume, setLocalVolume] = useState(sonos.volume)
+  const dragging = useRef(false)
+  const debounceRef = useRef(null)
+
+  // Sync from server when not actively dragging
+  useEffect(() => {
+    if (!dragging.current) {
+      setLocalVolume(sonos.volume)
+    }
+  }, [sonos.volume])
+
+  const onVolumeChange = useCallback((vol) => {
+    dragging.current = true
+    setLocalVolume(vol)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      onCommand('volume', { volume: vol })
+      // Allow server sync again after a short delay
+      setTimeout(() => { dragging.current = false }, 500)
+    }, 150)
+  }, [onCommand])
+
+  const onPrevious = useCallback(() => onCommand('previous'), [onCommand])
+  const onNext = useCallback(() => onCommand('next'), [onCommand])
+  const onPlayPause = useCallback(
+    () => onCommand(isPlaying ? 'pause' : 'play'),
+    [onCommand, isPlaying]
+  )
 
   return (
     <div className="sonos-card">
@@ -27,7 +56,7 @@ export function SonosCard({ sonos, onCommand }) {
       <div className="playback-controls">
         <button
           className="control-btn"
-          onClick={() => onCommand('previous')}
+          onClick={onPrevious}
           aria-label="Previous"
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -37,7 +66,7 @@ export function SonosCard({ sonos, onCommand }) {
 
         <button
           className="control-btn control-btn-primary"
-          onClick={() => onCommand(isPlaying ? 'pause' : 'play')}
+          onClick={onPlayPause}
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? (
@@ -53,7 +82,7 @@ export function SonosCard({ sonos, onCommand }) {
 
         <button
           className="control-btn"
-          onClick={() => onCommand('next')}
+          onClick={onNext}
           aria-label="Next"
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -67,13 +96,13 @@ export function SonosCard({ sonos, onCommand }) {
           <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
         </svg>
         <Slider
-          value={sonos.volume}
+          value={localVolume}
           min={0}
           max={100}
-          onChange={(vol) => onCommand('volume', { volume: vol })}
+          onChange={onVolumeChange}
           className="volume-slider"
         />
       </div>
     </div>
   )
-}
+})

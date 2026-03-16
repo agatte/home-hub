@@ -38,25 +38,29 @@ PHASE 1.5 — SMART AUTOMATION (Just Built)
      - POST /api/scenes/effects/{name}/light/{id} per-light effects
 
   ✅ Automation engine (automation_engine.py)
-     - Time-based light rules:
-       6-8am: gradual warm→daylight ramp (interpolated)
-       8am-6pm: daylight
-       6-9pm: warm evening
-       9pm-midnight: dim warm
-       midnight+: ultra dim
+     - Per-light control: each light can be set independently per mode
+     - Time-aware activity states: brightness adapts to day/evening/night
+       Day (8-18): brighter to counteract ambient daylight
+       Evening (18-21): moderate brightness
+       Night (21-8): dim, easy on eyes
+     - Weekday time rules: off at work (7am-6pm), warm evening, dim wind-down
+     - Weekend time rules: sleep in, gentle 2hr morning ramp, neutral bright day
      - Activity overrides: gaming, working, watching, social, relax, movie
-     - Manual override from dashboard (4-hour auto-timeout)
+     - Party sub-modes: color_cycle, club, rave, fire_and_ice
+     - Sleep detection: 10:30pm + 15min idle → pause YouTube + fade lights
+     - Screen sync: bedroom lamp matches projector content (mss capture)
+     - Manual override from dashboard (4-hour auto-timeout, optimistic UI)
      - Alexa coexistence: detects external "all off" (geofence), won't override
      - WebSocket broadcasts mode_update to all clients
-     - Background loop checks every 60 seconds
+     - Background loop checks every 60 seconds, auto-adapts on period transitions
 
   ✅ PC activity detector (pc_agent/activity_detector.py)
      - Standalone script, runs alongside server
      - psutil process detection every 15 seconds
      - Gaming: LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes
-     - No Discord dependency (user uses in-game voice chat)
+     - Working: windowsterminal, powershell, code.exe, cursor, devenv, etc.
      - Watching: VLC, Plex, media players
-     - Working: browser late at night
+     - Sleep detection: after 10:30pm, 15min idle → pause media + report sleeping
      - Away: Win32 GetLastInputInfo idle >10 min
      - Reports mode changes only to /api/automation/activity
 
@@ -85,18 +89,27 @@ PHASE 1.5 — SMART AUTOMATION (Just Built)
      - GET /api/sonos/favorites lists available playlists
      - GET/PUT /api/sonos/music-map for mapping configuration
 
+  ✅ Screen sync service (screen_sync.py)
+     - mss screen capture → dominant color → bedroom lamp
+     - EMA smoothing (alpha 0.3) + 2s transition for flicker-free
+     - Captures every 2.5s, brightness clamped 15-80
+     - Auto-starts in watching mode, stops on mode change
+
   ✅ Automation API routes (automation.py + routines.py)
      - POST /api/automation/activity — receive activity reports
      - GET /api/automation/status — full engine state
      - POST /api/automation/override — manual mode from dashboard
      - GET/PUT /api/automation/config — engine settings
+     - GET /api/automation/social-styles — list party sub-modes
+     - POST /api/automation/social-style — switch party sub-mode
+     - GET/POST /api/automation/screen-sync/status|start|stop
 
   FRONTEND:
-  ✅ Mode indicator — shows current mode (gaming/working/etc.) with icon + color
-  ✅ Mode override bar — manual mode buttons (Gaming, Working, Movie, etc.)
+  ✅ Mode indicator — shows current mode with icon + color + party sub-mode label
+  ✅ Mode override bar — manual mode buttons + party sub-mode row for social
   ✅ Native scene grid — Hue bridge scenes + dynamic effect buttons
   ✅ Routine card — morning routine status, toggle, test button
-  ✅ HubContext extended with automation state + mode_update WebSocket handler
+  ✅ HubContext extended with automation state, socialStyle, optimistic updates
   ✅ Home page updated with Mode, Lights, Sonos, and Routines sections
 
   PWA:
@@ -111,33 +124,34 @@ WHAT STILL NEEDS TO BE DONE
 
 MANUAL SETUP (User Action Required)
 ────────────────────────────────────
-  ☐ Delete AWS resources (us-east-2 region)
+  ✅ Delete AWS resources (us-east-2 region) — DONE 2026-03-15
      - Lambda: ColtsTouchdownDetector
      - DynamoDB: ColtsScoreTracker
      - CloudWatch: /aws/lambda/ColtsTouchdownDetector
 
-  ☐ Delete Home Assistant VirtualBox VM
+  ✅ Delete Home Assistant VirtualBox VM — DONE 2026-03-15
+     - Removed C:\Users\antho\VirtualBox VMs\ (7.1 GB)
 
-  ☐ Rotate OpenAI API key at platform.openai.com/api-keys
+  ✅ Rotate OpenAI API key — DONE 2026-03-15 (old key revoked)
+     - New key not needed until Phase 2 (Game Day Engine)
 
   ✅ API keys configured:
      - OpenWeatherMap API key in .env
      - Google Maps Directions API key in .env
      - HOME_ADDRESS and WORK_ADDRESS in .env
 
-  ☐ Install PyAudio for Blue Yeti mic support:
-     - pip install pyaudio (may need Visual C++ Build Tools on Windows)
-     - If install fails: pip install pipwin && pipwin install pyaudio
+  ✅ Install PyAudio for Blue Yeti mic support — DONE 2026-03-15
+     - PyAudio 0.2.14, PortAudio V19.7.0
 
-  ☐ Set up Tailscale for remote access:
-     - Install on PC: tailscale.com/download/windows
-     - Install on phone: App Store / Play Store
-     - Access Home Hub via Tailscale IP from anywhere
+  ✅ Set up Tailscale for remote access — DONE 2026-03-15
+     - PC Tailscale IP: 100.91.241.92
+     - Remote URL: http://100.91.241.92:8000
+     - Works from phone over cellular/any network
 
-  ☐ Create Apple Music playlists for each mood:
-     - Gaming, Working, Chill/Relax, Party
-     - Add to Sonos favorites in the Sonos app
-     - Map in Home Hub via PUT /api/sonos/music-map
+  ✅ Create Apple Music playlists for each mood — IN PROGRESS
+     - Chill playlist created and mapped to relax mode
+     - Add more playlists over time (Gaming, Working, Party)
+     - Map via PUT /api/sonos/music-map
 
 TESTING (Verified 2026-03-15)
 ─────────────────────────────
@@ -145,22 +159,22 @@ TESTING (Verified 2026-03-15)
   ✅ GET /api/scenes returns 7 presets + 19 native bridge scenes (deduplicated)
   ✅ Dynamic effects work: candlelight, fireplace, sparkle, prism, glisten, opal
   ✅ Morning routine test: weather (73°F broken clouds) + traffic (19 min) TTS generated
-  ✅ Manual mode override: Gaming button → lights change to Colts blue, Auto clears
-  ✅ Automation engine running: time-based idle mode active
+  ✅ Manual mode override: buttons respond instantly (optimistic UI)
+  ✅ Automation engine running: time-aware activity states + time-based idle
   ✅ WebSocket sync: mode changes broadcast to all clients in real-time
   ✅ Frontend renders all new sections: Mode, Hue Scenes, Effects, Routines
   ✅ PWA icons generated (192x192, 512x512)
-  ☐ Add to Home Screen on phone → verify PWA launches fullscreen
-  ☐ Run PC agent: python -m backend.services.pc_agent.activity_detector
-  ☐ Open a game → verify "gaming" mode appears on dashboard
+  ✅ Add to Home Screen on phone → PWA launches fullscreen — DONE 2026-03-15
+  ✅ PC agent: detects gaming, working, idle correctly
+  ✅ Time-aware brightness: gaming evening=160, gaming night=55, etc.
 
 NICE-TO-HAVE
 ─────────────
   ☐ Fix Android tablet blank page (deferred)
   ☐ Custom scene creation/saving via SQLite
-  ☐ Settings page (device status, config, TTS test)
+  ✅ Settings page — device status, automation config, morning routine, TTS test
   ☐ Hue bridge pairing endpoint (/api/lights/pair)
-  ☐ Windows Firewall inbound rule for port 8000
+  ✅ Windows Firewall inbound rule for port 8000 (Home Hub Server, TCP inbound)
   ☐ Scene room labels (show which room a bridge scene targets)
 
 PHASE 2: GAME DAY ENGINE (~August, Pre-Season)
@@ -253,14 +267,15 @@ NETWORK DEVICES
   Sonos Era 100:    192.168.1.157 ("Bedroom")
   Android Tablet:   192.168.1.209
 
-AUTOMATION MODES
+AUTOMATION MODES (all time-aware: day/evening/night brightness)
 ────────────────
-  gaming   — Colts blue, medium brightness (detected: game process running)
-  working  — Cool daylight (detected: browser, late night, no game)
-  watching — Movie night dim warm (detected: media player)
-  social   — Party mode with dynamic effects (detected: sustained ambient noise)
-  relax    — Warm relaxation
-  movie    — Dim warm (manual alias for watching)
+  gaming   — Warm bias light (day:200, eve:160, night:55) — process detection
+  working  — Warm productive (day:230, eve:180, night:80) — terminal/IDE detection
+  watching — Bedroom bias only (day:80, eve:70, night:30) + screen sync — Stremio/VLC/Plex/etc.
+  social   — Party sub-modes (color_cycle/club/rave/fire_and_ice) — ambient noise
+  relax    — Amber candlelight (day:200, eve:150, night:80) + candle effect
+  movie    — Same as watching (manual override)
+  sleeping — 10-min fade → off (detected: 10:30pm + 15min idle)
   idle     — Falls through to time-based rules
   away     — Falls through to time-based (PC idle >10 min)
 
@@ -287,6 +302,7 @@ TECH STACK
   Config:       pydantic-settings + .env
   HTTP:         httpx (async)
   PC Detection: psutil (process monitoring)
+  Screen Sync:  mss (fast screen capture)
   Ambient:      PyAudio (Blue Yeti mic)
   Python:       3.13
   Node:         (for Vite build only)
@@ -324,7 +340,8 @@ FILE STRUCTURE
   │   │   ├── sonos_service.py           # SoCo wrapper + favorites
   │   │   ├── tts_service.py             # edge-tts → Sonos
   │   │   ├── websocket_manager.py       # WS broadcast
-  │   │   ├── automation_engine.py       # Time + activity → light state
+  │   │   ├── automation_engine.py       # Time-aware activity + time → light state
+  │   │   ├── screen_sync.py           # Screen capture → bedroom lamp color
   │   │   ├── scheduler.py              # Async cron scheduler
   │   │   ├── morning_routine.py        # Weather + traffic TTS
   │   │   ├── music_mapper.py           # Mode → playlist mapping
@@ -348,6 +365,7 @@ FILE STRUCTURE
   │       ├── hooks/useWebSocket.js
   │       ├── context/HubContext.jsx     # Extended with automation state
   │       ├── pages/Home.jsx            # Mode + Lights + Sonos + Routines
+  │       ├── pages/Settings.jsx       # Device status, config, TTS test
   │       └── components/
   │           ├── lights/
   │           │   ├── LightCard.jsx, LightGrid.jsx, SceneButton.jsx

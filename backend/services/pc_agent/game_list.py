@@ -8,12 +8,9 @@ Process names are case-insensitive during matching.
 # Game processes — any of these running = "gaming" mode
 # No Discord dependency: user uses in-game voice chat (League, etc.) with headset
 GAME_PROCESSES: set[str] = {
-    # Riot Games
+    # Riot Games (only actual game processes, not launchers/background services)
     "leagueoflegends.exe",
     "league of legends.exe",
-    "leagueclient.exe",
-    "leagueclientux.exe",
-    "riotclientservices.exe",
     "valorant.exe",
     "valorant-win64-shipping.exe",
     # Jagex / OSRS
@@ -55,12 +52,26 @@ MEDIA_PROCESSES: set[str] = {
     "mpv.exe",
     "kodi.exe",
     "wmplayer.exe",
+    "stremio.exe",
+    "stremio service.exe",
 }
 
-# Browser processes — used for "working" detection (browser + late night + no game)
+# Browser processes — used for "working" detection (late night + no game)
 BROWSER_PROCESSES: set[str] = {
     "chrome.exe",
     "msedge.exe",
     "firefox.exe",
     "brave.exe",
+}
+
+# Dev/terminal processes — also count as "working"
+WORK_PROCESSES: set[str] = {
+    "windowsterminal.exe",
+    "powershell.exe",
+    "cmd.exe",
+    "code.exe",          # VS Code
+    "cursor.exe",        # Cursor IDE
+    "devenv.exe",        # Visual Studio
+    "sublime_text.exe",
+    "notepad++.exe",
 }

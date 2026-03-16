@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useHub } from '../context/HubContext'
+import { useLights, useAutomation, useSonos } from '../context/HubContext'
 import { ModeIndicator } from '../components/automation/ModeIndicator'
 import { ModeOverrideBar } from '../components/automation/ModeOverrideBar'
 import { RoutineCard } from '../components/automation/RoutineCard'
@@ -9,15 +9,14 @@ import { SceneButton } from '../components/lights/SceneButton'
 import { SonosCard } from '../components/sonos/SonosCard'
 
 export function Home() {
+  const { lights, setLight } = useLights()
+  const { sonos, sonosCommand } = useSonos()
   const {
-    lights,
-    setLight,
-    sonos,
-    sonosCommand,
-    activateScene,
     automationMode,
     setManualMode,
-  } = useHub()
+    setSocialStyle,
+    activateScene,
+  } = useAutomation()
   const [scenes, setScenes] = useState([])
 
   useEffect(() => {
@@ -40,11 +39,14 @@ export function Home() {
           mode={automationMode.mode}
           source={automationMode.source}
           manualOverride={automationMode.manual_override}
+          socialStyle={automationMode.social_style}
         />
         <ModeOverrideBar
           currentMode={automationMode.mode}
           manualOverride={automationMode.manual_override}
+          socialStyle={automationMode.social_style}
           onOverride={setManualMode}
+          onSocialStyle={setSocialStyle}
         />
       </section>
 

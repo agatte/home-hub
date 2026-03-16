@@ -64,7 +64,8 @@ class TTSService:
             logger.warning("Cannot speak — Sonos not connected")
             return False
 
-        vol = volume or self._default_volume
+        vol = volume if volume is not None else self._default_volume
+        logger.info(f"TTS requested volume={volume}, default={self._default_volume}, using vol={vol}")
 
         try:
             # Generate MP3
@@ -81,13 +82,10 @@ class TTSService:
 
             # Duck-and-resume: save current playback state
             snapshot = await self._sonos.get_current_playback_snapshot()
-
-            # Set volume for TTS
             original_volume = (await self._sonos.get_status()).get("volume", vol)
-            await self._sonos.set_volume(vol)
 
-            # Play the TTS audio
-            success = await self._sonos.play_uri(audio_url)
+            # Play TTS with volume set atomically (same thread call)
+            success = await self._sonos.play_uri(audio_url, volume=vol)
 
             if success:
                 logger.info(f"TTS playing: '{text[:50]}...' at volume {vol}")

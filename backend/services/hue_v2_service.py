@@ -5,6 +5,7 @@ Complements the v1 HueService (phue2) with direct HTTPS calls to the bridge's
 CLIP v2 API. This enables native scene activation (visible to Alexa) and
 dynamic light effects (candlelight, fireplace, sparkle, etc.).
 """
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -194,15 +195,13 @@ class HueV2Service:
             return False
 
     async def set_effect_all(self, effect: str) -> bool:
-        """Apply a dynamic effect to all mapped lights."""
+        """Apply a dynamic effect to all mapped lights (parallel)."""
         if not self._v1_to_v2:
             return False
 
-        results = []
-        for v1_id in self._v1_to_v2:
-            result = await self.set_effect(v1_id, effect)
-            results.append(result)
-
+        results = await asyncio.gather(
+            *(self.set_effect(v1_id, effect) for v1_id in self._v1_to_v2)
+        )
         return any(results)
 
     async def stop_effect(self, v1_light_id: str) -> bool:

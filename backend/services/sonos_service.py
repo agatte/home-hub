@@ -164,17 +164,24 @@ class SonosService:
             logger.error(f"Sonos previous error: {e}")
             return False
 
-    async def play_uri(self, uri: str) -> bool:
+    async def play_uri(self, uri: str, volume: Optional[int] = None) -> bool:
         """
         Play an audio file or stream from a URI.
 
         Args:
             uri: HTTP URL of the audio file to play.
+            volume: If set, volume is applied atomically before playback starts.
         """
         if not self._connected or not self._device:
             return False
         try:
-            await asyncio.to_thread(self._device.play_uri, uri)
+            def _play(device, uri, vol):
+                if vol is not None:
+                    device.volume = max(0, min(100, vol))
+                    logger.info(f"Sonos volume set to {vol} before play_uri")
+                logger.info(f"Sonos actual volume now: {device.volume}")
+                device.play_uri(uri)
+            await asyncio.to_thread(_play, self._device, uri, volume)
             return True
         except Exception as e:
             logger.error(f"Sonos play_uri error: {e}")
@@ -214,34 +221,60 @@ class SonosService:
 
     async def get_favorites(self) -> list[dict[str, str]]:
         """
-        List Sonos favorites (playlists, stations, etc.).
+        List Sonos favorites and Sonos playlists.
+
+        Combines cloud-synced favorites with locally-created Sonos playlists
+        (Era 100 / S2 firmware stores Apple Music items as playlists).
 
         Returns:
-            List of dicts with title and uri.
+            List of dicts with title, uri, and source.
         """
         if not self._connected or not self._device:
             return []
 
+        results = []
+
+        # Cloud-synced favorites
         try:
             favorites = await asyncio.to_thread(
                 self._device.music_library.get_sonos_favorites
             )
-            return [
-                {
-                    "title": fav.title,
-                    "uri": getattr(fav, "resources", [{}])[0].uri
+            for fav in favorites:
+                uri = (
+                    getattr(fav, "resources", [{}])[0].uri
                     if hasattr(fav, "resources") and fav.resources
-                    else getattr(fav, "uri", ""),
-                }
-                for fav in favorites
-            ]
+                    else getattr(fav, "uri", "")
+                )
+                results.append({
+                    "title": fav.title,
+                    "uri": uri,
+                    "source": "favorite",
+                })
         except Exception as e:
             logger.error(f"Error getting Sonos favorites: {e}")
-            return []
+
+        # Sonos playlists (where Apple Music items typically land)
+        try:
+            playlists = await asyncio.to_thread(
+                self._device.get_sonos_playlists
+            )
+            for pl in playlists:
+                results.append({
+                    "title": pl.title,
+                    "uri": pl.get_uri() if hasattr(pl, "get_uri") else getattr(pl, "uri", ""),
+                    "source": "playlist",
+                })
+        except Exception as e:
+            logger.error(f"Error getting Sonos playlists: {e}")
+
+        return results
 
     async def play_favorite(self, title: str) -> bool:
         """
-        Play a Sonos favorite by title.
+        Play a Sonos favorite or playlist by title.
+
+        Handles both cloud favorites (play_uri) and Sonos playlists
+        (add_to_queue + play).
 
         Args:
             title: The favorite's display name (case-insensitive match).
@@ -249,16 +282,37 @@ class SonosService:
         Returns:
             True if the favorite was found and playback started.
         """
-        favorites = await self.get_favorites()
+        if not self._connected or not self._device:
+            return False
+
         target = title.lower()
 
+        # Check Sonos playlists first (where Apple Music items land)
+        try:
+            playlists = await asyncio.to_thread(
+                self._device.get_sonos_playlists
+            )
+            for pl in playlists:
+                if pl.title.lower() == target:
+                    await asyncio.to_thread(self._device.clear_queue)
+                    await asyncio.to_thread(
+                        self._device.add_to_queue, pl
+                    )
+                    await asyncio.to_thread(self._device.play_from_queue, 0)
+                    logger.info(f"Playing Sonos playlist: {pl.title}")
+                    return True
+        except Exception as e:
+            logger.error(f"Error searching Sonos playlists: {e}")
+
+        # Fall back to cloud favorites
+        favorites = await self.get_favorites()
         for fav in favorites:
             if fav["title"].lower() == target:
                 uri = fav.get("uri", "")
                 if uri:
                     return await self.play_uri(uri)
 
-        logger.warning(f"Sonos favorite '{title}' not found")
+        logger.warning(f"Sonos favorite/playlist '{title}' not found")
         return False
 
     async def poll_state_loop(self, ws_manager) -> None:
