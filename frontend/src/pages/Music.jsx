@@ -1,8 +1,14 @@
+import { TasteProfileCard } from '../components/music/TasteProfileCard'
 import { ModePlaylistMapper } from '../components/music/ModePlaylistMapper'
 
 export function Music() {
   return (
     <main className="home-page">
+      <section className="section">
+        <h2 className="section-title">Taste Profile</h2>
+        <TasteProfileCard />
+      </section>
+
       <section className="section">
         <h2 className="section-title">Mode Playlists</h2>
         <p className="music-description">

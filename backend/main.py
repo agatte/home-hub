@@ -29,6 +29,7 @@ from backend.services.automation_engine import AutomationEngine
 from backend.services.screen_sync import ScreenSyncService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
+from backend.services.library_import_service import LibraryImportService
 from backend.services.morning_routine import MorningRoutineService
 from backend.services.music_mapper import MusicMapper
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
@@ -105,6 +106,10 @@ async def lifespan(app: FastAPI):
     await music_mapper.load_from_db()
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     app.state.music_mapper = music_mapper
+
+    # Library import service (Apple Music XML → taste profile)
+    library_import = LibraryImportService()
+    app.state.library_import = library_import
 
     # Morning routine
     morning = MorningRoutineService(

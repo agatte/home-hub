@@ -27,3 +27,24 @@ class ModePlaylistResponse(BaseModel):
 
     mappings: dict[str, Optional[ModePlaylistEntry]]
     favorites: list[dict]
+
+
+class ImportResponse(BaseModel):
+    """Response after library import."""
+
+    track_count: int
+    artist_count: int
+    genre_count: int
+    top_genres: list[list]
+    top_artists: list[dict]
+
+
+class TasteProfileResponse(BaseModel):
+    """Taste profile summary."""
+
+    genre_distribution: dict[str, float]
+    top_artists: list[dict]
+    mode_genre_map: dict[str, list[str]]
+    import_track_count: int
+    import_artist_count: int
+    last_import_at: Optional[str]
