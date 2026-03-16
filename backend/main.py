@@ -31,6 +31,7 @@ from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
 from backend.services.morning_routine import MorningRoutineService
+from backend.services.recommendation_service import RecommendationService
 from backend.services.music_mapper import MusicMapper
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
 from backend.services.sonos_service import SonosService
@@ -111,6 +112,12 @@ async def lifespan(app: FastAPI):
     library_import = LibraryImportService()
     app.state.library_import = library_import
 
+    # Recommendation service (Last.fm + iTunes Search API)
+    rec_service = RecommendationService(
+        lastfm_api_key=settings.LASTFM_API_KEY,
+    )
+    app.state.recommendation_service = rec_service
+
     # Morning routine
     morning = MorningRoutineService(
         tts_service=tts,
@@ -160,6 +167,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await hue_v2.close()
+    await rec_service.close()
 
 
 app = FastAPI(

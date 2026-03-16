@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     MORNING_VOLUME: int = 10
     TIMEZONE: str = "America/Indiana/Indianapolis"
 
+    # Music Discovery
+    LASTFM_API_KEY: Optional[str] = None
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5

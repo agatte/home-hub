@@ -125,3 +125,67 @@ async def get_taste_profile(request: Request) -> dict:
         return {"profile": None, "message": "No library imported yet"}
 
     return {"profile": profile}
+
+
+# ------------------------------------------------------------------
+# Recommendations
+# ------------------------------------------------------------------
+
+@router.get("/recommendations")
+async def get_recommendations(mode: str, request: Request) -> dict:
+    """Get pending recommendations for a mode."""
+    rec_service = request.app.state.recommendation_service
+    if not rec_service.enabled:
+        return {"recommendations": [], "message": "Last.fm API key not configured"}
+
+    recs = await rec_service.get_recommendations(mode)
+    return {"recommendations": recs}
+
+
+@router.post("/recommendations/generate")
+async def generate_recommendations(
+    request: Request, mode: str = "gaming"
+) -> dict:
+    """Trigger recommendation generation for a mode."""
+    rec_service = request.app.state.recommendation_service
+    if not rec_service.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Last.fm API key not configured. Add LASTFM_API_KEY to .env",
+        )
+
+    recs = await rec_service.generate_recommendations(mode)
+    return {"recommendations": recs, "count": len(recs)}
+
+
+@router.post("/recommendations/{rec_id}/feedback")
+async def submit_feedback(rec_id: int, request: Request) -> dict:
+    """Submit feedback on a recommendation (like or dismiss)."""
+    body = await request.json()
+    action = body.get("action")
+    if action not in ("liked", "dismissed"):
+        raise HTTPException(
+            status_code=400, detail="Action must be 'liked' or 'dismissed'"
+        )
+
+    rec_service = request.app.state.recommendation_service
+    found = await rec_service.update_feedback(rec_id, action)
+    if not found:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    return {"status": "ok", "action": action}
+
+
+@router.post("/preview")
+async def play_preview(request: Request) -> dict:
+    """Play a 30-second iTunes preview on Sonos."""
+    body = await request.json()
+    preview_url = body.get("preview_url")
+    if not preview_url:
+        raise HTTPException(status_code=400, detail="preview_url is required")
+
+    sonos = request.app.state.sonos
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    success = await sonos.play_uri(preview_url)
+    return {"status": "ok" if success else "error"}

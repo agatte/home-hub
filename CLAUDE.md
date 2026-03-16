@@ -66,6 +66,8 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
 - **Two Hue APIs**: `hue_service.py` (v1/phue2) for basic light control + polling; `hue_v2_service.py` (CLIP API v2/httpx) for native scenes and dynamic effects. Both talk to the same bridge. v2 uses UUIDs, v1 uses integers — a mapping cache bridges them.
 - **`automation_engine.py`** — Background loop (60s interval) applies time-based lighting rules. Accepts activity reports from PC agent and ambient monitor. Manual overrides from dashboard have 4-hour auto-timeout. Supports `register_on_mode_change` callbacks for extensibility (used by MusicMapper).
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites/playlists (persisted to SQLite). On mode change: auto-plays if Sonos is idle, broadcasts a WebSocket suggestion if Sonos is busy. Registered as a mode-change callback on the AutomationEngine.
+- **`library_import_service.py`** — Parses Apple Music/iTunes library XML exports (plistlib). Extracts artist play counts, genre distribution, playlist name signals. Builds a TasteProfile with mode-genre mapping.
+- **`recommendation_service.py`** — Uses Last.fm `artist.getSimilar` API for discovery and iTunes Search API for 30-second preview URLs + artwork. Generates per-mode recommendations scored by similarity, genre overlap, and user feedback. Caches Last.fm results in DB (30-day TTL).
 - **`scheduler.py`** — Async cron scheduler (no external deps). Drives the morning routine at 6:40 AM weekdays.
 - **`morning_routine.py`** — Fetches weather (OpenWeatherMap) + traffic (Google Maps Directions), generates TTS, plays on Sonos.
 - **`pc_agent/`** — Standalone scripts that POST mode changes to `/api/automation/activity`. `activity_detector.py` uses psutil for game/media process detection. `ambient_monitor.py` uses PyAudio for Blue Yeti mic RMS measurement (party detection).
@@ -74,7 +76,7 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
 
 - **`context/HubContext.jsx`** — Split context providers (Lights, Sonos, Automation, Music, Connection) for minimal re-renders. WebSocket connection handles real-time updates including `music_suggestion` and `music_auto_played` events. Exposes `setLight`, `sonosCommand`, `activateScene`, `setManualMode`, `useMusic`.
 - **`pages/Home.jsx`** — Main dashboard: Mode indicator/override → Lights grid → Scene presets → Native Hue scenes → Effects → Sonos player → Routines → MusicSuggestionToast.
-- **`pages/Music.jsx`** — Music page: Mode-to-playlist mapping configuration (Sonos favorite dropdown + auto-play toggle per mode).
+- **`pages/Music.jsx`** — Music page: Taste profile (genre donut, top artists, library import), mode-to-playlist mapping, and discovery feed (recommendations with preview/like/dismiss).
 - **`components/lights/NativeSceneGrid.jsx`** — Fetches bridge scenes (deduplicated by name across rooms) and dynamic effects. Clicking a scene activates it in all rooms.
 - Built frontend is served by FastAPI via `/{path:path}` catch-all (must come after API routes).
 
@@ -105,6 +107,5 @@ Server pushes `light_update`, `sonos_update`, `connection_status`, `mode_update`
 
 ## Future Phases
 
-- **Music Discovery** (in progress): Apple Music XML library import → taste profile analysis → Last.fm similar-artist recommendations → iTunes Search API 30s previews on Sonos → per-mode discovery feed with like/dismiss feedback loop.
 - **Game Day Engine** (~August pre-season): ESPN API polling, play detection (touchdown, field goal, big play), celebration orchestration (lights + TTS), GameDay.jsx live scoreboard.
 - **Pixel Art Field**: PixiJS/Canvas retro football field with animated sprites showing plays.
