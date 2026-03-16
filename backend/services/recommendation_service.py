@@ -266,7 +266,8 @@ class RecommendationService:
             db_artist = result.scalar_one_or_none()
 
         if db_artist and db_artist.similar_artists and db_artist.similar_fetched_at:
-            age = datetime.now(timezone.utc) - db_artist.similar_fetched_at
+            fetched_at = db_artist.similar_fetched_at.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - fetched_at
             if age < timedelta(days=SIMILAR_CACHE_DAYS):
                 return db_artist.similar_artists
 
