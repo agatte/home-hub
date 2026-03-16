@@ -100,13 +100,23 @@ class RecommendationService:
         candidates: dict[str, dict] = {}
         owned_artists = {a["name"].lower() for a in profile.top_artists}
 
+        # Exclude artists already recommended in other modes
+        async with async_session() as session:
+            result = await session.execute(
+                select(Recommendation.artist_name).where(
+                    Recommendation.source_mode != mode,
+                    Recommendation.status == "pending",
+                )
+            )
+            other_mode_artists = {r[0].lower() for r in result.all()}
+
         for seed_name in seeds[:5]:
             similar = await self._get_similar_artists(seed_name)
             for artist_info in similar:
                 name = artist_info["name"]
                 name_lower = name.lower()
-                # Skip artists already in library
-                if name_lower in owned_artists:
+                # Skip artists already in library or recommended in other modes
+                if name_lower in owned_artists or name_lower in other_mode_artists:
                     continue
                 if name_lower not in candidates:
                     candidates[name_lower] = {
@@ -224,7 +234,12 @@ class RecommendationService:
     def _get_seed_artists(
         self, profile: TasteProfile, mode: str
     ) -> list[str]:
-        """Get top artists whose genres match the target mode."""
+        """
+        Get top artists whose genres match the target mode.
+
+        Uses genre-based matching first, then falls back to a mode-specific
+        offset into the artist list so different modes get different seeds.
+        """
         mode_genres = set()
         for keyword in GENRE_MODE_MAP.get(mode, []):
             mode_genres.add(keyword.lower())
@@ -234,8 +249,10 @@ class RecommendationService:
             mode_genres.add(genre.lower())
 
         if not mode_genres:
-            # Fallback: use top artists regardless of genre
-            return [a["name"] for a in profile.top_artists[:5]]
+            # Fallback: offset into artist list by mode to avoid duplicates
+            mode_offset = list(GENRE_MODE_MAP.keys()).index(mode) if mode in GENRE_MODE_MAP else 0
+            start = mode_offset * 5
+            return [a["name"] for a in profile.top_artists[start:start + 5]]
 
         seeds = []
         for artist in profile.top_artists:
@@ -245,9 +262,14 @@ class RecommendationService:
                 if len(seeds) >= 5:
                     break
 
-        # If no genre match, fall back to top artists
+        # If no genre match, offset by mode so each mode gets different artists
         if not seeds:
-            seeds = [a["name"] for a in profile.top_artists[:3]]
+            mode_offset = list(GENRE_MODE_MAP.keys()).index(mode) if mode in GENRE_MODE_MAP else 0
+            start = mode_offset * 3
+            artists = profile.top_artists[start:start + 5]
+            if not artists:
+                artists = profile.top_artists[:5]
+            seeds = [a["name"] for a in artists]
 
         return seeds
 
