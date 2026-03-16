@@ -27,7 +27,17 @@ async def list_routines(request: Request) -> dict:
     if not scheduler:
         return {"routines": []}
 
-    return {"routines": scheduler.get_tasks()}
+    tasks = scheduler.get_tasks()
+
+    # Attach volume to morning routine from the service instance
+    morning = getattr(request.app.state, "morning_routine", None)
+    if morning:
+        for task in tasks:
+            if task["name"] == "morning_routine":
+                task["volume"] = morning._morning_volume
+                break
+
+    return {"routines": tasks}
 
 
 @router.post("/morning/test")

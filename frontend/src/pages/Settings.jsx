@@ -27,11 +27,12 @@ export function Settings() {
       .then((data) => {
         const morning = (data.routines || []).find((r) => r.name === 'morning_routine')
         if (morning) {
+          const [h, m] = morning.time.split(':').map(Number)
           setRoutineConfig({
-            hour: morning.hour,
-            minute: morning.minute,
+            hour: h,
+            minute: m,
             enabled: morning.enabled,
-            volume: 10, // Default, not returned by GET
+            volume: morning.volume ?? 40,
           })
         }
       })
