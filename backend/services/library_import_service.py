@@ -123,8 +123,12 @@ class LibraryImportService:
         """
         Aggregate track data by artist name.
 
+        Only includes artists with meaningful engagement — at least one
+        played track or a loved/rated track. Filters out artists that
+        were just added to the library but never listened to.
+
         Returns:
-            Dict of artist_name -> {play_count, track_count, genres, ratings}
+            Dict of artist_name -> {play_count, track_count, genres, ratings, loved}
         """
         artists: dict[str, dict] = {}
 
@@ -137,6 +141,7 @@ class LibraryImportService:
                 artists[artist_name] = {
                     "play_count": 0,
                     "track_count": 0,
+                    "loved_count": 0,
                     "genres": set(),
                     "ratings": [],
                 }
@@ -144,6 +149,10 @@ class LibraryImportService:
             entry = artists[artist_name]
             entry["play_count"] += track.get("Play Count", 0)
             entry["track_count"] += 1
+
+            # Apple Music "Loved" flag (heart button)
+            if track.get("Loved"):
+                entry["loved_count"] += 1
 
             genre = track.get("Genre", "").strip()
             if genre:
@@ -154,11 +163,21 @@ class LibraryImportService:
             if rating is not None and rating > 0:
                 entry["ratings"].append(rating / 20.0)
 
-        # Convert genre sets to sorted lists
-        for entry in artists.values():
-            entry["genres"] = sorted(entry["genres"])
+        # Filter: keep only artists the user actually engages with
+        # Must have at least 1 play, 1 loved track, or a rating
+        filtered = {}
+        for name, entry in artists.items():
+            if entry["play_count"] > 0 or entry["loved_count"] > 0 or entry["ratings"]:
+                entry["genres"] = sorted(entry["genres"])
+                filtered[name] = entry
 
-        return artists
+        skipped = len(artists) - len(filtered)
+        if skipped > 0:
+            logger.info(
+                f"Filtered out {skipped} artists with no plays, loves, or ratings"
+            )
+
+        return filtered
 
     def _build_genre_distribution(self, artists: dict[str, dict]) -> dict[str, float]:
         """
