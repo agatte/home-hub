@@ -35,8 +35,6 @@ class DaySchedule:
     wake_brightness: int = 40
     ramp_start_hour: int = 6
     ramp_duration_minutes: int = 60
-    away_start_hour: Optional[int] = 7     # None = no away period
-    away_end_hour: Optional[int] = 18
     evening_start_hour: int = 18
     winddown_start_hour: int = 21
 
@@ -50,8 +48,6 @@ class ScheduleConfig:
         wake_hour=8,
         ramp_start_hour=8,
         ramp_duration_minutes=120,
-        away_start_hour=None,
-        away_end_hour=None,
     ))
 
 
@@ -463,17 +459,13 @@ class AutomationEngine:
             if now.weekday() < 5
             else self._schedule_config.weekend
         )
-        if schedule.away_start_hour is not None and schedule.away_end_hour is not None:
-            day_start = schedule.away_start_hour
-        else:
-            day_start = schedule.ramp_start_hour + (
-                schedule.ramp_duration_minutes // 60
-            )
-        day_end = schedule.evening_start_hour
+        day_start = schedule.ramp_start_hour + max(
+            1, schedule.ramp_duration_minutes // 60
+        )
 
-        if day_start <= hour < day_end:
+        if day_start <= hour < schedule.evening_start_hour:
             return "day"
-        elif day_end <= hour < schedule.winddown_start_hour:
+        elif schedule.evening_start_hour <= hour < schedule.winddown_start_hour:
             return "evening"
         else:
             return "night"
@@ -484,6 +476,10 @@ class AutomationEngine:
 
         Returns the same format as the old WEEKDAY_TIME_RULES / WEEKEND_TIME_RULES
         constants: list of (start_hour, end_hour, state_or_ramp).
+
+        Away detection is handled by the PC activity detector, not the
+        schedule — so time-based rules always provide sensible lighting
+        for when the user is home (ramp → daytime → evening → wind-down).
         """
         rules = []
 
@@ -503,47 +499,27 @@ class AutomationEngine:
         ramp_end_hour = schedule.ramp_start_hour + max(
             1, schedule.ramp_duration_minutes // 60
         )
+        ramp_end = min(ramp_end_hour, schedule.evening_start_hour)
+        rules.append((
+            schedule.ramp_start_hour,
+            ramp_end,
+            ("morning_ramp", schedule.ramp_start_hour, schedule.ramp_duration_minutes),
+        ))
 
-        if schedule.away_start_hour is not None:
-            # Weekday pattern: ramp → away (off) → evening
-            ramp_end = min(ramp_end_hour, schedule.away_start_hour)
+        # Daytime bright neutral
+        if ramp_end < schedule.evening_start_hour:
             rules.append((
-                schedule.ramp_start_hour,
                 ramp_end,
-                ("morning_ramp", schedule.ramp_start_hour, schedule.ramp_duration_minutes),
-            ))
-            if schedule.away_end_hour is not None:
-                rules.append((
-                    schedule.away_start_hour,
-                    schedule.away_end_hour,
-                    {"on": False},
-                ))
-                # Evening warm
-                rules.append((
-                    schedule.away_end_hour,
-                    schedule.winddown_start_hour,
-                    {"on": True, "bri": 180, "hue": 8000, "sat": 160},
-                ))
-        else:
-            # Weekend pattern: ramp → daytime bright → evening
-            ramp_end = min(ramp_end_hour, schedule.evening_start_hour)
-            rules.append((
-                schedule.ramp_start_hour,
-                ramp_end,
-                ("morning_ramp", schedule.ramp_start_hour, schedule.ramp_duration_minutes),
-            ))
-            if ramp_end < schedule.evening_start_hour:
-                rules.append((
-                    ramp_end,
-                    schedule.evening_start_hour,
-                    {"on": True, "bri": 220, "hue": 20000, "sat": 80},
-                ))
-            # Evening warm
-            rules.append((
                 schedule.evening_start_hour,
-                schedule.winddown_start_hour,
-                {"on": True, "bri": 180, "hue": 8000, "sat": 160},
+                {"on": True, "bri": 220, "hue": 20000, "sat": 80},
             ))
+
+        # Evening warm
+        rules.append((
+            schedule.evening_start_hour,
+            schedule.winddown_start_hour,
+            {"on": True, "bri": 180, "hue": 8000, "sat": 160},
+        ))
 
         # Wind-down dim
         rules.append((

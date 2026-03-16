@@ -96,8 +96,6 @@ class DayScheduleSchema(BaseModel):
     wake_brightness: int = Field(default=40, ge=1, le=254)
     ramp_start_hour: int = Field(default=6, ge=0, le=23)
     ramp_duration_minutes: int = Field(default=60, ge=10, le=240)
-    away_start_hour: Optional[int] = Field(default=7, ge=0, le=23)
-    away_end_hour: Optional[int] = Field(default=18, ge=0, le=23)
     evening_start_hour: int = Field(default=18, ge=0, le=23)
     winddown_start_hour: int = Field(default=21, ge=0, le=23)
 
@@ -106,11 +104,6 @@ class DayScheduleSchema(BaseModel):
         """Ensure hours are in a logical order."""
         if self.ramp_start_hour < self.wake_hour:
             raise ValueError("Ramp must start at or after wake time")
-        if self.away_start_hour is not None and self.away_end_hour is not None:
-            if self.away_start_hour >= self.away_end_hour:
-                raise ValueError("Away end must be after away start")
-            if self.away_end_hour > self.evening_start_hour:
-                raise ValueError("Away end must be at or before evening start")
         if self.evening_start_hour >= self.winddown_start_hour:
             raise ValueError("Wind-down must start after evening")
         return self
@@ -125,8 +118,6 @@ class TimeScheduleConfig(BaseModel):
             wake_hour=8,
             ramp_start_hour=8,
             ramp_duration_minutes=120,
-            away_start_hour=None,
-            away_end_hour=None,
         )
     )
 

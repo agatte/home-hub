@@ -339,53 +339,6 @@ export function Settings() {
 
             <div className="setting-row">
               <div className="setting-info">
-                <span className="setting-label">Away Hours</span>
-                <span className="setting-hint">Lights off (at work)</span>
-              </div>
-              <button
-                className={`toggle-btn ${currentSchedule.away_start_hour != null ? 'toggle-on' : ''}`}
-                onClick={() => {
-                  if (currentSchedule.away_start_hour != null) {
-                    saveScheduleConfig(scheduleDay, { away_start_hour: null, away_end_hour: null })
-                  } else {
-                    saveScheduleConfig(scheduleDay, { away_start_hour: 7, away_end_hour: 18 })
-                  }
-                }}
-              >
-                {currentSchedule.away_start_hour != null ? 'ON' : 'OFF'}
-              </button>
-            </div>
-            {currentSchedule.away_start_hour != null && (
-              <div className="setting-row">
-                <div className="setting-info">
-                  <span className="setting-hint">Leave / Return</span>
-                </div>
-                <div className="setting-time-pair">
-                  <input
-                    type="time"
-                    className="setting-time"
-                    value={`${String(currentSchedule.away_start_hour).padStart(2, '0')}:00`}
-                    onChange={(e) => {
-                      const h = parseInt(e.target.value.split(':')[0])
-                      saveScheduleConfig(scheduleDay, { away_start_hour: h })
-                    }}
-                  />
-                  <span className="setting-time-sep">-</span>
-                  <input
-                    type="time"
-                    className="setting-time"
-                    value={`${String(currentSchedule.away_end_hour).padStart(2, '0')}:00`}
-                    onChange={(e) => {
-                      const h = parseInt(e.target.value.split(':')[0])
-                      saveScheduleConfig(scheduleDay, { away_end_hour: h })
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="setting-row">
-              <div className="setting-info">
                 <span className="setting-label">Evening</span>
                 <span className="setting-hint">Warm evening lighting starts</span>
               </div>
