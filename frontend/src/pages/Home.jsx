@@ -7,6 +7,7 @@ import { LightGrid } from '../components/lights/LightGrid'
 import { NativeSceneGrid } from '../components/lights/NativeSceneGrid'
 import { SceneButton } from '../components/lights/SceneButton'
 import { SonosCard } from '../components/sonos/SonosCard'
+import { MusicSuggestionToast } from '../components/music/MusicSuggestionToast'
 
 export function Home() {
   const { lights, setLight } = useLights()
@@ -78,6 +79,8 @@ export function Home() {
         <h2 className="section-title">Routines</h2>
         <RoutineCard />
       </section>
+
+      <MusicSuggestionToast />
     </main>
   )
 }

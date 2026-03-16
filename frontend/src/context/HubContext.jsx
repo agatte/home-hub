@@ -4,6 +4,7 @@ import { useWebSocket } from '../hooks/useWebSocket'
 const LightsContext = createContext(null)
 const SonosContext = createContext(null)
 const AutomationContext = createContext(null)
+const MusicContext = createContext(null)
 const ConnectionContext = createContext(null)
 
 export function HubProvider({ children }) {
@@ -24,6 +25,8 @@ export function HubProvider({ children }) {
     manual_override: false,
     social_style: 'color_cycle',
   })
+  const [musicSuggestion, setMusicSuggestion] = useState(null)
+  const [musicAutoPlayed, setMusicAutoPlayed] = useState(null)
 
   const handleMessage = useCallback((message) => {
     const { type, data } = message
@@ -40,6 +43,12 @@ export function HubProvider({ children }) {
         break
       case 'mode_update':
         setAutomationMode(data)
+        break
+      case 'music_suggestion':
+        setMusicSuggestion(data)
+        break
+      case 'music_auto_played':
+        setMusicAutoPlayed(data)
         break
       default:
         break
@@ -131,12 +140,44 @@ export function HubProvider({ children }) {
     })
   }, [])
 
+  const dismissMusicSuggestion = useCallback(() => {
+    setMusicSuggestion(null)
+  }, [])
+
+  const acceptMusicSuggestion = useCallback(async () => {
+    if (!musicSuggestion) return
+    try {
+      await fetch(`/api/sonos/favorites/${encodeURIComponent(musicSuggestion.title)}/play`, {
+        method: 'POST',
+      })
+    } catch { /* ignore */ }
+    setMusicSuggestion(null)
+  }, [musicSuggestion])
+
+  // Auto-clear music suggestion after 15s
+  useEffect(() => {
+    if (!musicSuggestion) return
+    const timer = setTimeout(() => setMusicSuggestion(null), 15000)
+    return () => clearTimeout(timer)
+  }, [musicSuggestion])
+
+  // Auto-clear music auto-played toast after 5s
+  useEffect(() => {
+    if (!musicAutoPlayed) return
+    const timer = setTimeout(() => setMusicAutoPlayed(null), 5000)
+    return () => clearTimeout(timer)
+  }, [musicAutoPlayed])
+
   // Split into separate context values so updates to one don't re-render consumers of another
   const lightsValue = useMemo(() => ({ lights, setLight }), [lights, setLight])
   const sonosValue = useMemo(() => ({ sonos, sonosCommand, speakText }), [sonos, sonosCommand, speakText])
   const automationValue = useMemo(
     () => ({ automationMode, setManualMode, setSocialStyle, activateScene }),
     [automationMode, setManualMode, setSocialStyle, activateScene]
+  )
+  const musicValue = useMemo(
+    () => ({ musicSuggestion, musicAutoPlayed, dismissMusicSuggestion, acceptMusicSuggestion }),
+    [musicSuggestion, musicAutoPlayed, dismissMusicSuggestion, acceptMusicSuggestion]
   )
   const connectionValue = useMemo(
     () => ({ connected, deviceStatus }),
@@ -146,11 +187,13 @@ export function HubProvider({ children }) {
   return (
     <ConnectionContext.Provider value={connectionValue}>
       <AutomationContext.Provider value={automationValue}>
-        <SonosContext.Provider value={sonosValue}>
-          <LightsContext.Provider value={lightsValue}>
-            {children}
-          </LightsContext.Provider>
-        </SonosContext.Provider>
+        <MusicContext.Provider value={musicValue}>
+          <SonosContext.Provider value={sonosValue}>
+            <LightsContext.Provider value={lightsValue}>
+              {children}
+            </LightsContext.Provider>
+          </SonosContext.Provider>
+        </MusicContext.Provider>
       </AutomationContext.Provider>
     </ConnectionContext.Provider>
   )
@@ -171,6 +214,12 @@ export function useSonos() {
 export function useAutomation() {
   const context = useContext(AutomationContext)
   if (!context) throw new Error('useAutomation must be used within HubProvider')
+  return context
+}
+
+export function useMusic() {
+  const context = useContext(MusicContext)
+  if (!context) throw new Error('useMusic must be used within HubProvider')
   return context
 }
 

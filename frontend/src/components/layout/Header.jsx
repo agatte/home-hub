@@ -18,6 +18,17 @@ export const Header = memo(function Header({ connected, deviceStatus, page, onPa
           <StatusDot active={deviceStatus.sonos} label="Sonos" />
         </div>
         <button
+          className={`settings-btn ${page === 'music' ? 'settings-btn-active' : ''}`}
+          onClick={() => onPageChange(page === 'music' ? 'home' : 'music')}
+          aria-label="Music"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8 17.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z" />
+            <path d="M10.5 15V3.5L17 2v11" />
+            <path d="M17 13a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0Z" />
+          </svg>
+        </button>
+        <button
           className={`settings-btn ${page === 'settings' ? 'settings-btn-active' : ''}`}
           onClick={() => onPageChange(page === 'settings' ? 'home' : 'settings')}
           aria-label="Settings"

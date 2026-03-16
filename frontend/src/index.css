@@ -971,3 +971,200 @@ body {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* Music page */
+.music-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+/* Mode playlist mapper */
+.mode-playlist-mapper {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 0;
+}
+
+.mode-playlist-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.mode-playlist-row + .mode-playlist-row {
+  border-top: 1px solid var(--border);
+}
+
+.mode-playlist-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 100px;
+}
+
+.mode-playlist-icon {
+  font-size: 18px;
+}
+
+.mode-playlist-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.mode-playlist-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.mode-playlist-select {
+  max-width: 200px;
+  flex: 1;
+}
+
+.mode-playlist-hint {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  border-top: 1px solid var(--border);
+}
+
+/* Music suggestion toast */
+.music-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 90;
+  animation: toastSlideUp 0.3s ease-out;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.music-toast-suggestion {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.music-toast-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.music-toast-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+  display: flex;
+}
+
+.music-toast-text {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.music-toast-text strong {
+  color: var(--accent);
+}
+
+.music-toast-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.music-toast-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.music-toast-accept {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  flex: 1;
+  justify-content: center;
+}
+
+.music-toast-accept:hover {
+  background: #3a5ce6;
+}
+
+.music-toast-dismiss {
+  width: 32px;
+  padding: 6px;
+  justify-content: center;
+}
+
+.music-toast-dismiss:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.music-toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 0 0 var(--radius) var(--radius);
+  animation: toastProgress 15s linear forwards;
+}
+
+.music-toast-info {
+  border-color: var(--accent);
+}
+
+@keyframes toastSlideUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes toastProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+@media (max-width: 500px) {
+  .mode-playlist-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .mode-playlist-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .mode-playlist-select {
+    max-width: none;
+  }
+}

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Home Hub is a unified home automation dashboard controlling Philips Hue lights and a Sonos Era 100 speaker. It runs as a single FastAPI server that also serves the React frontend. The system includes intelligent lighting automation based on time of day and PC activity detection, a morning routine with weather/traffic TTS, native Hue bridge scene/effect support, and a planned game-day mode for Colts games with dynamic light celebrations.
+Home Hub is a unified home automation dashboard controlling Philips Hue lights and a Sonos Era 100 speaker. It runs as a single FastAPI server that also serves the React frontend. The system includes intelligent lighting automation based on time of day and PC activity detection, a morning routine with weather/traffic TTS, native Hue bridge scene/effect support, mode-aware music playlists with smart auto-play, and a planned game-day mode for Colts games with dynamic light celebrations.
 
 ## Commands
 
@@ -54,6 +54,7 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
    ├── SonosService (SoCo) ──> Sonos Era 100 (UPnP, zero-auth)
    ├── TTSService ──> edge-tts generates MP3 ──> Sonos plays URL
    ├── AutomationEngine ──> time + activity → light state
+   ├── MusicMapper ──> mode change → smart Sonos auto-play
    ├── Scheduler ──> morning routine (weather + traffic TTS)
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves React static build from frontend/dist/
@@ -63,21 +64,23 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
 
 - **`backend/main.py`** — App lifespan initializes all services, registers routes, starts background tasks (Hue polling, Sonos polling, automation loop, scheduler). WebSocket endpoint at `/ws` handles bidirectional light/sonos commands and broadcasts state changes.
 - **Two Hue APIs**: `hue_service.py` (v1/phue2) for basic light control + polling; `hue_v2_service.py` (CLIP API v2/httpx) for native scenes and dynamic effects. Both talk to the same bridge. v2 uses UUIDs, v1 uses integers — a mapping cache bridges them.
-- **`automation_engine.py`** — Background loop (60s interval) applies time-based lighting rules. Accepts activity reports from PC agent and ambient monitor. Manual overrides from dashboard have 4-hour auto-timeout.
+- **`automation_engine.py`** — Background loop (60s interval) applies time-based lighting rules. Accepts activity reports from PC agent and ambient monitor. Manual overrides from dashboard have 4-hour auto-timeout. Supports `register_on_mode_change` callbacks for extensibility (used by MusicMapper).
+- **`music_mapper.py`** — Maps activity modes to Sonos favorites/playlists (persisted to SQLite). On mode change: auto-plays if Sonos is idle, broadcasts a WebSocket suggestion if Sonos is busy. Registered as a mode-change callback on the AutomationEngine.
 - **`scheduler.py`** — Async cron scheduler (no external deps). Drives the morning routine at 6:40 AM weekdays.
 - **`morning_routine.py`** — Fetches weather (OpenWeatherMap) + traffic (Google Maps Directions), generates TTS, plays on Sonos.
 - **`pc_agent/`** — Standalone scripts that POST mode changes to `/api/automation/activity`. `activity_detector.py` uses psutil for game/media process detection. `ambient_monitor.py` uses PyAudio for Blue Yeti mic RMS measurement (party detection).
 
 ### Frontend (React 18 + Vite)
 
-- **`context/HubContext.jsx`** — Single context provider manages all state (lights, sonos, automation mode). WebSocket connection handles real-time updates. Exposes `setLight`, `sonosCommand`, `activateScene`, `setManualMode`.
-- **`pages/Home.jsx`** — Main dashboard: Mode indicator/override → Lights grid → Scene presets → Native Hue scenes → Effects → Sonos player → Routines.
+- **`context/HubContext.jsx`** — Split context providers (Lights, Sonos, Automation, Music, Connection) for minimal re-renders. WebSocket connection handles real-time updates including `music_suggestion` and `music_auto_played` events. Exposes `setLight`, `sonosCommand`, `activateScene`, `setManualMode`, `useMusic`.
+- **`pages/Home.jsx`** — Main dashboard: Mode indicator/override → Lights grid → Scene presets → Native Hue scenes → Effects → Sonos player → Routines → MusicSuggestionToast.
+- **`pages/Music.jsx`** — Music page: Mode-to-playlist mapping configuration (Sonos favorite dropdown + auto-play toggle per mode).
 - **`components/lights/NativeSceneGrid.jsx`** — Fetches bridge scenes (deduplicated by name across rooms) and dynamic effects. Clicking a scene activates it in all rooms.
 - Built frontend is served by FastAPI via `/{path:path}` catch-all (must come after API routes).
 
 ### WebSocket Protocol
 
-Server pushes `light_update`, `sonos_update`, `connection_status`, `mode_update` events. Clients send `light_command`, `sonos_command` messages. All JSON with `type` + `data` fields.
+Server pushes `light_update`, `sonos_update`, `connection_status`, `mode_update`, `music_suggestion`, `music_auto_played` events. Clients send `light_command`, `sonos_command` messages. All JSON with `type` + `data` fields.
 
 ### Key Patterns
 
@@ -85,6 +88,7 @@ Server pushes `light_update`, `sonos_update`, `connection_status`, `mode_update`
 - **Polling + WebSocket hybrid**: Hue polled every 1s, Sonos every 2s. Changes detected by polling are broadcast to all WebSocket clients. This catches external changes (Alexa, Hue app).
 - **API route prefix**: All REST endpoints use `/api/` prefix. Health is at `/health` (no prefix).
 - **Scene routing**: `POST /api/scenes/{id}/activate` checks if ID is a preset name or UUID, routes to v1 or v2 API accordingly.
+- **Music auto-play**: `MusicMapper` is registered as a mode-change callback. On mode change, it checks Sonos state — plays the mapped favorite if idle, or broadcasts `music_suggestion` via WebSocket if Sonos is busy. Mappings persist to `mode_playlists` SQLite table.
 - **Config**: All settings via `pydantic-settings` loading from `.env`. See `.env.example`.
 
 ## Important Notes
@@ -101,5 +105,6 @@ Server pushes `light_update`, `sonos_update`, `connection_status`, `mode_update`
 
 ## Future Phases
 
-- **Game Day Engine** (Phase 2, ~August pre-season): ESPN API polling, play detection (touchdown, field goal, big play), celebration orchestration (lights + TTS), GameDay.jsx live scoreboard.
-- **Pixel Art Field** (Phase 3): PixiJS/Canvas retro football field with animated sprites showing plays.
+- **Music Discovery** (in progress): Apple Music XML library import → taste profile analysis → Last.fm similar-artist recommendations → iTunes Search API 30s previews on Sonos → per-mode discovery feed with like/dismiss feedback loop.
+- **Game Day Engine** (~August pre-season): ESPN API polling, play detection (touchdown, field goal, big play), celebration orchestration (lights + TTS), GameDay.jsx live scoreboard.
+- **Pixel Art Field**: PixiJS/Canvas retro football field with animated sprites showing plays.

@@ -275,6 +275,9 @@ class AutomationEngine:
         # Screen sync service (set by main.py after construction)
         self._screen_sync = None
 
+        # Mode change callbacks (e.g., music mapper auto-play)
+        self._on_mode_change_callbacks: list = []
+
         # Config
         self._enabled: bool = True
         self._override_timeout_hours: int = 4
@@ -364,6 +367,23 @@ class AutomationEngine:
     def screen_sync(self, service) -> None:
         self._screen_sync = service
 
+    def register_on_mode_change(self, callback) -> None:
+        """
+        Register a callback to be invoked when the active mode changes.
+
+        Args:
+            callback: Async callable accepting a single mode string argument.
+        """
+        self._on_mode_change_callbacks.append(callback)
+
+    async def _fire_mode_change_callbacks(self, mode: str) -> None:
+        """Invoke all registered mode-change callbacks."""
+        for callback in self._on_mode_change_callbacks:
+            try:
+                await callback(mode)
+            except Exception as e:
+                logger.error(f"Mode change callback error: {e}", exc_info=True)
+
     # ------------------------------------------------------------------
     # Activity reporting
     # ------------------------------------------------------------------
@@ -414,6 +434,10 @@ class AutomationEngine:
         if not self._manual_override:
             await self._apply_mode(mode)
 
+        # Fire mode change callbacks (e.g., music auto-play)
+        if old_mode != mode:
+            await self._fire_mode_change_callbacks(mode)
+
         # Broadcast mode change
         await self._broadcast_mode()
 
@@ -428,6 +452,8 @@ class AutomationEngine:
         # Broadcast first so the UI updates immediately, then apply lights
         await self._broadcast_mode()
         await self._apply_mode(mode)
+        # Fire mode change callbacks (e.g., music auto-play)
+        await self._fire_mode_change_callbacks(mode)
 
     async def clear_override(self) -> None:
         """Clear the manual override and return to automatic mode."""

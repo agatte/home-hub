@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.api.routes.automation import router as automation_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.lights import router as lights_router
+from backend.api.routes.music import router as music_router
 from backend.api.routes.routines import router as routines_router
 from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
@@ -99,8 +100,10 @@ async def lifespan(app: FastAPI):
     automation.screen_sync = screen_sync
     app.state.automation = automation
 
-    # Music mapper
-    music_mapper = MusicMapper(sonos_service=sonos)
+    # Music mapper (DB-backed mode-to-playlist mapping with smart auto-play)
+    music_mapper = MusicMapper(sonos_service=sonos, ws_manager=ws_manager)
+    await music_mapper.load_from_db()
+    automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     app.state.music_mapper = music_mapper
 
     # Morning routine
@@ -181,6 +184,7 @@ app.include_router(lights_router)
 app.include_router(scenes_router)
 app.include_router(sonos_router)
 app.include_router(automation_router)
+app.include_router(music_router)
 app.include_router(routines_router)
 
 # Serve React frontend build (must come after API routes)
