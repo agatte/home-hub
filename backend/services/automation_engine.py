@@ -12,6 +12,7 @@ others off; fire-and-ice party: warm/cool split across rooms).
 """
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -20,6 +21,50 @@ logger = logging.getLogger("home_hub.automation")
 
 # Indianapolis timezone (Indiana doesn't follow standard Eastern DST rules)
 TZ = ZoneInfo("America/Indiana/Indianapolis")
+
+
+# ---------------------------------------------------------------------------
+# Configurable schedule dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DaySchedule:
+    """Time-based lighting schedule for one day type (weekday or weekend)."""
+
+    wake_hour: int = 5
+    wake_brightness: int = 40
+    ramp_start_hour: int = 6
+    ramp_duration_minutes: int = 60
+    away_start_hour: Optional[int] = 7     # None = no away period
+    away_end_hour: Optional[int] = 18
+    evening_start_hour: int = 18
+    winddown_start_hour: int = 21
+
+
+@dataclass
+class ScheduleConfig:
+    """Combined weekday + weekend schedule configuration."""
+
+    weekday: DaySchedule = field(default_factory=DaySchedule)
+    weekend: DaySchedule = field(default_factory=lambda: DaySchedule(
+        wake_hour=8,
+        ramp_start_hour=8,
+        ramp_duration_minutes=120,
+        away_start_hour=None,
+        away_end_hour=None,
+    ))
+
+
+# Default mode brightness multipliers (1.0 = unchanged)
+DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
+    "gaming": 1.0,
+    "working": 1.0,
+    "watching": 1.0,
+    "relax": 1.0,
+    "movie": 1.0,
+    "social": 1.0,
+}
+
 
 # Light ID → room mapping for readability
 LIGHT_IDS = {
@@ -210,8 +255,8 @@ def _morning_ramp(
     return {"on": True, "bri": bri, "hue": hue, "sat": sat}
 
 
-def _get_time_period() -> str:
-    """Determine the current time period for activity brightness scaling."""
+def _get_time_period_static() -> str:
+    """Determine the current time period (static fallback, uses defaults)."""
     hour = datetime.now(tz=TZ).hour
     if 8 <= hour < 18:
         return "day"
@@ -221,19 +266,26 @@ def _get_time_period() -> str:
         return "night"
 
 
-def _resolve_activity_state(mode: str) -> dict[str, Any]:
+def _resolve_activity_state(
+    mode: str,
+    time_period: Optional[str] = None,
+) -> dict[str, Any]:
     """
     Look up the time-appropriate light state for an activity mode.
 
     Time-aware entries have "day"/"evening"/"night" keys. Flat entries
     (like social) are returned as-is.
+
+    Args:
+        mode: Activity mode name.
+        time_period: Override time period. Uses static default if None.
     """
     entry = ACTIVITY_LIGHT_STATES.get(mode)
     if entry is None:
         return {}
     # Time-aware entries have period keys
     if "day" in entry:
-        period = _get_time_period()
+        period = time_period or _get_time_period_static()
         return entry.get(period, entry.get("night", {}))
     # Flat per-light dict (social — no time awareness)
     return entry
@@ -249,7 +301,14 @@ class AutomationEngine:
     the dashboard take highest priority.
     """
 
-    def __init__(self, hue, hue_v2, ws_manager) -> None:
+    def __init__(
+        self,
+        hue,
+        hue_v2,
+        ws_manager,
+        schedule_config: Optional[ScheduleConfig] = None,
+        mode_brightness: Optional[dict[str, float]] = None,
+    ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
         self._ws_manager = ws_manager
@@ -284,6 +343,10 @@ class AutomationEngine:
         self._gaming_effect: Optional[str] = None
         self._social_style: str = "color_cycle"
         self._active_effect: bool = False  # Track if a Hue dynamic effect is running
+
+        # Configurable schedule and mode brightness
+        self._schedule_config = schedule_config or ScheduleConfig()
+        self._mode_brightness = {**DEFAULT_MODE_BRIGHTNESS, **(mode_brightness or {})}
 
     # ------------------------------------------------------------------
     # Properties
@@ -366,6 +429,157 @@ class AutomationEngine:
     @screen_sync.setter
     def screen_sync(self, service) -> None:
         self._screen_sync = service
+
+    # ------------------------------------------------------------------
+    # Schedule + brightness config
+    # ------------------------------------------------------------------
+
+    @property
+    def schedule_config(self) -> ScheduleConfig:
+        return self._schedule_config
+
+    @property
+    def mode_brightness(self) -> dict[str, float]:
+        return self._mode_brightness.copy()
+
+    def update_schedule_config(self, config: ScheduleConfig) -> None:
+        """Hot-reload the time schedule config. Takes effect on next loop cycle."""
+        self._schedule_config = config
+        self._last_applied_per_light = {}  # Force re-apply
+        logger.info("Schedule config updated")
+
+    def update_mode_brightness(self, brightness: dict[str, float]) -> None:
+        """Hot-reload per-mode brightness multipliers."""
+        self._mode_brightness = {**DEFAULT_MODE_BRIGHTNESS, **brightness}
+        self._last_applied_per_light = {}  # Force re-apply
+        logger.info(f"Mode brightness updated: {brightness}")
+
+    def _get_time_period(self) -> str:
+        """Determine the current time period using the schedule config."""
+        now = datetime.now(tz=TZ)
+        hour = now.hour
+        schedule = (
+            self._schedule_config.weekday
+            if now.weekday() < 5
+            else self._schedule_config.weekend
+        )
+        if schedule.away_start_hour is not None and schedule.away_end_hour is not None:
+            day_start = schedule.away_start_hour
+        else:
+            day_start = schedule.ramp_start_hour + (
+                schedule.ramp_duration_minutes // 60
+            )
+        day_end = schedule.evening_start_hour
+
+        if day_start <= hour < day_end:
+            return "day"
+        elif day_end <= hour < schedule.winddown_start_hour:
+            return "evening"
+        else:
+            return "night"
+
+    def _build_time_rules(self, schedule: DaySchedule) -> list:
+        """
+        Build time rule tuples dynamically from a DaySchedule config.
+
+        Returns the same format as the old WEEKDAY_TIME_RULES / WEEKEND_TIME_RULES
+        constants: list of (start_hour, end_hour, state_or_ramp).
+        """
+        rules = []
+
+        # Overnight → off (midnight to wake)
+        if schedule.wake_hour > 0:
+            rules.append((0, schedule.wake_hour, {"on": False}))
+
+        # Wake → ramp start: dim warm
+        if schedule.ramp_start_hour > schedule.wake_hour:
+            rules.append((
+                schedule.wake_hour,
+                schedule.ramp_start_hour,
+                {"on": True, "bri": schedule.wake_brightness, "hue": 6000, "sat": 200},
+            ))
+
+        # Morning ramp
+        ramp_end_hour = schedule.ramp_start_hour + max(
+            1, schedule.ramp_duration_minutes // 60
+        )
+
+        if schedule.away_start_hour is not None:
+            # Weekday pattern: ramp → away (off) → evening
+            ramp_end = min(ramp_end_hour, schedule.away_start_hour)
+            rules.append((
+                schedule.ramp_start_hour,
+                ramp_end,
+                ("morning_ramp", schedule.ramp_start_hour, schedule.ramp_duration_minutes),
+            ))
+            if schedule.away_end_hour is not None:
+                rules.append((
+                    schedule.away_start_hour,
+                    schedule.away_end_hour,
+                    {"on": False},
+                ))
+                # Evening warm
+                rules.append((
+                    schedule.away_end_hour,
+                    schedule.winddown_start_hour,
+                    {"on": True, "bri": 180, "hue": 8000, "sat": 160},
+                ))
+        else:
+            # Weekend pattern: ramp → daytime bright → evening
+            ramp_end = min(ramp_end_hour, schedule.evening_start_hour)
+            rules.append((
+                schedule.ramp_start_hour,
+                ramp_end,
+                ("morning_ramp", schedule.ramp_start_hour, schedule.ramp_duration_minutes),
+            ))
+            if ramp_end < schedule.evening_start_hour:
+                rules.append((
+                    ramp_end,
+                    schedule.evening_start_hour,
+                    {"on": True, "bri": 220, "hue": 20000, "sat": 80},
+                ))
+            # Evening warm
+            rules.append((
+                schedule.evening_start_hour,
+                schedule.winddown_start_hour,
+                {"on": True, "bri": 180, "hue": 8000, "sat": 160},
+            ))
+
+        # Wind-down dim
+        rules.append((
+            schedule.winddown_start_hour,
+            24,
+            {"on": True, "bri": 60, "hue": 5500, "sat": 220},
+        ))
+
+        return rules
+
+    def _apply_brightness_multiplier(
+        self, state: dict[str, Any], mode: str
+    ) -> dict[str, Any]:
+        """Apply per-mode brightness multiplier to a light state."""
+        multiplier = self._mode_brightness.get(mode, 1.0)
+        if multiplier == 1.0:
+            return state
+
+        # Per-light dict: keys are light IDs with dict values
+        is_per_light = all(
+            isinstance(v, dict) for v in state.values()
+        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
+
+        if is_per_light:
+            result = {}
+            for lid, ls in state.items():
+                ls_copy = ls.copy()
+                if ls_copy.get("on", True) and "bri" in ls_copy:
+                    ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * multiplier)))
+                result[lid] = ls_copy
+            return result
+        else:
+            result = state.copy()
+            if result.get("on", True) and "bri" in result:
+                result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
+            return result
 
     def register_on_mode_change(self, callback) -> None:
         """
@@ -524,7 +738,8 @@ class AutomationEngine:
             return
 
         if mode in ACTIVITY_LIGHT_STATES:
-            state = _resolve_activity_state(mode)
+            state = _resolve_activity_state(mode, self._get_time_period())
+            state = self._apply_brightness_multiplier(state, mode)
             await self._apply_state(state)
 
             # Start screen sync for watching and gaming modes
@@ -669,8 +884,13 @@ class AutomationEngine:
         hour = now.hour
         minute = now.minute
 
-        # Select rule set based on day of week
-        rules = WEEKDAY_TIME_RULES if now.weekday() < 5 else WEEKEND_TIME_RULES
+        # Select schedule config based on day of week
+        schedule = (
+            self._schedule_config.weekday
+            if now.weekday() < 5
+            else self._schedule_config.weekend
+        )
+        rules = self._build_time_rules(schedule)
 
         for start, end, rule in rules:
             if start <= hour < end:

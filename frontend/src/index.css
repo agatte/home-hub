@@ -972,6 +972,38 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Schedule tab toggle */
+.schedule-tab-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.schedule-tab {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.schedule-tab-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.setting-time-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.setting-time-sep {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 /* Music page */
 .music-description {
   font-size: 13px;

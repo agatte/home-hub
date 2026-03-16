@@ -97,8 +97,26 @@ async def lifespan(app: FastAPI):
     screen_sync = ScreenSyncService(hue_service=hue, target_light_id="2")
     app.state.screen_sync = screen_sync
 
-    # Automation engine
-    automation = AutomationEngine(hue=hue, hue_v2=hue_v2, ws_manager=ws_manager)
+    # Automation engine — load persisted schedule + brightness config
+    from backend.api.routes.routines import load_setting
+    from backend.api.routes.automation import (
+        SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, _dict_to_schedule_config,
+    )
+    from backend.services.automation_engine import ScheduleConfig
+
+    saved_schedule = await load_setting(SCHEDULE_CONFIG_KEY)
+    schedule_config = (
+        _dict_to_schedule_config(saved_schedule)
+        if saved_schedule
+        else ScheduleConfig()
+    )
+    saved_brightness = await load_setting(BRIGHTNESS_CONFIG_KEY)
+
+    automation = AutomationEngine(
+        hue=hue, hue_v2=hue_v2, ws_manager=ws_manager,
+        schedule_config=schedule_config,
+        mode_brightness=saved_brightness or None,
+    )
     automation.screen_sync = screen_sync
     app.state.automation = automation
 
@@ -143,6 +161,36 @@ async def lifespan(app: FastAPI):
         callback=morning.execute,
         enabled=saved_config.get("enabled", bool(settings.OPENWEATHER_API_KEY)),
     ))
+
+    # Evening wind-down routine
+    from backend.api.routes.routines import WINDDOWN_CONFIG_KEY
+    from backend.services.winddown_routine import WinddownRoutineService
+
+    winddown_config = await load_setting(WINDDOWN_CONFIG_KEY)
+    winddown = WinddownRoutineService(
+        automation_engine=automation,
+        sonos_service=sonos,
+        tts_service=tts,
+        volume=winddown_config.get("volume", 20),
+        activate_candlelight=winddown_config.get("activate_candlelight", True),
+        weekdays_only=winddown_config.get("weekdays_only", False),
+    )
+    app.state.winddown_routine = winddown
+
+    winddown_weekdays = (
+        [0, 1, 2, 3, 4]
+        if winddown_config.get("weekdays_only", False)
+        else [0, 1, 2, 3, 4, 5, 6]
+    )
+    scheduler.add_task(ScheduledTask(
+        name="winddown_routine",
+        hour=winddown_config.get("hour", 21),
+        minute=winddown_config.get("minute", 0),
+        weekdays=winddown_weekdays,
+        callback=winddown.execute,
+        enabled=winddown_config.get("enabled", False),
+    ))
+
     app.state.scheduler = scheduler
 
     # Background tasks
