@@ -118,7 +118,10 @@ async def lifespan(app: FastAPI):
     )
     app.state.recommendation_service = rec_service
 
-    # Morning routine
+    # Morning routine — load persisted config from DB, fall back to .env defaults
+    from backend.api.routes.routines import load_morning_config
+    saved_config = await load_morning_config()
+
     morning = MorningRoutineService(
         tts_service=tts,
         automation_engine=automation,
@@ -126,7 +129,7 @@ async def lifespan(app: FastAPI):
         google_maps_key=settings.GOOGLE_MAPS_API_KEY,
         home_address=settings.HOME_ADDRESS,
         work_address=settings.WORK_ADDRESS,
-        morning_volume=settings.MORNING_VOLUME,
+        morning_volume=saved_config.get("volume", settings.MORNING_VOLUME),
     )
     app.state.morning_routine = morning
 
@@ -134,11 +137,11 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncScheduler()
     scheduler.add_task(ScheduledTask(
         name="morning_routine",
-        hour=settings.MORNING_ROUTINE_HOUR,
-        minute=settings.MORNING_ROUTINE_MINUTE,
+        hour=saved_config.get("hour", settings.MORNING_ROUTINE_HOUR),
+        minute=saved_config.get("minute", settings.MORNING_ROUTINE_MINUTE),
         weekdays=[0, 1, 2, 3, 4],  # Monday-Friday
         callback=morning.execute,
-        enabled=bool(settings.OPENWEATHER_API_KEY),  # Only if API key is set
+        enabled=saved_config.get("enabled", bool(settings.OPENWEATHER_API_KEY)),
     ))
     app.state.scheduler = scheduler
 

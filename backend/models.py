@@ -10,6 +10,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.database import Base
 
 
+class AppSetting(Base):
+    """Key-value store for persistent app settings (survives restarts)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class Scene(Base):
     """A saved light + sonos preset that can be activated with one tap."""
 

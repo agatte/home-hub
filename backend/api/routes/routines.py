@@ -2,13 +2,20 @@
 Scheduled routine endpoints — morning routine and future automations.
 """
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+
+from backend.database import async_session
+from backend.models import AppSetting
 
 logger = logging.getLogger("home_hub.routines")
 
 router = APIRouter(prefix="/api/routines", tags=["routines"])
+
+MORNING_CONFIG_KEY = "morning_routine_config"
 
 
 class RoutineConfig(BaseModel):
@@ -18,6 +25,39 @@ class RoutineConfig(BaseModel):
     minute: int = Field(default=40, ge=0, le=59)
     enabled: bool = Field(default=True)
     volume: int = Field(default=40, ge=0, le=100)
+
+
+async def load_morning_config() -> dict:
+    """Load persisted morning routine config from database."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(AppSetting).where(AppSetting.key == MORNING_CONFIG_KEY)
+        )
+        setting = result.scalar_one_or_none()
+
+    if setting:
+        return setting.value
+    return {}
+
+
+async def _save_morning_config(config: dict) -> None:
+    """Persist morning routine config to database."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(AppSetting).where(AppSetting.key == MORNING_CONFIG_KEY)
+        )
+        setting = result.scalar_one_or_none()
+
+        if setting:
+            setting.value = config
+            setting.updated_at = datetime.now(timezone.utc)
+        else:
+            session.add(AppSetting(
+                key=MORNING_CONFIG_KEY,
+                value=config,
+            ))
+
+        await session.commit()
 
 
 @router.get("")
@@ -82,8 +122,11 @@ async def update_morning_config(config: RoutineConfig, request: Request) -> dict
     )
     scheduler.add_task(task)
 
-    # Update volume
+    # Update volume in-memory
     morning._morning_volume = config.volume
+
+    # Persist to database
+    await _save_morning_config(config.model_dump())
 
     logger.info(
         f"Morning routine updated: {config.hour:02d}:{config.minute:02d}, "
