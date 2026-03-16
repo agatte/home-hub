@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB — AUDIT SUMMARY
-                        Updated: 2026-03-15
+                        Updated: 2026-03-16
 ================================================================================
 
 PROJECT PATH: C:\Users\antho\Desktop\home-hub\
@@ -24,7 +24,7 @@ PHASE 1 — HOME HUB FOUNDATION (Complete)
   ✅ SQLite database, Pydantic Settings, structured logging
   ✅ Verified: all 4 lights, Sonos TTS, desktop + phone
 
-PHASE 1.5 — SMART AUTOMATION (Just Built)
+PHASE 1.5 — SMART AUTOMATION (Complete)
 ──────────────────────────────────────────
 
   BACKEND:
@@ -40,13 +40,11 @@ PHASE 1.5 — SMART AUTOMATION (Just Built)
   ✅ Automation engine (automation_engine.py)
      - Per-light control: each light can be set independently per mode
      - Time-aware activity states: brightness adapts to day/evening/night
-       Day (8-18): brighter to counteract ambient daylight
-       Evening (18-21): moderate brightness
-       Night (21-8): dim, easy on eyes
-     - Weekday time rules: off at work (7am-6pm), warm evening, dim wind-down
-     - Weekend time rules: sleep in, gentle 2hr morning ramp, neutral bright day
+     - Config-driven time rules (wake, ramp, evening, wind-down hours)
+     - Weekday/weekend schedules with separate defaults
      - Activity overrides: gaming, working, watching, social, relax, movie
      - Party sub-modes: color_cycle, club, rave, fire_and_ice
+     - Per-mode brightness multipliers (30%-150%, configurable from Settings)
      - Sleep detection: 10:30pm + 15min idle → pause YouTube + fade lights
      - Screen sync: bedroom lamp matches projector content (mss capture)
      - Manual override from dashboard (4-hour auto-timeout, optimistic UI)
@@ -81,6 +79,17 @@ PHASE 1.5 — SMART AUTOMATION (Just Built)
      - AsyncScheduler: cron-like async scheduling, no external deps
      - POST /api/routines/morning/test for instant testing
      - Configurable time/volume via PUT /api/routines/morning/config
+     - Volume persists in SQLite (app_settings table) across restarts
+
+  ✅ Evening wind-down routine (winddown_routine.py)
+     - Scheduled routine (default 9:00 PM)
+     - Sets manual override to "relax" → triggers candlelight + dim lights
+     - Lowers Sonos volume to configured level
+     - Brief TTS: "Wind-down time. Lights dimmed."
+     - Configurable: time, volume, candlelight on/off, weekdays-only toggle
+     - POST /api/routines/winddown/test for instant testing
+     - PUT /api/routines/winddown/config for settings
+     - Persists config in SQLite across restarts
 
   ✅ Music mapper (music_mapper.py)
      - Maps activity modes to Sonos favorites (Apple Music playlists)
@@ -95,14 +104,63 @@ PHASE 1.5 — SMART AUTOMATION (Just Built)
      - Captures every 2.5s, brightness clamped 15-80
      - Auto-starts in watching mode, stops on mode change
 
-  ✅ Automation API routes (automation.py + routines.py)
-     - POST /api/automation/activity — receive activity reports
-     - GET /api/automation/status — full engine state
-     - POST /api/automation/override — manual mode from dashboard
-     - GET/PUT /api/automation/config — engine settings
-     - GET /api/automation/social-styles — list party sub-modes
-     - POST /api/automation/social-style — switch party sub-mode
-     - GET/POST /api/automation/screen-sync/status|start|stop
+  ✅ Configurable automation schedule
+     - DaySchedule + ScheduleConfig dataclasses replace hardcoded time rules
+     - _build_time_rules() generates rule tuples dynamically from config
+     - Separate weekday/weekend settings
+     - Fields: wake_hour, wake_brightness, ramp_start_hour,
+       ramp_duration_minutes, evening_start_hour, winddown_start_hour
+     - Hot-reload: update_schedule_config() clears cache for immediate effect
+     - Persisted in SQLite (app_settings key: "time_schedule_config")
+     - Backward-compatible: filters unknown fields from stale DB data
+
+  ✅ Per-mode brightness multipliers
+     - 6 modes: gaming, working, watching, relax, movie, social
+     - Range: 0.3 (30%) to 1.5 (150%), default 1.0 (100%)
+     - Applied after activity state resolution, clamped to [1, 254]
+     - Hot-reload: update_mode_brightness() for immediate effect
+     - Persisted in SQLite (app_settings key: "mode_brightness_config")
+
+  ✅ Settings persistence (AppSetting model)
+     - Key-value JSON store in app_settings table
+     - Generic load_setting() / save_setting() helpers (reusable)
+     - Used by: morning routine, wind-down routine, schedule config,
+       mode brightness, music discovery
+     - All settings survive server restarts
+
+PHASE 1.6 — MUSIC DISCOVERY (Complete)
+──────────────────────────────────────────
+
+  ✅ Apple Music library import (library_import_service.py)
+     - Parses iTunes/Apple Music XML export
+     - Aggregates artist-level stats: play count, loved count, ratings
+     - Engagement filter: only imports artists with plays > 0 OR loved > 0
+     - Stores in SQLite (LibraryArtist model) with genre, play stats
+     - POST /api/music/library/upload — upload XML file
+     - GET /api/music/library/artists — browse imported library
+
+  ✅ Last.fm similar artist integration (recommendation_service.py)
+     - Fetches similar artists from Last.fm API for seed artists
+     - Caches results in DB (SimilarArtistCache) with 30-day TTL
+     - Mode-specific seed selection: offsets into artist list by mode index
+     - Cross-mode deduplication: excludes artists already recommended in other modes
+     - Filters out artists already in user's library
+     - Handles naive datetime from SQLite (normalizes to UTC)
+
+  ✅ Mode-based recommendations
+     - 6 modes: gaming, working, watching, relax, movie, social
+     - Each mode gets different seed artists for variety
+     - POST /api/music/recommendations/{mode}/generate — create recommendations
+     - GET /api/music/recommendations/{mode} — fetch current recommendations
+     - PUT /api/music/recommendations/{id}/status — accept/dismiss/save
+     - Recommendations stored in DB (MusicRecommendation model) with status tracking
+
+  ✅ Music Discovery page (MusicDiscovery.jsx)
+     - Tab bar for switching between modes
+     - Artist cards with genre, reason, and action buttons
+     - Library stats display (total artists, top genres)
+     - Upload interface for Apple Music XML
+     - Last.fm API key configuration
 
   FRONTEND:
   ✅ Mode indicator — shows current mode with icon + color + party sub-mode label
@@ -111,6 +169,8 @@ PHASE 1.5 — SMART AUTOMATION (Just Built)
   ✅ Routine card — morning routine status, toggle, test button
   ✅ HubContext extended with automation state, socialStyle, optimistic updates
   ✅ Home page updated with Mode, Lights, Sonos, and Routines sections
+  ✅ Settings page — device status, automation config, light schedule,
+     mode brightness sliders, morning routine, wind-down routine, TTS test
 
   PWA:
   ✅ manifest.json for "Add to Home Screen" on phone
@@ -125,57 +185,169 @@ WHAT STILL NEEDS TO BE DONE
 MANUAL SETUP (User Action Required)
 ────────────────────────────────────
   ✅ Delete AWS resources (us-east-2 region) — DONE 2026-03-15
-     - Lambda: ColtsTouchdownDetector
-     - DynamoDB: ColtsScoreTracker
-     - CloudWatch: /aws/lambda/ColtsTouchdownDetector
-
   ✅ Delete Home Assistant VirtualBox VM — DONE 2026-03-15
-     - Removed C:\Users\antho\VirtualBox VMs\ (7.1 GB)
-
-  ✅ Rotate OpenAI API key — DONE 2026-03-15 (old key revoked)
-     - New key not needed until Phase 2 (Game Day Engine)
-
-  ✅ API keys configured:
-     - OpenWeatherMap API key in .env
-     - Google Maps Directions API key in .env
-     - HOME_ADDRESS and WORK_ADDRESS in .env
-
+  ✅ Rotate OpenAI API key — DONE 2026-03-15
+  ✅ API keys configured (OpenWeatherMap, Google Maps, Last.fm)
   ✅ Install PyAudio for Blue Yeti mic support — DONE 2026-03-15
-     - PyAudio 0.2.14, PortAudio V19.7.0
-
   ✅ Set up Tailscale for remote access — DONE 2026-03-15
-     - PC Tailscale IP: 100.91.241.92
-     - Remote URL: http://100.91.241.92:8000
-     - Works from phone over cellular/any network
-
   ✅ Create Apple Music playlists for each mood — IN PROGRESS
-     - Chill playlist created and mapped to relax mode
-     - Add more playlists over time (Gaming, Working, Party)
-     - Map via PUT /api/sonos/music-map
+  ✅ Windows Firewall inbound rule for port 8000
 
 TESTING (Verified 2026-03-15)
 ─────────────────────────────
   ✅ Server starts, health endpoint returns healthy
   ✅ GET /api/scenes returns 7 presets + 19 native bridge scenes (deduplicated)
   ✅ Dynamic effects work: candlelight, fireplace, sparkle, prism, glisten, opal
-  ✅ Morning routine test: weather (73°F broken clouds) + traffic (19 min) TTS generated
+  ✅ Morning routine test: weather + traffic TTS generated and played
   ✅ Manual mode override: buttons respond instantly (optimistic UI)
   ✅ Automation engine running: time-aware activity states + time-based idle
   ✅ WebSocket sync: mode changes broadcast to all clients in real-time
-  ✅ Frontend renders all new sections: Mode, Hue Scenes, Effects, Routines
-  ✅ PWA icons generated (192x192, 512x512)
-  ✅ Add to Home Screen on phone → PWA launches fullscreen — DONE 2026-03-15
+  ✅ Frontend renders all sections: Mode, Lights, Sonos, Routines, Settings
+  ✅ PWA: Add to Home Screen on phone → launches fullscreen
   ✅ PC agent: detects gaming, working, idle correctly
-  ✅ Time-aware brightness: gaming evening=160, gaming night=55, etc.
+  ✅ Screen sync for gaming mode (bedroom lamp matches game screen)
+  ✅ Music discovery: library import, recommendations generate per mode
+  ✅ Settings: schedule config, mode brightness, wind-down all persist
+  ✅ Volume slider persists across page visits and server restarts
+
+PLAYWRIGHT FRONTEND AUDIT (2026-03-16)
+───────────────────────────────────────
+  Tested all 3 pages (Home, Settings, Music) on desktop (1280x800)
+  and mobile (375x812) using Playwright browser automation.
+
+  ✅ Dark theme consistent and polished across all pages
+  ✅ Desktop layout clean — 2-column light grid, well-spaced sections
+  ✅ Settings sections logically grouped with clear labels + descriptions
+  ✅ Mode override buttons appropriately sized on both viewports
+  ✅ Weekday/Weekend tab toggle works smoothly with correct value swapping
+  ✅ Cross-mode recommendation dedup works (different artists per tab)
+  ✅ Real-time state sync — wind-down routine triggered during testing,
+     mode changed Movie → Relax and UI updated instantly via WebSocket
+  ✅ Genre donut chart visually appealing
+  ✅ Responsive breakpoints (light grid 2-col → 1-col) work correctly
+  ✅ Header hides status dots on mobile, keeps nav buttons — good tradeoff
+  ✅ All interactive elements (buttons, sliders, toggles, tabs) functional
+
+  ISSUES FOUND:
+
+  UX Issues:
+  ⚠  Wind-down routine not shown in Home page Routines section
+     — only Morning Routine appears; no dashboard visibility for wind-down
+  ⚠  No save feedback on Settings — changes save silently with no toast
+     or confirmation; failures would be invisible to user
+  ⚠  No active state indicator on Hue Scenes or Effects
+     — after clicking a scene, all buttons look the same
+  ⚠  Duplicate "Relax" naming — preset scene "Relax" and native Hue
+     scene "Relax" both appear; different behavior, same label
+  ⚠  Mode Playlist "Manual" button is confusing when disabled
+     — unclear what Manual vs Auto means without tooltip
+
+  Visual / Mobile:
+  ⚠  Mobile recommendation cards over-truncated — artist names
+     ("Grand Funk Ra...", "Creedence Cle..."), track names, and
+     "Similar to..." text aggressively cut off on 375px width
+  ⚠  Genre donut legend incomplete — shows 7 of 15 genres, missing
+     "Other" entry for the remaining 8 genres
+  ⚠  Mode brightness sliders short on mobile — narrow track makes
+     precise percentage adjustments difficult with touch
+  ⚠  Hue Scenes wrap to 5+ rows on mobile — 19 scene buttons stacked
+     vertically takes excessive scroll space vs horizontal scroll
+  ⚠  Recommendation action buttons (play/like/dismiss/apple) are
+     icon-only with small touch targets on mobile
+
+  Accessibility:
+  ⚠  Connection status dots hidden on mobile — if bridge disconnects,
+     user won't know from phone
+  ⚠  Color preset buttons on light cards are unlabeled circles
+     — rely on color alone (screen readers get text, low-vision users don't)
+  ⚠  Recommendation action buttons icon-only — no visible text labels
 
 NICE-TO-HAVE
 ─────────────
   ☐ Fix Android tablet blank page (deferred)
   ☐ Custom scene creation/saving via SQLite
-  ✅ Settings page — device status, automation config, morning routine, TTS test
   ☐ Hue bridge pairing endpoint (/api/lights/pair)
-  ✅ Windows Firewall inbound rule for port 8000 (Home Hub Server, TCP inbound)
   ☐ Scene room labels (show which room a bridge scene targets)
+
+================================================================================
+FUTURE RECOMMENDATIONS
+================================================================================
+
+POLISH & UX (Next Priority — informed by Playwright audit)
+──────────────────────────────────────────────────────────
+  ☐ Toast notifications for save actions (HIGH — audit #2)
+     - Settings saves silently; user has no feedback on success or failure
+     - Apply to: save config, test routine, mode override, scene activation
+     - Suggested: react-hot-toast or lightweight custom toast component
+
+  ☐ Show wind-down routine on Home page (MEDIUM — audit #1)
+     - Routines section only shows Morning Routine
+     - Add wind-down card with time, ON/OFF status, Test button
+
+  ☐ Active state indicator on Hue Scenes & Effects (MEDIUM — audit #3)
+     - After clicking a scene, highlight the active button
+     - Track active scene/effect in state, apply visual distinction
+
+  ☐ Mobile recommendation card readability (MEDIUM — audit #6)
+     - Artist/track names are aggressively truncated at 375px
+     - Allow text to wrap or increase card height on mobile
+     - Consider stacking action buttons vertically on narrow screens
+
+  ☐ Connection status on mobile (MEDIUM — audit #9)
+     - Status dots hidden entirely on phone
+     - Show compact indicator (single dot or banner) on narrow viewports
+
+  ☐ Genre donut "Other" legend entry (LOW — audit #7)
+     - Donut shows 15 genres but legend only lists 7
+     - Add "Other" entry covering remaining genres
+
+  ☐ Disambiguate duplicate "Relax" (LOW — audit #4)
+     - Preset scene "Relax" and native Hue scene "Relax" both appear
+     - Rename preset to "Relax (preset)" or prefix Hue scenes with room
+
+  ☐ Hue Scenes horizontal scroll on mobile (LOW — audit #12)
+     - 19 buttons wrap to 5+ rows on mobile; use horizontal scroll container
+
+  ☐ Loading states and skeletons
+     - Music Discovery page flickers on mode switch
+     - Settings sections should show loading state while fetching configs
+
+  ☐ Offline/connection-lost handling
+     - Show banner when WebSocket disconnects
+     - Queue commands and replay when reconnected
+
+AUTOMATION IMPROVEMENTS
+───────────────────────
+  ☐ Per-room schedule overrides
+     - Different wake times for different rooms
+     - E.g., bedroom lights on at 5:00, living room at 5:30
+
+  ☐ Seasonal light temperature adjustment
+     - Warmer tones in winter, cooler in summer
+     - Based on sunrise/sunset times (already have OpenWeatherMap key)
+
+  ☐ Activity history / analytics dashboard
+     - Track mode transitions over time
+     - Show daily/weekly patterns (when gaming, working, etc.)
+     - Helps optimize schedule settings based on actual usage
+
+  ☐ Smart wind-down escalation
+     - If still active 30 min after wind-down, send gentler reminder
+     - Progressively dim lights further
+
+MUSIC DISCOVERY ENHANCEMENTS
+─────────────────────────────
+  ☐ Spotify/Apple Music API integration
+     - Direct playback of recommended artists
+     - One-click "add to playlist" from recommendation card
+
+  ☐ Recommendation quality tuning
+     - User feedback loop (accepted vs dismissed) to improve future picks
+     - Weight by genre preference and listening history
+
+  ☐ Discovery history
+     - Track which recommendations were accepted over time
+     - "Rediscover" feature for previously dismissed artists
 
 PHASE 2: GAME DAY ENGINE (~August, Pre-Season)
 ───────────────────────────────────────────────
@@ -232,12 +404,30 @@ API ENDPOINTS (Complete)
   POST /api/automation/mic/calibrate        — Calibrate mic baseline
   GET  /api/automation/config               — Get automation config
   PUT  /api/automation/config               — Update automation config
+  GET  /api/automation/social-styles        — List party sub-modes
+  POST /api/automation/social-style         — Switch party sub-mode
+  GET  /api/automation/screen-sync/status   — Screen sync status
+  POST /api/automation/screen-sync/start    — Start screen sync
+  POST /api/automation/screen-sync/stop     — Stop screen sync
+  GET  /api/automation/schedule             — Get time schedule config
+  PUT  /api/automation/schedule             — Update time schedule config
+  GET  /api/automation/mode-brightness      — Get per-mode brightness
+  PUT  /api/automation/mode-brightness      — Update per-mode brightness
 
   Routines:
   GET  /api/routines                        — List scheduled routines
   POST /api/routines/morning/test           — Test morning routine
   PUT  /api/routines/morning/config         — Update morning config
-  POST /api/routines/morning/toggle         — Enable/disable
+  POST /api/routines/morning/toggle         — Enable/disable morning
+  POST /api/routines/winddown/test          — Test wind-down routine
+  PUT  /api/routines/winddown/config        — Update wind-down config
+
+  Music Discovery:
+  POST /api/music/library/upload            — Upload Apple Music XML
+  GET  /api/music/library/artists           — Browse imported artists
+  POST /api/music/recommendations/{mode}/generate — Generate recommendations
+  GET  /api/music/recommendations/{mode}    — Get recommendations for mode
+  PUT  /api/music/recommendations/{id}/status — Accept/dismiss recommendation
 
 ================================================================================
 CONFIGURATION REFERENCE
@@ -250,7 +440,7 @@ CONFIGURATION REFERENCE
   HUE_BRIDGE_IP=192.168.1.50
   HUE_USERNAME=VklWYonFVpyD0eGl9Ot5xJWPrW57TrbwPMKV7TCi
   TTS_VOICE=en-US-GuyNeural
-  TTS_VOLUME=80
+  TTS_VOLUME=10
   LOG_LEVEL=INFO
   OPENWEATHER_API_KEY=...       (configured)
   GOOGLE_MAPS_API_KEY=...       (configured)
@@ -258,7 +448,8 @@ CONFIGURATION REFERENCE
   WORK_ADDRESS=...              (configured)
   MORNING_ROUTINE_HOUR=6
   MORNING_ROUTINE_MINUTE=40
-  MORNING_VOLUME=40
+  MORNING_VOLUME=10
+  LASTFM_API_KEY=...            (configured — music discovery)
 
 NETWORK DEVICES
 ───────────────
@@ -269,9 +460,9 @@ NETWORK DEVICES
 
 AUTOMATION MODES (all time-aware: day/evening/night brightness)
 ────────────────
-  gaming   — Warm bias light (day:200, eve:160, night:55) — process detection
+  gaming   — Warm bias (day:230, eve:210, night:120) + screen sync on lamp — process detection
   working  — Warm productive (day:230, eve:180, night:80) — terminal/IDE detection
-  watching — Bedroom bias only (day:80, eve:70, night:30) + screen sync — Stremio/VLC/Plex/etc.
+  watching — Bedroom bias only (day:100, eve:70, night:30) + screen sync — Stremio/VLC/Plex/etc.
   social   — Party sub-modes (color_cycle/club/rave/fire_and_ice) — ambient noise
   relax    — Amber candlelight (day:200, eve:150, night:80) + candle effect
   movie    — Same as watching (manual override)
@@ -287,6 +478,13 @@ DYNAMIC EFFECTS (Hue v2 API)
   prism    — Slow color cycling
   glisten  — Gentle shimmering glow
   opal     — Soft pastel transitions
+
+SQLITE PERSISTED SETTINGS (app_settings table)
+───────────────────────────────────────────────
+  morning_routine_config     — hour, minute, enabled, volume
+  winddown_routine_config    — hour, minute, enabled, volume, candlelight, weekdays_only
+  time_schedule_config       — weekday/weekend wake, ramp, evening, winddown hours
+  mode_brightness_config     — per-mode brightness multipliers (0.3-1.5)
 
 ================================================================================
 TECH STACK
@@ -304,6 +502,7 @@ TECH STACK
   PC Detection: psutil (process monitoring)
   Screen Sync:  mss (fast screen capture)
   Ambient:      PyAudio (Blue Yeti mic)
+  Music Data:   Last.fm API (similar artists)
   Python:       3.13
   Node:         (for Vite build only)
 
@@ -321,30 +520,34 @@ FILE STRUCTURE
   │   ├── main.py                         # FastAPI app, lifespan, WebSocket
   │   ├── config.py                       # Pydantic Settings (all .env vars)
   │   ├── database.py                     # SQLite async setup
-  │   ├── models.py                       # SQLAlchemy models
+  │   ├── models.py                       # SQLAlchemy models (incl. AppSetting)
   │   ├── api/
   │   │   ├── routes/
   │   │   │   ├── health.py
   │   │   │   ├── lights.py
   │   │   │   ├── scenes.py              # Presets + native scenes + effects
   │   │   │   ├── sonos.py              # Playback + favorites + music map
-  │   │   │   ├── automation.py         # Activity reports + mode control
-  │   │   │   └── routines.py           # Morning routine control
+  │   │   │   ├── automation.py         # Activity + schedule + brightness
+  │   │   │   ├── routines.py           # Morning + wind-down + settings helpers
+  │   │   │   └── music.py             # Library import + recommendations
   │   │   └── schemas/
   │   │       ├── lights.py
   │   │       ├── sonos.py
-  │   │       └── automation.py
+  │   │       └── automation.py         # Incl. schedule + brightness schemas
   │   ├── services/
   │   │   ├── hue_service.py             # v1 API (phue2) — basic control
   │   │   ├── hue_v2_service.py          # v2 API (CLIP) — scenes + effects
   │   │   ├── sonos_service.py           # SoCo wrapper + favorites
   │   │   ├── tts_service.py             # edge-tts → Sonos
   │   │   ├── websocket_manager.py       # WS broadcast
-  │   │   ├── automation_engine.py       # Time-aware activity + time → light state
+  │   │   ├── automation_engine.py       # Config-driven time + activity → light
   │   │   ├── screen_sync.py           # Screen capture → bedroom lamp color
   │   │   ├── scheduler.py              # Async cron scheduler
   │   │   ├── morning_routine.py        # Weather + traffic TTS
+  │   │   ├── winddown_routine.py       # Evening relax + dim + TTS
   │   │   ├── music_mapper.py           # Mode → playlist mapping
+  │   │   ├── library_import_service.py # Apple Music XML parser
+  │   │   ├── recommendation_service.py # Last.fm similar → mode recs
   │   │   └── pc_agent/
   │   │       ├── activity_detector.py  # Process monitoring (standalone)
   │   │       ├── ambient_monitor.py    # Blue Yeti mic (standalone)
@@ -363,9 +566,11 @@ FILE STRUCTURE
   │       ├── App.jsx
   │       ├── index.css
   │       ├── hooks/useWebSocket.js
-  │       ├── context/HubContext.jsx     # Extended with automation state
-  │       ├── pages/Home.jsx            # Mode + Lights + Sonos + Routines
-  │       ├── pages/Settings.jsx       # Device status, config, TTS test
+  │       ├── context/HubContext.jsx     # Split into 4 contexts
+  │       ├── pages/
+  │       │   ├── Home.jsx              # Mode + Lights + Sonos + Routines
+  │       │   ├── Settings.jsx          # Config + schedule + brightness + routines
+  │       │   └── MusicDiscovery.jsx    # Library + recommendations
   │       └── components/
   │           ├── lights/
   │           │   ├── LightCard.jsx, LightGrid.jsx, SceneButton.jsx
@@ -378,6 +583,32 @@ FILE STRUCTURE
   │           └── layout/Header.jsx
   ├── data/                              # SQLite DB (gitignored)
   └── logs/                              # Log files (gitignored)
+
+================================================================================
+BUGS FIXED (2026-03-15)
+================================================================================
+
+  1. SQLite naive datetime comparison (500 error)
+     - Cause: SQLite stores datetimes without timezone info; code compared
+       with timezone-aware datetime.now(timezone.utc)
+     - Fix: Normalize with .replace(tzinfo=timezone.utc) before comparison
+
+  2. Identical recommendations across all modes
+     - Cause: Seed artist selection always used same top 3; no cross-mode dedup
+     - Fix: Offset fallback artists by mode index + exclude pending recs
+       from other modes
+
+  3. Settings volume slider resetting on page revisit
+     - Cause: GET /api/routines didn't return volume; frontend hardcoded 10
+     - Fix: Backend attaches service volume to task response; frontend reads it
+
+  4. Morning routine volume not persisting across restarts
+     - Cause: Volume stored only in memory on service instance
+     - Fix: Persist via AppSetting model in SQLite
+
+  5. Startup crash from stale DB config after removing away_hours
+     - Cause: Saved JSON had now-removed away_start_hour/away_end_hour fields
+     - Fix: Filter dict keys to valid DaySchedule fields using dataclasses.fields()
 
 ================================================================================
 KNOWN ISSUES
