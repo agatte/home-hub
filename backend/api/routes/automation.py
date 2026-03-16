@@ -229,11 +229,16 @@ async def update_config(config: AutomationConfig, request: Request) -> dict:
 
 def _dict_to_schedule_config(data: dict) -> ScheduleConfig:
     """Convert saved JSON dict to ScheduleConfig dataclass."""
+    import dataclasses
+    valid_fields = {f.name for f in dataclasses.fields(DaySchedule)}
+
     config = ScheduleConfig()
     if "weekday" in data:
-        config.weekday = DaySchedule(**data["weekday"])
+        filtered = {k: v for k, v in data["weekday"].items() if k in valid_fields}
+        config.weekday = DaySchedule(**filtered)
     if "weekend" in data:
-        config.weekend = DaySchedule(**data["weekend"])
+        filtered = {k: v for k, v in data["weekend"].items() if k in valid_fields}
+        config.weekend = DaySchedule(**filtered)
     return config
 
 
