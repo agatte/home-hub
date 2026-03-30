@@ -2,11 +2,13 @@
  * Home Hub — Service Worker
  *
  * Enables "Add to Home Screen" on mobile devices.
- * Uses network-first strategy since we always need live data from the API.
- * Caches the app shell (HTML, JS, CSS) for faster subsequent loads.
+ * Strategy:
+ *   - HTML navigation (/, index.html): network-first so new builds load immediately
+ *   - Hashed assets (/assets/*.js, *.css): cache-first (safe — filenames change on rebuild)
+ *   - API / WebSocket / health: always network, no caching
  */
 
-const CACHE_NAME = "home-hub-v1";
+const CACHE_NAME = "home-hub-v2";
 const SHELL_ASSETS = ["/", "/index.html"];
 
 // Install — cache the app shell
@@ -31,11 +33,11 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Fetch — network-first for API calls, cache-first for static assets
+// Fetch — network-first for HTML, cache-first for hashed static assets
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Always go to network for API calls and WebSocket
+  // Always go to network for API calls, WebSocket, and TTS audio
   if (
     url.pathname.startsWith("/api/") ||
     url.pathname.startsWith("/ws") ||
@@ -45,11 +47,24 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for static assets (JS, CSS, images)
+  // Network-first for HTML — index.html must always be fresh so new JS bundles load
+  if (
+    event.request.mode === "navigate" ||
+    url.pathname === "/" ||
+    url.pathname.endsWith(".html")
+  ) {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Cache-first for hashed assets (JS, CSS, images)
+  // Safe because Vite generates new filenames on every build
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) {
-        // Return cached version and update cache in background
+        // Serve from cache and update in background
         fetch(event.request)
           .then((response) => {
             if (response.ok) {
