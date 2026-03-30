@@ -1,5 +1,5 @@
 # Web framework
-fastapi>=0.115.0
+fastapi>=0.135.0
 uvicorn[standard]>=0.30.0
 websockets>=12.0
 
@@ -29,3 +29,7 @@ mss>=9.0.0                # Fast screen capture for screen sync
 
 # Utilities
 aiofiles>=23.0.0          # Async file operations
+
+# Developer tooling
+fastmcp>=2.0.0            # MCP server for Claude Code integration
+ruff>=0.4.0               # Python linting + formatting

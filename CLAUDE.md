@@ -42,6 +42,48 @@ cd frontend && npm install && npm run build
 
 Server runs at http://localhost:8000. Frontend dev server: `cd frontend && npm run dev` on port 3000 (proxies API to 8000).
 
+## Claude Code Tooling
+
+### MCP Server (`backend/mcp_server.py`)
+
+A custom MCP server that wraps the Home Hub REST API as Claude tools. When the main server is running, Claude can call these directly to verify changes without manual testing.
+
+```bash
+# The MCP starts automatically when Claude Code opens this project.
+# To test it manually:
+python -m backend.mcp_server
+```
+
+**Available tools:**
+- `get_health()` — system status + device connectivity
+- `get_lights()` / `set_light(id, on, bri, hue, sat)` — light control
+- `get_automation_status()` / `set_mode(mode)` — automation state
+- `get_schedule()` / `get_mode_brightness()` — schedule + brightness config
+- `get_scenes()` / `activate_scene(id)` — scenes
+- `get_effects()` / `activate_effect(name)` — dynamic effects
+- `get_sonos_status()` / `sonos_play()` / `sonos_pause()` / `sonos_volume(vol)` — Sonos
+- `get_sonos_favorites()` / `get_mode_playlists()` — music
+- `get_routines()` — routine configs
+- `query_db(sql)` — read-only SQLite queries (SELECT only)
+
+**Registered in:** `.claude/mcp.json`
+
+### Hooks (`.claude/settings.json`)
+
+Hooks fire automatically after file edits:
+
+- **Python files (`backend/**/*.py`):** Runs `ruff check --fix` after every edit. Auto-fixes imports, style, and common issues.
+- **Frontend files (`frontend/src/**/*.{js,jsx,svelte}`):** Runs ESLint after every edit.
+
+### Skills
+
+| Skill | Command | Purpose |
+|-------|---------|---------|
+| `home-hub-dev` | `/home-hub-dev` | Start dev environment, verify Hue/Sonos connectivity |
+| `api-audit` | `/api-audit` | Smoke test all API endpoints via MCP |
+| `ui-audit` | `/ui-audit` | Playwright screenshots at desktop + mobile widths |
+| `project-spec` | `/project-spec` | Create or update `docs/PROJECT_SPEC.md` |
+
 ## Architecture
 
 ```
