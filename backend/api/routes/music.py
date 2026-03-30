@@ -1,14 +1,11 @@
 """
 Music discovery and mode-playlist mapping endpoints.
 """
-import tempfile
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
-from backend.api.schemas.music import ModePlaylistEntry, ModePlaylistUpdate
+from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
-from backend.services.music_mapper import SUPPORTED_MODES
+from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
 
@@ -18,8 +15,8 @@ async def get_mode_playlists(request: Request) -> dict:
     """
     Get all mode-to-playlist mappings and available Sonos favorites.
 
-    Returns the current mapping for each supported mode plus the list
-    of Sonos favorites the user can choose from.
+    Returns all mappings per mode (multiple per mode, each with a vibe tag)
+    plus the list of Sonos favorites to choose from.
     """
     mapper = request.app.state.music_mapper
     sonos = request.app.state.sonos
@@ -31,53 +28,64 @@ async def get_mode_playlists(request: Request) -> dict:
         except Exception:
             pass
 
-    mappings = {}
     raw = mapper.mapping
+    mappings = {}
     for mode in SUPPORTED_MODES:
-        entry = raw.get(mode, {})
-        title = entry.get("favorite_title", "")
-        if title:
-            mappings[mode] = ModePlaylistEntry(
+        entries = raw.get(mode, [])
+        mappings[mode] = [
+            ModePlaylistEntry(
+                id=e["id"],
                 mode=mode,
-                favorite_title=title,
-                auto_play=entry.get("auto_play", False),
+                favorite_title=e["favorite_title"],
+                vibe=e.get("vibe"),
+                auto_play=e.get("auto_play", False),
+                priority=e.get("priority", 0),
             ).model_dump()
-        else:
-            mappings[mode] = None
+            for e in entries
+        ]
 
     return {"mappings": mappings, "favorites": favorites}
 
 
-@router.put("/mode-playlists/{mode}")
-async def set_mode_playlist(
-    mode: str, body: ModePlaylistUpdate, request: Request
-) -> dict:
-    """Set or update the playlist mapping for a mode."""
-    if mode not in SUPPORTED_MODES:
+@router.post("/mode-playlists")
+async def add_mode_playlist(body: ModePlaylistAdd, request: Request) -> dict:
+    """Add a new mode-to-playlist mapping with an optional vibe tag."""
+    if body.mode not in SUPPORTED_MODES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported mode '{mode}'. Must be one of: {', '.join(SUPPORTED_MODES)}",
+            detail=f"Unsupported mode '{body.mode}'. Must be one of: {', '.join(SUPPORTED_MODES)}",
+        )
+    if body.vibe and body.vibe not in VALID_VIBES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid vibe '{body.vibe}'. Must be one of: {', '.join(VALID_VIBES)}",
         )
 
     mapper = request.app.state.music_mapper
-    await mapper.set_mapping(mode, body.favorite_title, body.auto_play)
-    return {"status": "ok", "mode": mode, "favorite_title": body.favorite_title}
+    mapping_id = await mapper.add_mapping(
+        mode=body.mode,
+        favorite_title=body.favorite_title,
+        vibe=body.vibe,
+        auto_play=body.auto_play,
+        priority=body.priority,
+    )
+    return {
+        "status": "ok",
+        "id": mapping_id,
+        "mode": body.mode,
+        "favorite_title": body.favorite_title,
+        "vibe": body.vibe,
+    }
 
 
-@router.delete("/mode-playlists/{mode}")
-async def remove_mode_playlist(mode: str, request: Request) -> dict:
-    """Remove the playlist mapping for a mode."""
-    if mode not in SUPPORTED_MODES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported mode '{mode}'. Must be one of: {', '.join(SUPPORTED_MODES)}",
-        )
-
+@router.delete("/mode-playlists/{mapping_id}")
+async def remove_mode_playlist(mapping_id: int, request: Request) -> dict:
+    """Remove a specific playlist mapping by ID."""
     mapper = request.app.state.music_mapper
-    removed = await mapper.remove_mapping(mode)
+    removed = await mapper.remove_mapping_by_id(mapping_id)
     if not removed:
-        raise HTTPException(status_code=404, detail=f"No mapping for mode '{mode}'")
-    return {"status": "ok", "mode": mode}
+        raise HTTPException(status_code=404, detail=f"No mapping with id {mapping_id}")
+    return {"status": "ok", "id": mapping_id}
 
 
 # ------------------------------------------------------------------

@@ -9,7 +9,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +32,7 @@ from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
 from backend.services.morning_routine import MorningRoutineService
 from backend.services.recommendation_service import RecommendationService
+from backend.services.event_logger import EventLogger
 from backend.services.music_mapper import MusicMapper
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
 from backend.services.sonos_service import SonosService
@@ -112,16 +113,23 @@ async def lifespan(app: FastAPI):
     )
     saved_brightness = await load_setting(BRIGHTNESS_CONFIG_KEY)
 
+    # Event logger — captures mode transitions, light adjustments, Sonos events
+    event_logger = EventLogger()
+    app.state.event_logger = event_logger
+
     automation = AutomationEngine(
         hue=hue, hue_v2=hue_v2, ws_manager=ws_manager,
         schedule_config=schedule_config,
         mode_brightness=saved_brightness or None,
+        event_logger=event_logger,
     )
     automation.screen_sync = screen_sync
     app.state.automation = automation
 
     # Music mapper (DB-backed mode-to-playlist mapping with smart auto-play)
-    music_mapper = MusicMapper(sonos_service=sonos, ws_manager=ws_manager)
+    music_mapper = MusicMapper(
+        sonos_service=sonos, ws_manager=ws_manager, event_logger=event_logger
+    )
     await music_mapper.load_from_db()
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     app.state.music_mapper = music_mapper
@@ -330,12 +338,34 @@ async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -
         return
 
     state = {k: v for k, v in data.items() if k != "light_id"}
+
+    # Capture current brightness before the change for event logging
+    bri_before = None
+    if "bri" in state:
+        current = await hue.get_light(light_id)
+        if current:
+            bri_before = current.get("bri")
+
     await hue.set_light(light_id, state)
 
     # Broadcast updated state to all clients
     updated = await hue.get_light(light_id)
     if updated:
         await ws_manager.broadcast("light_update", updated)
+
+    # Log the manual adjustment
+    if "bri" in state:
+        event_logger = getattr(app.state, "event_logger", None)
+        automation = getattr(app.state, "automation", None)
+        if event_logger:
+            mode = automation.current_mode if automation else None
+            await event_logger.log_light_adjustment(
+                light_id=str(light_id),
+                light_name=updated.get("name") if updated else None,
+                bri_before=bri_before,
+                bri_after=state["bri"],
+                mode_at_time=mode,
+            )
 
 
 async def _handle_sonos_command(app, data: dict) -> None:

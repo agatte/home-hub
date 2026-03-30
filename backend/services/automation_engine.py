@@ -304,10 +304,12 @@ class AutomationEngine:
         ws_manager,
         schedule_config: Optional[ScheduleConfig] = None,
         mode_brightness: Optional[dict[str, float]] = None,
+        event_logger=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
         self._ws_manager = ws_manager
+        self._event_logger = event_logger
 
         # Current state
         self._current_mode: str = "idle"
@@ -627,12 +629,19 @@ class AutomationEngine:
         # Fire mode change callbacks (e.g., music auto-play)
         if old_mode != mode:
             await self._fire_mode_change_callbacks(mode)
+            if self._event_logger:
+                await self._event_logger.log_mode_change(
+                    mode=mode,
+                    previous_mode=old_mode,
+                    source=source,
+                )
 
         # Broadcast mode change
         await self._broadcast_mode()
 
     async def set_manual_override(self, mode: str) -> None:
         """Set a manual mode override from the dashboard."""
+        old_mode = self._current_mode
         self._manual_override = True
         self._override_mode = mode
         self._override_time = datetime.now(tz=TZ)
@@ -644,6 +653,12 @@ class AutomationEngine:
         await self._apply_mode(mode)
         # Fire mode change callbacks (e.g., music auto-play)
         await self._fire_mode_change_callbacks(mode)
+        if self._event_logger and old_mode != mode:
+            await self._event_logger.log_mode_change(
+                mode=mode,
+                previous_mode=old_mode,
+                source="manual",
+            )
 
     async def clear_override(self) -> None:
         """Clear the manual override and return to automatic mode."""

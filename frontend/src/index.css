@@ -1012,8 +1012,7 @@ body {
 
 .mode-playlist-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
   padding: 12px 16px;
 }
@@ -1027,6 +1026,7 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 100px;
+  padding-top: 6px;
 }
 
 .mode-playlist-icon {
@@ -1039,17 +1039,98 @@ body {
   color: var(--text-primary);
 }
 
-.mode-playlist-controls {
+.mode-playlist-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+/* Existing entry row */
+.mode-playlist-entry {
   display: flex;
   align-items: center;
   gap: 8px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.entry-title {
   flex: 1;
-  justify-content: flex-end;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-vibe {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.entry-auto {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.entry-auto.auto-on {
+  color: var(--accent);
+}
+
+.entry-auto.auto-off {
+  color: var(--text-muted);
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  transition: color 0.15s, background 0.15s;
+}
+
+.icon-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.remove-btn:hover {
+  color: #e05252;
+}
+
+.add-btn {
+  font-size: 18px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Add mapping row */
+.mode-playlist-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.vibe-select {
+  max-width: 130px;
 }
 
 .mode-playlist-select {
-  max-width: 200px;
   flex: 1;
+  min-width: 0;
 }
 
 .mode-playlist-hint {
@@ -1372,15 +1453,13 @@ body {
 }
 
 @media (max-width: 500px) {
-  .mode-playlist-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+  .mode-playlist-add-row {
+    flex-wrap: wrap;
   }
 
-  .mode-playlist-controls {
-    width: 100%;
-    justify-content: flex-start;
+  .vibe-select {
+    max-width: none;
+    flex: 1;
   }
 
   .mode-playlist-select {

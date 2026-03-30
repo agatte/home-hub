@@ -5,27 +5,34 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+VALID_VIBES = ("energetic", "mellow", "focus", "background", "hype")
+
 
 class ModePlaylistEntry(BaseModel):
-    """A single mode-to-playlist mapping."""
+    """A single mode-to-playlist mapping with optional vibe tag."""
 
+    id: int
     mode: str
     favorite_title: str
+    vibe: Optional[str] = None
     auto_play: bool = False
     priority: int = 0
 
 
-class ModePlaylistUpdate(BaseModel):
-    """Request to set/update a mode-to-playlist mapping."""
+class ModePlaylistAdd(BaseModel):
+    """Request to add a new mode-to-playlist mapping."""
 
+    mode: str
     favorite_title: str = Field(..., min_length=1, max_length=200)
+    vibe: Optional[str] = Field(None, description="energetic|mellow|focus|background|hype")
     auto_play: bool = False
+    priority: int = 0
 
 
 class ModePlaylistResponse(BaseModel):
     """Response for mode-playlist configuration."""
 
-    mappings: dict[str, Optional[ModePlaylistEntry]]
+    mappings: dict[str, list[ModePlaylistEntry]]
     favorites: list[dict]
 
 

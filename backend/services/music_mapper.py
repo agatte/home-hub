@@ -1,11 +1,15 @@
 """
 Music mapper — maps activity modes to Sonos favorites/playlists.
 
-When the automation engine changes modes, the music mapper can auto-play
-or suggest the mapped playlist for that mode. Mappings persist to SQLite.
+Supports multiple favorites per mode, each optionally tagged with a vibe
+(energetic, mellow, focus, background, hype). On mode change, the mapper
+picks the best-matching vibe based on time of day, then auto-plays or
+broadcasts a suggestion via WebSocket. Mappings persist to SQLite.
 """
 import logging
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
 
@@ -14,24 +18,45 @@ from backend.models import ModePlaylist
 
 logger = logging.getLogger("home_hub.music")
 
+TZ = ZoneInfo("America/Indiana/Indianapolis")
+
 SUPPORTED_MODES = ("gaming", "working", "watching", "social", "relax", "movie")
+VALID_VIBES = ("energetic", "mellow", "focus", "background", "hype")
+
+# Time-of-day → preferred vibe order (first match wins)
+_TIME_VIBE_PREFERENCE: dict[str, list[str]] = {
+    "morning": ["focus", "mellow", "background", "energetic", "hype"],   # 5-10
+    "day": ["energetic", "focus", "background", "mellow", "hype"],        # 10-18
+    "evening": ["mellow", "background", "focus", "energetic", "hype"],    # 18-22
+    "night": ["mellow", "background", "focus", "energetic", "hype"],      # 22-5
+}
+
+
+def _time_period(hour: int) -> str:
+    if 5 <= hour < 10:
+        return "morning"
+    if 10 <= hour < 18:
+        return "day"
+    if 18 <= hour < 22:
+        return "evening"
+    return "night"
 
 
 class MusicMapper:
     """
     Maps activity modes to Sonos favorites for automatic playlist playback.
 
-    The user sets up playlists in Apple Music, adds them to Sonos favorites,
-    then maps each mode to a favorite name via the API. When a mode change
-    occurs, the mapper either auto-plays (if Sonos is idle) or broadcasts
-    a suggestion via WebSocket.
+    Supports multiple favorites per mode via vibe tags. On mode change,
+    picks the best vibe for the current time of day. Mappings persist
+    to the mode_playlists SQLite table.
     """
 
-    def __init__(self, sonos_service, ws_manager) -> None:
+    def __init__(self, sonos_service, ws_manager, event_logger=None) -> None:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
-        # In-memory cache: mode -> {favorite_title, auto_play, priority}
-        self._cache: dict[str, dict] = {}
+        self._event_logger = event_logger
+        # Cache: mode -> list[{id, favorite_title, vibe, auto_play, priority}]
+        self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
 
     async def load_from_db(self) -> None:
         """Load all mode-playlist mappings from the database into cache."""
@@ -41,116 +66,195 @@ class MusicMapper:
             )
             rows = result.scalars().all()
 
-        self._cache.clear()
+        self._cache = {m: [] for m in SUPPORTED_MODES}
         for row in rows:
-            self._cache[row.mode] = {
-                "favorite_title": row.favorite_title,
-                "auto_play": row.auto_play,
-                "priority": row.priority,
-            }
+            if row.mode in self._cache:
+                self._cache[row.mode].append({
+                    "id": row.id,
+                    "favorite_title": row.favorite_title,
+                    "vibe": row.vibe,
+                    "auto_play": row.auto_play,
+                    "priority": row.priority,
+                })
 
-        logger.info(f"Loaded {len(self._cache)} mode-playlist mappings from DB")
+        total = sum(len(v) for v in self._cache.values())
+        logger.info(f"Loaded {total} mode-playlist mappings from DB")
 
     @property
-    def mapping(self) -> dict[str, dict]:
-        """Current mode-to-playlist mapping (includes empty modes)."""
-        result = {}
-        for mode in SUPPORTED_MODES:
-            if mode in self._cache:
-                result[mode] = self._cache[mode].copy()
-            else:
-                result[mode] = {"favorite_title": "", "auto_play": False}
-        return result
+    def mapping(self) -> dict[str, list[dict]]:
+        """Current mode-to-playlist mappings, all modes included."""
+        return {mode: list(entries) for mode, entries in self._cache.items()}
 
-    async def set_mapping(
-        self, mode: str, favorite_title: str, auto_play: bool = False
-    ) -> None:
+    def pick_playlist(self, mode: str, vibe: Optional[str] = None) -> Optional[dict]:
         """
-        Set or update a mode-to-playlist mapping. Persists to database.
+        Select the best playlist entry for a mode.
 
-        Args:
-            mode: Activity mode (gaming, working, watching, social, relax, movie).
-            favorite_title: Name of the Sonos favorite to play.
-            auto_play: Whether to automatically start playback on mode change.
-        """
-        async with async_session() as session:
-            # Upsert: delete existing mapping for this mode, then insert
-            await session.execute(
-                delete(ModePlaylist).where(ModePlaylist.mode == mode)
-            )
-            session.add(ModePlaylist(
-                mode=mode,
-                favorite_title=favorite_title,
-                auto_play=auto_play,
-            ))
-            await session.commit()
-
-        # Update cache
-        self._cache[mode] = {
-            "favorite_title": favorite_title,
-            "auto_play": auto_play,
-            "priority": 0,
-        }
-        logger.info(
-            f"Music mapping updated: {mode} -> '{favorite_title}' "
-            f"(auto_play={auto_play})"
-        )
-
-    async def remove_mapping(self, mode: str) -> bool:
-        """
-        Remove the playlist mapping for a mode.
+        If vibe is specified, filters to that vibe (falls back to any entry
+        if none match). If vibe is None, uses the time-of-day heuristic.
 
         Returns:
-            True if a mapping was removed, False if none existed.
+            Entry dict {id, favorite_title, vibe, auto_play, priority}, or None.
         """
+        entries = self._cache.get(mode, [])
+        if not entries:
+            return None
+
+        if vibe:
+            match = next((e for e in entries if e["vibe"] == vibe), None)
+            return match or entries[0]
+
+        # Time-of-day heuristic
+        hour = datetime.now(tz=TZ).hour
+        period = _time_period(hour)
+        preference = _TIME_VIBE_PREFERENCE[period]
+
+        for preferred_vibe in preference:
+            match = next((e for e in entries if e["vibe"] == preferred_vibe), None)
+            if match:
+                return match
+
+        # Fallback: highest priority entry
+        return entries[0]
+
+    async def add_mapping(
+        self,
+        mode: str,
+        favorite_title: str,
+        vibe: Optional[str] = None,
+        auto_play: bool = False,
+        priority: int = 0,
+    ) -> int:
+        """
+        Add or update a mode-to-playlist mapping. Persists to database.
+
+        If the same (mode, favorite_title) already exists, updates its vibe,
+        auto_play, and priority in place.
+
+        Args:
+            mode: Activity mode.
+            favorite_title: Sonos favorite name.
+            vibe: Optional vibe tag (energetic/mellow/focus/background/hype).
+            auto_play: Whether to auto-play on mode change.
+            priority: Higher priority entries are preferred (default 0).
+
+        Returns:
+            Database ID of the created or updated row.
+        """
+        existing_row = None
+        async with async_session() as session:
+            result = await session.execute(
+                select(ModePlaylist).where(
+                    ModePlaylist.mode == mode,
+                    ModePlaylist.favorite_title == favorite_title,
+                )
+            )
+            existing_row = result.scalar_one_or_none()
+
+            if existing_row:
+                existing_row.vibe = vibe
+                existing_row.auto_play = auto_play
+                existing_row.priority = priority
+                row_id = existing_row.id
+            else:
+                row = ModePlaylist(
+                    mode=mode,
+                    favorite_title=favorite_title,
+                    vibe=vibe,
+                    auto_play=auto_play,
+                    priority=priority,
+                )
+                session.add(row)
+                await session.flush()
+                row_id = row.id
+
+            await session.commit()
+
+        await self._reload_mode(mode)
+        action = "updated" if existing_row else "added"
+        logger.info(
+            f"Music mapping {action}: {mode} -> '{favorite_title}' "
+            f"vibe={vibe} auto_play={auto_play}"
+        )
+        return row_id
+
+    async def remove_mapping_by_id(self, mapping_id: int) -> bool:
+        """
+        Remove a specific mapping by database ID.
+
+        Returns:
+            True if removed, False if not found.
+        """
+        mode = None
+        async with async_session() as session:
+            result = await session.execute(
+                select(ModePlaylist).where(ModePlaylist.id == mapping_id)
+            )
+            row = result.scalar_one_or_none()
+            if not row:
+                return False
+            mode = row.mode
+            await session.delete(row)
+            await session.commit()
+
+        await self._reload_mode(mode)
+        logger.info(f"Music mapping {mapping_id} removed")
+        return True
+
+    async def remove_all_for_mode(self, mode: str) -> int:
+        """Remove all mappings for a mode. Returns count removed."""
         async with async_session() as session:
             result = await session.execute(
                 delete(ModePlaylist).where(ModePlaylist.mode == mode)
             )
             await session.commit()
-            removed = result.rowcount > 0
+            count = result.rowcount
 
-        self._cache.pop(mode, None)
-        if removed:
-            logger.info(f"Music mapping removed for mode: {mode}")
-        return removed
+        self._cache[mode] = []
+        if count:
+            logger.info(f"Removed {count} mappings for mode '{mode}'")
+        return count
 
-    def get_playlist_for_mode(self, mode: str) -> Optional[str]:
-        """
-        Get the mapped playlist title for a given mode.
+    async def _reload_mode(self, mode: str) -> None:
+        """Refresh the cache for a single mode from the database."""
+        async with async_session() as session:
+            result = await session.execute(
+                select(ModePlaylist)
+                .where(ModePlaylist.mode == mode)
+                .order_by(ModePlaylist.priority.desc())
+            )
+            rows = result.scalars().all()
 
-        Returns:
-            Sonos favorite title, or None if no mapping exists.
-        """
-        entry = self._cache.get(mode, {})
-        title = entry.get("favorite_title", "")
-        return title if title else None
-
-    def should_auto_play(self, mode: str) -> bool:
-        """Check if the mapped playlist should auto-play for this mode."""
-        entry = self._cache.get(mode, {})
-        return entry.get("auto_play", False)
+        self._cache[mode] = [
+            {
+                "id": row.id,
+                "favorite_title": row.favorite_title,
+                "vibe": row.vibe,
+                "auto_play": row.auto_play,
+                "priority": row.priority,
+            }
+            for row in rows
+        ]
 
     async def on_mode_change(self, mode: str) -> Optional[dict]:
         """
         Handle a mode change — smart auto-play based on Sonos state.
 
-        If Sonos is idle and auto_play is enabled, starts the mapped playlist.
-        If Sonos is already playing, broadcasts a suggestion via WebSocket
-        so the user can choose to switch.
+        Uses time-of-day vibe heuristic to pick the best playlist.
+        If Sonos is idle and auto_play is set, starts the playlist.
+        If Sonos is busy, broadcasts a suggestion via WebSocket.
 
         Args:
             mode: The new activity mode.
 
         Returns:
-            Dict with action taken, or None if no mapping exists.
+            Dict describing the action taken, or None.
         """
-        title = self.get_playlist_for_mode(mode)
-        if not title:
+        entry = self.pick_playlist(mode)
+        if not entry or not entry.get("auto_play"):
             return None
 
-        if not self.should_auto_play(mode):
-            return None
+        title = entry["favorite_title"]
+        vibe = entry.get("vibe")
 
         if not self._sonos.connected:
             logger.warning("Sonos not connected — skipping music auto-play")
@@ -161,40 +265,62 @@ class MusicMapper:
             sonos_state = status.get("state", "STOPPED")
 
             if sonos_state in ("STOPPED", "PAUSED_PLAYBACK"):
-                # Sonos is idle — auto-play
                 success = await self._sonos.play_favorite(title)
                 if success:
-                    logger.info(f"Auto-playing '{title}' for mode '{mode}'")
+                    logger.info(
+                        f"Auto-playing '{title}' (vibe={vibe}) for mode '{mode}'"
+                    )
                     await self._ws_manager.broadcast("music_auto_played", {
                         "mode": mode,
                         "title": title,
+                        "vibe": vibe,
                     })
-                    return {"action": "auto_played", "title": title}
-                else:
-                    logger.warning(
-                        f"Failed to auto-play '{title}' for mode '{mode}'"
-                    )
-                    return None
+                    if self._event_logger:
+                        await self._event_logger.log_sonos_event(
+                            event_type="auto_play",
+                            favorite_title=title,
+                            mode_at_time=mode,
+                            triggered_by="auto",
+                        )
+                    return {"action": "auto_played", "title": title, "vibe": vibe}
+                logger.warning(f"Failed to auto-play '{title}' for mode '{mode}'")
+                return None
             else:
-                # Sonos is busy — suggest instead of interrupting
                 logger.info(
                     f"Sonos playing — suggesting '{title}' for mode '{mode}'"
                 )
                 await self._ws_manager.broadcast("music_suggestion", {
                     "mode": mode,
                     "title": title,
+                    "vibe": vibe,
                     "message": f"Play '{title}' for {mode} mode?",
                 })
-                return {"action": "suggested", "title": title}
+                if self._event_logger:
+                    await self._event_logger.log_sonos_event(
+                        event_type="suggestion",
+                        favorite_title=title,
+                        mode_at_time=mode,
+                        triggered_by="auto",
+                    )
+                return {"action": "suggested", "title": title, "vibe": vibe}
 
         except Exception as e:
             logger.error(f"Error during music auto-play: {e}", exc_info=True)
             return None
 
     async def on_mode_change_wrapper(self, mode: str) -> None:
-        """
-        Thin callback wrapper for AutomationEngine.register_on_mode_change.
-
-        The automation engine calls this with just the mode string.
-        """
+        """Thin callback wrapper for AutomationEngine.register_on_mode_change."""
         await self.on_mode_change(mode)
+
+    # ------------------------------------------------------------------
+    # Legacy helpers — used by older code paths
+    # ------------------------------------------------------------------
+
+    def get_playlist_for_mode(self, mode: str) -> Optional[str]:
+        """Return the best-match favorite title for a mode (legacy helper)."""
+        entry = self.pick_playlist(mode)
+        return entry["favorite_title"] if entry else None
+
+    def should_auto_play(self, mode: str) -> bool:
+        """Return True if any mapping for this mode has auto_play enabled."""
+        return any(e["auto_play"] for e in self._cache.get(mode, []))

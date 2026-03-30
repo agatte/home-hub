@@ -39,7 +39,12 @@ class Scene(Base):
 
 
 class ModePlaylist(Base):
-    """Maps an activity mode to a Sonos favorite/playlist for auto-play."""
+    """Maps an activity mode to a Sonos favorite/playlist for auto-play.
+
+    Multiple entries per mode are supported — each can carry a vibe tag
+    (energetic, mellow, focus, background, hype) so the mapper can pick
+    the right one based on time of day or explicit request.
+    """
 
     __tablename__ = "mode_playlists"
     __table_args__ = (
@@ -49,6 +54,7 @@ class ModePlaylist(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     mode: Mapped[str] = mapped_column(String(50), nullable=False)
     favorite_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    vibe: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     auto_play: Mapped[bool] = mapped_column(Boolean, default=False)
     priority: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
@@ -135,3 +141,65 @@ class RecommendationFeedback(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+# ---------------------------------------------------------------------------
+# Event logging — raw behavioral data for the future learning engine
+# ---------------------------------------------------------------------------
+
+
+class ActivityEvent(Base):
+    """Records every mode transition for behavioral analysis."""
+
+    __tablename__ = "activity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    previous_mode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # source: "automation", "manual", "pc_agent", "ambient"
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    # duration_seconds is filled in when the *next* event arrives
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class LightAdjustment(Base):
+    """Records every manual light change issued from the dashboard."""
+
+    __tablename__ = "light_adjustments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    light_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    light_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    bri_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bri_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+
+class SonosPlaybackEvent(Base):
+    """Records every Sonos play/pause/skip/volume event."""
+
+    __tablename__ = "sonos_playback_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    # event_type: "play", "pause", "skip", "volume", "auto_play", "suggestion"
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    favorite_title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    volume: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # triggered_by: "manual", "auto", "suggestion_accepted"
+    triggered_by: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
