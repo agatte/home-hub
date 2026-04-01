@@ -37,3 +37,10 @@ desktop.ini
 
 # Claude
 .claude/
+
+# Screenshots / audit images
+*.png
+.playwright-mcp/
+
+# Frontend
+frontend/README.md

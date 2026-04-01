@@ -90,6 +90,8 @@ MODE_PRIORITY = {
 
 _LIGHT_OFF = {"on": False}
 
+WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
+
 
 def _uniform(bri: int, hue: int, sat: int) -> dict[str, dict]:
     """Build a per-light dict where all 4 lights get the same state."""
@@ -249,6 +251,46 @@ def _morning_ramp(
     sat = int(180 + (50 - 180) * progress)
 
     return {"on": True, "bri": bri, "hue": hue, "sat": sat}
+
+
+def _lerp_light_state(
+    state_a: dict[str, Any],
+    state_b: dict[str, Any],
+    progress: float,
+) -> dict[str, Any]:
+    """
+    Interpolate between two light states.
+
+    Handles both uniform {bri, hue, sat} and per-light {"1": {...}, ...} formats.
+    progress=0.0 returns state_a, progress=1.0 returns state_b.
+    """
+    progress = min(1.0, max(0.0, progress))
+
+    def _lerp_val(a: int, b: int) -> int:
+        return int(a + (b - a) * progress)
+
+    def _lerp_single(sa: dict, sb: dict) -> dict:
+        result: dict[str, Any] = {"on": sa.get("on", True) or sb.get("on", True)}
+        for key in ("bri", "hue", "sat"):
+            if key in sa and key in sb:
+                result[key] = _lerp_val(sa[key], sb[key])
+            elif key in sa:
+                result[key] = sa[key]
+            elif key in sb:
+                result[key] = sb[key]
+        return result
+
+    is_per_light_a = any(k in ("1", "2", "3", "4") for k in state_a)
+    is_per_light_b = any(k in ("1", "2", "3", "4") for k in state_b)
+
+    if is_per_light_a and is_per_light_b:
+        return {
+            lid: _lerp_single(state_a[lid], state_b[lid])
+            for lid in state_a
+            if lid in state_b
+        }
+
+    return _lerp_single(state_a, state_b)
 
 
 def _get_time_period_static() -> str:
@@ -729,7 +771,29 @@ class AutomationEngine:
             return
 
         if mode in ACTIVITY_LIGHT_STATES:
-            state = _resolve_activity_state(mode, self._get_time_period())
+            mode_states = ACTIVITY_LIGHT_STATES[mode]
+            if "day" in mode_states:
+                # Time-aware mode: blend evening → night during the 30-min ramp window
+                now = datetime.now(tz=TZ)
+                schedule = (
+                    self._schedule_config.weekday
+                    if now.weekday() < 5
+                    else self._schedule_config.weekend
+                )
+                winddown_total = schedule.winddown_start_hour * 60
+                current_total = now.hour * 60 + now.minute
+                minutes_until_winddown = winddown_total - current_total
+
+                if 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES:
+                    progress = (WINDDOWN_RAMP_MINUTES - minutes_until_winddown) / WINDDOWN_RAMP_MINUTES
+                    evening_state = _resolve_activity_state(mode, "evening")
+                    night_state = _resolve_activity_state(mode, "night")
+                    state = _lerp_light_state(evening_state, night_state, progress)
+                else:
+                    state = _resolve_activity_state(mode, self._get_time_period())
+            else:
+                state = _resolve_activity_state(mode, self._get_time_period())
+
             state = self._apply_brightness_multiplier(state, mode)
             await self._apply_state(state)
 
@@ -882,6 +946,19 @@ class AutomationEngine:
             else self._schedule_config.weekend
         )
         rules = self._build_time_rules(schedule)
+
+        # Evening → wind-down fade: interpolate over the 30 min before winddown_start_hour
+        winddown_total_minute = schedule.winddown_start_hour * 60
+        current_total_minute = hour * 60 + minute
+        minutes_until_winddown = winddown_total_minute - current_total_minute
+
+        if 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES:
+            progress = (WINDDOWN_RAMP_MINUTES - minutes_until_winddown) / WINDDOWN_RAMP_MINUTES
+            evening_state: dict[str, Any] = {"on": True, "bri": 180, "hue": 8000, "sat": 160}
+            winddown_state: dict[str, Any] = {"on": True, "bri": 60, "hue": 5500, "sat": 220}
+            state = _lerp_light_state(evening_state, winddown_state, progress)
+            await self._apply_state(state)
+            return
 
         for start, end, rule in rules:
             if start <= hour < end:
