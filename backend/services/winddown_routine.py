@@ -5,9 +5,12 @@ Triggered by the scheduler at a configurable time (default 9 PM).
 Dims lights to relax mode, optionally activates candlelight effect,
 lowers Sonos volume, and plays a brief TTS announcement.
 """
+import asyncio
 import logging
 
 logger = logging.getLogger("home_hub.winddown")
+
+_ACTIVE_MODES = frozenset({"gaming", "watching", "social", "working"})
 
 
 class WinddownRoutineService:
@@ -27,6 +30,7 @@ class WinddownRoutineService:
         volume: int = 20,
         activate_candlelight: bool = True,
         weekdays_only: bool = False,
+        skip_if_active: bool = True,
     ) -> None:
         self._automation = automation_engine
         self._sonos = sonos_service
@@ -34,14 +38,46 @@ class WinddownRoutineService:
         self._volume = volume
         self._activate_candlelight = activate_candlelight
         self._weekdays_only = weekdays_only
+        self._skip_if_active = skip_if_active
 
-    async def execute(self) -> bool:
+    async def execute(self, force: bool = False) -> bool:
         """
         Run the evening wind-down routine.
 
+        If skip_if_active is True (default), checks whether the user is in an
+        active mode (gaming, watching, social, working). If so, waits 30 minutes
+        and checks again, up to 4 retries (2 hours total). If still active after
+        all retries, skips for the night and returns False.
+
+        Args:
+            force: If True, bypass the activity check and execute immediately.
+                   Used by the test endpoint.
+
         Returns:
-            True if the routine completed successfully.
+            True if the routine completed successfully, False if skipped or errored.
         """
+        _MAX_RETRIES = 4
+        _RETRY_DELAY_SECONDS = 1800  # 30 minutes
+
+        if not force and self._skip_if_active and self._automation:
+            for attempt in range(_MAX_RETRIES + 1):
+                mode = self._automation.current_mode
+                if mode not in _ACTIVE_MODES:
+                    break
+                if attempt < _MAX_RETRIES:
+                    logger.info(
+                        "Wind-down delayed: active mode '%s' detected "
+                        "(attempt %d/%d). Retrying in 30 minutes.",
+                        mode, attempt + 1, _MAX_RETRIES,
+                    )
+                    await asyncio.sleep(_RETRY_DELAY_SECONDS)
+                else:
+                    logger.warning(
+                        "Wind-down skipped for tonight: still in active mode "
+                        "'%s' after %d retries.", mode, _MAX_RETRIES,
+                    )
+                    return False
+
         logger.info("Executing evening wind-down routine")
 
         try:

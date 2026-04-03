@@ -65,12 +65,12 @@ The core focus is getting lights and music working seamlessly. Everything else b
 ### Known Issues & Pain Points
 
 **Automation timing:**
-- Evening transition is too abrupt — lights switch from bright to dim instantly instead of a gradual fade
-- Evening wind-down triggers at a fixed time regardless of activity — should wait if gaming/watching
+- ~~Evening transition is too abrupt~~ — fixed: 30-minute gradual lerp before winddown_start_hour
+- ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social/working
 - Mode detection has noticeable lag between activity start and mode switch
 
 **Music:**
-- Mode-to-playlist mapping is too rigid — one favorite per mode, often the wrong vibe
+- ~~Mode-to-playlist mapping is too rigid~~ — fixed: vibe tagging supports multiple favorites per mode with energetic/focus/mellow/background/hype tags
 - Auto-play is unreliable — sometimes doesn't trigger, sometimes plays when unwanted
 - Sonos favorites are limiting — can't express "high energy electronic" as a vibe, only specific playlists
 - Last.fm recommendations aren't useful — poor relevance to actual taste
@@ -229,6 +229,7 @@ External APIs (cloud):
 | id | Integer | PK, auto-increment |
 | mode | String(50) | gaming, working, watching, social, relax, movie |
 | favorite_title | String(200) | Sonos favorite name |
+| vibe | String(50) | Single vibe tag: energetic, focus, mellow, background, hype |
 | vibe_tags | JSON | Array of vibe descriptors e.g. `["high energy", "electronic", "instrumental"]` |
 | auto_play | Boolean | Auto-start on mode change |
 | priority | Integer | Playback priority — higher wins when multiple favorites match a vibe (default 0) |
@@ -284,8 +285,6 @@ External APIs (cloud):
 | action | String(20) | "liked" or "dismissed" |
 | created_at | DateTime | UTC |
 
-### Future Database Tables
-
 **activity_events** — Mode transition log (learning input)
 | Column | Type | Notes |
 |--------|------|-------|
@@ -325,6 +324,8 @@ External APIs (cloud):
 | ended_at | DateTime | UTC, nullable |
 | duration_seconds | Integer | Computed on end |
 | skipped | Boolean | Was track skipped before finishing |
+
+### Future Database Tables
 
 **routine_executions** — Routine run log
 | Column | Type | Notes |
@@ -1154,10 +1155,11 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 
 ### Phase 1: Core Fix & Foundation (Now — April 2026)
 
-- Fix automation timing: gradual evening transitions, activity-aware wind-down
+- ✓ Fix automation timing: gradual evening transitions (30-min lerp before winddown_start_hour)
+- ✓ Activity-aware wind-down: delays 30 min and retries up to 4x if gaming/watching/social/working
+- ✓ Add vibe tagging to mode-playlist mapping (multiple favorites per mode with vibe column)
+- ✓ Event logging tables live: activity_events, light_adjustments, sonos_playback_events + EventLogger service
 - Fix music auto-play reliability
-- Add vibe tagging to mode-playlist mapping (multiple favorites per mode)
-- Start event logging tables (activity_events, light_adjustments, sonos_playback_events)
 - Deploy server to dedicated laptop, confirm always-on stability
 
 ### Phase 2: Dashboard Redesign (May 2026)

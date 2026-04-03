@@ -78,6 +78,7 @@ class WinddownConfig(BaseModel):
     volume: int = Field(default=20, ge=0, le=100)
     activate_candlelight: bool = Field(default=True)
     weekdays_only: bool = Field(default=False)
+    skip_if_active: bool = Field(default=True)
 
 
 @router.get("")
@@ -99,6 +100,7 @@ async def list_routines(request: Request) -> dict:
             task["volume"] = winddown._volume
             task["activate_candlelight"] = winddown._activate_candlelight
             task["weekdays_only"] = winddown._weekdays_only
+            task["skip_if_active"] = winddown._skip_if_active
 
     return {"routines": tasks}
 
@@ -196,7 +198,7 @@ async def test_winddown(request: Request) -> dict:
             detail="Wind-down routine service not initialized",
         )
 
-    success = await winddown.execute()
+    success = await winddown.execute(force=True)
     return {
         "status": "ok" if success else "partial_failure",
         "message": "Wind-down executed" if success else "Wind-down had errors",
@@ -233,6 +235,7 @@ async def update_winddown_config(config: WinddownConfig, request: Request) -> di
     winddown._volume = config.volume
     winddown._activate_candlelight = config.activate_candlelight
     winddown._weekdays_only = config.weekdays_only
+    winddown._skip_if_active = config.skip_if_active
 
     # Persist to database
     await save_setting(WINDDOWN_CONFIG_KEY, config.model_dump())

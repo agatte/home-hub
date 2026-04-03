@@ -182,6 +182,7 @@ async def lifespan(app: FastAPI):
         volume=winddown_config.get("volume", 20),
         activate_candlelight=winddown_config.get("activate_candlelight", True),
         weekdays_only=winddown_config.get("weekdays_only", False),
+        skip_if_active=winddown_config.get("skip_if_active", True),
     )
     app.state.winddown_routine = winddown
 
