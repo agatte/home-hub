@@ -57,6 +57,8 @@ class MusicMapper:
         self._event_logger = event_logger
         # Cache: mode -> list[{id, favorite_title, vibe, auto_play, priority}]
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
+        # Tracks the most recent mode requested — used to skip stale auto-plays
+        self._last_requested_mode: Optional[str] = None
 
     async def load_from_db(self) -> None:
         """Load all mode-playlist mappings from the database into cache."""
@@ -249,6 +251,8 @@ class MusicMapper:
         Returns:
             Dict describing the action taken, or None.
         """
+        self._last_requested_mode = mode
+
         entry = self.pick_playlist(mode)
         if not entry or not entry.get("auto_play"):
             return None
@@ -265,6 +269,12 @@ class MusicMapper:
             sonos_state = status.get("state", "STOPPED")
 
             if sonos_state in ("STOPPED", "PAUSED_PLAYBACK"):
+                if self._last_requested_mode != mode:
+                    logger.info(
+                        "Mode changed during auto-play setup ('%s' → '%s'), skipping.",
+                        mode, self._last_requested_mode,
+                    )
+                    return None
                 success = await self._sonos.play_favorite(title)
                 if success:
                     logger.info(

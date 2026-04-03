@@ -143,5 +143,5 @@ async def update_music_map(entry: MusicMappingEntry, request: Request) -> dict:
     if not mapper:
         raise HTTPException(status_code=503, detail="Music mapper not initialized")
 
-    mapper.set_mapping(entry.mode, entry.favorite_title, entry.auto_play)
+    await mapper.add_mapping(entry.mode, entry.favorite_title, auto_play=entry.auto_play)
     return {"status": "ok", "mapping": mapper.mapping}

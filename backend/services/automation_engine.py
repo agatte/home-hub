@@ -717,6 +717,7 @@ class AutomationEngine:
             await self._apply_mode(self._current_mode)
 
         await self._broadcast_mode()
+        await self._fire_mode_change_callbacks(self._current_mode)
 
     async def set_social_style(self, style: str) -> None:
         """

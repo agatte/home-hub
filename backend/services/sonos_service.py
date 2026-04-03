@@ -312,7 +312,11 @@ class SonosService:
                 if uri:
                     return await self.play_uri(uri)
 
-        logger.warning(f"Sonos favorite/playlist '{title}' not found")
+        available = [fav["title"] for fav in favorites]
+        logger.warning(
+            "Sonos favorite/playlist '%s' not found. Available: %s",
+            title, available,
+        )
         return False
 
     async def poll_state_loop(self, ws_manager) -> None:
