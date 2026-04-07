@@ -38,10 +38,221 @@ body {
 }
 
 /* App layout */
+.app-shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100dvh;
+}
+
 .app {
-  max-width: 900px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 0 16px 32px;
+  padding: 0 24px 32px;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .app {
+    padding: 0 16px 32px;
+  }
+}
+
+/* Sidebar */
+.sidebar {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+}
+
+.sidebar-brand {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  padding: 6px 12px 24px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  text-align: left;
+}
+
+.sidebar-nav-item:hover {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.sidebar-nav-item-active {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
+.sidebar-nav-item-active:hover {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
+.sidebar-nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-now-playing {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-now-playing-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.sidebar-now-playing-track {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-now-playing-track.is-playing {
+  color: var(--success);
+}
+
+.sidebar-now-playing-artist {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
+}
+
+/* Quick actions strip */
+.quick-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.quick-action {
+  flex: 1;
+  min-width: 90px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.quick-action:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+}
+
+.quick-action-active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.quick-action-danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@media (max-width: 500px) {
+  .quick-action {
+    min-width: 0;
+    flex-basis: calc(33.333% - 6px);
+    padding: 12px 8px;
+    font-size: 13px;
+  }
+}
+
+/* Widget grid */
+.widget-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.widget {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.widget-title {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.widget-lights,
+.widget-routines-full {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .widget-grid {
+    grid-template-columns: 1fr;
+  }
+  .widget-lights {
+    grid-column: auto;
+  }
 }
 
 /* Header */
@@ -52,6 +263,12 @@ body {
   padding: 16px 0;
   border-bottom: 1px solid var(--border);
   margin-bottom: 24px;
+}
+
+@media (min-width: 769px) {
+  .app-header {
+    display: none;
+  }
 }
 
 .app-title {
@@ -464,7 +681,7 @@ body {
 /* Reconnect banner */
 .reconnect-banner {
   position: fixed;
-  bottom: 0;
+  top: 0;
   left: 0;
   right: 0;
   background: var(--danger);

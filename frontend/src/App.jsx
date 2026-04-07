@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { HubProvider, useConnection } from './context/HubContext'
+import { HubProvider, useConnection, useAutomation, useSonos } from './context/HubContext'
 import { Header } from './components/layout/Header'
+import { Sidebar } from './components/layout/Sidebar'
 import { Home } from './pages/Home'
 import { Music } from './pages/Music'
 import { Settings } from './pages/Settings'
 
 function AppContent() {
   const { connected, deviceStatus } = useConnection()
+  const { automationMode } = useAutomation()
+  const { sonos } = useSonos()
   const [page, setPage] = useState('home')
 
   const renderPage = () => {
@@ -18,19 +21,27 @@ function AppContent() {
   }
 
   return (
-    <div className="app">
-      <Header
-        connected={connected}
-        deviceStatus={deviceStatus}
+    <div className="app-shell">
+      <Sidebar
         page={page}
         onPageChange={setPage}
+        mode={automationMode.mode}
+        sonos={sonos}
       />
-      {renderPage()}
-      {!connected && (
-        <div className="reconnect-banner">
-          Reconnecting to server...
-        </div>
-      )}
+      <div className="app">
+        <Header
+          connected={connected}
+          deviceStatus={deviceStatus}
+          page={page}
+          onPageChange={setPage}
+        />
+        {renderPage()}
+        {!connected && (
+          <div className="reconnect-banner">
+            Reconnecting to server...
+          </div>
+        )}
+      </div>
     </div>
   )
 }
