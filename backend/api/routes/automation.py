@@ -14,15 +14,22 @@ from backend.api.schemas.automation import (
     ActivityReport,
     AutomationConfig,
     AutomationStatus,
+    LaptopLoopbackToggle,
     ManualOverride,
     MicCalibrationResult,
     ModeBrightnessConfig,
+    ScreenColorReport,
     TimeScheduleConfig,
 )
-from backend.services.automation_engine import DaySchedule, ScheduleConfig
+from backend.services.automation_engine import (
+    SCREEN_SYNC_MODES,
+    DaySchedule,
+    ScheduleConfig,
+)
 
 SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
+SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 
 logger = logging.getLogger("home_hub.automation")
 
@@ -146,37 +153,89 @@ async def set_social_style(request: Request) -> dict:
     return {"status": "ok", "style": style}
 
 
+@router.post("/screen-color")
+async def receive_screen_color(report: ScreenColorReport, request: Request) -> dict:
+    """
+    Receive a screen color sample from the desktop pc_agent or laptop loopback.
+
+    The current automation mode gates application: colors only reach the
+    bedroom lamp if the mode is in SCREEN_SYNC_MODES (gaming, watching, movie).
+    Off-mode colors are accepted (so the agent doesn't error) but dropped
+    silently — the response distinguishes via the `applied` field.
+    """
+    engine = getattr(request.app.state, "automation", None)
+    sync = getattr(request.app.state, "screen_sync", None)
+    if not engine or not sync:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+
+    if engine.current_mode not in SCREEN_SYNC_MODES:
+        return {"status": "ok", "applied": False}
+
+    await sync.apply_color(
+        report.r,
+        report.g,
+        report.b,
+        mode=engine.current_mode,
+        source=report.source,
+    )
+    return {"status": "ok", "applied": True}
+
+
 @router.get("/screen-sync/status")
 async def get_screen_sync_status(request: Request) -> dict:
-    """Check if screen sync is running."""
+    """
+    Current screen sync state — whether the mode gate is open, when the
+    last color arrived, what posted it, and whether the laptop loopback is on.
+    """
     engine = getattr(request.app.state, "automation", None)
-    sync = engine.screen_sync if engine else None
-    running = sync._running if sync else False
-    return {"running": running}
+    sync = getattr(request.app.state, "screen_sync", None)
+    loopback = getattr(request.app.state, "laptop_loopback", None)
+
+    enabled_mode = (
+        engine.current_mode in SCREEN_SYNC_MODES if engine else False
+    )
+    last_color_at = (
+        sync.last_color_at.isoformat()
+        if sync and sync.last_color_at
+        else None
+    )
+    last_source = sync.last_source if sync else None
+    laptop_loopback_running = loopback.running if loopback else False
+
+    return {
+        "enabled_mode": enabled_mode,
+        "current_mode": engine.current_mode if engine else None,
+        "last_color_at": last_color_at,
+        "last_source": last_source,
+        "laptop_loopback_enabled": laptop_loopback_running,
+    }
 
 
-@router.post("/screen-sync/start")
-async def start_screen_sync(request: Request) -> dict:
-    """Manually start screen sync."""
-    engine = getattr(request.app.state, "automation", None)
-    sync = engine.screen_sync if engine else None
-    if not sync:
-        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+@router.put("/screen-sync/laptop-enabled")
+async def set_laptop_loopback(
+    toggle: LaptopLoopbackToggle, request: Request
+) -> dict:
+    """
+    Toggle the in-process laptop screen capture loopback.
 
-    await sync.start()
-    return {"status": "ok", "running": True}
+    This is the escape hatch for the rare TV-on-laptop scenario. Default off.
+    Persists across restarts via the `screen_sync_laptop_enabled` app_setting.
+    """
+    loopback = getattr(request.app.state, "laptop_loopback", None)
+    if loopback is None:
+        raise HTTPException(
+            status_code=503, detail="Laptop loopback not initialized"
+        )
 
+    if toggle.enabled:
+        await loopback.start()
+    else:
+        await loopback.stop()
 
-@router.post("/screen-sync/stop")
-async def stop_screen_sync(request: Request) -> dict:
-    """Manually stop screen sync."""
-    engine = getattr(request.app.state, "automation", None)
-    sync = engine.screen_sync if engine else None
-    if not sync:
-        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+    await save_setting(SCREEN_SYNC_LAPTOP_KEY, {"enabled": toggle.enabled})
+    logger.info(f"Laptop screen sync loopback set to enabled={toggle.enabled}")
 
-    await sync.stop()
-    return {"status": "ok", "running": False}
+    return {"status": "ok", "enabled": toggle.enabled}
 
 
 @router.post("/mic/calibrate")

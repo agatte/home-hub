@@ -26,7 +26,7 @@ from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 from backend.database import init_db
 from backend.services.automation_engine import AutomationEngine
-from backend.services.screen_sync import ScreenSyncService
+from backend.services.screen_sync import LaptopLoopbackCapture, ScreenSyncService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
@@ -94,14 +94,22 @@ async def lifespan(app: FastAPI):
     )
     app.state.tts = tts
 
-    # Screen sync service (syncs dominant screen color to bedroom lamp)
+    # Screen sync service — receiver for RGB colors posted by the desktop
+    # pc_agent (or laptop loopback). Holds smoothing state and applies the
+    # final color to the bedroom lamp. The capture loop lives elsewhere.
     screen_sync = ScreenSyncService(hue_service=hue, target_light_id="2")
     app.state.screen_sync = screen_sync
+
+    # Laptop loopback — opt-in screen capture that runs in-process on the
+    # laptop and POSTs to localhost (TV-on-laptop escape hatch). Default off.
+    laptop_loopback = LaptopLoopbackCapture()
+    app.state.laptop_loopback = laptop_loopback
 
     # Automation engine — load persisted schedule + brightness config
     from backend.api.routes.routines import load_setting
     from backend.api.routes.automation import (
-        SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, _dict_to_schedule_config,
+        SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, SCREEN_SYNC_LAPTOP_KEY,
+        _dict_to_schedule_config,
     )
     from backend.services.automation_engine import ScheduleConfig
 
@@ -123,8 +131,13 @@ async def lifespan(app: FastAPI):
         mode_brightness=saved_brightness or None,
         event_logger=event_logger,
     )
-    automation.screen_sync = screen_sync
     app.state.automation = automation
+
+    # Restore laptop loopback state from persisted setting (default off)
+    saved_loopback = await load_setting(SCREEN_SYNC_LAPTOP_KEY)
+    if saved_loopback.get("enabled", False):
+        await laptop_loopback.start()
+        app_logger.info("Laptop screen sync loopback resumed from saved state")
 
     # Music mapper (DB-backed mode-to-playlist mapping with smart auto-play)
     music_mapper = MusicMapper(
@@ -220,6 +233,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     app_logger.info("Shutting down Home Hub...")
+    await laptop_loopback.stop()
     for task in tasks:
         task.cancel()
         try:

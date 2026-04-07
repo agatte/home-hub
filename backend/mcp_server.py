@@ -136,6 +136,68 @@ async def get_mode_brightness() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Screen sync
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_screen_sync_status() -> dict:
+    """
+    Get current screen sync state.
+
+    Returns whether the mode gate is open (current mode is in
+    gaming/watching/movie), when the last color was applied, what source
+    posted it, and whether the laptop loopback is running.
+    """
+    async with _client() as c:
+        r = await c.get("/api/automation/screen-sync/status")
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+async def apply_screen_color(r: int, g: int, b: int) -> dict:
+    """
+    Manually post an RGB color to the screen sync receiver.
+
+    Useful for testing — bypasses the desktop pc_agent. Will only update the
+    bedroom lamp if the current automation mode is gaming, watching, or movie.
+
+    Args:
+        r: Red channel 0-255
+        g: Green channel 0-255
+        b: Blue channel 0-255
+    """
+    async with _client() as c:
+        resp = await c.post(
+            "/api/automation/screen-color",
+            json={"r": r, "g": g, "b": b, "source": "mcp"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+@mcp.tool()
+async def set_laptop_screen_sync(enabled: bool) -> dict:
+    """
+    Toggle the in-process laptop screen capture loopback.
+
+    This is the TV-on-laptop escape hatch. Default off; only flip on when
+    the laptop is plugged into a TV and you want lights to follow it.
+
+    Args:
+        enabled: True to start the loopback, False to stop.
+    """
+    async with _client() as c:
+        resp = await c.put(
+            "/api/automation/screen-sync/laptop-enabled",
+            json={"enabled": enabled},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ---------------------------------------------------------------------------
 # Scenes & Effects
 # ---------------------------------------------------------------------------
 

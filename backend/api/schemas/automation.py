@@ -131,3 +131,21 @@ class ModeBrightnessConfig(BaseModel):
     relax: float = Field(default=1.0, ge=0.3, le=1.5)
     movie: float = Field(default=1.0, ge=0.3, le=1.5)
     social: float = Field(default=1.0, ge=0.3, le=1.5)
+
+
+class ScreenColorReport(BaseModel):
+    """RGB color reported by a screen sync source (desktop agent or laptop loopback)."""
+
+    r: int = Field(..., ge=0, le=255, description="Red channel 0-255")
+    g: int = Field(..., ge=0, le=255, description="Green channel 0-255")
+    b: int = Field(..., ge=0, le=255, description="Blue channel 0-255")
+    source: str = Field(
+        default="desktop",
+        description="Reporting source — 'desktop' or 'laptop'",
+    )
+
+
+class LaptopLoopbackToggle(BaseModel):
+    """Toggle for the in-process laptop screen capture (TV-on-laptop escape hatch)."""
+
+    enabled: bool = Field(..., description="True to start the loopback, False to stop")

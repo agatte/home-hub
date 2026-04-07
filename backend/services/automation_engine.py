@@ -22,6 +22,11 @@ logger = logging.getLogger("home_hub.automation")
 # Indianapolis timezone (Indiana doesn't follow standard Eastern DST rules)
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
+# Modes during which screen sync colors should be applied. The receiver
+# endpoint at POST /api/automation/screen-color drops colors silently when
+# the current mode isn't in this set.
+SCREEN_SYNC_MODES = frozenset(("gaming", "watching", "movie"))
+
 
 # ---------------------------------------------------------------------------
 # Configurable schedule dataclasses
@@ -371,9 +376,6 @@ class AutomationEngine:
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
 
-        # Screen sync service (set by main.py after construction)
-        self._screen_sync = None
-
         # Mode change callbacks (e.g., music mapper auto-play)
         self._on_mode_change_callbacks: list = []
 
@@ -461,14 +463,6 @@ class AutomationEngine:
                 self._social_style = style_name
                 return
         self._social_style = "color_cycle"
-
-    @property
-    def screen_sync(self):
-        return self._screen_sync
-
-    @screen_sync.setter
-    def screen_sync(self, service) -> None:
-        self._screen_sync = service
 
     # ------------------------------------------------------------------
     # Schedule + brightness config
@@ -750,9 +744,9 @@ class AutomationEngine:
             self._sleep_fade_task = None
             logger.info("Sleep fade cancelled — activity resumed")
 
-        # Stop screen sync if leaving a mode that uses it
-        if mode not in ("watching", "gaming") and self._screen_sync:
-            await self._screen_sync.stop()
+        # Screen sync no longer has a start/stop loop — colors arrive via
+        # POST /api/automation/screen-color and are gated by SCREEN_SYNC_MODES
+        # at the route handler. No engine-side action needed when modes change.
 
         # Stop active effects only if one is running (saves ~4 HTTP calls)
         if self._active_effect and self._hue_v2 and self._hue_v2.connected:
@@ -797,16 +791,6 @@ class AutomationEngine:
 
             state = self._apply_brightness_multiplier(state, mode)
             await self._apply_state(state)
-
-            # Start screen sync for watching and gaming modes
-            if mode in ("watching", "gaming") and self._screen_sync:
-                # Gaming gets higher brightness cap matching the time-aware values
-                if mode == "gaming":
-                    state_l2 = state.get("2", {})
-                    max_bri = state_l2.get("bri", 160)
-                    await self._screen_sync.start(max_brightness=max_bri)
-                else:
-                    await self._screen_sync.start(max_brightness=80)
 
             # Apply dynamic effects for certain modes
             if self._hue_v2 and self._hue_v2.connected:
