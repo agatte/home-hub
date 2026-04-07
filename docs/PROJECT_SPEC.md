@@ -1048,6 +1048,55 @@ The current three-page layout is being replaced with a command center design:
 - **Scene favorites** — Pin frequently-used scenes for quick one-tap access
 - **Per-room mode overrides** — Let one room stay in a different mode (e.g., bedroom relaxed while living room is social)
 
+### Display Auto-Switching (Monitor ↔ Projector)
+
+**Status: spec only — deferred to Phase 1.5 / Phase 2. Not implemented.**
+
+**Problem:** The desktop has two displays physically connected at all times — a DisplayPort monitor at native 2560x1440 (used for normal desktop work) and an HDMI projector at 1920x1080 (used in bed for movie/TV watching). Switching between them today is fully manual: turn projector on, switch its input to HDMI, turn the monitor off, then change the Windows display resolution by hand. The Windows resolution step is the part Home Hub can automate.
+
+**Goal:** When `movie` mode activates, drop the projector display to 1920x1080 automatically. When leaving that mode, restore it to 2560x1440 (or whatever default was captured at startup).
+
+**Architectural placement — desktop pc_agent, not in-process backend.** The projector is physically connected to the **desktop**, not the dashboard laptop where the FastAPI server runs. The Windows API call has to execute on the machine that owns the display, so this work belongs in a standalone pc_agent on the desktop — same pattern as `activity_detector.py`, `ambient_monitor.py`, and the upcoming `screen_sync_agent.py`. The agent polls `GET /api/automation/activity` and flips resolution locally on `movie` mode entry/exit. No new server endpoint needed.
+
+**Feasibility — confirmed yes, no admin required.** Windows exposes `ChangeDisplaySettingsEx` (Win32) reachable from Python via `pywin32`. With the `CDS_UPDATEREGISTRY` flag, resolution changes are a per-user setting and do **not** require elevation. `EnumDisplayDevices` lets us target the projector specifically without touching the monitor. Both displays stay enumerable even when the monitor is physically powered off, since they're still electrically connected.
+
+**Why not the alternatives:**
+- **In-process backend service on the laptop** — Original spec recommended this, but the laptop server can't reach the desktop's display devices. Wrong architecture.
+- **QRes / NirCmd / DisplaySwitch.exe** — external binaries, weaker per-display targeting, extra moving parts. Skip.
+- **Separate elevated helper process** — unnecessary since admin isn't required. Adds complexity for no gain.
+- **Switching the active display via Win+P / `DisplaySwitch.exe /external`** — out of scope. Anthony handles "which screen is on" physically (powering the monitor off, switching projector input). Resolution-only is the right scope.
+
+**Recommended implementation (when this work starts):**
+
+1. **New standalone agent** `backend/services/pc_agent/display_agent.py` following the `activity_detector.py` template. Runs on the desktop. Polls `GET /api/automation/activity` every ~5 seconds. On transitions into/out of `movie` mode, calls `win32api.ChangeDisplaySettingsEx` to swap projector resolution. Skips cleanly on non-Windows (`sys.platform != "win32"`).
+2. **Identify displays by friendly name** (`DeviceString`, e.g., "Dell U2719D" / "BenQ HT2050A"), not by `\\.\DISPLAY1` / `\\.\DISPLAY2` — those aren't stable across driver reinstalls. Resolve friendly name → current device name at runtime.
+3. **Snapshot the monitor's current refresh rate at agent startup** and restore it when leaving movie mode. Critical if the monitor runs >60 Hz, otherwise it'll silently drop.
+4. **Trigger on `movie` mode only** (manual override) — **not** `watching`, since that auto-detects whenever VLC opens at the desk.
+5. **No-op early-return** when already at target resolution to avoid double-flicker on repeated triggers.
+6. **Force-restore on agent startup** in case the agent died while in projector mode and the monitor was left at 1080p. Config flag controls this.
+7. **Local config file** in the agent's working directory (e.g., `display_config.json`):
+   ```json
+   {
+     "monitor": {"friendly_name": "...", "default_width": 2560, "default_height": 1440, "default_refresh": null},
+     "projector": {"friendly_name": "...", "default_width": 2560, "default_height": 1440, "movie_width": 1920, "movie_height": 1080, "refresh": 60},
+     "trigger_mode": "movie",
+     "restore_on_startup": true,
+     "enabled": true
+   }
+   ```
+   No server-side persistence needed — the agent owns its own state.
+8. **Optional later:** a `POST /api/automation/display/notify` endpoint so the agent can push current resolution to the dashboard for display. Defer until the dashboard actually wants to show it.
+9. **Dependencies:** `pywin32>=305` — added to a new `backend/services/pc_agent/requirements.txt` (desktop-only deps), not to the main backend requirements.
+
+**Verification when built:**
+- Run `python -m backend.services.pc_agent.display_agent` on the desktop → log shows current detected displays + friendly names.
+- `POST /api/automation/override {"mode":"movie"}` (against the laptop server) → desktop agent picks up the change on next poll → projector flips to 1920x1080 within ~5s, monitor untouched. Reverse on switching back.
+- Toggle movie mode twice in a row — confirm no second flicker (early-return path).
+- Kill agent while in projector mode, restart — confirm restore-on-startup works.
+- If monitor runs >60 Hz — confirm refresh rate is preserved across the round trip.
+
+**Out of scope on purpose:** active-display switching, primary-display changes, multi-monitor topology rearrangement, per-application resolution profiles, anything non-Windows.
+
 ### Music Overhaul
 
 - **Vibe-based mapping** — Replace single-favorite-per-mode with vibe tags per mode (e.g., gaming = "high energy, electronic, instrumental"). Multiple Sonos favorites tagged per vibe, system picks or rotates.
