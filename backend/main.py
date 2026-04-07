@@ -23,7 +23,7 @@ from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
-FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
 from backend.database import init_db
 from backend.services.automation_engine import AutomationEngine
 from backend.services.screen_sync import LaptopLoopbackCapture, ScreenSyncService
@@ -274,13 +274,23 @@ app.include_router(automation_router)
 app.include_router(music_router)
 app.include_router(routines_router)
 
-# Serve React frontend build (must come after API routes)
+# Serve the static frontend build (must come after API routes).
+# Path is controlled by settings.FRONTEND_BUILD — defaults to the React build
+# (frontend/dist); flip to frontend-svelte/build to serve the SvelteKit build.
 if FRONTEND_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="frontend-assets")
+    # React's Vite build emits hashed assets under /assets; SvelteKit's
+    # adapter-static emits them under /_app. Mount whichever exists so the
+    # catch-all below can still fall back to index.html for client-side routes.
+    _assets_dir = FRONTEND_DIST / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="frontend-assets")
+    _app_dir = FRONTEND_DIST / "_app"
+    if _app_dir.is_dir():
+        app.mount("/_app", StaticFiles(directory=str(_app_dir)), name="frontend-app")
 
     @app.get("/{path:path}")
     async def serve_frontend(path: str) -> FileResponse:
-        """Serve the React SPA — all non-API routes fall through to index.html."""
+        """Serve the frontend SPA — non-API routes fall through to index.html."""
         file_path = FRONTEND_DIST / path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
