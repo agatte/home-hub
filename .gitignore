@@ -47,3 +47,8 @@ frontend/README.md
 
 # Personal helpers
 start.txt
+
+# Experiments (Phase 2 prototyping sandbox)
+experiments/**/.svelte-kit/
+experiments/**/build/
+experiments/**/.vite/
