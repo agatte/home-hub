@@ -5,9 +5,10 @@
   /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, reachable: boolean }} */
   export let light
 
-  // Ported verbatim from frontend/src/components/lights/LightCard.jsx —
-  // same presets, same proximity thresholds (<2000 hue, <50 sat), same
-  // 100ms brightness debounce, same hue→HSL conversion with 20% min lightness.
+  // Color presets — proximity thresholds (<2000 hue, <50 sat) decide which
+  // preset highlights as "active". Brightness is debounced 100ms before
+  // hitting the API. Hue→HSL conversion uses a 20% min lightness so dark
+  // saturated colors remain visible in the swatch.
   const COLOR_PRESETS = [
     { name: 'Warm',     hue: 8000,  sat: 140 },
     { name: 'Cool',     hue: 34000, sat: 50 },

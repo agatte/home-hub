@@ -29,9 +29,8 @@ class Settings(BaseSettings):
     # App
     APP_ENV: str = "development"
     LOCAL_IP: str = "127.0.0.1"
-    # Relative path from PROJECT_ROOT to the static frontend build directory.
-    # Flip to "frontend-svelte/build" to serve the SvelteKit build.
-    FRONTEND_BUILD: str = "frontend/dist"
+    # Relative path from PROJECT_ROOT to the SvelteKit static build directory.
+    FRONTEND_BUILD: str = "frontend-svelte/build"
 
     # Hue Bridge
     HUE_BRIDGE_IP: str = "192.168.1.50"

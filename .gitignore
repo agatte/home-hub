@@ -15,7 +15,6 @@ venv/
 
 # Node
 node_modules/
-frontend/dist/
 
 # Generated
 backend/static/tts/

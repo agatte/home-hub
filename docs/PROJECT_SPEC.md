@@ -172,7 +172,7 @@ External APIs (cloud):
 
 - **Two-process model:** Main server handles real-time control. Learning engine runs separately, reads events from the shared DB, computes patterns, and exposes an internal API for predictions. Main server queries the learning engine before making automation decisions.
 - **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) when event volume grows. SQLAlchemy abstraction makes the switch straightforward. Event data uses 90-day rolling window with older data aggregated into daily/weekly summaries.
-- **Frontend rewrite (shipped):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`), and the old React tree is kept in-tree as one-flag rollback insurance for one burn-in cycle before deletion.
+- **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
 - **PC Agent over network:** Gaming PC (wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery.
 - **Alexa two-phase:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel for full flexibility later.
 
@@ -1221,48 +1221,26 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 - Weather widget (OpenWeatherMap)
 - External project widget cards (plant app)
 
-### Phase 2a: Post-Cutover Cleanup (Pending burn-in)
+### Phase 2a: Post-Cutover Cleanup (Complete)
 
-The SvelteKit parity pass is live (commit `b96d062`) and backed by a
-`FRONTEND_BUILD` env var in `backend/config.py` so the React tree stays
-as one-flag rollback insurance. Before deleting the React build:
+The SvelteKit parity pass shipped in commit `b96d062` and the React tree
+was retained briefly as rollback insurance. After a clean burn-in window
+(2026-04-07 evening → 2026-04-08 morning) crossing both the 22:00
+winddown routine and the 06:40 morning routine — automation, WebSocket,
+Sonos, Hue, and the Threlte sleeping background all verified — the
+cleanup landed:
 
-**Step 1 — Burn-in (one evening cycle):** Verify with the real
-hardware across a full evening transition (ideally crossing the
-~9 PM winddown ramp):
-
-- Automation transitions fire on time; evening ramp smooth, no jumps
-- Mode indicator + sidebar now-playing update within ~2s of Sonos
-  changes triggered from another client (phone, Alexa)
-- Sleeping-mode Threlte moon scene mounts full-bleed on sleep,
-  unmounts on exit (GPU usage drops)
-- Hue-app toggles reflect on the dashboard within ~1s
-- No repeated reconnect banner
-
-Rollback path if anything regresses: flip `FRONTEND_BUILD` in `.env`
-back to `frontend/dist`, restart `python run.py`. No code revert.
-
-**Step 2 — Re-add mode playlists:** `/api-audit` flagged all six
-mode-playlist mappings as empty (not a regression, empty pre-cutover
-too). Re-add via the Music page during burn-in so auto-play behavior
-can also be exercised during the evening cycle.
-
-**Step 3 — Cleanup commit(s):** Once burn-in passes cleanly:
-
-- Delete `frontend/` (entire React tree)
-- Delete `experiments/threlte-sleeping/` (MoonScene.svelte already
-  copied into `frontend-svelte/src/lib/backgrounds/`)
-- Drop the dead `/assets` mount branch in `backend/main.py:284-286`
-  and update the "defaults to the React build" comment on line 278
-- Flip `FRONTEND_BUILD` defaults in `.env.example` and
-  `backend/config.py` from `frontend/dist` to `frontend-svelte/build`
-- Update `CLAUDE.md`: Commands section (`cd frontend` →
-  `cd frontend-svelte`), file-structure tree, and the architecture
-  diagram's "Serves React static build" line
-
-**Verification after cleanup:** `python run.py` starts without the
-env var (new default kicks in), `/api-audit` + `/ui-audit` stay
-green, `git grep "frontend/"` shows no stale backend/doc references.
+- `frontend/` deleted (entire React tree)
+- `experiments/threlte-sleeping/` deleted (`MoonScene.svelte` lives in
+  `frontend-svelte/src/lib/backgrounds/` now)
+- `backend/main.py` `/assets` mount branch dropped; only `/_app` remains
+- `FRONTEND_BUILD` defaults flipped to `frontend-svelte/build` in
+  `backend/config.py` and `.env.example`
+- `CLAUDE.md` + `README.md` refreshed: commands, tech stack table,
+  file-structure tree, architecture diagram
+- Bonus fixes bundled in: `sw.js` precache shell (`/index.html` → `/`),
+  `Slider.svelte` a11y label association, and `winddown_routine.py`'s
+  stale `sonos.speaker` attribute (now uses `await sonos.set_volume()`)
 
 ### Phase 3: Intelligence & Voice (June 2026)
 

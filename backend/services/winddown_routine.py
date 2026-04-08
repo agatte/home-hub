@@ -91,8 +91,8 @@ class WinddownRoutineService:
 
         # Lower Sonos volume
         try:
-            if self._sonos and self._sonos.speaker:
-                self._sonos.speaker.volume = self._volume
+            if self._sonos and self._sonos.connected:
+                await self._sonos.set_volume(self._volume)
                 logger.info(f"Sonos volume set to {self._volume}")
         except Exception as e:
             logger.error(f"Wind-down volume adjustment failed: {e}")

@@ -5,9 +5,9 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    // Emit a fully static build that FastAPI can mount at /{path:path},
-    // mirroring how frontend/dist/ is served today. SPA fallback via index.html
-    // is required because client-side routing owns /music and /settings.
+    // Emit a fully static build that FastAPI mounts at /{path:path}.
+    // SPA fallback via index.html is required because client-side routing
+    // owns /music and /settings.
     adapter: adapter({
       pages: 'build',
       assets: 'build',

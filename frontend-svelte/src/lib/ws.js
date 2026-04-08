@@ -1,8 +1,6 @@
-// WebSocket client with exponential backoff reconnect. Ported from
-// frontend/src/hooks/useWebSocket.js — same reconnect semantics (1s → 30s),
-// same parse-error logging. Framework-agnostic: stores subscribe via
-// onMessage() and the connection lifetime is managed by initStores() in
-// lib/stores/init.js.
+// WebSocket client with exponential backoff reconnect (1s → 30s).
+// Framework-agnostic: stores subscribe via onMessage() and the connection
+// lifetime is managed by initStores() in lib/stores/init.js.
 
 const MAX_RECONNECT_DELAY = 30_000
 const INITIAL_RECONNECT_DELAY = 1_000

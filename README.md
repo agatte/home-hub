@@ -56,9 +56,10 @@ Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastM
 - All routines triggerable manually from the dashboard
 
 ### 📱 Real-time Dashboard
-- React 18 + Vite frontend served directly by FastAPI
+- SvelteKit + Threlte (Three.js) frontend served directly by FastAPI as a static build
 - WebSocket for bidirectional communication — server pushes `light_update`, `sonos_update`, `mode_update`, `music_suggestion`, `music_auto_played` events
-- Split context providers (Lights, Sonos, Automation, Music, Connection) for minimal re-renders
+- Five Svelte writable stores (Lights, Sonos, Automation, Music, Connection) for granular reactivity
+- Mode-gated Threlte canvas for animated backgrounds (sleeping-mode moon scene shipped)
 - Progressive Web App with service worker — installable on Android tablet as a kiosk display, works offline
 
 ---
@@ -67,7 +68,7 @@ Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastM
 
 | Layer | Technologies |
 |---|---|
-| Frontend | React 18, Vite, WebSocket, PWA + Service Worker |
+| Frontend | SvelteKit 2 + Svelte 4, Threlte 7 (Three.js), Vite 5, WebSocket, PWA + Service Worker |
 | Backend | Python, FastAPI, SQLAlchemy (async), aiosqlite |
 | MCP | FastMCP, Model Context Protocol |
 | Hue | phue2 (v1 API) + httpx CLIP API (v2) |
@@ -97,7 +98,7 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
    ├── EventLogger ──► mode/light/sonos events → SQLite
    ├── Scheduler ──► morning routine at 6:40 AM weekdays
    ├── SQLite (aiosqlite + SQLAlchemy async)
-   └── Serves React static build from frontend/dist/
+   └── Serves SvelteKit static build from frontend-svelte/build/
 
    Standalone processes (POST to /api/automation/activity):
    ├── pc_agent/activity_detector.py  (psutil — game/media/idle detection)
@@ -137,7 +138,7 @@ venv/Scripts/activate        # Windows
 pip install -r requirements.txt
 
 # Build frontend
-cd frontend && npm install && npm run build && cd ..
+cd frontend-svelte && npm install && npm run build && cd ..
 
 # Configure environment
 cp .env.example .env
@@ -161,8 +162,8 @@ python -m backend.services.pc_agent.ambient_monitor
 python -m backend.mcp_server
 
 # Frontend hot-reload dev server (proxies API to :8000)
-cd frontend && npm run dev
-# → http://localhost:3000
+cd frontend-svelte && npm run dev
+# → http://localhost:3001
 ```
 
 ---
@@ -212,7 +213,7 @@ The `query_db` tool accepts any SELECT statement against the live SQLite databas
 - Hue bridge uses a self-signed SSL cert — CLIP API calls use `verify=False`
 - Sonos TTS requires `LOCAL_IP` in `.env` — Sonos fetches the MP3 directly from the server's LAN address
 - Timezone is set to `America/Indiana/Indianapolis` (Indiana has unique DST rules)
-- The React static build catch-all in `main.py` must be registered after all API routes
+- The SvelteKit static build catch-all in `main.py` must be registered after all API routes
 - PC agent scripts are standalone processes — they communicate via HTTP POST, not imported by the server
 
 ---

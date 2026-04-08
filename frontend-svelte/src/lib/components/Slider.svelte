@@ -15,9 +15,9 @@
   }
 </script>
 
-<div class="slider-container {className}">
+<label class="slider-container {className}">
   {#if label}
-    <label class="slider-label">{label}</label>
+    <span class="slider-label">{label}</span>
   {/if}
   <input
     type="range"
@@ -28,4 +28,4 @@
     class="slider-input"
   />
   <span class="slider-value">{value}</span>
-</div>
+</label>

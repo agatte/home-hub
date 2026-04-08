@@ -8,8 +8,8 @@
  *   - API / WebSocket / health: always network, no caching
  */
 
-const CACHE_NAME = "home-hub-v2";
-const SHELL_ASSETS = ["/", "/index.html"];
+const CACHE_NAME = "home-hub-v3";
+const SHELL_ASSETS = ["/"];
 
 // Install — cache the app shell
 self.addEventListener("install", (event) => {
