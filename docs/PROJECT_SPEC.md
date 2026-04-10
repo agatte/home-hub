@@ -27,10 +27,15 @@ The core focus is getting lights and music working seamlessly. Everything else b
 ### Lighting
 
 - Full Philips Hue control via dual APIs (v1/phue2 for basic control + 1s polling, CLIP v2 for native scenes and dynamic effects)
+- **Color temperature (CT/mirek) support** — first-class parameter alongside HSB for precise Kelvin control (2000K–6500K)
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
 - Activity-driven modes: gaming, working, watching, relax, movie, social — each with per-light state definitions
+- **Working-at-night uses science-based bias lighting** — bedroom lamp only at 2700K CT, other lights off (reduces melatonin suppression)
+- **20 curated scenes** across 7 categories (functional, cozy, moody, vibrant, nature, entertainment, social) using color harmony theory — each scene defines per-light states with varied hue, saturation, and brightness for depth
+- **Custom scene CRUD** — user-created scenes persisted to SQLite with category and optional paired effect
+- **Effect auto-activation** — EFFECT_AUTO_MAP drives automatic effects by mode + time period (candle for relax at night, glisten for relax day, etc.) with easy manual override
 - Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal)
-- Social mode sub-styles (color cycle, theater, party)
+- Social mode sub-styles (color cycle, club, rave, fire & ice)
 - Screen sync for gaming (bedroom lamp mirrors dominant screen color via mss capture)
 - Manual override with 4-hour auto-timeout
 - Configurable per-mode brightness multipliers
@@ -54,13 +59,19 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
 
-### Dashboard
+### Dashboard — "Living Ink" Design
 
-- Three pages: Home (controls), Music (discovery + mapping), Settings (configuration)
+- **Generative canvas background** — Perlin noise flow field (Canvas2D, 15fps) with particle colors from live Hue light states. Music playing speeds up the flow. Each mode has unique algorithm parameters (gaming = turbulent, working = calm, social = fast/colorful). Monochrome drift when all lights off.
+- **No sidebar** — floating glassmorphic bottom pill bar (Home, Music, Settings) + mode overlay (Bebas Neue 36px all-caps mode name with character-stagger animation) + Now Playing chip
+- **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
+- **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the generative art + mode name. Tap anywhere to wake.
+- **Weather widget** — OpenWeatherMap current conditions with 10-minute cache
+- Three pages: Home (controls + weather + scenes), Music (discovery + mapping), Settings (configuration)
 - Real-time WebSocket sync — changes from Alexa, Hue app, or physical switches reflected instantly
 - PWA-capable for phone/tablet kiosk mode
 - Optimistic updates for responsive feel
 - Music suggestion toasts on mode change
+- Typography: Bebas Neue (display/mode headlines) + Source Sans 3 (body/UI)
 
 ### Known Issues & Pain Points
 
@@ -76,11 +87,11 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Last.fm recommendations aren't useful — poor relevance to actual taste
 
 **UI:**
-- Too many taps for common actions — no quick shortcuts
-- Visual design feels generic and unpolished — doesn't match the bold vision
-- Hard to read at a glance — can't quickly parse what's happening without focusing
-- Mobile experience is clunky — not optimized for touch or small screens
-- Three-page layout (Home, Music, Settings) doesn't serve the command center vision
+- ~~Too many taps for common actions~~ — fixed: quick action pill buttons + scene browser with category tabs
+- ~~Visual design feels generic and unpolished~~ — fixed: Living Ink redesign with generative canvas, glass cards, Bebas Neue typography
+- ~~Hard to read at a glance~~ — fixed: mode overlay with large mode name, weather widget, Now Playing chip
+- Mobile experience could use more polish
+- ~~Three-page layout doesn't serve command center vision~~ — fixed: full-screen layout with floating nav, no sidebar
 
 ---
 
@@ -100,6 +111,7 @@ Browser / Phone (PWA)
    ├── AutomationEngine ───────────> time + activity → light state
    │   └── mode-change callbacks ──> MusicMapper, [future: GameDayEngine]
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
+   ├── WeatherService ─────────────> OpenWeatherMap (10-min cache)
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
@@ -172,7 +184,7 @@ External APIs (cloud):
 
 - **Two-process model:** Main server handles real-time control. Learning engine runs separately, reads events from the shared DB, computes patterns, and exposes an internal API for predictions. Main server queries the learning engine before making automation decisions.
 - **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) when event volume grows. SQLAlchemy abstraction makes the switch straightforward. Event data uses 90-day rolling window with older data aggregated into daily/weekly summaries.
-- **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
+- **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
 - **PC Agent over network:** Gaming PC (wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery.
 - **Alexa two-phase:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel for full flexibility later.
 
@@ -184,7 +196,7 @@ External APIs (cloud):
 |-------|-----------|
 | Backend | Python 3.8+, FastAPI, uvicorn, async/await |
 | Database | SQLite via aiosqlite + SQLAlchemy 2.0 async ORM |
-| Frontend | SvelteKit 2 + Svelte 4, Threlte 7 (Three.js), Vite 5, Svelte writable stores |
+| Frontend | SvelteKit 2 + Svelte 4, Threlte 7 (Three.js), Vite 5, Svelte writable stores, Lucide icons, simplex-noise |
 | Hue (v1) | phue2 library (imports as `from phue import Bridge`) |
 | Hue (v2) | CLIP API via httpx (self-signed cert, `verify=False`) |
 | Sonos | SoCo library (UPnP, zero-auth, SSDP discovery) |
@@ -218,7 +230,9 @@ External APIs (cloud):
 |--------|------|-------|
 | id | Integer | PK, auto-increment |
 | name | String(100) | Unique scene name |
-| light_states | JSON | Per-light state objects |
+| light_states | JSON | Per-light state objects (supports hue/sat/bri and ct) |
+| category | String(50) | Scene category: custom, functional, cozy, moody, vibrant, nature, entertainment, social |
+| effect | String(50) | Optional paired Hue effect (candle, fire, glisten, etc.) |
 | created_at | DateTime | UTC |
 
 **mode_playlists** — Activity mode → Sonos favorite mapping
@@ -371,7 +385,7 @@ All messages are JSON with `type` + `data` fields.
 |------|---------|------|
 | `connection_status` | On connect | `{hue: bool, sonos: bool}` |
 | `mode_update` | On connect + mode change | `{mode, source, manual_override}` |
-| `light_update` | Polling detects change | `{light_id, name, on, bri, hue, sat, reachable}` |
+| `light_update` | Polling detects change | `{light_id, name, on, bri, hue, sat, ct, colormode, reachable}` |
 | `sonos_update` | Polling detects change | `{state, track, artist, album, art_url, volume, mute}` |
 | `music_auto_played` | Auto-play triggered | `{mode, title}` |
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
@@ -421,15 +435,19 @@ All messages are JSON with `type` + `data` fields.
 |--------|------|---------|
 | GET | `/api/lights` | All light states |
 | GET | `/api/lights/{id}` | Single light state |
-| PUT | `/api/lights/{id}` | Set light state (`on, bri, hue, sat, transitiontime`) |
+| PUT | `/api/lights/{id}` | Set light state (`on, bri, hue, sat, ct, transitiontime`) |
 | POST | `/api/lights/all` | Set all lights to same state |
 
 #### Scenes & Effects — `/api/scenes/`
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/scenes` | List all scenes (presets + bridge native) |
-| POST | `/api/scenes/{id}/activate` | Activate scene (routes to v1 or v2 by ID type) |
+| GET | `/api/scenes` | List all scenes (curated presets + custom + bridge native) |
+| POST | `/api/scenes/{id}/activate` | Activate scene (routes curated, custom, or bridge by ID) |
+| POST | `/api/scenes/custom` | Create custom scene |
+| GET | `/api/scenes/custom` | List custom scenes |
+| PUT | `/api/scenes/custom/{id}` | Update custom scene |
+| DELETE | `/api/scenes/custom/{id}` | Delete custom scene |
 | GET | `/api/scenes/effects` | List available dynamic effects |
 | POST | `/api/scenes/effects/{name}` | Apply effect to all lights |
 | POST | `/api/scenes/effects/{name}/light/{id}` | Apply effect to single light |
@@ -478,6 +496,12 @@ All messages are JSON with `type` + `data` fields.
 | GET | `/api/music/recommendations?mode=` | Get pending recommendations |
 | POST | `/api/music/recommendations/generate?mode=` | Generate new recs |
 | POST | `/api/music/recommendations/{id}/feedback` | Like/dismiss (`{action}`) |
+
+#### Weather — `/api/weather/`
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/weather` | Current weather conditions (cached 10 min from OpenWeatherMap) |
 
 #### Routines — `/api/routines/`
 
@@ -993,58 +1017,54 @@ await ws_manager.broadcast("widget_data", {
 **Frontend (SvelteKit):**
 Widget cards on the home page subscribe to `widget_data` WebSocket events and render app-specific cards with animated icons. Tapping opens the full external app in a new tab.
 
-### Pattern 10: Adding an Animated Background (Threlte/Three.js)
+### Pattern 10: Generative Background ("Living Ink")
 
-Each mode has a scene component in `frontend-svelte/src/lib/backgrounds/`:
+The background uses a single `GenerativeCanvas.svelte` (Canvas2D) that reacts to live data instead of per-mode Threlte scenes:
 
 ```
 frontend-svelte/src/lib/backgrounds/
-├── BackgroundManager.svelte    ← Switches scene based on current mode
-├── GamingScene.svelte          ← High-energy particles, color shifts
-├── RelaxScene.svelte           ← Arcade birds, warm ambient
-├── SleepingScene.svelte        ← Moon + darkening city
-├── WorkingScene.svelte         ← Minimal, subtle motion
-├── SocialScene.svelte          ← Party energy, color cycling
-├── GameDayScene.svelte         ← Colts themed, celebration bursts
-└── DefaultScene.svelte         ← Fallback gradient
+├── GenerativeCanvas.svelte     ← Perlin noise flow field, data-reactive
+└── MoonScene.svelte            ← Threlte 3D scene (sleeping mode overlay)
 ```
 
-**Convention:**
-- Each scene is a standalone Threlte component
-- Receives `timeOfDay` prop (morning/day/evening/night) for time-based variations
-- Receives `lightState` prop (current Hue colors) to match background to actual room lighting
-- Animations run at 30fps max to keep laptop cool (always-on concern)
-- Transitions between scenes use a fade-through-black (1s duration)
+**How it works:**
+- Perlin noise flow field with 200-400 particles leaving fading trails at 15fps
+- Particle colors sampled from live Hue light states (monochrome when all lights off)
+- Music playing → speed multiplier increases (1.0 → 1.3x)
+- Each mode has unique algorithm parameters in `theme.js` `MODE_CONFIG.generative`: frequency, speed, particleCount, trailAlpha, intensity
+- Mode changes smoothly interpolate parameters over ~800ms
+- `ModeBackground.svelte` renders GenerativeCanvas for all modes + MoonScene overlay for sleeping
+- `prefers-reduced-motion` drops to 2fps (near-static)
+- Away mode: static single frame, no animation loop
 
 ---
 
 ## Target Features
 
-### Dashboard Redesign (Priority 1)
+### Dashboard Redesign — "Living Ink" (Complete)
 
-The current three-page layout is being replaced with a command center design:
+The dashboard has been redesigned as a living, data-reactive interface:
 
-- **Sidebar navigation** — Persistent sidebar with sections. Content area changes. Desktop app feel.
-- **Widget-based home page** — Current mode (auto-updates), light state with live colors, now playing card, weather, next routine countdown, plant app status, bar app card
-- **Animated mode backgrounds** — Bold, dynamic backgrounds per mode AND time of day:
-  - *Gaming:* High-energy particles, vibrant color shifts matching light state
-  - *Relax:* Arcade-style birds drifting across the screen, warm ambient feel
-  - *Sleeping:* Dark theme, moon rotating based on real astronomical position (location-aware), city skyline growing darker
-  - *Social:* Party energy, color cycling that mirrors the Hue effects
-  - *Working:* Clean, minimal, focused — subtle motion only
-  - *Game Day:* Colts blue/white, football-themed elements, celebration bursts on scoring plays
-  - *Morning:* Sunrise gradient, warming colors
-  - *Evening:* Warm sunset fade, gradual dimming
-- **One-tap quick actions** — Movie night, bedtime, leaving, game day — each triggers a mode + light + music combo
-- **Responsive layout** — Optimized for 1080p landscape (foldable laptop) AND mobile phone PWA
-- **External project widgets** — Animated cards for plant app (live status: "3 plants need water") and bar app (recipe suggestion, hosting mode trigger). Widget + launcher pattern — show status, tap to open full app.
+- ✓ **Full-screen layout** — No sidebar. Floating glassmorphic bottom pill bar (3 Lucide icons). Mode overlay with Bebas Neue 36px all-caps mode name + character-stagger animation.
+- ✓ **Generative canvas background** — Perlin noise flow field reacts to live Hue light colors, Sonos playback state, and mode parameters. Each mode has unique visual character.
+- ✓ **Glass card widgets** — `backdrop-filter: blur(12px)`, staggered entrance animations, hover states. Home page: Now Playing strip, Quick Actions, Mode, Weather, Lights, Scenes, Routines.
+- ✓ **Auto-hide on idle** — Cards fade out after 60s, leaving just generative art + mode name. "Tap to wake" hint.
+- ✓ **Weather widget** — OpenWeatherMap current conditions (temp, feels-like, humidity, wind, hi/lo).
+- ✓ **Scene browser** — 20 curated scenes organized by category tabs (functional, cozy, moody, vibrant, nature, entertainment, social) + Effects tab + Hue Scenes tab.
+- ✓ **One-tap quick actions** — Lucide icon pill buttons for Movie, Relax, Party, Bedtime, Auto, All Off.
+- ✓ **Now Playing chip** — Fixed bottom-right, shows album art + track, pulses when playing.
+- **Remaining:** External project widget cards (plant app, bar app), custom scene builder UI.
 
-### Lighting Improvements
+### Lighting Improvements (Mostly Complete)
 
-- **Gradual transitions** — Smooth brightness/color curves between time periods instead of hard switches
-- **Activity-aware evening** — Wind-down starts gradually when idle in the evening, pauses if you're gaming/watching, resumes when idle again
-- **Scene favorites** — Pin frequently-used scenes for quick one-tap access
-- **Per-room mode overrides** — Let one room stay in a different mode (e.g., bedroom relaxed while living room is social)
+- ✓ **Gradual transitions** — 30-minute evening→night lerp, morning ramp
+- ✓ **Activity-aware evening** — Wind-down delays and retries if gaming/watching/social/working
+- ✓ **CT (color temperature) support** — mirek values (153=6500K → 500=2000K) as first-class parameter
+- ✓ **20 curated scenes** — per-light color harmony (analogous, complementary, triadic), paired effects
+- ✓ **Custom scene CRUD** — save/load/update/delete with category and effect
+- ✓ **Effect auto-activation** — candle for relax nights, glisten for relax days, prism for party
+- ✓ **Science-based night work** — 2700K CT bias lamp only (melatonin-safe)
+- **Remaining:** Custom scene builder UI, per-room mode overrides
 
 ### Display Auto-Switching (Monitor ↔ Projector)
 
@@ -1211,14 +1231,19 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 
 ### Phase 2: Dashboard Redesign (May 2026)
 
-- ✓ Sidebar navigation layout
-- ✓ Widget-based home page (mode, lights, music, routines)
-- ✓ Quick action buttons
+- ✓ Sidebar navigation layout → replaced by floating bottom nav in Living Ink redesign
+- ✓ Widget-based home page (mode, lights, music, routines, weather, scenes)
+- ✓ Quick action buttons (Lucide icon pills)
 - ✓ Mobile-responsive layout
 - ✓ Sleeping-mode Threlte animated background (stack validator)
 - ✓ SvelteKit + Threlte frontend rewrite (Phase 2a parity pass — commit `b96d062`)
-- Remaining animated mode backgrounds (gaming, relax, default)
-- Weather widget (OpenWeatherMap)
+- ✓ **Living Ink frontend redesign** — generative canvas background (Perlin noise, data-reactive to Hue lights + Sonos), glassmorphic cards, Bebas Neue typography, mode overlay with character-stagger animation, Now Playing chip, 60s auto-hide on idle
+- ✓ **Weather widget** — OpenWeatherMap current conditions with 10-min cache
+- ✓ **20 curated scenes** — color harmony theory (analogous, complementary, triadic), per-light states, 7 categories
+- ✓ **Custom scene CRUD** — save/load/delete user scenes with category + effect
+- ✓ **CT (color temperature) support** — mirek parameter throughout stack for precise Kelvin control
+- ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
+- ✓ **Science-based night work lighting** — 2700K bias lamp only when working at night
 - External project widget cards (plant app)
 
 ### Phase 2a: Post-Cutover Cleanup (Complete)
