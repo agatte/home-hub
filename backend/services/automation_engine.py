@@ -771,8 +771,8 @@ class AutomationEngine:
         # POST /api/automation/screen-color and are gated by SCREEN_SYNC_MODES
         # at the route handler. No engine-side action needed when modes change.
 
-        # Stop active effects only if one is running (saves ~4 HTTP calls)
-        if self._active_effect and self._hue_v2 and self._hue_v2.connected:
+        # Always stop effects on mode change to prevent carry-over
+        if self._hue_v2 and self._hue_v2.connected:
             await self._hue_v2.stop_effect_all()
             self._active_effect = False
 

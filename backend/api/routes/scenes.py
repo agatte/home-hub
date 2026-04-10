@@ -219,13 +219,11 @@ async def _activate_per_light(hue, light_states: dict, transitiontime: int = 10)
 
 
 async def _activate_effect_if_needed(hue_v2, effect: str | None):
-    """Activate or stop an effect if specified."""
+    """Activate a paired effect if specified. Does nothing if no effect."""
     if not hue_v2 or not hue_v2.connected:
         return
     if effect:
         await hue_v2.set_effect_all(effect)
-    else:
-        await hue_v2.stop_effect_all()
 
 
 @router.get("")
