@@ -375,11 +375,13 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
         preset = SCENE_PRESETS[scene_id]
 
-        # Stop any running effects first so they don't override the new state
-        if hue_v2 and hue_v2.connected:
-            await hue_v2.stop_effect_all()
-
+        # Apply light states first — setting explicit hue/sat/bri or ct
+        # automatically cancels any running effect on that light, so we
+        # don't need a separate stop_effect_all (which causes a visible
+        # flash as the bridge snaps to a raw state before our transition).
         await _activate_per_light(hue, preset["lights"])
+
+        # Then apply paired effect if the scene has one
         await _activate_effect_if_needed(hue_v2, preset.get("effect"))
 
         await asyncio.sleep(0.3)
@@ -407,9 +409,6 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
                 light_states = json.loads(row[0]) if isinstance(row[0], str) else row[0]
                 effect = row[1] if len(row) > 1 else None
-
-                if hue_v2 and hue_v2.connected:
-                    await hue_v2.stop_effect_all()
 
                 await _activate_per_light(hue, light_states)
                 await _activate_effect_if_needed(hue_v2, effect)
