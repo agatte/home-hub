@@ -1,7 +1,8 @@
 """
 Scene endpoints — curated presets, custom user scenes, bridge scenes, and effects.
 
-Curated presets define per-light states for 15 well-designed lighting combos.
+Curated presets define per-light states for 20 well-designed lighting combos
+using color harmony theory (analogous, complementary, split-complementary).
 Custom scenes are user-created and persisted to SQLite.
 Bridge scenes are native Hue scenes visible to Alexa / the Hue app.
 Effects are real-time dynamic animations run by the bridge hardware.
@@ -23,11 +24,19 @@ _OFF = {"on": False}
 
 
 # ------------------------------------------------------------------
-# 15 Curated Scene Presets (per-light states + category + effect)
+# 20 Curated Scene Presets
+# Color harmony: analogous (adjacent hues), complementary (opposing),
+# split-complementary, triadic. Brightness + saturation vary per light
+# to create depth. Effects paired only when they enhance the scene.
+#
+# Lights: L1=living room corner, L2=bedroom desk lamp,
+#         L3=kitchen front, L4=kitchen back
 # ------------------------------------------------------------------
 
 SCENE_PRESETS: dict[str, dict[str, Any]] = {
-    # === Functional (science-backed) ===
+
+    # ===================== FUNCTIONAL =====================
+
     "deep_focus": {
         "display_name": "Deep Focus",
         "category": "functional",
@@ -73,75 +82,167 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         },
     },
 
-    # === Mood / Atmosphere (HSB colors) ===
-    "sunset_glow": {
-        "display_name": "Sunset Glow",
-        "category": "mood",
+    # ===================== COZY & WARM =====================
+    # Analogous warm palette — adjacent hues on warm side of wheel
+
+    "golden_hour": {
+        "display_name": "Golden Hour",
+        "category": "cozy",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 200, "hue": 5000, "sat": 254},
-            "2": {"on": True, "bri": 180, "hue": 2000, "sat": 254},
-            "3": {"on": True, "bri": 160, "hue": 8000, "sat": 200},
-            "4": {"on": True, "bri": 140, "hue": 3000, "sat": 254},
+            "1": {"on": True, "bri": 180, "hue": 7000, "sat": 220},
+            "2": {"on": True, "bri": 160, "hue": 5000, "sat": 180},
+            "3": {"on": True, "bri": 120, "hue": 8500, "sat": 200},
+            "4": {"on": True, "bri": 100, "hue": 6000, "sat": 254},
         },
     },
-    "ocean_calm": {
-        "display_name": "Ocean Calm",
-        "category": "mood",
-        "effect": "glisten",
-        "lights": {
-            "1": {"on": True, "bri": 150, "hue": 40000, "sat": 180},
-            "2": {"on": True, "bri": 120, "hue": 46920, "sat": 200},
-            "3": {"on": True, "bri": 140, "hue": 43000, "sat": 160},
-            "4": {"on": True, "bri": 130, "hue": 46920, "sat": 180},
-        },
-    },
-    "forest": {
-        "display_name": "Forest",
-        "category": "mood",
-        "effect": None,
-        "lights": {
-            "1": {"on": True, "bri": 160, "hue": 25500, "sat": 200},
-            "2": {"on": True, "bri": 140, "hue": 22000, "sat": 180},
-            "3": {"on": True, "bri": 120, "hue": 12750, "sat": 150},
-            "4": {"on": True, "bri": 100, "hue": 25500, "sat": 220},
-        },
-    },
-    "lava": {
-        "display_name": "Lava",
-        "category": "mood",
+    "ember": {
+        "display_name": "Ember",
+        "category": "cozy",
         "effect": "fire",
         "lights": {
-            "1": {"on": True, "bri": 200, "hue": 0, "sat": 254},
-            "2": {"on": True, "bri": 180, "hue": 3000, "sat": 254},
-            "3": {"on": True, "bri": 160, "hue": 5000, "sat": 254},
-            "4": {"on": True, "bri": 200, "hue": 2000, "sat": 254},
+            "1": {"on": True, "bri": 140, "hue": 1500, "sat": 254},
+            "2": {"on": True, "bri": 100, "hue": 0, "sat": 240},
+            "3": {"on": True, "bri": 80, "hue": 3000, "sat": 254},
+            "4": {"on": True, "bri": 120, "hue": 500, "sat": 254},
         },
     },
-    "arctic": {
-        "display_name": "Arctic",
-        "category": "mood",
-        "effect": None,
+    "candlelit": {
+        "display_name": "Candlelit",
+        "category": "cozy",
+        "effect": "candle",
         "lights": {
-            "1": {"on": True, "bri": 220, "hue": 40000, "sat": 80},
-            "2": {"on": True, "bri": 200, "hue": 46920, "sat": 120},
-            "3": {"on": True, "bri": 230, "ct": 153},
-            "4": {"on": True, "bri": 180, "hue": 43000, "sat": 100},
-        },
-    },
-    "twilight": {
-        "display_name": "Twilight",
-        "category": "mood",
-        "effect": None,
-        "lights": {
-            "1": {"on": True, "bri": 100, "hue": 50000, "sat": 220},
-            "2": {"on": True, "bri": 80, "hue": 46920, "sat": 254},
-            "3": {"on": True, "bri": 90, "hue": 54000, "sat": 200},
-            "4": {"on": True, "bri": 70, "hue": 50000, "sat": 240},
+            "1": {"on": True, "bri": 50, "ct": 500},
+            "2": {"on": True, "bri": 50, "ct": 500},
+            "3": {"on": True, "bri": 50, "ct": 500},
+            "4": {"on": True, "bri": 50, "ct": 500},
         },
     },
 
-    # === Entertainment ===
+    # ===================== MOODY & DRAMATIC =====================
+    # Complementary + deep saturation, low brightness for drama
+
+    "noir": {
+        "display_name": "Noir",
+        "category": "moody",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 60, "hue": 46920, "sat": 254},
+            "2": {"on": True, "bri": 100, "hue": 7000, "sat": 200},
+            "3": {"on": True, "bri": 40, "hue": 50000, "sat": 220},
+            "4": {"on": True, "bri": 50, "hue": 48000, "sat": 240},
+        },
+    },
+    "midnight": {
+        "display_name": "Midnight",
+        "category": "moody",
+        "effect": "glisten",
+        "lights": {
+            "1": {"on": True, "bri": 80, "hue": 48000, "sat": 254},
+            "2": {"on": True, "bri": 60, "hue": 52000, "sat": 200},
+            "3": {"on": True, "bri": 50, "hue": 46920, "sat": 220},
+            "4": {"on": True, "bri": 40, "hue": 50000, "sat": 240},
+        },
+    },
+    "blood_moon": {
+        "display_name": "Blood Moon",
+        "category": "moody",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 120, "hue": 0, "sat": 254},
+            "2": {"on": True, "bri": 80, "hue": 36000, "sat": 200},
+            "3": {"on": True, "bri": 60, "hue": 1000, "sat": 254},
+            "4": {"on": True, "bri": 50, "hue": 34000, "sat": 180},
+        },
+    },
+
+    # ===================== VIBRANT & ENERGETIC =====================
+    # Triadic + split-complementary, high saturation, bold
+
+    "neon_tokyo": {
+        "display_name": "Neon Tokyo",
+        "category": "vibrant",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 200, "hue": 56100, "sat": 254},
+            "2": {"on": True, "bri": 180, "hue": 46920, "sat": 254},
+            "3": {"on": True, "bri": 160, "hue": 52000, "sat": 254},
+            "4": {"on": True, "bri": 140, "hue": 60000, "sat": 240},
+        },
+    },
+    "arcade": {
+        "display_name": "Arcade",
+        "category": "vibrant",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 200, "hue": 25500, "sat": 254},
+            "2": {"on": True, "bri": 180, "hue": 50000, "sat": 254},
+            "3": {"on": True, "bri": 160, "hue": 36000, "sat": 254},
+            "4": {"on": True, "bri": 120, "hue": 25500, "sat": 220},
+        },
+    },
+    "miami_vice": {
+        "display_name": "Miami Vice",
+        "category": "vibrant",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 200, "hue": 60000, "sat": 254},
+            "2": {"on": True, "bri": 180, "hue": 36000, "sat": 220},
+            "3": {"on": True, "bri": 140, "hue": 58000, "sat": 240},
+            "4": {"on": True, "bri": 120, "hue": 34000, "sat": 200},
+        },
+    },
+
+    # ===================== NATURE-INSPIRED =====================
+    # Analogous palettes drawn from natural phenomena
+
+    "northern_lights": {
+        "display_name": "Northern Lights",
+        "category": "nature",
+        "effect": "glisten",
+        "lights": {
+            "1": {"on": True, "bri": 160, "hue": 25500, "sat": 220},
+            "2": {"on": True, "bri": 140, "hue": 34000, "sat": 200},
+            "3": {"on": True, "bri": 100, "hue": 50000, "sat": 180},
+            "4": {"on": True, "bri": 120, "hue": 28000, "sat": 240},
+        },
+    },
+    "sunset_strip": {
+        "display_name": "Sunset Strip",
+        "category": "nature",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 200, "hue": 0, "sat": 254},
+            "2": {"on": True, "bri": 180, "hue": 5000, "sat": 254},
+            "3": {"on": True, "bri": 140, "hue": 60000, "sat": 200},
+            "4": {"on": True, "bri": 100, "hue": 52000, "sat": 180},
+        },
+    },
+    "deep_ocean": {
+        "display_name": "Deep Ocean",
+        "category": "nature",
+        "effect": "glisten",
+        "lights": {
+            "1": {"on": True, "bri": 100, "hue": 46920, "sat": 254},
+            "2": {"on": True, "bri": 120, "hue": 38000, "sat": 200},
+            "3": {"on": True, "bri": 80, "hue": 44000, "sat": 220},
+            "4": {"on": True, "bri": 60, "hue": 30000, "sat": 180},
+        },
+    },
+    "cherry_blossom": {
+        "display_name": "Cherry Blossom",
+        "category": "nature",
+        "effect": None,
+        "lights": {
+            "1": {"on": True, "bri": 180, "hue": 58000, "sat": 140},
+            "2": {"on": True, "bri": 160, "ct": 300},
+            "3": {"on": True, "bri": 140, "hue": 52000, "sat": 100},
+            "4": {"on": True, "bri": 120, "hue": 60000, "sat": 160},
+        },
+    },
+
+    # ===================== ENTERTAINMENT =====================
+
     "movie_night": {
         "display_name": "Movie Night",
         "category": "entertainment",
@@ -158,47 +259,24 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         "category": "entertainment",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 150, "hue": 56100, "sat": 200},
-            "2": {"on": True, "bri": 120, "ct": 300},
-            "3": {"on": True, "bri": 130, "hue": 56100, "sat": 180},
-            "4": {"on": True, "bri": 100, "hue": 46920, "sat": 200},
+            "1": {"on": True, "bri": 150, "hue": 50000, "sat": 200},
+            "2": {"on": True, "bri": 120, "hue": 46920, "sat": 180},
+            "3": {"on": True, "bri": 100, "hue": 52000, "sat": 160},
+            "4": {"on": True, "bri": 80, "hue": 46920, "sat": 200},
         },
     },
 
-    # === Social ===
-    "dinner_party": {
-        "display_name": "Dinner Party",
-        "category": "social",
-        "effect": "candle",
-        "lights": {
-            "1": {"on": True, "bri": 150, "ct": 400},
-            "2": {"on": True, "bri": 150, "ct": 400},
-            "3": {"on": True, "bri": 120, "ct": 454},
-            "4": {"on": True, "bri": 120, "ct": 454},
-        },
-    },
-    "lounge": {
-        "display_name": "Lounge",
-        "category": "social",
-        "effect": None,
-        "lights": {
-            "1": {"on": True, "bri": 120, "hue": 50000, "sat": 150},
-            "2": {"on": True, "bri": 100, "ct": 370},
-            "3": {"on": True, "bri": 100, "hue": 54000, "sat": 120},
-            "4": {"on": True, "bri": 80, "ct": 370},
-        },
-    },
+    # ===================== SOCIAL =====================
 
-    # === Special ===
-    "candlelight": {
-        "display_name": "Candlelight",
-        "category": "special",
-        "effect": "candle",
+    "house_party": {
+        "display_name": "House Party",
+        "category": "social",
+        "effect": "prism",
         "lights": {
-            "1": {"on": True, "bri": 40, "ct": 500},
-            "2": {"on": True, "bri": 40, "ct": 500},
-            "3": {"on": True, "bri": 40, "ct": 500},
-            "4": {"on": True, "bri": 40, "ct": 500},
+            "1": {"on": True, "bri": 254, "hue": 0, "sat": 254},
+            "2": {"on": True, "bri": 254, "hue": 25500, "sat": 254},
+            "3": {"on": True, "bri": 254, "hue": 46920, "sat": 254},
+            "4": {"on": True, "bri": 254, "hue": 56100, "sat": 254},
         },
     },
 }
@@ -249,7 +327,7 @@ async def list_scenes(request: Request) -> dict:
     # Custom scenes from DB
     custom_scenes = []
     try:
-        from sqlalchemy import select, text
+        from sqlalchemy import text
 
         db = request.app.state.db
         async with db() as session:
@@ -296,6 +374,11 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
             raise HTTPException(status_code=503, detail="Hue bridge not connected")
 
         preset = SCENE_PRESETS[scene_id]
+
+        # Stop any running effects first so they don't override the new state
+        if hue_v2 and hue_v2.connected:
+            await hue_v2.stop_effect_all()
+
         await _activate_per_light(hue, preset["lights"])
         await _activate_effect_if_needed(hue_v2, preset.get("effect"))
 
@@ -324,6 +407,9 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
                 light_states = json.loads(row[0]) if isinstance(row[0], str) else row[0]
                 effect = row[1] if len(row) > 1 else None
+
+                if hue_v2 and hue_v2.connected:
+                    await hue_v2.stop_effect_all()
 
                 await _activate_per_light(hue, light_states)
                 await _activate_effect_if_needed(hue_v2, effect)

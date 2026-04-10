@@ -86,11 +86,13 @@ export const LIGHT_CT_PRESETS = [
 /** @type {Record<string, { label: string, color: string }>} */
 export const SCENE_CATEGORIES = {
   functional:    { label: 'Functional',    color: '#3b82f6' },
-  mood:          { label: 'Mood',          color: '#a855f7' },
-  entertainment: { label: 'Entertainment', color: '#f43f5e' },
+  cozy:          { label: 'Cozy',          color: '#fb923c' },
+  moody:         { label: 'Moody',         color: '#6366f1' },
+  vibrant:       { label: 'Vibrant',       color: '#f43f5e' },
+  nature:        { label: 'Nature',        color: '#34d399' },
+  entertainment: { label: 'Entertainment', color: '#8b5cf6' },
   social:        { label: 'Social',        color: '#f472b6' },
-  special:       { label: 'Special',       color: '#fb923c' },
-  custom:        { label: 'Custom',        color: '#34d399' },
+  custom:        { label: 'Custom',        color: '#a855f7' },
 }
 
 /** @type {Record<string, string>} */

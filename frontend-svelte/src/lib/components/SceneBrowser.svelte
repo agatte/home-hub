@@ -19,7 +19,10 @@
   const TABS = [
     { id: 'all', label: 'All' },
     { id: 'functional', label: 'Functional' },
-    { id: 'mood', label: 'Mood' },
+    { id: 'cozy', label: 'Cozy' },
+    { id: 'moody', label: 'Moody' },
+    { id: 'vibrant', label: 'Vibrant' },
+    { id: 'nature', label: 'Nature' },
     { id: 'entertainment', label: 'Entertainment' },
     { id: 'social', label: 'Social' },
     { id: 'effects', label: 'Effects' },
