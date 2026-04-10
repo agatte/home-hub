@@ -27,6 +27,14 @@ async def _run_migrations(conn) -> None:
     if "vibe" not in existing_cols:
         await conn.execute(text("ALTER TABLE mode_playlists ADD COLUMN vibe TEXT"))
 
+    # Add category + effect columns to scenes (lighting enhancement)
+    result = await conn.execute(text("PRAGMA table_info(scenes)"))
+    scene_cols = {row[1] for row in result.fetchall()}
+    if "category" not in scene_cols:
+        await conn.execute(text("ALTER TABLE scenes ADD COLUMN category TEXT DEFAULT 'custom'"))
+    if "effect" not in scene_cols:
+        await conn.execute(text("ALTER TABLE scenes ADD COLUMN effect TEXT"))
+
 
 async def init_db() -> None:
     """Create all database tables and apply pending migrations."""

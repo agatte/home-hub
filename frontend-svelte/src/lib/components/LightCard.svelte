@@ -2,7 +2,9 @@
   import Slider from './Slider.svelte'
   import { setLight } from '$lib/stores/init.js'
 
-  /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, reachable: boolean }} */
+  import { LIGHT_CT_PRESETS } from '$lib/theme.js'
+
+  /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, ct?: number, colormode?: string, reachable: boolean }} */
   export let light
 
   const COLOR_PRESETS = [
@@ -14,6 +16,8 @@
     { name: 'Green',    hue: 25500, sat: 254 },
     { name: 'Purple',   hue: 50000, sat: 254 },
   ]
+
+  let presetTab = 'color' // 'color' | 'temp'
 
   function hueToHsl(hue, sat, bri) {
     const h = (hue / 65535) * 360
@@ -36,6 +40,21 @@
   function setColor(hue, sat) {
     setLight(light.light_id, { hue, sat })
     showPresets = false
+  }
+
+  function setCT(ct) {
+    setLight(light.light_id, { ct })
+    showPresets = false
+  }
+
+  /** Convert mirek to a warm-to-cool CSS gradient color for display */
+  function ctToColor(ct) {
+    // Simple mapping: 500 mirek (2000K) = warm orange, 153 mirek (6500K) = cool blue-white
+    const t = (ct - 153) / (500 - 153) // 0 = cool, 1 = warm
+    const r = Math.round(255 - t * 30)
+    const g = Math.round(220 - t * 80)
+    const b = Math.round(200 - t * 140)
+    return `rgb(${r}, ${g}, ${b})`
   }
 
   $: bgColor = light.on ? hueToHsl(light.hue, light.sat, light.bri) : 'var(--text-muted)'
@@ -75,16 +94,35 @@
 
   {#if showPresets && light.on}
     <div class="chip-presets">
-      {#each COLOR_PRESETS as preset}
-        {@const active = Math.abs(light.hue - preset.hue) < 2000 && Math.abs(light.sat - preset.sat) < 50}
-        <button
-          class="chip-preset-dot"
-          class:preset-active={active}
-          style="background: {hueToHsl(preset.hue, preset.sat, 200)}"
-          on:click={() => setColor(preset.hue, preset.sat)}
-          title={preset.name}
-        ></button>
-      {/each}
+      <div class="preset-tabs">
+        <button class="preset-tab" class:active={presetTab === 'color'} on:click={() => presetTab = 'color'}>Color</button>
+        <button class="preset-tab" class:active={presetTab === 'temp'} on:click={() => presetTab = 'temp'}>Temp</button>
+      </div>
+      <div class="preset-dots">
+        {#if presetTab === 'color'}
+          {#each COLOR_PRESETS as preset}
+            {@const active = light.colormode === 'hs' && Math.abs(light.hue - preset.hue) < 2000 && Math.abs(light.sat - preset.sat) < 50}
+            <button
+              class="chip-preset-dot"
+              class:preset-active={active}
+              style="background: {hueToHsl(preset.hue, preset.sat, 200)}"
+              on:click={() => setColor(preset.hue, preset.sat)}
+              title={preset.name}
+            ></button>
+          {/each}
+        {:else}
+          {#each LIGHT_CT_PRESETS as preset}
+            {@const active = light.colormode === 'ct' && light.ct && Math.abs(light.ct - preset.ct) < 20}
+            <button
+              class="chip-preset-dot"
+              class:preset-active={active}
+              style="background: {ctToColor(preset.ct)}"
+              on:click={() => setCT(preset.ct)}
+              title="{preset.name} ({preset.label})"
+            ></button>
+          {/each}
+        {/if}
+      </div>
     </div>
   {/if}
 </div>
@@ -167,6 +205,7 @@
     left: 12px;
     top: 100%;
     display: flex;
+    flex-direction: column;
     gap: 6px;
     padding: 8px 10px;
     background: rgba(10, 10, 15, 0.7);
@@ -176,6 +215,36 @@
     border-radius: 10px;
     z-index: 10;
     animation: presetsIn 0.15s ease-out;
+  }
+
+  .preset-tabs {
+    display: flex;
+    gap: 4px;
+  }
+
+  .preset-tab {
+    padding: 2px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .preset-tab.active {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .preset-dots {
+    display: flex;
+    gap: 6px;
   }
 
   @keyframes presetsIn {

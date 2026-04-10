@@ -97,10 +97,26 @@ _LIGHT_OFF = {"on": False}
 
 WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 
+# Auto-activate effects based on mode + time period.
+# None = no auto effect. Social mode handles its own effects via SOCIAL_STYLES.
+EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
+    "relax":    {"day": "glisten", "evening": "candle", "night": "candle"},
+    "working":  {"day": None,     "evening": None,     "night": "opal"},
+    "gaming":   {"day": None,     "evening": None,     "night": None},
+    "movie":    {"day": None,     "evening": None,     "night": None},
+    "watching": {"day": None,     "evening": None,     "night": None},
+}
+
 
 def _uniform(bri: int, hue: int, sat: int) -> dict[str, dict]:
     """Build a per-light dict where all 4 lights get the same state."""
     state = {"on": True, "bri": bri, "hue": hue, "sat": sat}
+    return {"1": state, "2": state.copy(), "3": state.copy(), "4": state.copy()}
+
+
+def _uniform_ct(bri: int, ct: int) -> dict[str, dict]:
+    """Build a per-light dict where all 4 lights get the same CT state."""
+    state = {"on": True, "bri": bri, "ct": ct}
     return {"1": state, "2": state.copy(), "3": state.copy(), "4": state.copy()}
 
 
@@ -134,10 +150,17 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "night":   _gaming_state(120, 8000, 160),
     },
     # Warm productive — near time baseline, functional lighting
+    # Night: only bedroom lamp (L2) as 2700K bias light — science-backed for
+    # reducing melatonin suppression while preventing eye strain from screen contrast.
     "working": {
         "day":     _uniform(230, 10000, 100),
         "evening": _uniform(180, 8500, 130),
-        "night":   _uniform(80, 8000, 140),
+        "night":   {
+            "1": _LIGHT_OFF,
+            "2": {"on": True, "bri": 80, "ct": 370},   # 2700K warm bias
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+        },
     },
     # Bedroom bias light only — brighter during day for screen contrast
     "watching": {
@@ -276,7 +299,7 @@ def _lerp_light_state(
 
     def _lerp_single(sa: dict, sb: dict) -> dict:
         result: dict[str, Any] = {"on": sa.get("on", True) or sb.get("on", True)}
-        for key in ("bri", "hue", "sat"):
+        for key in ("bri", "hue", "sat", "ct"):
             if key in sa and key in sb:
                 result[key] = _lerp_val(sa[key], sb[key])
             elif key in sa:
@@ -792,10 +815,12 @@ class AutomationEngine:
             state = self._apply_brightness_multiplier(state, mode)
             await self._apply_state(state)
 
-            # Apply dynamic effects for certain modes
+            # Apply dynamic effects based on mode + time period
             if self._hue_v2 and self._hue_v2.connected:
-                if mode == "relax":
-                    await self._hue_v2.set_effect_all("candle")
+                effect_map = EFFECT_AUTO_MAP.get(mode, {})
+                auto_effect = effect_map.get(self._get_time_period())
+                if auto_effect:
+                    await self._hue_v2.set_effect_all(auto_effect)
                     self._active_effect = True
         else:
             # Unknown mode — fall back to time-based

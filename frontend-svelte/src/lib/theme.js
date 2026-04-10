@@ -74,6 +74,25 @@ export const LIGHT_COLOR_PRESETS = [
   { name: 'purple', hue: 56100, sat: 254 },
 ]
 
+/** @type {Array<{ name: string, ct: number, label: string }>} */
+export const LIGHT_CT_PRESETS = [
+  { name: 'candle',   ct: 500, label: '2000K' },
+  { name: 'warm',     ct: 370, label: '2700K' },
+  { name: 'neutral',  ct: 250, label: '4000K' },
+  { name: 'cool',     ct: 182, label: '5500K' },
+  { name: 'daylight', ct: 153, label: '6500K' },
+]
+
+/** @type {Record<string, { label: string, color: string }>} */
+export const SCENE_CATEGORIES = {
+  functional:    { label: 'Functional',    color: '#3b82f6' },
+  mood:          { label: 'Mood',          color: '#a855f7' },
+  entertainment: { label: 'Entertainment', color: '#f43f5e' },
+  social:        { label: 'Social',        color: '#f472b6' },
+  special:       { label: 'Special',       color: '#fb923c' },
+  custom:        { label: 'Custom',        color: '#34d399' },
+}
+
 /** @type {Record<string, string>} */
 export const VIBE_COLORS = {
   energetic:  '#f472b6',

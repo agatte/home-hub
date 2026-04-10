@@ -8,6 +8,8 @@ import { writable } from 'svelte/store'
  * @property {number} bri
  * @property {number} hue
  * @property {number} sat
+ * @property {number} [ct] - Color temperature in mirek (153=6500K, 500=2000K)
+ * @property {string} [colormode] - Active color mode: 'hs' or 'ct'
  * @property {boolean} reachable
  */
 

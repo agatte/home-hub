@@ -1,34 +1,18 @@
 <script>
-  import { onMount } from 'svelte'
   import QuickActions from '$lib/components/QuickActions.svelte'
   import ModeIndicator from '$lib/components/ModeIndicator.svelte'
   import ModeOverrideBar from '$lib/components/ModeOverrideBar.svelte'
   import RoutineCard from '$lib/components/RoutineCard.svelte'
   import LightGrid from '$lib/components/LightGrid.svelte'
-  import NativeSceneGrid from '$lib/components/NativeSceneGrid.svelte'
-  import SceneButton from '$lib/components/SceneButton.svelte'
+  import SceneBrowser from '$lib/components/SceneBrowser.svelte'
   import SonosCard from '$lib/components/SonosCard.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
-  import { apiGet } from '$lib/api.js'
-  import { activateScene } from '$lib/stores/init.js'
 
   /** @type {any} */
   export let data = undefined
   /** @type {any} */
   export let params = undefined
   data; params;
-
-  /** @type {Array<{ id?: string, name: string, display_name: string }>} */
-  let scenes = []
-
-  onMount(async () => {
-    try {
-      const resp = await apiGet('/api/scenes')
-      scenes = (resp.scenes || []).filter((s) => s.source === 'preset')
-    } catch {
-      /* ignore */
-    }
-  })
 </script>
 
 <main class="home-page">
@@ -49,16 +33,11 @@
     <section class="widget widget-lights">
       <h2 class="widget-title">Lights</h2>
       <LightGrid />
-      <div class="scene-bar">
-        {#each scenes as scene (scene.id || scene.name)}
-          <SceneButton
-            name={scene.id || scene.name}
-            displayName={scene.display_name}
-            onActivate={activateScene}
-          />
-        {/each}
-      </div>
-      <NativeSceneGrid />
+    </section>
+
+    <section class="widget widget-scenes widget-routines-full">
+      <h2 class="widget-title">Scenes</h2>
+      <SceneBrowser />
     </section>
 
     <section class="widget widget-routines widget-routines-full">

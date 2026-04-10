@@ -73,6 +73,8 @@ class HueService:
                     "bri": state.get("bri", 0),
                     "hue": state.get("hue", 0),
                     "sat": state.get("sat", 0),
+                    "ct": state.get("ct"),
+                    "colormode": state.get("colormode"),
                     "reachable": state.get("reachable", False),
                 })
 
@@ -117,6 +119,8 @@ class HueService:
                 command["hue"] = max(0, min(65535, int(state["hue"])))
             if "sat" in state:
                 command["sat"] = max(0, min(254, int(state["sat"])))
+            if "ct" in state:
+                command["ct"] = max(153, min(500, int(state["ct"])))
             if "transitiontime" in state:
                 command["transitiontime"] = int(state["transitiontime"])
 
