@@ -7,6 +7,7 @@
   import SceneBrowser from '$lib/components/SceneBrowser.svelte'
   import SonosCard from '$lib/components/SonosCard.svelte'
   import WeatherCard from '$lib/components/WeatherCard.svelte'
+  import PlantWidget from '$lib/components/PlantWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
 
   /** @type {any} */
@@ -34,6 +35,11 @@
     <section class="widget widget-weather">
       <h2 class="widget-title">Weather</h2>
       <WeatherCard />
+    </section>
+
+    <section class="widget widget-plants">
+      <h2 class="widget-title">Plants</h2>
+      <PlantWidget />
     </section>
 
     <section class="widget widget-lights">

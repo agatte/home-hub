@@ -21,6 +21,7 @@ from backend.api.routes.music import router as music_router
 from backend.api.routes.routines import router as routines_router
 from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
+from backend.api.routes.plants import router as plants_router
 from backend.api.routes.weather import router as weather_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
@@ -158,6 +159,17 @@ async def lifespan(app: FastAPI):
     )
     app.state.recommendation_service = rec_service
 
+    # Plant app integration (external app, cached 10 min)
+    if settings.PLANT_APP_API_URL and settings.PLANT_APP_EMAIL:
+        from backend.services.plant_app_service import PlantAppService
+        plant_service = PlantAppService(
+            api_url=settings.PLANT_APP_API_URL,
+            email=settings.PLANT_APP_EMAIL,
+            password=settings.PLANT_APP_PASSWORD or "",
+        )
+        app.state.plant_service = plant_service
+        logger.info("Plant app service initialized")
+
     # Weather service (OpenWeatherMap, cached 10 min)
     if settings.OPENWEATHER_API_KEY:
         from backend.services.weather_service import WeatherService
@@ -281,6 +293,7 @@ app.include_router(sonos_router)
 app.include_router(automation_router)
 app.include_router(music_router)
 app.include_router(weather_router)
+app.include_router(plants_router)
 app.include_router(routines_router)
 
 # Serve the SvelteKit static build (must come after API routes).

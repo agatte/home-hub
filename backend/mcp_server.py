@@ -55,6 +55,20 @@ async def get_weather() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Plants
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_plant_status() -> dict:
+    """Get aggregated plant status (total, needs water, overdue, next watering)."""
+    async with _client() as c:
+        r = await c.get("/api/plants/status")
+        r.raise_for_status()
+        return r.json()
+
+
+# ---------------------------------------------------------------------------
 # Lights
 # ---------------------------------------------------------------------------
 

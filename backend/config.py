@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # Music Discovery
     LASTFM_API_KEY: Optional[str] = None
 
+    # Plant App Integration
+    PLANT_APP_API_URL: Optional[str] = None
+    PLANT_APP_EMAIL: Optional[str] = None
+    PLANT_APP_PASSWORD: Optional[str] = None
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5
