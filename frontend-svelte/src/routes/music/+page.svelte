@@ -11,18 +11,42 @@
 </script>
 
 <main class="music-page">
-  <section class="section">
-    <h2 class="section-title">Taste Profile</h2>
-    <TasteProfileCard />
-  </section>
+  <div class="page-grid">
+    <section class="widget">
+      <h2 class="widget-title">Taste Profile</h2>
+      <TasteProfileCard />
+    </section>
 
-  <section class="section">
-    <h2 class="section-title">Mode → Playlist Mapping</h2>
-    <ModePlaylistMapper />
-  </section>
+    <section class="widget">
+      <h2 class="widget-title">Mode → Playlist</h2>
+      <ModePlaylistMapper />
+    </section>
 
-  <section class="section">
-    <h2 class="section-title">Discover</h2>
-    <RecommendationPanel />
-  </section>
+    <section class="widget widget-full">
+      <h2 class="widget-title">Discover</h2>
+      <RecommendationPanel />
+    </section>
+  </div>
 </main>
+
+<style>
+  .music-page {
+    padding-top: 4px;
+  }
+
+  .page-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  .widget-full {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 900px) {
+    .page-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

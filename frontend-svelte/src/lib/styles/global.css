@@ -1,10 +1,10 @@
-/* Home Hub — Dark theme dashboard */
+/* Home Hub — Living Ink dark theme */
 
 :root {
-  --bg-primary: #0f1117;
-  --bg-secondary: #1a1b23;
-  --bg-card: #21222d;
-  --bg-card-hover: #282a38;
+  --bg-primary: #08080c;
+  --bg-secondary: #0d0d14;
+  --bg-card: rgba(10, 10, 15, 0.45);
+  --bg-card-hover: rgba(15, 15, 22, 0.6);
   --text-primary: #e8e9ed;
   --text-secondary: #8b8d97;
   --text-muted: #5c5e6a;
@@ -13,12 +13,25 @@
   --success: #34d399;
   --danger: #f87171;
   --warning: #fbbf24;
-  --border: #2a2c3a;
-  --radius: 12px;
-  --radius-sm: 8px;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.12);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --glass-blur: blur(12px);
+  --glass-saturate: saturate(1.1);
 
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Bebas Neue', sans-serif;
+  --font-body: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  font-family: var(--font-body);
   color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-ok: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root { --motion-ok: 1; }
 }
 
 *, *::before, *::after {
@@ -33,14 +46,60 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Global micro-interactions */
+button, .btn, [role="button"] {
+  transition: transform 0.1s ease, background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+button:active, .btn:active, [role="button"]:active {
+  transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:active, .btn:active, [role="button"]:active {
+    transform: none;
+  }
+}
+
+/* Auto-hide: cards fade when user is idle */
+.app-shell.user-idle .widget,
+.app-shell.user-idle .home-page > :not(.always-visible),
+.app-shell.user-idle .quick-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+
+.app-shell.user-idle .widget,
+.app-shell.user-idle .home-page > :not(.always-visible) {
+  transform: translateY(4px);
+}
+
+/* Idle hint */
+.idle-hint {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.app-shell.user-idle .idle-hint {
+  opacity: 0.6;
+}
+
 #root {
   min-height: 100dvh;
 }
 
-/* App layout */
+/* App layout — full-width, no sidebar */
 .app-shell {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
   min-height: 100dvh;
   position: relative;
   z-index: 1;
@@ -49,174 +108,20 @@ body {
 .app {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 0 24px 32px;
+  padding: 80px 32px 100px;
   width: 100%;
   min-width: 0;
 }
 
 @media (max-width: 768px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
   .app {
-    padding: 0 16px 32px;
+    padding: 72px 16px 100px;
   }
 }
 
-/* Sidebar */
-.sidebar {
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  padding: 20px 16px;
-  display: flex;
-  flex-direction: column;
-  position: sticky;
-  top: 0;
-  height: 100dvh;
-}
+/* (Sidebar removed — replaced by FloatingNav + ModeOverlay) */
 
-.sidebar-brand {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-  color: var(--text-primary);
-  padding: 6px 12px 24px;
-}
-
-.sidebar-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-}
-
-.sidebar-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  text-align: left;
-}
-
-.sidebar-nav-item:hover {
-  background: var(--bg-card);
-  color: var(--text-primary);
-}
-
-.sidebar-nav-item-active {
-  background: var(--accent-glow);
-  color: var(--accent);
-}
-
-.sidebar-nav-item-active:hover {
-  background: var(--accent-glow);
-  color: var(--accent);
-}
-
-.sidebar-nav-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar-now-playing {
-  margin-top: 16px;
-  padding: 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.sidebar-now-playing-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.sidebar-now-playing-track {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-now-playing-track.is-playing {
-  color: var(--success);
-}
-
-.sidebar-now-playing-artist {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-@media (max-width: 768px) {
-  .sidebar {
-    display: none;
-  }
-}
-
-/* Quick actions strip */
-.quick-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 24px;
-}
-
-.quick-action {
-  flex: 1;
-  min-width: 90px;
-  padding: 12px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.quick-action:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--accent);
-}
-
-.quick-action-active {
-  background: var(--accent-glow);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.quick-action-danger:hover {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
-@media (max-width: 500px) {
-  .quick-action {
-    min-width: 0;
-    flex-basis: calc(33.333% - 6px);
-    padding: 12px 8px;
-    font-size: 13px;
-  }
-}
+/* (Quick actions now use component-scoped styles) */
 
 /* Widget grid */
 .widget-grid {
@@ -227,6 +132,8 @@ body {
 
 .widget {
   background: var(--bg-card);
+  backdrop-filter: var(--glass-blur) var(--glass-saturate);
+  -webkit-backdrop-filter: var(--glass-blur) var(--glass-saturate);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
@@ -234,9 +141,44 @@ body {
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+  transition: border-color 0.2s, background 0.2s, opacity 0.5s, transform 0.3s;
+  animation: widgetFadeIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.widget:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
+/* Staggered entrance: each widget gets a delay via inline style */
+.widget:nth-child(1) { animation-delay: 0ms; }
+.widget:nth-child(2) { animation-delay: 40ms; }
+.widget:nth-child(3) { animation-delay: 80ms; }
+.widget:nth-child(4) { animation-delay: 120ms; }
+.widget:nth-child(5) { animation-delay: 160ms; }
+.widget:nth-child(6) { animation-delay: 200ms; }
+.widget:nth-child(7) { animation-delay: 240ms; }
+.widget:nth-child(8) { animation-delay: 280ms; }
+
+@keyframes widgetFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .widget {
+    animation: none;
+  }
 }
 
 .widget-title {
+  font-family: var(--font-body);
   font-size: 12px;
   font-weight: 500;
   text-transform: uppercase;
@@ -259,69 +201,7 @@ body {
   }
 }
 
-/* Header */
-.app-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 24px;
-}
-
-@media (min-width: 769px) {
-  .app-header {
-    display: none;
-  }
-}
-
-.app-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.5px;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.status-bar {
-  display: flex;
-  gap: 12px;
-}
-
-.settings-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.settings-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.settings-btn-active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
-}
-
-.settings-btn-active:hover {
-  background: #3a5ce6;
-  color: white;
-}
+/* (Header removed — replaced by ModeOverlay) */
 
 .status-dot-container {
   display: flex;
@@ -559,120 +439,7 @@ body {
 }
 
 /* Sonos card */
-.sonos-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-}
-
-.now-playing {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.album-art {
-  width: 64px;
-  height: 64px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
-  flex-shrink: 0;
-}
-
-.album-art-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-secondary);
-  color: var(--text-muted);
-}
-
-.track-info {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-}
-
-.track-name {
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.track-artist {
-  font-size: 13px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.track-album {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Playback controls */
-.playback-controls {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.control-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.control-btn:hover {
-  background: var(--bg-card-hover);
-}
-
-.control-btn-primary {
-  width: 48px;
-  height: 48px;
-  background: var(--accent);
-  color: white;
-}
-
-.control-btn-primary:hover {
-  background: #3a5ce6;
-}
-
-/* Volume */
-.volume-control {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.volume-icon {
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.volume-slider {
-  flex: 1;
-}
+/* (Sonos styles now component-scoped in SonosCard.svelte) */
 
 /* Empty state */
 .empty-state {
@@ -975,11 +742,11 @@ body {
   }
 }
 
-/* Settings page */
+/* Settings page — inner cards are transparent within .widget glass containers */
 .settings-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: transparent;
+  border: none;
+  border-radius: 0;
   padding: 4px 0;
 }
 

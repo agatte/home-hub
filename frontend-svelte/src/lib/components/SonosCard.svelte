@@ -3,18 +3,12 @@
   import { sonos } from '$lib/stores/sonos.js'
   import { sonosCommand } from '$lib/stores/init.js'
 
-  // Volume slider collision handling — ported verbatim from the React
-  // SonosCard. The local volume is authoritative while the user is dragging,
-  // and we ignore the 2s Sonos poll updates for ~500ms after the last drag
-  // so the slider doesn't snap back to a stale server value.
   let localVolume = 0
   let dragging = false
   /** @type {ReturnType<typeof setTimeout> | null} */
   let debounceTimer = null
 
-  // Sync from store when not actively dragging.
   $: if (!dragging) localVolume = $sonos.volume
-
   $: isPlaying = $sonos.state === 'PLAYING'
 
   /** @param {number} vol */
@@ -24,7 +18,6 @@
     if (debounceTimer) clearTimeout(debounceTimer)
     debounceTimer = setTimeout(() => {
       sonosCommand('volume', { volume: vol })
-      // Re-enable server sync after a short delay.
       setTimeout(() => { dragging = false }, 500)
     }, 150)
   }
@@ -34,58 +27,169 @@
   function onPlayPause() { sonosCommand(isPlaying ? 'pause' : 'play') }
 </script>
 
-<div class="sonos-card">
-  <div class="now-playing">
+<div class="sonos-strip" class:is-playing={isPlaying}>
+  <div class="strip-art-wrap">
     {#if $sonos.art_url}
-      <img src={$sonos.art_url} alt="Album art" class="album-art" />
+      <img src={$sonos.art_url} alt="Album art" class="strip-art" />
     {:else}
-      <div class="album-art album-art-placeholder">
-        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M9 18V5l12-2v13" />
-          <circle cx="6" cy="18" r="3" />
-          <circle cx="18" cy="16" r="3" />
+      <div class="strip-art strip-art-placeholder">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
         </svg>
       </div>
     {/if}
-    <div class="track-info">
-      <div class="track-name">{$sonos.track || 'Nothing playing'}</div>
-      <div class="track-artist">{$sonos.artist || '\u00A0'}</div>
-      {#if $sonos.album}
-        <div class="track-album">{$sonos.album}</div>
-      {/if}
-    </div>
   </div>
 
-  <div class="playback-controls">
-    <button class="control-btn" on:click={onPrevious} aria-label="Previous">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-        <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
-      </svg>
-    </button>
+  <div class="strip-info">
+    <div class="strip-track">{$sonos.track || 'Nothing playing'}</div>
+    <div class="strip-artist">{$sonos.artist || '\u00A0'}</div>
+  </div>
 
-    <button class="control-btn control-btn-primary" on:click={onPlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
+  <div class="strip-controls">
+    <button class="strip-btn" on:click={onPrevious} aria-label="Previous">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" /></svg>
+    </button>
+    <button class="strip-btn strip-btn-play" on:click={onPlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
       {#if isPlaying}
-        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
-          <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-        </svg>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
       {:else}
-        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
-          <path d="M8 5v14l11-7z" />
-        </svg>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
       {/if}
     </button>
-
-    <button class="control-btn" on:click={onNext} aria-label="Next">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-        <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
-      </svg>
+    <button class="strip-btn" on:click={onNext} aria-label="Next">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" /></svg>
     </button>
   </div>
 
-  <div class="volume-control">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="volume-icon">
+  <div class="strip-volume">
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" class="strip-vol-icon">
       <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
     </svg>
-    <Slider value={localVolume} min={0} max={100} onChange={onVolumeChange} className="volume-slider" />
+    <Slider value={localVolume} min={0} max={100} onChange={onVolumeChange} className="strip-vol-slider" />
   </div>
 </div>
+
+<style>
+  .sonos-strip {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    width: 100%;
+  }
+
+  .sonos-strip.is-playing .strip-track {
+    animation: trackPulse 3s ease-in-out infinite;
+  }
+
+  @keyframes trackPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.88; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sonos-strip.is-playing .strip-track { animation: none; }
+  }
+
+  .strip-art-wrap {
+    flex-shrink: 0;
+  }
+
+  .strip-art {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    object-fit: cover;
+  }
+
+  .strip-art-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted);
+  }
+
+  .strip-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .strip-track {
+    font-family: var(--font-body);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .strip-artist {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+
+  .strip-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .strip-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+  }
+
+  .strip-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .strip-btn-play {
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .strip-btn-play:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  .strip-volume {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    width: 120px;
+  }
+
+  .strip-vol-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 768px) {
+    .sonos-strip {
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .strip-volume {
+      width: 100%;
+    }
+  }
+</style>

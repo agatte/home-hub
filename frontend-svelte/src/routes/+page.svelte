@@ -12,8 +12,6 @@
   import { apiGet } from '$lib/api.js'
   import { activateScene } from '$lib/stores/init.js'
 
-  // SvelteKit passes data + params props to pages; declare them to silence
-  // Svelte's unknown-prop warnings.
   /** @type {any} */
   export let data = undefined
   /** @type {any} */
@@ -34,6 +32,11 @@
 </script>
 
 <main class="home-page">
+  <!-- Now Playing strip — full width at top -->
+  <section class="widget widget-sonos-strip">
+    <SonosCard />
+  </section>
+
   <QuickActions />
 
   <div class="widget-grid">
@@ -41,11 +44,6 @@
       <h2 class="widget-title">Mode</h2>
       <ModeIndicator />
       <ModeOverrideBar />
-    </section>
-
-    <section class="widget widget-sonos">
-      <h2 class="widget-title">Sonos</h2>
-      <SonosCard />
     </section>
 
     <section class="widget widget-lights">
@@ -71,3 +69,10 @@
 
   <MusicSuggestionToast />
 </main>
+
+<style>
+  .widget-sonos-strip {
+    margin-bottom: 8px;
+    padding: 8px 12px;
+  }
+</style>

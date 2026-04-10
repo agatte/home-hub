@@ -5,10 +5,6 @@
   /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, reachable: boolean }} */
   export let light
 
-  // Color presets — proximity thresholds (<2000 hue, <50 sat) decide which
-  // preset highlights as "active". Brightness is debounced 100ms before
-  // hitting the API. Hue→HSL conversion uses a 20% min lightness so dark
-  // saturated colors remain visible in the swatch.
   const COLOR_PRESETS = [
     { name: 'Warm',     hue: 8000,  sat: 140 },
     { name: 'Cool',     hue: 34000, sat: 50 },
@@ -19,11 +15,6 @@
     { name: 'Purple',   hue: 50000, sat: 254 },
   ]
 
-  /**
-   * @param {number} hue
-   * @param {number} sat
-   * @param {number} bri
-   */
   function hueToHsl(hue, sat, bri) {
     const h = (hue / 65535) * 360
     const s = (sat / 254) * 100
@@ -33,56 +24,62 @@
 
   /** @type {ReturnType<typeof setTimeout> | null} */
   let debounceTimer = null
+  let showPresets = false
 
-  /** @param {Record<string, unknown>} state */
   function debouncedUpdate(state) {
     if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      setLight(light.light_id, state)
-    }, 100)
+    debounceTimer = setTimeout(() => { setLight(light.light_id, state) }, 100)
   }
 
-  function togglePower() {
-    setLight(light.light_id, { on: !light.on })
-  }
-
-  /** @param {number} bri */
-  function setBrightness(bri) {
-    debouncedUpdate({ bri })
-  }
-
-  /** @param {number} hue @param {number} sat */
+  function togglePower() { setLight(light.light_id, { on: !light.on }) }
+  function setBrightness(bri) { debouncedUpdate({ bri }) }
   function setColor(hue, sat) {
     setLight(light.light_id, { hue, sat })
+    showPresets = false
   }
 
-  $: bgColor = light.on ? hueToHsl(light.hue, light.sat, light.bri) : '#1a1a2e'
+  $: bgColor = light.on ? hueToHsl(light.hue, light.sat, light.bri) : 'var(--text-muted)'
 </script>
 
-<div class="light-card" class:light-on={light.on} class:light-off={!light.on}>
-  <div class="light-header">
-    <div class="light-indicator" style="background: {light.on ? bgColor : '#333'}"></div>
-    <span class="light-name">{light.name}</span>
-    <button
-      class="power-btn"
-      class:power-on={light.on}
-      on:click={togglePower}
-      aria-label={light.on ? 'Turn off' : 'Turn on'}
-    >
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2v6M18.36 6.64A9 9 0 1 1 5.64 6.64" stroke-linecap="round" />
-      </svg>
-    </button>
-  </div>
+<div class="light-chip" class:light-on={light.on} class:light-off={!light.on}>
+  <button
+    class="chip-color-bar"
+    style="background: {bgColor}"
+    on:click={() => { if (light.on) showPresets = !showPresets }}
+    aria-label="Change color"
+    tabindex={light.on ? 0 : -1}
+  ></button>
+
+  <span class="chip-name">{light.name}</span>
 
   {#if light.on}
-    <Slider value={light.bri} min={1} max={254} onChange={setBrightness} label="Brightness" />
-    <div class="color-presets">
+    <div class="chip-slider">
+      <Slider value={light.bri} min={1} max={254} onChange={setBrightness} label="Brightness" />
+    </div>
+  {/if}
+
+  <button
+    class="chip-power"
+    class:power-on={light.on}
+    on:click={togglePower}
+    aria-label={light.on ? 'Turn off' : 'Turn on'}
+  >
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 2v6M18.36 6.64A9 9 0 1 1 5.64 6.64" stroke-linecap="round" />
+    </svg>
+  </button>
+
+  {#if !light.reachable}
+    <span class="chip-unreachable">Offline</span>
+  {/if}
+
+  {#if showPresets && light.on}
+    <div class="chip-presets">
       {#each COLOR_PRESETS as preset}
         {@const active = Math.abs(light.hue - preset.hue) < 2000 && Math.abs(light.sat - preset.sat) < 50}
         <button
-          class="color-preset"
-          class:color-active={active}
+          class="chip-preset-dot"
+          class:preset-active={active}
           style="background: {hueToHsl(preset.hue, preset.sat, 200)}"
           on:click={() => setColor(preset.hue, preset.sat)}
           title={preset.name}
@@ -90,8 +87,124 @@
       {/each}
     </div>
   {/if}
-
-  {#if !light.reachable}
-    <div class="light-unreachable">Unreachable</div>
-  {/if}
 </div>
+
+<style>
+  .light-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    position: relative;
+  }
+
+  .chip-color-bar {
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.3s, transform 0.15s;
+    padding: 0;
+  }
+
+  .light-on .chip-color-bar:hover {
+    transform: scaleY(2);
+  }
+
+  .chip-name {
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    min-width: 80px;
+  }
+
+  .light-off .chip-name {
+    color: var(--text-muted);
+  }
+
+  .chip-slider {
+    flex: 1;
+    min-width: 80px;
+  }
+
+  .chip-power {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s, background 0.15s;
+    flex-shrink: 0;
+  }
+
+  .chip-power:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .chip-power.power-on {
+    color: var(--success);
+  }
+
+  .chip-unreachable {
+    font-size: 10px;
+    color: var(--danger);
+    position: absolute;
+    right: 12px;
+    top: -2px;
+  }
+
+  .chip-presets {
+    position: absolute;
+    left: 12px;
+    top: 100%;
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px;
+    background: rgba(10, 10, 15, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    z-index: 10;
+    animation: presetsIn 0.15s ease-out;
+  }
+
+  @keyframes presetsIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .chip-preset-dot {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+    padding: 0;
+  }
+
+  .chip-preset-dot:hover {
+    transform: scale(1.15);
+  }
+
+  .chip-preset-dot.preset-active {
+    border-color: var(--text-primary);
+  }
+
+  @media (max-width: 768px) {
+    .chip-name {
+      min-width: 60px;
+      font-size: 12px;
+    }
+  }
+</style>

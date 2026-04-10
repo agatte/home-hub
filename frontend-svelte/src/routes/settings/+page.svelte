@@ -164,9 +164,10 @@
 </script>
 
 <main class="settings-page">
+  <div class="page-grid">
   <!-- Device Status -->
-  <section class="section">
-    <h2 class="section-title">Device Status</h2>
+  <section class="widget">
+    <h2 class="widget-title">Device Status</h2>
     <div class="settings-card">
       <div class="device-row">
         <span class="device-dot {$connected ? 'dot-green' : 'dot-red'}" />
@@ -194,8 +195,8 @@
   </section>
 
   <!-- Automation -->
-  <section class="section">
-    <h2 class="section-title">Automation</h2>
+  <section class="widget">
+    <h2 class="widget-title">Automation</h2>
     {#if autoConfig}
       <div class="settings-card">
         <div class="setting-row">
@@ -234,8 +235,8 @@
   </section>
 
   <!-- Light Schedule -->
-  <section class="section">
-    <h2 class="section-title">Light Schedule</h2>
+  <section class="widget">
+    <h2 class="widget-title">Light Schedule</h2>
     {#if scheduleConfig && currentSchedule}
       <div class="settings-card">
         <div class="schedule-tab-row">
@@ -318,8 +319,8 @@
   </section>
 
   <!-- Mode Brightness -->
-  <section class="section">
-    <h2 class="section-title">Mode Brightness</h2>
+  <section class="widget">
+    <h2 class="widget-title">Mode Brightness</h2>
     {#if modeBrightness}
       <div class="settings-card">
         {#each Object.entries(MODE_LABELS) as [mode, label] (mode)}
@@ -343,8 +344,8 @@
   </section>
 
   <!-- Morning Routine -->
-  <section class="section">
-    <h2 class="section-title">Morning Routine</h2>
+  <section class="widget">
+    <h2 class="widget-title">Morning Routine</h2>
     {#if routineConfig}
       <div class="settings-card">
         <div class="setting-row">
@@ -392,8 +393,8 @@
   </section>
 
   <!-- Evening Wind-Down -->
-  <section class="section">
-    <h2 class="section-title">Evening Wind-Down</h2>
+  <section class="widget">
+    <h2 class="widget-title">Evening Wind-Down</h2>
     {#if winddownConfig}
       <div class="settings-card">
         <div class="setting-row">
@@ -478,8 +479,8 @@
   </section>
 
   <!-- Quick Actions -->
-  <section class="section">
-    <h2 class="section-title">Quick Actions</h2>
+  <section class="widget">
+    <h2 class="widget-title">Quick Actions</h2>
     <div class="settings-card">
       <div class="action-row">
         <button class="action-btn" on:click={testTTS} disabled={saving === 'tts'}>
@@ -490,7 +491,23 @@
     </div>
   </section>
 
+  </div>
+
   {#if saving}
     <div class="settings-saving">Saving...</div>
   {/if}
 </main>
+
+<style>
+  .page-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  @media (max-width: 900px) {
+    .page-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

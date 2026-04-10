@@ -2,10 +2,15 @@
   import { Canvas } from '@threlte/core'
   import { automation } from '$lib/stores/automation.js'
   import MoonScene from '$lib/backgrounds/MoonScene.svelte'
+  import GenerativeCanvas from '$lib/backgrounds/GenerativeCanvas.svelte'
 
   $: isSleeping = $automation.mode === 'sleeping'
 </script>
 
+<!-- Generative canvas runs for all modes (including sleeping as underlayer) -->
+<GenerativeCanvas />
+
+<!-- MoonScene overlays on top during sleeping mode -->
 {#if isSleeping}
   <div class="mode-background">
     <Canvas>
