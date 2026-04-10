@@ -42,7 +42,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     "night_work": {
         "display_name": "Night Work",
         "category": "functional",
-        "effect": "opal",
+        "effect": None,
         "lights": {
             "1": _OFF,
             "2": {"on": True, "bri": 80, "ct": 370},

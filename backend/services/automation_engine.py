@@ -101,7 +101,7 @@ WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 # None = no auto effect. Social mode handles its own effects via SOCIAL_STYLES.
 EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
     "relax":    {"day": "glisten", "evening": "candle", "night": "candle"},
-    "working":  {"day": None,     "evening": None,     "night": "opal"},
+    "working":  {"day": None,     "evening": None,     "night": None},
     "gaming":   {"day": None,     "evening": None,     "night": None},
     "movie":    {"day": None,     "evening": None,     "night": None},
     "watching": {"day": None,     "evening": None,     "night": None},
@@ -775,6 +775,10 @@ class AutomationEngine:
         if self._hue_v2 and self._hue_v2.connected:
             await self._hue_v2.stop_effect_all()
             self._active_effect = False
+
+        # Clear dedup cache so the new state is always applied — effects and
+        # external apps change bridge state independently, making the cache stale.
+        self._last_applied_per_light = {}
 
         # Sleep mode: gradual fade over 10 minutes then lights off
         if mode == "sleeping":
