@@ -628,10 +628,16 @@ class AutomationEngine:
         self._on_mode_change_callbacks.append(callback)
 
     async def _fire_mode_change_callbacks(self, mode: str) -> None:
-        """Invoke all registered mode-change callbacks."""
+        """Invoke all registered mode-change callbacks with timeout protection."""
         for callback in self._on_mode_change_callbacks:
             try:
-                await callback(mode)
+                await asyncio.wait_for(callback(mode), timeout=8.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Mode change callback %s timed out after 8s for mode '%s'",
+                    getattr(callback, "__qualname__", callback),
+                    mode,
+                )
             except Exception as e:
                 logger.error(f"Mode change callback error: {e}", exc_info=True)
 
@@ -710,8 +716,9 @@ class AutomationEngine:
         # Broadcast first so the UI updates immediately, then apply lights
         await self._broadcast_mode()
         await self._apply_mode(mode)
-        # Fire mode change callbacks (e.g., music auto-play)
-        await self._fire_mode_change_callbacks(mode)
+        # Fire mode change callbacks only if the mode actually changed
+        if old_mode != mode:
+            await self._fire_mode_change_callbacks(mode)
         if self._event_logger and old_mode != mode:
             await self._event_logger.log_mode_change(
                 mode=mode,
@@ -721,6 +728,7 @@ class AutomationEngine:
 
     async def clear_override(self) -> None:
         """Clear the manual override and return to automatic mode."""
+        old_effective = self._override_mode
         self._manual_override = False
         self._override_mode = None
         self._override_time = None
@@ -734,7 +742,9 @@ class AutomationEngine:
             await self._apply_mode(self._current_mode)
 
         await self._broadcast_mode()
-        await self._fire_mode_change_callbacks(self._current_mode)
+        # Only fire callbacks if the effective mode actually changed
+        if old_effective != self._current_mode:
+            await self._fire_mode_change_callbacks(self._current_mode)
 
     async def set_social_style(self, style: str) -> None:
         """

@@ -3,6 +3,7 @@ Sonos speaker service — wraps SoCo for local UPnP control.
 """
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger("home_hub.sonos")
@@ -21,6 +22,12 @@ class SonosService:
         self._device = None
         self._connected = False
         self._last_status: Optional[dict] = None
+        # Favorites/playlists cache (5-min TTL)
+        self._favorites_cache: Optional[list] = None
+        self._favorites_cache_time: float = 0
+        self._playlists_cache: Optional[list] = None
+        self._playlists_cache_time: float = 0
+        self._CACHE_TTL: float = 300.0
 
     @property
     def connected(self) -> bool:
@@ -81,12 +88,12 @@ class SonosService:
             return {"state": "disconnected"}
 
         try:
-            transport = await asyncio.to_thread(
-                self._device.get_current_transport_info
+            transport, track, volume, mute = await asyncio.gather(
+                asyncio.to_thread(self._device.get_current_transport_info),
+                asyncio.to_thread(self._device.get_current_track_info),
+                asyncio.to_thread(lambda: self._device.volume),
+                asyncio.to_thread(lambda: self._device.mute),
             )
-            track = await asyncio.to_thread(self._device.get_current_track_info)
-            volume = await asyncio.to_thread(lambda: self._device.volume)
-            mute = await asyncio.to_thread(lambda: self._device.mute)
 
             return {
                 "state": transport.get("current_transport_state", "STOPPED"),
@@ -219,22 +226,13 @@ class SonosService:
         except Exception as e:
             logger.error(f"Error restoring playback: {e}")
 
-    async def get_favorites(self) -> list[dict[str, str]]:
-        """
-        List Sonos favorites and Sonos playlists.
-
-        Combines cloud-synced favorites with locally-created Sonos playlists
-        (Era 100 / S2 firmware stores Apple Music items as playlists).
-
-        Returns:
-            List of dicts with title, uri, and source.
-        """
-        if not self._connected or not self._device:
-            return []
+    async def _get_cloud_favorites_cached(self) -> list[dict[str, str]]:
+        """Fetch cloud favorites with TTL cache."""
+        now = time.monotonic()
+        if self._favorites_cache is not None and now - self._favorites_cache_time < self._CACHE_TTL:
+            return self._favorites_cache
 
         results = []
-
-        # Cloud-synced favorites
         try:
             favorites = await asyncio.to_thread(
                 self._device.music_library.get_sonos_favorites
@@ -252,20 +250,59 @@ class SonosService:
                 })
         except Exception as e:
             logger.error(f"Error getting Sonos favorites: {e}")
+            return self._favorites_cache or []
 
-        # Sonos playlists (where Apple Music items typically land)
+        self._favorites_cache = results
+        self._favorites_cache_time = now
+        return results
+
+    async def _get_sonos_playlists_cached(self):
+        """Fetch Sonos playlists (raw SoCo objects) with TTL cache."""
+        now = time.monotonic()
+        if self._playlists_cache is not None and now - self._playlists_cache_time < self._CACHE_TTL:
+            return self._playlists_cache
+
         try:
             playlists = await asyncio.to_thread(
                 self._device.get_sonos_playlists
             )
-            for pl in playlists:
-                results.append({
-                    "title": pl.title,
-                    "uri": pl.get_uri() if hasattr(pl, "get_uri") else getattr(pl, "uri", ""),
-                    "source": "playlist",
-                })
+            self._playlists_cache = list(playlists)
+            self._playlists_cache_time = now
+            return self._playlists_cache
         except Exception as e:
             logger.error(f"Error getting Sonos playlists: {e}")
+            return self._playlists_cache or []
+
+    def invalidate_favorites_cache(self) -> None:
+        """Clear the favorites/playlists cache so the next call fetches fresh data."""
+        self._favorites_cache = None
+        self._favorites_cache_time = 0
+        self._playlists_cache = None
+        self._playlists_cache_time = 0
+
+    async def get_favorites(self) -> list[dict[str, str]]:
+        """
+        List Sonos favorites and Sonos playlists.
+
+        Combines cloud-synced favorites with locally-created Sonos playlists
+        (Era 100 / S2 firmware stores Apple Music items as playlists).
+
+        Returns:
+            List of dicts with title, uri, and source.
+        """
+        if not self._connected or not self._device:
+            return []
+
+        results = list(await self._get_cloud_favorites_cached())
+
+        # Sonos playlists (where Apple Music items typically land)
+        playlists = await self._get_sonos_playlists_cached()
+        for pl in playlists:
+            results.append({
+                "title": pl.title,
+                "uri": pl.get_uri() if hasattr(pl, "get_uri") else getattr(pl, "uri", ""),
+                "source": "playlist",
+            })
 
         return results
 
@@ -289,23 +326,42 @@ class SonosService:
 
         # Check Sonos playlists first (where Apple Music items land)
         try:
-            playlists = await asyncio.to_thread(
-                self._device.get_sonos_playlists
-            )
+            playlists = await self._get_sonos_playlists_cached()
             for pl in playlists:
                 if pl.title.lower() == target:
-                    await asyncio.to_thread(self._device.clear_queue)
-                    await asyncio.to_thread(
-                        self._device.add_to_queue, pl
-                    )
-                    await asyncio.to_thread(self._device.play_from_queue, 0)
+                    try:
+                        await asyncio.to_thread(self._device.clear_queue)
+                        await asyncio.to_thread(
+                            self._device.add_to_queue, pl
+                        )
+                        await asyncio.to_thread(
+                            self._device.play_from_queue, 0
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Queue play failed mid-sequence for '%s': %s — retrying",
+                            pl.title, e,
+                        )
+                        try:
+                            await asyncio.to_thread(
+                                self._device.add_to_queue, pl
+                            )
+                            await asyncio.to_thread(
+                                self._device.play_from_queue, 0
+                            )
+                        except Exception as e2:
+                            logger.error(
+                                "Queue recovery also failed for '%s': %s",
+                                pl.title, e2,
+                            )
+                            return False
                     logger.info(f"Playing Sonos playlist: {pl.title}")
                     return True
         except Exception as e:
             logger.error(f"Error searching Sonos playlists: {e}")
 
         # Fall back to cloud favorites
-        favorites = await self.get_favorites()
+        favorites = await self._get_cloud_favorites_cached()
         for fav in favorites:
             if fav["title"].lower() == target:
                 uri = fav.get("uri", "")

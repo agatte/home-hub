@@ -6,6 +6,7 @@ Supports multiple favorites per mode, each optionally tagged with a vibe
 picks the best-matching vibe based on time of day, then auto-plays or
 broadcasts a suggestion via WebSocket. Mappings persist to SQLite.
 """
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -265,7 +266,13 @@ class MusicMapper:
             return None
 
         try:
-            status = await self._sonos.get_status()
+            try:
+                status = await asyncio.wait_for(
+                    self._sonos.get_status(), timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Sonos get_status timed out (5s) — skipping auto-play")
+                return None
             sonos_state = status.get("state", "STOPPED")
 
             if sonos_state in ("STOPPED", "PAUSED_PLAYBACK"):
@@ -275,7 +282,15 @@ class MusicMapper:
                         mode, self._last_requested_mode,
                     )
                     return None
-                success = await self._sonos.play_favorite(title)
+                try:
+                    success = await asyncio.wait_for(
+                        self._sonos.play_favorite(title), timeout=6.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Sonos play_favorite timed out (6s) for '%s'", title
+                    )
+                    return None
                 if success:
                     logger.info(
                         f"Auto-playing '{title}' (vibe={vibe}) for mode '{mode}'"
@@ -294,6 +309,11 @@ class MusicMapper:
                         )
                     return {"action": "auto_played", "title": title, "vibe": vibe}
                 logger.warning(f"Failed to auto-play '{title}' for mode '{mode}'")
+                await self._ws_manager.broadcast("music_auto_play_failed", {
+                    "mode": mode,
+                    "title": title,
+                    "error": "Favorite not found or playback failed",
+                })
                 return None
             else:
                 logger.info(
