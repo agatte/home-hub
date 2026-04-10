@@ -41,6 +41,20 @@ async def get_health() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Weather
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_weather() -> dict:
+    """Get current weather conditions (temperature, description, humidity, wind)."""
+    async with _client() as c:
+        r = await c.get("/api/weather")
+        r.raise_for_status()
+        return r.json()
+
+
+# ---------------------------------------------------------------------------
 # Lights
 # ---------------------------------------------------------------------------
 
