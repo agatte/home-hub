@@ -10,7 +10,7 @@ Effects are real-time dynamic animations run by the bridge hardware.
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -357,6 +357,22 @@ async def list_scenes(request: Request) -> dict:
     return {"scenes": presets + custom_scenes + bridge_scenes}
 
 
+async def _log_scene_activation(
+    request: Request, scene_id: str, scene_name: Optional[str], source: str
+) -> None:
+    """Fire-and-forget scene activation log entry."""
+    event_logger = getattr(request.app.state, "event_logger", None)
+    automation = getattr(request.app.state, "automation", None)
+    if event_logger:
+        mode_at_time = automation.current_mode if automation else None
+        await event_logger.log_scene_activation(
+            scene_id=scene_id,
+            scene_name=scene_name,
+            source=source,
+            mode_at_time=mode_at_time,
+        )
+
+
 @router.post("/{scene_id}/activate")
 async def activate_scene(scene_id: str, request: Request) -> dict:
     """
@@ -389,6 +405,9 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
         for light in lights:
             await ws_manager.broadcast("light_update", light)
 
+        await _log_scene_activation(
+            request, scene_id, preset.get("display_name"), "preset"
+        )
         return {"status": "ok", "scene": scene_id, "source": "preset"}
 
     # Check custom scene (custom_{id})
@@ -399,15 +418,16 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
             async with async_session() as session:
                 result = await session.execute(
-                    text("SELECT light_states, effect FROM scenes WHERE id = :id"),
+                    text("SELECT name, light_states, effect FROM scenes WHERE id = :id"),
                     {"id": int(db_id)},
                 )
                 row = result.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="Custom scene not found")
 
-                light_states = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-                effect = row[1] if len(row) > 1 else None
+                scene_name = row[0]
+                light_states = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+                effect = row[2] if len(row) > 2 else None
 
                 await _activate_per_light(hue, light_states)
                 await _activate_effect_if_needed(hue_v2, effect)
@@ -417,6 +437,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                 for light in lights:
                     await ws_manager.broadcast("light_update", light)
 
+                await _log_scene_activation(request, scene_id, scene_name, "custom")
                 return {"status": "ok", "scene": scene_id, "source": "custom"}
         except HTTPException:
             raise
@@ -443,6 +464,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
+    await _log_scene_activation(request, scene_id, None, "bridge")
     return {"status": "ok", "scene": scene_id, "source": "bridge"}
 
 

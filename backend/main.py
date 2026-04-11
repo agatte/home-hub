@@ -377,12 +377,10 @@ async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -
 
     state = {k: v for k, v in data.items() if k != "light_id"}
 
-    # Capture current brightness before the change for event logging
-    bri_before = None
-    if "bri" in state:
-        current = await hue.get_light(light_id)
-        if current:
-            bri_before = current.get("bri")
+    # Capture full before-state for event logging (bri, hue, sat, ct)
+    before = await hue.get_light(light_id) if any(
+        k in state for k in ("bri", "hue", "sat", "ct")
+    ) else None
 
     await hue.set_light(light_id, state)
 
@@ -391,19 +389,25 @@ async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -
     if updated:
         await ws_manager.broadcast("light_update", updated)
 
-    # Log the manual adjustment
-    if "bri" in state:
-        event_logger = getattr(app.state, "event_logger", None)
-        automation = getattr(app.state, "automation", None)
-        if event_logger:
-            mode = automation.current_mode if automation else None
-            await event_logger.log_light_adjustment(
-                light_id=str(light_id),
-                light_name=updated.get("name") if updated else None,
-                bri_before=bri_before,
-                bri_after=state["bri"],
-                mode_at_time=mode,
-            )
+    # Log the manual adjustment (covers bri/hue/sat/ct changes)
+    event_logger = getattr(app.state, "event_logger", None)
+    automation = getattr(app.state, "automation", None)
+    if event_logger and before is not None:
+        mode = automation.current_mode if automation else None
+        await event_logger.log_light_adjustment(
+            light_id=str(light_id),
+            light_name=(updated or before).get("name"),
+            bri_before=before.get("bri") if "bri" in state else None,
+            bri_after=state.get("bri"),
+            hue_before=before.get("hue") if "hue" in state else None,
+            hue_after=state.get("hue"),
+            sat_before=before.get("sat") if "sat" in state else None,
+            sat_after=state.get("sat"),
+            ct_before=before.get("ct") if "ct" in state else None,
+            ct_after=state.get("ct"),
+            mode_at_time=mode,
+            trigger="ws",
+        )
 
 
 async def _handle_sonos_command(app, data: dict) -> None:
@@ -413,15 +417,38 @@ async def _handle_sonos_command(app, data: dict) -> None:
         return
 
     action = data.get("action")
+    success = False
+    volume = None
     if action == "play":
-        await sonos.play()
+        success = await sonos.play()
+        event_type = "play"
     elif action == "pause":
-        await sonos.pause()
+        success = await sonos.pause()
+        event_type = "pause"
     elif action == "volume":
         volume = data.get("volume")
         if volume is not None:
-            await sonos.set_volume(int(volume))
+            success = await sonos.set_volume(int(volume))
+            event_type = "volume"
     elif action == "next":
-        await sonos.next_track()
+        success = await sonos.next_track()
+        event_type = "skip"
     elif action == "previous":
-        await sonos.previous_track()
+        success = await sonos.previous_track()
+        event_type = "skip"
+    else:
+        return
+
+    # Log the manual playback event
+    if success:
+        event_logger = getattr(app.state, "event_logger", None)
+        automation = getattr(app.state, "automation", None)
+        if event_logger:
+            mode = automation.current_mode if automation else None
+            await event_logger.log_sonos_event(
+                event_type=event_type,
+                favorite_title=None,
+                mode_at_time=mode,
+                volume=int(volume) if volume is not None else None,
+                triggered_by="manual",
+            )

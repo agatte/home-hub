@@ -1,12 +1,34 @@
 """
 Sonos speaker control endpoints — playback, volume, TTS, favorites, music mapping.
 """
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 
 router = APIRouter(prefix="/api/sonos", tags=["sonos"])
+
+
+async def _log_manual_sonos(
+    request: Request,
+    event_type: str,
+    favorite_title: Optional[str] = None,
+    volume: Optional[int] = None,
+) -> None:
+    """Fire-and-forget manual Sonos event logger."""
+    event_logger = getattr(request.app.state, "event_logger", None)
+    automation = getattr(request.app.state, "automation", None)
+    if event_logger:
+        mode = automation.current_mode if automation else None
+        await event_logger.log_sonos_event(
+            event_type=event_type,
+            favorite_title=favorite_title,
+            mode_at_time=mode,
+            volume=volume,
+            triggered_by="manual",
+        )
 
 
 @router.get("/status", response_model=SonosStatus)
@@ -25,6 +47,8 @@ async def sonos_play(request: Request) -> dict:
     if not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
     success = await sonos.play()
+    if success:
+        await _log_manual_sonos(request, "play")
     return {"status": "ok" if success else "error"}
 
 
@@ -35,6 +59,8 @@ async def sonos_pause(request: Request) -> dict:
     if not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
     success = await sonos.pause()
+    if success:
+        await _log_manual_sonos(request, "pause")
     return {"status": "ok" if success else "error"}
 
 
@@ -45,6 +71,8 @@ async def sonos_next(request: Request) -> dict:
     if not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
     success = await sonos.next_track()
+    if success:
+        await _log_manual_sonos(request, "skip")
     return {"status": "ok" if success else "error"}
 
 
@@ -55,6 +83,8 @@ async def sonos_previous(request: Request) -> dict:
     if not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
     success = await sonos.previous_track()
+    if success:
+        await _log_manual_sonos(request, "skip")
     return {"status": "ok" if success else "error"}
 
 
@@ -65,6 +95,8 @@ async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
     if not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
     success = await sonos.set_volume(body.volume)
+    if success:
+        await _log_manual_sonos(request, "volume", volume=body.volume)
     return {"status": "ok" if success else "error", "volume": body.volume}
 
 
@@ -124,6 +156,7 @@ async def play_favorite(title: str, request: Request) -> dict:
             status_code=404,
             detail=f"Favorite '{title}' not found or playback failed",
         )
+    await _log_manual_sonos(request, "play", favorite_title=title)
     return {"status": "ok", "playing": title}
 
 

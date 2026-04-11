@@ -184,7 +184,15 @@ class LightAdjustment(Base):
     light_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     bri_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     bri_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    hue_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    hue_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sat_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sat_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ct_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ct_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # trigger: "ws", "rest", "scene", "automation", "all_lights"
+    trigger: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
 
 class SonosPlaybackEvent(Base):
@@ -205,3 +213,21 @@ class SonosPlaybackEvent(Base):
     volume: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # triggered_by: "manual", "auto", "suggestion_accepted"
     triggered_by: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
+
+
+class SceneActivation(Base):
+    """Records every scene activation (preset, custom, or bridge)."""
+
+    __tablename__ = "scene_activations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    scene_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    scene_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # source: "preset", "custom", "bridge"
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

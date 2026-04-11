@@ -35,6 +35,15 @@ async def _run_migrations(conn) -> None:
     if "effect" not in scene_cols:
         await conn.execute(text("ALTER TABLE scenes ADD COLUMN effect TEXT"))
 
+    # Expand light_adjustments to cover color/ct and trigger source (event logger)
+    result = await conn.execute(text("PRAGMA table_info(light_adjustments)"))
+    la_cols = {row[1] for row in result.fetchall()}
+    for col in ("hue_before", "hue_after", "sat_before", "sat_after", "ct_before", "ct_after"):
+        if col not in la_cols:
+            await conn.execute(text(f"ALTER TABLE light_adjustments ADD COLUMN {col} INTEGER"))
+    if "trigger" not in la_cols:
+        await conn.execute(text("ALTER TABLE light_adjustments ADD COLUMN trigger TEXT"))
+
 
 async def init_db() -> None:
     """Create all database tables and apply pending migrations."""

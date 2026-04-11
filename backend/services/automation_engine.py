@@ -706,7 +706,10 @@ class AutomationEngine:
 
     async def set_manual_override(self, mode: str) -> None:
         """Set a manual mode override from the dashboard."""
-        old_mode = self._current_mode
+        # Capture the effective mode (override if active, else detected) so that
+        # event logging and callback gating see the real "previous" mode, not
+        # the stale private _current_mode which only reflects PC agent state.
+        old_mode = self.current_mode
         self._manual_override = True
         self._override_mode = mode
         self._override_time = datetime.now(tz=TZ)
