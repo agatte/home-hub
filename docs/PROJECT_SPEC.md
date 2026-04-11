@@ -1274,6 +1274,8 @@ cleanup landed:
 - Fauxmo Alexa integration (local voice control)
 - Override pattern analysis + auto-apply confident rules
 - Subtle nudge notification system
+- Query layer over event tables — read/aggregation API the rule engine will consume, designed from the real data shape accumulating post-audit (`activity_events`, `light_adjustments`, `scene_activations`, `sonos_playback_events`)
+- Dashboard polish — mobile floating-nav audit, and an analytics/history page reading from the new event tables
 
 ### Phase 4: Game Day (July-August 2026)
 

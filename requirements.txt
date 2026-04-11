@@ -6,6 +6,7 @@ websockets>=12.0
 # Device control
 phue2>=0.0.3              # Hue bridge control (Python 3.10+)
 soco>=0.30.0              # Sonos control via UPnP
+fauxmo>=0.8.0             # WeMo emulation for local Alexa voice control
 
 # TTS
 edge-tts>=6.0.0           # Free Microsoft TTS (primary)

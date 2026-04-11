@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     PLANT_APP_EMAIL: Optional[str] = None
     PLANT_APP_PASSWORD: Optional[str] = None
 
+    # Fauxmo Alexa integration (Phase 3 voice control)
+    FAUXMO_ENABLED: bool = False
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5

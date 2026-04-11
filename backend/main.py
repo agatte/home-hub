@@ -35,6 +35,7 @@ from backend.services.library_import_service import LibraryImportService
 from backend.services.morning_routine import MorningRoutineService
 from backend.services.recommendation_service import RecommendationService
 from backend.services.event_logger import EventLogger
+from backend.services.fauxmo_service import FauxmoService
 from backend.services.music_mapper import MusicMapper
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
 from backend.services.sonos_service import SonosService
@@ -177,6 +178,15 @@ async def lifespan(app: FastAPI):
         app.state.weather_service = weather_service
         logger.info("Weather service initialized")
 
+    # Fauxmo Alexa integration (Phase 3 voice control)
+    fauxmo = FauxmoService(
+        local_ip=settings.LOCAL_IP,
+        api_port=8000,
+        enabled=settings.FAUXMO_ENABLED,
+    )
+    await fauxmo.start()
+    app.state.fauxmo = fauxmo
+
     # Morning routine — load persisted config from DB, fall back to .env defaults
     from backend.api.routes.routines import load_morning_config
     saved_config = await load_morning_config()
@@ -254,6 +264,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     app_logger.info("Shutting down Home Hub...")
     await laptop_loopback.stop()
+    await fauxmo.stop()
     for task in tasks:
         task.cancel()
         try:
