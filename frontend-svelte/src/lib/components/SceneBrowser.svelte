@@ -3,6 +3,8 @@
   import { apiGet, apiPost } from '$lib/api.js'
   import { activateScene } from '$lib/stores/init.js'
   import { SCENE_CATEGORIES } from '$lib/theme.js'
+  import { Plus, Pencil } from 'lucide-svelte'
+  import CustomSceneEditor from './CustomSceneEditor.svelte'
 
   /** @type {Array<{id: string, name: string, display_name: string, category: string, effect?: string, source: string}>} */
   let scenes = []
@@ -15,6 +17,10 @@
   let activatingId = ''
   /** @type {string | null} */
   let activeEffect = null
+
+  let editorOpen = false
+  /** @type {number | null} */
+  let editingId = null
 
   const TABS = [
     { id: 'all', label: 'All' },
@@ -29,7 +35,7 @@
     { id: 'bridge', label: 'Hue Scenes' },
   ]
 
-  onMount(async () => {
+  async function loadScenes() {
     try {
       const resp = await apiGet('/api/scenes')
       const all = resp.scenes || []
@@ -49,7 +55,10 @@
     } catch {
       /* ignore */
     }
+  }
 
+  onMount(async () => {
+    await loadScenes()
     try {
       const data = await apiGet('/api/scenes/effects')
       effects = data.effects || []
@@ -57,6 +66,30 @@
       /* ignore */
     }
   })
+
+  function openNewEditor() {
+    editingId = null
+    editorOpen = true
+  }
+
+  function openEditEditor(scene) {
+    // Custom scene IDs are "custom_{db_id}" — extract numeric id
+    const match = /^custom_(\d+)$/.exec(scene.id)
+    if (!match) return
+    editingId = parseInt(match[1], 10)
+    editorOpen = true
+  }
+
+  async function handleEditorSave() {
+    editorOpen = false
+    editingId = null
+    await loadScenes()
+  }
+
+  function handleEditorCancel() {
+    editorOpen = false
+    editingId = null
+  }
 
   $: filtered = (() => {
     if (activeTab === 'all') return scenes
@@ -90,34 +123,60 @@
 </script>
 
 <div class="scene-browser">
-  <div class="scene-tabs">
-    {#each TABS as tab}
-      <button
-        class="scene-tab"
-        class:active={activeTab === tab.id}
-        on:click={() => activeTab = tab.id}
-      >
-        {tab.label}
-      </button>
-    {/each}
+  <div class="scene-tabs-row">
+    <div class="scene-tabs">
+      {#each TABS as tab}
+        <button
+          class="scene-tab"
+          class:active={activeTab === tab.id}
+          on:click={() => activeTab = tab.id}
+        >
+          {tab.label}
+        </button>
+      {/each}
+    </div>
+    <button class="new-scene-btn" on:click={openNewEditor} title="Create custom scene">
+      <Plus size={13} strokeWidth={2} />
+      <span>New</span>
+    </button>
   </div>
+
+  {#if editorOpen}
+    <CustomSceneEditor
+      {editingId}
+      onSave={handleEditorSave}
+      onCancel={handleEditorCancel}
+    />
+  {/if}
 
   <!-- Curated + Custom scenes -->
   {#if activeTab !== 'effects' && activeTab !== 'bridge'}
     <div class="scene-grid">
       {#each filtered as scene (scene.id)}
         {@const catMeta = SCENE_CATEGORIES[scene.category] || SCENE_CATEGORIES.custom}
-        <button
-          class="scene-item"
-          class:activating={activatingId === scene.id}
-          on:click={() => activate(scene.id)}
-          title={scene.display_name}
-        >
-          <span class="scene-name">{scene.display_name}</span>
-          {#if scene.effect}
-            <span class="scene-effect-badge" style="color: {catMeta.color}">{scene.effect}</span>
+        <div class="scene-wrap">
+          <button
+            class="scene-item"
+            class:activating={activatingId === scene.id}
+            on:click={() => activate(scene.id)}
+            title={scene.display_name}
+          >
+            <span class="scene-name">{scene.display_name}</span>
+            {#if scene.effect}
+              <span class="scene-effect-badge" style="color: {catMeta.color}">{scene.effect}</span>
+            {/if}
+          </button>
+          {#if scene.source === 'custom'}
+            <button
+              class="scene-edit-btn"
+              on:click|stopPropagation={() => openEditEditor(scene)}
+              aria-label="Edit scene"
+              title="Edit"
+            >
+              <Pencil size={11} strokeWidth={2} />
+            </button>
           {/if}
-        </button>
+        </div>
       {/each}
       {#if filtered.length === 0}
         <span class="scene-empty">No scenes in this category</span>
@@ -169,12 +228,43 @@
     gap: 10px;
   }
 
+  .scene-tabs-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .new-scene-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+
+  .new-scene-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(74, 108, 247, 0.08);
+  }
+
   .scene-tabs {
     display: flex;
     gap: 4px;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    flex: 1;
+    min-width: 0;
   }
 
   .scene-tabs::-webkit-scrollbar {
@@ -208,6 +298,39 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+  }
+
+  .scene-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .scene-wrap:hover .scene-edit-btn {
+    opacity: 1;
+  }
+
+  .scene-edit-btn {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(10, 10, 15, 0.9);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+    padding: 0;
+  }
+
+  .scene-edit-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   .scene-item {

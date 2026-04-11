@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.api.schemas.lights import CustomSceneCreate
+from backend.database import async_session
 
 logger = logging.getLogger("home_hub.scenes")
 
@@ -329,8 +330,7 @@ async def list_scenes(request: Request) -> dict:
     try:
         from sqlalchemy import text
 
-        db = request.app.state.db
-        async with db() as session:
+        async with async_session() as session:
             result = await session.execute(text("SELECT * FROM scenes ORDER BY name"))
             rows = result.fetchall()
             for row in rows:
@@ -397,8 +397,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
         try:
             from sqlalchemy import text
 
-            db = request.app.state.db
-            async with db() as session:
+            async with async_session() as session:
                 result = await session.execute(
                     text("SELECT light_states, effect FROM scenes WHERE id = :id"),
                     {"id": int(db_id)},
@@ -457,8 +456,7 @@ async def create_custom_scene(body: CustomSceneCreate, request: Request) -> dict
     """Create a new custom scene."""
     from sqlalchemy import text
 
-    db = request.app.state.db
-    async with db() as session:
+    async with async_session() as session:
         result = await session.execute(
             text(
                 "INSERT INTO scenes (name, light_states, category, effect) "
@@ -482,8 +480,7 @@ async def list_custom_scenes(request: Request) -> dict:
     """List all custom user scenes."""
     from sqlalchemy import text
 
-    db = request.app.state.db
-    async with db() as session:
+    async with async_session() as session:
         result = await session.execute(text("SELECT * FROM scenes ORDER BY name"))
         rows = result.fetchall()
 
@@ -508,8 +505,7 @@ async def update_custom_scene(
     """Update an existing custom scene."""
     from sqlalchemy import text
 
-    db = request.app.state.db
-    async with db() as session:
+    async with async_session() as session:
         result = await session.execute(
             text(
                 "UPDATE scenes SET name = :name, light_states = :light_states, "
@@ -535,8 +531,7 @@ async def delete_custom_scene(scene_id: int, request: Request) -> dict:
     """Delete a custom scene."""
     from sqlalchemy import text
 
-    db = request.app.state.db
-    async with db() as session:
+    async with async_session() as session:
         result = await session.execute(
             text("DELETE FROM scenes WHERE id = :id"), {"id": scene_id}
         )

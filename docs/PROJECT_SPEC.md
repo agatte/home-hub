@@ -1053,7 +1053,8 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Scene browser** — 20 curated scenes organized by category tabs (functional, cozy, moody, vibrant, nature, entertainment, social) + Effects tab + Hue Scenes tab.
 - ✓ **One-tap quick actions** — Lucide icon pill buttons for Movie, Relax, Party, Bedtime, Auto, All Off.
 - ✓ **Now Playing chip** — Fixed bottom-right, shows album art + track, pulses when playing.
-- **Remaining:** External project widget cards (plant app, bar app), custom scene builder UI.
+- ✓ **Plant app widget** — polls external Railway-hosted plant care API, shows total / needs-water / overdue counts + next watering.
+- **Remaining:** Bar app widget (future), custom scene builder UI.
 
 ### Lighting Improvements (Mostly Complete)
 
@@ -1244,7 +1245,7 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 - ✓ **CT (color temperature) support** — mirek parameter throughout stack for precise Kelvin control
 - ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
 - ✓ **Science-based night work lighting** — 2700K bias lamp only when working at night
-- External project widget cards (plant app)
+- ✓ **Plant app widget** — polls external Railway-hosted plant care API, shows total / needs-water / overdue counts + next watering
 
 ### Phase 2a: Post-Cutover Cleanup (Complete)
 
