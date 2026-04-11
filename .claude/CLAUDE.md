@@ -104,7 +104,7 @@ python -m backend.mcp_server
 - `get_routines()` — routine configs
 - `query_db(sql)` — read-only SQLite queries (SELECT only)
 
-**Registered in:** `.claude/mcp.json`
+**Registered in:** `.mcp.json` (project root — Claude Code auto-loads this on startup and prompts to approve on first run)
 
 ### Hooks (`.claude/settings.json`)
 
