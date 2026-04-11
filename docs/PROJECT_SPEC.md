@@ -120,10 +120,21 @@ Browser / Phone (PWA)
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves SvelteKit static build from frontend-svelte/build/ (via FRONTEND_BUILD env)
 
-PC Agent (standalone processes, same machine)
-   ├── activity_detector.py ───────> psutil → POST /api/automation/activity
-   └── ambient_monitor.py ────────> PyAudio RMS → POST /api/automation/activity
+PC Agent (split across two machines, parallel-forever architecture)
+   ├── activity_detector.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
+   │                         (psutil process detection only useful where Anthony games/works)
+   └── ambient_monitor.py    ON Latitude (192.168.1.210) ────> POST http://localhost:8000/api/automation/activity
+                             (PyAudio RMS via built-in mic near the apartment living space)
 ```
+
+**Deployment note:** As of 2026-04-11 the "dedicated laptop" from the
+Target Architecture is real — a Dell Latitude 7420 running Ubuntu
+24.04 LTS at 192.168.1.210. The FastAPI backend, ambient monitor, and
+Firefox kiosk all run there as systemd user services + GNOME
+autostart. The Windows dev machine (192.168.1.30) stays as a
+workstation for code editing + `git push`, and runs the PC activity
+detector pointed at the Latitude. See the Deployment section below
+and `CLAUDE.md` for operational details.
 
 ### Target Architecture
 
@@ -1209,13 +1220,88 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 
 ## Deployment
 
-**Primary:** Dedicated foldable laptop (1080p, landscape), always-on, lid open on a shelf. Runs the FastAPI server and displays the dashboard in a full-screen browser.
+### Production (as of 2026-04-11)
 
-**Secondary access:** Mobile phone (PWA), any browser on the local network.
+**Primary host:** Dell Latitude 7420 (service tag 81FPDB3), running
+**Ubuntu 24.04 LTS Desktop**, hostname `homehub-dashboard`, static LAN
+IP `192.168.1.210`. Always-on 24/7, lid-close configured to ignore
+via `/etc/systemd/logind.conf`, display never sleeps via `gsettings`.
+Auto-login enabled so power-on → desktop with no keystrokes.
 
-**Server:** The laptop runs the Python backend + serves the SvelteKit frontend (static build). PC agent scripts run on the main gaming/work PC and POST activity updates to the laptop's server over LAN.
+**Running services** on the Latitude:
 
-**Cloud services used:** OpenWeatherMap (weather), Google Maps (commute), Last.fm (music discovery), iTunes Search (previews), ESPN (future, game data). All are free-tier or low-cost APIs. Core features (lights, music, automation) work without internet.
+- `home-hub.service` (systemd user unit) — FastAPI backend via
+  `venv/bin/python run.py`, `Restart=on-failure`, `loginctl enable-linger`
+  for boot-time start without login
+- `home-hub-ambient.service` (systemd user unit) — ambient noise
+  monitor via laptop built-in mic, `ExecStartPre` polls `/health`
+  until backend ready before starting
+- **Firefox kiosk** — auto-launches on GNOME login via
+  `~/.config/autostart/home-hub-kiosk.desktop`, displays
+  `http://localhost:8000` fullscreen on the built-in laptop display.
+  Uses deb Firefox from Mozilla's official apt repo, **not** the
+  Ubuntu snap (snap Firefox + Wayland + `--kiosk` produces a black
+  screen)
+
+**Parallel-forever architecture.** The Windows gaming/dev machine
+(192.168.1.30) stays as Anthony's workstation — code editing, tests,
+`git push`. It's not a production host. It runs:
+
+- **PC activity detector** via Windows Task Scheduler (hidden
+  `pythonw.exe`, at-logon trigger with 30s delay, restart-on-failure),
+  pointed at the Latitude via `--server http://192.168.1.210:8000`.
+  Dev-machine process detection is only useful where Anthony actually
+  games and works, so this belongs on the dev machine, not the
+  Latitude.
+- **Claude Code MCP server** with `HOME_HUB_URL` set via Windows user
+  environment variable (`setx HOME_HUB_URL http://192.168.1.210:8000`)
+  so Claude sessions on the dev machine can query and control the
+  production backend via MCP tools without a local FastAPI running.
+  The `HOME_HUB_URL` env var support was added in commit `11e3798`.
+
+Each machine has its own `data/home_hub.db`; the Latitude's DB is
+canonical, the dev machine's is disposable (local testing only). The
+Latitude is never edited directly except for `.env` (secrets,
+gitignored).
+
+### Deployment workflow
+
+**Code changes** flow from dev → production via git:
+
+1. Edit code on the Windows dev machine
+2. `git commit` + `git push` from the dev machine
+3. On the Latitude (via SSH from the dev machine): run
+   `~/home-hub/scripts/deploy.sh`
+4. Verify production state via Claude Code MCP tools
+   (`mcp__home-hub__get_health`, etc.) without leaving the dev
+   machine
+
+`scripts/deploy.sh` (added in commit `3821cb2`) handles the full
+deploy: `git pull --ff-only`, diffs `HEAD` to detect what changed,
+reinstalls Python deps if `requirements.txt` changed, runs
+`npm install` if `frontend-svelte/package*.json` changed, rebuilds
+the frontend if source files changed, restarts `home-hub.service` if
+backend code changed, health-checks the backend via `/health` after
+restart, and restarts `home-hub-ambient.service` if the ambient
+monitor changed. Exits non-zero if the health check fails.
+
+**`.env` updates** (new secrets, API keys, etc.) are not git-tracked
+and must be nano-edited directly on the Latitude via SSH, followed by
+`systemctl --user restart home-hub.service`.
+
+### Secondary access
+
+Mobile phone (PWA) or any browser on the LAN can hit
+`http://192.168.1.210:8000` for the full dashboard. Same dashboard as
+the kiosk, no authentication (single-user home network only).
+
+### Cloud services used
+
+OpenWeatherMap (weather), Google Maps (commute), Last.fm (music
+discovery), iTunes Search (previews), ESPN (future, game data). All
+are free-tier or low-cost APIs. Core features (lights, music,
+automation) work without internet — the Hue bridge and Sonos speaker
+are LAN-only.
 
 ---
 
@@ -1227,8 +1313,8 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 - ✓ Activity-aware wind-down: delays 30 min and retries up to 4x if gaming/watching/social/working
 - ✓ Add vibe tagging to mode-playlist mapping (multiple favorites per mode with vibe column)
 - ✓ Event logging tables live: activity_events, light_adjustments, sonos_playback_events + EventLogger service
-- Fix music auto-play reliability
-- Deploy server to dedicated laptop, confirm always-on stability
+- ✓ Fix music auto-play reliability
+- ✓ Deploy server to dedicated laptop, confirm always-on stability (Dell Latitude 7420, Ubuntu 24.04, 2026-04-11 — systemd user services, Firefox kiosk auto-launch, parallel-forever dev→prod workflow via `scripts/deploy.sh`)
 
 ### Phase 2: Dashboard Redesign (May 2026)
 

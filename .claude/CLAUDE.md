@@ -77,6 +77,19 @@ cd frontend-svelte && npm install && npm run build
 
 Server runs at http://localhost:8000. Frontend dev server: `cd frontend-svelte && npm run dev` on port 3001 (proxies API to 8000).
 
+### Production deploy (Latitude at 192.168.1.210)
+
+```bash
+# After git push from the dev machine, ship to production:
+ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
+```
+
+`scripts/deploy.sh` runs on the Latitude — `git pull --ff-only`,
+diffs HEAD, reinstalls Python deps / rebuilds frontend / restarts
+`home-hub.service` based on what changed, then health-checks via
+`/health`. Verify via MCP tools (`mcp__home-hub__get_health`) without
+leaving the dev machine.
+
 ---
 
 ## Claude Code Tooling
@@ -591,9 +604,10 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 
 | Device | IP | Notes |
 |--------|----|-------|
-| PC / server (laptop) | 192.168.1.30 | Runs FastAPI server |
+| **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04 LTS, `homehub-dashboard`. Runs FastAPI backend + ambient monitor as systemd user services, Firefox kiosk via GNOME autostart. Always-on 24/7. Static IP via NetworkManager.** |
+| Windows desktop (dev) | 192.168.1.30 | Code editing, `git push`, local testing. Runs PC activity detector via Task Scheduler (hidden `pythonw.exe`, `--server http://192.168.1.210:8000`). Claude Code's MCP server uses `HOME_HUB_URL` Windows user env var to point at the Latitude. |
 | Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
-| Sonos Era 100 | 192.168.1.157 | "Bedroom" speaker |
+| Sonos Era 100 | 192.168.1.157 | "Bedroom" speaker. `SONOS_IP` hardcoded in `.env` on the Latitude to defeat cold-boot SSDP discovery race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page issue deferred) |
 
 ---
