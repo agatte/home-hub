@@ -11,6 +11,7 @@ Usage:
 Registered in .claude/mcp.json as the "home-hub" MCP server.
 """
 import logging
+import os
 from typing import Any, Optional
 
 import httpx
@@ -18,8 +19,8 @@ from fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://localhost:8000"
-mcp = FastMCP("home-hub", instructions="Tools for inspecting and controlling the live Home Hub system. The main server must be running at http://localhost:8000.")
+BASE_URL = os.environ.get("HOME_HUB_URL", "http://localhost:8000")
+mcp = FastMCP("home-hub", instructions=f"Tools for inspecting and controlling the live Home Hub system. The main server must be running at {BASE_URL}.")
 
 
 def _client() -> httpx.AsyncClient:
