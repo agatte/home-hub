@@ -2,11 +2,7 @@
   "mcpServers": {
     "home-hub": {
       "command": "python",
-      "args": ["-m", "backend.mcp_server"],
-      "cwd": "C:\\Users\\antho\\Desktop\\home-hub",
-      "env": {
-        "HOME_HUB_URL": "http://192.168.1.210:8000"
-      }
+      "args": ["-m", "backend.mcp_server"]
     }
   }
 }
