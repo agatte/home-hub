@@ -64,7 +64,7 @@ button:active, .btn:active, [role="button"]:active {
 /* Auto-hide: cards fade when user is idle */
 .app-shell.user-idle .widget,
 .app-shell.user-idle .home-page > :not(.always-visible),
-.app-shell.user-idle .quick-actions {
+.app-shell.user-idle .mode-card-deck {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.5s ease;

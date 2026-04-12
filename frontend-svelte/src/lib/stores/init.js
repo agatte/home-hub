@@ -110,7 +110,7 @@ export async function speakText(text, volume) {
 
 /** @param {string} mode */
 export async function setManualMode(mode) {
-  // Optimistic highlight — matches React's ModeOverrideBar behavior.
+  // Optimistic highlight — update store immediately before server confirms.
   automation.update((prev) => ({
     ...prev,
     mode: mode === 'auto' ? prev.mode : mode,

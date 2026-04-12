@@ -1,7 +1,6 @@
 <script>
-  import QuickActions from '$lib/components/QuickActions.svelte'
+  import ModeCardDeck from '$lib/components/ModeCardDeck.svelte'
   import ModeIndicator from '$lib/components/ModeIndicator.svelte'
-  import ModeOverrideBar from '$lib/components/ModeOverrideBar.svelte'
   import RoutineCard from '$lib/components/RoutineCard.svelte'
   import LightGrid from '$lib/components/LightGrid.svelte'
   import SceneBrowser from '$lib/components/SceneBrowser.svelte'
@@ -23,13 +22,12 @@
     <SonosCard />
   </section>
 
-  <QuickActions />
+  <ModeCardDeck />
 
   <div class="widget-grid">
     <section class="widget widget-mode">
       <h2 class="widget-title">Mode</h2>
       <ModeIndicator />
-      <ModeOverrideBar />
     </section>
 
     <section class="widget widget-weather">
