@@ -105,7 +105,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 **Infrastructure (from April 2026 audit):**
 - ~~CORS allows all origins~~ — fixed: locked to specific LAN IPs (localhost, Latitude, dev machine, tablet)
-- ~~No tests~~ — fixed: pytest suite with 36 tests (automation engine, health API, WebSocket protocol). GitHub Actions CI runs lint + tests on push
+- ~~No tests~~ — fixed: pytest suite with 101 tests across 8 files (automation engine, music mapper, scheduler, weather, pihole, API routes, WebSocket). GitHub Actions CI runs full suite on push
 - ~~No rate limiting~~ — fixed: slowapi (120/min default, 10/min on override/TTS, 5/min on file import)
 - ~~No log rotation~~ — fixed: RotatingFileHandler (5MB per file, 3 backups, 20MB max)
 - ~~WebSocket crashes on malformed JSON~~ — fixed: try-catch guard around json.loads()
@@ -113,8 +113,14 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - ~~Systemd service files not version-controlled~~ — fixed: `deployment/` dir with service units + kiosk desktop entry
 - ~~Dead frontend code (Sidebar, Header, modeIcon)~~ — fixed: deleted
 - ~~Weather widget shows current temp as high/low~~ — fixed: fetches daily range from OWM forecast API
+- ~~No structured logging~~ — fixed: python-json-logger (JSON to file for machine parsing, text to console for humans)
+- ~~No uptime monitoring~~ — fixed: Uptime Kuma on port 3002 monitoring Home Hub backend + Pi-hole health, with alerting
+- ~~No bundle analysis~~ — fixed: vite-plugin-visualizer (`npm run analyze` generates interactive treemap)
 - No authentication on API endpoints (acceptable for LAN-only, revisit if Cloudflare Tunnel added)
-- No uptime monitoring or alerting
+
+**Open bugs (from April 2026 audit):**
+- GenerativeCanvas store subscriptions (lines 40-61) may leak memory — three `$:` subscriptions (mode, lights, sonos) cleanup may not catch all paths on component destroy
+- Silent API error swallowing — `api.js` `.catch(() => ({}))` hides all fetch failures, UI never shows error state
 
 **Ambient intelligence features (April 2026):**
 - ~~Now Playing Ambient Typography~~ — shipped: `NowPlayingIdle.svelte` fills kiosk with giant song title/artist when idle + Sonos playing; album art as blurred ambient glow
@@ -153,6 +159,10 @@ Pi-hole (Docker container, host networking, same machine)
    └── pihole/pihole:latest ───────> DNS on :53, web admin on :8080
        ├── Network-wide ad/malware/tracking blocking (2M+ domains)
        └── Local DNS (homehub.local, pihole.local, hue.local, etc.)
+
+Uptime Kuma (Docker container, port 3002, same machine)
+   └── louislam/uptime-kuma:1 ─────> monitors Home Hub :8000/health + Pi-hole :8080
+       └── Alerting via Telegram/Pushover on downtime
 
 PC Agent (split across two machines, parallel-forever architecture)
    ├── activity_detector.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
@@ -1362,7 +1372,7 @@ are LAN-only.
 - ✓ Fix music auto-play reliability
 - ✓ Deploy server to dedicated laptop, confirm always-on stability (Dell Latitude 7420, Ubuntu 24.04, 2026-04-11 — systemd user services, Firefox kiosk auto-launch, parallel-forever dev→prod workflow via `scripts/deploy.sh`)
 
-### Phase 2: Dashboard Redesign (May 2026)
+### Phase 2: Dashboard Redesign (Complete — April 2026)
 
 - ✓ Sidebar navigation layout → replaced by floating bottom nav in Living Ink redesign
 - ✓ Widget-based home page (mode, lights, music, routines, weather, scenes)
@@ -1379,6 +1389,9 @@ are LAN-only.
 - ✓ **Science-based night work lighting** — 2700K bias lamp only when working at night
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering, and opens the full app in an in-dashboard iframe modal
 - ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across 10 curated blocklists, Network widget on dashboard, local DNS for all devices (homehub.local, etc.), Settings page management for DNS records and blocklists, per-device DNS config (apartment router locked)
+- ✓ **Test suite expansion** — 101 tests across 8 files (automation, music mapper, scheduler, weather, pihole, API routes, WebSocket). GitHub Actions CI runs full suite on push
+- ✓ **Observability tooling** — python-json-logger (structured JSON to file), Uptime Kuma monitoring on port 3002 (Home Hub + Pi-hole health checks with alerting), vite-plugin-visualizer for bundle analysis
+- ✓ **Ops tooling** — py-spy for production profiling, httpie for readable API testing (requirements-ops.txt on Latitude)
 
 ### Phase 2a: Post-Cutover Cleanup (Complete)
 

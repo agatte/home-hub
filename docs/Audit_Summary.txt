@@ -34,15 +34,15 @@ Post-audit additions (2026-04-12):
                                   WebSocket validated. Still no auth, file upload risks
   Performance             B-      Aggressive polling (1-2s), canvas perf OK
                                   but no lazy loading for Three.js
-  Observability           C-      Log rotation added (5MB, 3 backups). Still no
-                                  structured logs, no metrics, no alerting
+  Observability           C       Log rotation + JSON structured logs added.
+                                  Uptime Kuma monitoring active. No metrics yet
   Testing                 C+      pytest suite: 101 tests (automation, music
                                   mapper, scheduler, weather, pihole, API
                                   routes, WS). GitHub Actions runs full suite
   Documentation           B+      PROJECT_SPEC is excellent, CLAUDE.md thorough,
                                   but some staleness and missing ops runbook
-  DevOps / Deployment     C       deploy.sh works, systemd files now versioned,
-                                  daily DB backup cron active. No rollback yet
+  DevOps / Deployment     C+      deploy.sh works, systemd files versioned,
+                                  DB backup cron, Uptime Kuma. No rollback yet
   Tooling / DX            B+      MCP integration excellent, Claude Code hooks,
                                   GitHub Actions CI, pre-push hook, pytest
   Future Readiness        B       Good foundation for learning engine + game day,
@@ -199,31 +199,35 @@ Post-audit additions (2026-04-12):
   - File logging to logs/home_hub.log (5.6MB, 114K lines)
   - MCP get_health() and get_event_summary() tools
 
-  What's missing:
-  - No log rotation -- FileHandler not RotatingFileHandler. At ~60KB/day,
-    this fills disk over months
-  - No structured logging -- Plain text, can't parse or alert on error spikes
+  Fixed:
+  - Log rotation: RotatingFileHandler (5MB, 3 backups, 20MB max)
+  - Structured logging: python-json-logger (JSON to file, text to console)
+  - Uptime monitoring: Uptime Kuma on :3002 watching /health + Pi-hole
+
+  What's still missing:
   - No metrics endpoint -- No Prometheus /metrics, no error rate tracking
-  - No uptime monitoring -- If Latitude crashes at 3 AM, nobody knows
-  - No alerting -- Hue/Sonos disconnections logged but never surfaced
+  - No alerting on Hue/Sonos disconnections (Uptime Kuma only checks HTTP)
   - No request tracing -- No request IDs, can't correlate actions to logs
   - No database health in /health -- Only checks Hue/Sonos, not SQLite
-  - Timestamp format missing timezone
+  - Timestamp format missing timezone in log output
 
 --------------------------------------------------------------------------------
 7. TESTING -- Grade: F
 --------------------------------------------------------------------------------
 
-  - tests/ directory exists but is completely empty
-  - No pytest, no vitest, no Playwright tests
-  - No test configuration files
-  - No CI pipeline to run tests
-  - No mocking infrastructure
-  - The only "testing" is manual via MCP tools (/api-audit, /ui-audit)
+  What exists:
+  - pytest suite: 101 tests across 8 files
+  - Coverage: automation engine, music mapper, scheduler, weather service,
+    pihole service, API routes, WebSocket protocol, health/CORS
+  - Mock infrastructure in conftest.py (Hue, Sonos, WebSocket, DB)
+  - GitHub Actions CI runs full suite on push + pull_request
+  - pyproject.toml: asyncio_mode = "auto", testpaths = ["tests"]
 
-  This is the single biggest risk for an always-on system. The automation
-  engine (1,093 lines of mode priority logic, time-based rules, effect
-  mapping) has zero test coverage.
+  What's missing:
+  - No frontend tests (vitest, Playwright)
+  - No integration tests (end-to-end mode change → lights → music)
+  - Services without tests: Hue, Sonos, TTS, screen sync, routines
+  - No coverage reporting
 
 --------------------------------------------------------------------------------
 8. DOCUMENTATION -- Grade: B+
@@ -332,11 +336,18 @@ Post-audit additions (2026-04-12):
   [x] Sunrise Alarm Light Ramp (30-min bedroom lamp warm-up before routine)
   [x] Weather-Reactive Lighting (subtle ambient adjustments by condition)
 
+  COMPLETED -- Tooling & Observability (April 12, 2026):
+  -----------------------------------------------------------------------
+  [x] 13. Uptime Kuma on Latitude (port 3002, monitoring Home Hub + Pi-hole)
+  [x] --  python-json-logger (structured JSON file logs)
+  [x] --  vite-plugin-visualizer (npm run analyze for bundle size)
+  [x] --  py-spy + httpie ops tools (requirements-ops.txt on Latitude)
+  [x] --  Test suite expanded: 36 → 101 tests, CI runs full suite
+
   REMAINING -- THIS MONTH:
   -----------------------------------------------------------------------
   [ ] 10. Add Pydantic schemas for WebSocket messages
   [ ] 11. Add file upload size limit + content-type validation
-  [ ] 13. Install Uptime Kuma on Latitude for monitoring
 
   REMAINING -- NEXT QUARTER:
   -----------------------------------------------------------------------
