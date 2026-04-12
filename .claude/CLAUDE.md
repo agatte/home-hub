@@ -32,12 +32,7 @@ The dashboard is a living interface with bold, mode-aware animated backgrounds �
 
 **Dashboard:** Three pages (Home, Music, Settings), real-time WebSocket sync, PWA for phone/tablet, optimistic updates.
 
-**Known Pain Points:**
-- Evening transition is abrupt (should fade gradually)
-- Wind-down triggers at fixed time regardless of activity
-- Mode-to-playlist mapping too rigid (one favorite per mode)
-- Auto-play sometimes unreliable
-- UI feels generic; too many taps for common actions
+**Known Pain Points:** see `docs/PROJECT_SPEC.md` § "Known Issues & Pain Points" for the live list — that file gets updated as items ship.
 
 ---
 
@@ -705,7 +700,7 @@ home-hub/
 | Phase | Timeline | Focus |
 |-------|----------|-------|
 | **Phase 1: Core Fix & Foundation** | ✓ Complete | Gradual evening transitions, vibe tagging, event logging tables |
-| **Phase 2: Dashboard Redesign** | ✓ Mostly complete | Living Ink redesign (generative canvas, glass cards, floating nav), weather widget, 20 curated scenes, CT support, custom scene CRUD, effect auto-activation, plant app widget with in-dashboard iframe modal. Remaining: custom scene builder UI |
+| **Phase 2: Dashboard Redesign** | ✓ Complete | Living Ink redesign (generative canvas, glass cards, floating nav), weather widget, 20 curated scenes, CT support, custom scene CRUD + builder UI, effect auto-activation, plant app widget with in-dashboard iframe modal, recommendation card QR modal, kiosk auto-reload on backend deploys |
 | **Phase 3: Intelligence & Voice** | June 2026 | Simple rule engine from events, Fauxmo Alexa integration, override pattern analysis, nudge system |
 | **Phase 4: Game Day** | July–August 2026 | ESPN API, GameDay page, celebration orchestration, pixel art field, pre-game mode |
 | **Phase 5: Polish & Expand** | September 2026+ | Custom Alexa Skill, Apple Music API, full autopilot, bar app widget |

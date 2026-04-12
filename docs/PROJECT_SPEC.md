@@ -82,7 +82,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 **Music:**
 - ~~Mode-to-playlist mapping is too rigid~~ — fixed: vibe tagging supports multiple favorites per mode with energetic/focus/mellow/background/hype tags
-- Auto-play is unreliable — sometimes doesn't trigger, sometimes plays when unwanted
+- ~~Auto-play is unreliable — sometimes doesn't trigger, sometimes plays when unwanted~~ — fixed: queue-based playback for cloud favorites with DIDL metadata, graceful failure for unsupported "shortcut" favorites (Apple Music artist/station containers without playable URIs), and the music page UI now flags those unsupported favorites in the mode→playlist mapper so they can't be silently mapped
 - Sonos favorites are limiting — can't express "high energy electronic" as a vibe, only specific playlists
 - Last.fm recommendations aren't useful — poor relevance to actual taste
 
@@ -1069,7 +1069,8 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering. Tapping "View Plants" opens the full plant app inside a fullscreen iframe modal layered over the dashboard (no new tab — the kiosk Firefox stays on the dashboard).
 - ✓ **Recommendation card QR modal** — on the music page, the "Open in Apple Music" action on each recommendation card opens an in-dashboard modal showing a client-side-generated QR code for the track's `itunes_url`. Anthony scans with his phone; iOS opens it in the native Apple Music app where Add-to-Library actually works. No `target="_blank"`, no kiosk lockout.
 - ✓ **Auto-reload on backend deploys** — the WebSocket `connection_status` message carries a `build_id` (short git SHA). When `scripts/deploy.sh` restarts the backend, the kiosk's WS reconnects, sees a new `build_id`, and calls `window.location.reload()`. Eliminates the manual F5 dance after every deploy.
-- **Remaining:** Bar app widget (future), custom scene builder UI.
+- ✓ **Custom scene builder UI** — `CustomSceneEditor.svelte` opens from the scene browser's "New" button; per-light color and effect picker, save/update/delete via the existing `/api/scenes/custom` CRUD endpoints.
+- **Remaining:** Bar app widget (future).
 
 ### Lighting Improvements (Mostly Complete)
 
@@ -1080,7 +1081,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Custom scene CRUD** — save/load/update/delete with category and effect
 - ✓ **Effect auto-activation** — candle for relax nights, glisten for relax days, prism for party
 - ✓ **Science-based night work** — 2700K CT bias lamp only (melatonin-safe)
-- **Remaining:** Custom scene builder UI, per-room mode overrides
+- **Remaining:** per-room mode overrides
 
 ### Display Auto-Switching (Monitor ↔ Projector)
 
