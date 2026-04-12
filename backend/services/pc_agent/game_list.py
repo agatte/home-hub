@@ -69,10 +69,25 @@ BROWSER_PROCESSES: set[str] = {
 WORK_PROCESSES: set[str] = {
     "windowsterminal.exe",
     "powershell.exe",
+    "pwsh.exe",          # PowerShell 7+
     "cmd.exe",
+    "bash.exe",          # Git Bash / WSL
+    "wsl.exe",           # Windows Subsystem for Linux
     "code.exe",          # VS Code
     "cursor.exe",        # Cursor IDE
+    "claude.exe",        # Claude Code
     "devenv.exe",        # Visual Studio
     "sublime_text.exe",
     "notepad++.exe",
+    "rider64.exe",       # JetBrains Rider
+    "idea64.exe",        # JetBrains IntelliJ
+    "pycharm64.exe",     # JetBrains PyCharm
+    "webstorm64.exe",    # JetBrains WebStorm
+    "datagrip64.exe",    # JetBrains DataGrip
+    "wezterm-gui.exe",   # WezTerm
+    "alacritty.exe",     # Alacritty
+    "hyper.exe",         # Hyper terminal
+    "tabby.exe",         # Tabby terminal
+    "warp.exe",          # Warp terminal
+    "mintty.exe",        # MinTTY (Git Bash default)
 }
