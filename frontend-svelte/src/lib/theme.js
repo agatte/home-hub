@@ -3,11 +3,22 @@
 
 /**
  * @typedef {Object} GenerativeParams
- * @property {number} frequency  - Perlin noise frequency (higher = more turbulent)
- * @property {number} speed      - Time evolution speed
- * @property {number} particleCount - Number of flow-field particles
- * @property {number} trailAlpha - Trail fade per frame (lower = longer trails)
- * @property {number} intensity  - Max particle alpha
+ * @property {number} blobCount      - Gradient mesh blobs (2-4)
+ * @property {number} blobOpacity    - Max blob opacity (0.05-0.25)
+ * @property {number} blobSpeed      - Blob drift speed
+ * @property {number} particleCount  - Flow-field particle count
+ * @property {number} particleSize   - Particle radius in px
+ * @property {number} particleSpeed  - Particle flow speed
+ * @property {number} particleTrail  - Trail fade per frame (lower = longer)
+ * @property {number} particleIntensity - Max particle alpha
+ * @property {string} particleStyle  - 'dots' | 'streaks' | 'embers' | 'none'
+ * @property {string} geoPattern     - 'none' | 'grid' | 'hex' | 'waves' | 'rings' | 'radial'
+ * @property {number} geoOpacity     - Geometric overlay opacity
+ * @property {number} musicBlobPulse - Blob scale delta when music plays
+ * @property {number} musicSpeedBoost - Particle speed multiplier when music plays
+ * @property {number} noiseFrequency - Perlin noise frequency
+ * @property {string} [secondaryColor] - Fallback secondary color hex
+ * @property {string} [accentColor]    - Fallback accent color hex
  */
 
 /**
@@ -22,43 +33,113 @@
 export const MODE_CONFIG = {
   gaming: {
     label: 'Gaming', icon: '🎮', lucide: 'gamepad-2', color: '#a855f7',
-    generative: { frequency: 1.2, speed: 0.6, particleCount: 350, trailAlpha: 0.025, intensity: 0.14 },
+    generative: {
+      blobCount: 4, blobOpacity: 0.20, blobSpeed: 0.5,
+      particleCount: 200, particleSize: 4, particleSpeed: 0.6,
+      particleTrail: 0.02, particleIntensity: 0.4, particleStyle: 'streaks',
+      geoPattern: 'hex', geoOpacity: 0.05,
+      musicBlobPulse: 0.18, musicSpeedBoost: 1.5, noiseFrequency: 1.0,
+      secondaryColor: '#7c3aed', accentColor: '#c084fc',
+    },
   },
   working: {
     label: 'Working', icon: '💻', lucide: 'monitor', color: '#3b82f6',
-    generative: { frequency: 0.3, speed: 0.1, particleCount: 200, trailAlpha: 0.04, intensity: 0.08 },
+    generative: {
+      blobCount: 2, blobOpacity: 0.10, blobSpeed: 0.15,
+      particleCount: 80, particleSize: 2, particleSpeed: 0.12,
+      particleTrail: 0.04, particleIntensity: 0.25, particleStyle: 'dots',
+      geoPattern: 'grid', geoOpacity: 0.03,
+      musicBlobPulse: 0.08, musicSpeedBoost: 1.2, noiseFrequency: 0.3,
+      secondaryColor: '#1d4ed8', accentColor: '#60a5fa',
+    },
   },
   watching: {
     label: 'Watching', icon: '🎬', lucide: 'tv', color: '#8b5cf6',
-    generative: { frequency: 0.5, speed: 0.15, particleCount: 250, trailAlpha: 0.03, intensity: 0.10 },
+    generative: {
+      blobCount: 2, blobOpacity: 0.06, blobSpeed: 0.1,
+      particleCount: 20, particleSize: 2, particleSpeed: 0.08,
+      particleTrail: 0.05, particleIntensity: 0.15, particleStyle: 'dots',
+      geoPattern: 'none', geoOpacity: 0,
+      musicBlobPulse: 0, musicSpeedBoost: 1.0, noiseFrequency: 0.2,
+      secondaryColor: '#6d28d9',
+    },
   },
   social: {
     label: 'Social', icon: '🎉', lucide: 'party-popper', color: '#f472b6',
-    generative: { frequency: 0.9, speed: 0.8, particleCount: 400, trailAlpha: 0.02, intensity: 0.15 },
+    generative: {
+      blobCount: 4, blobOpacity: 0.22, blobSpeed: 0.6,
+      particleCount: 250, particleSize: 3, particleSpeed: 0.7,
+      particleTrail: 0.018, particleIntensity: 0.45, particleStyle: 'dots',
+      geoPattern: 'radial', geoOpacity: 0.06,
+      musicBlobPulse: 0.20, musicSpeedBoost: 1.6, noiseFrequency: 0.8,
+      secondaryColor: '#ec4899', accentColor: '#a855f7',
+    },
   },
   relax: {
     label: 'Relax', icon: '🌙', lucide: 'flame', color: '#fb923c',
-    generative: { frequency: 0.5, speed: 0.2, particleCount: 250, trailAlpha: 0.03, intensity: 0.10 },
+    generative: {
+      blobCount: 3, blobOpacity: 0.15, blobSpeed: 0.2,
+      particleCount: 100, particleSize: 3, particleSpeed: 0.15,
+      particleTrail: 0.03, particleIntensity: 0.3, particleStyle: 'embers',
+      geoPattern: 'waves', geoOpacity: 0.04,
+      musicBlobPulse: 0.12, musicSpeedBoost: 1.3, noiseFrequency: 0.4,
+      secondaryColor: '#f97316', accentColor: '#fdba74',
+    },
   },
   movie: {
     label: 'Movie', icon: '🎥', lucide: 'clapperboard', color: '#6366f1',
-    generative: { frequency: 0.5, speed: 0.15, particleCount: 250, trailAlpha: 0.03, intensity: 0.10 },
+    generative: {
+      blobCount: 2, blobOpacity: 0.06, blobSpeed: 0.1,
+      particleCount: 20, particleSize: 2, particleSpeed: 0.08,
+      particleTrail: 0.05, particleIntensity: 0.15, particleStyle: 'dots',
+      geoPattern: 'none', geoOpacity: 0,
+      musicBlobPulse: 0, musicSpeedBoost: 1.0, noiseFrequency: 0.2,
+      secondaryColor: '#4f46e5',
+    },
   },
   sleeping: {
     label: 'Sleeping', icon: '😴', lucide: 'moon', color: '#1e3a8a',
-    generative: { frequency: 0.15, speed: 0.05, particleCount: 150, trailAlpha: 0.05, intensity: 0.06 },
+    generative: {
+      blobCount: 1, blobOpacity: 0.04, blobSpeed: 0.05,
+      particleCount: 30, particleSize: 2, particleSpeed: 0.03,
+      particleTrail: 0.06, particleIntensity: 0.1, particleStyle: 'dots',
+      geoPattern: 'none', geoOpacity: 0,
+      musicBlobPulse: 0, musicSpeedBoost: 1.0, noiseFrequency: 0.1,
+      secondaryColor: '#1e1b4b',
+    },
   },
   idle: {
     label: 'Idle', icon: '✨', lucide: 'sparkles', color: '#6b7280',
-    generative: { frequency: 0.2, speed: 0.08, particleCount: 100, trailAlpha: 0.04, intensity: 0.06 },
+    generative: {
+      blobCount: 2, blobOpacity: 0.08, blobSpeed: 0.12,
+      particleCount: 60, particleSize: 2, particleSpeed: 0.08,
+      particleTrail: 0.04, particleIntensity: 0.2, particleStyle: 'dots',
+      geoPattern: 'rings', geoOpacity: 0.03,
+      musicBlobPulse: 0.10, musicSpeedBoost: 1.3, noiseFrequency: 0.2,
+      secondaryColor: '#4b5563', accentColor: '#374151',
+    },
   },
   away: {
     label: 'Away', icon: '🚪', lucide: 'door-open', color: '#475569',
-    generative: { frequency: 0.1, speed: 0.0, particleCount: 80, trailAlpha: 0.05, intensity: 0.04 },
+    generative: {
+      blobCount: 1, blobOpacity: 0.05, blobSpeed: 0.02,
+      particleCount: 40, particleSize: 2, particleSpeed: 0.02,
+      particleTrail: 0.06, particleIntensity: 0.1, particleStyle: 'dots',
+      geoPattern: 'none', geoOpacity: 0,
+      musicBlobPulse: 0, musicSpeedBoost: 1.0, noiseFrequency: 0.1,
+      secondaryColor: '#334155',
+    },
   },
   auto: {
     label: 'Auto', icon: '🤖', lucide: 'bot', color: '#4a6cf7',
-    generative: { frequency: 0.4, speed: 0.15, particleCount: 200, trailAlpha: 0.03, intensity: 0.08 },
+    generative: {
+      blobCount: 2, blobOpacity: 0.08, blobSpeed: 0.15,
+      particleCount: 80, particleSize: 2, particleSpeed: 0.1,
+      particleTrail: 0.04, particleIntensity: 0.2, particleStyle: 'dots',
+      geoPattern: 'none', geoOpacity: 0,
+      musicBlobPulse: 0.08, musicSpeedBoost: 1.2, noiseFrequency: 0.3,
+      secondaryColor: '#3b5ce0',
+    },
   },
 }
 
