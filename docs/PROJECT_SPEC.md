@@ -78,7 +78,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 **Automation timing:**
 - ~~Evening transition is too abrupt~~ — fixed: 30-minute gradual lerp before winddown_start_hour
 - ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social/working
-- Mode detection has noticeable lag between activity start and mode switch
+- ~~Mode detection has noticeable lag between activity start and mode switch~~ — fixed: dropped PC agent POLL_INTERVAL from 15s to 5s (worst-case 5s, average ~2.5s). The backend processes activity reports synchronously on POST, so the polling interval was the entire lag budget.
 
 **Music:**
 - ~~Mode-to-playlist mapping is too rigid~~ — fixed: vibe tagging supports multiple favorites per mode with energetic/focus/mellow/background/hype tags
