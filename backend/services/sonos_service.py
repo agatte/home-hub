@@ -371,41 +371,52 @@ class SonosService:
         except Exception as e:
             logger.error(f"Error searching Sonos playlists: {e}")
 
-        # Fall back to cloud favorites — play via the queue using the raw SoCo
-        # Favorite object so SoCo serializes the DIDL metadata internally. This
-        # is required for Apple Music library containers (x-rincon-cpcontainer)
-        # and other cloud favorites that play_uri rejects without metadata.
+        # Fall back to cloud favorites. Two paths depending on whether the
+        # favorite's reference has populated .resources:
+        #   Path A — populated (playlists, albums): hand the raw SoCo object
+        #     to add_to_queue and let SoCo serialize the DIDL internally.
+        #   Path B — empty .resources: Apple Music library artist/station
+        #     "shortcut" favorites. These have no static playable URI; the
+        #     Sonos app resolves them on-tap via the Apple Music wire protocol,
+        #     which SoCo's MusicService machinery doesn't implement for Apple
+        #     Music. We can't queue them via any standard SOAP action — we
+        #     verified this empirically against AddURIToQueue (UPnP 804) and
+        #     SetAVTransportURI (UPnP 714) with every URI scheme/flag/metadata
+        #     combo we could find. Detect and report clearly so Anthony knows
+        #     to remap the mode to a playlist favorite that does work.
         await self._get_cloud_favorites_cached()
         for fav_obj in (self._favorites_objects_cache or []):
             if fav_obj.title.lower() != target:
                 continue
 
             ref = getattr(fav_obj, "reference", fav_obj)
-            try:
-                await asyncio.to_thread(self._device.clear_queue)
-                await asyncio.to_thread(self._device.add_to_queue, ref)
-                await asyncio.to_thread(self._device.play_from_queue, 0)
-                logger.info(f"Playing Sonos favorite via queue: {fav_obj.title}")
-                return True
-            except Exception as e:
-                logger.warning(
-                    "Queue play failed for favorite '%s': %s — falling back to play_uri with metadata",
-                    fav_obj.title, e,
-                )
+            ref_resources = getattr(ref, "resources", None) or []
 
-            # Fallback for non-queueable items (radio streams, etc.)
-            try:
-                uri = ref.get_uri() if hasattr(ref, "get_uri") else getattr(ref, "uri", "")
-                meta = ref.to_element().toxml() if hasattr(ref, "to_element") else ""
-                await asyncio.to_thread(self._device.play_uri, uri, meta)
-                logger.info(f"Playing Sonos favorite via play_uri+meta: {fav_obj.title}")
-                return True
-            except Exception as e2:
-                logger.error(
-                    "Fallback play_uri also failed for '%s': %s",
-                    fav_obj.title, e2,
-                )
-                return False
+            if ref_resources:
+                # Path A: queue the SoCo object directly
+                try:
+                    await asyncio.to_thread(self._device.clear_queue)
+                    await asyncio.to_thread(self._device.add_to_queue, ref)
+                    await asyncio.to_thread(self._device.play_from_queue, 0)
+                    logger.info(f"Playing Sonos favorite via queue: {fav_obj.title}")
+                    return True
+                except Exception as e:
+                    logger.error(
+                        "Queue play failed for favorite '%s': %s",
+                        fav_obj.title, e, exc_info=True,
+                    )
+                    return False
+
+            # Path B: unsupported shortcut favorite (artist, station, etc.)
+            ref_class = getattr(ref, "item_class", "unknown")
+            logger.warning(
+                "Cannot auto-play favorite '%s' — it's a shortcut to a %s "
+                "container with no playable URI (Apple Music artist/station "
+                "favorites require on-demand resolution that SoCo doesn't "
+                "support). Re-map this mode to a playlist or album favorite.",
+                fav_obj.title, ref_class,
+            )
+            return False
 
         favorites = await self._get_cloud_favorites_cached()
         available = [fav["title"] for fav in favorites]
