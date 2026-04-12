@@ -54,6 +54,12 @@ def _compute_build_id() -> str:
     over the WebSocket and auto-reload the kiosk dashboard. Prefers the short
     git SHA so a benign restart on the same commit doesn't trigger a reload;
     falls back to a per-process UUID if git is unavailable.
+
+    Note: scripts/deploy.sh only restarts home-hub.service when files under
+    backend/ or run.py actually changed in the pulled diff, so empty commits
+    or pure-frontend deploys won't bump this value mid-flight. That's by
+    design — skipping unnecessary backend restarts is what keeps the
+    dashboard responsive during routine deploys.
     """
     try:
         result = subprocess.run(
