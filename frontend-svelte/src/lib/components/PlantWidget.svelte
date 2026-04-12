@@ -9,6 +9,12 @@
   let summary = null
   let error = false
   let refreshInterval
+  let modalOpen = false
+
+  /** @param {KeyboardEvent} e */
+  function handleKeydown(e) {
+    if (e.key === 'Escape' && modalOpen) modalOpen = false
+  }
 
   async function fetchStatus() {
     try {
@@ -66,14 +72,39 @@
       </div>
     {/if}
 
-    <a href={PLANT_APP_URL} target="_blank" rel="noopener" class="plant-link">
+    <button type="button" class="plant-link" on:click={() => (modalOpen = true)}>
       View Plants &rarr;
-    </a>
+    </button>
   </div>
 {:else if error}
   <div class="plant-empty">Plant app unavailable</div>
 {:else}
   <div class="plant-empty">Loading...</div>
+{/if}
+
+<svelte:window on:keydown={handleKeydown} />
+
+{#if modalOpen}
+  <div
+    class="plant-modal-backdrop"
+    on:click|self={() => (modalOpen = false)}
+    role="presentation"
+  >
+    <button
+      type="button"
+      class="plant-modal-close"
+      on:click={() => (modalOpen = false)}
+      aria-label="Close plant app"
+    >
+      ✕
+    </button>
+    <iframe
+      class="plant-modal-iframe"
+      src={PLANT_APP_URL}
+      title="Plant Care App"
+      allow="fullscreen"
+    ></iframe>
+  </div>
 {/if}
 
 <style>
@@ -148,11 +179,17 @@
   }
 
   .plant-link {
+    appearance: none;
+    background: none;
+    border: none;
+    padding: 0;
+    align-self: flex-start;
     font-family: var(--font-body);
     font-size: 12px;
     color: var(--accent);
     text-decoration: none;
     margin-top: 4px;
+    cursor: pointer;
     transition: color 0.15s;
   }
 
@@ -165,5 +202,56 @@
     font-size: 12px;
     color: var(--text-muted);
     padding: 8px 0;
+  }
+
+  .plant-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .plant-modal-iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  .plant-modal-close {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1001;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.15s;
+  }
+
+  .plant-modal-close:hover {
+    background: rgba(0, 0, 0, 0.9);
+    transform: scale(1.05);
+  }
+
+  @media (max-width: 480px) {
+    .plant-modal-backdrop {
+      padding: 12px;
+    }
   }
 </style>
