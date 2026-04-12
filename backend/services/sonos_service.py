@@ -24,6 +24,10 @@ class SonosService:
         self._last_status: Optional[dict] = None
         # Favorites/playlists cache (5-min TTL)
         self._favorites_cache: Optional[list] = None
+        # Raw SoCo favorite objects, parallel to _favorites_cache, needed so
+        # play_favorite can call add_to_queue with the original DidlObject
+        # (which carries the DIDL metadata Sonos requires for cloud containers).
+        self._favorites_objects_cache: Optional[list] = None
         self._favorites_cache_time: float = 0
         self._playlists_cache: Optional[list] = None
         self._playlists_cache_time: float = 0
@@ -233,6 +237,7 @@ class SonosService:
             return self._favorites_cache
 
         results = []
+        raw_objects = []
         try:
             favorites = await asyncio.to_thread(
                 self._device.music_library.get_sonos_favorites
@@ -248,11 +253,13 @@ class SonosService:
                     "uri": uri,
                     "source": "favorite",
                 })
+                raw_objects.append(fav)
         except Exception as e:
             logger.error(f"Error getting Sonos favorites: {e}")
             return self._favorites_cache or []
 
         self._favorites_cache = results
+        self._favorites_objects_cache = raw_objects
         self._favorites_cache_time = now
         return results
 
@@ -276,6 +283,7 @@ class SonosService:
     def invalidate_favorites_cache(self) -> None:
         """Clear the favorites/playlists cache so the next call fetches fresh data."""
         self._favorites_cache = None
+        self._favorites_objects_cache = None
         self._favorites_cache_time = 0
         self._playlists_cache = None
         self._playlists_cache_time = 0
@@ -310,8 +318,11 @@ class SonosService:
         """
         Play a Sonos favorite or playlist by title.
 
-        Handles both cloud favorites (play_uri) and Sonos playlists
-        (add_to_queue + play).
+        Sonos playlists are matched first (saved-queue items), then cloud
+        favorites. Both go through add_to_queue + play_from_queue using the
+        raw SoCo DidlObject so SoCo can build the DIDL metadata internally.
+        Non-queueable favorites (radio streams) fall back to play_uri with
+        explicit metadata.
 
         Args:
             title: The favorite's display name (case-insensitive match).
@@ -360,14 +371,43 @@ class SonosService:
         except Exception as e:
             logger.error(f"Error searching Sonos playlists: {e}")
 
-        # Fall back to cloud favorites
-        favorites = await self._get_cloud_favorites_cached()
-        for fav in favorites:
-            if fav["title"].lower() == target:
-                uri = fav.get("uri", "")
-                if uri:
-                    return await self.play_uri(uri)
+        # Fall back to cloud favorites — play via the queue using the raw SoCo
+        # Favorite object so SoCo serializes the DIDL metadata internally. This
+        # is required for Apple Music library containers (x-rincon-cpcontainer)
+        # and other cloud favorites that play_uri rejects without metadata.
+        await self._get_cloud_favorites_cached()
+        for fav_obj in (self._favorites_objects_cache or []):
+            if fav_obj.title.lower() != target:
+                continue
 
+            ref = getattr(fav_obj, "reference", fav_obj)
+            try:
+                await asyncio.to_thread(self._device.clear_queue)
+                await asyncio.to_thread(self._device.add_to_queue, ref)
+                await asyncio.to_thread(self._device.play_from_queue, 0)
+                logger.info(f"Playing Sonos favorite via queue: {fav_obj.title}")
+                return True
+            except Exception as e:
+                logger.warning(
+                    "Queue play failed for favorite '%s': %s — falling back to play_uri with metadata",
+                    fav_obj.title, e,
+                )
+
+            # Fallback for non-queueable items (radio streams, etc.)
+            try:
+                uri = ref.get_uri() if hasattr(ref, "get_uri") else getattr(ref, "uri", "")
+                meta = ref.to_element().toxml() if hasattr(ref, "to_element") else ""
+                await asyncio.to_thread(self._device.play_uri, uri, meta)
+                logger.info(f"Playing Sonos favorite via play_uri+meta: {fav_obj.title}")
+                return True
+            except Exception as e2:
+                logger.error(
+                    "Fallback play_uri also failed for '%s': %s",
+                    fav_obj.title, e2,
+                )
+                return False
+
+        favorites = await self._get_cloud_favorites_cached()
         available = [fav["title"] for fav in favorites]
         logger.warning(
             "Sonos favorite/playlist '%s' not found. Available: %s",
