@@ -4,8 +4,8 @@
   import MoonScene from '$lib/backgrounds/MoonScene.svelte'
   import GenerativeCanvas from '$lib/backgrounds/GenerativeCanvas.svelte'
   import PixelScene from '$lib/backgrounds/PixelScene.svelte'
-  import WindowScene from '$lib/backgrounds/WindowScene.svelte'
-  import LofiScene from '$lib/backgrounds/LofiScene.svelte'
+  import CityScene from '$lib/backgrounds/CityScene.svelte'
+  import AuroraScene from '$lib/backgrounds/AuroraScene.svelte'
 
   $: mode = $automation.mode
 </script>
@@ -19,9 +19,9 @@
 {:else if mode === 'gaming'}
   <PixelScene />
 {:else if mode === 'working'}
-  <WindowScene />
+  <CityScene />
 {:else if mode === 'relax'}
-  <LofiScene />
+  <AuroraScene />
 {:else}
   <GenerativeCanvas />
 {/if}
