@@ -1,0 +1,7 @@
+# Operational tools — install on production Latitude only.
+# Usage: pip install -r requirements-ops.txt
+#
+# These are CLI tools for debugging/profiling, NOT application dependencies.
+
+py-spy>=0.4.0       # Attach to running uvicorn for CPU profiling
+httpie>=3.2.0       # Readable HTTP testing (replaces curl for ad-hoc checks)

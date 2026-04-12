@@ -43,6 +43,7 @@ desktop.ini
 
 # Frontend
 frontend/README.md
+frontend-svelte/stats.html
 
 # Personal helpers
 start.txt

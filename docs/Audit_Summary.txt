@@ -455,13 +455,12 @@ Post-audit additions (2026-04-12):
   slowapi                   Rate limiting for FastAPI         ADDED
   GitHub Actions            Lint + type-check on push         ADDED
   pre-push git hook         Catch lint errors before push     ADDED
-  Uptime Kuma               Self-hosted monitoring,           Not yet
-                            Telegram alerts on crash
-  python-json-logger        Structured JSON logs              Not yet
-  py-spy                    Production profiling              Not yet
-  vite-plugin-visualizer    Bundle size analysis              Not yet
+  python-json-logger        Structured JSON logs (file)       ADDED
+  Uptime Kuma               Self-hosted monitoring on 3002    ADDED
+  vite-plugin-visualizer    Bundle size analysis              ADDED
+  py-spy                    Production profiling              ADDED
+  httpie                    Readable HTTP testing via SSH     ADDED
   DB Browser for SQLite     Visual data exploration           Not yet
-  httpie                    Readable HTTP testing via SSH     Not yet
 
 ================================================================================
                            DEV SETUP NOTES
