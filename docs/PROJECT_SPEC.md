@@ -394,12 +394,14 @@ All messages are JSON with `type` + `data` fields.
 
 | Type | Trigger | Data |
 |------|---------|------|
-| `connection_status` | On connect | `{hue: bool, sonos: bool}` |
+| `connection_status` | On connect | `{hue: bool, sonos: bool, build_id: str}` |
 | `mode_update` | On connect + mode change | `{mode, source, manual_override}` |
 | `light_update` | Polling detects change | `{light_id, name, on, bri, hue, sat, ct, colormode, reachable}` |
 | `sonos_update` | Polling detects change | `{state, track, artist, album, art_url, volume, mute}` |
 | `music_auto_played` | Auto-play triggered | `{mode, title}` |
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
+
+`build_id` is the short git SHA of the running backend, computed once at startup. The frontend stashes the first one it sees per page session and reloads `window.location` if a later `connection_status` (after a WS reconnect, e.g. post-deploy) reports a different value. This is what makes the kiosk dashboard auto-refresh after `scripts/deploy.sh` instead of needing a manual F5.
 
 #### Client → Server
 
@@ -1065,6 +1067,8 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **One-tap quick actions** — Lucide icon pill buttons for Movie, Relax, Party, Bedtime, Auto, All Off.
 - ✓ **Now Playing chip** — Fixed bottom-right, shows album art + track, pulses when playing.
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering. Tapping "View Plants" opens the full plant app inside a fullscreen iframe modal layered over the dashboard (no new tab — the kiosk Firefox stays on the dashboard).
+- ✓ **Recommendation card QR modal** — on the music page, the "Open in Apple Music" action on each recommendation card opens an in-dashboard modal showing a client-side-generated QR code for the track's `itunes_url`. Anthony scans with his phone; iOS opens it in the native Apple Music app where Add-to-Library actually works. No `target="_blank"`, no kiosk lockout.
+- ✓ **Auto-reload on backend deploys** — the WebSocket `connection_status` message carries a `build_id` (short git SHA). When `scripts/deploy.sh` restarts the backend, the kiosk's WS reconnects, sees a new `build_id`, and calls `window.location.reload()`. Eliminates the manual F5 dance after every deploy.
 - **Remaining:** Bar app widget (future), custom scene builder UI.
 
 ### Lighting Improvements (Mostly Complete)

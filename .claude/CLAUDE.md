@@ -90,6 +90,11 @@ diffs HEAD, reinstalls Python deps / rebuilds frontend / restarts
 `/health`. Verify via MCP tools (`mcp__home-hub__get_health`) without
 leaving the dev machine.
 
+When the backend restarts, the kiosk dashboard's WebSocket reconnects,
+sees a new `build_id` in the `connection_status` message, and reloads
+itself within ~1s — no manual F5 needed. Empty commits and pure-frontend
+deploys correctly skip the backend restart and don't trigger reloads.
+
 ---
 
 ## Claude Code Tooling
@@ -242,12 +247,14 @@ All messages: JSON with `type` + `data` fields.
 
 | Type | Trigger | Data |
 |------|---------|------|
-| `connection_status` | On connect | `{hue: bool, sonos: bool}` |
+| `connection_status` | On connect | `{hue: bool, sonos: bool, build_id: str}` |
 | `mode_update` | On connect + mode change | `{mode, source, manual_override}` |
 | `light_update` | Polling detects change | `{light_id, name, on, bri, hue, sat, reachable}` |
 | `sonos_update` | Polling detects change | `{state, track, artist, album, art_url, volume, mute}` |
 | `music_auto_played` | Auto-play triggered | `{mode, title}` |
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
+
+`build_id` is the short git SHA the backend computed at startup. The frontend (`frontend-svelte/src/lib/ws.js`) stashes the first one it sees per page session and calls `window.location.reload()` if a later `connection_status` reports a different value — that's how the kiosk dashboard auto-refreshes after `scripts/deploy.sh` restarts the backend, no F5 required.
 
 ### Client → Server
 
