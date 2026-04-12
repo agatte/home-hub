@@ -22,6 +22,10 @@ class WeatherService:
         self._cache: Optional[dict[str, Any]] = None
         self._cache_time: float = 0
 
+    def get_cached(self) -> Optional[dict[str, Any]]:
+        """Return the most recent cached weather data (sync, no fetch)."""
+        return self._cache
+
     async def get_current(self) -> Optional[dict[str, Any]]:
         """
         Get current weather conditions.

@@ -375,11 +375,13 @@ class AutomationEngine:
         schedule_config: Optional[ScheduleConfig] = None,
         mode_brightness: Optional[dict[str, float]] = None,
         event_logger=None,
+        weather_service=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
         self._ws_manager = ws_manager
         self._event_logger = event_logger
+        self._weather_service = weather_service
 
         # Current state
         self._current_mode: str = "idle"
@@ -960,6 +962,69 @@ class AutomationEngine:
             off_ids = [lid for lid in changed_ids if not states[lid].get("on", True)]
             logger.info(f"Applied per-light state: on={on_ids}, off={off_ids}")
 
+    def _weather_adjust(self, state: dict[str, Any]) -> dict[str, Any]:
+        """
+        Apply subtle weather-based adjustments to a time-based light state.
+
+        Only modifies uniform states (flat dicts with bri/hue/sat/ct keys).
+        Per-light dicts pass through unchanged — weather shouldn't fight
+        mode-specific per-light layouts.
+
+        Adjustments are small deltas, never dramatic. The apartment should
+        feel subtly connected to the outside world, not like a disco.
+        """
+        if not self._weather_service:
+            return state
+
+        # Skip per-light states (keyed by light ID strings)
+        if state and all(isinstance(k, str) and k.isdigit() for k in state):
+            return state
+
+        try:
+            weather = self._weather_service.get_cached()
+            if not weather:
+                return state
+        except Exception:
+            return state
+
+        desc = weather.get("description", "").lower()
+        adjusted = {**state}
+
+        if "thunderstorm" in desc:
+            # Cooler, slightly purple tint
+            adjusted["hue"] = min(65535, adjusted.get("hue", 8000) + 15000)
+            adjusted["sat"] = min(254, adjusted.get("sat", 100) + 40)
+        elif "rain" in desc or "drizzle" in desc:
+            # Shift cooler (lower CT = bluer)
+            if "ct" in adjusted:
+                adjusted["ct"] = max(153, adjusted["ct"] - 30)
+            else:
+                adjusted["hue"] = max(0, adjusted.get("hue", 8000) + 3000)
+                adjusted["sat"] = min(254, adjusted.get("sat", 100) + 15)
+        elif "snow" in desc:
+            # Brighter, cooler
+            adjusted["bri"] = min(254, adjusted.get("bri", 200) + 20)
+            if "ct" in adjusted:
+                adjusted["ct"] = max(153, adjusted["ct"] - 50)
+        elif "overcast" in desc or "clouds" in desc:
+            # Slightly dimmer
+            adjusted["bri"] = max(1, int(adjusted.get("bri", 200) * 0.9))
+        elif "clear" in desc:
+            # During sunset hour: warm golden shift
+            now = datetime.now(tz=TZ)
+            sunset_ts = weather.get("sunset")
+            if sunset_ts:
+                from datetime import timezone as _tz
+                sunset_utc = datetime.fromtimestamp(sunset_ts, tz=_tz.utc)
+                sunset_local = sunset_utc.astimezone(TZ)
+                minutes_to_sunset = (sunset_local - now).total_seconds() / 60
+                if -30 <= minutes_to_sunset <= 30:
+                    # Golden hour window
+                    adjusted["hue"] = min(65535, adjusted.get("hue", 8000) + 2000)
+                    adjusted["sat"] = min(254, adjusted.get("sat", 100) + 30)
+
+        return adjusted
+
     async def _apply_time_based(self) -> None:
         """Apply the time-appropriate light state (weekday/weekend aware)."""
         now = datetime.now(tz=TZ)
@@ -984,6 +1049,7 @@ class AutomationEngine:
             evening_state: dict[str, Any] = {"on": True, "bri": 180, "hue": 8000, "sat": 160}
             winddown_state: dict[str, Any] = {"on": True, "bri": 60, "hue": 5500, "sat": 220}
             state = _lerp_light_state(evening_state, winddown_state, progress)
+            state = self._weather_adjust(state)
             await self._apply_state(state)
             return
 
@@ -995,6 +1061,7 @@ class AutomationEngine:
                     state = _morning_ramp(minutes_since_start, ramp_duration)
                 else:
                     state = rule
+                state = self._weather_adjust(state)
                 await self._apply_state(state)
                 return
 

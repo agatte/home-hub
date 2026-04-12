@@ -6,6 +6,7 @@
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
   import ModeBackground from '$lib/components/ModeBackground.svelte'
   import ModeOverlay from '$lib/components/ModeOverlay.svelte'
+  import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
   import FloatingNav from '$lib/components/FloatingNav.svelte'
   import NowPlayingChip from '$lib/components/NowPlayingChip.svelte'
 
@@ -27,6 +28,7 @@
 
 <ModeBackground />
 <ModeOverlay />
+<NowPlayingIdle />
 
 <div class="app-shell" class:user-idle={$userIdle}>
   <div class="app">

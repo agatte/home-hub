@@ -3,7 +3,11 @@ Morning routine service — replaces the Alexa 6:40 AM weekday routine.
 
 Fetches weather and traffic data, generates a TTS greeting, plays it on
 Sonos, and triggers the morning light ramp.
+
+Also provides a sunrise_ramp() coroutine that gradually wakes the bedroom
+lamp over 30 minutes before the routine fires — warm candlelight to daylight.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -125,6 +129,48 @@ class MorningRoutineService:
         except Exception as e:
             logger.error(f"Weather fetch failed: {e}")
             return None
+
+    async def sunrise_ramp(self) -> bool:
+        """
+        Gradual 30-minute bedroom lamp ramp simulating sunrise.
+
+        Runs 30 minutes before the morning routine. Over 15 steps (every 2 min):
+        - Color temp:  500 mirek (2000K candlelight) → 250 mirek (4000K daylight)
+        - Brightness:  1 (barely visible) → 150 (moderate)
+        - Transition:  12 seconds per step for smooth blending
+
+        Only controls light "2" (bedroom lamp). Other lights stay off.
+        """
+        if not self._automation or not self._automation._hue:
+            logger.warning("Sunrise ramp skipped — no Hue service available")
+            return False
+
+        hue = self._automation._hue
+        LIGHT_ID = "2"  # Bedroom lamp
+        STEPS = 15
+        INTERVAL_SECONDS = 120  # 2 minutes between steps
+        CT_START, CT_END = 500, 250  # Warm → daylight (mirek)
+        BRI_START, BRI_END = 1, 150
+
+        logger.info("Sunrise ramp starting — 30 min bedroom lamp warm-up")
+
+        for step in range(STEPS + 1):
+            progress = step / STEPS
+            ct = int(CT_START + (CT_END - CT_START) * progress)
+            bri = int(BRI_START + (BRI_END - BRI_START) * progress)
+
+            await hue.set_light(LIGHT_ID, {
+                "on": True,
+                "ct": ct,
+                "bri": bri,
+                "transitiontime": 120,  # 12 seconds
+            })
+
+            if step < STEPS:
+                await asyncio.sleep(INTERVAL_SECONDS)
+
+        logger.info("Sunrise ramp complete — bedroom lamp at daylight brightness")
+        return True
 
     async def _fetch_traffic(self) -> Optional[str]:
         """

@@ -171,6 +171,7 @@ async def lifespan(app: FastAPI):
         schedule_config=schedule_config,
         mode_brightness=saved_brightness or None,
         event_logger=event_logger,
+        # weather_service injected below after WeatherService init
     )
     app.state.automation = automation
 
@@ -214,7 +215,8 @@ async def lifespan(app: FastAPI):
         from backend.services.weather_service import WeatherService
         weather_service = WeatherService(api_key=settings.OPENWEATHER_API_KEY)
         app.state.weather_service = weather_service
-        logger.info("Weather service initialized")
+        automation._weather_service = weather_service
+        logger.info("Weather service initialized (linked to automation engine)")
 
     # Pi-hole DNS stats (optional)
     if settings.PIHOLE_API_URL and settings.PIHOLE_API_KEY:
@@ -252,13 +254,33 @@ async def lifespan(app: FastAPI):
 
     # Scheduler
     scheduler = AsyncScheduler()
+
+    morning_hour = saved_config.get("hour", settings.MORNING_ROUTINE_HOUR)
+    morning_minute = saved_config.get("minute", settings.MORNING_ROUTINE_MINUTE)
+    morning_enabled = saved_config.get("enabled", bool(settings.OPENWEATHER_API_KEY))
+
+    # Sunrise ramp — 30 minutes before morning routine
+    ramp_total = morning_hour * 60 + morning_minute - 30
+    if ramp_total < 0:
+        ramp_total += 1440  # Wrap past midnight
+    ramp_hour, ramp_minute = divmod(ramp_total, 60)
+
+    scheduler.add_task(ScheduledTask(
+        name="sunrise_ramp",
+        hour=ramp_hour,
+        minute=ramp_minute,
+        weekdays=[0, 1, 2, 3, 4],
+        callback=morning.sunrise_ramp,
+        enabled=morning_enabled,
+    ))
+
     scheduler.add_task(ScheduledTask(
         name="morning_routine",
-        hour=saved_config.get("hour", settings.MORNING_ROUTINE_HOUR),
-        minute=saved_config.get("minute", settings.MORNING_ROUTINE_MINUTE),
+        hour=morning_hour,
+        minute=morning_minute,
         weekdays=[0, 1, 2, 3, 4],  # Monday-Friday
         callback=morning.execute,
-        enabled=saved_config.get("enabled", bool(settings.OPENWEATHER_API_KEY)),
+        enabled=morning_enabled,
     ))
 
     # Evening wind-down routine
