@@ -1,10 +1,11 @@
 <script>
   import { page } from '$app/stores'
-  import { Home, Music, Settings } from 'lucide-svelte'
+  import { Home, Music, BarChart3, Settings } from 'lucide-svelte'
 
   const NAV = [
     { id: 'home', href: '/', label: 'Home', icon: Home },
     { id: 'music', href: '/music', label: 'Music', icon: Music },
+    { id: 'analytics', href: '/analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'settings', href: '/settings', label: 'Settings', icon: Settings },
   ]
 
