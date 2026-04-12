@@ -5,6 +5,18 @@
 
   const PLANT_APP_URL = 'https://plant-care-app-gamma.vercel.app'
 
+  // Portal action — moves the node to document.body so position:fixed escapes
+  // the .widget ancestor's backdrop-filter containing block.
+  /** @param {HTMLElement} node */
+  function portal(node) {
+    document.body.appendChild(node)
+    return {
+      destroy() {
+        if (node.parentNode === document.body) document.body.removeChild(node)
+      },
+    }
+  }
+
   /** @type {{ total: number, needs_water: number, overdue: number, healthy: number, needs_attention: number, next_watering: { plant: string, label: string } | null } | null} */
   let summary = null
   let error = false
@@ -99,6 +111,7 @@
 {#if modalOpen}
   <div
     class="plant-modal-backdrop"
+    use:portal
     on:click|self={() => (modalOpen = false)}
     role="presentation"
   >
