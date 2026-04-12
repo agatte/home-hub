@@ -371,35 +371,39 @@ class SonosService:
         except Exception as e:
             logger.error(f"Error searching Sonos playlists: {e}")
 
-        # Fall back to cloud favorites — use play_uri with the favorite's
-        # pre-built DIDL metadata. SoCo's DidlFavorite exposes resource_meta_data,
-        # the canonical DIDL-Lite XML envelope Sonos requires for cloud container
-        # URIs (Apple Music library playlists, artist radio, etc.). Hand-rolling
-        # the metadata or using add_to_queue does NOT work for these — Sonos
-        # silently keeps the previous queue.
+        # Fall back to cloud favorites — play via the queue using the raw SoCo
+        # Favorite object so SoCo serializes the DIDL metadata internally. This
+        # is required for Apple Music library containers (x-rincon-cpcontainer)
+        # and other cloud favorites that play_uri rejects without metadata.
         await self._get_cloud_favorites_cached()
         for fav_obj in (self._favorites_objects_cache or []):
             if fav_obj.title.lower() != target:
                 continue
 
             ref = getattr(fav_obj, "reference", fav_obj)
-            uri = ref.get_uri() if hasattr(ref, "get_uri") else getattr(ref, "uri", "")
-            meta = getattr(fav_obj, "resource_meta_data", "") or ""
-
-            if not uri:
-                logger.warning(
-                    "Favorite '%s' has no playable URI", fav_obj.title
-                )
-                return False
-
             try:
-                await asyncio.to_thread(self._device.play_uri, uri, meta)
-                logger.info(f"Playing Sonos favorite: {fav_obj.title}")
+                await asyncio.to_thread(self._device.clear_queue)
+                await asyncio.to_thread(self._device.add_to_queue, ref)
+                await asyncio.to_thread(self._device.play_from_queue, 0)
+                logger.info(f"Playing Sonos favorite via queue: {fav_obj.title}")
                 return True
             except Exception as e:
+                logger.warning(
+                    "Queue play failed for favorite '%s': %s — falling back to play_uri with metadata",
+                    fav_obj.title, e,
+                )
+
+            # Fallback for non-queueable items (radio streams, etc.)
+            try:
+                uri = ref.get_uri() if hasattr(ref, "get_uri") else getattr(ref, "uri", "")
+                meta = ref.to_element().toxml() if hasattr(ref, "to_element") else ""
+                await asyncio.to_thread(self._device.play_uri, uri, meta)
+                logger.info(f"Playing Sonos favorite via play_uri+meta: {fav_obj.title}")
+                return True
+            except Exception as e2:
                 logger.error(
-                    "Failed to play favorite '%s' via play_uri: %s",
-                    fav_obj.title, e, exc_info=True,
+                    "Fallback play_uri also failed for '%s': %s",
+                    fav_obj.title, e2,
                 )
                 return False
 
