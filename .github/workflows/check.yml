@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Check Svelte
         run: cd frontend-svelte && npm ci && npm run check
@@ -34,8 +34,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install fastapi uvicorn[standard] websockets aiosqlite "sqlalchemy[asyncio]" \
-            pydantic-settings python-dotenv httpx aiofiles slowapi phue2 fauxmo \
-            python-json-logger edge-tts pytest pytest-asyncio
+            pydantic-settings python-dotenv httpx aiofiles slowapi phue2 fauxmo soco \
+            python-json-logger edge-tts psutil mss pytest pytest-asyncio
 
       - name: Run tests
         run: python -m pytest tests/ -v
