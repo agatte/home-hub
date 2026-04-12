@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     PLANT_APP_EMAIL: Optional[str] = None
     PLANT_APP_PASSWORD: Optional[str] = None
 
+    # Pi-hole DNS ad blocker (optional — enables network stats widget)
+    PIHOLE_API_URL: Optional[str] = None
+    PIHOLE_API_KEY: Optional[str] = None
+
     # Fauxmo Alexa integration (Phase 3 voice control)
     FAUXMO_ENABLED: bool = False
 

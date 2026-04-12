@@ -6,6 +6,7 @@
   import SceneBrowser from '$lib/components/SceneBrowser.svelte'
   import SonosCard from '$lib/components/SonosCard.svelte'
   import WeatherCard from '$lib/components/WeatherCard.svelte'
+  import PiholeCard from '$lib/components/PiholeCard.svelte'
   import PlantWidget from '$lib/components/PlantWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
 
@@ -38,6 +39,11 @@
     <section class="widget widget-plants">
       <h2 class="widget-title">Plants</h2>
       <PlantWidget />
+    </section>
+
+    <section class="widget widget-pihole">
+      <h2 class="widget-title">Network</h2>
+      <PiholeCard />
     </section>
 
     <section class="widget widget-lights">

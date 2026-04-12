@@ -26,6 +26,10 @@ async def health_check(request: Request) -> dict:
     if hasattr(app.state, "sonos"):
         sonos_connected = app.state.sonos.connected
 
+    pihole_connected = False
+    if hasattr(app.state, "pihole_service"):
+        pihole_connected = app.state.pihole_service.connected
+
     ws_count = 0
     if hasattr(app.state, "ws_manager"):
         ws_count = app.state.ws_manager.connection_count
@@ -37,6 +41,7 @@ async def health_check(request: Request) -> dict:
         "devices": {
             "hue_bridge": hue_connected,
             "sonos": sonos_connected,
+            "pihole": pihole_connected,
         },
         "websocket_clients": ws_count,
     }

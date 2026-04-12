@@ -56,6 +56,20 @@ async def get_weather() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Pi-hole
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_pihole_stats() -> dict:
+    """Get Pi-hole DNS stats — total queries, blocked percentage, blocklist size, active clients."""
+    async with _client() as c:
+        r = await c.get("/api/pihole/stats")
+        r.raise_for_status()
+        return r.json()
+
+
+# ---------------------------------------------------------------------------
 # Plants
 # ---------------------------------------------------------------------------
 

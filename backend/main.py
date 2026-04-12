@@ -24,6 +24,7 @@ from backend.api.routes.routines import router as routines_router
 from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.api.routes.plants import router as plants_router
+from backend.api.routes.pihole import router as pihole_router
 from backend.api.routes.weather import router as weather_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
@@ -213,6 +214,16 @@ async def lifespan(app: FastAPI):
         app.state.weather_service = weather_service
         logger.info("Weather service initialized")
 
+    # Pi-hole DNS stats (optional)
+    if settings.PIHOLE_API_URL and settings.PIHOLE_API_KEY:
+        from backend.services.pihole_service import PiholeService
+        pihole_service = PiholeService(
+            api_url=settings.PIHOLE_API_URL,
+            api_key=settings.PIHOLE_API_KEY,
+        )
+        app.state.pihole_service = pihole_service
+        logger.info("Pi-hole service initialized")
+
     # Fauxmo Alexa integration (Phase 3 voice control)
     fauxmo = FauxmoService(
         local_ip=settings.LOCAL_IP,
@@ -339,6 +350,7 @@ app.include_router(sonos_router)
 app.include_router(automation_router)
 app.include_router(music_router)
 app.include_router(weather_router)
+app.include_router(pihole_router)
 app.include_router(plants_router)
 app.include_router(routines_router)
 
