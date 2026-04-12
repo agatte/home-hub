@@ -87,8 +87,8 @@ leaving the dev machine.
 
 When the backend restarts, the kiosk dashboard's WebSocket reconnects,
 sees a new `build_id` in the `connection_status` message, and reloads
-itself within ~1s — no manual F5 needed. Empty commits and pure-frontend
-deploys correctly skip the backend restart and don't trigger reloads.
+itself within ~1s — no manual F5 needed. Frontend rebuilds also trigger
+a backend restart so the kiosk picks up the new `build_id`.
 
 ---
 

@@ -64,6 +64,9 @@ fi
 if [[ "$REBUILD_FRONTEND" == "1" ]]; then
     echo "→ Rebuilding frontend..."
     (cd frontend-svelte && npm run build)
+    # Frontend is served by the backend — restart it so the kiosk sees
+    # a new build_id and auto-reloads via WebSocket.
+    RESTART_BACKEND=1
 fi
 
 if echo "$CHANGED" | grep -qE "^(backend/|run\.py$)"; then
