@@ -12,6 +12,7 @@ others off; fire-and-ice party: warm/cool split across rooms).
 """
 import asyncio
 import logging
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -100,11 +101,25 @@ WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 # Auto-activate effects based on mode + time period.
 # None = no auto effect. Social mode handles its own effects via SOCIAL_STYLES.
 EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
-    "relax":    {"day": "glisten", "evening": "candle", "night": "candle"},
-    "working":  {"day": None,     "evening": None,     "night": None},
-    "gaming":   {"day": None,     "evening": None,     "night": None},
-    "movie":    {"day": None,     "evening": None,     "night": None},
-    "watching": {"day": None,     "evening": None,     "night": None},
+    "relax":    {"day": "opal",    "evening": "candle",  "night": "candle"},
+    "working":  {"day": None,      "evening": None,      "night": None},
+    "gaming":   {"day": None,      "evening": "glisten", "night": "glisten"},
+    "movie":    {"day": None,      "evening": None,      "night": None},
+    "watching": {"day": None,      "evening": None,      "night": None},
+}
+
+# Mode-specific transition speeds (deciseconds: 10 = 1 second).
+# Each mode gets a physically different feel when transitioning.
+MODE_TRANSITION_TIME: dict[str, int] = {
+    "working":  20,   # 2s smooth
+    "gaming":    5,   # 0.5s snappy
+    "watching": 30,   # 3s cinematic fade
+    "relax":    40,   # 4s gentle
+    "social":   10,   # 1s
+    "sleeping": 50,   # 5s gradual
+    "movie":    30,   # 3s
+    "idle":     20,   # 2s
+    "away":     30,   # 3s
 }
 
 
@@ -142,31 +157,76 @@ def _watching_state(bri: int, hue: int, sat: int) -> dict[str, dict]:
 
 
 ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
-    # Warm bias + screen sync on bedroom lamp (light 2 overridden by sync)
-    # Time baselines: day=220, evening=180, night=60
+    # ── Gaming ────────────────────────────────────────────────────────
+    # Blue/purple accents on peripherals, screen sync overrides L2.
+    # Night: immersive colored glow, not amber-tinted like working.
     "gaming": {
-        "day":     _gaming_state(230, 8000, 140),
-        "evening": _gaming_state(210, 8000, 150),
-        "night":   _gaming_state(120, 8000, 160),
-    },
-    # Warm productive — near time baseline, functional lighting
-    # Night: only bedroom lamp (L2) as 2700K bias light — science-backed for
-    # reducing melatonin suppression while preventing eye strain from screen contrast.
-    "working": {
-        "day":     _uniform(230, 10000, 100),
-        "evening": _uniform(180, 8500, 130),
-        "night":   {
-            "1": _LIGHT_OFF,
-            "2": {"on": True, "bri": 80, "ct": 370},   # 2700K warm bias
-            "3": _LIGHT_OFF,
+        "day": {
+            "1": {"on": True, "bri": 150, "ct": 250},                   # Neutral fill
+            "2": {"on": True, "bri": 130, "ct": 233},                   # Bias (sync overrides)
+            "3": {"on": True, "bri": 100, "hue": 46920, "sat": 60},    # Subtle blue accent
+            "4": {"on": True, "bri": 80,  "hue": 46920, "sat": 40},    # Subtle blue accent
+        },
+        "evening": {
+            "1": {"on": True, "bri": 90,  "hue": 46920, "sat": 120},   # Blue-purple wash
+            "2": {"on": True, "bri": 110, "ct": 280},                    # Warm bias (sync overrides)
+            "3": {"on": True, "bri": 70,  "hue": 50000, "sat": 140},   # Purple accent
+            "4": {"on": True, "bri": 50,  "hue": 48000, "sat": 100},   # Blue accent
+        },
+        "night": {
+            "1": {"on": True, "bri": 45,  "hue": 48000, "sat": 180},   # Deep blue ambient
+            "2": {"on": True, "bri": 70,  "ct": 310},                    # Warm bias (sync overrides)
+            "3": {"on": True, "bri": 35,  "hue": 52000, "sat": 200},   # Purple glow
             "4": _LIGHT_OFF,
         },
     },
-    # Bedroom bias light only — brighter during day for screen contrast
+    # ── Working ───────────────────────────────────────────────────────
+    # Clean ct-mode whites only. Per-light brightness gradient creates
+    # depth instead of flat uniform lighting. Night: desk lamp (L2)
+    # bright enough to reduce monitor contrast to ~3:1, ambient fill
+    # from L1 + L4 eliminates the dark-cave feeling.
+    "working": {
+        "day": {
+            "1": {"on": True, "bri": 200, "ct": 220},    # Bright neutral fill
+            "2": {"on": True, "bri": 254, "ct": 200},    # Max brightness desk lamp
+            "3": {"on": True, "bri": 170, "ct": 233},    # Good kitchen fill
+            "4": {"on": True, "bri": 150, "ct": 250},    # Slightly warmer back fill
+        },
+        "evening": {
+            "1": {"on": True, "bri": 140, "ct": 300},    # Warm-neutral fill
+            "2": {"on": True, "bri": 200, "ct": 270},    # Still bright desk lamp
+            "3": {"on": True, "bri": 110, "ct": 320},    # Warmer kitchen
+            "4": {"on": True, "bri": 90,  "ct": 340},    # Warmest back
+        },
+        "night": {
+            "1": {"on": True, "bri": 45,  "ct": 420},    # Dim warm ambient glow
+            "2": {"on": True, "bri": 150, "ct": 310},    # Adequate desk light (3200K)
+            "3": _LIGHT_OFF,                               # Kitchen front off
+            "4": {"on": True, "bri": 25,  "ct": 454},    # Ultra-dim warm wash
+        },
+    },
+    # ── Watching ──────────────────────────────────────────────────────
+    # SMPTE-inspired bias lighting: neutral ct on L2 (behind screen),
+    # minimal fill elsewhere to avoid washing out the picture.
     "watching": {
-        "day":     _watching_state(100, 8000, 160),
-        "evening": _watching_state(70, 8000, 180),
-        "night":   _watching_state(30, 8000, 200),
+        "day": {
+            "1": {"on": True, "bri": 40,  "ct": 330},    # Dim warm fill
+            "2": {"on": True, "bri": 60,  "ct": 200},    # Neutral bias behind screen
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+        },
+        "evening": {
+            "1": _LIGHT_OFF,
+            "2": {"on": True, "bri": 35,  "ct": 233},    # Neutral bias
+            "3": _LIGHT_OFF,
+            "4": {"on": True, "bri": 15,  "ct": 454},    # Ultra-dim warm wash
+        },
+        "night": {
+            "1": _LIGHT_OFF,
+            "2": {"on": True, "bri": 20,  "ct": 200},    # Minimal neutral bias
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+        },
     },
     # Base state for social/party — no time awareness (flat, no period keys)
     "social": {
@@ -175,17 +235,51 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "3": {"on": True, "bri": 200, "hue": 0, "sat": 254},
         "4": {"on": True, "bri": 200, "hue": 0, "sat": 254},
     },
-    # Amber candlelight — paired with candle effect
+    # ── Relax ─────────────────────────────────────────────────────────
+    # Warm gradient — each light gets different warmth/brightness to
+    # create spatial depth instead of flat amber. Paired with opal (day)
+    # and candle (evening/night) effects.
     "relax": {
-        "day":     _uniform(200, 7000, 200),
-        "evening": _uniform(150, 6500, 220),
-        "night":   _uniform(80, 6500, 220),
+        "day": {
+            "1": {"on": True, "bri": 190, "ct": 370},                   # Warm white
+            "2": {"on": True, "bri": 170, "hue": 7000,  "sat": 160},   # Golden accent
+            "3": {"on": True, "bri": 130, "ct": 400},                   # Warmer
+            "4": {"on": True, "bri": 110, "hue": 5500,  "sat": 140},   # Amber accent
+        },
+        "evening": {
+            "1": {"on": True, "bri": 110, "hue": 6000,  "sat": 200},   # Deep amber
+            "2": {"on": True, "bri": 90,  "hue": 5000,  "sat": 180},   # Golden
+            "3": {"on": True, "bri": 70,  "hue": 7500,  "sat": 220},   # Orange
+            "4": {"on": True, "bri": 50,  "hue": 4500,  "sat": 254},   # Deep gold
+        },
+        "night": {
+            "1": {"on": True, "bri": 45,  "hue": 5500,  "sat": 220},   # Dim amber
+            "2": {"on": True, "bri": 35,  "hue": 4000,  "sat": 200},   # Dim gold
+            "3": {"on": True, "bri": 25,  "hue": 6500,  "sat": 240},   # Dim orange
+            "4": {"on": True, "bri": 20,  "ct": 500},                   # Ultra-warm white
+        },
     },
-    # Movie alias — same structure as watching
+    # ── Movie ─────────────────────────────────────────────────────────
+    # Same bias-light approach as watching.
     "movie": {
-        "day":     _watching_state(100, 8000, 160),
-        "evening": _watching_state(70, 8000, 180),
-        "night":   _watching_state(30, 8000, 200),
+        "day": {
+            "1": {"on": True, "bri": 40,  "ct": 330},
+            "2": {"on": True, "bri": 60,  "ct": 200},
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+        },
+        "evening": {
+            "1": _LIGHT_OFF,
+            "2": {"on": True, "bri": 35,  "ct": 233},
+            "3": _LIGHT_OFF,
+            "4": {"on": True, "bri": 15,  "ct": 454},
+        },
+        "night": {
+            "1": _LIGHT_OFF,
+            "2": {"on": True, "bri": 20,  "ct": 200},
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+        },
     },
 }
 
@@ -415,6 +509,15 @@ class AutomationEngine:
         self._schedule_config = schedule_config or ScheduleConfig()
         self._mode_brightness = {**DEFAULT_MODE_BRIGHTNESS, **(mode_brightness or {})}
 
+        # Scene drift — subtle variation over time to prevent staleness
+        self._scene_drift_enabled: bool = True
+        self._last_drift_time: Optional[datetime] = None
+        self._drift_interval_minutes: int = 30
+
+        # Mode → scene overrides cache (loaded from DB)
+        self._scene_overrides: dict[str, dict[str, str]] = {}  # {mode: {period: scene_id}}
+        self._scene_override_sources: dict[str, dict[str, str]] = {}  # {mode: {period: source}}
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -506,6 +609,26 @@ class AutomationEngine:
         self._schedule_config = config
         self._last_applied_per_light = {}  # Force re-apply
         logger.info("Schedule config updated")
+
+    async def load_scene_overrides(self) -> None:
+        """Load mode → scene overrides from the database into memory."""
+        try:
+            from backend.database import async_session
+            from backend.models import ModeSceneOverride
+            from sqlalchemy import select
+
+            async with async_session() as session:
+                result = await session.execute(select(ModeSceneOverride))
+                overrides = result.scalars().all()
+
+            self._scene_overrides = {}
+            self._scene_override_sources = {}
+            for o in overrides:
+                self._scene_overrides.setdefault(o.mode, {})[o.time_period] = o.scene_id
+                self._scene_override_sources.setdefault(o.mode, {})[o.time_period] = o.scene_source
+            logger.info("Loaded %d mode-scene overrides", len(overrides))
+        except Exception as e:
+            logger.error("Failed to load scene overrides: %s", e, exc_info=True)
 
     def update_mode_brightness(self, brightness: dict[str, float]) -> None:
         """Hot-reload per-mode brightness multipliers."""
@@ -807,6 +930,29 @@ class AutomationEngine:
             await self._apply_social_style()
             return
 
+        # Check for scene override (user-mapped Hue scene for this mode+time)
+        period = self._get_time_period()
+        override_scene = self._scene_overrides.get(mode, {}).get(period)
+        if override_scene and self._hue_v2 and self._hue_v2.connected:
+            source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
+            if source == "bridge":
+                await self._hue_v2.activate_scene(override_scene)
+                logger.info("Applied scene override for %s/%s: %s", mode, period, override_scene)
+            elif source == "preset":
+                # Preset scenes are handled via the scenes route — activate by name
+                from backend.api.routes.scenes import SCENE_PRESETS, _activate_per_light
+                preset = SCENE_PRESETS.get(override_scene)
+                if preset:
+                    await _activate_per_light(preset["lights"], self._hue)
+            # Still apply auto-effects on top of scene overrides
+            if self._hue_v2 and self._hue_v2.connected:
+                effect_map = EFFECT_AUTO_MAP.get(mode, {})
+                auto_effect = effect_map.get(period)
+                if auto_effect:
+                    await self._hue_v2.set_effect_all(auto_effect)
+                    self._active_effect = True
+            return
+
         if mode in ACTIVITY_LIGHT_STATES:
             mode_states = ACTIVITY_LIGHT_STATES[mode]
             if "day" in mode_states:
@@ -827,17 +973,18 @@ class AutomationEngine:
                     night_state = _resolve_activity_state(mode, "night")
                     state = _lerp_light_state(evening_state, night_state, progress)
                 else:
-                    state = _resolve_activity_state(mode, self._get_time_period())
+                    state = _resolve_activity_state(mode, period)
             else:
-                state = _resolve_activity_state(mode, self._get_time_period())
+                state = _resolve_activity_state(mode, period)
 
             state = self._apply_brightness_multiplier(state, mode)
-            await self._apply_state(state)
+            tt = MODE_TRANSITION_TIME.get(mode)
+            await self._apply_state(state, transitiontime=tt)
 
             # Apply dynamic effects based on mode + time period
             if self._hue_v2 and self._hue_v2.connected:
                 effect_map = EFFECT_AUTO_MAP.get(mode, {})
-                auto_effect = effect_map.get(self._get_time_period())
+                auto_effect = effect_map.get(period)
                 if auto_effect:
                     await self._hue_v2.set_effect_all(auto_effect)
                     self._active_effect = True
@@ -906,13 +1053,17 @@ class AutomationEngine:
         except Exception as e:
             logger.error(f"Sleep fade error: {e}", exc_info=True)
 
-    async def _apply_state(self, state: dict[str, Any]) -> None:
+    async def _apply_state(
+        self, state: dict[str, Any], transitiontime: int | None = None,
+    ) -> None:
         """
         Apply a light state — supports both uniform and per-light formats.
 
         Args:
             state: Either a flat dict (applied to all lights) or a dict keyed
                    by light ID with individual states per light.
+            transitiontime: Transition duration in deciseconds (10 = 1s).
+                            Injected into each light command if provided.
         """
         if not self._hue or not self._hue.connected:
             return
@@ -923,11 +1074,13 @@ class AutomationEngine:
         ) and any(k in ("1", "2", "3", "4") for k in state.keys())
 
         if is_per_light:
-            await self._apply_per_light(state)
+            await self._apply_per_light(state, transitiontime)
         else:
-            await self._apply_uniform(state)
+            await self._apply_uniform(state, transitiontime)
 
-    async def _apply_uniform(self, state: dict[str, Any]) -> None:
+    async def _apply_uniform(
+        self, state: dict[str, Any], transitiontime: int | None = None,
+    ) -> None:
         """Apply the same state to all lights (backward-compatible path)."""
         # Convert to per-light for dedup tracking
         per_light = {lid: state for lid in ("1", "2", "3", "4")}
@@ -935,15 +1088,20 @@ class AutomationEngine:
             return
 
         self._last_applied_per_light = {lid: state.copy() for lid in ("1", "2", "3", "4")}
-        await self._hue.set_all_lights(state)
+        cmd = {**state}
+        if transitiontime is not None:
+            cmd["transitiontime"] = transitiontime
+        await self._hue.set_all_lights(cmd)
         logger.info(f"Applied uniform state: bri={state.get('bri')}, hue={state.get('hue')}")
 
-    async def _apply_per_light(self, states: dict[str, dict]) -> None:
+    async def _apply_per_light(
+        self, states: dict[str, dict], transitiontime: int | None = None,
+    ) -> None:
         """Apply individual states to each light (parallel when possible)."""
         # Optimization: if all lights get the same state, use the uniform path
         unique_states = list(states.values())
         if all(s == unique_states[0] for s in unique_states):
-            await self._apply_uniform(unique_states[0])
+            await self._apply_uniform(unique_states[0], transitiontime)
             return
 
         # Build list of lights that actually changed
@@ -952,7 +1110,10 @@ class AutomationEngine:
         for light_id, state in states.items():
             last = self._last_applied_per_light.get(light_id)
             if state != last:
-                tasks.append(self._hue.set_light(light_id, state))
+                cmd = {**state}
+                if transitiontime is not None:
+                    cmd["transitiontime"] = transitiontime
+                tasks.append(self._hue.set_light(light_id, cmd))
                 self._last_applied_per_light[light_id] = state.copy()
                 changed_ids.append(light_id)
 
@@ -961,6 +1122,62 @@ class AutomationEngine:
             on_ids = [lid for lid in changed_ids if states[lid].get("on", True)]
             off_ids = [lid for lid in changed_ids if not states[lid].get("on", True)]
             logger.info(f"Applied per-light state: on={on_ids}, off={off_ids}")
+
+    async def _maybe_drift(self) -> None:
+        """
+        Apply subtle random perturbation to current light state if the mode
+        has been unchanged for drift_interval_minutes. Prevents the "nothing
+        ever changes" feeling during long sessions.
+        """
+        if not self._scene_drift_enabled:
+            return
+        # Only drift during active modes (not idle/away/sleeping/social)
+        mode = self.current_mode
+        if mode in ("idle", "away", "sleeping", "social"):
+            return
+
+        now = datetime.now(tz=TZ)
+
+        # Need a stable mode for at least drift_interval minutes
+        if self._last_activity_change:
+            minutes_in_mode = (now - self._last_activity_change).total_seconds() / 60
+            if minutes_in_mode < self._drift_interval_minutes:
+                return
+
+        # Throttle drift frequency
+        if self._last_drift_time:
+            since_drift = (now - self._last_drift_time).total_seconds() / 60
+            if since_drift < self._drift_interval_minutes:
+                return
+
+        self._last_drift_time = now
+
+        # Get the base state and apply small random deltas
+        base = _resolve_activity_state(mode, self._get_time_period())
+        if not base:
+            return
+
+        drifted: dict[str, dict] = {}
+        for lid in ("1", "2", "3", "4"):
+            ls = base.get(lid, {})
+            if not ls or not ls.get("on", True):
+                drifted[lid] = ls
+                continue
+            d = {**ls}
+            if "bri" in d:
+                d["bri"] = max(1, min(254, d["bri"] + random.randint(-15, 15)))
+            if "hue" in d:
+                d["hue"] = max(0, min(65535, d["hue"] + random.randint(-1500, 1500)))
+            if "sat" in d:
+                d["sat"] = max(0, min(254, d["sat"] + random.randint(-20, 20)))
+            if "ct" in d:
+                d["ct"] = max(153, min(500, d["ct"] + random.randint(-15, 15)))
+            drifted[lid] = d
+
+        drifted = self._apply_brightness_multiplier(drifted, mode)
+        self._last_applied_per_light = {}  # Force apply
+        await self._apply_state(drifted, transitiontime=100)  # 10s imperceptible
+        logger.info("Scene drift applied for mode '%s'", mode)
 
     def _weather_adjust(self, state: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1116,6 +1333,10 @@ class AutomationEngine:
                     # Re-apply activity mode to pick up day→evening→night transitions
                     # Dedup in _last_applied_per_light makes this a no-op most cycles
                     await self._apply_mode(self._current_mode)
+
+                # Scene drift — subtle variety during long sessions
+                if not self._manual_override:
+                    await self._maybe_drift()
 
                 # Check learned rules for mode suggestion (nudge, not auto-apply)
                 rule_engine = getattr(self, "_rule_engine", None)

@@ -234,6 +234,31 @@ class SceneActivation(Base):
 
 
 # ---------------------------------------------------------------------------
+# Mode → scene overrides (use Hue scenes instead of hardcoded light states)
+# ---------------------------------------------------------------------------
+
+
+class ModeSceneOverride(Base):
+    """Maps a mode + time period to a Hue scene for automation."""
+
+    __tablename__ = "mode_scene_overrides"
+    __table_args__ = (
+        UniqueConstraint("mode", "time_period", name="uq_mode_time"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    time_period: Mapped[str] = mapped_column(String(20), nullable=False)  # day, evening, night
+    scene_id: Mapped[str] = mapped_column(String(200), nullable=False)  # preset name or bridge UUID
+    scene_source: Mapped[str] = mapped_column(String(20), nullable=False)  # "preset" or "bridge"
+    scene_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Learned rules (Phase 3b: rule engine)
 # ---------------------------------------------------------------------------
 

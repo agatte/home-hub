@@ -30,11 +30,14 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Color temperature (CT/mirek) support** — first-class parameter alongside HSB for precise Kelvin control (2000K–6500K)
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
 - Activity-driven modes: gaming, working, watching, relax, movie, social — each with per-light state definitions
-- **Working-at-night uses science-based bias lighting** — bedroom lamp only at 2700K CT, other lights off (reduces melatonin suppression)
+- **Science-based per-mode lighting** — each mode uses distinct per-light variation (not uniform): working uses ct-mode clean whites, gaming uses blue/purple accents, relax uses warm gradients, watching uses SMPTE-inspired neutral bias. Night working: desk lamp at 3200K (bri=150) + dim ambient fill to reduce monitor contrast to ~3:1
+- **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching/movie cinematic (3s), sleeping gradual (5s) via MODE_TRANSITION_TIME
+- **Scene drift** — subtle random perturbation (±15 bri, ±1500 hue) every 30min during long sessions with 10s imperceptible transitions
+- **Mode → scene overrides** — any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, checked before hardcoded ACTIVITY_LIGHT_STATES
 - **20 curated scenes** across 7 categories (functional, cozy, moody, vibrant, nature, entertainment, social) using color harmony theory — each scene defines per-light states with varied hue, saturation, and brightness for depth
 - **Custom scene CRUD** — user-created scenes persisted to SQLite with category and optional paired effect
-- **Effect auto-activation** — EFFECT_AUTO_MAP drives automatic effects by mode + time period (candle for relax at night, glisten for relax day, etc.) with easy manual override
-- Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal)
+- **Effect auto-activation** — EFFECT_AUTO_MAP: opal (relax/day), candle (relax/eve+night), glisten (gaming/eve+night)
+- Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal) with 5-min cache on bridge scene fetches
 - Social mode sub-styles (color cycle, club, rave, fire & ice)
 - Screen sync for gaming (bedroom lamp mirrors dominant screen color via mss capture)
 - Manual override with 4-hour auto-timeout
@@ -413,6 +416,17 @@ External APIs (cloud):
 | action | String(50) | page_view, mode_override, light_tap, quick_action, etc. |
 | detail | JSON | Action-specific data |
 | page | String(50) | Which page/section |
+| created_at | DateTime | UTC |
+
+**mode_scene_overrides** — Maps mode+time to a Hue scene, overriding default ACTIVITY_LIGHT_STATES
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| mode | String(50) | Activity mode (gaming, working, etc.) |
+| time_period | String(20) | day, evening, or night |
+| scene_id | String(200) | Preset name or bridge UUID |
+| scene_source | String(20) | "preset" or "bridge" |
+| scene_name | String(200) | Display name |
 | created_at | DateTime | UTC |
 
 **learned_rules** — Frequency-based rules learned from activity event patterns
@@ -1010,28 +1024,22 @@ scheduler.add_task(task)
 
 ### Pattern 7: Adding Light States for a New Mode
 
-Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`:
+Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`. Each light should have **different** values to create spatial depth — avoid `_uniform()`:
 
 ```python
 "new_mode": {
     "day": {
-        "1": {"on": True, "bri": 200, "hue": 15000, "sat": 100},
-        "2": {"on": False},
-        "3": {"on": True, "bri": 150, "hue": 8000, "sat": 150},
-        "4": {"on": True, "bri": 150, "hue": 8000, "sat": 150},
+        "1": {"on": True, "bri": 200, "ct": 220},     # Living room: bright neutral
+        "2": {"on": True, "bri": 254, "ct": 200},     # Bedroom/desk: max brightness
+        "3": {"on": True, "bri": 170, "ct": 233},     # Kitchen front: fill
+        "4": {"on": True, "bri": 150, "ct": 250},     # Kitchen back: warmer fill
     },
-    "evening": {
-        "1": {"on": True, "bri": 150, "hue": 8000, "sat": 150},
-        # ... per-light states for evening
-    },
-    "night": {
-        "1": {"on": True, "bri": 80, "hue": 5000, "sat": 200},
-        # ... per-light states for night
-    },
+    "evening": { ... },  # Warmer ct values, reduced brightness
+    "night": { ... },     # Dim ambient fill + adequate desk light
 }
 ```
 
-**How it works:** The engine combines time period (day/evening/night from schedule config) + current mode to look up per-light states. Each light ID maps to a specific physical light. Brightness multipliers from `mode_brightness` config are applied on top.
+**How it works:** The engine first checks `mode_scene_overrides` table for user-mapped Hue scenes, then falls through to `ACTIVITY_LIGHT_STATES`. Time period (day/evening/night from schedule config) + current mode determines the per-light states. Brightness multipliers applied on top. `MODE_TRANSITION_TIME` controls fade speed per mode.
 
 ### Pattern 8: Adding Event Logging
 
@@ -1145,7 +1153,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **20 curated scenes** — per-light color harmony (analogous, complementary, triadic), paired effects
 - ✓ **Custom scene CRUD** — save/load/update/delete with category and effect
 - ✓ **Effect auto-activation** — candle for relax nights, glisten for relax days, prism for party
-- ✓ **Science-based night work** — 2700K CT bias lamp only (melatonin-safe)
+- ✓ **Science-based night work** — desk lamp at 3200K + dim ambient fill (contrast-optimized)
 - **Remaining:** per-room mode overrides
 
 ### Display Auto-Switching (Monitor ↔ Projector)
@@ -1406,7 +1414,7 @@ are LAN-only.
 - ✓ **Custom scene CRUD** — save/load/delete user scenes with category + effect
 - ✓ **CT (color temperature) support** — mirek parameter throughout stack for precise Kelvin control
 - ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
-- ✓ **Science-based night work lighting** — 2700K bias lamp only when working at night
+- ✓ **Science-based night work lighting** — per-light variation with 3200K desk lamp + ambient fill, mode-specific transitions, scene drift, mode→scene overrides
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering, and opens the full app in an in-dashboard iframe modal
 - ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across 10 curated blocklists, Network widget on dashboard, local DNS for all devices (homehub.local, etc.), Settings page management for DNS records and blocklists, per-device DNS config (apartment router locked)
 - ✓ **Test suite expansion** — 101 tests across 8 files (automation, music mapper, scheduler, weather, pihole, API routes, WebSocket). GitHub Actions CI runs full suite on push

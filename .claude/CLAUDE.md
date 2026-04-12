@@ -206,7 +206,7 @@ Key additions beyond current:
 - **`hue_v2_service.py`** — CLIP API v2/httpx: native bridge scenes and dynamic effects. Maintains v1↔v2 UUID mapping cache.
 - **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
 - **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
-- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state. Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
+- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
 - **`weather_service.py`** — OpenWeatherMap with 10-minute cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
 - **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing (α=0.3), 2.5s interval, 2s transitions. Auto-starts in watching/gaming mode.
@@ -320,6 +320,9 @@ All messages: JSON with `type` + `data` fields.
 | GET | `/api/automation/screen-sync/status` | Screen sync status |
 | POST | `/api/automation/screen-sync/start` | Start screen sync |
 | POST | `/api/automation/screen-sync/stop` | Stop screen sync |
+| GET | `/api/automation/mode-scenes` | List mode → scene overrides |
+| PUT | `/api/automation/mode-scenes/{mode}/{period}` | Map scene to mode+time `{scene_id, scene_source, scene_name}` |
+| DELETE | `/api/automation/mode-scenes/{mode}/{period}` | Remove override (revert to default) |
 
 ### Sonos
 | Method | Path | Purpose |
@@ -499,16 +502,21 @@ Routine config persisted in `app_settings` table (key: `{routine_name}_config`).
 
 ### Pattern 7: New Automation Mode Light States
 
-Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`:
+Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`. Each light should have **different** brightness/color to create spatial depth — avoid `_uniform()` for new modes:
 
 ```python
 "new_mode": {
-    "day":     {"1": {"on": True, "bri": 200, "hue": 15000, "sat": 100}, "2": {"on": False}, ...},
-    "evening": {"1": {"on": True, "bri": 150, "hue": 8000, "sat": 150}, ...},
-    "night":   {"1": {"on": True, "bri": 80, "hue": 5000, "sat": 200}, ...},
+    "day": {
+        "1": {"on": True, "bri": 200, "ct": 220},     # Living room: bright neutral
+        "2": {"on": True, "bri": 254, "ct": 200},     # Bedroom/desk: max brightness
+        "3": {"on": True, "bri": 170, "ct": 233},     # Kitchen front: fill
+        "4": {"on": True, "bri": 150, "ct": 250},     # Kitchen back: warmer fill
+    },
+    "evening": { ... },  # Warmer ct values, reduced brightness
+    "night": { ... },     # Dim ambient fill + adequate desk light
 }
 ```
-Engine combines time period (from schedule config) + mode → per-light states. Mode brightness multipliers applied on top.
+Engine checks `mode_scene_overrides` table first (user-mapped Hue scenes), then falls through to `ACTIVITY_LIGHT_STATES`. Mode brightness multipliers applied on top. `MODE_TRANSITION_TIME` controls transition speed per mode.
 
 ### Pattern 8: Event Logging (future)
 
@@ -537,19 +545,25 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 
 ## Automation Modes
 
-| Mode | Detection | Brightness Behavior | Notes |
-|------|-----------|---------------------|-------|
-| `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Day:230, Eve:210, Night:120 | Screen sync on bedroom lamp |
-| `working` | windowsterminal, powershell, code.exe, cursor, devenv | Day:230, Eve:180, Night:80 | Terminal/IDE detection |
-| `watching` | VLC, Plex, Stremio, media players | Day:100, Eve:70, Night:30 | Bedroom-only bias + screen sync |
+| Mode | Detection | Lighting Strategy | Notes |
+|------|-----------|-------------------|-------|
+| `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
+| `working` | windowsterminal, powershell, code.exe, cursor, devenv | ct-mode clean whites with per-light brightness gradient. Night: desk lamp bri=150/3200K + dim warm ambient fill (L1+L4). | Designed to reduce monitor contrast ratio to ~3:1 |
+| `watching` | VLC, Plex, Stremio, media players | SMPTE-inspired neutral bias (6500K) on desk lamp, peripherals off/ultra-dim. | Screen sync on L2 |
 | `social` | Blue Yeti ambient noise >2min + no game | Sub-modes: color_cycle, club, rave, fire_and_ice | Party lighting |
-| `relax` | Manual override | Day:200, Eve:150, Night:80 | Amber candlelight + candle effect |
-| `movie` | Manual override | Same as watching | |
+| `relax` | Manual override | Warm gradient — each light different warmth/brightness for spatial depth. | opal effect (day), candle effect (eve/night) |
+| `movie` | Manual override | Same bias-light approach as watching | |
 | `sleeping` | 10:30pm + 15min idle → psutil | 10-min fade → off | Also pauses media |
 | `idle` | No process detected | Falls through to time-based rules | |
 | `away` | Win32 idle >10min | Falls through to time-based | |
 
 **Mode priority (engine enforces):** gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0)
+
+**Mode transition speeds:** gaming 0.5s (snappy), working 2s, watching/movie 3s (cinematic), relax 4s (gentle), sleeping 5s (gradual)
+
+**Scene drift:** After 30min in any active mode, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness.
+
+**Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
 
 ---
 
@@ -566,6 +580,11 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 
 Activated via `POST /api/scenes/effects/{name}` (all lights) or `POST /api/scenes/effects/{name}/light/{id}` (single light).
 
+**EFFECT_AUTO_MAP** (auto-activated by mode+time):
+- `relax`: opal (day), candle (evening), candle (night)
+- `gaming`: none (day), glisten (evening), glisten (night)
+- `working`, `watching`, `movie`: none (all periods)
+
 ---
 
 ## Database Schema (Current Tables)
@@ -579,8 +598,9 @@ Activated via `POST /api/scenes/effects/{name}` (all lights) or `POST /api/scene
 | `taste_profile` | Aggregated music profile singleton (genre_distribution, top_artists, mode_genre_map) |
 | `recommendations` | Music recommendations (artist, track, preview_url, source_mode, status) |
 | `recommendation_feedback` | Like/dismiss actions on recommendations |
+| `mode_scene_overrides` | Mode+time → Hue scene mapping (mode, time_period, scene_id, scene_source, scene_name) |
 
-**Future tables (Phase 3):** `activity_events`, `light_adjustments`, `sonos_playback_events`, `routine_executions`, `user_interactions`, `learned_rules`. See `docs/PROJECT_SPEC.md` for full schema.
+**Event tables (Phase 3, live):** `activity_events`, `light_adjustments`, `sonos_playback_events`, `scene_activations`, `learned_rules`. See `docs/PROJECT_SPEC.md` for full schema.
 
 **Data retention:** 90-day rolling window; older data aggregated into weekly summaries.
 

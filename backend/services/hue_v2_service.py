@@ -7,6 +7,7 @@ dynamic light effects (candlelight, fireplace, sparkle, etc.).
 """
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 import httpx
@@ -41,6 +42,10 @@ class HueV2Service:
         # Maps v1 light IDs ("1", "2") to v2 UUIDs and vice versa
         self._v1_to_v2: dict[str, str] = {}
         self._v2_to_v1: dict[str, str] = {}
+        # Scene cache (5-minute TTL)
+        self._scene_cache: list[dict[str, Any]] = []
+        self._scene_cache_time: float = 0
+        self._scene_cache_ttl: float = 300  # 5 minutes
 
     @property
     def connected(self) -> bool:
@@ -97,17 +102,28 @@ class HueV2Service:
     # Scenes
     # ------------------------------------------------------------------
 
-    async def get_scenes(self) -> list[dict[str, Any]]:
+    async def get_scenes(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         """
-        List all native scenes stored on the Hue bridge.
+        List all native scenes stored on the Hue bridge (5-min cache).
 
         These scenes are visible to Alexa and the Hue app.
+
+        Args:
+            force_refresh: Bypass cache and fetch from bridge.
 
         Returns:
             List of scene dicts with id, name, group, and status.
         """
         if not self._connected or not self._client:
             return []
+
+        # Return cached if fresh
+        if (
+            not force_refresh
+            and self._scene_cache
+            and (time.monotonic() - self._scene_cache_time) < self._scene_cache_ttl
+        ):
+            return self._scene_cache
 
         try:
             resp = await self._client.get("/scene")
@@ -126,10 +142,12 @@ class HueV2Service:
                 })
 
             scenes.sort(key=lambda s: s["name"])
+            self._scene_cache = scenes
+            self._scene_cache_time = time.monotonic()
             return scenes
         except Exception as e:
             logger.error(f"Error fetching v2 scenes: {e}")
-            return []
+            return self._scene_cache if self._scene_cache else []
 
     async def activate_scene(self, scene_id: str) -> bool:
         """

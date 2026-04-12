@@ -384,3 +384,120 @@ async def update_mode_brightness(
 
     logger.info(f"Mode brightness updated: {brightness}")
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Mode → Scene overrides (use Hue scenes instead of hardcoded light states)
+# ---------------------------------------------------------------------------
+
+VALID_MODES = {"gaming", "working", "watching", "relax", "movie", "social"}
+VALID_PERIODS = {"day", "evening", "night"}
+
+
+@router.get("/mode-scenes")
+async def get_mode_scene_overrides(request: Request) -> dict:
+    """List all mode → scene overrides."""
+    from backend.database import async_session
+    from backend.models import ModeSceneOverride
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        result = await session.execute(select(ModeSceneOverride))
+        overrides = result.scalars().all()
+
+    return {
+        "overrides": [
+            {
+                "mode": o.mode,
+                "time_period": o.time_period,
+                "scene_id": o.scene_id,
+                "scene_source": o.scene_source,
+                "scene_name": o.scene_name,
+            }
+            for o in overrides
+        ]
+    }
+
+
+@router.put("/mode-scenes/{mode}/{time_period}")
+async def set_mode_scene_override(
+    mode: str, time_period: str, request: Request
+) -> dict:
+    """Map a scene to a mode + time period, overriding default light states."""
+    if mode not in VALID_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
+    if time_period not in VALID_PERIODS:
+        raise HTTPException(status_code=400, detail=f"Invalid period: {time_period}")
+
+    body = await request.json()
+    scene_id = body.get("scene_id")
+    scene_source = body.get("scene_source", "bridge")
+    scene_name = body.get("scene_name", "")
+
+    if not scene_id:
+        raise HTTPException(status_code=400, detail="scene_id is required")
+
+    from backend.database import async_session
+    from backend.models import ModeSceneOverride
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ModeSceneOverride).where(
+                ModeSceneOverride.mode == mode,
+                ModeSceneOverride.time_period == time_period,
+            )
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.scene_id = scene_id
+            existing.scene_source = scene_source
+            existing.scene_name = scene_name
+        else:
+            session.add(ModeSceneOverride(
+                mode=mode,
+                time_period=time_period,
+                scene_id=scene_id,
+                scene_source=scene_source,
+                scene_name=scene_name,
+            ))
+        await session.commit()
+
+    # Reload overrides cache in the automation engine
+    engine = getattr(request.app.state, "automation", None)
+    if engine:
+        await engine.load_scene_overrides()
+
+    logger.info("Mode scene override set: %s/%s → %s (%s)", mode, time_period, scene_name, scene_source)
+    return {"status": "ok"}
+
+
+@router.delete("/mode-scenes/{mode}/{time_period}")
+async def delete_mode_scene_override(
+    mode: str, time_period: str, request: Request
+) -> dict:
+    """Remove a mode → scene override, reverting to default light states."""
+    from backend.database import async_session
+    from backend.models import ModeSceneOverride
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ModeSceneOverride).where(
+                ModeSceneOverride.mode == mode,
+                ModeSceneOverride.time_period == time_period,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            await session.delete(existing)
+            await session.commit()
+
+    # Reload overrides cache
+    engine = getattr(request.app.state, "automation", None)
+    if engine:
+        await engine.load_scene_overrides()
+
+    logger.info("Mode scene override removed: %s/%s", mode, time_period)
+    return {"status": "ok"}

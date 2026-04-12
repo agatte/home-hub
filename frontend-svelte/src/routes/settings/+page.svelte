@@ -38,7 +38,63 @@
   /** @type {string | null} */
   let saving = null
 
+  // Mode → scene overrides
+  /** @type {any[]} */
+  let modeSceneOverrides = []
+  /** @type {any[]} */
+  let allScenes = []
+  /** @type {string | null} */
+  let editingSlot = null  // "mode/period" key when picker is open
+
+  const TIME_PERIODS = ['day', 'evening', 'night']
+  const PERIOD_LABELS = { day: 'Day', evening: 'Evening', night: 'Night' }
+
   $: currentSchedule = scheduleConfig?.[scheduleDay]
+
+  /** @param {string} mode @param {string} period */
+  function getOverride(mode, period) {
+    return modeSceneOverrides.find(
+      (/** @type {any} */ o) => o.mode === mode && o.time_period === period
+    )
+  }
+
+  async function loadModeScenes() {
+    try {
+      const data = await apiGet('/api/automation/mode-scenes')
+      modeSceneOverrides = data.overrides || []
+    } catch {}
+    if (!allScenes.length) {
+      try {
+        const data = await apiGet('/api/scenes')
+        allScenes = data.scenes || []
+      } catch {}
+    }
+  }
+
+  /** @param {string} mode @param {string} period @param {any} scene */
+  async function setModeScene(mode, period, scene) {
+    saving = 'mode-scene'
+    try {
+      await apiPut(`/api/automation/mode-scenes/${mode}/${period}`, {
+        scene_id: scene.id,
+        scene_source: scene.source,
+        scene_name: scene.display_name || scene.name,
+      })
+      await loadModeScenes()
+    } catch {}
+    editingSlot = null
+    saving = null
+  }
+
+  /** @param {string} mode @param {string} period */
+  async function clearModeScene(mode, period) {
+    saving = 'mode-scene'
+    try {
+      await apiDelete(`/api/automation/mode-scenes/${mode}/${period}`)
+      await loadModeScenes()
+    } catch {}
+    saving = null
+  }
 
   onMount(async () => {
     try { health = await apiGet('/health') } catch {}
@@ -46,6 +102,7 @@
     try { scheduleConfig = await apiGet('/api/automation/schedule') } catch {}
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
     loadPiholeData()
+    loadModeScenes()
     try {
       const data = await apiGet('/api/routines')
       const routines = data.routines || []
@@ -483,6 +540,50 @@
     {/if}
   </section>
 
+  <!-- Mode Lighting (scene overrides) -->
+  <section class="widget">
+    <h2 class="widget-title">Mode Lighting</h2>
+    <p class="widget-hint">Map a Hue scene to any mode + time of day. Overrides default automation lighting.</p>
+    <div class="settings-card">
+      <div class="mode-scene-grid">
+        <div class="ms-header"></div>
+        {#each TIME_PERIODS as period}
+          <div class="ms-header">{PERIOD_LABELS[period]}</div>
+        {/each}
+        {#each Object.entries(MODE_LABELS) as [mode, label] (mode)}
+          <div class="ms-mode-label">{label}</div>
+          {#each TIME_PERIODS as period}
+            {@const override = getOverride(mode, period)}
+            {@const slotKey = `${mode}/${period}`}
+            <div class="ms-cell">
+              {#if editingSlot === slotKey}
+                <div class="ms-picker">
+                  <button class="ms-pick-btn ms-pick-default" on:click={() => { clearModeScene(mode, period); editingSlot = null }}>
+                    Default
+                  </button>
+                  {#each allScenes as scene (scene.id)}
+                    <button class="ms-pick-btn" on:click={() => setModeScene(mode, period, scene)}>
+                      {scene.display_name || scene.name}
+                      <span class="ms-pick-source">{scene.source}</span>
+                    </button>
+                  {/each}
+                </div>
+              {:else if override}
+                <button class="ms-cell-btn ms-cell-active" on:click={() => { editingSlot = slotKey }}>
+                  {override.scene_name}
+                </button>
+              {:else}
+                <button class="ms-cell-btn" on:click={() => { editingSlot = slotKey }}>
+                  Default
+                </button>
+              {/if}
+            </div>
+          {/each}
+        {/each}
+      </div>
+    </div>
+  </section>
+
   <!-- Morning Routine -->
   <section class="widget">
     <h2 class="widget-title">Morning Routine</h2>
@@ -868,5 +969,121 @@
     color: var(--text-muted);
     padding: 8px 0;
     margin-bottom: 10px;
+  }
+
+  /* Mode Lighting grid */
+  .widget-hint {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: -4px 0 8px;
+  }
+
+  .mode-scene-grid {
+    display: grid;
+    grid-template-columns: 80px repeat(3, 1fr);
+    gap: 6px;
+    align-items: center;
+  }
+
+  .ms-header {
+    font-family: var(--font-display);
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 4px 0;
+  }
+
+  .ms-mode-label {
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    padding: 4px 0;
+  }
+
+  .ms-cell {
+    position: relative;
+  }
+
+  .ms-cell-btn {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    font-family: var(--font-body);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .ms-cell-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .ms-cell-active {
+    color: var(--text-primary);
+    background: rgba(100, 180, 255, 0.1);
+    border-color: rgba(100, 180, 255, 0.25);
+  }
+
+  .ms-picker {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    max-height: 200px;
+    overflow-y: auto;
+    background: rgba(20, 20, 30, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .ms-pick-btn {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s;
+    text-align: left;
+  }
+
+  .ms-pick-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .ms-pick-default {
+    color: var(--text-muted);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-bottom: 2px;
+  }
+
+  .ms-pick-source {
+    font-size: 9px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    flex-shrink: 0;
+    margin-left: 4px;
   }
 </style>
