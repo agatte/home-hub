@@ -128,6 +128,11 @@ class MockSonosService:
     async def get_favorites(self) -> list[dict]:
         return [{"title": "Lo-Fi Beats", "uri": "x-rincon:fake"}]
 
+    async def play_favorite(self, title: str) -> bool:
+        self._state["state"] = "PLAYING"
+        self._state["track"] = title
+        return True
+
 
 class MockWebSocketManager:
     """Captures broadcast calls for assertion."""

@@ -36,8 +36,9 @@ Post-audit additions (2026-04-12):
                                   but no lazy loading for Three.js
   Observability           C-      Log rotation added (5MB, 3 backups). Still no
                                   structured logs, no metrics, no alerting
-  Testing                 D+      pytest suite: 36 tests (automation engine,
-                                  API, WebSocket). GitHub Actions CI on push
+  Testing                 C+      pytest suite: 101 tests (automation, music
+                                  mapper, scheduler, weather, pihole, API
+                                  routes, WS). GitHub Actions runs full suite
   Documentation           B+      PROJECT_SPEC is excellent, CLAUDE.md thorough,
                                   but some staleness and missing ops runbook
   DevOps / Deployment     C       deploy.sh works, systemd files now versioned,
@@ -316,8 +317,8 @@ Post-audit additions (2026-04-12):
   [x] 4.  Add RotatingFileHandler to logger.py (commit 3482ecc)
   [x] 5.  Add try-catch around WebSocket json.loads() (commit 3482ecc)
   [x] 6.  Add daily SQLite backup cron on Latitude (4 AM, 7-day retention)
-  [x] 7.  Add pytest test suite -- 36 tests (commit f376e26)
-  [x] 8.  Add GitHub Actions workflow (commit f376e26)
+  [x] 7.  Add pytest test suite -- 101 tests (expanded from 36)
+  [x] 8.  Add GitHub Actions workflow -- now runs full suite
   [x] 9.  Version-control systemd service files in deployment/
   [x] 12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
   [x] 14. Add rate limiting via slowapi (commit f376e26)
@@ -460,7 +461,7 @@ Post-audit additions (2026-04-12):
   vite-plugin-visualizer    Bundle size analysis              ADDED
   py-spy                    Production profiling              ADDED
   httpie                    Readable HTTP testing via SSH     ADDED
-  DB Browser for SQLite     Visual data exploration           Not yet
+  DB Browser for SQLite     Visual data exploration           Optional (desktop GUI)
 
 ================================================================================
                            DEV SETUP NOTES

@@ -35,9 +35,9 @@ jobs:
         run: |
           pip install fastapi uvicorn[standard] websockets aiosqlite "sqlalchemy[asyncio]" \
             pydantic-settings python-dotenv httpx aiofiles slowapi phue2 fauxmo \
-            pytest pytest-asyncio
+            python-json-logger edge-tts pytest pytest-asyncio
 
       - name: Run tests
-        run: python -m pytest tests/test_automation_engine.py -v
+        run: python -m pytest tests/ -v
         env:
           APP_ENV: testing
