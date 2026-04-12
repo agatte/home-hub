@@ -181,4 +181,27 @@
       width: 100%;
     }
   }
+
+  @media (max-width: 480px) {
+    .sonos-strip {
+      gap: 10px;
+      padding: 10px 12px;
+    }
+    .strip-art {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+    }
+    .strip-controls {
+      gap: 4px;
+    }
+    .strip-btn {
+      width: 32px;
+      height: 32px;
+    }
+    .strip-btn-play {
+      width: 36px;
+      height: 36px;
+    }
+  }
 </style>

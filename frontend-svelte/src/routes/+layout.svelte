@@ -9,6 +9,7 @@
   import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
   import FloatingNav from '$lib/components/FloatingNav.svelte'
   import NowPlayingChip from '$lib/components/NowPlayingChip.svelte'
+  import ErrorToast from '$lib/components/ErrorToast.svelte'
 
   // SvelteKit passes these props to layout components; declaring them
   // silences Svelte's unknown-prop warnings.
@@ -42,3 +43,4 @@
 
 <FloatingNav />
 <NowPlayingChip />
+<ErrorToast />

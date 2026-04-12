@@ -122,8 +122,8 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - No authentication on API endpoints (acceptable for LAN-only, revisit if Cloudflare Tunnel added)
 
 **Open bugs (from April 2026 audit):**
-- GenerativeCanvas store subscriptions (lines 40-61) may leak memory — three `$:` subscriptions (mode, lights, sonos) cleanup may not catch all paths on component destroy
-- Silent API error swallowing — `api.js` `.catch(() => ({}))` hides all fetch failures, UI never shows error state
+- ~~GenerativeCanvas store subscriptions may leak memory~~ — false positive: subscriptions are manual `subscribe()` calls with proper `onDestroy` cleanup (lines 218-224)
+- ~~Silent API error swallowing~~ — fixed: `api.js` now uses `safeFetch()` wrapper that pushes errors to an `errors` store. `ErrorToast.svelte` renders red toasts in bottom-left with 5s auto-dismiss
 
 **Ambient intelligence features (April 2026):**
 - ~~Now Playing Ambient Typography~~ — shipped: `NowPlayingIdle.svelte` fills kiosk with giant song title/artist when idle + Sonos playing; album art as blurred ambient glow

@@ -599,4 +599,17 @@
       scroll-snap-align: start;
     }
   }
+
+  @media (max-width: 480px) {
+    .card-row {
+      gap: 8px;
+    }
+    .mode-card {
+      min-width: 72px;
+      max-width: 80px;
+    }
+    .card-label {
+      font-size: 17px;
+    }
+  }
 </style>
