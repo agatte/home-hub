@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { apiGet } from '$lib/api.js'
   import { Sprout, Droplets, AlertTriangle } from 'lucide-svelte'
 
@@ -10,10 +10,22 @@
   let error = false
   let refreshInterval
   let modalOpen = false
+  /** @type {HTMLButtonElement | undefined} */
+  let closeBtn
 
   /** @param {KeyboardEvent} e */
   function handleKeydown(e) {
     if (e.key === 'Escape' && modalOpen) modalOpen = false
+  }
+
+  async function openModal() {
+    modalOpen = true
+    // Focus the close button so ESC works before the iframe steals focus.
+    // After the user clicks into the iframe, ESC keystrokes go to the iframe
+    // and our window listener can't see them — the X button stays as the
+    // always-available escape path.
+    await tick()
+    closeBtn?.focus()
   }
 
   async function fetchStatus() {
@@ -72,7 +84,7 @@
       </div>
     {/if}
 
-    <button type="button" class="plant-link" on:click={() => (modalOpen = true)}>
+    <button type="button" class="plant-link" on:click={openModal}>
       View Plants &rarr;
     </button>
   </div>
@@ -93,6 +105,7 @@
     <button
       type="button"
       class="plant-modal-close"
+      bind:this={closeBtn}
       on:click={() => (modalOpen = false)}
       aria-label="Close plant app"
     >
@@ -218,6 +231,8 @@
   .plant-modal-iframe {
     width: 100%;
     height: 100%;
+    max-width: 1100px;
+    max-height: 88vh;
     border: 0;
     border-radius: 12px;
     background: #fff;
