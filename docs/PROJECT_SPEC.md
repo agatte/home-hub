@@ -109,9 +109,17 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - ~~No rate limiting~~ — fixed: slowapi (120/min default, 10/min on override/TTS, 5/min on file import)
 - ~~No log rotation~~ — fixed: RotatingFileHandler (5MB per file, 3 backups, 20MB max)
 - ~~WebSocket crashes on malformed JSON~~ — fixed: try-catch guard around json.loads()
+- ~~No database backup automation~~ — fixed: daily SQLite backup cron on Latitude (4 AM, 7-day retention)
+- ~~Systemd service files not version-controlled~~ — fixed: `deployment/` dir with service units + kiosk desktop entry
+- ~~Dead frontend code (Sidebar, Header, modeIcon)~~ — fixed: deleted
+- ~~Weather widget shows current temp as high/low~~ — fixed: fetches daily range from OWM forecast API
 - No authentication on API endpoints (acceptable for LAN-only, revisit if Cloudflare Tunnel added)
-- No database backup automation
 - No uptime monitoring or alerting
+
+**Ambient intelligence features (April 2026):**
+- ~~Now Playing Ambient Typography~~ — shipped: `NowPlayingIdle.svelte` fills kiosk with giant song title/artist when idle + Sonos playing; album art as blurred ambient glow
+- ~~Sunrise Alarm Light Ramp~~ — shipped: 30-min bedroom lamp warm-up (CT 500→250, bri 1→150) before morning routine via ScheduledTask
+- ~~Weather-Reactive Lighting~~ — shipped: subtle light adjustments during idle modes (thunderstorm=purple, rain=cool, sunset=golden, overcast=dim, snow=bright+cool)
 
 ---
 

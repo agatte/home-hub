@@ -26,8 +26,8 @@ Post-audit additions (2026-04-12):
   ---------------------   -----   --------------------------------------------------
   Backend Architecture    B       Good separation of concerns, async throughout,
                                   but large files and tight coupling to app.state
-  Frontend / UI           B       Clean component structure, good reactivity,
-                                  but memory leaks, dead code, accessibility gaps
+  Frontend / UI           B       Clean component structure, good reactivity.
+                                  Dead code removed. Now Playing idle overlay added
   Design / UX             B+      Bold, distinctive aesthetic with generative
                                   canvas + glass cards. Responsive untested
   Security                C       CORS locked to LAN origins, rate limiting added,
@@ -40,8 +40,8 @@ Post-audit additions (2026-04-12):
                                   API, WebSocket). GitHub Actions CI on push
   Documentation           B+      PROJECT_SPEC is excellent, CLAUDE.md thorough,
                                   but some staleness and missing ops runbook
-  DevOps / Deployment     C-      deploy.sh works but no rollback, no backups,
-                                  no CI/CD, systemd files not versioned
+  DevOps / Deployment     C       deploy.sh works, systemd files now versioned,
+                                  daily DB backup cron active. No rollback yet
   Tooling / DX            B+      MCP integration excellent, Claude Code hooks,
                                   GitHub Actions CI, pre-push hook, pytest
   Future Readiness        B       Good foundation for learning engine + game day,
@@ -315,18 +315,26 @@ Post-audit additions (2026-04-12):
   [x] 3.  Fix fauxmo make_udp_sock -- already fixed in current code
   [x] 4.  Add RotatingFileHandler to logger.py (commit 3482ecc)
   [x] 5.  Add try-catch around WebSocket json.loads() (commit 3482ecc)
+  [x] 6.  Add daily SQLite backup cron on Latitude (4 AM, 7-day retention)
   [x] 7.  Add pytest test suite -- 36 tests (commit f376e26)
   [x] 8.  Add GitHub Actions workflow (commit f376e26)
+  [x] 9.  Version-control systemd service files in deployment/
+  [x] 12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
   [x] 14. Add rate limiting via slowapi (commit f376e26)
   [x] 19. Add pre-push git hook (commit f376e26)
+  [x] --  Add ruff config in pyproject.toml (ignore pre-existing E402/E731/E741)
+  [x] --  Fix weather widget high/low (was showing current temp for both)
+
+  COMPLETED -- Tier 2 features (April 12, 2026):
+  -----------------------------------------------------------------------
+  [x] Now Playing Ambient Typography (NowPlayingIdle.svelte)
+  [x] Sunrise Alarm Light Ramp (30-min bedroom lamp warm-up before routine)
+  [x] Weather-Reactive Lighting (subtle ambient adjustments by condition)
 
   REMAINING -- THIS MONTH:
   -----------------------------------------------------------------------
-  [ ] 6.  Add daily SQLite backup cron on Latitude
-  [ ] 9.  Version-control systemd service files in deployment/
   [ ] 10. Add Pydantic schemas for WebSocket messages
   [ ] 11. Add file upload size limit + content-type validation
-  [ ] 12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
   [ ] 13. Install Uptime Kuma on Latitude for monitoring
 
   REMAINING -- NEXT QUARTER:
@@ -344,16 +352,14 @@ Post-audit additions (2026-04-12):
   WEEKEND PROJECTS (1-2 days each)
   -----------------------------------------------------------------------
 
-  Now Playing Ambient Typography                              [Easy]
-    When idle + music playing, fill the 1080p screen with giant animated
-    song title/artist using album art colors as text texture. Pure CSS
-    mix-blend-mode + background-clip: text. Uses existing $userIdle store
-    + sonos_update WebSocket data.
+  Now Playing Ambient Typography                              [SHIPPED]
+    Giant song title/artist fills 1080p kiosk when idle + music playing.
+    Album art as blurred ambient glow. Bebas Neue, gentle float animation.
+    Component: NowPlayingIdle.svelte (commit 4d1867a)
 
-  Sunrise Alarm Light Ramp                                    [Easy]
-    30-min light ramp before morning routine -- CT 500 (candlelight) to
-    CT 250 (daylight), brightness 0 to 150. Wire into existing
-    AsyncScheduler using wake_hour from ScheduleConfig.
+  Sunrise Alarm Light Ramp                                    [SHIPPED]
+    30-min bedroom lamp ramp before morning routine. CT 500→250, bri 1→150
+    over 15 steps. Registered as ScheduledTask. (commit 4d1867a)
 
   Color of the Day                                            [Easy]
     Daily auto-rotate through curated scenes. Day-of-year mod scene count.
@@ -378,10 +384,10 @@ Post-audit additions (2026-04-12):
   MULTI-DAY PROJECTS (3-7 days)
   -----------------------------------------------------------------------
 
-  Weather-Reactive Lighting                                   [Medium]
-    Map weather conditions to subtle lighting shifts: thunderstorm =
-    purple flash, rain = cool blue CT, sunset = warm orange ramp keyed
-    to actual sunset time (already fetched). Extend automation_engine.
+  Weather-Reactive Lighting                                   [SHIPPED]
+    Subtle ambient adjustments during idle modes: thunderstorm = purple
+    tint, rain = cooler CT, clear sunset = golden hour, snow = brighter +
+    cooler, overcast = 10% dimmer. (commit 4d1867a)
 
   Beat-Reactive Lighting                                      [Medium]
     Extend ambient_monitor with numpy FFT to extract bass energy
@@ -442,21 +448,20 @@ Post-audit additions (2026-04-12):
                         RECOMMENDED TOOLS TO ADD
 ================================================================================
 
-  Tool                      Purpose                           Priority
+  Tool                      Purpose                           Status
   ------------------------  --------------------------------  --------
-  pytest + pytest-asyncio   Backend test suite                Critical
-  Uptime Kuma               Self-hosted monitoring,           High
+  pytest + pytest-asyncio   Backend test suite                ADDED
+  RotatingFileHandler       Log rotation (stdlib)             ADDED
+  slowapi                   Rate limiting for FastAPI         ADDED
+  GitHub Actions            Lint + type-check on push         ADDED
+  pre-push git hook         Catch lint errors before push     ADDED
+  Uptime Kuma               Self-hosted monitoring,           Not yet
                             Telegram alerts on crash
-  RotatingFileHandler       Log rotation (stdlib)             High
-  python-json-logger        Structured JSON logs              Medium
-  slowapi                   Rate limiting for FastAPI         Medium
-  py-spy                    Production profiling              Medium
-                            (attach to running uvicorn)
-  vite-plugin-visualizer    Bundle size analysis              Medium
-  GitHub Actions            Lint + type-check on push         Medium
-  DB Browser for SQLite     Visual data exploration           Low
-  httpie                    Readable HTTP testing via SSH     Low
-  pre-push git hook         Catch lint errors before push     Low
+  python-json-logger        Structured JSON logs              Not yet
+  py-spy                    Production profiling              Not yet
+  vite-plugin-visualizer    Bundle size analysis              Not yet
+  DB Browser for SQLite     Visual data exploration           Not yet
+  httpie                    Readable HTTP testing via SSH     Not yet
 
 ================================================================================
                            DEV SETUP NOTES
@@ -470,11 +475,13 @@ Post-audit additions (2026-04-12):
   - Deploy: ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
   - MCP server uses HOME_HUB_URL Windows env var to point at Latitude
 
-  What should be version-controlled but isn't:
+  Now version-controlled in deployment/:
   - systemd service files (home-hub.service, home-hub-ambient.service)
-  - Latitude-specific setup scripts (Firefox kiosk, GNOME autostart)
-  - Database backup cron configuration
-  - Uptime monitoring configuration
+  - Firefox kiosk desktop entry (home-hub-kiosk.desktop)
+  - Database backup script (scripts/backup-db.sh, cron active on Latitude)
+
+  Still not version-controlled:
+  - Uptime monitoring configuration (Uptime Kuma not yet installed)
 
 ================================================================================
                           VERIFICATION PLAN
