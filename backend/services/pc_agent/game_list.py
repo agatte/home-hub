@@ -8,7 +8,8 @@ Process names are case-insensitive during matching.
 # Game processes — any of these running = "gaming" mode
 # No Discord dependency: user uses in-game voice chat (League, etc.) with headset
 GAME_PROCESSES: set[str] = {
-    # Riot Games (only actual game processes, not launchers/background services)
+    # Riot Games — client + in-game (not RiotClientServices.exe which is always running)
+    "leagueclient.exe",
     "leagueoflegends.exe",
     "league of legends.exe",
     "valorant.exe",
