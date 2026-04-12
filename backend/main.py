@@ -27,6 +27,7 @@ from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.api.routes.plants import router as plants_router
 from backend.api.routes.events import router as events_router
+from backend.api.routes.rules import router as rules_router
 from backend.api.routes.pihole import router as pihole_router
 from backend.api.routes.weather import router as weather_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
@@ -171,6 +172,11 @@ async def lifespan(app: FastAPI):
     from backend.services.event_query_service import EventQueryService
     app.state.event_query_service = EventQueryService()
 
+    # Rule engine — learns time-based mode patterns, nudges user
+    from backend.services.rule_engine_service import RuleEngineService
+    rule_engine = RuleEngineService(ws_manager=ws_manager)
+    app.state.rule_engine = rule_engine
+
     automation = AutomationEngine(
         hue=hue, hue_v2=hue_v2, ws_manager=ws_manager,
         schedule_config=schedule_config,
@@ -222,6 +228,7 @@ async def lifespan(app: FastAPI):
         app.state.weather_service = weather_service
         automation._weather_service = weather_service
         logger.info("Weather service initialized (linked to automation engine)")
+    automation._rule_engine = rule_engine
 
     # Pi-hole DNS stats (optional)
     if settings.PIHOLE_API_URL and settings.PIHOLE_API_KEY:
@@ -331,6 +338,7 @@ async def lifespan(app: FastAPI):
 
     tasks.append(asyncio.create_task(automation.run_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
+    tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
 
     app_logger.info("Home Hub is ready")
 
@@ -397,6 +405,7 @@ app.include_router(pihole_router)
 app.include_router(plants_router)
 app.include_router(routines_router)
 app.include_router(events_router)
+app.include_router(rules_router)
 
 # Serve the SvelteKit static build (must come after API routes).
 # Path is controlled by settings.FRONTEND_BUILD (default frontend-svelte/build).

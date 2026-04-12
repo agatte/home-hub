@@ -1117,6 +1117,11 @@ class AutomationEngine:
                     # Dedup in _last_applied_per_light makes this a no-op most cycles
                     await self._apply_mode(self._current_mode)
 
+                # Check learned rules for mode suggestion (nudge, not auto-apply)
+                rule_engine = getattr(self, "_rule_engine", None)
+                if rule_engine and not self._manual_override and self._current_mode in ("idle", "away"):
+                    await rule_engine.check_rules(self._current_mode)
+
                 await asyncio.sleep(60)
 
             except asyncio.CancelledError:

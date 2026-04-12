@@ -231,3 +231,33 @@ class SceneActivation(Base):
     # source: "preset", "custom", "bridge"
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Learned rules (Phase 3b: rule engine)
+# ---------------------------------------------------------------------------
+
+
+class LearnedRule(Base):
+    """A frequency-based rule learned from activity event patterns."""
+
+    __tablename__ = "learned_rules"
+    __table_args__ = (
+        UniqueConstraint("day_of_week", "hour", name="uq_day_hour"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)  # 0=Monday, 6=Sunday
+    hour: Mapped[int] = mapped_column(Integer, nullable=False)  # 0-23
+    predicted_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)  # 0.0-1.0
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
