@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Home Hub Kiosk
+Comment=Launch Firefox in kiosk mode pointing at the Home Hub dashboard
+Exec=firefox --kiosk http://localhost:8000
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,26 @@
+# Home Hub backend — systemd user unit for the Latitude (192.168.1.210)
+#
+# Install:
+#   cp deployment/home-hub.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable home-hub.service
+#   loginctl enable-linger anthony
+#
+# Logs:
+#   journalctl --user -u home-hub.service -f
+
+[Unit]
+Description=Home Hub FastAPI Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/home-hub
+ExecStart=%h/home-hub/venv/bin/python run.py
+Restart=on-failure
+RestartSec=10
+Environment="PATH=%h/home-hub/venv/bin:/usr/bin"
+
+[Install]
+WantedBy=default.target

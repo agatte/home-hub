@@ -1,3 +1,12 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# E402: module-level imports not at top (main.py has intentional ordering)
+# E731: lambda assignment (fauxmo factory pattern)
+# F401: unused imports are caught by --fix, not worth blocking push
+ignore = ["E402", "E731", "E741", "F401"]

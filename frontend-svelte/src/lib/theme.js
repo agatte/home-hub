@@ -120,11 +120,6 @@ export function modeLabel(mode) {
   return MODE_CONFIG[mode]?.label ?? mode
 }
 
-/** @deprecated Use modeLucide() for SVG icons */
-export function modeIcon(mode) {
-  return MODE_CONFIG[mode]?.icon ?? '✨'
-}
-
 export function modeLucide(mode) {
   return MODE_CONFIG[mode]?.lucide ?? 'sparkles'
 }
