@@ -266,7 +266,8 @@ class PiholeService:
         resp = await self._request(
             "POST",
             "/api/lists",
-            json_body={"address": address, "type": "block", "enabled": enabled},
+            params={"type": "block"},
+            json_body={"address": address, "enabled": enabled},
         )
         if resp is not None:
             logger.info("Pi-hole blocklist added: %s", address)
