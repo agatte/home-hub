@@ -95,8 +95,9 @@ class WeatherService:
         """
         Get today's actual high/low from the OWM 5-day/3-hour forecast.
 
-        Scans all forecast entries for the current date (UTC-based date
-        from the API's dt_txt field) and returns (high, low).
+        Scans all forecast entries for the current local date using each
+        entry's temp, temp_min, and temp_max fields. Uses local (Indiana)
+        date to avoid UTC date-boundary issues in the afternoon.
         """
         try:
             resp = await client.get(
@@ -111,18 +112,27 @@ class WeatherService:
             data = resp.json()
 
             from datetime import datetime, timezone
+            from zoneinfo import ZoneInfo
 
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            temps = [
-                entry["main"]["temp"]
-                for entry in data.get("list", [])
-                if entry.get("dt_txt", "").startswith(today_str)
-            ]
+            local_tz = ZoneInfo("America/Indiana/Indianapolis")
+            today_str = datetime.now(local_tz).strftime("%Y-%m-%d")
 
-            if not temps:
+            highs = []
+            lows = []
+            for entry in data.get("list", []):
+                # Convert each entry's UTC timestamp to local date
+                entry_utc = datetime.fromtimestamp(entry["dt"], tz=timezone.utc)
+                entry_local = entry_utc.astimezone(local_tz)
+                if entry_local.strftime("%Y-%m-%d") != today_str:
+                    continue
+                main = entry.get("main", {})
+                highs.append(main.get("temp_max", main["temp"]))
+                lows.append(main.get("temp_min", main["temp"]))
+
+            if not highs:
                 return None, None
 
-            return round(max(temps)), round(min(temps))
+            return round(max(highs)), round(min(lows))
 
         except Exception as e:
             logger.warning(f"Forecast fetch failed (high/low unavailable): {e}")
