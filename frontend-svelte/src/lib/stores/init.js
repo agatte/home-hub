@@ -15,6 +15,11 @@ import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 /** @type {HubSocket | null} */
 let socket = null
 
+// Brief lock to prevent WebSocket mode_update from overwriting an optimistic
+// update before the server confirms. Cleared after 2s or when a matching
+// server confirmation arrives.
+let modeUpdateLockUntil = 0
+
 export function initStores() {
   // Initial REST fetches — best-effort, errors swallowed so the UI still mounts
   // if the backend is warming up.
@@ -53,6 +58,13 @@ export function initStores() {
           deviceStatus.set(data)
           break
         case 'mode_update':
+          // If a user just clicked a mode, ignore server updates briefly
+          // to prevent the stale pre-override broadcast from overwriting
+          // the optimistic update.
+          if (Date.now() < modeUpdateLockUntil && !data.manual_override) {
+            break
+          }
+          modeUpdateLockUntil = 0
           automation.set(data)
           break
         case 'music_suggestion':
@@ -117,13 +129,21 @@ export async function speakText(text, volume) {
 
 /** @param {string} mode */
 export async function setManualMode(mode) {
+  // Lock out stale WebSocket updates for 2s while the server processes
+  modeUpdateLockUntil = Date.now() + 2000
   // Optimistic highlight — update store immediately before server confirms.
   automation.update((prev) => ({
     ...prev,
     mode: mode === 'auto' ? prev.mode : mode,
     manual_override: mode !== 'auto',
   }))
-  await apiPost('/api/automation/override', { mode })
+  try {
+    await apiPost('/api/automation/override', { mode })
+  } catch (e) {
+    // Revert optimistic update on failure
+    modeUpdateLockUntil = 0
+    console.error('Mode override failed:', e)
+  }
 }
 
 /** @param {string} style */

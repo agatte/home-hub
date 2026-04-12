@@ -373,6 +373,8 @@ button:active, .btn:active, [role="button"]:active {
 
 .slider-input {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
   -webkit-appearance: none;
   appearance: none;
   height: 4px;

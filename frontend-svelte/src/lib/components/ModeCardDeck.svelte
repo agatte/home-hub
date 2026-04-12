@@ -30,18 +30,25 @@
   $: socialStyle = $automation.social_style
   $: showSocialStyles = currentMode === 'social'
 
-  function isActive(cardId) {
-    if (cardId === 'alloff') return false
-    if (cardId === 'auto') return !manualOverride
-    return manualOverride && currentMode === cardId
-  }
+  // Build a reactive map of which card is active — recalculates when
+  // currentMode or manualOverride change, which fixes the Svelte 4
+  // @const reactivity issue that caused "if_block.p is not a function".
+  $: activeMap = Object.fromEntries(CARDS.map(c => [
+    c.id,
+    c.isAction ? false : c.id === 'auto' ? !manualOverride : manualOverride && currentMode === c.id,
+  ]))
 
   function cardColor(card) {
     if (card.color) return card.color
     return modeColor(card.id)
   }
 
+  /** @type {string | null} */
+  let pressedId = null
+
   async function handleClick(card) {
+    pressedId = card.id
+    setTimeout(() => { pressedId = null }, 400)
     if (card.isAction) {
       await apiPost('/api/lights/all', { on: false })
     } else {
@@ -53,20 +60,20 @@
 <div class="mode-card-deck">
   <div class="card-row">
     {#each CARDS as card, i}
-      {@const active = isActive(card.id)}
       {@const color = cardColor(card)}
       <button
         class="mode-card"
-        class:mode-card-active={active}
+        class:mode-card-active={activeMap[card.id]}
+        class:mode-card-pressing={pressedId === card.id}
         class:mode-card-danger={card.isAction}
         style="
           --mode-color: {color};
           --delay: {i * 40}ms;
-          {active ? `--active-glow: ${color}30; --active-border: ${color}44; --active-bg: ${color}1f;` : ''}
+          {activeMap[card.id] ? `--active-glow: ${color}30; --active-border: ${color}44; --active-bg: ${color}1f;` : ''}
         "
         on:click={() => handleClick(card)}
         aria-label={card.isAction ? 'Turn all lights off' : `${card.label} mode`}
-        aria-pressed={active}
+        aria-pressed={activeMap[card.id]}
       >
         <div class="card-inner">
           <div class="card-front">
@@ -80,7 +87,7 @@
             <span class="card-back-label">{card.label}</span>
           </div>
         </div>
-        {#if active}
+        {#if activeMap[card.id]}
           <div class="active-dot" style="background: {color}"></div>
         {/if}
       </button>
@@ -146,10 +153,15 @@
   }
 
   @media (hover: hover) {
-    .mode-card:hover .card-inner {
-      transform: rotateY(540deg);
+    .mode-card:not(.mode-card-pressing):hover .card-inner {
+      transform: rotateY(180deg);
       will-change: transform;
     }
+  }
+
+  /* Click feedback — brief scale pulse */
+  .mode-card-pressing .card-front {
+    transform: scale(0.93);
   }
 
   /* --- Faces (shared) --- */
@@ -479,6 +491,12 @@
     height: 6px;
     border-radius: 50%;
     z-index: 2;
+    animation: dotFadeIn 0.3s ease-out;
+  }
+
+  @keyframes dotFadeIn {
+    from { opacity: 0; transform: translateX(-50%) scale(0); }
+    to { opacity: 1; transform: translateX(-50%) scale(1); }
   }
 
   /* --- Social sub-style pills --- */

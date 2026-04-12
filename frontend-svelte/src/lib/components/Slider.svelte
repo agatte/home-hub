@@ -5,13 +5,31 @@
   /** @type {string | undefined} */
   export let label = undefined
   export let className = ''
+  /** When false, onChange only fires on release (mouseup/touchend). */
+  export let liveUpdate = true
   /** @type {(v: number) => void} */
   export let onChange = () => {}
 
+  let displayValue = value
+  $: if (!dragging) displayValue = value
+
+  let dragging = false
+
   /** @param {Event} e */
-  function handle(e) {
+  function onInput(e) {
+    dragging = true
     const target = /** @type {HTMLInputElement} */ (e.target)
-    onChange(Number(target.value))
+    displayValue = Number(target.value)
+    if (liveUpdate) onChange(displayValue)
+  }
+
+  /** @param {Event} e */
+  function onCommit(e) {
+    const target = /** @type {HTMLInputElement} */ (e.target)
+    const val = Number(target.value)
+    displayValue = val
+    if (!liveUpdate) onChange(val)
+    dragging = false
   }
 </script>
 
@@ -23,9 +41,10 @@
     type="range"
     {min}
     {max}
-    {value}
-    on:input={handle}
+    value={displayValue}
+    on:input={onInput}
+    on:change={onCommit}
     class="slider-input"
   />
-  <span class="slider-value">{value}</span>
+  <span class="slider-value">{displayValue}</span>
 </label>

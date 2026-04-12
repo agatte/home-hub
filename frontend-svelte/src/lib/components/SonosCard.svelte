@@ -3,23 +3,11 @@
   import { sonos } from '$lib/stores/sonos.js'
   import { sonosCommand } from '$lib/stores/init.js'
 
-  let localVolume = 0
-  let dragging = false
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let debounceTimer = null
-
-  $: if (!dragging) localVolume = $sonos.volume
   $: isPlaying = $sonos.state === 'PLAYING'
 
   /** @param {number} vol */
   function onVolumeChange(vol) {
-    dragging = true
-    localVolume = vol
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      sonosCommand('volume', { volume: vol })
-      setTimeout(() => { dragging = false }, 500)
-    }, 150)
+    sonosCommand('volume', { volume: vol })
   }
 
   function onPrevious() { sonosCommand('previous') }
@@ -65,7 +53,7 @@
     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" class="strip-vol-icon">
       <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
     </svg>
-    <Slider value={localVolume} min={0} max={100} onChange={onVolumeChange} className="strip-vol-slider" />
+    <Slider value={$sonos.volume} min={0} max={100} onChange={onVolumeChange} liveUpdate={false} className="strip-vol-slider" />
   </div>
 </div>
 
@@ -175,7 +163,8 @@
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
-    width: 120px;
+    width: 160px;
+    overflow: hidden;
   }
 
   .strip-vol-icon {
