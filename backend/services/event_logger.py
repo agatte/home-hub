@@ -57,11 +57,13 @@ class EventLogger:
                     .limit(1)
                 )
                 prev_event = result.scalar_one_or_none()
-                if prev_event:
+                if prev_event and prev_event.timestamp is not None:
                     # SQLite stores DateTime(timezone=True) as a naive string,
                     # so SQLAlchemy deserializes it without tzinfo. Normalize
                     # to UTC before subtracting our tz-aware `now`.
                     prev_ts = prev_event.timestamp
+                    if not isinstance(prev_ts, datetime):
+                        prev_ts = datetime.fromisoformat(str(prev_ts))
                     if prev_ts.tzinfo is None:
                         prev_ts = prev_ts.replace(tzinfo=timezone.utc)
                     elapsed = int((now - prev_ts).total_seconds())

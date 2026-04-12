@@ -1,11 +1,15 @@
 """
-Logging configuration — file + console output.
+Logging configuration — file (rotating) + console output.
 """
 import logging
 import sys
-from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 from backend.config import LOG_DIR, settings
+
+# 5 MB per file, keep 3 old backups (20 MB total max)
+_MAX_LOG_BYTES = 5 * 1024 * 1024
+_BACKUP_COUNT = 3
 
 
 def setup_logging() -> logging.Logger:
@@ -30,8 +34,13 @@ def setup_logging() -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # File handler
-    file_handler = logging.FileHandler(LOG_DIR / "home_hub.log", encoding="utf-8")
+    # Rotating file handler — caps disk usage at ~20 MB
+    file_handler = RotatingFileHandler(
+        LOG_DIR / "home_hub.log",
+        maxBytes=_MAX_LOG_BYTES,
+        backupCount=_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 

@@ -1,0 +1,485 @@
+================================================================================
+                        HOME HUB - FULL APPLICATION AUDIT
+                              Date: April 12, 2026
+================================================================================
+
+Comprehensive audit covering backend, frontend, security, performance,
+observability, documentation, DevOps, tooling, and future roadmap.
+
+System: Single-user, always-on home automation dashboard
+Stack:  FastAPI + SvelteKit + SQLite + WebSocket
+Prod:   Dell Latitude 7420 (Ubuntu 24.04) kiosk mode at 192.168.1.210
+Dev:    Windows desktop at 192.168.1.30
+
+================================================================================
+                              GRADING SUMMARY
+================================================================================
+
+  Category                Grade   Summary
+  ---------------------   -----   --------------------------------------------------
+  Backend Architecture    B       Good separation of concerns, async throughout,
+                                  but large files and tight coupling to app.state
+  Frontend / UI           B       Clean component structure, good reactivity,
+                                  but memory leaks, dead code, accessibility gaps
+  Design / UX             B+      Bold, distinctive aesthetic with generative
+                                  canvas + glass cards. Responsive untested
+  Security                D       CORS wide open, zero auth, no rate limiting,
+                                  unvalidated WebSocket messages, file upload risks
+  Performance             B-      Aggressive polling (1-2s), canvas perf OK
+                                  but no lazy loading for Three.js
+  Observability           D+      Basic logging exists but no rotation, no
+                                  structured logs, no metrics, no alerting
+  Testing                 F       Zero tests. No unit, integration, or E2E
+                                  tests anywhere
+  Documentation           B+      PROJECT_SPEC is excellent, CLAUDE.md thorough,
+                                  but some staleness and missing ops runbook
+  DevOps / Deployment     C-      deploy.sh works but no rollback, no backups,
+                                  no CI/CD, systemd files not versioned
+  Tooling / DX            B       MCP integration excellent, Claude Code hooks
+                                  good, missing pre-commit and profiling tools
+  Future Readiness        B       Good foundation for learning engine + game day,
+                                  needs event bugs fixed and test coverage first
+  ---------------------   -----   --------------------------------------------------
+  OVERALL GRADE           C+      Strong vision and solid core, but production
+                                  hygiene is critically underbuilt for an
+                                  always-on system
+
+================================================================================
+                            CATEGORY DETAILS
+================================================================================
+
+--------------------------------------------------------------------------------
+1. BACKEND ARCHITECTURE -- Grade: B
+--------------------------------------------------------------------------------
+
+  Strengths:
+  - Clean service layer pattern (HueService, SonosService, AutomationEngine)
+  - Async/await used correctly throughout; blocking Hue calls wrapped in
+    asyncio.to_thread()
+  - WebSocket + polling hybrid catches external changes (Alexa, Hue app)
+  - Mode-change callback system is elegant and extensible
+  - SQLAlchemy 2.0 async ORM with proper parameterized queries
+
+  Issues:
+  - automation_engine.py is 1,093 lines -- should split into mode logic,
+    light state calculator, and effect manager
+  - main.py lifespan function is 200+ lines initializing 10+ services --
+    extract to a bootstrap.py
+  - scenes.py route file is 637 lines with inline SQL via text() -- should
+    use ORM queries
+  - Light IDs are strings in some places, ints in others -- inconsistent typing
+  - 22+ bare "except Exception" clauses across the backend -- should catch
+    specific exceptions
+  - No middleware for request logging/tracing
+  - No circuit breaker for Hue/Sonos API calls (if bridge hangs, polling blocks)
+
+  Active bugs found in logs:
+  - TypeError: can't subtract offset-naive and offset-aware datetimes
+    in event_logger.py (repeats 6x)
+  - NameError: name 'make_udp_sock' is not defined in fauxmo_service.py --
+    voice control is completely broken
+
+--------------------------------------------------------------------------------
+2. FRONTEND / UI -- Grade: B
+--------------------------------------------------------------------------------
+
+  Strengths:
+  - Clean Svelte store pattern with WebSocket dispatch
+  - Generative canvas is visually distinctive -- not generic AI dashboard
+  - Good idle detection (60s timeout, auto-hide UI elements)
+  - WebSocket reconnection with build_id auto-reload is clever
+  - Playing-card deck for mode selection is unique
+
+  Issues:
+  - Memory leaks: GenerativeCanvas.svelte lines 40-61 -- three store
+    subscriptions (unsubMode, unsubLights, unsubSonos) cleanup may not
+    catch all paths
+  - Dead code: Sidebar.svelte (fully implemented, never imported),
+    Header.svelte (empty with "replaced by" comment) -- delete both
+  - Race condition: ws.js line 51 -- knownBuildId is module-level, shared
+    across potential multiple socket instances
+  - Silent API failures: api.js lines 27/41/50 -- .catch(() => ({}))
+    swallows all errors, UI never shows failure state
+  - Accessibility gaps:
+    * Empty alt text on album art images
+    * Slider missing aria-labelledby
+    * --text-muted color (#5c5e6a on #08080c) fails WCAG AA (~2.5:1)
+    * No <html lang="en">
+  - No component tests or E2E tests
+  - Bundle concerns: Three.js (~500KB) + Threlte (~100KB) loaded
+    unconditionally, even when MoonScene isn't active
+  - Deprecated function: modeIcon() in theme.js still exported
+
+--------------------------------------------------------------------------------
+3. DESIGN / UX -- Grade: B+
+--------------------------------------------------------------------------------
+
+  Strengths:
+  - Generative Perlin noise canvas reacting to mode/lights/music is impressive
+  - Glass-card aesthetic with Bebas Neue display font is cohesive
+  - MoonScene sleeping overlay (GLSL sky shader, moon orbit, city silhouette)
+  - Mode card deck with flip animation is memorable
+  - NowPlayingChip is clean and unobtrusive
+
+  Issues:
+  - No prefers-reduced-motion gate on heavy animations
+  - Canvas DPR capped at 2x -- loses sharpness on 3x displays
+  - rotateY(540deg) on card flip is 3x more rotation than needed
+  - No loading/skeleton states for async data (weather, Sonos status)
+  - Mobile responsive breakpoints exist but untested on actual devices
+
+--------------------------------------------------------------------------------
+4. SECURITY -- Grade: D
+--------------------------------------------------------------------------------
+
+  CRITICAL:
+  - CORS: main.py:323 -- allow_origins=["*"] with allow_credentials=True.
+    Any website can make authenticated requests. Even on a LAN, this allows
+    drive-by attacks from any browser tab.
+  - Zero authentication: Every API endpoint is fully open. Anyone on the
+    WiFi can control lights, play audio, upload files, read all data.
+  - WebSocket unvalidated: main.py:397 -- json.loads(raw) with no try-catch,
+    no schema validation. Malformed JSON crashes the handler. Arbitrary keys
+    pass through to hue.set_light().
+
+  HIGH:
+  - File upload: music.py:96-123 -- No file size limit, no content-type
+    validation, predictable filename, no XXE protection on XML parsing.
+  - Preview URL injection: music.py:190 -- preview_url passed directly to
+    sonos.play_uri() with no URL validation (SSRF risk).
+
+  MEDIUM:
+  - MCP query_db: Accepts arbitrary SELECT including UNION attacks.
+  - No rate limiting: No slowapi or equivalent on any endpoint.
+  - HTTP only: No TLS. Acceptable for LAN-only but blocks Cloudflare Tunnel.
+
+  Verified safe:
+  - .env IS in .gitignore (line 2) -- secrets not committed
+  - subprocess.run() uses list args (no shell injection)
+  - SQL in route files uses parameterized :placeholder syntax
+
+--------------------------------------------------------------------------------
+5. PERFORMANCE -- Grade: B-
+--------------------------------------------------------------------------------
+
+  Issues:
+  - Hue polling at 1s intervals (hue_service.py:214) -- aggressive for
+    6 bulbs. 3-5s would be fine
+  - Sonos polling at 2s intervals (sonos_service.py:447) -- could be 5s
+  - Individual WebSocket broadcasts per light on scene activation (N sends
+    instead of batched)
+  - LightGrid.svelte runs Object.values($lights).sort() on every reactive
+    change -- should memoize
+  - GenerativeCanvas particle count resizes array frame-by-frame during
+    transitions (GC pressure)
+  - MoonScene shader materials at module scope -- VRAM leak risk on
+    unmount/remount
+  - Three.js + Threlte loaded unconditionally (~600KB) even when sleeping
+    mode isn't active
+
+  OK:
+  - 15fps cap on GenerativeCanvas is appropriate
+  - asyncio.to_thread() correctly used for blocking Hue bridge calls
+  - SQLite is fine for current data volume (148KB DB)
+
+--------------------------------------------------------------------------------
+6. OBSERVABILITY -- Grade: D+
+--------------------------------------------------------------------------------
+
+  What exists:
+  - /health endpoint with Hue/Sonos connectivity status
+  - File logging to logs/home_hub.log (5.6MB, 114K lines)
+  - MCP get_health() and get_event_summary() tools
+
+  What's missing:
+  - No log rotation -- FileHandler not RotatingFileHandler. At ~60KB/day,
+    this fills disk over months
+  - No structured logging -- Plain text, can't parse or alert on error spikes
+  - No metrics endpoint -- No Prometheus /metrics, no error rate tracking
+  - No uptime monitoring -- If Latitude crashes at 3 AM, nobody knows
+  - No alerting -- Hue/Sonos disconnections logged but never surfaced
+  - No request tracing -- No request IDs, can't correlate actions to logs
+  - No database health in /health -- Only checks Hue/Sonos, not SQLite
+  - Timestamp format missing timezone
+
+--------------------------------------------------------------------------------
+7. TESTING -- Grade: F
+--------------------------------------------------------------------------------
+
+  - tests/ directory exists but is completely empty
+  - No pytest, no vitest, no Playwright tests
+  - No test configuration files
+  - No CI pipeline to run tests
+  - No mocking infrastructure
+  - The only "testing" is manual via MCP tools (/api-audit, /ui-audit)
+
+  This is the single biggest risk for an always-on system. The automation
+  engine (1,093 lines of mode priority logic, time-based rules, effect
+  mapping) has zero test coverage.
+
+--------------------------------------------------------------------------------
+8. DOCUMENTATION -- Grade: B+
+--------------------------------------------------------------------------------
+
+  Strengths:
+  - PROJECT_SPEC.md is exceptional -- covers vision, architecture, API
+    schema, database schema, roadmap
+  - CLAUDE.md is thorough -- patterns, commands, network devices, file
+    structure
+  - Commit messages follow conventional format (fix:, feat:, docs:)
+  - API routes fully documented with method, path, purpose tables
+
+  Issues:
+  - PROJECT_SPEC slightly stale on PC Agent location
+  - Systemd service files not documented (mentioned but not in repo)
+  - No ops runbook -- how to troubleshoot, check logs, recover
+  - No changelog for breaking changes
+  - No database migration documentation
+  - .env.example missing PLANT_APP_PASSWORD, PLANT_APP_EMAIL, HOME_HUB_URL
+
+--------------------------------------------------------------------------------
+9. DEVOPS / DEPLOYMENT -- Grade: C-
+--------------------------------------------------------------------------------
+
+  What works:
+  - deploy.sh is smart -- diffs HEAD, only rebuilds what changed, health-
+    checks after restart
+  - set -euo pipefail for safety
+  - git pull --ff-only prevents accidental merge commits
+  - Kiosk auto-reload via WebSocket build_id handshake
+
+  What's missing:
+  - No rollback: If health check fails, system is left in broken state
+  - No database backup: 148KB SQLite with all config, scenes, playlists --
+    one corruption = total loss
+  - No CI/CD: Zero GitHub Actions, no automated linting or build verification
+  - Systemd files not in repo: If Latitude dies, service definitions lost
+  - No pre-commit hooks: Linting only via Claude Code hooks, not git
+  - Health check timing: 3s sleep may not be enough for full startup
+  - No staging environment: Changes go straight from dev to production
+
+--------------------------------------------------------------------------------
+10. TOOLING / DX -- Grade: B
+--------------------------------------------------------------------------------
+
+  Strengths:
+  - MCP server with 20+ tools -- verify changes without leaving Claude Code
+  - Claude Code hooks auto-run ruff + ESLint on save
+  - /api-audit and /ui-audit skills for systematic checking
+  - Frontend hot reload via Vite dev server with API proxy
+
+  Missing tools:
+  - Pre-push git hook -- catch lint/type errors before pushing
+  - DB Browser for SQLite -- visual data exploration on dev machine
+  - py-spy -- attach to running uvicorn for production profiling
+  - Uptime Kuma -- lightweight self-hosted monitoring on Latitude
+  - python-json-logger -- structured JSON logs for debugging
+  - Bundle analyzer -- vite-plugin-visualizer for Three.js size tracking
+  - httpie -- readable HTTP client for ad-hoc API testing
+
+================================================================================
+                            ACTIVE BUGS FOUND
+================================================================================
+
+  Bug                                           Location              Severity
+  -------------------------------------------   -------------------   --------
+  TypeError: can't subtract offset-naive and    event_logger.py       HIGH
+  offset-aware datetimes                        (seen 6x in logs)
+
+  NameError: name 'make_udp_sock' is not        fauxmo_service.py     HIGH
+  defined (voice control broken)
+
+  Memory leak in GenerativeCanvas store         GenerativeCanvas      MEDIUM
+  subscriptions                                 .svelte:40-61
+
+  Silent API error swallowing                   api.js:27/41/50       MEDIUM
+
+  WebSocket JSON parse crash on malformed       main.py:397           MEDIUM
+  messages
+
+================================================================================
+                        TOP PRIORITY ACTION ITEMS
+================================================================================
+
+  THIS WEEK (critical fixes):
+  -----------------------------------------------------------------------
+  1. Fix CORS to specific origins (backend/main.py:323)
+  2. Fix event_logger datetime timezone bug
+  3. Fix fauxmo make_udp_sock import
+  4. Add RotatingFileHandler to logger.py (5MB max, 3 backups)
+  5. Add try-catch around WebSocket json.loads() in main.py
+  6. Add daily SQLite backup cron on Latitude
+
+  THIS MONTH (production hygiene):
+  -----------------------------------------------------------------------
+  7.  Add pytest test suite -- start with automation engine mode priority
+  8.  Add GitHub Actions workflow (ruff + svelte-check on push)
+  9.  Version-control systemd service files in deployment/
+  10. Add Pydantic schemas for WebSocket messages
+  11. Add file upload size limit + content-type validation
+  12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
+  13. Install Uptime Kuma on Latitude for monitoring
+
+  NEXT QUARTER (maturity):
+  -----------------------------------------------------------------------
+  14. Add rate limiting (slowapi)
+  15. Add simple API key auth for write endpoints
+  16. Add Prometheus /metrics endpoint
+  17. Split automation_engine.py into smaller modules
+  18. Extract main.py lifespan to bootstrap.py
+  19. Add pre-push git hooks
+  20. Add deploy.sh rollback capability
+
+================================================================================
+                          CREATIVE FEATURE IDEAS
+================================================================================
+
+  WEEKEND PROJECTS (1-2 days each)
+  -----------------------------------------------------------------------
+
+  Now Playing Ambient Typography                              [Easy]
+    When idle + music playing, fill the 1080p screen with giant animated
+    song title/artist using album art colors as text texture. Pure CSS
+    mix-blend-mode + background-clip: text. Uses existing $userIdle store
+    + sonos_update WebSocket data.
+
+  Sunrise Alarm Light Ramp                                    [Easy]
+    30-min light ramp before morning routine -- CT 500 (candlelight) to
+    CT 250 (daylight), brightness 0 to 150. Wire into existing
+    AsyncScheduler using wake_hour from ScheduleConfig.
+
+  Color of the Day                                            [Easy]
+    Daily auto-rotate through curated scenes. Day-of-year mod scene count.
+    One new ScheduledTask, no new files.
+
+  QR Code Party Mode                                          [Easy]
+    Social mode shows QR code on kiosk linking to /party -- a guest DJ
+    page with big Sonos favorites and volume slider. qrcode npm package
+    already installed.
+
+  Activity Heatmap Widget                                     [Medium]
+    GitHub-style contribution heatmap of apartment activity. New
+    /api/events/heatmap endpoint with GROUP BY date, hour. EventLogger
+    data already exists.
+
+  NFC Tap-to-Scene                                            [Easy/HW]
+    NFC215 tags ($5/10-pack) around apartment. Each opens
+    GET /api/quick/{slug} URL. Tap nightstand = sleeping. Tap desk =
+    working. Zero latency, no app needed.
+
+
+  MULTI-DAY PROJECTS (3-7 days)
+  -----------------------------------------------------------------------
+
+  Weather-Reactive Lighting                                   [Medium]
+    Map weather conditions to subtle lighting shifts: thunderstorm =
+    purple flash, rain = cool blue CT, sunset = warm orange ramp keyed
+    to actual sunset time (already fetched). Extend automation_engine.
+
+  Beat-Reactive Lighting                                      [Medium]
+    Extend ambient_monitor with numpy FFT to extract bass energy
+    (20-200Hz). POST beat pulses to new endpoint. Map to brightness
+    bumps on all lights. Party vibes.
+
+  Network Presence Detection                                  [Medium]
+    ARP sweep every 30s to detect known phones joining WiFi. Map MAC
+    addresses to names. Feed social mode detection + personalized TTS
+    greetings. New standalone agent.
+
+  Smart Sleep-Debt Alarm                                      [Easy]
+    Morning routine queries last night's sleep start from activity_events.
+    If sleep started at 2 AM instead of 10:30 PM, delay alarm
+    proportionally. Small change to morning_routine.py.
+
+  Time Machine Replay                                         [Medium]
+    Scrub through any past day's events via timeline slider. See what
+    the apartment looked like at any moment. New endpoint + component.
+
+  Audio Fingerprinting                                        [Medium]
+    Blue Yeti mic + shazamio library identifies what Sonos is playing.
+    Gets rich metadata (genre, BPM) even when Sonos shows generic
+    "Apple Music". Enables BPM-aware lighting.
+
+
+  AMBITIOUS STRETCH GOALS (1-4 weeks)
+  -----------------------------------------------------------------------
+
+  Colts Game Day Engine                                       [Hard]
+    ESPN free API polling during game windows. Touchdown = Colts blue
+    flash + TTS + celebration clip. Field goal = subtle pulse. Opponent
+    scores = red flash. New GameDayEngine service + GameDayCard.svelte
+    + pixel art field overlay.
+
+  WLED LED Strip Integration                                  [Medium/HW]
+    ESP32 + WS2812B strip ($15 total). WLED REST API similar to Hue.
+    Addressable LEDs for color chasing, rainbow waves, audio-reactive
+    effects. New WledService.
+
+  Apartment Digital Twin                                      [Hard]
+    3D model of apartment in Threlte. Real-time light colors mapped to
+    Three.js point lights. The ultimate "that's so cool" idle screen.
+    Threlte experience already exists from MoonScene.
+
+  Learning Engine v1                                          [Hard]
+    Nightly pattern detection: group 30 days of events by (day_of_week,
+    hour, mode). If a mode occurs >80% at a specific time, generate a
+    learned rule. Surface predictions on dashboard. No ML needed --
+    pure frequency analysis.
+
+  Full Room Audio Analysis Dashboard                          [Hard]
+    Combine beat detection + audio fingerprinting + ambient noise levels
+    into a real-time audio visualization on the kiosk. Waveform,
+    frequency spectrum, BPM counter. Uses existing Blue Yeti hardware.
+
+================================================================================
+                        RECOMMENDED TOOLS TO ADD
+================================================================================
+
+  Tool                      Purpose                           Priority
+  ------------------------  --------------------------------  --------
+  pytest + pytest-asyncio   Backend test suite                Critical
+  Uptime Kuma               Self-hosted monitoring,           High
+                            Telegram alerts on crash
+  RotatingFileHandler       Log rotation (stdlib)             High
+  python-json-logger        Structured JSON logs              Medium
+  slowapi                   Rate limiting for FastAPI         Medium
+  py-spy                    Production profiling              Medium
+                            (attach to running uvicorn)
+  vite-plugin-visualizer    Bundle size analysis              Medium
+  GitHub Actions            Lint + type-check on push         Medium
+  DB Browser for SQLite     Visual data exploration           Low
+  httpie                    Readable HTTP testing via SSH     Low
+  pre-push git hook         Catch lint errors before push     Low
+
+================================================================================
+                           DEV SETUP NOTES
+================================================================================
+
+  Current workflow:
+  - Windows desktop: code editing, git push, local testing, runs PC
+    activity detector via Task Scheduler
+  - Latitude (192.168.1.210): Ubuntu 24.04, runs FastAPI backend +
+    ambient monitor as systemd user services, Firefox kiosk via GNOME
+  - Deploy: ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
+  - MCP server uses HOME_HUB_URL Windows env var to point at Latitude
+
+  What should be version-controlled but isn't:
+  - systemd service files (home-hub.service, home-hub-ambient.service)
+  - Latitude-specific setup scripts (Firefox kiosk, GNOME autostart)
+  - Database backup cron configuration
+  - Uptime monitoring configuration
+
+================================================================================
+                          VERIFICATION PLAN
+================================================================================
+
+  After implementing fixes:
+  1. Run /api-audit to verify all endpoints still work
+  2. Run /ui-audit to screenshot all pages at desktop + mobile widths
+  3. Check mcp get_health for Hue/Sonos connectivity
+  4. Verify log rotation: check logs/ for rotated files
+  5. Verify backup: check data/backups/ on Latitude
+  6. Run pytest (once test suite exists)
+  7. Check GitHub Actions (once CI exists)
+
+================================================================================

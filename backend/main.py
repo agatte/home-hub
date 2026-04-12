@@ -328,10 +328,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow frontend dev server and tablet
+# CORS — allow frontend dev server, kiosk, and local network clients
+_CORS_ORIGINS = [
+    "http://localhost:8000",
+    "http://localhost:3001",
+    "http://127.0.0.1:8000",
+    "http://192.168.1.210:8000",   # Latitude kiosk (production)
+    "http://192.168.1.30:8000",    # Windows dev machine
+    "http://192.168.1.30:3001",    # Vite dev server
+    "http://192.168.1.209:8000",   # Android tablet
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -406,7 +415,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     try:
         while True:
             raw = await websocket.receive_text()
-            message = json.loads(raw)
+            try:
+                message = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                app_logger.warning("Malformed WebSocket JSON, ignoring")
+                continue
             msg_type = message.get("type")
             data = message.get("data", {})
 
