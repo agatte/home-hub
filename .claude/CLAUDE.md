@@ -698,7 +698,7 @@ home-hub/
 | Phase | Timeline | Focus |
 |-------|----------|-------|
 | **Phase 1: Core Fix & Foundation** | ✓ Complete | Gradual evening transitions, vibe tagging, event logging tables |
-| **Phase 2: Dashboard Redesign** | ✓ Mostly complete | Living Ink redesign (generative canvas, glass cards, floating nav), weather widget, 20 curated scenes, CT support, custom scene CRUD, effect auto-activation. Remaining: plant app widget, custom scene builder UI |
+| **Phase 2: Dashboard Redesign** | ✓ Mostly complete | Living Ink redesign (generative canvas, glass cards, floating nav), weather widget, 20 curated scenes, CT support, custom scene CRUD, effect auto-activation, plant app widget with in-dashboard iframe modal. Remaining: custom scene builder UI |
 | **Phase 3: Intelligence & Voice** | June 2026 | Simple rule engine from events, Fauxmo Alexa integration, override pattern analysis, nudge system |
 | **Phase 4: Game Day** | July–August 2026 | ESPN API, GameDay page, celebration orchestration, pixel art field, pre-game mode |
 | **Phase 5: Polish & Expand** | September 2026+ | Custom Alexa Skill, Apple Music API, full autopilot, bar app widget |

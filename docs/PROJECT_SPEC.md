@@ -1064,7 +1064,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Scene browser** — 20 curated scenes organized by category tabs (functional, cozy, moody, vibrant, nature, entertainment, social) + Effects tab + Hue Scenes tab.
 - ✓ **One-tap quick actions** — Lucide icon pill buttons for Movie, Relax, Party, Bedtime, Auto, All Off.
 - ✓ **Now Playing chip** — Fixed bottom-right, shows album art + track, pulses when playing.
-- ✓ **Plant app widget** — polls external Railway-hosted plant care API, shows total / needs-water / overdue counts + next watering.
+- ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering. Tapping "View Plants" opens the full plant app inside a fullscreen iframe modal layered over the dashboard (no new tab — the kiosk Firefox stays on the dashboard).
 - **Remaining:** Bar app widget (future), custom scene builder UI.
 
 ### Lighting Improvements (Mostly Complete)
@@ -1213,7 +1213,7 @@ Registers as a mode-change callback + runs its own ESPN polling loop. No changes
 
 ### External Project Integration
 
-- **Plant app widget** — Shows live status from the plant tracking web app (needs water count, next care action). Animated card on dashboard, taps to open full app.
+- **Plant app widget** — Shows live status from the plant tracking web app (needs water count, next care action). Animated card on dashboard. Tapping "View Plants" opens the full plant app in a fullscreen iframe modal portaled to `document.body` — the dashboard SPA stays loaded underneath, and a fixed close button (plus ESC and backdrop click) always returns to it. This avoids the kiosk-Firefox lockout that `target="_blank"` would cause.
 - **Bar app widget** (future) — Recipe/inventory app. Widget shows tonight's cocktail suggestion based on current inventory. "Hosting mode" button sets mood lighting + playlist + shows recipe cards. Deeply tied to Home Hub for the hosting experience.
 
 ---
@@ -1331,7 +1331,7 @@ are LAN-only.
 - ✓ **CT (color temperature) support** — mirek parameter throughout stack for precise Kelvin control
 - ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
 - ✓ **Science-based night work lighting** — 2700K bias lamp only when working at night
-- ✓ **Plant app widget** — polls external Railway-hosted plant care API, shows total / needs-water / overdue counts + next watering
+- ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering, and opens the full app in an in-dashboard iframe modal
 
 ### Phase 2a: Post-Cutover Cleanup (Complete)
 
