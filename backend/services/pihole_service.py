@@ -68,18 +68,26 @@ class PiholeService:
             headers["X-FTL-CSRF"] = self._csrf
         return headers
 
-    async def _get(self, path: str, params: Optional[dict] = None) -> Optional[dict]:
-        """Make an authenticated GET request with 401 retry."""
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[dict] = None,
+        json_body: Optional[dict] = None,
+    ) -> Optional[dict]:
+        """Make an authenticated request with 401 retry."""
         if not self._sid:
             if not await self._authenticate():
                 return None
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
+                resp = await client.request(
+                    method,
                     f"{self._api_url}{path}",
                     headers=self._auth_headers(),
                     params=params,
+                    json=json_body,
                 )
 
                 # Session expired — re-authenticate and retry once
@@ -87,18 +95,27 @@ class PiholeService:
                     logger.info("Pi-hole session expired, re-authenticating")
                     if not await self._authenticate():
                         return None
-                    resp = await client.get(
+                    resp = await client.request(
+                        method,
                         f"{self._api_url}{path}",
                         headers=self._auth_headers(),
                         params=params,
+                        json=json_body,
                     )
 
                 resp.raise_for_status()
+                # Some endpoints return empty body (204)
+                if resp.status_code == 204 or not resp.content:
+                    return {}
                 return resp.json()
 
         except Exception as e:
-            logger.error("Pi-hole API request failed (%s): %s", path, e)
+            logger.error("Pi-hole API %s %s failed: %s", method, path, e)
             return None
+
+    async def _get(self, path: str, params: Optional[dict] = None) -> Optional[dict]:
+        """Make an authenticated GET request."""
+        return await self._request("GET", path, params=params)
 
     async def get_summary(self) -> Optional[dict[str, Any]]:
         """
@@ -182,3 +199,85 @@ class PiholeService:
         self._top_blocked_cache = top
         self._top_blocked_cache_time = now
         return top
+
+    # -----------------------------------------------------------------
+    # Local DNS management
+    # -----------------------------------------------------------------
+
+    async def get_dns_hosts(self) -> Optional[list[dict[str, str]]]:
+        """Get all custom local DNS records."""
+        data = await self._get("/api/config/dns/hosts")
+        if data is None:
+            return None
+        # Pi-hole v6 returns {"config": {"dns": {"hosts": [...]}}}
+        # or may return the list directly depending on version
+        hosts = data
+        if isinstance(data, dict):
+            hosts = (
+                data.get("config", {}).get("dns", {}).get("hosts", [])
+                or data.get("hosts", [])
+            )
+        if not isinstance(hosts, list):
+            return []
+
+        result = []
+        for entry in hosts:
+            if isinstance(entry, str) and " " in entry:
+                ip, hostname = entry.split(" ", 1)
+                result.append({"ip": ip, "hostname": hostname})
+            elif isinstance(entry, dict):
+                result.append(entry)
+        return result
+
+    async def add_dns_host(self, ip: str, hostname: str) -> bool:
+        """Add a local DNS record. Returns True on success."""
+        encoded = f"{ip} {hostname}".replace(" ", "%20")
+        resp = await self._request("PUT", f"/api/config/dns/hosts/{encoded}")
+        if resp is not None:
+            logger.info("Pi-hole DNS added: %s → %s", hostname, ip)
+            return True
+        return False
+
+    async def delete_dns_host(self, ip: str, hostname: str) -> bool:
+        """Delete a local DNS record. Returns True on success."""
+        encoded = f"{ip} {hostname}".replace(" ", "%20")
+        resp = await self._request("DELETE", f"/api/config/dns/hosts/{encoded}")
+        if resp is not None:
+            logger.info("Pi-hole DNS removed: %s → %s", hostname, ip)
+            return True
+        return False
+
+    # -----------------------------------------------------------------
+    # Blocklist management
+    # -----------------------------------------------------------------
+
+    async def get_blocklists(self) -> Optional[list[dict[str, Any]]]:
+        """Get all configured adlists."""
+        data = await self._get("/api/lists")
+        if data is None:
+            return None
+        lists = data.get("lists", data) if isinstance(data, dict) else data
+        if not isinstance(lists, list):
+            return []
+        return lists
+
+    async def add_blocklist(self, address: str, enabled: bool = True) -> bool:
+        """Add a blocklist URL. Returns True on success."""
+        resp = await self._request(
+            "POST",
+            "/api/lists",
+            json_body={"address": address, "type": "block", "enabled": enabled},
+        )
+        if resp is not None:
+            logger.info("Pi-hole blocklist added: %s", address)
+            return True
+        return False
+
+    async def delete_blocklist(self, address: str) -> bool:
+        """Remove a blocklist URL. Returns True on success."""
+        encoded = address.replace("/", "%2F").replace(":", "%3A")
+        resp = await self._request("DELETE", f"/api/lists/{encoded}")
+        if resp is not None:
+            logger.info("Pi-hole blocklist removed: %s", address)
+            return True
+        return False

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
-  import { apiGet, apiPut, apiPost } from '$lib/api.js'
+  import { apiGet, apiPut, apiPost, apiDelete } from '$lib/api.js'
   import Slider from '$lib/components/Slider.svelte'
 
   const MODE_LABELS = {
@@ -45,6 +45,7 @@
     try { autoConfig = await apiGet('/api/automation/config') } catch {}
     try { scheduleConfig = await apiGet('/api/automation/schedule') } catch {}
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
+    loadPiholeData()
     try {
       const data = await apiGet('/api/routines')
       const routines = data.routines || []
@@ -159,6 +160,140 @@
     saveWinddownConfig({ hour: h, minute: m })
   }
 
+  // ----- Pi-hole DNS & Blocklist management -----
+
+  const RECOMMENDED_LISTS = [
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/multi.txt', label: 'Hagezi Multi' },
+    { url: 'https://big.oisd.nl/', label: 'OISD Full' },
+    { url: 'https://v.firebog.net/hosts/AdguardDNS.txt', label: 'AdGuard DNS' },
+    { url: 'https://v.firebog.net/hosts/Easyprivacy.txt', label: 'EasyPrivacy' },
+    { url: 'https://v.firebog.net/hosts/Easylist.txt', label: 'EasyList' },
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/tif.txt', label: 'Hagezi TIF (Threats)' },
+    { url: 'https://phishing.army/download/phishing_army_blocklist.txt', label: 'Phishing Army' },
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/fake.txt', label: 'Hagezi Fake/Scam' },
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/native.winoffice.txt', label: 'Windows Telemetry' },
+  ]
+
+  const DEFAULT_DNS_HOSTS = [
+    { ip: '192.168.1.210', hostname: 'homehub.local' },
+    { ip: '192.168.1.210', hostname: 'pihole.local' },
+    { ip: '192.168.1.50', hostname: 'hue.local' },
+    { ip: '192.168.1.157', hostname: 'sonos.local' },
+    { ip: '192.168.1.30', hostname: 'desktop.local' },
+    { ip: '192.168.1.209', hostname: 'tablet.local' },
+  ]
+
+  /** @type {any[] | null} */
+  let dnsHosts = null
+  /** @type {any[] | null} */
+  let blocklists = null
+  let newDnsHostname = ''
+  let newDnsIp = ''
+  let newBlocklistUrl = ''
+  let piholeAvailable = false
+
+  async function loadPiholeData() {
+    try {
+      const dnsResp = await apiGet('/api/pihole/dns')
+      dnsHosts = dnsResp.dns_hosts || []
+      piholeAvailable = true
+    } catch { dnsHosts = null }
+    try {
+      const listsResp = await apiGet('/api/pihole/lists')
+      blocklists = listsResp.lists || []
+    } catch { blocklists = null }
+  }
+
+  async function addDnsHost() {
+    if (!newDnsHostname || !newDnsIp) return
+    saving = 'dns-add'
+    try {
+      await apiPost('/api/pihole/dns', { ip: newDnsIp, hostname: newDnsHostname })
+      newDnsHostname = ''
+      newDnsIp = ''
+      const resp = await apiGet('/api/pihole/dns')
+      dnsHosts = resp.dns_hosts || []
+    } catch {}
+    saving = null
+  }
+
+  /** @param {{ ip: string, hostname: string }} record */
+  async function deleteDnsHost(record) {
+    saving = 'dns-del'
+    try {
+      await apiDelete(`/api/pihole/dns/${record.ip}/${record.hostname}`)
+      dnsHosts = (dnsHosts || []).filter(
+        (/** @type {any} */ r) => !(r.ip === record.ip && r.hostname === record.hostname)
+      )
+    } catch {}
+    saving = null
+  }
+
+  async function addAllDefaultDns() {
+    saving = 'dns-defaults'
+    for (const host of DEFAULT_DNS_HOSTS) {
+      const exists = (dnsHosts || []).some(
+        (/** @type {any} */ r) => r.ip === host.ip && r.hostname === host.hostname
+      )
+      if (!exists) {
+        try { await apiPost('/api/pihole/dns', host) } catch {}
+      }
+    }
+    try {
+      const resp = await apiGet('/api/pihole/dns')
+      dnsHosts = resp.dns_hosts || []
+    } catch {}
+    saving = null
+  }
+
+  /** @param {string} url */
+  async function addBlocklist(url) {
+    saving = 'list-add'
+    try {
+      await apiPost('/api/pihole/lists', { address: url })
+      const resp = await apiGet('/api/pihole/lists')
+      blocklists = resp.lists || []
+      newBlocklistUrl = ''
+    } catch {}
+    saving = null
+  }
+
+  /** @param {string} address */
+  async function deleteBlocklist(address) {
+    saving = 'list-del'
+    try {
+      await apiDelete(`/api/pihole/lists/${encodeURIComponent(address)}`)
+      blocklists = (blocklists || []).filter((/** @type {any} */ l) => l.address !== address)
+    } catch {}
+    saving = null
+  }
+
+  async function addAllRecommendedLists() {
+    saving = 'lists-recommended'
+    const existingUrls = new Set((blocklists || []).map((/** @type {any} */ l) => l.address))
+    for (const list of RECOMMENDED_LISTS) {
+      if (!existingUrls.has(list.url)) {
+        try { await apiPost('/api/pihole/lists', { address: list.url }) } catch {}
+      }
+    }
+    try {
+      const resp = await apiGet('/api/pihole/lists')
+      blocklists = resp.lists || []
+    } catch {}
+    saving = null
+  }
+
+  /** @param {string} url */
+  function getListLabel(url) {
+    const rec = RECOMMENDED_LISTS.find(l => l.url === url)
+    if (rec) return rec.label
+    try {
+      const u = new URL(url)
+      const parts = u.pathname.split('/')
+      return parts[parts.length - 1] || u.hostname
+    } catch { return url }
+  }
+
   /** @param {number} n */
   const pad = (n) => String(n).padStart(2, '0')
 </script>
@@ -185,6 +320,11 @@
         <span class="device-detail">{$deviceStatus.sonos ? 'Connected' : 'Offline'}</span>
       </div>
       {#if health}
+        <div class="device-row">
+          <span class="device-dot {health.devices?.pihole ? 'dot-green' : 'dot-red'}" />
+          <span class="device-name">Pi-hole</span>
+          <span class="device-detail">{health.devices?.pihole ? 'Connected' : 'Offline'}</span>
+        </div>
         <div class="device-row">
           <span class="device-dot dot-blue" />
           <span class="device-name">WebSocket Clients</span>
@@ -478,6 +618,116 @@
     {/if}
   </section>
 
+  <!-- Pi-hole Local DNS -->
+  {#if piholeAvailable}
+  <section class="widget">
+    <h2 class="widget-title">Local DNS</h2>
+    <div class="settings-card">
+      {#if dnsHosts && dnsHosts.length > 0}
+        <div class="pihole-list">
+          {#each dnsHosts as record (record.ip + record.hostname)}
+            <div class="pihole-list-item">
+              <div class="pihole-list-info">
+                <span class="pihole-list-primary">{record.hostname}</span>
+                <span class="pihole-list-secondary">{record.ip}</span>
+              </div>
+              <button
+                class="pihole-remove-btn"
+                on:click={() => deleteDnsHost(record)}
+                disabled={saving === 'dns-del'}
+              >x</button>
+            </div>
+          {/each}
+        </div>
+      {:else if dnsHosts}
+        <div class="pihole-empty">No custom DNS records</div>
+      {/if}
+
+      <div class="pihole-add-form">
+        <input
+          class="pihole-input"
+          type="text"
+          placeholder="hostname.local"
+          bind:value={newDnsHostname}
+        />
+        <input
+          class="pihole-input pihole-input-sm"
+          type="text"
+          placeholder="192.168.1.x"
+          bind:value={newDnsIp}
+        />
+        <button
+          class="action-btn"
+          on:click={addDnsHost}
+          disabled={!newDnsHostname || !newDnsIp || saving === 'dns-add'}
+        >Add</button>
+      </div>
+
+      <div class="action-row">
+        <button
+          class="action-btn"
+          on:click={addAllDefaultDns}
+          disabled={saving === 'dns-defaults'}
+        >
+          {saving === 'dns-defaults' ? 'Adding...' : 'Add All Devices'}
+        </button>
+        <span class="setting-hint">homehub, pihole, hue, sonos, desktop, tablet</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pi-hole Blocklists -->
+  <section class="widget">
+    <h2 class="widget-title">Blocklists</h2>
+    <div class="settings-card">
+      {#if blocklists && blocklists.length > 0}
+        <div class="pihole-list">
+          {#each blocklists as list (list.address)}
+            <div class="pihole-list-item">
+              <div class="pihole-list-info">
+                <span class="pihole-list-primary">{getListLabel(list.address)}</span>
+                <span class="pihole-list-secondary pihole-list-url">{list.address}</span>
+              </div>
+              <button
+                class="pihole-remove-btn"
+                on:click={() => deleteBlocklist(list.address)}
+                disabled={saving === 'list-del'}
+              >x</button>
+            </div>
+          {/each}
+        </div>
+      {:else if blocklists}
+        <div class="pihole-empty">No blocklists configured</div>
+      {/if}
+
+      <div class="pihole-add-form">
+        <input
+          class="pihole-input pihole-input-wide"
+          type="url"
+          placeholder="https://blocklist-url..."
+          bind:value={newBlocklistUrl}
+        />
+        <button
+          class="action-btn"
+          on:click={() => addBlocklist(newBlocklistUrl)}
+          disabled={!newBlocklistUrl || saving === 'list-add'}
+        >Add</button>
+      </div>
+
+      <div class="action-row">
+        <button
+          class="action-btn"
+          on:click={addAllRecommendedLists}
+          disabled={saving === 'lists-recommended'}
+        >
+          {saving === 'lists-recommended' ? 'Adding...' : 'Add Recommended Lists'}
+        </button>
+        <span class="setting-hint">{RECOMMENDED_LISTS.length} curated lists (ads, malware, tracking)</span>
+      </div>
+    </div>
+  </section>
+  {/if}
+
   <!-- Quick Actions -->
   <section class="widget">
     <h2 class="widget-title">Quick Actions</h2>
@@ -509,5 +759,114 @@
     .page-grid {
       grid-template-columns: minmax(0, 1fr);
     }
+  }
+
+  /* Pi-hole management */
+  .pihole-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .pihole-list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .pihole-list-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .pihole-list-primary {
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .pihole-list-secondary {
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .pihole-list-url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 240px;
+  }
+
+  .pihole-remove-btn {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(255, 60, 60, 0.15);
+    color: #ff6b6b;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+  }
+
+  .pihole-remove-btn:hover {
+    background: rgba(255, 60, 60, 0.3);
+  }
+
+  .pihole-add-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .pihole-input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .pihole-input:focus {
+    border-color: var(--text-secondary);
+  }
+
+  .pihole-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .pihole-input-sm {
+    flex: 0.6;
+  }
+
+  .pihole-input-wide {
+    flex: 2;
+  }
+
+  .pihole-empty {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 8px 0;
+    margin-bottom: 10px;
   }
 </style>
