@@ -129,6 +129,47 @@ class TestMusicAPI:
 # Routines
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Events
+# ---------------------------------------------------------------------------
+
+class TestEventsAPI:
+    """Verify /api/events endpoints."""
+
+    def test_summary_returns_structure(self, client):
+        resp = client.get("/api/events/summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "activity" in data
+        assert "lights" in data
+        assert "sonos" in data
+        assert "scenes" in data
+
+    def test_activity_returns_paginated(self, client):
+        resp = client.get("/api/events/activity")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total" in data
+        assert "events" in data
+
+    def test_patterns_returns_structure(self, client):
+        resp = client.get("/api/events/patterns")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "by_hour" in data
+        assert "overrides" in data
+
+    def test_timeline_returns_events(self, client):
+        resp = client.get("/api/events/timeline")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "events" in data
+
+
+# ---------------------------------------------------------------------------
+# Routines
+# ---------------------------------------------------------------------------
+
 class TestRoutinesAPI:
     """Verify /api/routines endpoint."""
 

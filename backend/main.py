@@ -26,6 +26,7 @@ from backend.api.routes.routines import router as routines_router
 from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.api.routes.plants import router as plants_router
+from backend.api.routes.events import router as events_router
 from backend.api.routes.pihole import router as pihole_router
 from backend.api.routes.weather import router as weather_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
@@ -165,6 +166,10 @@ async def lifespan(app: FastAPI):
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
     app.state.event_logger = event_logger
+
+    # Event query service — read-only aggregation over event tables
+    from backend.services.event_query_service import EventQueryService
+    app.state.event_query_service = EventQueryService()
 
     automation = AutomationEngine(
         hue=hue, hue_v2=hue_v2, ws_manager=ws_manager,
@@ -391,6 +396,7 @@ app.include_router(weather_router)
 app.include_router(pihole_router)
 app.include_router(plants_router)
 app.include_router(routines_router)
+app.include_router(events_router)
 
 # Serve the SvelteKit static build (must come after API routes).
 # Path is controlled by settings.FRONTEND_BUILD (default frontend-svelte/build).
