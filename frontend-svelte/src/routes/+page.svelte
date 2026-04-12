@@ -9,6 +9,7 @@
   import PiholeCard from '$lib/components/PiholeCard.svelte'
   import PlantWidget from '$lib/components/PlantWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
+  import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
 
   /** @type {any} */
   export let data = undefined
@@ -63,6 +64,7 @@
   </div>
 
   <MusicSuggestionToast />
+  <ModeSuggestionToast />
 </main>
 
 <style>

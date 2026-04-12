@@ -10,6 +10,7 @@ import { sonos } from './sonos.js'
 import { automation } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
+import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 
 /** @type {HubSocket | null} */
 let socket = null
@@ -59,6 +60,12 @@ export function initStores() {
           break
         case 'music_auto_played':
           showMusicAutoPlayed(data)
+          break
+        case 'mode_suggestion':
+          showModeSuggestion(data)
+          break
+        case 'mode_suggestion_dismissed':
+          dismissModeSuggestion()
           break
         default:
           break
