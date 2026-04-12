@@ -7,6 +7,8 @@ and serves the React frontend.
 import asyncio
 import json
 import logging
+import subprocess
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -46,10 +48,37 @@ from backend.utils.logger import logger  # noqa: F401 — triggers logging setup
 app_logger = logging.getLogger("home_hub.main")
 
 
+def _compute_build_id() -> str:
+    """
+    Identifier for the running code, used by the frontend to detect deploys
+    over the WebSocket and auto-reload the kiosk dashboard. Prefers the short
+    git SHA so a benign restart on the same commit doesn't trigger a reload;
+    falls back to a per-process UUID if git is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        sha = result.stdout.strip()
+        if sha:
+            return sha
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return uuid.uuid4().hex[:8]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle for the application."""
     app_logger.info("Starting Home Hub...")
+
+    app.state.build_id = _compute_build_id()
+    app_logger.info(f"Build ID: {app.state.build_id}")
 
     # Initialize database
     await init_db()
@@ -342,6 +371,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         "data": {
             "hue": hue.connected,
             "sonos": sonos.connected,
+            "build_id": websocket.app.state.build_id,
         },
     }))
 

@@ -5,6 +5,13 @@
 const MAX_RECONNECT_DELAY = 30_000
 const INITIAL_RECONNECT_DELAY = 1_000
 
+// Auto-reload-on-deploy: the backend includes its build_id (short git SHA)
+// in every connection_status message. The first one we see is "current"; if
+// a later one differs (after the WS reconnects following a deploy restart),
+// the page is running stale JS and we reload to pick up the new bundle.
+/** @type {string | null} */
+let knownBuildId = null
+
 /**
  * @typedef {{ type: string, data: unknown }} HubMessage
  */
@@ -41,6 +48,18 @@ export class HubSocket {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data)
+        if (message?.type === 'connection_status') {
+          const incoming = /** @type {any} */ (message.data)?.build_id
+          if (typeof incoming === 'string' && incoming) {
+            if (knownBuildId === null) {
+              knownBuildId = incoming
+            } else if (incoming !== knownBuildId) {
+              console.info(`[ws] build_id changed (${knownBuildId} → ${incoming}), reloading`)
+              window.location.reload()
+              return
+            }
+          }
+        }
         this._onMessage(message)
       } catch (e) {
         console.error('WebSocket parse error:', e)
