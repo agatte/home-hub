@@ -73,6 +73,16 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Music suggestion toasts on mode change
 - Typography: Bebas Neue (display/mode headlines) + Source Sans 3 (body/UI)
 
+### Network & DNS
+
+- **Pi-hole v6** running in Docker (host networking) on the Latitude for network-wide DNS ad blocking
+- 2M+ domains blocked across 10 curated blocklists (ads, malware, phishing, tracking, Windows telemetry)
+- Local DNS records for all network devices: `homehub.local`, `pihole.local`, `hue.local`, `sonos.local`, `desktop.local`, `tablet.local`
+- Dashboard Network widget showing real-time stats (block percentage, total queries, blocklist size, active clients)
+- Settings page management for local DNS records and blocklists (add/remove, one-click bulk add)
+- Per-device DNS configuration (apartment router is locked — no DHCP DNS control)
+- Pi-hole admin UI at `http://192.168.1.210:8080/admin`
+
 ### Known Issues & Pain Points
 
 **Automation timing:**
@@ -127,8 +137,14 @@ Browser / Phone (PWA)
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed
    ├── WebSocketManager ───────────> bidirectional real-time sync
+   ├── PiholeService (httpx) ────────> Pi-hole v6 API (DNS stats, blocklists, local DNS)
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves SvelteKit static build from frontend-svelte/build/ (via FRONTEND_BUILD env)
+
+Pi-hole (Docker container, host networking, same machine)
+   └── pihole/pihole:latest ───────> DNS on :53, web admin on :8080
+       ├── Network-wide ad/malware/tracking blocking (2M+ domains)
+       └── Local DNS (homehub.local, pihole.local, hue.local, etc.)
 
 PC Agent (split across two machines, parallel-forever architecture)
    ├── activity_detector.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
@@ -224,6 +240,7 @@ External APIs (cloud):
 | TTS | edge-tts (Microsoft neural voices), gTTS fallback |
 | Screen Sync | mss (screen capture), RGB→HSB conversion |
 | PC Agent | psutil (process detection), PyAudio (ambient noise) |
+| DNS / Ad Blocking | Pi-hole v6 (Docker, host networking), session-based REST API |
 | Config | pydantic-settings, python-dotenv |
 | Timezone | America/Indiana/Indianapolis |
 
@@ -1251,6 +1268,12 @@ Auto-login enabled so power-on → desktop with no keystrokes.
 - `home-hub-ambient.service` (systemd user unit) — ambient noise
   monitor via laptop built-in mic, `ExecStartPre` polls `/health`
   until backend ready before starting
+- **Pi-hole** (Docker container, host networking) — DNS ad blocker on
+  port 53, web admin on port 8080. Compose file at
+  `docker/pihole/docker-compose.yml`, config persisted in
+  `docker/pihole/etc-pihole/`. Requires `PIHOLE_PASSWORD` env var for
+  `docker compose up`. systemd-resolved DNS stub disabled
+  (`DNSStubListener=no`) to free port 53.
 - **Firefox kiosk** — auto-launches on GNOME login via
   `~/.config/autostart/home-hub-kiosk.desktop`, displays
   `http://localhost:8000` fullscreen on the built-in laptop display.
@@ -1347,6 +1370,7 @@ are LAN-only.
 - ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
 - ✓ **Science-based night work lighting** — 2700K bias lamp only when working at night
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering, and opens the full app in an in-dashboard iframe modal
+- ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across 10 curated blocklists, Network widget on dashboard, local DNS for all devices (homehub.local, etc.), Settings page management for DNS records and blocklists, per-device DNS config (apartment router locked)
 
 ### Phase 2a: Post-Cutover Cleanup (Complete)
 
@@ -1410,6 +1434,8 @@ cleanup landed:
 - **Edge-tts requires internet** — TTS falls back to gTTS (also internet). No offline TTS option currently.
 - **1080p landscape primary** — Animated backgrounds and layout designed for this resolution. Must degrade gracefully on mobile.
 - **Indiana timezone** — America/Indiana/Indianapolis has unique DST rules. All scheduling must use this timezone explicitly.
+- **Apartment router locked** — UISP Fiber router has no admin access; DNS must be configured per-device. Hue Bridge and Sonos cannot be configured for custom DNS (they use DHCP DNS from the router).
+- **Pi-hole on same machine** — Pi-hole Docker runs on the Latitude alongside Home Hub. If Docker or the container goes down, DNS resolution fails for devices using Pi-hole. Fallback DNS (1.1.1.1) configured on desktop and phone.
 
 ## Non-Goals
 

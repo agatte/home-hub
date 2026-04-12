@@ -7,9 +7,16 @@ Comprehensive audit covering backend, frontend, security, performance,
 observability, documentation, DevOps, tooling, and future roadmap.
 
 System: Single-user, always-on home automation dashboard
-Stack:  FastAPI + SvelteKit + SQLite + WebSocket
+Stack:  FastAPI + SvelteKit + SQLite + WebSocket + Pi-hole (Docker)
 Prod:   Dell Latitude 7420 (Ubuntu 24.04) kiosk mode at 192.168.1.210
 Dev:    Windows desktop at 192.168.1.30
+
+Post-audit additions (2026-04-12):
+  - Pi-hole v6 DNS ad blocker (Docker, host networking on Latitude)
+  - 2M+ domain blocklist (10 curated lists: ads, malware, tracking, telemetry)
+  - Local DNS for all network devices (homehub.local, pihole.local, etc.)
+  - Network widget on dashboard + Settings page management (DNS + blocklists)
+  - Per-device DNS config (desktop + iPhone → 192.168.1.210)
 
 ================================================================================
                               GRADING SUMMARY

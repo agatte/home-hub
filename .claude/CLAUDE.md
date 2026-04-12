@@ -115,6 +115,7 @@ python -m backend.mcp_server
 - `get_sonos_status()` / `sonos_play()` / `sonos_pause()` / `sonos_volume(vol)` — Sonos
 - `get_sonos_favorites()` / `get_mode_playlists()` — music
 - `get_routines()` — routine configs
+- `get_pihole_stats()` — Pi-hole DNS stats (queries, blocked, blocklist size)
 - `query_db(sql)` — read-only SQLite queries (SELECT only)
 
 **Registered in:** `.mcp.json` (project root — Claude Code auto-loads this on startup and prompts to approve on first run)
@@ -157,9 +158,13 @@ Browser / Phone (PWA)
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed
+   ├── PiholeService (httpx) ──────> Pi-hole v6 API (stats, DNS, blocklists)
    ├── WebSocketManager ───────────> bidirectional real-time sync
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves SvelteKit static build from frontend-svelte/build/
+
+Pi-hole (Docker container, host networking, same machine)
+   └── pihole/pihole:latest ───────> DNS on :53, admin on :8080
 
 PC Agent (standalone processes, same machine)
    ├── activity_detector.py ───────> psutil → POST /api/automation/activity
@@ -210,6 +215,7 @@ Key additions beyond current:
 - **`winddown_routine.py`** — Evening relax: activates candlelight + dims lights + lowers volume + brief TTS.
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML (plistlib). Extracts artist play counts, genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` for discovery. Caches in DB (30-day TTL). Mode-specific seed selection with cross-mode dedup.
+- **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
 - **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 15s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`.
 - **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS measurement. Party detection: sustained noise >2min + no game = "social". Never records audio.
 
@@ -346,6 +352,18 @@ All messages: JSON with `type` + `data` fields.
 | POST | `/api/routines/morning/test` | Test morning routine |
 | POST | `/api/routines/winddown/test` | Test winddown routine |
 | POST | `/api/routines/morning/toggle` | Toggle on/off |
+
+### Pi-hole
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/pihole/stats` | Summary stats (queries, blocked, percentage, blocklist size) |
+| GET | `/api/pihole/top-blocked` | Most frequently blocked domains |
+| GET | `/api/pihole/dns` | List local DNS records |
+| POST | `/api/pihole/dns` | Add DNS record `{ip, hostname}` |
+| DELETE | `/api/pihole/dns/{ip}/{hostname}` | Remove DNS record |
+| GET | `/api/pihole/lists` | List blocklists |
+| POST | `/api/pihole/lists` | Add blocklist `{address}` |
+| DELETE | `/api/pihole/lists/{address}` | Remove blocklist |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -606,7 +624,7 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 
 | Device | IP | Notes |
 |--------|----|-------|
-| **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04 LTS, `homehub-dashboard`. Runs FastAPI backend + ambient monitor as systemd user services, Firefox kiosk via GNOME autostart. Always-on 24/7. Static IP via NetworkManager.** |
+| **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04 LTS, `homehub-dashboard`. Runs FastAPI backend + ambient monitor as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker container (DNS on :53, admin on :8080). Always-on 24/7. Static IP via NetworkManager.** |
 | Windows desktop (dev) | 192.168.1.30 | Code editing, `git push`, local testing. Runs PC activity detector via Task Scheduler (hidden `pythonw.exe`, `--server http://192.168.1.210:8000`). Claude Code's MCP server uses `HOME_HUB_URL` Windows user env var to point at the Latitude. |
 | Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
 | Sonos Era 100 | 192.168.1.157 | "Bedroom" speaker. `SONOS_IP` hardcoded in `.env` on the Latitude to defeat cold-boot SSDP discovery race. |
@@ -639,7 +657,8 @@ home-hub/
 │   │   │   ├── sonos.py         # Playback + favorites + music map
 │   │   │   ├── automation.py    # Activity + schedule + brightness + screen sync
 │   │   │   ├── routines.py      # Morning + winddown + settings helpers
-│   │   │   └── music.py         # Library import + recommendations
+│   │   │   ├── music.py         # Library import + recommendations
+│   │   │   └── pihole.py        # Pi-hole stats, DNS hosts, blocklists
 │   │   └── schemas/
 │   │       ├── lights.py
 │   │       ├── sonos.py
@@ -659,6 +678,7 @@ home-hub/
 │       ├── music_mapper.py       # Mode → playlist mapping
 │       ├── library_import_service.py  # Apple Music XML parser
 │       ├── recommendation_service.py  # Last.fm similar → mode recs
+│       ├── pihole_service.py          # Pi-hole v6 API (stats, DNS, blocklists)
 │       └── pc_agent/
 │           ├── activity_detector.py   # Process monitoring (standalone)
 │           ├── ambient_monitor.py     # Blue Yeti mic (standalone)
@@ -689,6 +709,11 @@ home-hub/
 │           │   ├── GenerativeCanvas.svelte  # Perlin noise flow field (Canvas2D, 15fps)
 │           │   └── MoonScene.svelte         # Threlte sleeping scene overlay
 │           └── styles/global.css
+├── docker/
+│   └── pihole/
+│       ├── docker-compose.yml   # Pi-hole v6 container (host networking)
+│       ├── setup.sh             # Automated setup: Docker install + systemd-resolved fix
+│       └── etc-pihole/          # Pi-hole config (gitignored, Docker volume)
 ├── data/                        # SQLite DB (gitignored)
 └── logs/                        # Log files (gitignored)
 ```
