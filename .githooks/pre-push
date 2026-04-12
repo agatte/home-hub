@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pre-push hook — runs lint checks before allowing git push.
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+echo "=== Pre-push: Python lint ==="
+ruff check backend/ --quiet
+
+echo "=== Pre-push: Svelte check ==="
+cd frontend-svelte && npm run check 2>/dev/null
+
+echo "=== Pre-push: All checks passed ==="

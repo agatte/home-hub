@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
+from backend.rate_limit import limiter
 
 router = APIRouter(prefix="/api/sonos", tags=["sonos"])
 
@@ -101,6 +102,7 @@ async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
 
 
 @router.post("/tts")
+@limiter.limit("10/minute")
 async def speak_text(body: TTSRequest, request: Request) -> dict:
     """
     Generate TTS audio and play it on the Sonos speaker.

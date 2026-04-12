@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
+from backend.rate_limit import limiter
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
@@ -93,6 +94,7 @@ async def remove_mode_playlist(mapping_id: int, request: Request) -> dict:
 # ------------------------------------------------------------------
 
 @router.post("/import")
+@limiter.limit("5/minute")
 async def import_library(file: UploadFile, request: Request) -> dict:
     """
     Import an Apple Music / iTunes library XML file.

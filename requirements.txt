@@ -34,3 +34,10 @@ aiofiles>=23.0.0          # Async file operations
 # Developer tooling
 fastmcp>=2.0.0            # MCP server for Claude Code integration
 ruff>=0.4.0               # Python linting + formatting
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Rate limiting
+slowapi>=0.1.9

@@ -15,6 +15,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from backend.api.routes.automation import router as automation_router
 from backend.api.routes.health import router as health_router
@@ -321,12 +323,17 @@ async def lifespan(app: FastAPI):
     await rec_service.close()
 
 
+# Rate limiter — prevents abuse from rogue LAN clients
+from backend.rate_limit import limiter  # noqa: E402 — after route imports to avoid circular
+
 app = FastAPI(
     title="Home Hub",
     description="Unified home automation dashboard — Hue lights, Sonos, smart automation.",
     version="2.0.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — allow frontend dev server, kiosk, and local network clients
 _CORS_ORIGINS = [

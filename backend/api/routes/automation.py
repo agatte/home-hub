@@ -9,6 +9,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from backend.rate_limit import limiter
+
 from backend.api.routes.routines import load_setting, save_setting
 from backend.api.schemas.automation import (
     ActivityReport,
@@ -93,6 +95,7 @@ async def get_status(request: Request) -> AutomationStatus:
 
 
 @router.post("/override")
+@limiter.limit("10/minute")
 async def set_override(override: ManualOverride, request: Request) -> dict:
     """
     Manually override the current automation mode.
