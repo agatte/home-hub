@@ -21,6 +21,7 @@
     "@threlte/core": "^7.3.0",
     "@threlte/extras": "^8.11.0",
     "lucide-svelte": "^1.0.1",
+    "qrcode": "^1.5.4",
     "simplex-noise": "^4.0.3",
     "three": "^0.163.0"
   }
