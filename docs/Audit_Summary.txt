@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB - FULL APPLICATION AUDIT
-                              Date: April 12, 2026
+                    Date: April 12, 2026 (updated same day)
 ================================================================================
 
 Comprehensive audit covering backend, frontend, security, performance,
@@ -23,26 +23,26 @@ Dev:    Windows desktop at 192.168.1.30
                                   but memory leaks, dead code, accessibility gaps
   Design / UX             B+      Bold, distinctive aesthetic with generative
                                   canvas + glass cards. Responsive untested
-  Security                D       CORS wide open, zero auth, no rate limiting,
-                                  unvalidated WebSocket messages, file upload risks
+  Security                C       CORS locked to LAN origins, rate limiting added,
+                                  WebSocket validated. Still no auth, file upload risks
   Performance             B-      Aggressive polling (1-2s), canvas perf OK
                                   but no lazy loading for Three.js
-  Observability           D+      Basic logging exists but no rotation, no
+  Observability           C-      Log rotation added (5MB, 3 backups). Still no
                                   structured logs, no metrics, no alerting
-  Testing                 F       Zero tests. No unit, integration, or E2E
-                                  tests anywhere
+  Testing                 D+      pytest suite: 36 tests (automation engine,
+                                  API, WebSocket). GitHub Actions CI on push
   Documentation           B+      PROJECT_SPEC is excellent, CLAUDE.md thorough,
                                   but some staleness and missing ops runbook
   DevOps / Deployment     C-      deploy.sh works but no rollback, no backups,
                                   no CI/CD, systemd files not versioned
-  Tooling / DX            B       MCP integration excellent, Claude Code hooks
-                                  good, missing pre-commit and profiling tools
+  Tooling / DX            B+      MCP integration excellent, Claude Code hooks,
+                                  GitHub Actions CI, pre-push hook, pytest
   Future Readiness        B       Good foundation for learning engine + game day,
                                   needs event bugs fixed and test coverage first
   ---------------------   -----   --------------------------------------------------
-  OVERALL GRADE           C+      Strong vision and solid core, but production
-                                  hygiene is critically underbuilt for an
-                                  always-on system
+  OVERALL GRADE           B-      Strong vision and solid core. Security,
+                                  testing, and observability foundations now
+                                  in place. Backups and monitoring still needed
 
 ================================================================================
                             CATEGORY DETAILS
@@ -281,54 +281,54 @@ Dev:    Windows desktop at 192.168.1.30
                             ACTIVE BUGS FOUND
 ================================================================================
 
-  Bug                                           Location              Severity
+  Bug                                           Location              Status
   -------------------------------------------   -------------------   --------
-  TypeError: can't subtract offset-naive and    event_logger.py       HIGH
-  offset-aware datetimes                        (seen 6x in logs)
+  TypeError: can't subtract offset-naive and    event_logger.py       FIXED
+  offset-aware datetimes                        (commit 3482ecc)      (hardened)
 
-  NameError: name 'make_udp_sock' is not        fauxmo_service.py     HIGH
-  defined (voice control broken)
+  NameError: name 'make_udp_sock' is not        fauxmo_service.py     FIXED
+  defined (voice control broken)                                      (was stale)
 
-  Memory leak in GenerativeCanvas store         GenerativeCanvas      MEDIUM
+  Memory leak in GenerativeCanvas store         GenerativeCanvas      OPEN
   subscriptions                                 .svelte:40-61
 
-  Silent API error swallowing                   api.js:27/41/50       MEDIUM
+  Silent API error swallowing                   api.js:27/41/50       OPEN
 
-  WebSocket JSON parse crash on malformed       main.py:397           MEDIUM
-  messages
+  WebSocket JSON parse crash on malformed       main.py:418           FIXED
+  messages                                      (commit 3482ecc)
 
 ================================================================================
                         TOP PRIORITY ACTION ITEMS
 ================================================================================
 
-  THIS WEEK (critical fixes):
+  COMPLETED (April 12, 2026):
   -----------------------------------------------------------------------
-  1. Fix CORS to specific origins (backend/main.py:323)
-  2. Fix event_logger datetime timezone bug
-  3. Fix fauxmo make_udp_sock import
-  4. Add RotatingFileHandler to logger.py (5MB max, 3 backups)
-  5. Add try-catch around WebSocket json.loads() in main.py
-  6. Add daily SQLite backup cron on Latitude
+  [x] 1.  Fix CORS to specific origins (commit 3482ecc)
+  [x] 2.  Fix event_logger datetime timezone bug (commit 3482ecc)
+  [x] 3.  Fix fauxmo make_udp_sock -- already fixed in current code
+  [x] 4.  Add RotatingFileHandler to logger.py (commit 3482ecc)
+  [x] 5.  Add try-catch around WebSocket json.loads() (commit 3482ecc)
+  [x] 7.  Add pytest test suite -- 36 tests (commit f376e26)
+  [x] 8.  Add GitHub Actions workflow (commit f376e26)
+  [x] 14. Add rate limiting via slowapi (commit f376e26)
+  [x] 19. Add pre-push git hook (commit f376e26)
 
-  THIS MONTH (production hygiene):
+  REMAINING -- THIS MONTH:
   -----------------------------------------------------------------------
-  7.  Add pytest test suite -- start with automation engine mode priority
-  8.  Add GitHub Actions workflow (ruff + svelte-check on push)
-  9.  Version-control systemd service files in deployment/
-  10. Add Pydantic schemas for WebSocket messages
-  11. Add file upload size limit + content-type validation
-  12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
-  13. Install Uptime Kuma on Latitude for monitoring
+  [ ] 6.  Add daily SQLite backup cron on Latitude
+  [ ] 9.  Version-control systemd service files in deployment/
+  [ ] 10. Add Pydantic schemas for WebSocket messages
+  [ ] 11. Add file upload size limit + content-type validation
+  [ ] 12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
+  [ ] 13. Install Uptime Kuma on Latitude for monitoring
 
-  NEXT QUARTER (maturity):
+  REMAINING -- NEXT QUARTER:
   -----------------------------------------------------------------------
-  14. Add rate limiting (slowapi)
-  15. Add simple API key auth for write endpoints
-  16. Add Prometheus /metrics endpoint
-  17. Split automation_engine.py into smaller modules
-  18. Extract main.py lifespan to bootstrap.py
-  19. Add pre-push git hooks
-  20. Add deploy.sh rollback capability
+  [ ] 15. Add simple API key auth for write endpoints
+  [ ] 16. Add Prometheus /metrics endpoint
+  [ ] 17. Split automation_engine.py into smaller modules
+  [ ] 18. Extract main.py lifespan to bootstrap.py
+  [ ] 20. Add deploy.sh rollback capability
 
 ================================================================================
                           CREATIVE FEATURE IDEAS

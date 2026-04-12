@@ -93,6 +93,16 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Mobile experience could use more polish
 - ~~Three-page layout doesn't serve command center vision~~ — fixed: full-screen layout with floating nav, no sidebar
 
+**Infrastructure (from April 2026 audit):**
+- ~~CORS allows all origins~~ — fixed: locked to specific LAN IPs (localhost, Latitude, dev machine, tablet)
+- ~~No tests~~ — fixed: pytest suite with 36 tests (automation engine, health API, WebSocket protocol). GitHub Actions CI runs lint + tests on push
+- ~~No rate limiting~~ — fixed: slowapi (120/min default, 10/min on override/TTS, 5/min on file import)
+- ~~No log rotation~~ — fixed: RotatingFileHandler (5MB per file, 3 backups, 20MB max)
+- ~~WebSocket crashes on malformed JSON~~ — fixed: try-catch guard around json.loads()
+- No authentication on API endpoints (acceptable for LAN-only, revisit if Cloudflare Tunnel added)
+- No database backup automation
+- No uptime monitoring or alerting
+
 ---
 
 ## System Architecture
