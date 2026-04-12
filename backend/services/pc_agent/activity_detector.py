@@ -34,8 +34,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("home_hub.pc_agent")
 
-# How often to poll processes (seconds)
-POLL_INTERVAL = 15
+# How often to poll processes (seconds). Sets the worst-case lag between
+# starting an app (e.g., launching a game) and Home Hub reacting (lights +
+# music). 5s gives ~2.5s average lag at negligible CPU cost on the desktop.
+POLL_INTERVAL = 5
 
 # PC idle threshold for "away" mode (seconds)
 IDLE_THRESHOLD = 600  # 10 minutes
