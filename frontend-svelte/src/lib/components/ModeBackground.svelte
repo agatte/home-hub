@@ -3,20 +3,27 @@
   import { automation } from '$lib/stores/automation.js'
   import MoonScene from '$lib/backgrounds/MoonScene.svelte'
   import GenerativeCanvas from '$lib/backgrounds/GenerativeCanvas.svelte'
+  import PixelScene from '$lib/backgrounds/PixelScene.svelte'
+  import WindowScene from '$lib/backgrounds/WindowScene.svelte'
+  import LofiScene from '$lib/backgrounds/LofiScene.svelte'
 
-  $: isSleeping = $automation.mode === 'sleeping'
+  $: mode = $automation.mode
 </script>
 
-<!-- Generative canvas runs for all modes (including sleeping as underlayer) -->
-<GenerativeCanvas />
-
-<!-- MoonScene overlays on top during sleeping mode -->
-{#if isSleeping}
+{#if mode === 'sleeping'}
   <div class="mode-background">
     <Canvas>
       <MoonScene />
     </Canvas>
   </div>
+{:else if mode === 'gaming'}
+  <PixelScene />
+{:else if mode === 'working'}
+  <WindowScene />
+{:else if mode === 'relax'}
+  <LofiScene />
+{:else}
+  <GenerativeCanvas />
 {/if}
 
 <style>
