@@ -1045,12 +1045,33 @@ button:active, .btn:active, [role="button"]:active {
   font-size: 13px;
 }
 
+.mode-playlist-entry.entry-broken {
+  border: 1px solid var(--danger);
+  background: rgba(239, 68, 68, 0.08);
+}
+
 .entry-title {
   flex: 1;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.entry-warning {
+  font-size: 11px;
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.mode-playlist-select option:disabled {
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .entry-vibe {

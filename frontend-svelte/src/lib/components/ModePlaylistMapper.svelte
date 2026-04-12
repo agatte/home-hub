@@ -22,9 +22,21 @@
 
   /** @type {Record<string, any[]>} */
   let mappings = {}
-  /** @type {Array<{ title: string }>} */
+  /** @type {Array<{ title: string, uri: string, source: string }>} */
   let favorites = []
   let mounted = true
+
+  // A favorite with an empty `uri` is an Apple Music artist/station shortcut
+  // (or Sonos-curated container). The Sonos backend can't auto-play these
+  // because there's no static playable URI — the Sonos app resolves them on
+  // tap via the music service's wire protocol, which the home-hub doesn't
+  // implement. Surface this to the user instead of letting them pick a
+  // favorite that will silently fail.
+  /** @param {string} title */
+  function isUnsupported(title) {
+    const fav = favorites.find((f) => f.title === title)
+    return !!fav && !fav.uri
+  }
 
   onMount(async () => {
     try {
@@ -110,8 +122,15 @@
       </div>
       <div class="mode-playlist-entries">
         {#each entries as entry (entry.id)}
-          <div class="mode-playlist-entry">
+          {@const broken = isUnsupported(entry.favorite_title)}
+          <div class="mode-playlist-entry" class:entry-broken={broken}>
             <span class="entry-title">{entry.favorite_title}</span>
+            {#if broken}
+              <span
+                class="entry-warning"
+                title="This favorite is an Apple Music artist or station shortcut. The Sonos app can play it but Home Hub can't auto-play it. Remove this mapping and pick a playlist or album favorite instead."
+              >⚠ unsupported</span>
+            {/if}
             {#if entry.vibe}
               <span class="entry-vibe">{vibeLabel(entry.vibe)}</span>
             {/if}
@@ -129,7 +148,9 @@
             >
               <option value="">Add favorite…</option>
               {#each favorites as fav (fav.title)}
-                <option value={fav.title}>{fav.title}</option>
+                <option value={fav.title} disabled={!fav.uri}>
+                  {fav.title}{!fav.uri ? ' — unsupported' : ''}
+                </option>
               {/each}
             </select>
             <select
