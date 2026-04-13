@@ -4,10 +4,12 @@
   import MoonScene from '$lib/backgrounds/MoonScene.svelte'
   import GenerativeCanvas from '$lib/backgrounds/GenerativeCanvas.svelte'
   import PixelScene from '$lib/backgrounds/PixelScene.svelte'
-  import CityScene from '$lib/backgrounds/CityScene.svelte'
+  import ParallaxScene from '$lib/backgrounds/ParallaxScene.svelte'
   import AuroraScene from '$lib/backgrounds/AuroraScene.svelte'
+  import { LAYER_CONFIGS } from '$lib/backgrounds/layer-config.js'
 
   $: mode = $automation.mode
+  $: hasParallaxLayers = !!LAYER_CONFIGS[mode]
 </script>
 
 {#if mode === 'sleeping'}
@@ -16,10 +18,10 @@
       <MoonScene />
     </Canvas>
   </div>
+{:else if hasParallaxLayers}
+  <ParallaxScene {mode} />
 {:else if mode === 'gaming'}
   <PixelScene />
-{:else if mode === 'working'}
-  <CityScene />
 {:else if mode === 'relax'}
   <AuroraScene />
 {:else}
