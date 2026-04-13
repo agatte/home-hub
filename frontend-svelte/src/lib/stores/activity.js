@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store'
 
-const IDLE_TIMEOUT_MS = 10000 // 10 seconds
+const IDLE_TIMEOUT_MS = 60000 // 60 seconds
 
 /** Whether the user is currently idle (no mouse/touch/key for 60s) */
 export const userIdle = writable(false)
