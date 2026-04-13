@@ -1046,7 +1046,10 @@ class AutomationEngine:
 
     async def _sleep_fade(self) -> None:
         """
-        Gradually dim lights over 10 minutes then turn off.
+        Gradually dim lights then turn off.
+
+        Manual trigger: quick 2-minute fade (you asked for lights off).
+        Auto-detected: slow 10-minute fade (you drifted off naturally).
 
         Runs as a background task so it doesn't block the automation loop.
         Cancellable if the user wakes up (mouse/keyboard activity detected).
@@ -1058,14 +1061,20 @@ class AutomationEngine:
                 return
             current_bri = lights[0].get("bri", 80)
 
-            # 6 steps over 10 minutes (~100 seconds each)
-            steps = 6
-            step_interval = 100
+            # Manual = quick fade (2 min), auto = slow fade (10 min)
+            if self._manual_override:
+                steps = 4
+                step_interval = 30  # 4 steps × 30s = 2 minutes
+            else:
+                steps = 6
+                step_interval = 100  # 6 steps × 100s ≈ 10 minutes
+
             bri_step = current_bri / steps
+            total_min = steps * step_interval // 60
 
             logger.info(
                 f"Sleep fade started: {current_bri} → off over "
-                f"{steps * step_interval // 60} minutes"
+                f"{total_min} minutes ({'manual' if self._manual_override else 'auto'})"
             )
 
             for i in range(1, steps + 1):
