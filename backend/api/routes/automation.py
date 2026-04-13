@@ -91,6 +91,7 @@ async def get_status(request: Request) -> AutomationStatus:
             else None
         ),
         automation_enabled=engine.enabled,
+        manual_light_overrides=list(engine.manual_light_overrides),
     )
 
 

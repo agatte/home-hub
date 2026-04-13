@@ -489,6 +489,10 @@ class AutomationEngine:
         # Per-light state tracking for deduplication
         self._last_applied_per_light: dict[str, dict] = {}
 
+        # Per-light manual overrides — maps light_id → timestamp
+        # Lights in this dict are protected from automation until next mode change
+        self._manual_light_overrides: dict[str, datetime] = {}
+
         # Track if lights were turned off externally (Alexa geofence)
         self._external_off_detected: bool = False
 
@@ -541,6 +545,11 @@ class AutomationEngine:
     @property
     def last_activity_change(self) -> Optional[datetime]:
         return self._last_activity_change
+
+    @property
+    def manual_light_overrides(self) -> dict[str, datetime]:
+        """Light IDs with active per-light manual overrides."""
+        return self._manual_light_overrides
 
     @property
     def enabled(self) -> bool:
@@ -793,28 +802,35 @@ class AutomationEngine:
             if self._current_mode == "gaming":
                 return
 
-        # Accept the new mode
+        # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
         self._mode_source = source
         self._last_activity = mode
         self._last_activity_change = datetime.now(tz=TZ)
 
-        # Clear manual override on activity change
-        if self._manual_override and old_mode != mode:
-            logger.info(
-                f"Activity changed ({old_mode} → {mode}) — clearing manual override"
-            )
-            self._manual_override = False
-            self._override_mode = None
-            self._override_time = None
+        # If manual override is active, update detected mode silently but
+        # never clear the override — only the user or the 4h timeout should.
+        if self._manual_override:
+            if old_mode != mode:
+                logger.info(
+                    f"Activity changed ({old_mode} → {mode}) — "
+                    f"manual override active, keeping {self._override_mode}"
+                )
+                if self._event_logger:
+                    await self._event_logger.log_mode_change(
+                        mode=mode,
+                        previous_mode=old_mode,
+                        source=source,
+                    )
+            await self._broadcast_mode()
+            return
 
         # Clear external off detection on any activity
         if mode not in ("idle", "away"):
             self._external_off_detected = False
 
         # Apply the appropriate light state
-        if not self._manual_override:
-            await self._apply_mode(mode)
+        await self._apply_mode(mode)
 
         # Fire mode change callbacks (e.g., music auto-play)
         if old_mode != mode:
@@ -840,6 +856,7 @@ class AutomationEngine:
         self._override_time = datetime.now(tz=TZ)
         self._last_activity_change = self._override_time
 
+        self._clear_per_light_overrides()
         logger.info(f"Manual override set: {mode}")
         # Broadcast first so the UI updates immediately, then apply lights
         await self._broadcast_mode()
@@ -861,6 +878,7 @@ class AutomationEngine:
         self._override_mode = None
         self._override_time = None
 
+        self._clear_per_light_overrides()
         logger.info("Manual override cleared — returning to auto")
 
         # Re-apply current detected mode or time-based
@@ -873,6 +891,23 @@ class AutomationEngine:
         # Only fire callbacks if the effective mode actually changed
         if old_effective != self._current_mode:
             await self._fire_mode_change_callbacks(self._current_mode)
+
+    def mark_light_manual(self, light_id: str) -> None:
+        """Mark a light as manually adjusted — protects it from automation.
+
+        Per-light overrides are cleared on the next explicit mode change
+        (manual override set/cleared) so automation resumes naturally.
+        """
+        self._manual_light_overrides[light_id] = datetime.now(tz=TZ)
+        logger.info(f"Light {light_id} marked as manually overridden")
+
+    def _clear_per_light_overrides(self) -> None:
+        """Clear all per-light manual overrides."""
+        if self._manual_light_overrides:
+            logger.info(
+                f"Clearing per-light overrides: {list(self._manual_light_overrides)}"
+            )
+            self._manual_light_overrides.clear()
 
     async def set_social_style(self, style: str) -> None:
         """
@@ -1082,6 +1117,12 @@ class AutomationEngine:
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
         """Apply the same state to all lights (backward-compatible path)."""
+        # If any lights have manual overrides, fall through to per-light path
+        if self._manual_light_overrides:
+            per_light = {lid: state for lid in ("1", "2", "3", "4")}
+            await self._apply_per_light(per_light, transitiontime)
+            return
+
         # Convert to per-light for dedup tracking
         per_light = {lid: state for lid in ("1", "2", "3", "4")}
         if per_light == self._last_applied_per_light:
@@ -1098,9 +1139,23 @@ class AutomationEngine:
         self, states: dict[str, dict], transitiontime: int | None = None,
     ) -> None:
         """Apply individual states to each light (parallel when possible)."""
+        # Filter out lights with active manual overrides
+        if self._manual_light_overrides:
+            skipped = [lid for lid in states if lid in self._manual_light_overrides]
+            if skipped:
+                states = {
+                    lid: s for lid, s in states.items()
+                    if lid not in self._manual_light_overrides
+                }
+                logger.debug(f"Skipping manually overridden lights: {skipped}")
+                if not states:
+                    return
+
         # Optimization: if all lights get the same state, use the uniform path
         unique_states = list(states.values())
-        if all(s == unique_states[0] for s in unique_states):
+        if not self._manual_light_overrides and all(
+            s == unique_states[0] for s in unique_states
+        ):
             await self._apply_uniform(unique_states[0], transitiontime)
             return
 

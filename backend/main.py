@@ -520,6 +520,11 @@ async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -
 
     await hue.set_light(light_id, state)
 
+    # Mark this light as manually overridden so automation skips it
+    automation = getattr(app.state, "automation", None)
+    if automation:
+        automation.mark_light_manual(str(light_id))
+
     # Broadcast updated state to all clients
     updated = await hue.get_light(light_id)
     if updated:

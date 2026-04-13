@@ -82,6 +82,11 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     if not success:
         raise HTTPException(status_code=500, detail="Failed to set light state")
 
+    # Mark this light as manually overridden so automation skips it
+    automation = getattr(request.app.state, "automation", None)
+    if automation:
+        automation.mark_light_manual(str(light_id))
+
     # Broadcast update to WebSocket clients
     updated = await hue.get_light(light_id)
     if updated:

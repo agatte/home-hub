@@ -52,6 +52,10 @@ class AutomationStatus(BaseModel):
         default=True,
         description="Whether the automation engine is active",
     )
+    manual_light_overrides: list[str] = Field(
+        default_factory=list,
+        description="Light IDs with active per-light manual overrides",
+    )
 
 
 class ManualOverride(BaseModel):
