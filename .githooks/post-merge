@@ -1,0 +1,19 @@
+#!/bin/bash
+# Post-merge hook — restarts the PC activity detector if game_list or
+# activity_detector changed. Only runs on Windows (dev machine).
+
+if [[ "$OS" != "Windows_NT" ]]; then
+    exit 0
+fi
+
+CHANGED=$(git diff-tree -r --name-only ORIG_HEAD HEAD)
+
+if echo "$CHANGED" | grep -qE "pc_agent/(game_list|activity_detector)\.py$"; then
+    echo "=== Post-merge: PC agent code changed, restarting detector ==="
+    powershell -Command "
+        Get-Process pythonw -ErrorAction SilentlyContinue | Stop-Process -Force
+        Start-Sleep -Seconds 1
+        Start-Process pythonw -ArgumentList '-m','backend.services.pc_agent.activity_detector','--server','http://192.168.1.210:8000' -WorkingDirectory 'C:\Users\antho\Desktop\home-hub' -WindowStyle Hidden
+        Write-Host 'Detector restarted'
+    "
+fi
