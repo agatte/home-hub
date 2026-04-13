@@ -10,12 +10,17 @@ Usage:
     python -m backend.services.pc_agent.activity_detector --server http://192.168.1.30:8000
 """
 import argparse
+import atexit
 import ctypes
 import ctypes.wintypes
 import logging
+import os
+import signal
 import sys
 import time
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -28,11 +33,33 @@ from backend.services.pc_agent.game_list import (
     WORK_PROCESSES,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+# ---------------------------------------------------------------------------
+# Logging — file + console (file captures errors even under pythonw.exe)
+# ---------------------------------------------------------------------------
+
+LOG_DIR = Path("logs")
+LOG_FILE = LOG_DIR / "activity_detector.log"
+PID_FILE = LOG_DIR / "activity_detector.pid"
+
+LOG_DIR.mkdir(exist_ok=True)
+
 logger = logging.getLogger("home_hub.pc_agent")
+logger.setLevel(logging.INFO)
+
+_fmt = logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+
+# Console handler (no-op under pythonw.exe, but useful for manual runs)
+_console = logging.StreamHandler()
+_console.setFormatter(_fmt)
+logger.addHandler(_console)
+
+# Rotating file handler — 5 MB, 2 backups
+_file_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8",
+)
+_file_handler.setFormatter(_fmt)
+logger.addHandler(_file_handler)
+
 
 # How often to poll processes (seconds). Sets the worst-case lag between
 # starting an app (e.g., launching a game) and Home Hub reacting (lights +
@@ -49,6 +76,105 @@ LATE_NIGHT_START = 21  # 9 PM
 SLEEP_DETECT_HOUR = 22    # 10 PM
 SLEEP_DETECT_MINUTE = 30  # :30
 SLEEP_IDLE_THRESHOLD = 900  # 15 minutes
+
+
+# ---------------------------------------------------------------------------
+# Single-instance PID lock
+# ---------------------------------------------------------------------------
+
+
+def _is_detector_process(proc: psutil.Process) -> bool:
+    """Check if a process is an activity_detector instance."""
+    try:
+        cmdline = " ".join(proc.cmdline()).lower()
+        return "activity_detector" in cmdline
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+
+def _kill_process_tree(pid: int) -> None:
+    """Kill a process and all its children."""
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            logger.info(f"Killing child process {child.pid} ({child.name()})")
+            child.kill()
+        parent.kill()
+        logger.info(f"Killed process {pid}")
+        # Wait for processes to actually terminate
+        gone, alive = psutil.wait_procs([parent, *children], timeout=5)
+        for p in alive:
+            logger.warning(f"Process {p.pid} did not terminate, forcing")
+            p.kill()
+    except psutil.NoSuchProcess:
+        pass
+    except Exception as e:
+        logger.error(f"Error killing process tree {pid}: {e}")
+
+
+def acquire_pid_lock() -> None:
+    """Ensure only one detector instance runs. Kill any existing instance."""
+    if PID_FILE.exists():
+        try:
+            old_pid = int(PID_FILE.read_text().strip())
+            old_proc = psutil.Process(old_pid)
+            if _is_detector_process(old_proc):
+                logger.info(
+                    f"Found existing detector (PID {old_pid}) — killing it"
+                )
+                _kill_process_tree(old_pid)
+                time.sleep(1)
+            else:
+                logger.info(
+                    f"PID file points to {old_pid} ({old_proc.name()}) "
+                    f"— not a detector, ignoring"
+                )
+        except (psutil.NoSuchProcess, ValueError):
+            logger.info("Stale PID file found — removing")
+        except Exception as e:
+            logger.warning(f"Error checking existing PID: {e}")
+
+    # Also scan for any orphaned detector processes not tracked by PID file
+    my_pid = os.getpid()
+    # Build set of PIDs in our own process ancestry (don't kill our parents)
+    my_ancestors: set[int] = {my_pid}
+    try:
+        p = psutil.Process(my_pid)
+        while p.ppid() and p.ppid() != p.pid:
+            my_ancestors.add(p.ppid())
+            p = psutil.Process(p.ppid())
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+
+    for proc in psutil.process_iter(["pid", "name"]):
+        pid = proc.info["pid"]
+        if pid in my_ancestors:
+            continue
+        try:
+            if _is_detector_process(proc):
+                logger.info(
+                    f"Found orphaned detector (PID {pid}) — killing"
+                )
+                _kill_process_tree(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    # Write our PID
+    PID_FILE.write_text(str(os.getpid()))
+    logger.info(f"PID lock acquired (PID {os.getpid()}, file: {PID_FILE})")
+
+
+def release_pid_lock() -> None:
+    """Remove the PID file on clean exit."""
+    try:
+        if PID_FILE.exists():
+            stored_pid = int(PID_FILE.read_text().strip())
+            if stored_pid == os.getpid():
+                PID_FILE.unlink()
+                logger.info("PID lock released")
+    except Exception:
+        pass
 
 
 class ActivityDetector:
@@ -240,4 +366,9 @@ if __name__ == "__main__":
         help="Home Hub server URL (default: http://localhost:8000)",
     )
     args = parser.parse_args()
+
+    acquire_pid_lock()
+    atexit.register(release_pid_lock)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
     run_agent(args.server)
