@@ -17,16 +17,10 @@
 /** @type {Record<string, LayerDef[]>} */
 export const LAYER_CONFIGS = {
   working: [
-    // Sky — static, full viewport background
-    { src: '/backgrounds/working/sky.png', duration: 0, opacity: 1, zIndex: 0,
-      sizing: 'cover', anchor: 'full' },
-    // Far skyline — very slow, subtle depth behind the street scene
-    { src: '/backgrounds/working/buildings-far.png', duration: 120, opacity: 0.35, zIndex: 1,
-      sizing: 'tile', anchor: 'bottom', height: '50%' },
-    // Street scene — the hero layer. Has buildings + street + details baked in.
-    // Covers the lower 65% of viewport, scrolls at main speed.
-    { src: '/backgrounds/working/street.png', duration: 35, opacity: 1, zIndex: 3,
-      sizing: 'tile', anchor: 'bottom', height: '65%' },
+    // Single street scene — has buildings, streetlamps, characters baked in.
+    // Fills lower 75% with a code-drawn sky gradient above.
+    { src: '/backgrounds/working/street.png', duration: 40, opacity: 1, zIndex: 1,
+      sizing: 'tile', anchor: 'bottom', height: '75%' },
   ],
 }
 
