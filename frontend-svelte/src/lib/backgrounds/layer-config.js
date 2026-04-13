@@ -17,18 +17,18 @@
 /** @type {Record<string, LayerDef[]>} */
 export const LAYER_CONFIGS = {
   working: [
-    // Sky — static, covers full viewport
+    // Sky — static, covers full viewport, anchored so clouds sit at bottom
     { src: '/backgrounds/working/sky.png', duration: 0, opacity: 1, zIndex: 0,
       sizing: 'cover', anchor: 'full' },
-    // Far city — slow scroll, anchored to bottom, only lower portion visible
-    { src: '/backgrounds/working/buildings-far.png', duration: 90, opacity: 0.6, zIndex: 1,
-      sizing: 'tile', anchor: 'bottom', height: '55%' },
-    // Near buildings — medium scroll, lower third only (image fills frame, clip it)
-    { src: '/backgrounds/working/buildings-near.png', duration: 55, opacity: 0.8, zIndex: 2,
-      sizing: 'tile', anchor: 'bottom', height: '35%' },
-    // Street level — fastest scroll, just the bottom strip
+    // Far city — slow scroll, covers lower 75% so silhouettes are large and visible
+    { src: '/backgrounds/working/buildings-far.png', duration: 90, opacity: 0.7, zIndex: 1,
+      sizing: 'tile', anchor: 'bottom', height: '75%' },
+    // Near buildings — medium scroll, covers lower 60%
+    { src: '/backgrounds/working/buildings-near.png', duration: 55, opacity: 0.9, zIndex: 2,
+      sizing: 'tile', anchor: 'bottom', height: '60%' },
+    // Street level — fastest scroll, covers lower 55%
     { src: '/backgrounds/working/street.png', duration: 30, opacity: 1, zIndex: 3,
-      sizing: 'tile', anchor: 'bottom', height: '30%' },
+      sizing: 'tile', anchor: 'bottom', height: '55%' },
   ],
 }
 
