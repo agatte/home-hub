@@ -58,3 +58,19 @@ class BarAppService:
             if self._cache:
                 return self._cache
             return None
+
+    async def notify_party_mode(self, activate: bool) -> bool:
+        """Tell the bar app to activate or deactivate party mode.
+
+        Called when Home Hub enters/leaves social mode.
+        """
+        endpoint = "/api/party/activate" if activate else "/api/party/deactivate"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(f"{self._api_url}{endpoint}")
+                resp.raise_for_status()
+                logger.info("Bar app party mode %s", "activated" if activate else "deactivated")
+                return True
+        except Exception as e:
+            logger.warning("Bar app party notify failed: %s", e)
+            return False

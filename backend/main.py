@@ -228,6 +228,16 @@ async def lifespan(app: FastAPI):
         from backend.services.bar_app_service import BarAppService
         bar_service = BarAppService(api_url=settings.BAR_APP_URL)
         app.state.bar_service = bar_service
+
+        # When Home Hub enters "social" mode, auto-activate bar party mode
+        async def _bar_mode_callback(new_mode: str, **kwargs) -> None:
+            if new_mode == "social":
+                await bar_service.notify_party_mode(True)
+            elif new_mode != "social":
+                # Only deactivate if we previously activated
+                pass  # Don't auto-deactivate — let the host control this
+
+        automation.register_on_mode_change(_bar_mode_callback)
         logger.info("Bar app service initialized (%s)", settings.BAR_APP_URL)
 
     # Weather service (OpenWeatherMap, cached 10 min)
