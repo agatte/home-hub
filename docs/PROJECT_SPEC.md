@@ -6,7 +6,7 @@
 
 Home Hub is an always-on personal command center built for one apartment and one person. It controls Philips Hue lights and a Sonos Era 100 speaker from a single, visually striking dashboard that's always running on a dedicated laptop display. The system is deeply integrated into daily life — it detects what you're doing, adjusts lighting and music to match, and learns your patterns over time until it can run on full autopilot.
 
-The dashboard isn't a boring control panel. It's a living interface with bold, mode-aware animated backgrounds — arcade birds drifting across the screen during relax mode, a rotating moon over a darkening city while sleeping, energy and motion during gaming. It shows everything at a glance: current mode, light colors, now playing, weather, upcoming routines. It's also a hub for other personal projects (plant tracking app, future bar app) with animated widget cards that link out to each one.
+The dashboard isn't a boring control panel. It's a living interface with bold, mode-aware themed backgrounds — a retro pixel art landscape during gaming, a scrolling pixel city during working, flowing aurora borealis for relax, a 3D moon scene over a city silhouette while sleeping. It shows everything at a glance: current mode, light colors, now playing, weather, upcoming routines. It's also a hub for other personal projects (plant tracking app, future bar app) with animated widget cards that link out to each one.
 
 The core focus is getting lights and music working seamlessly. Everything else builds on that foundation — voice control via Alexa, game day celebrations for the Colts, and an intelligence layer that observes everything (mode changes, manual overrides, music choices, light adjustments, routine interactions) and gradually takes over.
 
@@ -62,12 +62,19 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
 
-### Dashboard — "Living Ink" Design
+### Dashboard — Themed Backgrounds
 
-- **Generative canvas background** — Perlin noise flow field (Canvas2D, 15fps) with particle colors from live Hue light states. Music playing speeds up the flow. Each mode has unique algorithm parameters (gaming = turbulent, working = calm, social = fast/colorful). Monochrome drift when all lights off.
+- **Per-mode themed backgrounds** — each mode has a distinct visual scene:
+  - **Gaming**: `PixelScene.svelte` — code-drawn retro pixel art landscape (480×270 scaled 4×) with parallax mountains, walking sprites, twinkling stars, floating particles, shooting stars
+  - **Working**: `ParallaxScene.svelte` — AI-generated pixel art city street (PNG sprite sheet) with JS-driven parallax scroll, code-drawn sky gradient synced to weather/time of day
+  - **Relax**: `AuroraScene.svelte` — simplex noise-driven aurora borealis curtains with twinkling stars and treeline silhouette
+  - **Sleeping**: `MoonScene.svelte` — Three.js/Threlte 3D scene with orbiting moon, GLSL sky shader, procedural city silhouette with flickering windows, star field
+  - **Other modes**: `GenerativeCanvas.svelte` — three-layer system (gradient mesh blobs + flow-field particles + geometric overlay) as fallback
+- All scenes react to music (Sonos playing = faster motion, brighter effects)
+- `ModeBackground.svelte` routes the active mode to its scene component; only one scene renders at a time
 - **No sidebar** — floating glassmorphic bottom pill bar (Home, Music, Analytics, Settings) + mode overlay (Bebas Neue 36px all-caps mode name with character-stagger animation) + Now Playing chip
 - **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
-- **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the generative art + mode name. Tap anywhere to wake.
+- **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
 - **Weather widget** — OpenWeatherMap current conditions with 10-minute cache
 - Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (mode distribution, patterns, rules, activity feed), Settings (configuration)
 - Real-time WebSocket sync — changes from Alexa, Hue app, or physical switches reflected instantly
@@ -101,7 +108,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 **UI:**
 - ~~Too many taps for common actions~~ — fixed: quick action pill buttons + scene browser with category tabs
-- ~~Visual design feels generic and unpolished~~ — fixed: Living Ink redesign with generative canvas, glass cards, Bebas Neue typography
+- ~~Visual design feels generic and unpolished~~ — fixed: themed mode backgrounds (pixel art, parallax city, aurora, 3D moon), glass cards, Bebas Neue typography
 - ~~Hard to read at a glance~~ — fixed: mode overlay with large mode name, weather widget, Now Playing chip
 - Mobile experience could use more polish
 - ~~Three-page layout doesn't serve command center vision~~ — fixed: full-screen layout with floating nav, no sidebar
@@ -1103,25 +1110,32 @@ await ws_manager.broadcast("widget_data", {
 **Frontend (SvelteKit):**
 Widget cards on the home page subscribe to `widget_data` WebSocket events and render app-specific cards with animated icons. Tapping opens the full external app in a new tab.
 
-### Pattern 10: Generative Background ("Living Ink")
+### Pattern 10: Themed Mode Backgrounds
 
-The background uses a single `GenerativeCanvas.svelte` (Canvas2D) that reacts to live data instead of per-mode Threlte scenes:
+Each mode has a dedicated background scene. `ModeBackground.svelte` routes the active mode to the appropriate component — only one scene renders at a time.
 
 ```
 frontend-svelte/src/lib/backgrounds/
-├── GenerativeCanvas.svelte     ← Perlin noise flow field, data-reactive
-└── MoonScene.svelte            ← Threlte 3D scene (sleeping mode overlay)
+├── PixelScene.svelte           ← Gaming: code-drawn pixel art (480×270 scaled 4×)
+├── ParallaxScene.svelte        ← Working: AI-generated PNG with JS parallax scroll
+├── AuroraScene.svelte          ← Relax: simplex noise aurora curtains
+├── MoonScene.svelte            ← Sleeping: Threlte 3D moon + city scene
+├── GenerativeCanvas.svelte     ← Fallback: gradient blobs + particles + geometric overlay
+├── scene-utils.js              ← Shared: stars, rain, snow, canvas init
+└── layer-config.js             ← ParallaxScene layer definitions per mode
 ```
 
-**How it works:**
-- Perlin noise flow field with 200-400 particles leaving fading trails at 15fps
-- Particle colors sampled from live Hue light states (monochrome when all lights off)
-- Music playing → speed multiplier increases (1.0 → 1.3x)
-- Each mode has unique algorithm parameters in `theme.js` `MODE_CONFIG.generative`: frequency, speed, particleCount, trailAlpha, intensity
-- Mode changes smoothly interpolate parameters over ~800ms
-- `ModeBackground.svelte` renders GenerativeCanvas for all modes + MoonScene overlay for sleeping
-- `prefers-reduced-motion` drops to 2fps (near-static)
-- Away mode: static single frame, no animation loop
+**How routing works:**
+- `ModeBackground.svelte` checks `$automation.mode` and renders the matching scene
+- Sleeping → MoonScene (Three.js), Gaming → PixelScene, Working → ParallaxScene, Relax → AuroraScene
+- All other modes (idle, social, watching, movie, away) → GenerativeCanvas
+- All scenes subscribe to `sonos` store for music reactivity (speed boost, brightness pulse)
+- Scene components are destroyed on mode change (Svelte lifecycle), so only one runs at a time
+
+**Adding a new mode scene:**
+1. Create `NewScene.svelte` in `backgrounds/` — standalone component with its own canvas/animation
+2. Add routing in `ModeBackground.svelte`: `{:else if mode === 'newmode'} <NewScene />`
+3. For sprite-sheet scenes: add PNG to `static/backgrounds/newmode/`, define layers in `layer-config.js`
 
 ---
 
@@ -1132,7 +1146,7 @@ frontend-svelte/src/lib/backgrounds/
 The dashboard has been redesigned as a living, data-reactive interface:
 
 - ✓ **Full-screen layout** — No sidebar. Floating glassmorphic bottom pill bar (3 Lucide icons). Mode overlay with Bebas Neue 36px all-caps mode name + character-stagger animation.
-- ✓ **Generative canvas background** — Perlin noise flow field reacts to live Hue light colors, Sonos playback state, and mode parameters. Each mode has unique visual character.
+- ✓ **Themed mode backgrounds** — per-mode illustrated scenes: pixel art landscape (gaming), parallax city street (working), aurora borealis (relax), 3D moon scene (sleeping), gradient blobs + particles fallback (other modes). All react to music playback.
 - ✓ **Glass card widgets** — `backdrop-filter: blur(12px)`, staggered entrance animations, hover states. Home page: Now Playing strip, Quick Actions, Mode, Weather, Lights, Scenes, Routines.
 - ✓ **Auto-hide on idle** — Cards fade out after 60s, leaving just generative art + mode name. "Tap to wake" hint.
 - ✓ **Weather widget** — OpenWeatherMap current conditions (temp, feels-like, humidity, wind, hi/lo).
@@ -1463,7 +1477,7 @@ cleanup landed:
 
 ### Phase 5: Polish & Expand (September 2026+)
 
-- Remaining animated backgrounds (all modes + time-of-day variants)
+- Remaining mode backgrounds (social/club, watching/drive-in) + improved art assets (transparent layers, wider tiles)
 - Custom Alexa Skill (full voice control)
 - Apple Music API integration ($99/year)
 - Full autopilot learning from accumulated data
