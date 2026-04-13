@@ -39,6 +39,8 @@ desktop.ini
 
 # Screenshots / audit images
 *.png
+# Allow background art assets
+!frontend-svelte/static/backgrounds/**/*.png
 .playwright-mcp/
 
 # Frontend
