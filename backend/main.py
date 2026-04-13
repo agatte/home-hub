@@ -26,6 +26,7 @@ from backend.api.routes.routines import router as routines_router
 from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.api.routes.plants import router as plants_router
+from backend.api.routes.bar import router as bar_router
 from backend.api.routes.events import router as events_router
 from backend.api.routes.rules import router as rules_router
 from backend.api.routes.pihole import router as pihole_router
@@ -222,6 +223,13 @@ async def lifespan(app: FastAPI):
         app.state.plant_service = plant_service
         logger.info("Plant app service initialized")
 
+    # Bar app integration (Home Bar on LAN, cached 10 min)
+    if settings.BAR_APP_URL:
+        from backend.services.bar_app_service import BarAppService
+        bar_service = BarAppService(api_url=settings.BAR_APP_URL)
+        app.state.bar_service = bar_service
+        logger.info("Bar app service initialized (%s)", settings.BAR_APP_URL)
+
     # Weather service (OpenWeatherMap, cached 10 min)
     if settings.OPENWEATHER_API_KEY:
         from backend.services.weather_service import WeatherService
@@ -404,6 +412,7 @@ app.include_router(music_router)
 app.include_router(weather_router)
 app.include_router(pihole_router)
 app.include_router(plants_router)
+app.include_router(bar_router)
 app.include_router(routines_router)
 app.include_router(events_router)
 app.include_router(rules_router)
