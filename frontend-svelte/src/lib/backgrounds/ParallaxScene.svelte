@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { sonos } from '$lib/stores/sonos.js'
   import { apiGet } from '$lib/api.js'
-  import { LAYER_CONFIGS, TILE_WIDTH, getSkyVariant, MUSIC_SPEED_BOOST } from './layer-config.js'
+  import { LAYER_CONFIGS, getSkyVariant, MUSIC_SPEED_BOOST } from './layer-config.js'
   import { fade } from 'svelte/transition'
 
   /** @type {string} */
@@ -12,14 +12,18 @@
   let weatherDesc = 'clear'
   /** @type {ReturnType<typeof setInterval> | null} */
   let weatherTimer = null
+  let animId = 0
+  let lastTime = 0
+
+  /** @type {HTMLDivElement[]} */
+  let layerEls = []
+  /** Per-layer scroll offset in pixels */
+  let scrollOffsets = []
 
   const unsub = sonos.subscribe(($s) => { musicPlaying = $s.state === 'PLAYING' })
 
   $: layers = LAYER_CONFIGS[mode] || []
   $: speedBoost = MUSIC_SPEED_BOOST[mode] || 0.7
-
-  // Sky override based on weather/time — only recompute when weatherDesc changes
-  let skyOverride = ''
   $: skyOverride = getSkyVariant(mode, weatherDesc)
 
   async function fetchWeather() {
@@ -29,67 +33,62 @@
     } catch { /* ignore */ }
   }
 
-  function getLayerDuration(baseDuration) {
-    if (baseDuration === 0) return 0
-    return musicPlaying ? baseDuration * speedBoost : baseDuration
-  }
-
   function getLayerSrc(layer, index) {
-    // Sky layer (index 0) can be swapped for weather/time variants
     if (index === 0 && skyOverride) return skyOverride
     return layer.src
   }
 
-  function getLayerStyle(layer, index) {
-    const dur = getLayerDuration(layer.duration)
-    const src = getLayerSrc(layer, index)
-    const isTile = layer.sizing === 'tile'
-    const isBottom = layer.anchor === 'bottom'
+  function animate(ts) {
+    animId = requestAnimationFrame(animate)
+    if (!lastTime) { lastTime = ts; return }
+    const dt = (ts - lastTime) / 1000 // seconds
+    lastTime = ts
 
-    let style = `background-image: url('${src}');`
-    style += `z-index: ${layer.zIndex};`
-    style += `opacity: ${layer.opacity};`
+    const speedMult = musicPlaying ? speedBoost : 1.0
 
-    if (isTile) {
-      // Tile horizontally, scale height to fill the layer's portion
-      style += `background-size: auto 100%;`
-      style += `background-repeat: repeat-x;`
-      style += `background-position: bottom left;`
-    } else {
-      // Cover — stretch to fill
-      style += `background-size: cover;`
-      style += `background-repeat: no-repeat;`
-      style += `background-position: center;`
+    for (let i = 0; i < layers.length; i++) {
+      const layer = layers[i]
+      if (layer.duration === 0 || !layerEls[i]) continue
+
+      // Pixels per second = tileWidth / duration
+      // tileWidth = element height (square 1:1 images at background-size: auto 100%)
+      const el = layerEls[i]
+      const tileW = el.offsetHeight // square image: rendered width = element height
+      const pxPerSec = tileW / (layer.duration * speedMult)
+
+      if (!scrollOffsets[i]) scrollOffsets[i] = 0
+      scrollOffsets[i] = (scrollOffsets[i] + pxPerSec * dt) % tileW
+
+      el.style.backgroundPositionX = `-${Math.round(scrollOffsets[i])}px`
     }
-
-    if (isBottom && layer.height) {
-      style += `top: auto; height: ${layer.height};`
-    }
-
-    if (dur > 0) {
-      style += `animation-duration: ${dur}s;`
-    }
-
-    return style
   }
 
   onMount(async () => {
+    scrollOffsets = layers.map(() => 0)
     await fetchWeather()
     weatherTimer = setInterval(fetchWeather, 600_000)
+    animId = requestAnimationFrame(animate)
   })
 
   onDestroy(() => {
+    cancelAnimationFrame(animId)
     unsub()
     if (weatherTimer) clearInterval(weatherTimer)
   })
 </script>
 
 <div class="parallax-container" transition:fade={{ duration: 500 }}>
-  {#each layers as layer, i (layer.src)}
+  {#each layers as layer, i (layer.src + i)}
     <div
       class="parallax-layer"
-      class:parallax-scroll={layer.duration > 0}
-      style={getLayerStyle(layer, i)}
+      bind:this={layerEls[i]}
+      style="
+        background-image: url('{getLayerSrc(layer, i)}');
+        z-index: {layer.zIndex};
+        opacity: {layer.opacity};
+        {layer.sizing === 'cover' ? 'background-size: cover; background-repeat: no-repeat; background-position: center bottom;' : 'background-size: auto 100%; background-repeat: repeat-x; background-position: left bottom;'}
+        {layer.anchor === 'bottom' && layer.height ? `top: auto; height: ${layer.height};` : ''}
+      "
     ></div>
   {/each}
 </div>
@@ -110,24 +109,12 @@
     right: 0;
     bottom: 0;
     top: 0;
-    will-change: transform;
     image-rendering: auto;
   }
 
-  .parallax-scroll {
-    animation: parallaxScroll linear infinite;
-    /* Extend width by one tile so the repeat covers the seam during scroll */
-    width: calc(100% + 1024px);
-  }
-
-  @keyframes parallaxScroll {
-    from { transform: translateX(0); }
-    to   { transform: translateX(-1024px); }
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    .parallax-scroll {
-      animation: none;
+    .parallax-layer {
+      background-position: left bottom !important;
     }
   }
 </style>
