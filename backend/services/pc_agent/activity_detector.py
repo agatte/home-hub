@@ -313,21 +313,32 @@ def run_agent(server_url: str) -> None:
     """
     Main loop — poll processes, report mode changes to the Home Hub server.
 
+    Reports immediately on mode changes and periodically as a heartbeat
+    so the server recovers quickly after restarts/deploys.
+
     Args:
         server_url: Base URL of the Home Hub backend (e.g., http://localhost:8000).
     """
     detector = ActivityDetector()
     endpoint = f"{server_url.rstrip('/')}/api/automation/activity"
     backoff = 1
+    last_report_time: float = 0
+    heartbeat_interval = 60  # Re-report current mode every 60s
 
     logger.info(f"PC Activity Detector started — reporting to {endpoint}")
 
     while True:
         try:
             mode = detector.detect()
+            now = time.time()
+            mode_changed = detector.has_changed(mode)
+            heartbeat_due = (now - last_report_time) >= heartbeat_interval
 
-            if detector.has_changed(mode):
-                logger.info(f"Activity changed: {mode}")
+            if mode_changed or heartbeat_due:
+                if mode_changed:
+                    logger.info(f"Activity changed: {mode}")
+                else:
+                    logger.debug(f"Heartbeat: {mode}")
 
                 # Report to server
                 try:
@@ -341,7 +352,9 @@ def run_agent(server_url: str) -> None:
                             },
                         )
                         resp.raise_for_status()
-                        logger.info(f"Reported '{mode}' to server (HTTP {resp.status_code})")
+                        last_report_time = now
+                        if mode_changed:
+                            logger.info(f"Reported '{mode}' to server (HTTP {resp.status_code})")
                         backoff = 1
                 except httpx.HTTPError as e:
                     logger.warning(f"Failed to report to server: {e}")
