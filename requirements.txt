@@ -32,6 +32,7 @@ mss>=9.0.0                # Fast screen capture for screen sync
 numpy>=1.20.0
 scikit-learn>=1.0.0       # K-means for screen sync color clustering
 lightgbm>=4.0.0           # Behavioral mode prediction
+ai-edge-litert>=1.0.0     # TFLite runtime for YAMNet audio classification
 
 # Utilities
 aiofiles>=23.0.0          # Async file operations

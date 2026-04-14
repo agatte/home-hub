@@ -1,12 +1,23 @@
 """ML learning endpoints — model status, decisions, and manual controls."""
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 logger = logging.getLogger("home_hub.ml")
 
 router = APIRouter(prefix="/api/learning", tags=["learning"])
+
+
+class AudioDecisionReport(BaseModel):
+    """Payload from the ambient monitor's YAMNet classifier."""
+
+    predicted_mode: str
+    confidence: float
+    applied: bool = False
+    factors: Optional[dict] = None
 
 
 def _get_model_manager(request: Request):
@@ -44,8 +55,8 @@ async def get_status(request: Request) -> dict:
     mgr = _get_model_manager(request)
     lighting = getattr(request.app.state, "lighting_learner", None)
     predictor = getattr(request.app.state, "behavioral_predictor", None)
-
     bandit = getattr(request.app.state, "music_bandit", None)
+    audio_clf = getattr(request.app.state, "audio_classifier", None)
 
     return {
         "status": "ok",
@@ -55,6 +66,7 @@ async def get_status(request: Request) -> dict:
             predictor.get_status() if predictor and hasattr(predictor, "get_status") else None
         ),
         "music_bandit": bandit.get_status() if bandit else None,
+        "audio_classifier": audio_clf.get_status() if audio_clf else None,
     }
 
 
@@ -77,6 +89,30 @@ async def get_accuracy(request: Request, days: int = 7) -> dict:
     ml_log = _get_ml_logger(request)
     accuracy = await ml_log.compute_accuracy(days=min(days, 90))
     return {"status": "ok", **accuracy}
+
+
+# ------------------------------------------------------------------
+# Audio classifier (shadow mode logging)
+# ------------------------------------------------------------------
+
+
+@router.post("/audio-decision")
+async def log_audio_decision(body: AudioDecisionReport, request: Request) -> dict:
+    """Log a YAMNet audio classification decision from the ambient monitor.
+
+    Called by the standalone ambient_monitor.py process to record
+    shadow-mode (or active-mode) classification results for accuracy
+    comparison against the RMS-based detector.
+    """
+    ml_log = _get_ml_logger(request)
+    await ml_log.log_decision(
+        predicted_mode=body.predicted_mode,
+        confidence=body.confidence,
+        decision_source="audio_ml",
+        factors=body.factors,
+        applied=body.applied,
+    )
+    return {"status": "ok"}
 
 
 # ------------------------------------------------------------------
