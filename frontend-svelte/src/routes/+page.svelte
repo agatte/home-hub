@@ -84,4 +84,10 @@
     margin-bottom: 8px;
     padding: 8px 12px;
   }
+
+  @media (max-width: 480px) {
+    .widget-sonos-strip {
+      padding: 4px 8px;
+    }
+  }
 </style>

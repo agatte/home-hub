@@ -78,7 +78,7 @@
 
   @media (max-width: 480px) {
     .floating-nav {
-      bottom: 12px;
+      bottom: calc(8px + env(safe-area-inset-bottom, 0px));
       padding: 4px;
     }
     .floating-nav-item {

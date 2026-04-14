@@ -153,23 +153,26 @@
 
   @media (max-width: 480px) {
     .mode-overlay {
-      top: 8px;
+      top: 6px;
       left: 12px;
+      z-index: 5;
     }
     .mode-name {
-      font-size: 24px;
+      font-size: 22px;
+      letter-spacing: 0.08em;
     }
     .mode-overlay-top {
-      gap: 10px;
+      gap: 8px;
     }
     .mode-time {
-      font-size: 12px;
+      display: none;
     }
     .mode-source {
-      font-size: 10px;
+      font-size: 9px;
+      margin-top: 2px;
     }
     .mode-status {
-      margin-top: 4px;
+      display: none;
     }
   }
 </style>

@@ -279,15 +279,23 @@
 
   @media (max-width: 480px) {
     .light-chip {
-      gap: 8px;
-      padding: 8px 10px;
+      gap: 6px;
+      padding: 8px 8px;
+    }
+    .chip-color-bar {
+      width: 24px;
     }
     .chip-name {
       min-width: 0;
-      font-size: 12px;
+      font-size: 11px;
     }
     .chip-slider {
-      min-width: 60px;
+      min-width: 0;
+      flex: 1;
+    }
+    .chip-power {
+      width: 28px;
+      height: 28px;
     }
   }
 </style>
