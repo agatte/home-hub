@@ -296,6 +296,14 @@ async def lifespan(app: FastAPI):
         app_logger.warning("lightgbm not installed — behavioral predictor disabled")
         app.state.behavioral_predictor = None
 
+    # Music bandit — Thompson sampling playlist selection
+    from backend.services.ml.music_bandit import MusicBandit
+    music_bandit = MusicBandit(model_manager)
+    model_manager.register_learner(music_bandit)
+    app.state.music_bandit = music_bandit
+    music_mapper._music_bandit = music_bandit
+    app_logger.info("Music bandit initialized (%d arms)", len(music_bandit._arms))
+
     app_logger.info("ML services initialized")
 
     # Pi-hole DNS stats (optional)

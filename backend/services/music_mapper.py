@@ -56,6 +56,7 @@ class MusicMapper:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
         self._event_logger = event_logger
+        self._music_bandit = None  # Set by main.py if ML is available
         # Cache: mode -> list[{id, favorite_title, vibe, auto_play, priority}]
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
         # Tracks the most recent mode requested — used to skip stale auto-plays
@@ -93,7 +94,8 @@ class MusicMapper:
         Select the best playlist entry for a mode.
 
         If vibe is specified, filters to that vibe (falls back to any entry
-        if none match). If vibe is None, uses the time-of-day heuristic.
+        if none match). If vibe is None, uses the Thompson sampling bandit
+        (if available) or falls back to the time-of-day heuristic.
 
         Returns:
             Entry dict {id, favorite_title, vibe, auto_play, priority}, or None.
@@ -106,11 +108,22 @@ class MusicMapper:
             match = next((e for e in entries if e["vibe"] == vibe), None)
             return match or entries[0]
 
-        # Time-of-day heuristic
         hour = datetime.now(tz=TZ).hour
         period = _time_period(hour)
         preference = _TIME_VIBE_PREFERENCE[period]
 
+        # Try Thompson sampling bandit first
+        if self._music_bandit and len(entries) > 1:
+            pick = self._music_bandit.select(
+                mode=mode,
+                period=period,
+                candidates=entries,
+                preferred_vibes=preference,
+            )
+            if pick:
+                return pick
+
+        # Fallback: time-of-day vibe heuristic
         for preferred_vibe in preference:
             match = next((e for e in entries if e["vibe"] == preferred_vibe), None)
             if match:

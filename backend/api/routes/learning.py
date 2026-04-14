@@ -45,6 +45,8 @@ async def get_status(request: Request) -> dict:
     lighting = getattr(request.app.state, "lighting_learner", None)
     predictor = getattr(request.app.state, "behavioral_predictor", None)
 
+    bandit = getattr(request.app.state, "music_bandit", None)
+
     return {
         "status": "ok",
         "models": mgr.get_health(),
@@ -52,6 +54,7 @@ async def get_status(request: Request) -> dict:
         "behavioral_predictor": (
             predictor.get_status() if predictor and hasattr(predictor, "get_status") else None
         ),
+        "music_bandit": bandit.get_status() if bandit else None,
     }
 
 
@@ -138,6 +141,36 @@ async def get_predictor_status(request: Request) -> dict:
     """Return detailed behavioral predictor status."""
     predictor = _get_predictor(request)
     return {"status": "ok", **predictor.get_status()}
+
+
+# ------------------------------------------------------------------
+# Music bandit
+# ------------------------------------------------------------------
+
+
+def _get_bandit(request: Request):
+    """Get MusicBandit from app state."""
+    bandit = getattr(request.app.state, "music_bandit", None)
+    if bandit is None:
+        raise HTTPException(status_code=503, detail="Music bandit not initialized")
+    return bandit
+
+
+@router.get("/bandit")
+async def get_bandit_status(request: Request) -> dict:
+    """Return music bandit status — arm counts, top picks per mode."""
+    bandit = _get_bandit(request)
+    return {"status": "ok", **bandit.get_status()}
+
+
+@router.delete("/bandit/reset")
+async def reset_bandit(request: Request) -> dict:
+    """Wipe bandit arm data and restart from cold priors."""
+    bandit = _get_bandit(request)
+    bandit._arms = {}
+    bandit._total_selections = 0
+    bandit._save()
+    return {"status": "ok", "detail": "Music bandit reset to cold start"}
 
 
 # ------------------------------------------------------------------
