@@ -215,9 +215,9 @@ class AudioSceneClassifier:
             return False
 
         try:
-            import ai_edge_litert as tflite
+            from ai_edge_litert.interpreter import Interpreter
 
-            self._interpreter = tflite.Interpreter(
+            self._interpreter = Interpreter(
                 model_path=str(self._model_path)
             )
             self._interpreter.allocate_tensors()
