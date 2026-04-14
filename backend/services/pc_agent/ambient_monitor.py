@@ -26,9 +26,7 @@ Usage:
 """
 
 import argparse
-import audioop
 import logging
-import struct
 import sys
 import time
 from collections import deque
@@ -59,6 +57,9 @@ DEFAULT_THRESHOLD = 800  # RMS threshold (calibrated per environment)
 
 # YAMNet buffer size (0.975s at 16kHz)
 YAMNET_SAMPLES = 15600
+
+# Shadow logging throttle — log on class change or every N seconds
+SHADOW_LOG_INTERVAL = 30
 
 
 class AmbientMonitor:
@@ -195,8 +196,9 @@ class AmbientMonitor:
 
         try:
             data = self._stream.read(CHUNK_SIZE, exception_on_overflow=False)
-            rms = audioop.rms(data, FORMAT_WIDTH)
-            return float(rms), data
+            samples = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+            rms = float(np.sqrt(np.mean(samples ** 2)))
+            return rms, data
         except Exception as e:
             logger.error(f"Error reading mic: {e}")
             return None
@@ -374,6 +376,10 @@ def run_monitor(
         activity_endpoint,
     )
 
+    # Shadow logging throttle state
+    last_logged_class: Optional[str] = None
+    last_log_time: float = 0.0
+
     try:
         while True:
             # ── RMS-based detection (always runs) ──────────────
@@ -440,29 +446,43 @@ def run_monitor(
                                 "Failed to report ML result to server: %s", e
                             )
 
-                    # Log ML decision (shadow or active)
-                    try:
-                        with httpx.Client(timeout=5.0) as client:
-                            resp = client.post(
-                                ml_endpoint,
-                                json={
-                                    "predicted_mode": ml_mode or ml_result["top_class"],
-                                    "confidence": ml_result["confidence"],
-                                    "applied": not shadow_mode and ml_mode is not None,
-                                    "factors": {
-                                        "top_class": ml_result["top_class"],
-                                        "all_scores": ml_result["all_scores"],
-                                        "raw_yamnet_top5": ml_result["raw_yamnet_top5"],
-                                        "inference_ms": ml_result["inference_ms"],
-                                        "rms_would_say": rms_would_say,
-                                        "mode_signal": mode_signal,
-                                        "shadow_mode": shadow_mode,
+                    # Log ML decision — throttled in shadow mode
+                    # (log on class change, mode signal, or every 30s)
+                    now_log = time.time()
+                    class_changed = ml_result["top_class"] != last_logged_class
+                    interval_elapsed = (now_log - last_log_time) >= SHADOW_LOG_INTERVAL
+                    should_log = (
+                        not shadow_mode
+                        or class_changed
+                        or mode_signal is not None
+                        or interval_elapsed
+                    )
+
+                    if should_log:
+                        last_logged_class = ml_result["top_class"]
+                        last_log_time = now_log
+                        try:
+                            with httpx.Client(timeout=5.0) as client:
+                                resp = client.post(
+                                    ml_endpoint,
+                                    json={
+                                        "predicted_mode": ml_mode or ml_result["top_class"],
+                                        "confidence": ml_result["confidence"],
+                                        "applied": not shadow_mode and ml_mode is not None,
+                                        "factors": {
+                                            "top_class": ml_result["top_class"],
+                                            "all_scores": ml_result["all_scores"],
+                                            "raw_yamnet_top5": ml_result["raw_yamnet_top5"],
+                                            "inference_ms": ml_result["inference_ms"],
+                                            "rms_would_say": rms_would_say,
+                                            "mode_signal": mode_signal,
+                                            "shadow_mode": shadow_mode,
+                                        },
                                     },
-                                },
-                            )
-                            resp.raise_for_status()
-                    except httpx.HTTPError as e:
-                        logger.debug("Failed to log ML decision: %s", e)
+                                )
+                                resp.raise_for_status()
+                        except httpx.HTTPError as e:
+                            logger.debug("Failed to log ML decision: %s", e)
 
             time.sleep(POLL_INTERVAL)
 
