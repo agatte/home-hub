@@ -18,8 +18,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/home-hub
 ExecStart=%h/home-hub/venv/bin/python run.py
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=5
 Environment="PATH=%h/home-hub/venv/bin:/usr/bin"
 
 [Install]
