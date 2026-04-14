@@ -11,6 +11,7 @@ import { automation } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
+import { ambient } from './ambient.js'
 
 /** @type {HubSocket | null} */
 let socket = null
@@ -29,6 +30,10 @@ export function initStores() {
 
   apiGet('/api/sonos/status')
     .then((data) => sonos.set(/** @type {any} */ (data)))
+    .catch(() => {})
+
+  apiGet('/api/ambient')
+    .then((data) => ambient.set(/** @type {any} */ (data)))
     .catch(() => {})
 
   apiGet('/api/automation/status')
@@ -78,6 +83,9 @@ export function initStores() {
           break
         case 'mode_suggestion_dismissed':
           dismissModeSuggestion()
+          break
+        case 'ambient_update':
+          ambient.set(data)
           break
         default:
           break

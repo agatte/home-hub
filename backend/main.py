@@ -31,6 +31,7 @@ from backend.api.routes.events import router as events_router
 from backend.api.routes.rules import router as rules_router
 from backend.api.routes.pihole import router as pihole_router
 from backend.api.routes.weather import router as weather_router
+from backend.api.routes.ambient import router as ambient_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
 FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
@@ -202,6 +203,17 @@ async def lifespan(app: FastAPI):
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     app.state.music_mapper = music_mapper
 
+    # Ambient sound service (browser-based ambient audio)
+    from backend.services.ambient_sound_service import AmbientSoundService
+    ambient_sound = AmbientSoundService(
+        ws_manager=ws_manager,
+        weather_service=getattr(app.state, "weather_service", None),
+    )
+    await ambient_sound.load_from_db()
+    ambient_sound.scan_sounds()
+    automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
+    app.state.ambient_sound = ambient_sound
+
     # Library import service (Apple Music XML → taste profile)
     library_import = LibraryImportService()
     app.state.library_import = library_import
@@ -246,6 +258,7 @@ async def lifespan(app: FastAPI):
         weather_service = WeatherService(api_key=settings.OPENWEATHER_API_KEY)
         app.state.weather_service = weather_service
         automation._weather_service = weather_service
+        ambient_sound._weather_service = weather_service
         logger.info("Weather service initialized (linked to automation engine)")
     automation._rule_engine = rule_engine
 
@@ -407,9 +420,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files (TTS audio, frontend build)
+# Mount static files (TTS audio, ambient sounds, frontend build)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 TTS_DIR.mkdir(parents=True, exist_ok=True)
+(STATIC_DIR / "ambient").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Routes
@@ -426,6 +440,7 @@ app.include_router(bar_router)
 app.include_router(routines_router)
 app.include_router(events_router)
 app.include_router(rules_router)
+app.include_router(ambient_router)
 
 # Serve the SvelteKit static build (must come after API routes).
 # Path is controlled by settings.FRONTEND_BUILD (default frontend-svelte/build).
@@ -475,6 +490,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "manual_override": automation.manual_override,
         },
     }))
+
+    # Send current ambient sound state
+    ambient = getattr(websocket.app.state, "ambient_sound", None)
+    if ambient:
+        await websocket.send_text(json.dumps({
+            "type": "ambient_update",
+            "data": ambient.get_state(),
+        }))
 
     try:
         while True:

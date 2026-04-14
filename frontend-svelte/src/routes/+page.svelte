@@ -7,6 +7,7 @@
   import SonosCard from '$lib/components/SonosCard.svelte'
   import WeatherCard from '$lib/components/WeatherCard.svelte'
   import PiholeCard from '$lib/components/PiholeCard.svelte'
+  import AmbientSoundWidget from '$lib/components/AmbientSoundWidget.svelte'
   import PlantWidget from '$lib/components/PlantWidget.svelte'
   import BarWidget from '$lib/components/BarWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
@@ -36,6 +37,11 @@
     <section class="widget widget-weather">
       <h2 class="widget-title">Weather</h2>
       <WeatherCard />
+    </section>
+
+    <section class="widget widget-ambient">
+      <h2 class="widget-title">Ambient</h2>
+      <AmbientSoundWidget />
     </section>
 
     <section class="widget widget-plants">

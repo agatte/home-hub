@@ -4,6 +4,7 @@
   import { initStores } from '$lib/stores/init.js'
   import { connected } from '$lib/stores/connection.js'
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
+  import { initAmbientAudio } from '$lib/ambientAudio.js'
   import ModeBackground from '$lib/components/ModeBackground.svelte'
   import ModeOverlay from '$lib/components/ModeOverlay.svelte'
   import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
@@ -23,7 +24,8 @@
   onMount(() => {
     const cleanupStores = initStores()
     const cleanupActivity = initActivityTracking()
-    return () => { cleanupStores(); cleanupActivity() }
+    const cleanupAmbient = initAmbientAudio()
+    return () => { cleanupStores(); cleanupActivity(); cleanupAmbient() }
   })
 </script>
 
