@@ -6,7 +6,7 @@
 > audio classification), and evolve toward autonomous operation.
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
-> **Status:** Phase 1 complete, Phase 2 in progress (screen sync + music bandit shipped)
+> **Status:** Phase 1 complete, Phase 2 complete (screen sync, music bandit, YAMNet audio, camera presence all shipped)
 > **Last updated:** April 14, 2026
 
 ---
@@ -56,7 +56,7 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision & Learning** | In Progress | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling). Remaining: camera presence/posture (MediaPipe), audio scene classification (YAMNet) | Detect presence/away within 30s (vs current 10-minute idle timer) |
+| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection). Remaining for Phase 2b: posture classification (BlazePose upgrade) | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
 | **Phase 3: Autonomous Operation** | Months 6-12 | Confidence-gated auto-apply, full prediction pipeline, decision explainability | Fewer than 2 manual overrides per day |
 
 ### Design Principles
@@ -106,10 +106,9 @@ a few more with minimal overhead.
 ```
 backend/services/ml/
     __init__.py
-    audio_classifier.py      # Phase 1: YAMNet-based audio scene classification
-    behavioral_predictor.py  # Phase 1: LightGBM mode prediction
+    audio_classifier.py      # Phase 2: YAMNet audio scene classification (shadow mode, runs on desktop)
+    behavioral_predictor.py  # Phase 1: LightGBM mode prediction (shadow mode)
     lighting_learner.py      # Phase 1: Adaptive per-light preferences
-    camera_service.py        # Phase 2: MediaPipe presence/posture detection
     music_bandit.py          # Phase 2: Thompson sampling playlist selection
     feature_builder.py       # Shared: Feature engineering from event tables
     model_manager.py         # Shared: Model loading, versioning, health checks
@@ -119,12 +118,14 @@ backend/services/ml/
 ### Model Storage
 
 ```
-data/models/                 # gitignored, persists on the Latitude
-    audio_scene.onnx         # Pretrained YAMNet/custom audio classifier
-    mode_predictor.lgb       # LightGBM trained from activity_events
-    lighting_prefs.json      # Learned per-light brightness/color preferences
-    music_bandit.json        # Thompson sampling Beta parameters
-    model_meta.json          # Version, last trained, accuracy metrics
+data/models/                           # gitignored, persists on each machine
+    yamnet.tflite                      # YAMNet audio classifier (16MB, auto-downloaded)
+    yamnet_class_map.csv               # YAMNet 521 class names (auto-downloaded)
+    blaze_face_short_range.tflite      # MediaPipe face detection (230KB, auto-downloaded)
+    mode_predictor.lgb                 # LightGBM trained from activity_events
+    lighting_prefs.json                # Learned per-light brightness/color preferences
+    music_bandit.json                  # Thompson sampling Beta parameters
+    model_meta.json                    # Version, last trained, accuracy metrics
 ```
 
 ### Fallback Chain
@@ -1193,35 +1194,33 @@ except ImportError:
 - ✓ `ml_decisions` + `ml_metrics` database tables with indexes.
 - ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle/away, ML logger registered as mode-change callback.
 
-**Current state:** All services running on production (Latitude). Behavioral predictor in shadow mode, collecting activity events toward the 500-event training threshold. Lighting learner collecting manual adjustments. Audio classifier (YAMNet) deferred to Phase 2.
+**Current state:** All services running on production (Latitude). Behavioral predictor in shadow mode, collecting activity events toward the 500-event training threshold. Lighting learner collecting manual adjustments. Audio classifier (YAMNet) shipped in Phase 2, running in shadow mode on Windows desktop (Blue Yeti mic) via Task Scheduler. Camera presence detection (MediaPipe FaceDetector) shipped in Phase 2, active on Latitude webcam with 15s away detection.
 
 **Phase 1 exit criteria:** ~~Audio classifier active,~~ behavioral predictor
 outperforming rules, lighting learner active for 2+ lights. Manual overrides
 down 30% from baseline.
 
-### Phase 2: Computer Vision & Learning (In Progress)
+### Phase 2: Computer Vision & Learning (✓ Complete)
 
 **Implemented (April 14, 2026):**
 - ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
 - ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others. Rewards from play/skip behavior in `sonos_playback_events`. Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`. Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate.
+- ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `speech_multiple` ≥80% for 30s → social, `silence` ≥70% for 60s → exit social. Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
+- ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. Captures one frame every 5s, downsampled to 320×240, runs face detection (~5ms CPU). 3 consecutive absent frames (15s) triggers `away` mode — 40× faster than 10-minute idle timer. Also measures ambient light from frame luminance (grayscale mean, 0–255). Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera source priority: `away` does not override process-detected gaming/working/watching; `idle` (present) does not downgrade higher-priority modes. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
 
-**Remaining:**
+**Remaining (Phase 2b, deferred):**
 ```
-Camera presence detection (opt-in, MediaPipe)
-  - Away detection: 15s (vs 10min idle timer)
-  - Ambient lux measurement feeding brightness
+Camera posture classification (BlazePose upgrade)
+  - Posture feeds mode disambiguation (upright vs reclined)
+  - Calibration flow in Settings (30s sit/recline)
+  - Ambient lux feeding brightness multipliers
 
-Camera posture classification
-  - Posture feeds mode disambiguation
-  - Calibration flow in Settings
-
-Audio scene classification (YAMNet)
-  - Replace RMS-only detection with sound type recognition
-  - Social detection: 30s (vs 2min)
+Audio classifier promotion from shadow to active
+  - After 7+ days of shadow data, compare ML vs RMS accuracy
+  - If ML > RMS + 10pp, switch ambient_monitor to --active
 ```
 
-**Phase 2 exit criteria:** Camera presence working reliably (opt-in), posture
-improving mode accuracy, away detection under 30 seconds.
+**Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ Away detection under 30 seconds (achieved 15s). Posture and audio promotion deferred to Phase 2b.
 
 ### Phase 3: Autonomous Operation (Months 6+)
 
