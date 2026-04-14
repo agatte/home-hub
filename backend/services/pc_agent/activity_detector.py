@@ -323,7 +323,7 @@ def run_agent(server_url: str) -> None:
     endpoint = f"{server_url.rstrip('/')}/api/automation/activity"
     backoff = 1
     last_report_time: float = 0
-    heartbeat_interval = 60  # Re-report current mode every 60s
+    heartbeat_interval = 15  # Re-report current mode every 15s
 
     logger.info(f"PC Activity Detector started — reporting to {endpoint}")
 
