@@ -34,9 +34,10 @@ WEATHER_SKIP_MODES = frozenset(("social", "sleeping"))
 
 # Weather condition → effect override. When a weather condition matches and
 # the mode has no auto-effect already, this effect is applied on top.
-# Only fires during evening/night when effects are most visible.
+# Thunderstorm (sparkle) fires any time of day; others evening/night only.
 WEATHER_EFFECT_MAP: dict[str, str | None] = {
     "thunderstorm": "sparkle",
+    "rain": "candle",
     "snow": "opal",
 }
 
@@ -488,6 +489,10 @@ class AutomationEngine:
         self._ws_manager = ws_manager
         self._event_logger = event_logger
         self._weather_service = weather_service
+        self._music_mapper = None  # Set by main.py after construction
+
+        # Weather condition tracking for music suggestions
+        self._last_weather_condition: Optional[str] = None
 
         # Current state
         self._current_mode: str = "idle"
@@ -1056,8 +1061,13 @@ class AutomationEngine:
             if self._hue_v2 and self._hue_v2.connected:
                 effect_map = EFFECT_AUTO_MAP.get(mode, {})
                 auto_effect = effect_map.get(period)
-                if not auto_effect and period in ("evening", "night"):
-                    auto_effect = self._get_weather_effect()
+                if not auto_effect:
+                    weather_effect = self._get_weather_effect()
+                    if weather_effect and (
+                        period in ("evening", "night")
+                        or weather_effect == "sparkle"
+                    ):
+                        auto_effect = weather_effect
                 if auto_effect:
                     await self._hue_v2.set_effect_all(auto_effect)
                     self._active_effect = True
@@ -1361,6 +1371,19 @@ class AutomationEngine:
                 return effect
         return None
 
+    def _get_current_weather_condition(self) -> str | None:
+        """Return the classified weather condition string, or None."""
+        if not self._weather_service:
+            return None
+        try:
+            weather = self._weather_service.get_cached()
+            if not weather:
+                return None
+        except Exception:
+            return None
+        desc = weather.get("description", "").lower()
+        return self._classify_weather(desc, weather)
+
     @staticmethod
     def _adjust_single_light(
         light: dict[str, Any], condition: str,
@@ -1375,41 +1398,42 @@ class AutomationEngine:
         uses_ct = "ct" in adj
 
         if condition == "thunderstorm":
-            # Cooler / purple tint, slight dim
-            adj["bri"] = max(1, adj.get("bri", 200) - 10)
+            # Cooler / purple tint, noticeable dim
+            adj["bri"] = max(1, adj.get("bri", 200) - 30)
             if uses_ct:
-                adj["ct"] = max(153, adj["ct"] - 40)
+                adj["ct"] = max(153, adj["ct"] - 80)
             else:
                 adj["hue"] = min(65535, adj.get("hue", 8000) + 12000)
-                adj["sat"] = min(254, adj.get("sat", 100) + 35)
+                adj["sat"] = min(254, adj.get("sat", 100) + 60)
 
         elif condition == "rain":
-            # Shift cooler
+            # Cooler, slightly dimmer — cozy indoor contrast
+            adj["bri"] = max(1, adj.get("bri", 200) - 15)
             if uses_ct:
-                adj["ct"] = max(153, adj["ct"] - 25)
+                adj["ct"] = max(153, adj["ct"] - 50)
             else:
-                adj["hue"] = max(0, adj.get("hue", 8000) + 3000)
-                adj["sat"] = min(254, adj.get("sat", 100) + 15)
+                adj["hue"] = max(0, adj.get("hue", 8000) + 4000)
+                adj["sat"] = min(254, adj.get("sat", 100) + 30)
 
         elif condition == "snow":
-            # Brighter, cooler white
-            adj["bri"] = min(254, adj.get("bri", 200) + 15)
+            # Brighter, crisp cool white
+            adj["bri"] = min(254, adj.get("bri", 200) + 25)
             if uses_ct:
-                adj["ct"] = max(153, adj["ct"] - 40)
+                adj["ct"] = max(153, adj["ct"] - 60)
 
         elif condition == "clouds":
-            # Slightly warmer, slightly dimmer
-            adj["bri"] = max(1, int(adj.get("bri", 200) * 0.92))
+            # Warmer, noticeably dimmer — overcast feel
+            adj["bri"] = max(1, int(adj.get("bri", 200) * 0.85))
             if uses_ct:
-                adj["ct"] = min(500, adj["ct"] + 15)
+                adj["ct"] = min(500, adj["ct"] + 25)
 
         elif condition == "golden_hour":
-            # Warm golden shift
+            # Rich warm golden shift
             if uses_ct:
-                adj["ct"] = min(500, adj["ct"] + 30)
+                adj["ct"] = min(500, adj["ct"] + 50)
             else:
-                adj["hue"] = min(65535, adj.get("hue", 8000) + 2000)
-                adj["sat"] = min(254, adj.get("sat", 100) + 25)
+                adj["hue"] = min(65535, adj.get("hue", 8000) + 3000)
+                adj["sat"] = min(254, adj.get("sat", 100) + 40)
 
         return adj
 
@@ -1508,6 +1532,15 @@ class AutomationEngine:
                 # Scene drift — subtle variety during long sessions
                 if not self._manual_override:
                     await self._maybe_drift()
+
+                # Weather-driven music suggestions
+                weather_condition = self._get_current_weather_condition()
+                if weather_condition != self._last_weather_condition:
+                    self._last_weather_condition = weather_condition
+                    if weather_condition and self._music_mapper:
+                        await self._music_mapper.on_weather_change(
+                            weather_condition, self._current_mode,
+                        )
 
                 # ML behavioral predictor (primary, if active)
                 predictor = getattr(self, "_behavioral_predictor", None)

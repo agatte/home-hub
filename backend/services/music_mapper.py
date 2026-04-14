@@ -32,6 +32,17 @@ _TIME_VIBE_PREFERENCE: dict[str, list[str]] = {
     "night": ["mellow", "background", "focus", "energetic", "hype"],      # 22-5
 }
 
+# Weather condition → preferred vibe order. Only precipitation/storms
+# warrant a music suggestion; clouds and golden hour don't.
+_WEATHER_VIBE_OVERRIDE: dict[str, list[str]] = {
+    "thunderstorm": ["background", "mellow", "focus", "energetic", "hype"],
+    "rain": ["mellow", "background", "focus", "energetic", "hype"],
+    "snow": ["mellow", "focus", "background", "energetic", "hype"],
+}
+
+# Modes that skip weather music suggestions (party/sleep have their own thing)
+_WEATHER_MUSIC_SKIP_MODES = frozenset(("social", "sleeping"))
+
 
 def _time_period(hour: int) -> str:
     if 5 <= hour < 10:
@@ -354,6 +365,88 @@ class MusicMapper:
     async def on_mode_change_wrapper(self, mode: str) -> None:
         """Thin callback wrapper for AutomationEngine.register_on_mode_change."""
         await self.on_mode_change(mode)
+
+    async def on_weather_change(
+        self, condition: str, mode: str,
+    ) -> Optional[dict]:
+        """Suggest a weather-appropriate playlist when weather changes.
+
+        Called by the automation engine when weather condition shifts (e.g.
+        clear → rain). Never auto-plays — only broadcasts a WebSocket
+        suggestion so the user can choose to switch.
+
+        Args:
+            condition: Classified weather (thunderstorm, rain, snow).
+            mode: Current activity mode.
+
+        Returns:
+            Dict describing the suggestion, or None.
+        """
+        if mode in _WEATHER_MUSIC_SKIP_MODES:
+            return None
+
+        preference = _WEATHER_VIBE_OVERRIDE.get(condition)
+        if not preference:
+            return None
+
+        entries = self._cache.get(mode, [])
+        if not entries:
+            return None
+
+        # Pick best playlist using weather vibe preference
+        pick = None
+        for preferred_vibe in preference:
+            match = next((e for e in entries if e["vibe"] == preferred_vibe), None)
+            if match:
+                pick = match
+                break
+        if not pick:
+            pick = entries[0]
+
+        title = pick["favorite_title"]
+        vibe = pick.get("vibe")
+
+        # Check if Sonos is already playing this
+        if self._sonos.connected:
+            try:
+                status = await asyncio.wait_for(
+                    self._sonos.get_status(), timeout=5.0,
+                )
+                current_track = status.get("title") or status.get("track") or ""
+                if title.lower() in current_track.lower():
+                    logger.debug(
+                        "Weather suggestion '%s' already playing, skipping", title,
+                    )
+                    return None
+            except (asyncio.TimeoutError, Exception):
+                pass  # Suggest anyway if we can't check
+
+        _WEATHER_LABELS = {
+            "thunderstorm": "Stormy",
+            "rain": "Rainy",
+            "snow": "Snowy",
+        }
+        weather_label = _WEATHER_LABELS.get(condition, condition.title())
+
+        logger.info(
+            "Weather music suggestion: '%s' (vibe=%s) for %s weather in %s mode",
+            title, vibe, condition, mode,
+        )
+        await self._ws_manager.broadcast("music_weather_suggestion", {
+            "mode": mode,
+            "title": title,
+            "vibe": vibe,
+            "weather": condition,
+            "message": f"{weather_label} outside — try '{title}'?",
+        })
+        if self._event_logger:
+            await self._event_logger.log_sonos_event(
+                event_type="weather_suggestion",
+                favorite_title=title,
+                mode_at_time=mode,
+                triggered_by="weather",
+            )
+        return {"action": "weather_suggested", "title": title, "vibe": vibe}
 
     # ------------------------------------------------------------------
     # Legacy helpers — used by older code paths

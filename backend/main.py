@@ -204,6 +204,7 @@ async def lifespan(app: FastAPI):
     )
     await music_mapper.load_from_db()
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
+    automation._music_mapper = music_mapper
     app.state.music_mapper = music_mapper
 
     # Ambient sound service (browser-based ambient audio)
