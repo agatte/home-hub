@@ -38,21 +38,14 @@
     try {
       const resp = await apiGet('/api/bar/status')
       summary = resp.bar_summary
+      if (resp.bar_app_url) barAppUrl = resp.bar_app_url
       error = false
     } catch {
       error = true
     }
   }
 
-  onMount(async () => {
-    // Get the bar app URL from health endpoint
-    try {
-      const health = await apiGet('/health')
-      const ip = health.local_ip || '192.168.1.30'
-      barAppUrl = `http://${ip}:8001`
-    } catch {
-      barAppUrl = 'http://192.168.1.30:8001'
-    }
+  onMount(() => {
     fetchStatus()
     refreshInterval = setInterval(fetchStatus, 600000) // 10 min
   })

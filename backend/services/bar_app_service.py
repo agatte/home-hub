@@ -17,6 +17,7 @@ class BarAppService:
 
     def __init__(self, api_url: str) -> None:
         self._api_url = api_url.rstrip("/")
+        self.app_url: str = self._api_url
         self._cache: Optional[dict[str, Any]] = None
         self._cache_time: float = 0
 

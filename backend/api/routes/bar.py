@@ -29,4 +29,8 @@ async def get_bar_status(request: Request) -> dict:
     if not data:
         raise HTTPException(status_code=502, detail="Bar app data unavailable")
 
-    return {"status": "ok", "bar_summary": data}
+    return {
+        "status": "ok",
+        "bar_summary": data,
+        "bar_app_url": service.app_url,
+    }
