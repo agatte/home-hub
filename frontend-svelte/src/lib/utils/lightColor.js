@@ -20,10 +20,11 @@ export function hueToHsl(hue, sat, bri) {
  */
 export function ctToColor(ct) {
   const t = (ct - 153) / (500 - 153) // 0 = cool, 1 = warm
-  const r = Math.round(255 - t * 30)
-  const g = Math.round(220 - t * 80)
-  const b = Math.round(200 - t * 140)
-  return `rgb(${r}, ${g}, ${b})`
+  // Wider gamut: cool blue-white → warm amber with stronger differentiation
+  const r = Math.round(220 + t * 35)
+  const g = Math.round(225 - t * 105)
+  const b = Math.round(255 - t * 200)
+  return `rgb(${Math.min(r, 255)}, ${Math.max(g, 60)}, ${Math.max(b, 30)})`
 }
 
 /**
