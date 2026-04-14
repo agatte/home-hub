@@ -452,7 +452,7 @@
           </div>
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label">Ambient Light</span>
+              <span class="setting-label">Webcam Brightness</span>
             </div>
             <span class="setting-value">
               {$cameraStore.ambient_lux?.toFixed(0) ?? '--'} / 255
