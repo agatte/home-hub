@@ -116,7 +116,7 @@ WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
     "relax":    {"day": "opal",    "evening": "candle",  "night": "candle"},
     "working":  {"day": None,      "evening": None,      "night": None},
-    "gaming":   {"day": None,      "evening": "glisten", "night": "glisten"},
+    "gaming":   {"day": None,      "evening": "prism",   "night": "prism"},
     "movie":    {"day": None,      "evening": None,      "night": None},
     "watching": {"day": None,      "evening": None,      "night": None},
 }
@@ -171,26 +171,27 @@ def _watching_state(bri: int, hue: int, sat: int) -> dict[str, dict]:
 
 ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # ── Gaming ────────────────────────────────────────────────────────
-    # Blue/purple accents on peripherals, screen sync overrides L2.
-    # Night: immersive colored glow, not amber-tinted like working.
+    # Classic RGB: purple wash (L1), teal bias (L2, sync overrides),
+    # blue + purple accents (L3/L4). All HSB, high saturation.
+    # Prism effect on evening/night adds slow color cycling.
     "gaming": {
         "day": {
-            "1": {"on": True, "bri": 150, "ct": 250},                   # Neutral fill
-            "2": {"on": True, "bri": 130, "ct": 233},                   # Bias (sync overrides)
-            "3": {"on": True, "bri": 100, "hue": 46920, "sat": 60},    # Subtle blue accent
-            "4": {"on": True, "bri": 80,  "hue": 46920, "sat": 40},    # Subtle blue accent
+            "1": {"on": True, "bri": 140, "hue": 49000, "sat": 200},   # Purple ambient wash
+            "2": {"on": True, "bri": 130, "hue": 40000, "sat": 180},   # Teal bias (sync overrides)
+            "3": {"on": True, "bri": 100, "hue": 46920, "sat": 220},   # Blue accent
+            "4": {"on": True, "bri": 80,  "hue": 50000, "sat": 200},   # Blue-purple accent
         },
         "evening": {
-            "1": {"on": True, "bri": 90,  "hue": 46920, "sat": 120},   # Blue-purple wash
-            "2": {"on": True, "bri": 110, "ct": 280},                    # Warm bias (sync overrides)
-            "3": {"on": True, "bri": 70,  "hue": 50000, "sat": 140},   # Purple accent
-            "4": {"on": True, "bri": 50,  "hue": 48000, "sat": 100},   # Blue accent
+            "1": {"on": True, "bri": 100, "hue": 50000, "sat": 230},   # Deeper purple wash
+            "2": {"on": True, "bri": 110, "hue": 40000, "sat": 200},   # Teal bias (sync overrides)
+            "3": {"on": True, "bri": 70,  "hue": 46920, "sat": 240},   # Vivid blue accent
+            "4": {"on": True, "bri": 50,  "hue": 52000, "sat": 220},   # Purple accent
         },
         "night": {
-            "1": {"on": True, "bri": 45,  "hue": 48000, "sat": 180},   # Deep blue ambient
-            "2": {"on": True, "bri": 70,  "ct": 310},                    # Warm bias (sync overrides)
-            "3": {"on": True, "bri": 35,  "hue": 52000, "sat": 200},   # Purple glow
-            "4": _LIGHT_OFF,
+            "1": {"on": True, "bri": 55,  "hue": 50000, "sat": 254},   # Deep purple glow
+            "2": {"on": True, "bri": 70,  "hue": 40000, "sat": 220},   # Teal bias (sync overrides)
+            "3": {"on": True, "bri": 35,  "hue": 46920, "sat": 254},   # Blue glow
+            "4": {"on": True, "bri": 25,  "hue": 52000, "sat": 254},   # Dim purple
         },
     },
     # ── Working ───────────────────────────────────────────────────────
