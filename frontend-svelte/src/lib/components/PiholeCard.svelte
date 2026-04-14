@@ -1,11 +1,37 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { apiGet } from '$lib/api.js'
+
+  const PIHOLE_ADMIN_URL = 'http://192.168.1.210:8080/admin'
+
+  /** @param {HTMLElement} node */
+  function portal(node) {
+    document.body.appendChild(node)
+    return {
+      destroy() {
+        if (node.parentNode === document.body) document.body.removeChild(node)
+      },
+    }
+  }
 
   /** @type {{ total_queries: number, blocked: number, percent_blocked: number, domains_on_blocklist: number, active_clients: number, unique_domains: number, forwarded: number, cached: number } | null} */
   let stats = null
   let error = false
   let refreshInterval
+  let modalOpen = false
+  /** @type {HTMLButtonElement | undefined} */
+  let closeBtn
+
+  /** @param {KeyboardEvent} e */
+  function handleKeydown(e) {
+    if (e.key === 'Escape' && modalOpen) modalOpen = false
+  }
+
+  async function openModal() {
+    modalOpen = true
+    await tick()
+    closeBtn?.focus()
+  }
 
   async function fetchStats() {
     try {
@@ -67,19 +93,46 @@
       </div>
     </div>
 
-    <a class="pihole-admin" href="http://192.168.1.210:8080/admin" target="_blank" rel="noopener noreferrer">
+    <button type="button" class="pihole-admin" on:click={openModal}>
       Open Admin
       <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
         <polyline points="15 3 21 3 21 9" />
         <line x1="10" y1="14" x2="21" y2="3" />
       </svg>
-    </a>
+    </button>
   </div>
 {:else if error}
   <div class="pihole-empty">Pi-hole unavailable</div>
 {:else}
   <div class="pihole-empty">Loading...</div>
+{/if}
+
+<svelte:window on:keydown={handleKeydown} />
+
+{#if modalOpen}
+  <div
+    class="pihole-modal-backdrop"
+    use:portal
+    on:click|self={() => (modalOpen = false)}
+    role="presentation"
+  >
+    <button
+      type="button"
+      class="pihole-modal-close"
+      bind:this={closeBtn}
+      on:click={() => (modalOpen = false)}
+      aria-label="Close Pi-hole admin"
+    >
+      ✕
+    </button>
+    <iframe
+      class="pihole-modal-iframe"
+      src={PIHOLE_ADMIN_URL}
+      title="Pi-hole Admin"
+      allow="fullscreen"
+    ></iframe>
+  </div>
 {/if}
 
 <style>
@@ -154,14 +207,18 @@
   }
 
   .pihole-admin {
+    appearance: none;
+    background: none;
+    border: none;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     gap: 4px;
     font-family: var(--font-body);
     font-size: 11px;
     color: var(--text-muted);
-    text-decoration: none;
     margin-top: 2px;
+    cursor: pointer;
     transition: color 0.2s;
   }
 
@@ -174,5 +231,58 @@
     font-size: 12px;
     color: var(--text-muted);
     padding: 8px 0;
+  }
+
+  .pihole-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .pihole-modal-iframe {
+    width: 100%;
+    height: 100%;
+    max-width: 1100px;
+    max-height: 88vh;
+    border: 0;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  .pihole-modal-close {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1001;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.15s;
+  }
+
+  .pihole-modal-close:hover {
+    background: rgba(0, 0, 0, 0.9);
+    transform: scale(1.05);
+  }
+
+  @media (max-width: 480px) {
+    .pihole-modal-backdrop {
+      padding: 12px;
+    }
   }
 </style>
