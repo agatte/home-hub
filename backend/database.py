@@ -44,6 +44,40 @@ async def _run_migrations(conn) -> None:
     if "trigger" not in la_cols:
         await conn.execute(text("ALTER TABLE light_adjustments ADD COLUMN trigger TEXT"))
 
+    # ML decision and metrics tables (Phase 3: ML foundation)
+    result = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_decisions'")
+    )
+    if not result.fetchone():
+        await conn.execute(text("""
+            CREATE TABLE ml_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT (datetime('now')),
+                predicted_mode VARCHAR(50) NOT NULL,
+                actual_mode VARCHAR(50),
+                applied BOOLEAN NOT NULL,
+                confidence FLOAT,
+                decision_source VARCHAR(30) NOT NULL,
+                factors JSON
+            )
+        """))
+        await conn.execute(text("CREATE INDEX ix_ml_decisions_timestamp ON ml_decisions(timestamp)"))
+
+    result = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_metrics'")
+    )
+    if not result.fetchone():
+        await conn.execute(text("""
+            CREATE TABLE ml_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date DATE NOT NULL,
+                metric_name VARCHAR(50) NOT NULL,
+                value FLOAT NOT NULL,
+                extra JSON
+            )
+        """))
+        await conn.execute(text("CREATE INDEX ix_ml_metrics_date ON ml_metrics(date)"))
+
 
 async def init_db() -> None:
     """Create all database tables and apply pending migrations."""
