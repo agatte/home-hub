@@ -15,6 +15,7 @@ import logging
 
 import httpx
 from fastapi import APIRouter, Request, Response
+from fastapi.responses import RedirectResponse
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,16 @@ _METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 
 @router.api_route("/admin/{path:path}", methods=_METHODS)
 async def proxy_pihole_admin(path: str, request: Request) -> Response:
-    """Proxy Pi-hole admin UI assets."""
+    """Proxy Pi-hole admin UI assets.
+
+    Top-level document navigations (``Sec-Fetch-Dest: document``) are
+    redirected back to the dashboard so the kiosk can't get stuck on the
+    Pi-hole page after a session restore or direct URL entry.  Iframe
+    loads (``Sec-Fetch-Dest: iframe``) and sub-resource fetches (style,
+    script, image, etc.) are proxied normally.
+    """
+    if request.headers.get("sec-fetch-dest") == "document":
+        return RedirectResponse("/")
     qs = f"?{request.query_params}" if request.query_params else ""
     return await _proxy(request, f"{PIHOLE_ORIGIN}/admin/{path}{qs}")
 
