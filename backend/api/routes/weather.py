@@ -1,5 +1,5 @@
 """
-Weather endpoints — current conditions from OpenWeatherMap.
+Weather endpoints — current conditions from the NWS API.
 """
 import logging
 
@@ -15,13 +15,13 @@ async def get_weather(request: Request) -> dict:
     """
     Get current weather conditions.
 
-    Returns cached data (10-minute TTL) from OpenWeatherMap.
+    Returns cached data (5-minute TTL) from the NWS API.
     """
     service = getattr(request.app.state, "weather_service", None)
     if not service:
         raise HTTPException(
             status_code=503,
-            detail="Weather service not configured — set OPENWEATHER_API_KEY in .env",
+            detail="Weather service not configured",
         )
 
     data = await service.get_current()
@@ -29,3 +29,17 @@ async def get_weather(request: Request) -> dict:
         raise HTTPException(status_code=502, detail="Weather data unavailable")
 
     return {"status": "ok", "weather": data}
+
+
+@router.get("/alerts")
+async def get_weather_alerts(request: Request) -> dict:
+    """Get active NWS weather alerts for Indianapolis."""
+    service = getattr(request.app.state, "weather_service", None)
+    if not service:
+        raise HTTPException(
+            status_code=503,
+            detail="Weather service not configured",
+        )
+
+    alerts = await service.refresh_alerts()
+    return {"status": "ok", "alerts": alerts}

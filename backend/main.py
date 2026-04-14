@@ -256,14 +256,13 @@ async def lifespan(app: FastAPI):
         automation.register_on_mode_change(_bar_mode_callback)
         logger.info("Bar app service initialized (%s)", settings.BAR_APP_URL)
 
-    # Weather service (OpenWeatherMap, cached 10 min)
-    if settings.OPENWEATHER_API_KEY:
-        from backend.services.weather_service import WeatherService
-        weather_service = WeatherService(api_key=settings.OPENWEATHER_API_KEY)
-        app.state.weather_service = weather_service
-        automation._weather_service = weather_service
-        ambient_sound._weather_service = weather_service
-        logger.info("Weather service initialized (linked to automation engine)")
+    # Weather service (NWS API — no key required, free alerts)
+    from backend.services.weather_service import WeatherService
+    weather_service = WeatherService()
+    app.state.weather_service = weather_service
+    automation._weather_service = weather_service
+    ambient_sound._weather_service = weather_service
+    logger.info("Weather service initialized (NWS API, linked to automation engine)")
     automation._rule_engine = rule_engine
 
     # ML services (Phase 1) — model manager, lighting learner, decision logger
@@ -335,7 +334,7 @@ async def lifespan(app: FastAPI):
     morning = MorningRoutineService(
         tts_service=tts,
         automation_engine=automation,
-        openweather_key=settings.OPENWEATHER_API_KEY,
+        weather_service=getattr(app.state, "weather_service", None),
         google_maps_key=settings.GOOGLE_MAPS_API_KEY,
         home_address=settings.HOME_ADDRESS,
         work_address=settings.WORK_ADDRESS,
@@ -348,7 +347,7 @@ async def lifespan(app: FastAPI):
 
     morning_hour = saved_config.get("hour", settings.MORNING_ROUTINE_HOUR)
     morning_minute = saved_config.get("minute", settings.MORNING_ROUTINE_MINUTE)
-    morning_enabled = saved_config.get("enabled", bool(settings.OPENWEATHER_API_KEY))
+    morning_enabled = saved_config.get("enabled", True)
 
     # Sunrise ramp — 30 minutes before morning routine
     ramp_total = morning_hour * 60 + morning_minute - 30

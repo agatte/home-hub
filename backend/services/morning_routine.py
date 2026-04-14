@@ -21,7 +21,7 @@ class MorningRoutineService:
     Executes the morning routine: weather + traffic TTS, light ramp.
 
     At 6:40 AM ET on weekdays:
-    1. Fetch current weather from OpenWeatherMap
+    1. Fetch current weather from the NWS weather service
     2. Fetch commute traffic from Google Maps Directions API
     3. Generate TTS: "Good morning Anthony. It's 45 degrees and cloudy.
        Your commute is currently 28 minutes with light traffic."
@@ -33,7 +33,7 @@ class MorningRoutineService:
         self,
         tts_service,
         automation_engine,
-        openweather_key: Optional[str] = None,
+        weather_service=None,
         google_maps_key: Optional[str] = None,
         home_address: str = "",
         work_address: str = "",
@@ -41,7 +41,7 @@ class MorningRoutineService:
     ) -> None:
         self._tts = tts_service
         self._automation = automation_engine
-        self._openweather_key = openweather_key
+        self._weather_service = weather_service
         self._google_maps_key = google_maps_key
         self._home_address = home_address
         self._work_address = work_address
@@ -93,32 +93,23 @@ class MorningRoutineService:
         return True
 
     async def _fetch_weather(self) -> Optional[str]:
-        """
-        Fetch current weather from OpenWeatherMap.
+        """Fetch current weather from the NWS-backed weather service.
 
         Returns:
             Formatted weather string, or None if unavailable.
         """
-        if not self._openweather_key:
-            logger.warning("No OpenWeatherMap API key — skipping weather")
+        if not self._weather_service:
+            logger.warning("No weather service — skipping weather")
             return None
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    "https://api.openweathermap.org/data/2.5/weather",
-                    params={
-                        "q": "Indianapolis,US",
-                        "appid": self._openweather_key,
-                        "units": "imperial",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            data = await self._weather_service.get_current()
+            if not data:
+                return None
 
-            temp = round(data["main"]["temp"])
-            feels_like = round(data["main"]["feels_like"])
-            conditions = data["weather"][0]["description"]
+            temp = data["temp"]
+            feels_like = data["feels_like"]
+            conditions = data["description"]
 
             result = f"It's {temp} degrees and {conditions}."
             if abs(temp - feels_like) >= 5:
@@ -127,7 +118,7 @@ class MorningRoutineService:
             return result
 
         except Exception as e:
-            logger.error(f"Weather fetch failed: {e}")
+            logger.error("Weather fetch failed: %s", e)
             return None
 
     async def sunrise_ramp(self) -> bool:
