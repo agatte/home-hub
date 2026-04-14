@@ -10,6 +10,7 @@ Effects are real-time dynamic animations run by the bridge hardware.
 import asyncio
 import json
 import logging
+import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -312,7 +313,7 @@ async def list_scenes(request: Request) -> dict:
 
     Each scene includes source ('preset', 'custom', 'bridge'), category, and effect.
     """
-    # Curated presets
+    # Curated presets — include per-light states for frontend preview
     presets = [
         {
             "id": name,
@@ -321,11 +322,12 @@ async def list_scenes(request: Request) -> dict:
             "category": data["category"],
             "effect": data.get("effect"),
             "source": "preset",
+            "lights": data.get("lights"),
         }
         for name, data in SCENE_PRESETS.items()
     ]
 
-    # Custom scenes from DB
+    # Custom scenes from DB — include per-light states for frontend preview
     custom_scenes = []
     try:
         from sqlalchemy import text
@@ -334,6 +336,9 @@ async def list_scenes(request: Request) -> dict:
             result = await session.execute(text("SELECT * FROM scenes ORDER BY name"))
             rows = result.fetchall()
             for row in rows:
+                light_states = (
+                    json.loads(row[2]) if isinstance(row[2], str) else row[2]
+                )
                 custom_scenes.append({
                     "id": f"custom_{row[0]}",
                     "name": row[1],
@@ -341,6 +346,7 @@ async def list_scenes(request: Request) -> dict:
                     "category": row[3] if len(row) > 3 and row[3] else "custom",
                     "effect": row[4] if len(row) > 4 else None,
                     "source": "custom",
+                    "lights": light_states,
                 })
     except Exception as e:
         logger.debug(f"No custom scenes or table not ready: {e}")
@@ -635,3 +641,128 @@ async def activate_effect_on_light(
         )
 
     return {"status": "ok", "effect": effect_name, "light_id": light_id}
+
+
+# ------------------------------------------------------------------
+# "Try It" — activate a scene temporarily and auto-revert
+# ------------------------------------------------------------------
+
+# Single-slot: only one trial can be active at a time.
+_try_it_state: dict[str, Any] = {
+    "task": None,
+    "snapshot": None,
+    "snapshot_id": None,
+}
+
+
+async def _revert_after_delay(
+    hue: Any, ws_manager: Any, snapshot: list[dict], delay: int
+) -> None:
+    """Wait *delay* seconds, then restore the snapshot light states."""
+    try:
+        await asyncio.sleep(delay)
+        for light in snapshot:
+            state: dict[str, Any] = {}
+            if light.get("on") is not None:
+                state["on"] = light["on"]
+            if light.get("bri") is not None:
+                state["bri"] = light["bri"]
+            if light.get("colormode") == "ct" and light.get("ct"):
+                state["ct"] = light["ct"]
+            elif light.get("hue") is not None and light.get("sat") is not None:
+                state["hue"] = light["hue"]
+                state["sat"] = light["sat"]
+            state["transitiontime"] = 10  # 1s smooth revert
+            await hue.set_light(light["light_id"], state)
+        await asyncio.sleep(0.3)
+        lights = await hue.get_all_lights()
+        for light in lights:
+            await ws_manager.broadcast("light_update", light)
+    except asyncio.CancelledError:
+        pass  # cancelled by a new trial or explicit cancel
+    except Exception as e:
+        logger.error("Try-it revert failed: %s", e, exc_info=True)
+    finally:
+        _try_it_state["task"] = None
+        _try_it_state["snapshot"] = None
+        _try_it_state["snapshot_id"] = None
+
+
+@router.post("/try/cancel")
+async def cancel_try(request: Request) -> dict:
+    """
+    Cancel an active scene trial and immediately revert to the snapshot.
+    """
+    hue = request.app.state.hue
+    ws_manager = request.app.state.ws_manager
+
+    if not _try_it_state["task"] or _try_it_state["task"].done():
+        return {"status": "ok", "detail": "No active trial"}
+
+    # Cancel the delayed revert
+    _try_it_state["task"].cancel()
+    snapshot = _try_it_state["snapshot"]
+
+    if snapshot:
+        # Immediately revert
+        for light in snapshot:
+            state: dict[str, Any] = {}
+            if light.get("on") is not None:
+                state["on"] = light["on"]
+            if light.get("bri") is not None:
+                state["bri"] = light["bri"]
+            if light.get("colormode") == "ct" and light.get("ct"):
+                state["ct"] = light["ct"]
+            elif light.get("hue") is not None and light.get("sat") is not None:
+                state["hue"] = light["hue"]
+                state["sat"] = light["sat"]
+            state["transitiontime"] = 5  # 0.5s quick revert
+            await hue.set_light(light["light_id"], state)
+        await asyncio.sleep(0.3)
+        lights = await hue.get_all_lights()
+        for light in lights:
+            await ws_manager.broadcast("light_update", light)
+
+    _try_it_state["task"] = None
+    _try_it_state["snapshot"] = None
+    _try_it_state["snapshot_id"] = None
+
+    return {"status": "reverted"}
+
+
+@router.post("/{scene_id}/try")
+async def try_scene(scene_id: str, request: Request) -> dict:
+    """
+    Activate a scene temporarily for 30 seconds, then auto-revert.
+
+    Snapshots the current light states, activates the requested scene,
+    and schedules a revert task. Only one trial can be active at a time.
+    """
+    hue = request.app.state.hue
+    ws_manager = request.app.state.ws_manager
+
+    if not hue.connected:
+        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+
+    # Cancel any existing trial
+    if _try_it_state["task"] and not _try_it_state["task"].done():
+        _try_it_state["task"].cancel()
+
+    # Snapshot current light states
+    snapshot = await hue.get_all_lights()
+
+    # Activate the scene using the existing activate logic
+    result = await activate_scene(scene_id, request)
+    if result.get("status") != "ok":
+        raise HTTPException(status_code=400, detail="Scene activation failed")
+
+    # Schedule revert
+    sid = str(uuid.uuid4())[:8]
+    task = asyncio.create_task(
+        _revert_after_delay(hue, ws_manager, snapshot, 30)
+    )
+    _try_it_state["task"] = task
+    _try_it_state["snapshot"] = snapshot
+    _try_it_state["snapshot_id"] = sid
+
+    return {"status": "ok", "revert_after": 30, "snapshot_id": sid}

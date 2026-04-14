@@ -3,10 +3,19 @@
   import { apiGet, apiPost } from '$lib/api.js'
   import { activateScene } from '$lib/stores/init.js'
   import { SCENE_CATEGORIES } from '$lib/theme.js'
-  import { Plus, Pencil } from 'lucide-svelte'
+  import { Plus, Pencil, Timer } from 'lucide-svelte'
   import CustomSceneEditor from './CustomSceneEditor.svelte'
 
-  /** @type {Array<{id: string, name: string, display_name: string, category: string, effect?: string, source: string}>} */
+  /** @type {(lightStates: Record<string, any>) => void} */
+  export let onPreview = () => {}
+  /** @type {() => void} */
+  export let onPreviewEnd = () => {}
+  /** @type {(sceneId: string, sceneName: string) => void} */
+  export let onTryIt = () => {}
+  /** Whether a trial is currently active (disables Try It buttons) */
+  export let tryItActive = false
+
+  /** @type {Array<{id: string, name: string, display_name: string, category: string, effect?: string, source: string, lights?: Record<string, any>}>} */
   let scenes = []
   /** @type {Array<{name: string, display_name: string, description?: string}>} */
   let effects = []
@@ -154,7 +163,11 @@
     <div class="scene-grid">
       {#each filtered as scene (scene.id)}
         {@const catMeta = SCENE_CATEGORIES[scene.category] || SCENE_CATEGORIES.custom}
-        <div class="scene-wrap">
+        <div
+          class="scene-wrap"
+          on:mouseenter={() => { if (scene.lights) onPreview(scene.lights) }}
+          on:mouseleave={() => onPreviewEnd()}
+        >
           <button
             class="scene-item"
             class:activating={activatingId === scene.id}
@@ -165,6 +178,15 @@
             {#if scene.effect}
               <span class="scene-effect-badge" style="color: {catMeta.color}">{scene.effect}</span>
             {/if}
+          </button>
+          <button
+            class="scene-try-btn"
+            class:try-disabled={tryItActive}
+            on:click|stopPropagation={() => { if (!tryItActive) onTryIt(scene.id, scene.display_name) }}
+            aria-label="Try for 30 seconds"
+            title="Try for 30s"
+          >
+            <Timer size={11} strokeWidth={2} />
           </button>
           {#if scene.source === 'custom'}
             <button
@@ -207,12 +229,23 @@
   {#if activeTab === 'bridge'}
     <div class="scene-grid">
       {#each bridgeScenes as scene}
-        <button
-          class="scene-item"
-          on:click={() => activateBridge(scene)}
-        >
-          <span class="scene-name">{scene.name}</span>
-        </button>
+        <div class="scene-wrap">
+          <button
+            class="scene-item"
+            on:click={() => activateBridge(scene)}
+          >
+            <span class="scene-name">{scene.name}</span>
+          </button>
+          <button
+            class="scene-try-btn"
+            class:try-disabled={tryItActive}
+            on:click|stopPropagation={() => { if (!tryItActive) onTryIt(scene.ids[0], scene.name) }}
+            aria-label="Try for 30 seconds"
+            title="Try for 30s"
+          >
+            <Timer size={11} strokeWidth={2} />
+          </button>
+        </div>
       {/each}
       {#if bridgeScenes.length === 0}
         <span class="scene-empty">No bridge scenes found</span>
@@ -307,6 +340,39 @@
 
   .scene-wrap:hover .scene-edit-btn {
     opacity: 1;
+  }
+
+  .scene-try-btn {
+    position: absolute;
+    bottom: -4px;
+    right: -4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(10, 10, 15, 0.9);
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+    padding: 0;
+  }
+
+  .scene-wrap:hover .scene-try-btn {
+    opacity: 1;
+  }
+
+  .scene-try-btn:hover {
+    color: rgba(120, 220, 160, 0.9);
+    border-color: rgba(120, 220, 160, 0.4);
+  }
+
+  .scene-try-btn.try-disabled {
+    pointer-events: none;
+    opacity: 0.3;
   }
 
   .scene-edit-btn {

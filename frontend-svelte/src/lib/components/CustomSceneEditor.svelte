@@ -3,6 +3,7 @@
   import { get } from 'svelte/store'
   import { apiGet, apiPost, apiPut, apiDelete } from '$lib/api.js'
   import { lights } from '$lib/stores/lights.js'
+  import { hueToHsl, ctToColor } from '$lib/utils/lightColor.js'
   import { SCENE_CATEGORIES } from '$lib/theme.js'
   import { Camera, Save, Trash2, X } from 'lucide-svelte'
 
@@ -40,21 +41,6 @@
       }
     }
     lightStates = snapshot
-  }
-
-  function hueToHsl(hue, sat, bri) {
-    const h = (hue / 65535) * 360
-    const s = (sat / 254) * 100
-    const l = (bri / 254) * 50
-    return `hsl(${h}, ${s}%, ${Math.max(l, 20)}%)`
-  }
-
-  function ctToColor(ct) {
-    const t = (ct - 153) / (500 - 153)
-    const r = Math.round(255 - t * 30)
-    const g = Math.round(220 - t * 80)
-    const b = Math.round(200 - t * 140)
-    return `rgb(${r}, ${g}, ${b})`
   }
 
   function previewColor(state) {

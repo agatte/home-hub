@@ -2,8 +2,7 @@
   import ModeCardDeck from '$lib/components/ModeCardDeck.svelte'
   import ModeIndicator from '$lib/components/ModeIndicator.svelte'
   import RoutineCard from '$lib/components/RoutineCard.svelte'
-  import LightGrid from '$lib/components/LightGrid.svelte'
-  import SceneBrowser from '$lib/components/SceneBrowser.svelte'
+  import ApartmentWidget from '$lib/components/ApartmentWidget.svelte'
   import SonosCard from '$lib/components/SonosCard.svelte'
   import WeatherCard from '$lib/components/WeatherCard.svelte'
   import PiholeCard from '$lib/components/PiholeCard.svelte'
@@ -59,14 +58,9 @@
       <PiholeCard />
     </section>
 
-    <section class="widget widget-lights">
-      <h2 class="widget-title">Lights</h2>
-      <LightGrid />
-    </section>
-
-    <section class="widget widget-scenes widget-routines-full">
-      <h2 class="widget-title">Scenes</h2>
-      <SceneBrowser />
+    <section class="widget widget-apartment widget-routines-full">
+      <h2 class="widget-title">Apartment</h2>
+      <ApartmentWidget />
     </section>
 
     <section class="widget widget-routines widget-routines-full">

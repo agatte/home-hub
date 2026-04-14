@@ -1,6 +1,7 @@
 <script>
   import Slider from './Slider.svelte'
   import { setLight } from '$lib/stores/init.js'
+  import { hueToHsl, ctToColor } from '$lib/utils/lightColor.js'
 
   import { LIGHT_CT_PRESETS } from '$lib/theme.js'
 
@@ -18,13 +19,6 @@
   ]
 
   let presetTab = 'color' // 'color' | 'temp'
-
-  function hueToHsl(hue, sat, bri) {
-    const h = (hue / 65535) * 360
-    const s = (sat / 254) * 100
-    const l = (bri / 254) * 50
-    return `hsl(${h}, ${s}%, ${Math.max(l, 20)}%)`
-  }
 
   /** @type {ReturnType<typeof setTimeout> | null} */
   let debounceTimer = null
@@ -45,16 +39,6 @@
   function setCT(ct) {
     setLight(light.light_id, { ct })
     showPresets = false
-  }
-
-  /** Convert mirek to a warm-to-cool CSS gradient color for display */
-  function ctToColor(ct) {
-    // Simple mapping: 500 mirek (2000K) = warm orange, 153 mirek (6500K) = cool blue-white
-    const t = (ct - 153) / (500 - 153) // 0 = cool, 1 = warm
-    const r = Math.round(255 - t * 30)
-    const g = Math.round(220 - t * 80)
-    const b = Math.round(200 - t * 140)
-    return `rgb(${r}, ${g}, ${b})`
   }
 
   $: bgColor = light.on ? hueToHsl(light.hue, light.sat, light.bri) : 'var(--text-muted)'
