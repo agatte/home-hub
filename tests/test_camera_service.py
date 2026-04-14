@@ -35,9 +35,11 @@ def _make_service(
 
 
 def _mock_detection(score: float):
-    """Create a mock MediaPipe detection result with the given score."""
+    """Create a mock MediaPipe Tasks API detection result."""
+    category = MagicMock()
+    category.score = score
     det = MagicMock()
-    det.score = [score]
+    det.categories = [category]
     return det
 
 
@@ -83,11 +85,11 @@ class TestPresenceLogic:
         mock_cap.read.return_value = (True, fake_frame)
         service._cap = mock_cap
 
-        # Mock face detector
+        # Mock face detector (Tasks API uses .detect() not .process())
         mock_detector = MagicMock()
         mock_results = MagicMock()
         mock_results.detections = [_mock_detection(0.92)]
-        mock_detector.process.return_value = mock_results
+        mock_detector.detect.return_value = mock_results
         service._face_detector = mock_detector
 
         result = service._process_frame()
@@ -111,8 +113,8 @@ class TestPresenceLogic:
 
         mock_detector = MagicMock()
         mock_results = MagicMock()
-        mock_results.detections = None
-        mock_detector.process.return_value = mock_results
+        mock_results.detections = []
+        mock_detector.detect.return_value = mock_results
         service._face_detector = mock_detector
 
         result = service._process_frame()
@@ -207,8 +209,8 @@ class TestAmbientLux:
 
         mock_detector = MagicMock()
         mock_results = MagicMock()
-        mock_results.detections = None
-        mock_detector.process.return_value = mock_results
+        mock_results.detections = []
+        mock_detector.detect.return_value = mock_results
         service._face_detector = mock_detector
 
         result = service._process_frame()
@@ -229,8 +231,8 @@ class TestAmbientLux:
 
         mock_detector = MagicMock()
         mock_results = MagicMock()
-        mock_results.detections = None
-        mock_detector.process.return_value = mock_results
+        mock_results.detections = []
+        mock_detector.detect.return_value = mock_results
         service._face_detector = mock_detector
 
         result = service._process_frame()

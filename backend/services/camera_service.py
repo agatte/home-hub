@@ -17,6 +17,7 @@ Privacy guarantees:
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger("home_hub.camera")
@@ -27,6 +28,15 @@ FRAME_WIDTH = 320       # Downsampled frame size for inference
 FRAME_HEIGHT = 240
 ABSENT_THRESHOLD = 3    # Consecutive absent frames before reporting away (15s)
 MIN_FACE_CONFIDENCE = 0.5
+
+# Model file for MediaPipe Tasks API (v0.10.20+)
+MODEL_DIR = Path("data/models")
+MODEL_FILENAME = "blaze_face_short_range.tflite"
+MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "face_detector/blaze_face_short_range/float16/latest/"
+    "blaze_face_short_range.tflite"
+)
 
 
 class CameraService:
@@ -67,6 +77,7 @@ class CameraService:
         """Open the webcam and initialize MediaPipe face detection.
 
         Fails gracefully if the camera is unavailable (busy, missing, etc.).
+        Downloads the face detection model on first run (~230KB).
         """
         try:
             import cv2
@@ -95,12 +106,26 @@ class CameraService:
             self._cap = None
             return
 
-        # Initialize MediaPipe Face Detection (short-range, optimized for <2m)
+        # Ensure face detection model is available
+        model_path = MODEL_DIR / MODEL_FILENAME
+        if not model_path.exists():
+            if not self._download_model(model_path):
+                if self._cap:
+                    self._cap.release()
+                    self._cap = None
+                return
+
+        # Initialize MediaPipe Face Detection (Tasks API, v0.10.20+)
         try:
-            self._face_detector = mp.solutions.face_detection.FaceDetection(
-                model_selection=0,
+            BaseOptions = mp.tasks.BaseOptions
+            FaceDetector = mp.tasks.vision.FaceDetector
+            FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
+
+            options = FaceDetectorOptions(
+                base_options=BaseOptions(model_asset_path=str(model_path)),
                 min_detection_confidence=MIN_FACE_CONFIDENCE,
             )
+            self._face_detector = FaceDetector.create_from_options(options)
         except Exception as exc:
             logger.error(
                 "Failed to initialize MediaPipe face detection: %s",
@@ -114,6 +139,30 @@ class CameraService:
 
         self._enabled = True
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
+
+    @staticmethod
+    def _download_model(model_path: Path) -> bool:
+        """Download the BlazeFace short-range model from Google.
+
+        Returns:
+            True if download succeeded.
+        """
+        try:
+            import httpx
+
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.info("Downloading face detection model...")
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                resp = client.get(MODEL_URL)
+                resp.raise_for_status()
+                model_path.write_bytes(resp.content)
+            logger.info(
+                "Face detection model saved (%d bytes)", len(resp.content)
+            )
+            return True
+        except Exception as exc:
+            logger.error("Failed to download face detection model: %s", exc)
+            return False
 
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
@@ -222,6 +271,8 @@ class CameraService:
             return None
 
         try:
+            import mediapipe as mp
+
             # Downsample if the camera returns a larger frame
             h, w = frame.shape[:2]
             if w > FRAME_WIDTH or h > FRAME_HEIGHT:
@@ -234,15 +285,21 @@ class CameraService:
             # Convert to RGB for MediaPipe
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+            # Wrap in MediaPipe Image for Tasks API
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
             # Run face detection
-            results = self._face_detector.process(rgb)
+            results = self._face_detector.detect(mp_image)
 
             # Determine presence
             if results.detections:
                 # Take highest confidence detection
-                best = max(results.detections, key=lambda d: d.score[0])
+                best = max(
+                    results.detections,
+                    key=lambda d: d.categories[0].score,
+                )
                 status = "present"
-                confidence = float(best.score[0])
+                confidence = float(best.categories[0].score)
             else:
                 status = "absent"
                 confidence = 0.0
