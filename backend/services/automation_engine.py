@@ -178,20 +178,20 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "day": {
             "1": {"on": True, "bri": 140, "hue": 49000, "sat": 200},   # Purple ambient wash
             "2": {"on": True, "bri": 200, "hue": 46920, "sat": 200},   # Blue bias (sync overrides)
-            "3": {"on": True, "bri": 100, "hue": 46920, "sat": 220},   # Blue accent
-            "4": {"on": True, "bri": 80,  "hue": 50000, "sat": 200},   # Blue-purple accent
+            "3": {"on": True, "bri": 100, "hue": 44000, "sat": 230},   # Deep blue accent
+            "4": {"on": True, "bri": 80,  "hue": 57000, "sat": 210},   # Magenta accent
         },
         "evening": {
             "1": {"on": True, "bri": 100, "hue": 50000, "sat": 230},   # Deeper purple wash
             "2": {"on": True, "bri": 140, "hue": 46920, "sat": 220},   # Blue bias (sync overrides)
-            "3": {"on": True, "bri": 70,  "hue": 46920, "sat": 240},   # Vivid blue accent
-            "4": {"on": True, "bri": 50,  "hue": 52000, "sat": 220},   # Purple accent
+            "3": {"on": True, "bri": 70,  "hue": 44000, "sat": 250},   # Vivid deep blue
+            "4": {"on": True, "bri": 55,  "hue": 57000, "sat": 230},   # Magenta accent
         },
         "night": {
             "1": {"on": True, "bri": 55,  "hue": 50000, "sat": 254},   # Deep purple glow
             "2": {"on": True, "bri": 80,  "hue": 46920, "sat": 240},   # Blue bias (sync overrides)
-            "3": {"on": True, "bri": 35,  "hue": 46920, "sat": 254},   # Blue glow
-            "4": {"on": True, "bri": 25,  "hue": 52000, "sat": 254},   # Dim purple
+            "3": {"on": True, "bri": 35,  "hue": 44000, "sat": 254},   # Deep blue glow
+            "4": {"on": True, "bri": 28,  "hue": 57000, "sat": 254},   # Dim magenta
         },
     },
     # ── Working ───────────────────────────────────────────────────────

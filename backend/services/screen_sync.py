@@ -34,6 +34,12 @@ MODE_MAX_BRIGHTNESS = {
 DEFAULT_MAX_BRIGHTNESS = 80
 MIN_BRIGHTNESS = 15
 
+# Per-mode minimum brightness — gaming stays visible even on dark scenes;
+# watching/movie allow dim bias lighting.
+MODE_MIN_BRIGHTNESS: dict[str, int] = {
+    "gaming": 80,
+}
+
 
 class ScreenSyncService:
     """
@@ -79,7 +85,8 @@ class ScreenSyncService:
             source: "desktop" or "laptop" — recorded for status reporting only.
         """
         max_bri = MODE_MAX_BRIGHTNESS.get(mode, DEFAULT_MAX_BRIGHTNESS)
-        h, s, br = self._rgb_to_hue_hsb((r, g, b), max_bri)
+        min_bri = MODE_MIN_BRIGHTNESS.get(mode, MIN_BRIGHTNESS)
+        h, s, br = self._rgb_to_hue_hsb((r, g, b), max_bri, min_bri)
         sh, ss, sb = self._smooth(h, s, br)
         await self._hue.set_light(self._target_light, {
             "on": True,
@@ -92,15 +99,16 @@ class ScreenSyncService:
         self._last_source = source
 
     def _rgb_to_hue_hsb(
-        self, rgb: tuple[int, int, int], max_brightness: int
+        self, rgb: tuple[int, int, int], max_brightness: int,
+        min_brightness: int = MIN_BRIGHTNESS,
     ) -> tuple[float, float, float]:
-        """Convert RGB (0-255) to Hue bridge HSB values, clamped to max_brightness."""
+        """Convert RGB (0-255) to Hue bridge HSB values, clamped to brightness range."""
         r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
         h, s, v = colorsys.rgb_to_hsv(r, g, b)
 
         hue_val = h * 65535
         sat_val = min(254, s * 254 * 1.2)  # boost saturation for vibrancy
-        bri_val = max(MIN_BRIGHTNESS, min(max_brightness, v * 254))
+        bri_val = max(min_brightness, min(max_brightness, v * 254))
 
         return (hue_val, sat_val, bri_val)
 
