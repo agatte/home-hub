@@ -28,10 +28,10 @@
    */
 
   const LIGHT_POSITIONS = {
-    '2': { x: 88,  y: 110 },   // Bedroom lamp — bottom-center of bedroom
-    '1': { x: 345, y: 38 },    // Living room lamp — top-right corner
-    '3': { x: 228, y: 182 },   // Kitchen front — above island
-    '4': { x: 228, y: 218 },   // Kitchen back — below island
+    '2': { x: 88,  y: 105 },   // Bedroom lamp — bottom-center of bedroom
+    '1': { x: 335, y: 42 },    // Living room lamp — top-right area (inset from wall)
+    '3': { x: 195, y: 195 },   // Kitchen front — left of island
+    '4': { x: 280, y: 195 },   // Kitchen back — right of island
   }
 
   const ROOM_LABELS = [
@@ -50,13 +50,16 @@
   function glowRadius(state) {
     if (!state?.on) return 4
     const bri = state.bri ?? 128
-    return 10 + (bri / 254) * 16
+    // sqrt scaling flattens the curve — high bri doesn't balloon
+    const t = Math.sqrt(bri / 254)
+    return 10 + t * 12
   }
 
   function glowOpacity(state) {
     if (!state?.on) return 0.06
     const bri = state.bri ?? 128
-    return 0.3 + (bri / 254) * 0.5
+    const t = Math.sqrt(bri / 254)
+    return 0.3 + t * 0.45
   }
 
   $: liveMap = $lights
@@ -128,12 +131,12 @@
       <!-- TV stand (living room, right wall) -->
       <rect x="362" y="50" width="14" height="40" rx="1.5" fill="white" />
 
-      <!-- Kitchen island -->
-      <rect x="216" y="186" width="26" height="36" rx="2" fill="white" />
+      <!-- Kitchen island (centered between lights 3 & 4) -->
+      <rect x="226" y="186" width="26" height="20" rx="2" fill="white" />
       <!-- Counter (right wall) -->
       <rect x="360" y="142" width="18" height="65" rx="1.5" fill="white" />
       <!-- Counter (bottom wall) -->
-      <rect x="200" y="238" width="90" height="10" rx="1.5" fill="white" />
+      <rect x="180" y="238" width="110" height="10" rx="1.5" fill="white" />
 
       <!-- Toilet -->
       <rect x="24" y="180" width="12" height="16" rx="4" fill="white" />
@@ -164,9 +167,9 @@
       {@const r = glowRadius(state)}
       {@const opacity = glowOpacity(state)}
       <circle
-        cx={pos.x} cy={pos.y} r={r * 1.4}
+        cx={pos.x} cy={pos.y} r={r * 1.2}
         fill={color}
-        opacity={opacity * 0.3}
+        opacity={opacity * 0.25}
         filter="url(#bloom)"
         class="light-bloom"
       />
