@@ -28,6 +28,11 @@ psutil>=5.9.0             # Process monitoring for activity detection
 pyaudio>=0.2.14           # Blue Yeti mic ambient noise detection
 mss>=9.0.0                # Fast screen capture for screen sync
 
+# ML
+numpy>=1.20.0
+scikit-learn>=1.0.0       # K-means for screen sync color clustering
+lightgbm>=4.0.0           # Behavioral mode prediction
+
 # Utilities
 aiofiles>=23.0.0          # Async file operations
 

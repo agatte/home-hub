@@ -18,12 +18,20 @@ Autostart on Windows:
     to capture the screen). Set "Hidden" on so it stays out of the way.
 """
 import argparse
+import colorsys
 import logging
 import time
 from typing import Optional
 
 import httpx
 import mss
+import numpy as np
+
+try:
+    from sklearn.cluster import MiniBatchKMeans
+    _HAS_KMEANS = True
+except ImportError:
+    _HAS_KMEANS = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,12 +42,50 @@ logger = logging.getLogger("home_hub.screen_sync_agent")
 CAPTURE_INTERVAL = 2.5  # seconds between captures
 
 
+def _pick_dominant_kmeans(pixels: np.ndarray) -> tuple[int, int, int]:
+    """Pick the most visually dominant color via K-means clustering.
+
+    Scores each cluster center by saturation (0.7 weight) and luminance
+    balance (0.3 weight). Prefers saturated, mid-brightness colors over
+    dark/washed-out clusters. Falls back to the largest cluster if no
+    candidate passes the quality thresholds.
+    """
+    kmeans = MiniBatchKMeans(n_clusters=5, batch_size=100, n_init=1)
+    kmeans.fit(pixels)
+
+    best_score = -1.0
+    best_center = None
+
+    for center in kmeans.cluster_centers_:
+        r, g, b = center / 255.0
+        _h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        if s > 0.2 and 0.15 < v < 0.85:
+            score = s * 0.7 + (1.0 - abs(v - 0.5)) * 0.3
+            if score > best_score:
+                best_score = score
+                best_center = center
+
+    if best_center is None:
+        largest = int(np.argmax(np.bincount(kmeans.labels_)))
+        best_center = kmeans.cluster_centers_[largest]
+
+    return (int(best_center[0]), int(best_center[1]), int(best_center[2]))
+
+
+def _pick_dominant_average(pixels: np.ndarray) -> tuple[int, int, int]:
+    """Fallback: simple arithmetic mean of all pixels."""
+    mean = pixels.mean(axis=0)
+    return (int(mean[0]), int(mean[1]), int(mean[2]))
+
+
 def capture_dominant_color() -> Optional[tuple[int, int, int]]:
     """
     Capture the primary screen and extract the dominant color.
 
     Grabs the full screen, downsamples to ~100x60, crops to the center 60%
-    (avoiding taskbar / window chrome), and averages the pixel colors.
+    (avoiding taskbar / window chrome). Uses K-means clustering to pick the
+    most saturated dominant color; falls back to averaging if scikit-learn
+    is not available.
     """
     try:
         with mss.mss() as sct:
@@ -50,30 +96,30 @@ def capture_dominant_color() -> Optional[tuple[int, int, int]]:
             height = screenshot.height
             raw = screenshot.rgb
 
-            step_x = max(1, width // 100)
-            step_y = max(1, height // 60)
+            step_x = max(1, width // 50)
+            step_y = max(1, height // 30)
 
             x_start = int(width * 0.2)
             x_end = int(width * 0.8)
             y_start = int(height * 0.2)
             y_end = int(height * 0.8)
 
-            r_total, g_total, b_total = 0, 0, 0
-            count = 0
-
+            pixels = []
             for y in range(y_start, y_end, step_y):
                 for x in range(x_start, x_end, step_x):
                     idx = (y * width + x) * 3
                     if idx + 2 < len(raw):
-                        r_total += raw[idx]
-                        g_total += raw[idx + 1]
-                        b_total += raw[idx + 2]
-                        count += 1
+                        pixels.append((raw[idx], raw[idx + 1], raw[idx + 2]))
 
-            if count == 0:
+            if not pixels:
                 return None
 
-            return (r_total // count, g_total // count, b_total // count)
+            pixel_array = np.array(pixels, dtype=np.float32)
+
+            if _HAS_KMEANS and len(pixels) >= 5:
+                return _pick_dominant_kmeans(pixel_array)
+            return _pick_dominant_average(pixel_array)
+
     except Exception as e:
         logger.error(f"Screen capture error: {e}")
         return None

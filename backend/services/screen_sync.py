@@ -191,6 +191,14 @@ class LaptopLoopbackCapture:
             await asyncio.sleep(self._capture_interval)
 
 
+try:
+    import numpy as np
+    from sklearn.cluster import MiniBatchKMeans
+    _HAS_KMEANS = True
+except ImportError:
+    _HAS_KMEANS = False
+
+
 def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
     """
     Capture the primary screen and extract the dominant color.
@@ -198,6 +206,9 @@ def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
     Used by `LaptopLoopbackCapture`. The desktop agent has its own copy of
     this logic in `pc_agent/screen_sync_agent.py` — they're intentionally
     duplicated so the agent has zero backend dependencies.
+
+    Uses K-means clustering (5 clusters) to pick the most saturated dominant
+    color. Falls back to simple averaging if scikit-learn is not installed.
     """
     try:
         import mss
@@ -214,9 +225,9 @@ def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
             height = screenshot.height
             raw = screenshot.rgb
 
-            # Downsample by stepping through pixels
-            step_x = max(1, width // 100)
-            step_y = max(1, height // 60)
+            # Downsample to ~50x30 grid (~1500 pixels — enough for K-means)
+            step_x = max(1, width // 50)
+            step_y = max(1, height // 30)
 
             # Crop to center 60% (skip 20% edge — taskbar, window chrome)
             x_start = int(width * 0.2)
@@ -224,21 +235,45 @@ def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
             y_start = int(height * 0.2)
             y_end = int(height * 0.8)
 
-            r_total, g_total, b_total = 0, 0, 0
-            count = 0
-
+            pixels = []
             for y in range(y_start, y_end, step_y):
                 for x in range(x_start, x_end, step_x):
                     idx = (y * width + x) * 3
                     if idx + 2 < len(raw):
-                        r_total += raw[idx]
-                        g_total += raw[idx + 1]
-                        b_total += raw[idx + 2]
-                        count += 1
+                        pixels.append((raw[idx], raw[idx + 1], raw[idx + 2]))
 
-            if count == 0:
+            if not pixels:
                 return None
 
+            if _HAS_KMEANS and len(pixels) >= 5:
+                import colorsys
+
+                pixel_array = np.array(pixels, dtype=np.float32)
+                kmeans = MiniBatchKMeans(n_clusters=5, batch_size=100, n_init=1)
+                kmeans.fit(pixel_array)
+
+                best_score = -1.0
+                best_center = None
+                for center in kmeans.cluster_centers_:
+                    r, g, b = center / 255.0
+                    _h, s, v = colorsys.rgb_to_hsv(r, g, b)
+                    if s > 0.2 and 0.15 < v < 0.85:
+                        score = s * 0.7 + (1.0 - abs(v - 0.5)) * 0.3
+                        if score > best_score:
+                            best_score = score
+                            best_center = center
+
+                if best_center is None:
+                    largest = int(np.argmax(np.bincount(kmeans.labels_)))
+                    best_center = kmeans.cluster_centers_[largest]
+
+                return (int(best_center[0]), int(best_center[1]), int(best_center[2]))
+
+            # Fallback: simple average
+            r_total = sum(p[0] for p in pixels)
+            g_total = sum(p[1] for p in pixels)
+            b_total = sum(p[2] for p in pixels)
+            count = len(pixels)
             return (r_total // count, g_total // count, b_total // count)
 
     except Exception as e:
