@@ -12,6 +12,7 @@ import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 import { ambient } from './ambient.js'
+import { camera } from './camera.js'
 
 /** @type {HubSocket | null} */
 let socket = null
@@ -34,6 +35,10 @@ export function initStores() {
 
   apiGet('/api/ambient')
     .then((data) => ambient.set(/** @type {any} */ (data)))
+    .catch(() => {})
+
+  apiGet('/api/camera/status')
+    .then((data) => camera.set(/** @type {any} */ (data)))
     .catch(() => {})
 
   apiGet('/api/automation/status')
@@ -86,6 +91,9 @@ export function initStores() {
           break
         case 'ambient_update':
           ambient.set(data)
+          break
+        case 'camera_update':
+          camera.update((prev) => prev ? { ...prev, ...data, last_detection: data.detection } : prev)
           break
         default:
           break

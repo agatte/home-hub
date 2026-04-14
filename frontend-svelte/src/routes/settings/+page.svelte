@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
+  import { camera as cameraStore } from '$lib/stores/camera.js'
   import { apiGet, apiPut, apiPost, apiDelete } from '$lib/api.js'
   import Slider from '$lib/components/Slider.svelte'
 
@@ -38,9 +39,7 @@
   /** @type {string | null} */
   let saving = null
 
-  // Camera presence
-  /** @type {any} */
-  let cameraStatus = null
+  // Camera presence — driven by $cameraStore (real-time via WebSocket)
 
   // Mode → scene overrides
   /** @type {any[]} */
@@ -105,7 +104,7 @@
     try { autoConfig = await apiGet('/api/automation/config') } catch {}
     try { scheduleConfig = await apiGet('/api/automation/schedule') } catch {}
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
-    try { cameraStatus = await apiGet('/api/camera/status') } catch {}
+    // Camera status is loaded globally in init.js and updated via WebSocket
     loadPiholeData()
     loadModeScenes()
     try {
@@ -223,11 +222,11 @@
   }
 
   async function toggleCamera() {
-    const newState = !cameraStatus?.enabled
+    const newState = !$cameraStore?.enabled
     saving = 'camera'
     try {
       const resp = await apiPost('/api/camera/enable', { enabled: newState })
-      cameraStatus = await apiGet('/api/camera/status')
+      $cameraStore = await apiGet('/api/camera/status')
     } catch {}
     saving = null
   }
@@ -432,22 +431,22 @@
           </div>
           <button
             class="toggle-btn"
-            class:toggle-on={cameraStatus?.enabled}
+            class:toggle-on={$cameraStore?.enabled}
             on:click={toggleCamera}
             disabled={saving === 'camera'}
           >
-            {cameraStatus?.enabled ? 'ON' : 'OFF'}
+            {$cameraStore?.enabled ? 'ON' : 'OFF'}
           </button>
         </div>
-        {#if cameraStatus?.enabled}
+        {#if $cameraStore?.enabled}
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Detection</span>
             </div>
             <span class="setting-value">
-              {cameraStatus.last_detection === 'present' ? 'Present' : cameraStatus.last_detection === 'absent' ? 'Absent' : 'Unknown'}
-              {#if cameraStatus.confidence > 0}
-                ({(cameraStatus.confidence * 100).toFixed(0)}%)
+              {$cameraStore.last_detection === 'present' ? 'Present' : $cameraStore.last_detection === 'absent' ? 'Absent' : 'Unknown'}
+              {#if $cameraStore.confidence > 0}
+                ({($cameraStore.confidence * 100).toFixed(0)}%)
               {/if}
             </span>
           </div>
@@ -456,10 +455,10 @@
               <span class="setting-label">Ambient Light</span>
             </div>
             <span class="setting-value">
-              {cameraStatus.ambient_lux?.toFixed(0) ?? '--'} / 255
+              {$cameraStore.ambient_lux?.toFixed(0) ?? '--'} / 255
             </span>
           </div>
-          {#if cameraStatus.paused}
+          {#if $cameraStore.paused}
             <div class="setting-row">
               <span class="setting-hint">Paused during sleeping mode</span>
             </div>
