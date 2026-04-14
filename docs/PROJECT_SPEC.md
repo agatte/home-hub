@@ -1514,7 +1514,7 @@ ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
 - ✓ **ML Phase 1 (Complete — April 2026):** Behavioral mode prediction (LightGBM, shadow mode collecting data), adaptive lighting preferences (EMA from manual adjustments), ML decision logger (every mode decision with reasoning), model manager (persistence + nightly retraining at 4 AM), feature builder (temporal + behavioral extraction), full `/api/learning/` REST API (status, decisions, accuracy, predictor promote/demote, lighting prefs, retrain, reset), `ml_decisions` + `ml_metrics` DB tables
-- **ML Phase 2 (next):** Camera presence/posture detection (MediaPipe), smart screen sync (K-means), music selection learning (Thompson sampling), YAMNet audio scene classification
+- **ML Phase 2 (in progress):** ✓ Smart screen sync (K-means MiniBatchKMeans replacing pixel averaging), ✓ Music selection bandit (Thompson sampling with Beta priors). Remaining: camera presence/posture (MediaPipe), YAMNet audio scene classification
 - **ML Phase 3 (months 6+):** Autonomous mode switching with confidence-gated actions (95%+ auto-apply, 70-95% suggest via toast)
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 

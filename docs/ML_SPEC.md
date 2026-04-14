@@ -6,7 +6,7 @@
 > audio classification), and evolve toward autonomous operation.
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
-> **Status:** Phase 1 implemented (April 2026), Phase 2 next
+> **Status:** Phase 1 complete, Phase 2 in progress (screen sync + music bandit shipped)
 > **Last updated:** April 14, 2026
 
 ---
@@ -56,7 +56,7 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision** | Next | Camera-based presence/posture detection, smart screen sync, music selection learning, audio scene classification (YAMNet) | Detect presence/away within 30s (vs current 10-minute idle timer) |
+| **Phase 2: Computer Vision & Learning** | In Progress | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling). Remaining: camera presence/posture (MediaPipe), audio scene classification (YAMNet) | Detect presence/away within 30s (vs current 10-minute idle timer) |
 | **Phase 3: Autonomous Operation** | Months 6-12 | Confidence-gated auto-apply, full prediction pipeline, decision explainability | Fewer than 2 manual overrides per day |
 
 ### Design Principles
@@ -1199,20 +1199,25 @@ except ImportError:
 outperforming rules, lighting learner active for 2+ lights. Manual overrides
 down 30% from baseline.
 
-### Phase 2: Computer Vision (Months 3-6)
+### Phase 2: Computer Vision & Learning (In Progress)
 
+**Implemented (April 14, 2026):**
+- ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
+- ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others. Rewards from play/skip behavior in `sonos_playback_events`. Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`. Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate.
+
+**Remaining:**
 ```
-Month 3-4:  Camera presence detection deployed (opt-in)
-              - Away detection: 15s (was 10min)
-              - Ambient lux measurement feeding brightness
+Camera presence detection (opt-in, MediaPipe)
+  - Away detection: 15s (vs 10min idle timer)
+  - Ambient lux measurement feeding brightness
 
-Month 4-5:  Camera posture classification deployed
-              - Posture feeds mode disambiguation
-              - Calibration flow in Settings
+Camera posture classification
+  - Posture feeds mode disambiguation
+  - Calibration flow in Settings
 
-Month 5-6:  All Phase 2 features active
-            Full decision explainability on Analytics page
-            ML metrics dashboard operational
+Audio scene classification (YAMNet)
+  - Replace RMS-only detection with sound type recognition
+  - Social detection: 30s (vs 2min)
 ```
 
 **Phase 2 exit criteria:** Camera presence working reliably (opt-in), posture
@@ -1244,8 +1249,8 @@ Behavioral Predictor ───────────────────�
 Lighting Learner ──────────────────────── (needs manual adjustment history)
 Camera Presence ───────────────────────── (independent of Phase 1)
 Camera Posture ────── depends on ──────── Camera Presence
-Smart Screen Sync ─────────────────────── (independent)
-Music Bandit ──────────────────────────── (needs play/skip history)
+Smart Screen Sync ─────────────────────── ✓ SHIPPED (K-means, April 2026)
+Music Bandit ──────────────────────────── ✓ SHIPPED (Thompson sampling, April 2026)
 Decision Explainability ── depends on ─── Any ML prediction source
 Autonomous Operation ──── depends on ──── Behavioral Predictor validated
 ```
