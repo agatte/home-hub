@@ -177,6 +177,18 @@ async def get_favorites(request: Request) -> dict:
     return {"favorites": favorites}
 
 
+@router.post("/favorites/refresh")
+async def refresh_favorites(request: Request) -> dict:
+    """Clear the favorites cache so the next fetch picks up new additions."""
+    sonos = request.app.state.sonos
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    sonos.invalidate_favorites_cache()
+    favorites = await sonos.get_favorites()
+    return {"status": "ok", "favorites": favorites}
+
+
 @router.post("/favorites/{title}/play")
 async def play_favorite(title: str, request: Request) -> dict:
     """Play a Sonos favorite by title."""
