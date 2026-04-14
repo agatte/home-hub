@@ -6,8 +6,8 @@
 > audio classification), and evolve toward autonomous operation.
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
-> **Status:** Specification (not yet implemented)
-> **Last updated:** April 2026
+> **Status:** Phase 1 implemented (April 2026), Phase 2 next
+> **Last updated:** April 14, 2026
 
 ---
 
@@ -55,8 +55,8 @@ rare.
 
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
-| **Phase 1: Lightweight Classifiers** | Months 1-3 | Audio scene classification, behavioral prediction from event history, adaptive lighting | Reduce incorrect mode time by 30% |
-| **Phase 2: Computer Vision** | Months 3-6 | Camera-based presence/posture detection, smart screen sync, music selection learning | Detect presence/away within 30s (vs current 10-minute idle timer) |
+| **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
+| **Phase 2: Computer Vision** | Next | Camera-based presence/posture detection, smart screen sync, music selection learning, audio scene classification (YAMNet) | Detect presence/away within 30s (vs current 10-minute idle timer) |
 | **Phase 3: Autonomous Operation** | Months 6-12 | Confidence-gated auto-apply, full prediction pipeline, decision explainability | Fewer than 2 manual overrides per day |
 
 ### Design Principles
@@ -1181,33 +1181,21 @@ except ImportError:
 
 ## 15. Phased Rollout
 
-### Phase 1: Lightweight Classifiers (Months 1-3)
+### Phase 1: Lightweight Classifiers (✓ Complete — April 14, 2026)
 
-```
-Week 1-2:   Audio classifier deployed in shadow mode alongside RMS
-            Behavioral predictor collecting event data
-            Lighting learner collecting manual adjustments
+**Implemented:**
+- ✓ `MLDecisionLogger` — logs every mode decision (ML, rule, time, manual) with reasoning chain to `ml_decisions` table. Backfills actual_mode on next transition for accuracy tracking.
+- ✓ `BehavioralPredictor` — LightGBM model, starts in shadow mode. Predicts mode from temporal + behavioral features. Auto-apply at 95%+ confidence, suggest at 70-95%, silent below. Needs 500+ activity events to train (collecting now).
+- ✓ `LightingPreferenceLearner` — EMA-based (α=0.3) learned per-light preferences from manual adjustments. Overlays on top of hardcoded `ACTIVITY_LIGHT_STATES`. Needs 5+ adjustments per (light, mode, period) combo.
+- ✓ `FeatureBuilder` — temporal features (hour, day, season, time period) + behavioral features (mode transitions, wake time) for both training and real-time prediction.
+- ✓ `ModelManager` — model persistence to `data/models/`, metadata versioning, nightly retraining at 4 AM via scheduler.
+- ✓ Full `/api/learning/` REST API — status, decisions, accuracy, lighting prefs, predictor promote/demote, retrain, reset.
+- ✓ `ml_decisions` + `ml_metrics` database tables with indexes.
+- ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle/away, ML logger registered as mode-change callback.
 
-Week 2-4:   Audio classifier validated (>90% agreement with RMS)
-            Behavioral predictor begins shadow training (if 500+ events)
-            Music bandit begins collecting play/skip signals
+**Current state:** All services running on production (Latitude). Behavioral predictor in shadow mode, collecting activity events toward the 500-event training threshold. Lighting learner collecting manual adjustments. Audio classifier (YAMNet) deferred to Phase 2.
 
-Week 4-6:   Audio classifier PROMOTED to active
-              - Social detection: 30s (was 2min)
-              - RMS becomes secondary signal
-            Behavioral predictor shadow accuracy evaluated vs rule engine
-
-Week 6-8:   Behavioral predictor PROMOTED (if outperforms rules)
-              - Rule engine becomes fallback
-            Lighting preference learner ACTIVATED
-              - Per-light overrides for combos with 5+ adjustments
-
-Week 8-12:  Smart screen sync deployed (K-means, replaces average RGB)
-            Music bandit ACTIVATED with informative priors
-            Decision explainability logging active
-```
-
-**Phase 1 exit criteria:** Audio classifier active, behavioral predictor
+**Phase 1 exit criteria:** ~~Audio classifier active,~~ behavioral predictor
 outperforming rules, lighting learner active for 2+ lights. Manual overrides
 down 30% from baseline.
 

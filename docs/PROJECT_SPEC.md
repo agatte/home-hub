@@ -153,7 +153,14 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, RuleEngine check
+   │   └── mode-change callbacks ──> MusicMapper, RuleEngine, MLLogger, LightingLearner
+   ├── ML Services ────────────────> see docs/ML_SPEC.md
+   │   ├── MLDecisionLogger ───────> logs every mode decision with reasoning
+   │   ├── BehavioralPredictor ────> LightGBM mode prediction (shadow mode)
+   │   ├── LightingPreferenceLearner > EMA-based adaptive per-light prefs
+   │   ├── FeatureBuilder ─────────> temporal + behavioral feature extraction
+   │   └── ModelManager ───────────> model persistence + nightly retraining (4 AM)
+   ├── FauxmoService ──────────────> Alexa voice control (7 WeMo virtual devices)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
@@ -451,6 +458,27 @@ External APIs (cloud):
 
 UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30 days of activity_events. Minimum thresholds: 70% confidence, 3 samples. Idle/away modes excluded as predictions.
 
+**ml_decisions** — ML decision log (every mode decision with reasoning)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| timestamp | DateTime | UTC, indexed |
+| predicted_mode | String(50) | Mode the system chose |
+| actual_mode | String(50) | Nullable, backfilled on next mode change |
+| applied | Boolean | Whether the prediction was acted upon |
+| confidence | Float | Nullable, prediction confidence |
+| decision_source | String(30) | "ml", "rule", "time", "manual" |
+| factors | JSON | Nullable, reasoning chain for explainability |
+
+**ml_metrics** — Daily aggregate ML performance metrics
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| date | Date | Indexed |
+| metric_name | String(50) | e.g. "accuracy", "override_rate" |
+| value | Float | Metric value |
+| extra | JSON | Nullable, additional context |
+
 **Data retention policy:** 90-day rolling window for raw events. Older data aggregated into daily/weekly summaries stored in a separate `event_summaries` table. Aggregation runs as a scheduled task in the learning engine.
 
 ### WebSocket Protocol
@@ -558,6 +586,7 @@ All messages are JSON with `type` + `data` fields.
 |--------|------|---------|
 | GET | `/api/sonos/status` | Current playback state |
 | POST | `/api/sonos/play` | Resume playback |
+| POST | `/api/sonos/smart-play` | Resume if track loaded, else play first favorite (used by Fauxmo) |
 | POST | `/api/sonos/pause` | Pause playback |
 | POST | `/api/sonos/next` | Next track |
 | POST | `/api/sonos/previous` | Previous track |
@@ -606,16 +635,20 @@ All messages are JSON with `type` + `data` fields.
 | POST | `/api/actions/{name}/execute` | Execute quick action (movie_night, bedtime, leaving, game_day) |
 | PUT | `/api/actions/{name}` | Configure what a quick action does (mode + lights + music combo) |
 
-#### Learning — `/api/learning/` **(future)**
+#### Learning — `/api/learning/`
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/learning/status` | Learning engine status, stats, data freshness |
-| GET | `/api/learning/rules` | Active learned rules with confidence scores |
-| PUT | `/api/learning/rules/{id}` | Enable/disable a learned rule |
-| GET | `/api/learning/patterns` | Detected patterns (for display on dashboard) |
-| GET | `/api/learning/prediction` | What would the engine do right now? (debug endpoint) |
-| POST | `/api/learning/nudge/{id}/respond` | Accept/dismiss a learning suggestion |
+| GET | `/api/learning/status` | ML model health, lighting learner + behavioral predictor status |
+| GET | `/api/learning/decisions` | Recent ML decisions with reasoning (`?limit=20`) |
+| GET | `/api/learning/accuracy` | Prediction accuracy over time window (`?days=7`) |
+| GET | `/api/learning/lighting` | Current learned lighting preferences |
+| POST | `/api/learning/lighting/recalculate` | Trigger immediate lighting preference recalculation |
+| GET | `/api/learning/predictor` | Behavioral predictor detailed status |
+| POST | `/api/learning/predictor/promote` | Promote predictor from shadow to active |
+| POST | `/api/learning/predictor/demote` | Demote predictor back to shadow mode |
+| POST | `/api/learning/retrain` | Trigger immediate retrain of all ML models |
+| DELETE | `/api/learning/reset` | Wipe all ML models and decision/metric tables |
 
 #### Events — `/api/events/`
 
@@ -1462,7 +1495,7 @@ cleanup landed:
 - ✓ **Rule Engine v1** (Phase 3b) — `RuleEngineService` learns time-based mode patterns from 30 days of activity events (70%+ confidence, 3+ samples). Regenerates every 6h. `LearnedRule` table with day_of_week + hour → predicted_mode. 7 REST endpoints under `/api/rules/`
 - ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons, 20s auto-dismiss
 - ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route with mode distribution donut, quick stats, hourly pattern bars, learned rules list with enable/disable toggles, recent activity feed, top Sonos favorites and scenes
-- ✓ Fauxmo Alexa integration (already working — 7 virtual devices: movie night, relax, arcade, party, bedtime, music, all lights)
+- ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (movie night, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
 - Override pattern analysis tracked via `override_rate` in patterns API — auto-apply deferred to future (v1 is nudge-only)
 
 ### Phase 4: Game Day (July-August 2026)
@@ -1475,14 +1508,14 @@ cleanup landed:
 - Pre-game mode automation
 - Test during pre-season games
 
-### Phase 4.5: Machine Learning (June-September 2026)
+### Phase 4.5: Machine Learning (April-September 2026)
 
 ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
-- **Phase 1 (months 1-3):** Audio scene classification (YAMNet), behavioral mode prediction (LightGBM), adaptive lighting preferences (EMA from manual adjustments)
-- **Phase 2 (months 3-6):** Camera presence/posture detection (MediaPipe), smart screen sync (K-means), music selection learning (Thompson sampling)
-- **Phase 3 (months 6+):** Autonomous mode switching with confidence-gated actions (95%+ auto-apply, 70-95% suggest via toast)
+- ✓ **ML Phase 1 (Complete — April 2026):** Behavioral mode prediction (LightGBM, shadow mode collecting data), adaptive lighting preferences (EMA from manual adjustments), ML decision logger (every mode decision with reasoning), model manager (persistence + nightly retraining at 4 AM), feature builder (temporal + behavioral extraction), full `/api/learning/` REST API (status, decisions, accuracy, predictor promote/demote, lighting prefs, retrain, reset), `ml_decisions` + `ml_metrics` DB tables
+- **ML Phase 2 (next):** Camera presence/posture detection (MediaPipe), smart screen sync (K-means), music selection learning (Thompson sampling), YAMNet audio scene classification
+- **ML Phase 3 (months 6+):** Autonomous mode switching with confidence-gated actions (95%+ auto-apply, 70-95% suggest via toast)
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
 ### Phase 5: Polish & Expand (September 2026+)
