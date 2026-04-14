@@ -53,6 +53,38 @@ async def sonos_play(request: Request) -> dict:
     return {"status": "ok" if success else "error"}
 
 
+@router.post("/smart-play")
+async def sonos_smart_play(request: Request) -> dict:
+    """Resume playback, or start a favorite if nothing is queued.
+
+    Tries resume first. If Sonos is stopped with no track loaded,
+    plays the first available favorite with a valid URI. Used by
+    Fauxmo so "Alexa, turn on music" always does something.
+    """
+    sonos = request.app.state.sonos
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    # Try resume first — if there's a track loaded, just hit play
+    status = await sonos.get_status()
+    if status.get("track"):
+        success = await sonos.play()
+        if success:
+            await _log_manual_sonos(request, "play")
+            return {"status": "ok", "action": "resumed"}
+
+    # Nothing queued — pick first favorite with a URI
+    favorites = await sonos.get_favorites()
+    for fav in favorites:
+        if fav.get("uri"):
+            success = await sonos.play_favorite(fav["title"])
+            if success:
+                await _log_manual_sonos(request, "play")
+                return {"status": "ok", "action": "favorite", "title": fav["title"]}
+
+    return {"status": "error", "detail": "No track queued and no playable favorites"}
+
+
 @router.post("/pause")
 async def sonos_pause(request: Request) -> dict:
     """Pause Sonos playback."""

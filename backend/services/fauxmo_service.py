@@ -116,7 +116,7 @@ DEVICE_MAP: list[dict[str, Any]] = [
     },
     {
         "name": "music",
-        "on": ("POST", "/api/sonos/play", None),
+        "on": ("POST", "/api/sonos/smart-play", None),
         "off": ("POST", "/api/sonos/pause", None),
     },
     {
