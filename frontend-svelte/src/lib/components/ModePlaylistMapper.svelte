@@ -38,7 +38,9 @@
     return !!fav && !fav.uri
   }
 
-  onMount(async () => {
+  let refreshing = false
+
+  async function loadData() {
     try {
       const data = await apiGet('/api/music/mode-playlists')
       if (mounted) {
@@ -48,7 +50,20 @@
     } catch {
       /* ignore */
     }
-  })
+  }
+
+  async function refreshFavorites() {
+    refreshing = true
+    try {
+      await apiPost('/api/sonos/favorites/refresh')
+      await loadData()
+    } catch {
+      /* ignore */
+    }
+    refreshing = false
+  }
+
+  onMount(loadData)
 
   onDestroy(() => { mounted = false })
 
@@ -113,6 +128,9 @@
 </script>
 
 <div class="mode-playlist-mapper">
+  <button class="refresh-btn" on:click={refreshFavorites} disabled={refreshing} title="Refresh Sonos favorites">
+    {refreshing ? '↻' : '↻'} Refresh favorites
+  </button>
   {#each MODE_CONFIG as { mode, label, icon } (mode)}
     {@const entries = mappings[mode] || []}
     <div class="mode-playlist-row">

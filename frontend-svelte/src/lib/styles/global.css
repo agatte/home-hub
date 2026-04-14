@@ -1031,6 +1031,29 @@ button:active, .btn:active, [role="button"]:active {
   padding: 4px 0;
 }
 
+.mode-playlist-mapper .refresh-btn {
+  display: block;
+  margin: 4px 8px 2px auto;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.mode-playlist-mapper .refresh-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.mode-playlist-mapper .refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .mode-playlist-row {
   display: flex;
   align-items: flex-start;
