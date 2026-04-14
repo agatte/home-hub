@@ -1024,6 +1024,16 @@ class AutomationEngine:
             else:
                 state = _resolve_activity_state(mode, period)
 
+            # Apply learned lighting preferences as overlay (ML Phase 1).
+            # Learned values replace hardcoded defaults per-light, per-property.
+            lighting_learner = getattr(self, "_lighting_learner", None)
+            if lighting_learner:
+                overlay = lighting_learner.get_overlay(mode, period)
+                if overlay:
+                    for light_id, prefs in overlay.items():
+                        if light_id in state:
+                            state[light_id] = {**state[light_id], **prefs}
+
             state = self._apply_brightness_multiplier(state, mode)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
@@ -1488,7 +1498,54 @@ class AutomationEngine:
                 if not self._manual_override:
                     await self._maybe_drift()
 
-                # Check learned rules for mode suggestion (nudge, not auto-apply)
+                # ML behavioral predictor (primary, if active)
+                predictor = getattr(self, "_behavioral_predictor", None)
+                ml_logger = getattr(self, "_ml_logger", None)
+                if (
+                    predictor
+                    and not self._manual_override
+                    and self._current_mode in ("idle", "away")
+                ):
+                    prediction = await predictor.predict(
+                        current_mode=self._current_mode,
+                    )
+                    if prediction and not prediction.get("shadow"):
+                        confidence = prediction["confidence"]
+                        if confidence >= 0.95:
+                            # Auto-apply at high confidence
+                            await self.set_manual_override(prediction["predicted_mode"])
+                            if ml_logger:
+                                await ml_logger.log_decision(
+                                    predicted_mode=prediction["predicted_mode"],
+                                    confidence=confidence,
+                                    decision_source="ml",
+                                    factors=prediction.get("factors"),
+                                    applied=True,
+                                )
+                        elif confidence >= 0.70:
+                            # Suggest via WebSocket toast
+                            await self._ws_manager.broadcast(
+                                "ml_prediction", prediction
+                            )
+                            if ml_logger:
+                                await ml_logger.log_decision(
+                                    predicted_mode=prediction["predicted_mode"],
+                                    confidence=confidence,
+                                    decision_source="ml",
+                                    factors=prediction.get("factors"),
+                                    applied=False,
+                                )
+                    elif prediction and prediction.get("shadow") and ml_logger:
+                        # Shadow mode: log but don't act
+                        await ml_logger.log_decision(
+                            predicted_mode=prediction["predicted_mode"],
+                            confidence=prediction["confidence"],
+                            decision_source="ml",
+                            factors=prediction.get("factors"),
+                            applied=False,
+                        )
+
+                # Rule engine fallback (fires if ML didn't produce a result)
                 rule_engine = getattr(self, "_rule_engine", None)
                 if rule_engine and not self._manual_override and self._current_mode in ("idle", "away"):
                     await rule_engine.check_rules(self._current_mode)

@@ -1475,15 +1475,23 @@ cleanup landed:
 - Pre-game mode automation
 - Test during pre-season games
 
+### Phase 4.5: Machine Learning (June-September 2026)
+
+ML capabilities to replace hardcoded rules with learned behavior and add new
+sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
+
+- **Phase 1 (months 1-3):** Audio scene classification (YAMNet), behavioral mode prediction (LightGBM), adaptive lighting preferences (EMA from manual adjustments)
+- **Phase 2 (months 3-6):** Camera presence/posture detection (MediaPipe), smart screen sync (K-means), music selection learning (Thompson sampling)
+- **Phase 3 (months 6+):** Autonomous mode switching with confidence-gated actions (95%+ auto-apply, 70-95% suggest via toast)
+- All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
+
 ### Phase 5: Polish & Expand (September 2026+)
 
 - Remaining mode backgrounds (social/club, watching/drive-in) + improved art assets (transparent layers, wider tiles)
 - Custom Alexa Skill (full voice control)
 - Apple Music API integration ($99/year)
-- Full autopilot learning from accumulated data
 - Bar app widget integration
 - Seasonal lighting adjustments
-- Presence detection
 - Guest mode
 
 ## Technical Limitations & Constraints

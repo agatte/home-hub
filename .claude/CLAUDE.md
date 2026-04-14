@@ -2,6 +2,7 @@
 
 > This file provides guidance to Claude Code when working in this repository.
 > **Source of truth:** `docs/PROJECT_SPEC.md` — read it for full architecture, schema, and feature details. This file is the working guide; the spec is authoritative.
+> **ML specification:** `docs/ML_SPEC.md` — audio classification, behavioral prediction, camera presence, adaptive lighting, and phased rollout plan.
 
 ---
 
@@ -9,7 +10,7 @@
 
 Home Hub is an always-on personal command center built for one apartment and one person. It controls Philips Hue lights and a Sonos Era 100 speaker from a single, visually striking dashboard running on a dedicated laptop display. The system detects what you're doing, adjusts lighting and music to match, and learns patterns over time until it can run on full autopilot.
 
-The dashboard is a living interface with bold, mode-aware animated backgrounds — arcade birds drifting during relax mode, a rotating moon over a darkening city while sleeping, energy and motion during gaming. It shows everything at a glance: current mode, light colors, now playing, weather, upcoming routines. It's also the home screen for other personal projects (plant app, bar app) via animated widget cards.
+The dashboard is a living interface with bold, mode-aware themed backgrounds — a retro pixel art landscape during gaming, a scrolling pixel city during working, flowing aurora borealis for relax, a 3D moon scene while sleeping, and gradient blobs with particles as a fallback. It shows everything at a glance: current mode, light colors, now playing, weather, upcoming routines. It's also the home screen for other personal projects (plant app, bar app) via animated widget cards.
 
 **Core focus:** Lights and music working seamlessly. Everything else builds on that.
 
@@ -152,7 +153,13 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, [future: GameDayEngine]
+   │   └── mode-change callbacks ──> MusicMapper, MLLogger, [future: GameDayEngine]
+   ├── ML Services (planned) ──────> see docs/ML_SPEC.md
+   │   ├── AudioClassifier ────────> YAMNet audio scene classification
+   │   ├── BehavioralPredictor ────> LightGBM mode prediction
+   │   ├── LightingLearner ────────> adaptive per-light preferences
+   │   ├── CameraService ──────────> MediaPipe presence/posture (opt-in)
+   │   └── MusicBandit ────────────> Thompson sampling playlist selection
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
    ├── Scheduler ──────────────────> morning routine, evening wind-down
@@ -216,7 +223,7 @@ Key additions beyond current:
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML (plistlib). Extracts artist play counts, genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` for discovery. Caches in DB (30-day TTL). Mode-specific seed selection with cross-mode dedup.
 - **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
-- **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 15s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`.
+- **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 5s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`.
 - **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS measurement. Party detection: sustained noise >2min + no game = "social". Never records audio.
 
 ---
@@ -225,12 +232,18 @@ Key additions beyond current:
 
 - **`src/lib/stores/{lights,sonos,automation,music,connection,activity}.js`** — Svelte writable stores. WebSocket dispatches into them. `activity.js` tracks user idle state (60s timeout for auto-hide).
 - **`src/lib/ws.js`** — Shared WebSocket client + reconnect logic. Dispatches messages into the stores.
-- **`src/routes/+layout.svelte`** — App shell: ModeBackground (generative canvas + MoonScene) + ModeOverlay + FloatingNav + NowPlayingChip. No sidebar.
+- **`src/routes/+layout.svelte`** — App shell: ModeBackground + ModeOverlay + FloatingNav + NowPlayingChip + ErrorToast. No sidebar.
 - **`src/routes/+page.svelte`** — Home: SonosCard strip + QuickActions + widget grid (Mode, Weather, Lights, Scenes, Routines) + MusicSuggestionToast.
 - **`src/routes/music/+page.svelte`** — Taste profile, mode→playlist mapping, discovery feed. Glass card grid.
-- **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, morning/wind-down routine config, TTS test. Glass card grid.
-- **`src/lib/backgrounds/GenerativeCanvas.svelte`** — Canvas2D Perlin noise flow field. Data-reactive to lights/sonos/mode stores. 15fps cap.
-- **`src/lib/backgrounds/MoonScene.svelte`** — Threlte/Three.js sleeping-mode overlay (GLSL sky shader, moon orbit, star field, city silhouette).
+- **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, mode→scene overrides, morning/wind-down routine config, TTS test. Glass card grid.
+- **`src/lib/backgrounds/PixelScene.svelte`** — Gaming: code-drawn pixel art landscape (480×270 scaled 4×) with parallax, sprites, stars.
+- **`src/lib/backgrounds/ParallaxScene.svelte`** — Working: JS-driven parallax scroll of PNG sprite sheets + code-drawn sky gradient (weather/time aware).
+- **`src/lib/backgrounds/AuroraScene.svelte`** — Relax: simplex noise aurora borealis curtains with stars and treeline.
+- **`src/lib/backgrounds/MoonScene.svelte`** — Sleeping: Threlte/Three.js (GLSL sky shader, moon orbit, star field, city silhouette with flickering windows).
+- **`src/lib/backgrounds/GenerativeCanvas.svelte`** — Fallback (idle, social, watching, etc.): three-layer system (gradient mesh blobs + flow-field particles + geometric overlay). 15fps cap.
+- **`src/lib/backgrounds/layer-config.js`** — Per-mode layer definitions for ParallaxScene (PNG paths, scroll speeds, heights).
+- **`src/lib/backgrounds/scene-utils.js`** — Shared drawing utilities (stars, rain, snow, canvas init).
+- **`src/lib/components/ModeBackground.svelte`** — Routes `$automation.mode` to the appropriate scene component.
 - **`src/lib/components/SceneBrowser.svelte`** — Categorized scene browser with tabs (functional, cozy, moody, vibrant, nature, entertainment, social, effects, bridge scenes).
 - **`src/lib/components/WeatherCard.svelte`** — OpenWeatherMap current conditions widget with SVG weather icons.
 - **`src/lib/theme.js`** — MODE_CONFIG with generative params + Lucide icon names, LIGHT_COLOR_PRESETS, LIGHT_CT_PRESETS, SCENE_CATEGORIES, VIBE_COLORS.
@@ -268,105 +281,19 @@ All messages: JSON with `type` + `data` fields.
 
 ## API Routes
 
-**Prefix:** All REST endpoints use `/api/`. Health is at `/health` (no prefix). All routes must be registered BEFORE the `/{path:path}` frontend catch-all.
+**Prefix:** All REST endpoints use `/api/`. Health is at `/health` (no prefix). All routes must be registered BEFORE the `/{path:path}` frontend catch-all. See route files in `backend/api/routes/` for full endpoint details.
 
-### System
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | System status, device connectivity, WS client count |
-| WS | `/ws` | Real-time bidirectional sync |
-
-### Lights
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/lights` | All light states |
-| GET | `/api/lights/{id}` | Single light state |
-| PUT | `/api/lights/{id}` | Set state (`on, bri, hue, sat, ct, transitiontime`) |
-| POST | `/api/lights/all` | Set all lights to same state |
-
-### Scenes & Effects
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/scenes` | Curated presets + custom + bridge native scenes |
-| POST | `/api/scenes/{id}/activate` | Activate (routes curated, custom, or bridge) |
-| POST | `/api/scenes/custom` | Create custom scene |
-| GET | `/api/scenes/custom` | List custom scenes |
-| PUT | `/api/scenes/custom/{id}` | Update custom scene |
-| DELETE | `/api/scenes/custom/{id}` | Delete custom scene |
-| GET | `/api/scenes/effects` | List dynamic effects |
-| POST | `/api/scenes/effects/{name}` | Apply effect to all lights |
-| POST | `/api/scenes/effects/{name}/light/{id}` | Apply to single light |
-
-### Weather
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/weather` | Current conditions (10-min cache from OpenWeatherMap) |
-
-### Automation
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/automation/status` | Current mode, source, override state |
-| GET | `/api/automation/config` | Automation toggles |
-| PUT | `/api/automation/config` | Update config |
-| GET | `/api/automation/schedule` | Time-based schedule (weekday/weekend) |
-| PUT | `/api/automation/schedule` | Update schedule |
-| GET | `/api/automation/mode-brightness` | Per-mode brightness multipliers |
-| PUT | `/api/automation/mode-brightness` | Update multipliers |
-| POST | `/api/automation/activity` | Report activity `{mode, source}` |
-| POST | `/api/automation/override` | Manual mode override |
-| GET | `/api/automation/social-styles` | List social sub-styles |
-| POST | `/api/automation/social-style` | Set active sub-style |
-| POST | `/api/automation/mic/calibrate` | Calibrate mic baseline |
-| GET | `/api/automation/screen-sync/status` | Screen sync status |
-| POST | `/api/automation/screen-sync/start` | Start screen sync |
-| POST | `/api/automation/screen-sync/stop` | Stop screen sync |
-| GET | `/api/automation/mode-scenes` | List mode → scene overrides |
-| PUT | `/api/automation/mode-scenes/{mode}/{period}` | Map scene to mode+time `{scene_id, scene_source, scene_name}` |
-| DELETE | `/api/automation/mode-scenes/{mode}/{period}` | Remove override (revert to default) |
-
-### Sonos
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/sonos/status` | Current playback state |
-| POST | `/api/sonos/play\|pause\|next\|previous` | Transport controls |
-| POST | `/api/sonos/volume` | Set volume `{volume: 0-100}` |
-| POST | `/api/sonos/tts` | Text-to-speech `{text, volume?}` |
-| GET | `/api/sonos/favorites` | List Sonos favorites |
-| POST | `/api/sonos/favorites/{title}/play` | Play favorite by name |
-
-### Music
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/music/mode-playlists` | All mode→vibe mappings |
-| PUT | `/api/music/mode-playlists/{mode}` | Set mapping `{favorite_title, auto_play, vibe_tags}` |
-| DELETE | `/api/music/mode-playlists/{mode}` | Remove mapping |
-| POST | `/api/music/import` | Upload Apple Music XML (multipart) |
-| GET | `/api/music/profile` | Taste profile |
-| GET | `/api/music/recommendations?mode=` | Get pending recs |
-| POST | `/api/music/recommendations/generate?mode=` | Generate new recs |
-| POST | `/api/music/recommendations/{id}/feedback` | Like/dismiss `{action}` |
-
-### Routines
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/routines` | All routine configs |
-| PUT | `/api/routines/morning/config` | Update morning config |
-| PUT | `/api/routines/winddown/config` | Update winddown config |
-| POST | `/api/routines/morning/test` | Test morning routine |
-| POST | `/api/routines/winddown/test` | Test winddown routine |
-| POST | `/api/routines/morning/toggle` | Toggle on/off |
-
-### Pi-hole
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/pihole/stats` | Summary stats (queries, blocked, percentage, blocklist size) |
-| GET | `/api/pihole/top-blocked` | Most frequently blocked domains |
-| GET | `/api/pihole/dns` | List local DNS records |
-| POST | `/api/pihole/dns` | Add DNS record `{ip, hostname}` |
-| DELETE | `/api/pihole/dns/{ip}/{hostname}` | Remove DNS record |
-| GET | `/api/pihole/lists` | List blocklists |
-| POST | `/api/pihole/lists` | Add blocklist `{address}` |
-| DELETE | `/api/pihole/lists/{address}` | Remove blocklist |
+| Group | Prefix | Key endpoints |
+|-------|--------|---------------|
+| System | `/health`, `/ws` | Health check, WebSocket sync |
+| Lights | `/api/lights` | CRUD per-light state (on, bri, hue, sat, ct), bulk set |
+| Scenes | `/api/scenes` | Curated + custom + bridge scenes, activate, effects (per-light or all) |
+| Weather | `/api/weather` | Current conditions (10-min cache) |
+| Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides |
+| Sonos | `/api/sonos` | Transport (play/pause/next/prev), volume, TTS, favorites |
+| Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
+| Routines | `/api/routines` | Morning + winddown config, toggle, test |
+| Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -548,7 +475,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | Mode | Detection | Lighting Strategy | Notes |
 |------|-----------|-------------------|-------|
 | `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
-| `working` | windowsterminal, powershell, code.exe, cursor, devenv | ct-mode clean whites with per-light brightness gradient. Night: desk lamp bri=150/3200K + dim warm ambient fill (L1+L4). | Designed to reduce monitor contrast ratio to ~3:1 |
+| `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites with per-light brightness gradient. Night: desk lamp bri=150/3200K + dim warm ambient fill (L1+L4). | Designed to reduce monitor contrast ratio to ~3:1 |
 | `watching` | VLC, Plex, Stremio, media players | SMPTE-inspired neutral bias (6500K) on desk lamp, peripherals off/ultra-dim. | Screen sync on L2 |
 | `social` | Blue Yeti ambient noise >2min + no game | Sub-modes: color_cycle, club, rave, fire_and_ice | Party lighting |
 | `relax` | Manual override | Warm gradient — each light different warmth/brightness for spatial depth. | opal effect (day), candle effect (eve/night) |
@@ -652,100 +579,12 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 
 ---
 
-## File Structure
-
-```
-home-hub/
-├── run.py
-├── .env / .env.example
-├── requirements.txt
-├── CLAUDE.md
-├── docs/
-│   └── PROJECT_SPEC.md          # Authoritative spec — read this for full detail
-├── backend/
-│   ├── main.py                  # FastAPI app, lifespan, WebSocket
-│   ├── config.py                # Pydantic Settings (all .env vars)
-│   ├── database.py              # SQLite async setup
-│   ├── models.py                # SQLAlchemy models (incl. AppSetting)
-│   ├── mcp_server.py            # Claude Code MCP server
-│   ├── api/
-│   │   ├── routes/
-│   │   │   ├── health.py
-│   │   │   ├── lights.py
-│   │   │   ├── scenes.py        # 20 curated + custom CRUD + bridge scenes + effects
-│   │   │   ├── weather.py       # Current conditions (OpenWeatherMap, cached)
-│   │   │   ├── sonos.py         # Playback + favorites + music map
-│   │   │   ├── automation.py    # Activity + schedule + brightness + screen sync
-│   │   │   ├── routines.py      # Morning + winddown + settings helpers
-│   │   │   ├── music.py         # Library import + recommendations
-│   │   │   └── pihole.py        # Pi-hole stats, DNS hosts, blocklists
-│   │   └── schemas/
-│   │       ├── lights.py
-│   │       ├── sonos.py
-│   │       └── automation.py    # Schedule + brightness schemas
-│   └── services/
-│       ├── hue_service.py        # v1 API (phue2) — basic control + polling
-│       ├── hue_v2_service.py     # v2 API (CLIP) — scenes + effects
-│       ├── sonos_service.py      # SoCo wrapper + favorites
-│       ├── tts_service.py        # edge-tts → Sonos
-│       ├── websocket_manager.py  # WS broadcast
-│       ├── automation_engine.py  # Time + activity → lights, CT support, EFFECT_AUTO_MAP
-│       ├── weather_service.py    # OpenWeatherMap cached fetcher
-│       ├── screen_sync.py        # Screen capture → bedroom lamp color
-│       ├── scheduler.py          # Async cron scheduler
-│       ├── morning_routine.py    # Weather + traffic TTS
-│       ├── winddown_routine.py   # Evening relax + dim + TTS
-│       ├── music_mapper.py       # Mode → playlist mapping
-│       ├── library_import_service.py  # Apple Music XML parser
-│       ├── recommendation_service.py  # Last.fm similar → mode recs
-│       ├── pihole_service.py          # Pi-hole v6 API (stats, DNS, blocklists)
-│       └── pc_agent/
-│           ├── activity_detector.py   # Process monitoring (standalone)
-│           ├── ambient_monitor.py     # Blue Yeti mic (standalone)
-│           └── game_list.py           # Game/media process lists
-├── frontend-svelte/
-│   ├── svelte.config.js          # adapter-static
-│   ├── vite.config.js            # :3001 dev, /api + /ws + /health proxy → :8000
-│   ├── package.json
-│   ├── static/
-│   │   ├── manifest.json         # PWA manifest
-│   │   ├── favicon.svg, icons.svg
-│   │   └── sw.js                 # Service worker (network-first for HTML)
-│   ├── build/                    # Static build output (gitignored, served by FastAPI)
-│   └── src/
-│       ├── app.html              # SvelteKit HTML shell
-│       ├── routes/
-│       │   ├── +layout.svelte    # ModeBackground + ModeOverlay + FloatingNav + NowPlayingChip
-│       │   ├── +page.svelte      # Home: SonosCard + QuickActions + widget grid (Mode, Weather, Lights, Scenes, Routines)
-│       │   ├── music/+page.svelte
-│       │   └── settings/+page.svelte
-│       └── lib/
-│           ├── api.js            # Fetch wrapper for REST endpoints
-│           ├── ws.js             # WebSocket client + reconnect
-│           ├── theme.js          # MODE_CONFIG (generative params + Lucide), CT_PRESETS, SCENE_CATEGORIES
-│           ├── stores/           # lights, sonos, automation, music, connection, activity
-│           ├── components/       # LightCard, SonosCard, SceneBrowser, WeatherCard, FloatingNav, ModeOverlay, etc.
-│           ├── backgrounds/
-│           │   ├── GenerativeCanvas.svelte  # Perlin noise flow field (Canvas2D, 15fps)
-│           │   └── MoonScene.svelte         # Threlte sleeping scene overlay
-│           └── styles/global.css
-├── docker/
-│   └── pihole/
-│       ├── docker-compose.yml   # Pi-hole v6 container (host networking)
-│       ├── setup.sh             # Automated setup: Docker install + systemd-resolved fix
-│       └── etc-pihole/          # Pi-hole config (gitignored, Docker volume)
-├── data/                        # SQLite DB (gitignored)
-└── logs/                        # Log files (gitignored)
-```
-
----
-
 ## Roadmap
 
 | Phase | Timeline | Focus |
 |-------|----------|-------|
 | **Phase 1: Core Fix & Foundation** | ✓ Complete | Gradual evening transitions, vibe tagging, event logging tables |
-| **Phase 2: Dashboard Redesign** | ✓ Complete | Living Ink redesign (generative canvas, glass cards, floating nav), weather widget, 20 curated scenes, CT support, custom scene CRUD + builder UI, effect auto-activation, plant app widget with in-dashboard iframe modal, recommendation card QR modal, kiosk auto-reload on backend deploys |
+| **Phase 2: Dashboard Redesign** | ✓ Complete | Themed mode backgrounds (pixel art gaming, parallax city working, aurora relax, 3D moon sleeping), glass cards, floating nav, weather widget, 20 curated scenes, CT support, custom scene CRUD + builder UI, effect auto-activation, plant app widget, kiosk auto-reload on backend deploys |
 | **Phase 3: Intelligence & Voice** | June 2026 | Simple rule engine from events, Fauxmo Alexa integration, override pattern analysis, nudge system |
 | **Phase 4: Game Day** | July–August 2026 | ESPN API, GameDay page, celebration orchestration, pixel art field, pre-game mode |
 | **Phase 5: Polish & Expand** | September 2026+ | Custom Alexa Skill, Apple Music API, full autopilot, bar app widget |
@@ -774,14 +613,3 @@ home-hub/
 - Not a general sports tracker (Game Day is Colts-specific)
 - Not a music streaming service (Sonos/Apple Music handle playback; Home Hub orchestrates)
 
----
-
-## Key Patterns
-
-- **Optimistic updates** — Light commands update local state immediately, then send via WebSocket.
-- **Polling + WebSocket hybrid** — Hue polled every 1s, Sonos every 2s. Changes detected by polling are broadcast to all WebSocket clients. Catches external changes (Alexa, Hue app).
-- **API route prefix** — All REST at `/api/`. Health at `/health`. Frontend catch-all `/{path:path}` must be last.
-- **Scene routing** — `POST /api/scenes/{id}/activate` checks if ID is a preset name or UUID, routes to v1 or v2 accordingly.
-- **Music auto-play** — MusicMapper registered as mode-change callback. Checks Sonos state → plays if idle, suggests via WebSocket if busy. Mappings persist to `mode_playlists` table.
-- **Config** — All settings via pydantic-settings from `.env`. Runtime config persisted in `app_settings` SQLite table.
-- **Service access in routes** — Always via `request.app.state.{service_name}`. Never import service singletons directly.

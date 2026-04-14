@@ -4,7 +4,7 @@ SQLAlchemy models for persistent data.
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -286,3 +286,40 @@ class LearnedRule(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+# ---------------------------------------------------------------------------
+# ML decision and metrics logging
+# ---------------------------------------------------------------------------
+
+
+class MLDecision(Base):
+    """Records every mode decision with reasoning chain for explainability."""
+
+    __tablename__ = "ml_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    predicted_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    actual_mode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # decision_source: "ml", "rule", "time", "manual"
+    decision_source: Mapped[str] = mapped_column(String(30), nullable=False)
+    factors: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class MLMetric(Base):
+    """Daily aggregate ML performance metrics."""
+
+    __tablename__ = "ml_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    metric_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

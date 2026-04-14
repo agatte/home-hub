@@ -32,6 +32,7 @@ from backend.api.routes.rules import router as rules_router
 from backend.api.routes.pihole import router as pihole_router
 from backend.api.routes.weather import router as weather_router
 from backend.api.routes.ambient import router as ambient_router
+from backend.api.routes.learning import router as learning_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
 FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
@@ -262,6 +263,41 @@ async def lifespan(app: FastAPI):
         logger.info("Weather service initialized (linked to automation engine)")
     automation._rule_engine = rule_engine
 
+    # ML services (Phase 1) — model manager, lighting learner, decision logger
+    from backend.services.ml.model_manager import ModelManager
+    from backend.services.ml.lighting_learner import LightingPreferenceLearner
+    from backend.services.ml.ml_logger import MLDecisionLogger
+
+    model_manager = ModelManager()
+    await model_manager.load_all()
+
+    lighting_learner = LightingPreferenceLearner(model_manager)
+    model_manager.register_learner(lighting_learner)
+
+    ml_logger = MLDecisionLogger(ws_manager=ws_manager)
+
+    app.state.model_manager = model_manager
+    app.state.lighting_learner = lighting_learner
+    app.state.ml_logger = ml_logger
+
+    automation._lighting_learner = lighting_learner
+    automation.register_on_mode_change(ml_logger.on_mode_change)
+
+    # Behavioral predictor (requires lightgbm — graceful degradation if missing)
+    try:
+        from backend.services.ml.behavioral_predictor import BehavioralPredictor
+        behavioral_predictor = BehavioralPredictor(model_manager)
+        model_manager.register_learner(behavioral_predictor)
+        app.state.behavioral_predictor = behavioral_predictor
+        automation._behavioral_predictor = behavioral_predictor
+        automation._ml_logger = ml_logger
+        app_logger.info("Behavioral predictor initialized (status=%s)", behavioral_predictor._status)
+    except ImportError:
+        app_logger.warning("lightgbm not installed — behavioral predictor disabled")
+        app.state.behavioral_predictor = None
+
+    app_logger.info("ML services initialized")
+
     # Pi-hole DNS stats (optional)
     if settings.PIHOLE_API_URL and settings.PIHOLE_API_KEY:
         from backend.services.pihole_service import PiholeService
@@ -357,6 +393,16 @@ async def lifespan(app: FastAPI):
         enabled=winddown_config.get("enabled", False),
     ))
 
+    # Nightly ML retrain at 4:00 AM
+    scheduler.add_task(ScheduledTask(
+        name="ml_nightly_training",
+        hour=4,
+        minute=0,
+        weekdays=[0, 1, 2, 3, 4, 5, 6],
+        callback=model_manager.retrain_all,
+        enabled=True,
+    ))
+
     app.state.scheduler = scheduler
 
     # Background tasks
@@ -441,6 +487,7 @@ app.include_router(routines_router)
 app.include_router(events_router)
 app.include_router(rules_router)
 app.include_router(ambient_router)
+app.include_router(learning_router)
 
 # Serve the SvelteKit static build (must come after API routes).
 # Path is controlled by settings.FRONTEND_BUILD (default frontend-svelte/build).
