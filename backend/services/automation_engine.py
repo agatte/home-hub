@@ -116,7 +116,7 @@ WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
     "relax":    {"day": "opal",    "evening": "candle",  "night": "candle"},
     "working":  {"day": None,      "evening": None,      "night": None},
-    "gaming":   {"day": None,      "evening": "prism",   "night": "prism"},
+    "gaming":   {"day": None,      "evening": None,      "night": None},
     "movie":    {"day": None,      "evening": None,      "night": None},
     "watching": {"day": None,      "evening": None,      "night": None},
 }
