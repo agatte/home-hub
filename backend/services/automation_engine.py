@@ -524,7 +524,7 @@ class AutomationEngine:
         self._override_timeout_hours: int = 4
         self._gaming_effect: Optional[str] = None
         self._social_style: str = "color_cycle"
-        self._active_effect: bool = False  # Track if a Hue dynamic effect is running
+        self._active_effect_name: Optional[str] = None  # Name of active Hue dynamic effect
 
         # Configurable schedule and mode brightness
         self._schedule_config = schedule_config or ScheduleConfig()
@@ -975,7 +975,7 @@ class AutomationEngine:
         # Always stop effects on mode change to prevent carry-over
         if self._hue_v2 and self._hue_v2.connected:
             await self._hue_v2.stop_effect_all()
-            self._active_effect = False
+            self._active_effect_name = None
 
         # Clear dedup cache so the new state is always applied — effects and
         # external apps change bridge state independently, making the cache stale.
@@ -1011,9 +1011,9 @@ class AutomationEngine:
             if self._hue_v2 and self._hue_v2.connected:
                 effect_map = EFFECT_AUTO_MAP.get(mode, {})
                 auto_effect = effect_map.get(period)
-                if auto_effect:
+                if auto_effect and auto_effect != self._active_effect_name:
                     await self._hue_v2.set_effect_all(auto_effect)
-                    self._active_effect = True
+                    self._active_effect_name = auto_effect
             return
 
         if mode in ACTIVITY_LIGHT_STATES:
@@ -1068,9 +1068,9 @@ class AutomationEngine:
                         or weather_effect == "sparkle"
                     ):
                         auto_effect = weather_effect
-                if auto_effect:
+                if auto_effect and auto_effect != self._active_effect_name:
                     await self._hue_v2.set_effect_all(auto_effect)
-                    self._active_effect = True
+                    self._active_effect_name = auto_effect
         else:
             # Unknown mode — fall back to time-based
             await self._apply_time_based()
@@ -1089,8 +1089,9 @@ class AutomationEngine:
         # Apply effect
         effect = style.get("effect")
         if effect and self._hue_v2 and self._hue_v2.connected:
-            await self._hue_v2.set_effect_all(effect)
-            self._active_effect = True
+            if effect != self._active_effect_name:
+                await self._hue_v2.set_effect_all(effect)
+                self._active_effect_name = effect
 
     async def _sleep_fade(self) -> None:
         """

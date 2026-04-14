@@ -28,6 +28,7 @@ NWS_BASE = "https://api.weather.gov"
 NWS_OBSERVATIONS_URL = f"{NWS_BASE}/stations/{NWS_STATION}/observations/latest"
 NWS_FORECAST_URL = f"{NWS_BASE}/gridpoints/{NWS_OFFICE}/{NWS_GRID_X},{NWS_GRID_Y}/forecast"
 NWS_ALERTS_URL = f"{NWS_BASE}/alerts/active"
+SUNRISE_SUNSET_URL = "https://api.sunrise-sunset.org/json"
 NWS_HEADERS = {
     "User-Agent": "HomeHub/1.0 (anthonygatte@gmail.com)",
     "Accept": "application/geo+json",
@@ -35,6 +36,7 @@ NWS_HEADERS = {
 
 CACHE_TTL = 300  # 5 minutes (down from 10 — NWS is free, no rate concern)
 ALERT_CACHE_TTL = 120  # 2 minutes for alerts (storms move fast)
+ASTRO_CACHE_TTL = 86400  # 24 hours — sunrise/sunset shift <1 min per day
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -145,9 +147,10 @@ class WeatherService:
         self._cache_time: float = 0
         self._alert_cache: Optional[list[dict[str, Any]]] = None
         self._alert_cache_time: float = 0
-        # Sunrise/sunset from forecast (refreshed with forecast)
+        # Sunrise/sunset (Unix timestamps, from sunrise-sunset.org)
         self._sunrise: Optional[int] = None
         self._sunset: Optional[int] = None
+        self._astro_cache_time: float = 0
 
     def get_cached(self) -> Optional[dict[str, Any]]:
         """Return the most recent cached weather data (sync, no fetch)."""
@@ -181,6 +184,9 @@ class WeatherService:
 
                 # Fetch alerts on a faster cadence
                 await self._fetch_alerts(client)
+
+                # Fetch sunrise/sunset (cached 24h, separate API)
+                await self._fetch_sunrise_sunset(client)
 
             weather = self._build_weather_dict(obs, day_high, day_low)
             self._cache = weather
@@ -407,3 +413,40 @@ class WeatherService:
 
         except Exception as e:
             logger.error("NWS alert fetch failed: %s", e, exc_info=True)
+
+    async def _fetch_sunrise_sunset(self, client: httpx.AsyncClient) -> None:
+        """Fetch sunrise/sunset from sunrise-sunset.org (cached 24h)."""
+        now = time.time()
+        if self._sunrise and (now - self._astro_cache_time) < ASTRO_CACHE_TTL:
+            return
+
+        try:
+            resp = await client.get(
+                SUNRISE_SUNSET_URL,
+                params={"lat": LAT, "lng": LON, "formatted": 0},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("status") != "OK":
+                logger.warning("Sunrise-sunset API status: %s", data.get("status"))
+                return
+
+            results = data.get("results", {})
+            sunrise_iso = results.get("sunrise")
+            sunset_iso = results.get("sunset")
+
+            if sunrise_iso and sunset_iso:
+                sunrise_dt = datetime.fromisoformat(sunrise_iso)
+                sunset_dt = datetime.fromisoformat(sunset_iso)
+                self._sunrise = int(sunrise_dt.timestamp())
+                self._sunset = int(sunset_dt.timestamp())
+                self._astro_cache_time = now
+                logger.info(
+                    "Sunrise/sunset updated: rise=%s, set=%s",
+                    sunrise_dt.astimezone(TZ).strftime("%I:%M %p"),
+                    sunset_dt.astimezone(TZ).strftime("%I:%M %p"),
+                )
+
+        except Exception as e:
+            logger.warning("Sunrise-sunset fetch failed: %s", e)
