@@ -75,4 +75,15 @@
     color: var(--text-primary);
     background: rgba(255, 255, 255, 0.08);
   }
+
+  @media (max-width: 480px) {
+    .floating-nav {
+      bottom: 12px;
+      padding: 4px;
+    }
+    .floating-nav-item {
+      width: 40px;
+      height: 40px;
+    }
+  }
 </style>

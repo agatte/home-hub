@@ -276,4 +276,18 @@
       font-size: 12px;
     }
   }
+
+  @media (max-width: 480px) {
+    .light-chip {
+      gap: 8px;
+      padding: 8px 10px;
+    }
+    .chip-name {
+      min-width: 0;
+      font-size: 12px;
+    }
+    .chip-slider {
+      min-width: 60px;
+    }
+  }
 </style>

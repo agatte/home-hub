@@ -153,6 +153,9 @@
     color: var(--text-primary);
     letter-spacing: 0.02em;
     line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .ambient-source {

@@ -119,6 +119,12 @@ button:active, .btn:active, [role="button"]:active {
   }
 }
 
+@media (max-width: 480px) {
+  .app {
+    padding: 64px 12px 90px;
+  }
+}
+
 /* (Sidebar removed — replaced by FloatingNav + ModeOverlay) */
 
 /* (Quick actions now use component-scoped styles) */
@@ -201,6 +207,16 @@ button:active, .btn:active, [role="button"]:active {
   }
 }
 
+@media (max-width: 480px) {
+  .widget-grid {
+    gap: 14px;
+  }
+  .widget {
+    padding: 16px;
+    gap: 12px;
+  }
+}
+
 /* (Header removed — replaced by ModeOverlay) */
 
 .status-dot-container {
@@ -264,6 +280,7 @@ button:active, .btn:active, [role="button"]:active {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
+  overflow: hidden;
   transition: background 0.2s, border-color 0.2s;
 }
 

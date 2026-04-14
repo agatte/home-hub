@@ -112,4 +112,12 @@
       max-width: 200px;
     }
   }
+
+  @media (max-width: 480px) {
+    .now-playing-chip {
+      bottom: 64px;
+      right: 8px;
+      max-width: 180px;
+    }
+  }
 </style>

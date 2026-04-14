@@ -150,4 +150,26 @@
       font-size: 28px;
     }
   }
+
+  @media (max-width: 480px) {
+    .mode-overlay {
+      top: 8px;
+      left: 12px;
+    }
+    .mode-name {
+      font-size: 24px;
+    }
+    .mode-overlay-top {
+      gap: 10px;
+    }
+    .mode-time {
+      font-size: 12px;
+    }
+    .mode-source {
+      font-size: 10px;
+    }
+    .mode-status {
+      margin-top: 4px;
+    }
+  }
 </style>
