@@ -153,25 +153,6 @@
 
   @media (max-width: 480px) {
     .mode-overlay {
-      top: calc(6px + env(safe-area-inset-top, 0px));
-      left: 12px;
-      z-index: 5;
-    }
-    .mode-name {
-      font-size: 22px;
-      letter-spacing: 0.08em;
-    }
-    .mode-overlay-top {
-      gap: 8px;
-    }
-    .mode-time {
-      display: none;
-    }
-    .mode-source {
-      font-size: 9px;
-      margin-top: 2px;
-    }
-    .mode-status {
       display: none;
     }
   }
