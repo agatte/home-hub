@@ -29,7 +29,7 @@ The dashboard is a living interface with bold, mode-aware themed backgrounds —
 
 **Audio:** Sonos Era 100 control, mode-to-playlist mapping, smart auto-play, Apple Music library import + taste profile, Last.fm music discovery, TTS with duck-and-resume.
 
-**Automation:** PC activity detection (psutil), ambient noise monitoring (Blue Yeti), mode priority system, morning routine (weather + commute TTS), evening wind-down, all config persisted to SQLite.
+**Automation:** PC activity detection (psutil), ambient noise monitoring (Blue Yeti), mode priority system, morning routine (weather + commute TTS), evening wind-down, weather-reactive lighting (NWS alerts for real-time storm detection) + weather-driven music suggestions, all config persisted to SQLite.
 
 **Dashboard:** Three pages (Home, Music, Settings), real-time WebSocket sync, PWA for phone/tablet, optimistic updates.
 
@@ -214,11 +214,11 @@ Key additions beyond current:
 - **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
 - **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
 - **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
-- **`weather_service.py`** — OpenWeatherMap with 10-minute cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset.
+- **`weather_service.py`** — NWS API (api.weather.gov) with 5-minute cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset. Active severe weather alerts checked every 2 min — alert descriptions override stale observation data so automation catches storms immediately. Sunrise/sunset from sunrise-sunset.org (24h cache). No API key needed.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
 - **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing (α=0.3), 2.5s interval, 2s transitions. Auto-starts in watching/gaming mode.
 - **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning + wind-down routines.
-- **`morning_routine.py`** — Fetches weather (OpenWeatherMap) + commute (Google Maps), generates TTS, plays on Sonos.
+- **`morning_routine.py`** — Fetches weather (via shared WeatherService) + commute (Google Maps), generates TTS, plays on Sonos.
 - **`winddown_routine.py`** — Evening relax: activates candlelight + dims lights + lowers volume + brief TTS.
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML (plistlib). Extracts artist play counts, genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` for discovery. Caches in DB (30-day TTL). Mode-specific seed selection with cross-mode dedup.
@@ -245,7 +245,7 @@ Key additions beyond current:
 - **`src/lib/backgrounds/scene-utils.js`** — Shared drawing utilities (stars, rain, snow, canvas init).
 - **`src/lib/components/ModeBackground.svelte`** — Routes `$automation.mode` to the appropriate scene component.
 - **`src/lib/components/SceneBrowser.svelte`** — Categorized scene browser with tabs (functional, cozy, moody, vibrant, nature, entertainment, social, effects, bridge scenes).
-- **`src/lib/components/WeatherCard.svelte`** — OpenWeatherMap current conditions widget with SVG weather icons.
+- **`src/lib/components/WeatherCard.svelte`** — NWS weather conditions widget with SVG weather icons.
 - **`src/lib/theme.js`** — MODE_CONFIG with generative params + Lucide icon names, LIGHT_COLOR_PRESETS, LIGHT_CT_PRESETS, SCENE_CATEGORIES, VIBE_COLORS.
 - Typography: Bebas Neue (display/mode) + Source Sans 3 (body). Lucide SVG icons.
 - Built frontend served by FastAPI via `/{path:path}` catch-all (must come after all API routes).
@@ -288,7 +288,7 @@ All messages: JSON with `type` + `data` fields.
 | System | `/health`, `/ws` | Health check, WebSocket sync |
 | Lights | `/api/lights` | CRUD per-light state (on, bri, hue, sat, ct), bulk set |
 | Scenes | `/api/scenes` | Curated + custom + bridge scenes, activate, effects (per-light or all) |
-| Weather | `/api/weather` | Current conditions (10-min cache) |
+| Weather | `/api/weather` | Current conditions (5-min cache, NWS), alerts |
 | Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides |
 | Sonos | `/api/sonos` | Transport (play/pause/next/prev), volume, TTS, favorites |
 | Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
@@ -545,7 +545,7 @@ HUE_USERNAME=<bridge token>    # From bridge pairing
 TTS_VOICE=en-US-GuyNeural
 TTS_VOLUME=10
 LOG_LEVEL=INFO
-OPENWEATHER_API_KEY=...
+# OPENWEATHER_API_KEY=...        # No longer needed (switched to NWS API)
 GOOGLE_MAPS_API_KEY=...
 HOME_ADDRESS=...
 WORK_ADDRESS=...

@@ -805,7 +805,7 @@ class MLDecision(Base):
 All inference runs locally on the Latitude 7420. No model weights, training
 data, predictions, or telemetry are ever transmitted to external services. The
 system operates identically with no internet connection (except weather features
-degrade gracefully without OpenWeatherMap API access).
+degrade gracefully without NWS API access).
 
 ---
 

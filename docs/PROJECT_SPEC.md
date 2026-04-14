@@ -58,7 +58,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - PC activity detection (psutil process monitoring for games/media)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
 - Mode priority system: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0)
-- Morning routine: weather (OpenWeatherMap) + commute (Google Maps) TTS at configurable time
+- Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
 
@@ -75,7 +75,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **No sidebar** — floating glassmorphic bottom pill bar (Home, Music, Analytics, Settings) + mode overlay (Bebas Neue 36px all-caps mode name with character-stagger animation) + Now Playing chip
 - **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
 - **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
-- **Weather widget** — OpenWeatherMap current conditions with 10-minute cache
+- **Weather widget** — NWS API current conditions with 5-minute cache + active severe weather alerts
 - Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (mode distribution, patterns, rules, activity feed), Settings (configuration)
 - Real-time WebSocket sync — changes from Alexa, Hue app, or physical switches reflected instantly
 - PWA-capable for phone/tablet kiosk mode
@@ -122,7 +122,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - ~~No database backup automation~~ — fixed: daily SQLite backup cron on Latitude (4 AM, 7-day retention)
 - ~~Systemd service files not version-controlled~~ — fixed: `deployment/` dir with service units + kiosk desktop entry
 - ~~Dead frontend code (Sidebar, Header, modeIcon)~~ — fixed: deleted
-- ~~Weather widget shows current temp as high/low~~ — fixed: fetches daily range from OWM forecast API
+- ~~Weather widget shows current temp as high/low~~ — fixed: fetches daily range from NWS 7-day forecast
 - ~~No structured logging~~ — fixed: python-json-logger (JSON to file for machine parsing, text to console for humans)
 - ~~No uptime monitoring~~ — fixed: Uptime Kuma on port 3002 monitoring Home Hub backend + Pi-hole health, with alerting
 - ~~No bundle analysis~~ — fixed: vite-plugin-visualizer (`npm run analyze` generates interactive treemap)
@@ -135,7 +135,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 **Ambient intelligence features (April 2026):**
 - ~~Now Playing Ambient Typography~~ — shipped: `NowPlayingIdle.svelte` fills kiosk with giant song title/artist when idle + Sonos playing; album art as blurred ambient glow
 - ~~Sunrise Alarm Light Ramp~~ — shipped: 30-min bedroom lamp warm-up (CT 500→250, bri 1→150) before morning routine via ScheduledTask
-- ~~Weather-Reactive Lighting~~ — shipped: subtle light adjustments during idle modes (thunderstorm=purple, rain=cool, sunset=golden, overcast=dim, snow=bright+cool)
+- ~~Weather-Reactive Lighting~~ — shipped: noticeable light adjustments across all active modes (thunderstorm=purple+sparkle, rain=cool+candle, golden_hour=warm, overcast=dim+warm, snow=bright+cool+opal). NWS alert override ensures storms are detected even when observation stations lag. Weather-driven music suggestions broadcast via WebSocket during rain/storm/snow
 
 ---
 
@@ -164,7 +164,7 @@ Browser / Phone (PWA)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
-   ├── WeatherService ─────────────> OpenWeatherMap (10-min cache)
+   ├── WeatherService ─────────────> NWS API (5-min cache) + severe weather alerts (2-min cache)
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
@@ -245,7 +245,7 @@ and `CLAUDE.md` for operational details.
                            └───────────────────┘
 
 External APIs (cloud):
-   ├── OpenWeatherMap (weather)
+   ├── NWS API (weather + alerts, api.weather.gov)
    ├── Google Maps (commute)
    ├── Last.fm (music discovery)
    ├── iTunes Search (previews)
@@ -614,7 +614,8 @@ All messages are JSON with `type` + `data` fields.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/weather` | Current weather conditions (cached 10 min from OpenWeatherMap) |
+| GET | `/api/weather` | Current weather conditions (cached 5 min from NWS API) |
+| GET | `/api/weather/alerts` | Active NWS severe weather alerts for Indianapolis |
 
 #### Routines — `/api/routines/`
 
@@ -1182,7 +1183,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Themed mode backgrounds** — per-mode illustrated scenes: pixel art landscape (gaming), parallax city street (working), aurora borealis (relax), 3D moon scene (sleeping), gradient blobs + particles fallback (other modes). All react to music playback.
 - ✓ **Glass card widgets** — `backdrop-filter: blur(12px)`, staggered entrance animations, hover states. Home page: Now Playing strip, Quick Actions, Mode, Weather, Lights, Scenes, Routines.
 - ✓ **Auto-hide on idle** — Cards fade out after 60s, leaving just generative art + mode name. "Tap to wake" hint.
-- ✓ **Weather widget** — OpenWeatherMap current conditions (temp, feels-like, humidity, wind, hi/lo).
+- ✓ **Weather widget** — NWS API current conditions (temp, feels-like, humidity, wind, hi/lo) + active severe weather alerts.
 - ✓ **Scene browser** — 20 curated scenes organized by category tabs (functional, cozy, moody, vibrant, nature, entertainment, social) + Effects tab + Hue Scenes tab.
 - ✓ **One-tap quick actions** — Lucide icon pill buttons for Movie, Relax, Party, Bedtime, Auto, All Off.
 - ✓ **Now Playing chip** — Fixed bottom-right, shows album art + track, pulses when playing.
@@ -1428,11 +1429,12 @@ the kiosk, no authentication (single-user home network only).
 
 ### Cloud services used
 
-OpenWeatherMap (weather), Google Maps (commute), Last.fm (music
-discovery), iTunes Search (previews), ESPN (future, game data). All
-are free-tier or low-cost APIs. Core features (lights, music,
-automation) work without internet — the Hue bridge and Sonos speaker
-are LAN-only.
+NWS API (weather + severe alerts, api.weather.gov — free, no key),
+sunrise-sunset.org (astronomical data — free, no key), Google Maps
+(commute), Last.fm (music discovery), iTunes Search (previews), ESPN
+(future, game data). All are free-tier or no-cost APIs. Core features
+(lights, music, automation) work without internet — the Hue bridge
+and Sonos speaker are LAN-only.
 
 ---
 
@@ -1456,7 +1458,7 @@ are LAN-only.
 - ✓ Sleeping-mode Threlte animated background (stack validator)
 - ✓ SvelteKit + Threlte frontend rewrite (Phase 2a parity pass — commit `b96d062`)
 - ✓ **Living Ink frontend redesign** — generative canvas background (Perlin noise, data-reactive to Hue lights + Sonos), glassmorphic cards, Bebas Neue typography, mode overlay with character-stagger animation, Now Playing chip, 60s auto-hide on idle
-- ✓ **Weather widget** — OpenWeatherMap current conditions with 10-min cache
+- ✓ **Weather widget** — NWS API current conditions (5-min cache) + severe weather alerts (2-min cache) + sunrise/sunset from sunrise-sunset.org
 - ✓ **20 curated scenes** — color harmony theory (analogous, complementary, triadic), per-light states, 7 categories
 - ✓ **Custom scene CRUD** — save/load/delete user scenes with category + effect
 - ✓ **CT (color temperature) support** — mirek parameter throughout stack for precise Kelvin control
