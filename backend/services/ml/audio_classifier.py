@@ -36,11 +36,8 @@ DEFAULT_MODEL_DIR = Path("data/models")
 MODEL_FILENAME = "yamnet.tflite"
 CLASS_MAP_FILENAME = "yamnet_class_map.csv"
 
-# TFHub download URLs for the YAMNet TFLite model
-MODEL_URL = (
-    "https://storage.googleapis.com/tfhub-lite-models/"
-    "google/lite-model/yamnet/tflite/1.tflite"
-)
+# Download URLs for the YAMNet TFLite model
+MODEL_URL = "https://storage.googleapis.com/audioset/yamnet.tflite"
 CLASS_MAP_URL = (
     "https://raw.githubusercontent.com/tensorflow/models/master/"
     "research/audioset/yamnet/yamnet_class_map.csv"
