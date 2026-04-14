@@ -49,6 +49,10 @@ async def init_db() -> None:
     """Create all database tables and apply pending migrations."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Ensure all model classes are registered with Base.metadata
+    # before create_all runs (import order may not guarantee this).
+    import backend.models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _run_migrations(conn)
