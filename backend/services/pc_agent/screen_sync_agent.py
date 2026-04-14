@@ -20,7 +20,11 @@ Autostart on Windows:
 import argparse
 import colorsys
 import logging
+import os
+import random
+import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -40,6 +44,40 @@ logging.basicConfig(
 logger = logging.getLogger("home_hub.screen_sync_agent")
 
 CAPTURE_INTERVAL = 2.5  # seconds between captures
+LOG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "home-hub" / "logs"
+PID_FILE = LOG_DIR / "screen_sync_agent.pid"
+
+
+_mutex_handle = None
+
+
+def _acquire_singleton_lock() -> bool:
+    """Ensure only one instance runs using a Windows named mutex (kernel-level atomic)."""
+    global _mutex_handle
+    if sys.platform == "win32":
+        import ctypes
+        _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, True, "HomeHub_ScreenSyncAgent")
+        last_error = ctypes.windll.kernel32.GetLastError()
+        # ERROR_ALREADY_EXISTS = 183
+        if last_error == 183:
+            ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+            _mutex_handle = None
+            return False
+        return True
+    # Unix fallback: fcntl file lock
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _mutex_handle = open(PID_FILE, "w")  # noqa: SIM115
+        import fcntl
+        fcntl.flock(_mutex_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _mutex_handle.write(str(os.getpid()))
+        _mutex_handle.flush()
+        return True
+    except (OSError, IOError):
+        if _mutex_handle:
+            _mutex_handle.close()
+            _mutex_handle = None
+        return False
 
 
 def _pick_dominant_kmeans(pixels: np.ndarray) -> tuple[int, int, int]:
@@ -167,6 +205,8 @@ def run_agent(server_url: str) -> None:
 
 
 if __name__ == "__main__":
+    import atexit
+
     parser = argparse.ArgumentParser(description="Home Hub Screen Sync Agent")
     parser.add_argument(
         "--server",
@@ -174,4 +214,8 @@ if __name__ == "__main__":
         help="Home Hub server URL (default: http://localhost:8000)",
     )
     args = parser.parse_args()
+
+    if not _acquire_singleton_lock():
+        sys.exit(0)
+
     run_agent(args.server)
