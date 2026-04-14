@@ -122,7 +122,7 @@ button:active, .btn:active, [role="button"]:active {
 
 @media (max-width: 480px) {
   .app {
-    padding: 56px 12px 110px;
+    padding: calc(80px + env(safe-area-inset-top, 0px)) 12px 110px;
   }
 }
 

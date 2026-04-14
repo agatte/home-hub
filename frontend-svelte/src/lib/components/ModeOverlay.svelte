@@ -153,7 +153,7 @@
 
   @media (max-width: 480px) {
     .mode-overlay {
-      top: 6px;
+      top: calc(6px + env(safe-area-inset-top, 0px));
       left: 12px;
       z-index: 5;
     }
