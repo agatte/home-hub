@@ -793,11 +793,11 @@ class AutomationEngine:
 
     async def report_activity(self, mode: str, source: str) -> None:
         """
-        Process an activity report from the PC agent or ambient monitor.
+        Process an activity report from the PC agent, ambient monitor, or camera.
 
         Args:
             mode: Detected mode (gaming, watching, working, social, idle, away).
-            source: Detection source ("process" or "ambient").
+            source: Detection source ("process", "ambient", "audio_ml", or "camera").
         """
         if not self._enabled:
             return
@@ -805,6 +805,17 @@ class AutomationEngine:
         # Ambient "idle" should not override process-detected activity
         if source == "ambient" and mode == "idle":
             if self._mode_source == "process" and self._current_mode != "idle":
+                return
+
+        # Camera "away" should not override active process detection
+        if source == "camera" and mode == "away":
+            if self._mode_source == "process" and self._current_mode not in ("idle", "away"):
+                return
+
+        # Camera "idle" (present) should not downgrade higher-priority modes
+        if source == "camera" and mode == "idle":
+            current_priority = MODE_PRIORITY.get(self._current_mode, 0)
+            if current_priority > MODE_PRIORITY.get("idle", 1):
                 return
 
         old_mode = self._current_mode

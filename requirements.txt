@@ -33,6 +33,8 @@ numpy>=1.20.0
 scikit-learn>=1.0.0       # K-means for screen sync color clustering
 lightgbm>=4.0.0           # Behavioral mode prediction
 ai-edge-litert>=1.0.0     # TFLite runtime for YAMNet audio classification
+mediapipe>=0.10.0         # Face detection + BlazePose (camera presence)
+opencv-python-headless>=4.9  # Camera capture (headless = no GUI deps on kiosk)
 
 # Utilities
 aiofiles>=23.0.0          # Async file operations

@@ -33,6 +33,7 @@ from backend.api.routes.pihole import router as pihole_router
 from backend.api.routes.weather import router as weather_router
 from backend.api.routes.ambient import router as ambient_router
 from backend.api.routes.learning import router as learning_router
+from backend.api.routes.camera import router as camera_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
 FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
@@ -426,6 +427,25 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
 
+    # Camera presence detection (opt-in, runs on Latitude webcam)
+    camera_enabled_setting = await load_setting("camera_enabled")
+    if camera_enabled_setting and camera_enabled_setting.get("enabled", False):
+        try:
+            from backend.services.camera_service import CameraService
+            camera_service = CameraService(ws_manager, automation, ml_logger)
+            await camera_service.start()
+            if camera_service.enabled:
+                app.state.camera_service = camera_service
+                automation.register_on_mode_change(camera_service.on_mode_change)
+                tasks.append(asyncio.create_task(camera_service.poll_loop()))
+                app_logger.info("Camera presence detection started")
+            else:
+                app_logger.warning("Camera service failed to start (webcam unavailable?)")
+        except ImportError:
+            app_logger.warning("mediapipe/opencv not installed — camera service disabled")
+    else:
+        app_logger.info("Camera service disabled (camera_enabled=false)")
+
     app_logger.info("Home Hub is ready")
 
     yield
@@ -442,6 +462,9 @@ async def lifespan(app: FastAPI):
             pass
     await hue_v2.close()
     await rec_service.close()
+    camera = getattr(app.state, "camera_service", None)
+    if camera:
+        await camera.close()
 
 
 # Rate limiter — prevents abuse from rogue LAN clients
@@ -496,6 +519,7 @@ app.include_router(events_router)
 app.include_router(rules_router)
 app.include_router(ambient_router)
 app.include_router(learning_router)
+app.include_router(camera_router)
 
 # Serve the SvelteKit static build (must come after API routes).
 # Path is controlled by settings.FRONTEND_BUILD (default frontend-svelte/build).
