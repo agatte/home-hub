@@ -28,6 +28,7 @@ Usage:
 import argparse
 import logging
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -329,17 +330,24 @@ class AmbientMonitor:
 
     def close(self) -> None:
         """Clean up audio resources."""
-        if self._stream:
-            self._stream.stop_stream()
-            self._stream.close()
-        if self._audio:
-            self._audio.terminate()
+        try:
+            if self._stream:
+                self._stream.stop_stream()
+                self._stream.close()
+        except Exception:
+            pass
+        try:
+            if self._audio:
+                self._audio.terminate()
+        except Exception:
+            pass
 
 
 def run_monitor(
     server_url: str,
     classifier_enabled: bool = False,
     shadow_mode: bool = True,
+    stop_event: Optional[threading.Event] = None,
 ) -> None:
     """
     Main loop — monitor ambient noise, report social/quiet changes to server.
@@ -348,6 +356,7 @@ def run_monitor(
         server_url: Base URL of the Home Hub backend.
         classifier_enabled: Whether to run YAMNet classifier.
         shadow_mode: If True, log ML results but don't act on them.
+        stop_event: Optional threading event for clean shutdown (set by supervisor).
     """
     monitor = AmbientMonitor(
         classifier_enabled=classifier_enabled,
@@ -358,11 +367,17 @@ def run_monitor(
     ml_endpoint = f"{base_url}/api/learning/audio-decision"
 
     if not monitor._init_audio():
-        logger.error("Cannot start ambient monitor — mic not available")
+        msg = "Cannot start ambient monitor — mic not available"
+        if stop_event is not None:
+            raise RuntimeError(msg)
+        logger.error(msg)
         sys.exit(1)
 
     # Auto-calibrate on startup
     monitor.calibrate(duration=5)
+
+    _stop = stop_event or threading.Event()
+    client = httpx.Client(timeout=5.0)
 
     mode_label = "shadow" if shadow_mode else "active"
     classifier_label = (
@@ -381,24 +396,23 @@ def run_monitor(
     last_log_time: float = 0.0
 
     try:
-        while True:
+        while not _stop.is_set():
             # ── RMS-based detection (always runs) ──────────────
             rms_result = monitor.check()
 
             if rms_result in ("social", "quiet"):
                 mode = "social" if rms_result == "social" else "idle"
                 try:
-                    with httpx.Client(timeout=5.0) as client:
-                        resp = client.post(
-                            activity_endpoint,
-                            json={
-                                "mode": mode,
-                                "source": "ambient",
-                                "detected_at": datetime.now().isoformat(),
-                            },
-                        )
-                        resp.raise_for_status()
-                        logger.info(f"Reported '{mode}' to server (RMS)")
+                    resp = client.post(
+                        activity_endpoint,
+                        json={
+                            "mode": mode,
+                            "source": "ambient",
+                            "detected_at": datetime.now().isoformat(),
+                        },
+                    )
+                    resp.raise_for_status()
+                    logger.info(f"Reported '{mode}' to server (RMS)")
                 except httpx.HTTPError as e:
                     logger.warning(f"Failed to report RMS result to server: {e}")
 
@@ -427,20 +441,19 @@ def run_monitor(
                     # In active mode, use ML result for mode changes
                     if not shadow_mode and ml_mode is not None:
                         try:
-                            with httpx.Client(timeout=5.0) as client:
-                                resp = client.post(
-                                    activity_endpoint,
-                                    json={
-                                        "mode": ml_mode,
-                                        "source": "audio_ml",
-                                        "detected_at": datetime.now().isoformat(),
-                                    },
-                                )
-                                resp.raise_for_status()
-                                logger.info(
-                                    "Reported '%s' to server (YAMNet active)",
-                                    ml_mode,
-                                )
+                            resp = client.post(
+                                activity_endpoint,
+                                json={
+                                    "mode": ml_mode,
+                                    "source": "audio_ml",
+                                    "detected_at": datetime.now().isoformat(),
+                                },
+                            )
+                            resp.raise_for_status()
+                            logger.info(
+                                "Reported '%s' to server (YAMNet active)",
+                                ml_mode,
+                            )
                         except httpx.HTTPError as e:
                             logger.warning(
                                 "Failed to report ML result to server: %s", e
@@ -462,33 +475,33 @@ def run_monitor(
                         last_logged_class = ml_result["top_class"]
                         last_log_time = now_log
                         try:
-                            with httpx.Client(timeout=5.0) as client:
-                                resp = client.post(
-                                    ml_endpoint,
-                                    json={
-                                        "predicted_mode": ml_mode or ml_result["top_class"],
-                                        "confidence": ml_result["confidence"],
-                                        "applied": not shadow_mode and ml_mode is not None,
-                                        "factors": {
-                                            "top_class": ml_result["top_class"],
-                                            "all_scores": ml_result["all_scores"],
-                                            "raw_yamnet_top5": ml_result["raw_yamnet_top5"],
-                                            "inference_ms": ml_result["inference_ms"],
-                                            "rms_would_say": rms_would_say,
-                                            "mode_signal": mode_signal,
-                                            "shadow_mode": shadow_mode,
-                                        },
+                            resp = client.post(
+                                ml_endpoint,
+                                json={
+                                    "predicted_mode": ml_mode or ml_result["top_class"],
+                                    "confidence": ml_result["confidence"],
+                                    "applied": not shadow_mode and ml_mode is not None,
+                                    "factors": {
+                                        "top_class": ml_result["top_class"],
+                                        "all_scores": ml_result["all_scores"],
+                                        "raw_yamnet_top5": ml_result["raw_yamnet_top5"],
+                                        "inference_ms": ml_result["inference_ms"],
+                                        "rms_would_say": rms_would_say,
+                                        "mode_signal": mode_signal,
+                                        "shadow_mode": shadow_mode,
                                     },
-                                )
-                                resp.raise_for_status()
+                                },
+                            )
+                            resp.raise_for_status()
                         except httpx.HTTPError as e:
                             logger.debug("Failed to log ML decision: %s", e)
 
-            time.sleep(POLL_INTERVAL)
+            _stop.wait(POLL_INTERVAL)
 
     except KeyboardInterrupt:
         logger.info("Ambient monitor stopped")
     finally:
+        client.close()
         monitor.close()
 
 

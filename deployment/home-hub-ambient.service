@@ -18,7 +18,7 @@ Type=simple
 WorkingDirectory=%h/home-hub
 ExecStartPre=/bin/bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
 ExecStart=%h/home-hub/venv/bin/python -m backend.services.pc_agent.ambient_monitor --server http://localhost:8000
-Restart=on-failure
+Restart=always
 RestartSec=10
 Environment="PATH=%h/home-hub/venv/bin:/usr/bin"
 

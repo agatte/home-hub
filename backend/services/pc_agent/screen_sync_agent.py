@@ -23,6 +23,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -163,21 +164,31 @@ def capture_dominant_color() -> Optional[tuple[int, int, int]]:
         return None
 
 
-def run_agent(server_url: str) -> None:
+def run_agent(
+    server_url: str,
+    stop_event: Optional[threading.Event] = None,
+) -> None:
     """
     Main loop — capture, POST, sleep, repeat. Backs off on HTTP errors.
+
+    Args:
+        server_url: Base URL of the Home Hub backend.
+        stop_event: Optional threading event for clean shutdown (set by supervisor).
     """
     endpoint = f"{server_url.rstrip('/')}/api/automation/screen-color"
     backoff = 1
 
+    _stop = stop_event or threading.Event()
+    client = httpx.Client(timeout=5.0)
+
     logger.info(f"Screen Sync Agent started — reporting to {endpoint}")
 
-    while True:
-        try:
-            rgb = capture_dominant_color()
-            if rgb is not None:
-                try:
-                    with httpx.Client(timeout=5.0) as client:
+    try:
+        while not _stop.is_set():
+            try:
+                rgb = capture_dominant_color()
+                if rgb is not None:
+                    try:
                         resp = client.post(
                             endpoint,
                             json={
@@ -189,19 +200,21 @@ def run_agent(server_url: str) -> None:
                         )
                         resp.raise_for_status()
                         backoff = 1
-                except httpx.HTTPError as e:
-                    logger.warning(f"Failed to report color: {e}")
-                    backoff = min(backoff * 2, 60)
+                    except httpx.HTTPError as e:
+                        logger.warning(f"Failed to report color: {e}")
+                        backoff = min(backoff * 2, 60)
 
-            time.sleep(CAPTURE_INTERVAL if backoff == 1 else backoff)
+                _stop.wait(CAPTURE_INTERVAL if backoff == 1 else backoff)
 
-        except KeyboardInterrupt:
-            logger.info("Screen sync agent stopped")
-            break
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}", exc_info=True)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+            except KeyboardInterrupt:
+                logger.info("Screen sync agent stopped")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}", exc_info=True)
+                _stop.wait(backoff)
+                backoff = min(backoff * 2, 60)
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -309,7 +310,10 @@ class ActivityDetector:
         return changed
 
 
-def run_agent(server_url: str) -> None:
+def run_agent(
+    server_url: str,
+    stop_event: Optional[threading.Event] = None,
+) -> None:
     """
     Main loop — poll processes, report mode changes to the Home Hub server.
 
@@ -318,6 +322,7 @@ def run_agent(server_url: str) -> None:
 
     Args:
         server_url: Base URL of the Home Hub backend (e.g., http://localhost:8000).
+        stop_event: Optional threading event for clean shutdown (set by supervisor).
     """
     detector = ActivityDetector()
     endpoint = f"{server_url.rstrip('/')}/api/automation/activity"
@@ -325,24 +330,26 @@ def run_agent(server_url: str) -> None:
     last_report_time: float = 0
     heartbeat_interval = 15  # Re-report current mode every 15s
 
+    _stop = stop_event or threading.Event()
+    client = httpx.Client(timeout=5.0)
+
     logger.info(f"PC Activity Detector started — reporting to {endpoint}")
 
-    while True:
-        try:
-            mode = detector.detect()
-            now = time.time()
-            mode_changed = detector.has_changed(mode)
-            heartbeat_due = (now - last_report_time) >= heartbeat_interval
+    try:
+        while not _stop.is_set():
+            try:
+                mode = detector.detect()
+                now = time.time()
+                mode_changed = detector.has_changed(mode)
+                heartbeat_due = (now - last_report_time) >= heartbeat_interval
 
-            if mode_changed or heartbeat_due:
-                if mode_changed:
-                    logger.info(f"Activity changed: {mode}")
-                else:
-                    logger.debug(f"Heartbeat: {mode}")
+                if mode_changed or heartbeat_due:
+                    if mode_changed:
+                        logger.info(f"Activity changed: {mode}")
+                    else:
+                        logger.debug(f"Heartbeat: {mode}")
 
-                # Report to server
-                try:
-                    with httpx.Client(timeout=5.0) as client:
+                    try:
                         resp = client.post(
                             endpoint,
                             json={
@@ -356,19 +363,21 @@ def run_agent(server_url: str) -> None:
                         if mode_changed:
                             logger.info(f"Reported '{mode}' to server (HTTP {resp.status_code})")
                         backoff = 1
-                except httpx.HTTPError as e:
-                    logger.warning(f"Failed to report to server: {e}")
-                    backoff = min(backoff * 2, 60)
+                    except httpx.HTTPError as e:
+                        logger.warning(f"Failed to report to server: {e}")
+                        backoff = min(backoff * 2, 60)
 
-            time.sleep(POLL_INTERVAL)
+                _stop.wait(POLL_INTERVAL)
 
-        except KeyboardInterrupt:
-            logger.info("Activity detector stopped")
-            break
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}", exc_info=True)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+            except KeyboardInterrupt:
+                logger.info("Activity detector stopped")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}", exc_info=True)
+                _stop.wait(backoff)
+                backoff = min(backoff * 2, 60)
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

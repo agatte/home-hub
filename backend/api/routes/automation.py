@@ -73,6 +73,23 @@ async def get_activity(request: Request) -> dict:
     }
 
 
+@router.post("/agent-health")
+async def report_agent_health(request: Request) -> dict:
+    """Receive health heartbeat from the PC agent supervisor."""
+    body = await request.json()
+    request.app.state.agent_health = body
+    return {"status": "ok"}
+
+
+@router.get("/agent-health")
+async def get_agent_health(request: Request) -> dict:
+    """Get the latest agent supervisor health report."""
+    health = getattr(request.app.state, "agent_health", None)
+    if not health:
+        return {"status": "no_report", "agents": {}}
+    return health
+
+
 @router.get("/status")
 async def get_status(request: Request) -> AutomationStatus:
     """Get the full automation engine status."""
