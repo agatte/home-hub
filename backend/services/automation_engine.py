@@ -28,6 +28,18 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 # the current mode isn't in this set.
 SCREEN_SYNC_MODES = frozenset(("gaming", "watching", "movie"))
 
+# Modes that skip weather-reactive lighting adjustments entirely.
+# Social has its own party lighting; sleeping is a gradual fade sequence.
+WEATHER_SKIP_MODES = frozenset(("social", "sleeping"))
+
+# Weather condition → effect override. When a weather condition matches and
+# the mode has no auto-effect already, this effect is applied on top.
+# Only fires during evening/night when effects are most visible.
+WEATHER_EFFECT_MAP: dict[str, str | None] = {
+    "thunderstorm": "sparkle",
+    "snow": "opal",
+}
+
 
 # ---------------------------------------------------------------------------
 # Configurable schedule dataclasses
@@ -1013,13 +1025,18 @@ class AutomationEngine:
                 state = _resolve_activity_state(mode, period)
 
             state = self._apply_brightness_multiplier(state, mode)
+            if mode not in WEATHER_SKIP_MODES:
+                state = self._weather_adjust(state)
             tt = MODE_TRANSITION_TIME.get(mode)
             await self._apply_state(state, transitiontime=tt)
 
-            # Apply dynamic effects based on mode + time period
+            # Apply dynamic effects based on mode + time period.
+            # Weather can override the effect when no mode-specific one is set.
             if self._hue_v2 and self._hue_v2.connected:
                 effect_map = EFFECT_AUTO_MAP.get(mode, {})
                 auto_effect = effect_map.get(period)
+                if not auto_effect and period in ("evening", "night"):
+                    auto_effect = self._get_weather_effect()
                 if auto_effect:
                     await self._hue_v2.set_effect_all(auto_effect)
                     self._active_effect = True
@@ -1239,26 +1256,21 @@ class AutomationEngine:
             drifted[lid] = d
 
         drifted = self._apply_brightness_multiplier(drifted, mode)
+        if mode not in WEATHER_SKIP_MODES:
+            drifted = self._weather_adjust(drifted)
         self._last_applied_per_light = {}  # Force apply
         await self._apply_state(drifted, transitiontime=100)  # 10s imperceptible
         logger.info("Scene drift applied for mode '%s'", mode)
 
     def _weather_adjust(self, state: dict[str, Any]) -> dict[str, Any]:
-        """
-        Apply subtle weather-based adjustments to a time-based light state.
+        """Apply subtle weather-based adjustments to light states.
 
-        Only modifies uniform states (flat dicts with bri/hue/sat/ct keys).
-        Per-light dicts pass through unchanged — weather shouldn't fight
-        mode-specific per-light layouts.
-
-        Adjustments are small deltas, never dramatic. The apartment should
-        feel subtly connected to the outside world, not like a disco.
+        Works with both uniform (flat) and per-light (keyed by ID) formats.
+        Respects each light's color mode: adjusts CT for CT-based lights and
+        hue/sat for HSB-based lights. Adjustments are small deltas — the
+        apartment should feel subtly connected to the outside, not dramatic.
         """
         if not self._weather_service:
-            return state
-
-        # Skip per-light states (keyed by light ID strings)
-        if state and all(isinstance(k, str) and k.isdigit() for k in state):
             return state
 
         try:
@@ -1269,29 +1281,38 @@ class AutomationEngine:
             return state
 
         desc = weather.get("description", "").lower()
-        adjusted = {**state}
+        condition = self._classify_weather(desc, weather)
+        if not condition:
+            return state
 
+        logger.debug("Weather adjustment: %s (%s)", condition, desc)
+
+        # Detect format: per-light dicts have light ID keys with dict values
+        is_per_light = all(
+            isinstance(v, dict) for v in state.values()
+        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
+
+        if is_per_light:
+            return {
+                lid: self._adjust_single_light(ls, condition)
+                if ls.get("on", True) else ls
+                for lid, ls in state.items()
+            }
+        return self._adjust_single_light(state, condition)
+
+    def _classify_weather(
+        self, desc: str, weather: dict[str, Any],
+    ) -> str | None:
+        """Map weather description to a condition category."""
         if "thunderstorm" in desc:
-            # Cooler, slightly purple tint
-            adjusted["hue"] = min(65535, adjusted.get("hue", 8000) + 15000)
-            adjusted["sat"] = min(254, adjusted.get("sat", 100) + 40)
-        elif "rain" in desc or "drizzle" in desc:
-            # Shift cooler (lower CT = bluer)
-            if "ct" in adjusted:
-                adjusted["ct"] = max(153, adjusted["ct"] - 30)
-            else:
-                adjusted["hue"] = max(0, adjusted.get("hue", 8000) + 3000)
-                adjusted["sat"] = min(254, adjusted.get("sat", 100) + 15)
-        elif "snow" in desc:
-            # Brighter, cooler
-            adjusted["bri"] = min(254, adjusted.get("bri", 200) + 20)
-            if "ct" in adjusted:
-                adjusted["ct"] = max(153, adjusted["ct"] - 50)
-        elif "overcast" in desc or "clouds" in desc:
-            # Slightly dimmer
-            adjusted["bri"] = max(1, int(adjusted.get("bri", 200) * 0.9))
-        elif "clear" in desc:
-            # During sunset hour: warm golden shift
+            return "thunderstorm"
+        if "rain" in desc or "drizzle" in desc:
+            return "rain"
+        if "snow" in desc:
+            return "snow"
+        if "overcast" in desc or "clouds" in desc:
+            return "clouds"
+        if "clear" in desc:
             now = datetime.now(tz=TZ)
             sunset_ts = weather.get("sunset")
             if sunset_ts:
@@ -1300,11 +1321,76 @@ class AutomationEngine:
                 sunset_local = sunset_utc.astimezone(TZ)
                 minutes_to_sunset = (sunset_local - now).total_seconds() / 60
                 if -30 <= minutes_to_sunset <= 30:
-                    # Golden hour window
-                    adjusted["hue"] = min(65535, adjusted.get("hue", 8000) + 2000)
-                    adjusted["sat"] = min(254, adjusted.get("sat", 100) + 30)
+                    return "golden_hour"
+        return None
 
-        return adjusted
+    def _get_weather_effect(self) -> str | None:
+        """Return an effect override based on current weather, or None."""
+        if not self._weather_service:
+            return None
+        try:
+            weather = self._weather_service.get_cached()
+            if not weather:
+                return None
+        except Exception:
+            return None
+        desc = weather.get("description", "").lower()
+        for keyword, effect in WEATHER_EFFECT_MAP.items():
+            if keyword in desc:
+                return effect
+        return None
+
+    @staticmethod
+    def _adjust_single_light(
+        light: dict[str, Any], condition: str,
+    ) -> dict[str, Any]:
+        """Apply weather adjustment to a single light's state dict.
+
+        Respects CT vs HSB: if the light uses ``ct``, adjustments shift
+        color temperature. If it uses ``hue``/``sat``, adjustments shift
+        those values instead. Never mixes the two color spaces.
+        """
+        adj = {**light}
+        uses_ct = "ct" in adj
+
+        if condition == "thunderstorm":
+            # Cooler / purple tint, slight dim
+            adj["bri"] = max(1, adj.get("bri", 200) - 10)
+            if uses_ct:
+                adj["ct"] = max(153, adj["ct"] - 40)
+            else:
+                adj["hue"] = min(65535, adj.get("hue", 8000) + 12000)
+                adj["sat"] = min(254, adj.get("sat", 100) + 35)
+
+        elif condition == "rain":
+            # Shift cooler
+            if uses_ct:
+                adj["ct"] = max(153, adj["ct"] - 25)
+            else:
+                adj["hue"] = max(0, adj.get("hue", 8000) + 3000)
+                adj["sat"] = min(254, adj.get("sat", 100) + 15)
+
+        elif condition == "snow":
+            # Brighter, cooler white
+            adj["bri"] = min(254, adj.get("bri", 200) + 15)
+            if uses_ct:
+                adj["ct"] = max(153, adj["ct"] - 40)
+
+        elif condition == "clouds":
+            # Slightly warmer, slightly dimmer
+            adj["bri"] = max(1, int(adj.get("bri", 200) * 0.92))
+            if uses_ct:
+                adj["ct"] = min(500, adj["ct"] + 15)
+
+        elif condition == "golden_hour":
+            # Warm golden shift
+            if uses_ct:
+                adj["ct"] = min(500, adj["ct"] + 30)
+            else:
+                adj["hue"] = min(65535, adj.get("hue", 8000) + 2000)
+                adj["sat"] = min(254, adj.get("sat", 100) + 25)
+
+        return adj
 
     async def _apply_time_based(self) -> None:
         """Apply the time-appropriate light state (weekday/weekend aware)."""
