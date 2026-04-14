@@ -406,53 +406,6 @@
     </div>
   </section>
 
-  <!-- Camera Presence -->
-  <section class="widget">
-    <h2 class="widget-title">Camera Presence</h2>
-    <div class="settings-card">
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-label">Camera Detection</span>
-          <span class="setting-hint">Use Latitude webcam for fast away detection (15s)</span>
-        </div>
-        <button
-          class="toggle-btn"
-          class:toggle-on={cameraStatus?.enabled}
-          on:click={toggleCamera}
-          disabled={saving === 'camera'}
-        >
-          {cameraStatus?.enabled ? 'ON' : 'OFF'}
-        </button>
-      </div>
-      {#if cameraStatus?.enabled}
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Detection</span>
-          </div>
-          <span class="setting-value">
-            {cameraStatus.last_detection === 'present' ? 'Present' : cameraStatus.last_detection === 'absent' ? 'Absent' : 'Unknown'}
-            {#if cameraStatus.confidence > 0}
-              ({(cameraStatus.confidence * 100).toFixed(0)}%)
-            {/if}
-          </span>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Ambient Light</span>
-          </div>
-          <span class="setting-value">
-            {cameraStatus.ambient_lux?.toFixed(0) ?? '--'} / 255
-          </span>
-        </div>
-        {#if cameraStatus.paused}
-          <div class="setting-row">
-            <span class="setting-hint">Paused during sleeping mode</span>
-          </div>
-        {/if}
-      {/if}
-    </div>
-  </section>
-
   <!-- Automation -->
   <section class="widget">
     <h2 class="widget-title">Automation</h2>
@@ -471,6 +424,47 @@
             {autoConfig.enabled ? 'ON' : 'OFF'}
           </button>
         </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Camera Detection</span>
+            <span class="setting-hint">Latitude webcam for fast away detection (15s)</span>
+          </div>
+          <button
+            class="toggle-btn"
+            class:toggle-on={cameraStatus?.enabled}
+            on:click={toggleCamera}
+            disabled={saving === 'camera'}
+          >
+            {cameraStatus?.enabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
+        {#if cameraStatus?.enabled}
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Detection</span>
+            </div>
+            <span class="setting-value">
+              {cameraStatus.last_detection === 'present' ? 'Present' : cameraStatus.last_detection === 'absent' ? 'Absent' : 'Unknown'}
+              {#if cameraStatus.confidence > 0}
+                ({(cameraStatus.confidence * 100).toFixed(0)}%)
+              {/if}
+            </span>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Ambient Light</span>
+            </div>
+            <span class="setting-value">
+              {cameraStatus.ambient_lux?.toFixed(0) ?? '--'} / 255
+            </span>
+          </div>
+          {#if cameraStatus.paused}
+            <div class="setting-row">
+              <span class="setting-hint">Paused during sleeping mode</span>
+            </div>
+          {/if}
+        {/if}
 
         <div class="setting-row">
           <div class="setting-info">
