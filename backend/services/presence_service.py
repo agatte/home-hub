@@ -141,12 +141,18 @@ class PresenceService:
     def get_status(self) -> dict[str, Any]:
         """Current presence state for REST / MCP / WebSocket."""
         now = datetime.now(tz=TZ)
+        # Map internal states to public-facing values
+        public_state = (
+            "away" if self._state in ("startup_away",) else self._state
+        )
         away_duration = None
-        if self._away_since and self._state in ("away", "departing"):
+        if self._away_since and self._state in (
+            "away", "departing", "startup_away"
+        ):
             away_duration = int((now - self._away_since).total_seconds() / 60)
 
         return {
-            "state": self._state,
+            "state": public_state,
             "enabled": self._config.enabled,
             "phone_ip": self._config.phone_ip,
             "last_seen": (
@@ -190,14 +196,12 @@ class PresenceService:
                     self._consecutive_failures = 0
                     self._last_seen = now
 
-                    if self._state == "unknown":
-                        # Startup — set state without triggering arrival
+                    if self._state in ("unknown", "startup_away"):
+                        # Startup — set home without triggering arrival
                         self._state = "home"
                         logger.info("Initial presence: home")
                     elif self._state in ("away", "departing"):
                         await self._on_arrival()
-                    # If "departing", the departure task cancel happens
-                    # inside _on_arrival
 
                 else:
                     self._consecutive_failures += 1
@@ -220,10 +224,22 @@ class PresenceService:
                             continue  # Retry immediately with new IP
 
                     if self._state == "unknown":
-                        # Startup — set state without triggering departure
-                        self._state = "away"
+                        # First failure on startup — use interim state
+                        # so a successful ping next cycle sets "home"
+                        # instead of triggering a false arrival
+                        self._state = "startup_away"
                         self._away_since = now
-                        logger.info("Initial presence: away")
+                        logger.info("Initial presence: away (startup)")
+                    elif (
+                        self._state == "startup_away"
+                        and self._last_seen is None
+                        and (now - self._away_since).total_seconds()
+                        >= self._config.away_timeout
+                    ):
+                        # Never seen the phone and timeout elapsed —
+                        # user is genuinely away
+                        self._state = "away"
+                        logger.info("Startup away confirmed — phone not seen")
                     elif (
                         self._state == "home"
                         and self._last_seen
