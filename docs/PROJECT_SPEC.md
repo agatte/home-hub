@@ -57,6 +57,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 - PC activity detection (psutil process monitoring for games/media)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
+- WiFi presence detection: pings iPhone every 30s, 10-min timeout triggers departure (gradual fade, pause Sonos), arrival triggers choreographed welcome-home sequence (light wave, adaptive TTS greeting, weather-aware effects, music auto-play)
 - Mode priority system: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
@@ -165,6 +166,7 @@ Browser / Phone (PWA)
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
    ├── WeatherService ─────────────> NWS API (5-min cache) + severe weather alerts (2-min cache)
+   ├── PresenceService (ping) ─────> iPhone WiFi ping → arrival/departure sequences
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
@@ -299,6 +301,8 @@ External APIs (cloud):
 | key | String(100) | PK. Config key identifier |
 | value | JSON | Serialized config object |
 | updated_at | DateTime | UTC, auto-updated |
+
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`.
 
 **scenes** — User-created light presets
 | Column | Type | Notes |
@@ -579,6 +583,10 @@ All messages are JSON with `type` + `data` fields.
 | POST | `/api/automation/override` | Manual mode override |
 | GET | `/api/automation/social-styles` | List social sub-styles |
 | POST | `/api/automation/social-style` | Set active sub-style |
+| GET | `/api/automation/presence/status` | Current presence state (home/away/arriving) |
+| GET | `/api/automation/presence/config` | Presence detection config |
+| PUT | `/api/automation/presence/config` | Update presence config |
+| POST | `/api/automation/presence/test-arrival` | Trigger test arrival sequence |
 
 #### Sonos — `/api/sonos/`
 
@@ -1498,6 +1506,7 @@ cleanup landed:
 - ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons, 20s auto-dismiss
 - ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route with mode distribution donut, quick stats, hourly pattern bars, learned rules list with enable/disable toggles, recent activity feed, top Sonos favorites and scenes
 - ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (movie night, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
+- ✓ **WiFi Presence Detection** (Phase 3e) — `PresenceService` pings iPhone every 30s via ICMP. 10-min timeout triggers gradual departure (30s light fade, Sonos pause). Arrival triggers choreographed welcome-home: sequential light wave (kitchen door → kitchen back → living room → bedroom), adaptive TTS greeting (time/weather/duration-aware), dynamic Hue effect, music auto-play. ARP fallback for DHCP IP changes. Config persisted to `presence_config` in `app_settings`. Phase 2 planned: BLE proximity for "at the door" precision
 - Override pattern analysis tracked via `override_rate` in patterns API — auto-apply deferred to future (v1 is nudge-only)
 
 ### Phase 4: Game Day (July-August 2026)

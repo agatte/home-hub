@@ -216,6 +216,7 @@ Key additions beyond current:
 - **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
 - **`weather_service.py`** — NWS API (api.weather.gov) with 5-minute cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset. Active severe weather alerts checked every 2 min — alert descriptions override stale observation data so automation catches storms immediately. Sunrise/sunset from sunrise-sunset.org (24h cache). No API key needed.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
+- **`presence_service.py`** — WiFi presence detection. Pings iPhone (192.168.1.148) every 30s. 10-min timeout → gradual departure fade → Sonos pause → away. Arrival → choreographed light wave (L3→L4→L1→L2, 1s staggers) + adaptive TTS greeting + weather-aware effect + music auto-play. ARP fallback for DHCP IP changes. Config in `app_settings` key `presence_config`.
 - **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing (α=0.3), 2.5s interval, 2s transitions. Auto-starts in watching/gaming mode.
 - **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning + wind-down routines.
 - **`morning_routine.py`** — Fetches weather (via shared WeatherService) + commute (Google Maps), generates TTS, plays on Sonos.
@@ -267,6 +268,7 @@ All messages: JSON with `type` + `data` fields.
 | `sonos_update` | Polling detects change | `{state, track, artist, album, art_url, volume, mute}` |
 | `music_auto_played` | Auto-play triggered | `{mode, title}` |
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
+| `presence_update` | Presence state change | `{state, phone_ip, last_seen, away_since, away_duration_minutes}` |
 
 `build_id` is the short git SHA the backend computed at startup. The frontend (`frontend-svelte/src/lib/ws.js`) stashes the first one it sees per page session and calls `window.location.reload()` if a later `connection_status` reports a different value — that's how the kiosk dashboard auto-refreshes after `scripts/deploy.sh` restarts the backend, no F5 required.
 
@@ -466,7 +468,7 @@ await save_setting(db, "my_service_config", {"key": "value"})
 # Load
 config = await load_setting(db, "my_service_config")
 ```
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`.
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`.
 
 ---
 
@@ -564,6 +566,7 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 | `winddown_routine_config` | `{hour, minute, enabled, volume, candlelight, weekdays_only}` |
 | `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ...}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
+| `presence_config` | `{enabled, phone_ip, phone_mac, ping_interval, away_timeout, short_absence_threshold, arrival_volume, departure_fade_seconds}` |
 
 ---
 
