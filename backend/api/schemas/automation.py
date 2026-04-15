@@ -153,3 +153,24 @@ class LaptopLoopbackToggle(BaseModel):
     """Toggle for the in-process laptop screen capture (TV-on-laptop escape hatch)."""
 
     enabled: bool = Field(..., description="True to start the loopback, False to stop")
+
+
+class PresenceConfigSchema(BaseModel):
+    """Presence detection configuration."""
+
+    enabled: bool = Field(default=True, description="Enable/disable presence detection")
+    phone_ip: str = Field(default="192.168.1.148", description="Phone IP address")
+    phone_mac: str = Field(default="A2:DD:D9:65:EE:F8", description="Phone MAC address")
+    ping_interval: int = Field(default=30, ge=10, le=120, description="Seconds between pings")
+    away_timeout: int = Field(
+        default=600, ge=60, le=3600,
+        description="Seconds without response before marking away",
+    )
+    short_absence_threshold: int = Field(
+        default=1800, ge=300, le=7200,
+        description="Seconds — skip ceremony for absences shorter than this",
+    )
+    arrival_volume: int = Field(default=25, ge=0, le=100, description="TTS volume on arrival")
+    departure_fade_seconds: int = Field(
+        default=30, ge=10, le=120, description="Departure fade duration",
+    )

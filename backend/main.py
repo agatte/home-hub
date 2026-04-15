@@ -50,6 +50,7 @@ from backend.services.event_logger import EventLogger
 from backend.services.fauxmo_service import FauxmoService
 from backend.services.music_mapper import MusicMapper
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
+from backend.services.presence_service import PresenceService
 from backend.services.sonos_service import SonosService
 from backend.services.tts_service import TTSService
 from backend.services.websocket_manager import WebSocketManager
@@ -266,6 +267,25 @@ async def lifespan(app: FastAPI):
     logger.info("Weather service initialized (NWS API, linked to automation engine)")
     automation._rule_engine = rule_engine
 
+    # Presence detection — replaces Alexa geofence
+    presence_config = await load_setting("presence_config")
+    presence = PresenceService(
+        hue=hue,
+        hue_v2=hue_v2,
+        sonos=sonos,
+        tts=tts,
+        weather_service=weather_service,
+        automation_engine=automation,
+        music_mapper=music_mapper,
+        ws_manager=ws_manager,
+        event_logger=event_logger,
+        config=presence_config or {},
+    )
+    app.state.presence = presence
+    logger.info(
+        "Presence detection initialized (phone=%s)", presence.config.phone_ip
+    )
+
     # ML services (Phase 1) — model manager, lighting learner, decision logger
     from backend.services.ml.model_manager import ModelManager
     from backend.services.ml.lighting_learner import LightingPreferenceLearner
@@ -428,6 +448,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(automation.run_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
+    tasks.append(asyncio.create_task(presence.run_loop()))
 
     # Camera presence detection (opt-in, runs on Latitude webcam)
     camera_enabled_setting = await load_setting("camera_enabled")
@@ -583,6 +604,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.send_text(json.dumps({
             "type": "ambient_update",
             "data": ambient.get_state(),
+        }))
+
+    # Send current presence state
+    presence = getattr(websocket.app.state, "presence", None)
+    if presence:
+        await websocket.send_text(json.dumps({
+            "type": "presence_update",
+            "data": presence.get_status(),
         }))
 
     try:

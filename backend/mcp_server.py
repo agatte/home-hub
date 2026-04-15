@@ -146,6 +146,15 @@ async def get_automation_status() -> dict:
 
 
 @mcp.tool()
+async def get_presence_status() -> dict:
+    """Get current presence detection state (home/away/arriving/departing)."""
+    async with _client() as c:
+        r = await c.get("/api/automation/presence/status")
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
 async def set_mode(mode: str) -> dict:
     """
     Manually override the automation mode.

@@ -20,6 +20,7 @@ from backend.api.schemas.automation import (
     ManualOverride,
     MicCalibrationResult,
     ModeBrightnessConfig,
+    PresenceConfigSchema,
     ScreenColorReport,
     TimeScheduleConfig,
 )
@@ -531,3 +532,60 @@ async def delete_mode_scene_override(
 
     logger.info("Mode scene override removed: %s/%s", mode, time_period)
     return {"status": "ok"}
+
+
+# ------------------------------------------------------------------
+# Presence detection
+# ------------------------------------------------------------------
+
+PRESENCE_CONFIG_KEY = "presence_config"
+
+
+@router.get("/presence/status")
+async def get_presence_status(request: Request) -> dict:
+    """Get current presence detection state."""
+    presence = getattr(request.app.state, "presence", None)
+    if not presence:
+        return {"state": "disabled"}
+    return presence.get_status()
+
+
+@router.get("/presence/config")
+async def get_presence_config(request: Request) -> dict:
+    """Get presence detection configuration."""
+    presence = getattr(request.app.state, "presence", None)
+    if not presence:
+        return {}
+    return presence.config_dict()
+
+
+@router.put("/presence/config")
+async def update_presence_config(
+    config: PresenceConfigSchema, request: Request,
+) -> dict:
+    """Update presence detection configuration."""
+    presence = getattr(request.app.state, "presence", None)
+    if not presence:
+        raise HTTPException(
+            status_code=503, detail="Presence service not initialized"
+        )
+    new_config = config.model_dump()
+    await presence.update_config(new_config)
+    await save_setting(PRESENCE_CONFIG_KEY, new_config)
+    return {"status": "ok"}
+
+
+@router.post("/presence/test-arrival")
+@limiter.limit("2/minute")
+async def test_arrival(request: Request) -> dict:
+    """Trigger a test arrival sequence (for development/debugging)."""
+    import asyncio
+    from datetime import timedelta
+
+    presence = getattr(request.app.state, "presence", None)
+    if not presence:
+        raise HTTPException(
+            status_code=503, detail="Presence service not initialized"
+        )
+    asyncio.create_task(presence._arrival_sequence(timedelta(hours=2)))
+    return {"status": "ok", "message": "Test arrival sequence triggered"}
