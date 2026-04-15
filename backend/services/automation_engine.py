@@ -540,6 +540,11 @@ class AutomationEngine:
         self._scene_overrides: dict[str, dict[str, str]] = {}  # {mode: {period: scene_id}}
         self._scene_override_sources: dict[str, dict[str, str]] = {}  # {mode: {period: source}}
 
+        # Decision pipeline — real-time snapshot of all inputs → output
+        self._screen_sync = None  # Set by main.py after construction
+        self._pipeline_history: list[dict] = []
+        self._last_pipeline_broadcast: Optional[datetime] = None
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -1596,6 +1601,10 @@ class AutomationEngine:
                 if rule_engine and not self._manual_override and self._current_mode in ("idle", "away"):
                     await rule_engine.check_rules(self._current_mode)
 
+                # Periodic pipeline broadcast — keeps the pipeline view fresh
+                # even when no mode changes occur (e.g., time period transitions)
+                await self._broadcast_pipeline()
+
                 await asyncio.sleep(60)
 
             except asyncio.CancelledError:
@@ -1629,6 +1638,182 @@ class AutomationEngine:
     # Broadcasting
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Decision pipeline snapshot
+    # ------------------------------------------------------------------
+
+    def _build_pipeline_state(self) -> dict[str, Any]:
+        """Snapshot all active inputs, priority resolution, and final output."""
+        now = datetime.now(tz=TZ)
+        mode = self.current_mode
+        period = self._get_time_period()
+
+        # --- Inputs ---
+        manual_input = {
+            "active": self._manual_override,
+            "mode": self._override_mode,
+            "set_at": (
+                self._override_time.isoformat()
+                if self._override_time else None
+            ),
+        }
+
+        activity_priority = MODE_PRIORITY.get(self._current_mode, 0)
+        activity_input = {
+            "active": self._current_mode not in ("idle", "away")
+            or self._mode_source == "process",
+            "mode": self._current_mode,
+            "source": self._mode_source,
+            "priority": activity_priority,
+            "last_change": (
+                self._last_activity_change.isoformat()
+                if self._last_activity_change else None
+            ),
+        }
+
+        ambient_input = {
+            "active": self._current_mode == "social"
+            and self._mode_source == "ambient",
+            "mode": "social" if (
+                self._current_mode == "social"
+                and self._mode_source == "ambient"
+            ) else None,
+        }
+
+        # Screen sync state from the service reference
+        sync = self._screen_sync
+        screen_active = (
+            mode in SCREEN_SYNC_MODES
+            and sync is not None
+            and sync.last_color_at is not None
+        )
+        screen_input = {
+            "active": screen_active,
+            "target_light": sync._target_light if sync else "2",
+            "last_color_at": (
+                sync.last_color_at.isoformat()
+                if sync and sync.last_color_at else None
+            ),
+            "source": sync.last_source if sync else None,
+        }
+
+        time_input = {
+            "period": period,
+            "schedule_type": "weekday" if now.weekday() < 5 else "weekend",
+            "applies": mode in ("idle", "away")
+            and not self._manual_override,
+        }
+
+        weather_condition = self._get_current_weather_condition()
+        weather_effect = self._get_weather_effect()
+        weather_input = {
+            "condition": weather_condition,
+            "effect_override": weather_effect if (
+                weather_effect and not EFFECT_AUTO_MAP.get(mode, {}).get(period)
+            ) else None,
+            "applies": mode not in WEATHER_SKIP_MODES,
+        }
+
+        brightness_mult = self._mode_brightness.get(mode, 1.0)
+        brightness_input = {
+            "multiplier": brightness_mult,
+            "applies": brightness_mult != 1.0,
+        }
+
+        override_scene = self._scene_overrides.get(mode, {}).get(period)
+        scene_input = {
+            "active": override_scene is not None,
+            "scene_id": override_scene,
+            "source": self._scene_override_sources.get(
+                mode, {},
+            ).get(period),
+        }
+
+        inputs = {
+            "manual_override": manual_input,
+            "activity": activity_input,
+            "ambient": ambient_input,
+            "screen_sync": screen_input,
+            "time_of_day": time_input,
+            "weather": weather_input,
+            "brightness": brightness_input,
+            "scene_override": scene_input,
+        }
+
+        # --- Resolution ---
+        if self._manual_override:
+            winning = "manual_override"
+            reason = (
+                f"Manual override to {self._override_mode}"
+                f" (set {self._format_ago(self._override_time)})"
+            )
+        elif self._current_mode not in ("idle", "away"):
+            winning = "activity"
+            reason = (
+                f"{self._current_mode.title()} detected via "
+                f"{self._mode_source} (priority {activity_priority})"
+            )
+        else:
+            winning = "time_of_day"
+            reason = f"No activity — using {period} time rules"
+
+        resolution = {
+            "winning_input": winning,
+            "reason": reason,
+            "effective_mode": mode,
+            "effective_source": self.mode_source,
+        }
+
+        # --- Output ---
+        output = {
+            "mode": mode,
+            "time_period": period,
+            "effect": self._active_effect_name,
+            "social_style": (
+                self._social_style if mode == "social" else None
+            ),
+            "brightness_multiplier": brightness_mult,
+            "lights": dict(self._last_applied_per_light),
+        }
+
+        return {
+            "timestamp": now.isoformat(),
+            "inputs": inputs,
+            "resolution": resolution,
+            "output": output,
+        }
+
+    @staticmethod
+    def _format_ago(dt: Optional[datetime]) -> str:
+        """Format a datetime as a human-readable 'X ago' string."""
+        if not dt:
+            return "unknown"
+        delta = datetime.now(tz=TZ) - dt
+        minutes = int(delta.total_seconds() / 60)
+        if minutes < 1:
+            return "just now"
+        if minutes < 60:
+            return f"{minutes}m ago"
+        hours = minutes // 60
+        return f"{hours}h {minutes % 60}m ago"
+
+    async def _broadcast_pipeline(self) -> None:
+        """Broadcast pipeline state to all WebSocket clients (throttled)."""
+        now = datetime.now(tz=TZ)
+        if (
+            self._last_pipeline_broadcast
+            and (now - self._last_pipeline_broadcast).total_seconds() < 1.0
+        ):
+            return
+        self._last_pipeline_broadcast = now
+
+        state = self._build_pipeline_state()
+        self._pipeline_history.append(state)
+        if len(self._pipeline_history) > 30:
+            self._pipeline_history.pop(0)
+
+        await self._ws_manager.broadcast("pipeline_state", state)
+
     async def _broadcast_mode(self) -> None:
         """Broadcast the current mode to all WebSocket clients."""
         await self._ws_manager.broadcast("mode_update", {
@@ -1637,3 +1822,4 @@ class AutomationEngine:
             "manual_override": self._manual_override,
             "social_style": self._social_style,
         })
+        await self._broadcast_pipeline()

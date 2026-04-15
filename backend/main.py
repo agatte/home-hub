@@ -190,6 +190,7 @@ async def lifespan(app: FastAPI):
         # weather_service injected below after WeatherService init
     )
     app.state.automation = automation
+    automation._screen_sync = screen_sync
     await automation.load_scene_overrides()
 
     # Restore laptop loopback state from persisted setting (default off)

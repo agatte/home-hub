@@ -112,6 +112,18 @@ async def get_status(request: Request) -> AutomationStatus:
     )
 
 
+@router.get("/pipeline")
+async def get_pipeline(request: Request) -> dict:
+    """Get the current decision pipeline state and recent history."""
+    engine = getattr(request.app.state, "automation", None)
+    if not engine:
+        return {"current": None, "history": []}
+    return {
+        "current": engine._build_pipeline_state(),
+        "history": list(engine._pipeline_history),
+    }
+
+
 @router.post("/override")
 @limiter.limit("10/minute")
 async def set_override(override: ManualOverride, request: Request) -> dict:

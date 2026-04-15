@@ -2,6 +2,9 @@
   import { onMount } from 'svelte'
   import { apiGet, apiPost } from '$lib/api.js'
   import { modeColor, modeLabel } from '$lib/theme.js'
+  import DecisionPipeline from '$lib/components/DecisionPipeline.svelte'
+
+  let view = 'analytics'
 
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -98,7 +101,14 @@
 </script>
 
 <main class="analytics-page">
-  {#if loading}
+  <div class="view-toggle">
+    <button class:active={view === 'analytics'} on:click={() => view = 'analytics'}>Analytics</button>
+    <button class:active={view === 'pipeline'} on:click={() => view = 'pipeline'}>Pipeline</button>
+  </div>
+
+  {#if view === 'pipeline'}
+    <DecisionPipeline />
+  {:else if loading}
     <div class="analytics-loading">Loading analytics...</div>
   {:else}
     <div class="page-grid">
@@ -264,6 +274,40 @@
     padding: 24px 20px 100px;
     max-width: 960px;
     margin: 0 auto;
+  }
+
+  .view-toggle {
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 24px;
+  }
+  .view-toggle button {
+    padding: 8px 24px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.4);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 15px;
+    letter-spacing: 1.5px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .view-toggle button:first-child {
+    border-radius: 20px 0 0 20px;
+    border-right: none;
+  }
+  .view-toggle button:last-child {
+    border-radius: 0 20px 20px 0;
+  }
+  .view-toggle button.active {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  .view-toggle button:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.55);
   }
 
   .analytics-loading {

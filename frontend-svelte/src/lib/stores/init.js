@@ -13,6 +13,7 @@ import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
+import { pipeline } from './pipeline.js'
 
 /** @type {HubSocket | null} */
 let socket = null
@@ -50,6 +51,13 @@ export function initStores() {
         manual_override: d.manual_override,
         social_style: d.social_style ?? 'color_cycle',
       })
+    })
+    .catch(() => {})
+
+  apiGet('/api/automation/pipeline')
+    .then((data) => {
+      const d = /** @type {any} */ (data)
+      pipeline.set({ current: d.current, history: d.history || [] })
     })
     .catch(() => {})
 
@@ -94,6 +102,12 @@ export function initStores() {
           break
         case 'camera_update':
           camera.update((prev) => prev ? { ...prev, ...data, last_detection: data.detection } : prev)
+          break
+        case 'pipeline_state':
+          pipeline.update((prev) => ({
+            current: data,
+            history: [...prev.history.slice(-29), data],
+          }))
           break
         default:
           break
