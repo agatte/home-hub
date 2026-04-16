@@ -17,7 +17,7 @@ logger = logging.getLogger("home_hub.ml")
 
 # Modes the behavioral predictor targets (excluding idle/away which are
 # the "no detection" states the predictor tries to fill).
-PREDICTABLE_MODES = ("gaming", "working", "watching", "relax", "social", "movie")
+PREDICTABLE_MODES = ("gaming", "working", "watching", "relax", "social", "cooking")
 
 
 def get_time_period(timestamp: datetime) -> str:

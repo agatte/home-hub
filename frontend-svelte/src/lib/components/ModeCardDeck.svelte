@@ -4,14 +4,14 @@
   import { apiPost } from '$lib/api.js'
   import { modeColor } from '$lib/theme.js'
   import { slide } from 'svelte/transition'
-  import { Power, Gamepad2, Monitor, Tv, Clapperboard, Flame, PartyPopper, Moon, Bot } from 'lucide-svelte'
+  import { Power, Gamepad2, Monitor, Tv, ChefHat, Flame, PartyPopper, Moon, Bot } from 'lucide-svelte'
 
   const CARDS = [
     { id: 'alloff',    label: 'All Off',   icon: Power,        isAction: true, color: '#f87171' },
     { id: 'gaming',    label: 'Gaming',    icon: Gamepad2,     isAction: false },
     { id: 'working',   label: 'Working',   icon: Monitor,      isAction: false },
     { id: 'watching',  label: 'Watching',  icon: Tv,           isAction: false },
-    { id: 'movie',     label: 'Movie',     icon: Clapperboard, isAction: false },
+    { id: 'cooking',   label: 'Cooking',   icon: ChefHat,      isAction: false },
     { id: 'relax',     label: 'Relax',     icon: Flame,        isAction: false },
     { id: 'social',    label: 'Party',     icon: PartyPopper,  isAction: false },
     { id: 'sleeping',  label: 'Sleep',     icon: Moon,         isAction: false },
@@ -343,28 +343,26 @@
     opacity: 0.6;
   }
 
-  /* Movie — film strip bars */
-  .card-art-movie {
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 20px,
-      var(--mode-color) 20px,
-      var(--mode-color) 22px
+  /* Cooking — radial heat from a stovetop burner */
+  .card-art-cooking {
+    background: radial-gradient(
+      circle at 50% 65%,
+      var(--mode-color) 0%,
+      transparent 35%
     );
-    opacity: 0.25;
+    opacity: 0.35;
   }
-  .card-art-movie::before {
+  .card-art-cooking::before {
     content: '';
     position: absolute;
-    top: 30%;
+    top: 55%;
     left: 50%;
-    width: 40px;
-    height: 28px;
-    transform: translateX(-50%);
+    width: 38px;
+    height: 38px;
+    transform: translate(-50%, -50%);
     border: 2px solid var(--mode-color);
-    border-radius: 3px;
-    opacity: 0.5;
+    border-radius: 50%;
+    opacity: 0.55;
   }
 
   /* Relax — wavy diagonal lines */

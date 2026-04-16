@@ -18,7 +18,7 @@ Scrub through any day to see what the apartment looked like at any point — mod
 
 ### 2. Contextual Quick Actions (Macro Engine)
 
-Orchestrate multi-step sequences with configurable delays. Example "Movie Night": dim lights → bias lighting → movie playlist → volume 15 → screen sync → TTS. Macro builder UI in Settings — no code for new macros.
+Orchestrate multi-step sequences with configurable delays. Example "Cooking": kitchen lights bright → cooking playlist → volume 18 → kitchen-timer TTS pings every 5 min. Macro builder UI in Settings — no code for new macros.
 
 **Touches:** New `MacroEngine` service, new DB table (`macros`), Settings page builder UI
 

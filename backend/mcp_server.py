@@ -160,7 +160,7 @@ async def set_mode(mode: str) -> dict:
     Manually override the automation mode.
 
     Args:
-        mode: One of gaming, watching, working, social, relax, movie, idle, away, sleeping.
+        mode: One of gaming, watching, working, social, relax, cooking, idle, away, sleeping.
               Use "auto" to clear the override and return to time-based automation.
     """
     async with _client() as c:
@@ -198,7 +198,7 @@ async def get_screen_sync_status() -> dict:
     Get current screen sync state.
 
     Returns whether the mode gate is open (current mode is in
-    gaming/watching/movie), when the last color was applied, what source
+    gaming/watching), when the last color was applied, what source
     posted it, and whether the laptop loopback is running.
     """
     async with _client() as c:
@@ -213,7 +213,7 @@ async def apply_screen_color(r: int, g: int, b: int) -> dict:
     Manually post an RGB color to the screen sync receiver.
 
     Useful for testing — bypasses the desktop pc_agent. Will only update the
-    bedroom lamp if the current automation mode is gaming, watching, or movie.
+    bedroom lamp if the current automation mode is gaming or watching.
 
     Args:
         r: Red channel 0-255

@@ -9,7 +9,7 @@
     watching: 'Watching',
     relax: 'Relax',
     social: 'Party',
-    movie: 'Movie',
+    cooking: 'Cooking',
   }
 
   async function accept() {

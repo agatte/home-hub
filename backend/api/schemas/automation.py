@@ -63,7 +63,7 @@ class ManualOverride(BaseModel):
 
     mode: str = Field(
         ...,
-        description="Mode to set: gaming, watching, working, social, movie, "
+        description="Mode to set: gaming, watching, working, social, cooking, "
         "relax, auto (clears override)",
     )
 
@@ -133,7 +133,7 @@ class ModeBrightnessConfig(BaseModel):
     working: float = Field(default=1.0, ge=0.3, le=1.5)
     watching: float = Field(default=1.0, ge=0.3, le=1.5)
     relax: float = Field(default=1.0, ge=0.3, le=1.5)
-    movie: float = Field(default=1.0, ge=0.3, le=1.5)
+    cooking: float = Field(default=1.0, ge=0.3, le=1.5)
     social: float = Field(default=1.0, ge=0.3, le=1.5)
 
 

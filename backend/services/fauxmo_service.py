@@ -85,13 +85,13 @@ def _make_ssdp_socket(iface_ip: str) -> socket.socket:
 # Virtual devices Alexa will discover. Each entry: (name, on_req, off_req)
 # where *_req is a tuple of (method, path, json_body_or_None).
 DEVICE_MAP: list[dict[str, Any]] = [
-    # "movie night", "arcade mode", etc. instead of "movie mode"/"gaming
-    # mode" because Alexa reserves "movie", "gaming", and "cinema" for its
-    # own built-in features (Echo sound modes, Fire TV profiles) and
-    # silently drops WeMo devices whose names collide with those keywords.
+    # "cooking mode", "arcade mode", etc. — Alexa reserves "movie",
+    # "gaming", and "cinema" for its own built-in features (Echo sound
+    # modes, Fire TV profiles) and silently drops WeMo devices whose
+    # names collide with those keywords. "cooking" is safe.
     {
-        "name": "movie night",
-        "on": ("POST", "/api/automation/override", {"mode": "movie"}),
+        "name": "cooking mode",
+        "on": ("POST", "/api/automation/override", {"mode": "cooking"}),
         "off": ("POST", "/api/automation/override", {"mode": "auto"}),
     },
     {

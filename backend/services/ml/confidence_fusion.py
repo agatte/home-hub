@@ -22,7 +22,7 @@ logger = logging.getLogger("home_hub.ml")
 
 VALID_MODES = frozenset({
     "gaming", "working", "watching", "social", "relax",
-    "movie", "idle", "away", "sleeping",
+    "cooking", "idle", "away", "sleeping",
 })
 
 SIGNAL_SOURCES = ("process", "camera", "audio_ml", "behavioral", "rule_engine")

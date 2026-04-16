@@ -26,7 +26,7 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 # Modes during which screen sync colors should be applied. The receiver
 # endpoint at POST /api/automation/screen-color drops colors silently when
 # the current mode isn't in this set.
-SCREEN_SYNC_MODES = frozenset(("gaming", "watching", "movie"))
+SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
 
 # Modes that skip weather-reactive lighting adjustments entirely.
 # Social has its own party lighting; sleeping is a gradual fade sequence.
@@ -76,7 +76,7 @@ DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
     "working": 1.0,
     "watching": 1.0,
     "relax": 1.0,
-    "movie": 1.0,
+    "cooking": 1.0,
     "social": 1.0,
 }
 
@@ -96,6 +96,7 @@ MODE_PRIORITY = {
     "idle": 1,
     "working": 2,
     "watching": 3,
+    "cooking": 3,
     "social": 4,
     "gaming": 5,
 }
@@ -117,7 +118,7 @@ EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
     "relax":    {"day": "opal",    "evening": "candle",  "night": "fire"},
     "working":  {"day": None,      "evening": None,      "night": None},
     "gaming":   {"day": None,      "evening": None,      "night": None},
-    "movie":    {"day": None,      "evening": None,      "night": None},
+    "cooking":  {"day": None,      "evening": None,      "night": None},
     "watching": {"day": None,      "evening": "glisten", "night": "glisten"},
 }
 
@@ -130,7 +131,7 @@ MODE_TRANSITION_TIME: dict[str, int] = {
     "relax":    50,   # 5s gentle (slower for moodier vibe)
     "social":   10,   # 1s
     "sleeping": 50,   # 5s gradual
-    "movie":    30,   # 3s
+    "cooking":  10,   # 1s — kitchen lights up the moment you tap the tile
     "idle":     20,   # 2s
     "away":     30,   # 3s
 }
@@ -239,26 +240,30 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 8,   "hue": 1500,  "sat": 254},   # Dying coal
         },
     },
-    # ── Movie ─────────────────────────────────────────────────────────
-    # Same bias-light approach as watching.
-    "movie": {
+    # ── Cooking ───────────────────────────────────────────────────────
+    # Kitchen-focused: L3 + L4 boosted to high brightness with neutral
+    # ~3500K (ct≈286) for accurate food colors. L1 stays a warm ambient
+    # for the rest of the apartment, L2 (bedroom desk) drops low so it
+    # doesn't compete with the prep counter. Late-night cooking shifts
+    # warmer to avoid blasting your eyes at 11pm.
+    "cooking": {
         "day": {
-            "1": {"on": True, "bri": 50,  "ct": 370},
-            "2": {"on": True, "bri": 45,  "ct": 280},
-            "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 25,  "ct": 400},
+            "1": {"on": True, "bri": 150, "ct": 320},   # Living room: warm-neutral ambient
+            "2": {"on": True, "bri": 80,  "ct": 333},   # Bedroom: dim warm
+            "3": {"on": True, "bri": 254, "ct": 286},   # Kitchen front: max bright, 3500K
+            "4": {"on": True, "bri": 230, "ct": 286},   # Kitchen back: bright, 3500K
         },
         "evening": {
-            "1": {"on": True, "bri": 30,  "ct": 420},
-            "2": {"on": True, "bri": 35,  "ct": 310},
-            "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 15,  "ct": 454},
+            "1": {"on": True, "bri": 100, "ct": 370},
+            "2": {"on": True, "bri": 50,  "ct": 400},
+            "3": {"on": True, "bri": 230, "ct": 320},
+            "4": {"on": True, "bri": 200, "ct": 320},
         },
         "night": {
-            "1": {"on": True, "bri": 12,  "ct": 454},
-            "2": {"on": True, "bri": 20,  "ct": 350},
-            "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 8,   "ct": 454},
+            "1": {"on": True, "bri": 60,  "ct": 420},
+            "2": {"on": True, "bri": 25,  "ct": 454},
+            "3": {"on": True, "bri": 180, "ct": 370},
+            "4": {"on": True, "bri": 150, "ct": 370},
         },
     },
 }

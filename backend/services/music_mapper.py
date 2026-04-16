@@ -21,7 +21,7 @@ logger = logging.getLogger("home_hub.music")
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
-SUPPORTED_MODES = ("gaming", "working", "watching", "social", "relax", "movie")
+SUPPORTED_MODES = ("gaming", "working", "watching", "social", "relax", "cooking")
 VALID_VIBES = ("energetic", "mellow", "focus", "background", "hype")
 
 # Time-of-day → preferred vibe order (first match wins)

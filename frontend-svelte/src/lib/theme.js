@@ -86,15 +86,15 @@ export const MODE_CONFIG = {
       secondaryColor: '#f97316', accentColor: '#fdba74',
     },
   },
-  movie: {
-    label: 'Movie', icon: '🎥', lucide: 'clapperboard', color: '#6366f1',
+  cooking: {
+    label: 'Cooking', icon: '🍳', lucide: 'chef-hat', color: '#f59e0b',
     generative: {
-      blobCount: 2, blobOpacity: 0.06, blobSpeed: 0.1,
-      particleCount: 20, particleSize: 2, particleSpeed: 0.08,
-      particleTrail: 0.05, particleIntensity: 0.15, particleStyle: 'dots',
-      geoPattern: 'none', geoOpacity: 0,
-      musicBlobPulse: 0, musicSpeedBoost: 1.0, noiseFrequency: 0.2,
-      secondaryColor: '#4f46e5',
+      blobCount: 3, blobOpacity: 0.18, blobSpeed: 0.3,
+      particleCount: 60, particleSize: 3, particleSpeed: 0.2,
+      particleTrail: 0.04, particleIntensity: 0.3, particleStyle: 'embers',
+      geoPattern: 'grid', geoOpacity: 0.05,
+      musicBlobPulse: 0.1, musicSpeedBoost: 1.2, noiseFrequency: 0.5,
+      secondaryColor: '#ea580c', accentColor: '#fed7aa',
     },
   },
   sleeping: {

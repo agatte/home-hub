@@ -193,7 +193,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     Receive a screen color sample from the desktop pc_agent or laptop loopback.
 
     The current automation mode gates application: colors only reach the
-    bedroom lamp if the mode is in SCREEN_SYNC_MODES (gaming, watching, movie).
+    bedroom lamp if the mode is in SCREEN_SYNC_MODES (gaming, watching).
     Off-mode colors are accepted (so the agent doesn't error) but dropped
     silently — the response distinguishes via the `applied` field.
     """
@@ -421,7 +421,7 @@ async def update_mode_brightness(
 # Mode → Scene overrides (use Hue scenes instead of hardcoded light states)
 # ---------------------------------------------------------------------------
 
-VALID_MODES = {"gaming", "working", "watching", "relax", "movie", "social"}
+VALID_MODES = {"gaming", "working", "watching", "relax", "cooking", "social"}
 VALID_PERIODS = {"day", "evening", "night"}
 
 

@@ -8,7 +8,7 @@
     { mode: 'watching', label: 'Watching', icon: '🎬' },
     { mode: 'relax',    label: 'Relax',    icon: '🛋️' },
     { mode: 'social',   label: 'Party',    icon: '🎉' },
-    { mode: 'movie',    label: 'Movie',    icon: '🍿' },
+    { mode: 'cooking',  label: 'Cooking',  icon: '🍳' },
   ]
 
   const VIBES = [

@@ -4,7 +4,7 @@ Screen sync service — color receiver for the bedroom lamp.
 The capture loop lives in a desktop pc_agent (`screen_sync_agent.py`). This
 service receives RGB colors via `POST /api/automation/screen-color`, smooths
 them with an exponential moving average, and applies them to a single Hue
-light. The mode gate (gaming / watching / movie only) lives in the route
+light. The mode gate (gaming / watching only) lives in the route
 handler — by the time `apply_color` is called, the gate has already passed.
 
 `LaptopLoopbackCapture` is an opt-in escape hatch for the rare case of
@@ -25,17 +25,16 @@ logger = logging.getLogger("home_hub.screen_sync")
 
 # Per-mode max brightness clamps for the synced lamp.
 # Gaming gets a higher cap so the lamp can pop on bright moments; watching
-# and movie stay subtle so the screen color doesn't fight the screen itself.
+# stays subtle so the screen color doesn't fight the screen itself.
 MODE_MAX_BRIGHTNESS = {
     "gaming": 200,
     "watching": 80,
-    "movie": 80,
 }
 DEFAULT_MAX_BRIGHTNESS = 80
 MIN_BRIGHTNESS = 15
 
 # Per-mode minimum brightness — gaming stays visible even on dark scenes;
-# watching/movie allow dim bias lighting.
+# watching allows dim bias lighting.
 MODE_MIN_BRIGHTNESS: dict[str, int] = {
     "gaming": 50,     # Was 80 — allow darker on dark scenes since accents are very dim
 }

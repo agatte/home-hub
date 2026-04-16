@@ -4,8 +4,7 @@ Screen Sync Agent — standalone desktop process.
 Runs on the user's desktop. Captures the dominant color of the primary
 screen every 2.5 seconds and POSTs it to the Home Hub backend on the laptop.
 The backend gates application by current automation mode (only gaming /
-watching / movie modes apply the color); this agent stays dumb and always
-sends.
+watching modes apply the color); this agent stays dumb and always sends.
 
 Usage:
     python -m backend.services.pc_agent.screen_sync_agent

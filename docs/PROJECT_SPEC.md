@@ -29,9 +29,9 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Full Philips Hue control via dual APIs (v1/phue2 for basic control + 1s polling, CLIP v2 for native scenes and dynamic effects)
 - **Color temperature (CT/mirek) support** — first-class parameter alongside HSB for precise Kelvin control (2000K–6500K)
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
-- Activity-driven modes: gaming, working, watching, relax, movie, social — each with per-light state definitions
+- Activity-driven modes: gaming, working, watching, relax, cooking, social — each with per-light state definitions
 - **Science-based per-mode lighting** — each mode uses distinct per-light variation (not uniform): working uses ct-mode clean whites, gaming uses blue/purple accents, relax uses warm gradients, watching uses SMPTE-inspired neutral bias. Night working: desk lamp at 3200K (bri=150) + dim ambient fill to reduce monitor contrast to ~3:1
-- **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching/movie cinematic (3s), sleeping gradual (5s) via MODE_TRANSITION_TIME
+- **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching cinematic (3s), cooking quick (1s), sleeping gradual (5s) via MODE_TRANSITION_TIME
 - **Scene drift** — subtle random perturbation (±15 bri, ±1500 hue) every 30min during long sessions with 10s imperceptible transitions
 - **Mode → scene overrides** — any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, checked before hardcoded ACTIVITY_LIGHT_STATES
 - **20 curated scenes** across 7 categories (functional, cozy, moody, vibrant, nature, entertainment, social) using color harmony theory — each scene defines per-light states with varied hue, saturation, and brightness for depth
@@ -318,7 +318,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | Column | Type | Notes |
 |--------|------|-------|
 | id | Integer | PK, auto-increment |
-| mode | String(50) | gaming, working, watching, social, relax, movie |
+| mode | String(50) | gaming, working, watching, social, relax, cooking |
 | favorite_title | String(200) | Sonos favorite name |
 | vibe | String(50) | Single vibe tag: energetic, focus, mellow, background, hype |
 | vibe_tags | JSON | Array of vibe descriptors e.g. `["high energy", "electronic", "instrumental"]` |
@@ -811,7 +811,7 @@ Manages Alexa virtual device registration and command handling.
 | `register_device` | `(name, on_callback, off_callback) → None` | Add virtual device |
 | `_handle_command` | `(device, state) → None` | Route command to API |
 
-**Virtual devices:** "gaming mode", "relax mode", "movie night", "bedtime", "music play", "music pause"
+**Virtual devices:** "gaming mode", "relax mode", "cooking mode", "bedtime", "music play", "music pause"
 
 #### GameDayEngine (future)
 ESPN polling, play detection, celebration orchestration.
@@ -842,7 +842,7 @@ async def on_mode_change(mode: str) -> None:
     """Called by AutomationEngine whenever the active mode changes.
 
     Args:
-        mode: One of gaming, watching, working, social, idle, away, relax, movie, sleeping
+        mode: One of gaming, watching, working, social, idle, away, relax, cooking, sleeping
     """
     if mode == "gaming":
         await do_something()
@@ -1170,7 +1170,7 @@ frontend-svelte/src/lib/backgrounds/
 **How routing works:**
 - `ModeBackground.svelte` checks `$automation.mode` and renders the matching scene
 - Sleeping → MoonScene (Three.js), Gaming → PixelScene, Working → ParallaxScene, Relax → AuroraScene
-- All other modes (idle, social, watching, movie, away) → GenerativeCanvas
+- All other modes (idle, social, watching, cooking, away) → GenerativeCanvas
 - All scenes subscribe to `sonos` store for music reactivity (speed boost, brightness pulse)
 - Scene components are destroyed on mode change (Svelte lifecycle), so only one runs at a time
 
@@ -1212,55 +1212,6 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Science-based night work** — desk lamp at 3200K + dim ambient fill (contrast-optimized)
 - **Remaining:** per-room mode overrides
 
-### Display Auto-Switching (Monitor ↔ Projector)
-
-**Status: spec only — deferred to Phase 1.5 / Phase 2. Not implemented.**
-
-**Problem:** The desktop has two displays physically connected at all times — a DisplayPort monitor at native 2560x1440 (used for normal desktop work) and an HDMI projector at 1920x1080 (used in bed for movie/TV watching). Switching between them today is fully manual: turn projector on, switch its input to HDMI, turn the monitor off, then change the Windows display resolution by hand. The Windows resolution step is the part Home Hub can automate.
-
-**Goal:** When `movie` mode activates, drop the projector display to 1920x1080 automatically. When leaving that mode, restore it to 2560x1440 (or whatever default was captured at startup).
-
-**Architectural placement — desktop pc_agent, not in-process backend.** The projector is physically connected to the **desktop**, not the dashboard laptop where the FastAPI server runs. The Windows API call has to execute on the machine that owns the display, so this work belongs in a standalone pc_agent on the desktop — same pattern as `activity_detector.py`, `ambient_monitor.py`, and the upcoming `screen_sync_agent.py`. The agent polls `GET /api/automation/activity` and flips resolution locally on `movie` mode entry/exit. No new server endpoint needed.
-
-**Feasibility — confirmed yes, no admin required.** Windows exposes `ChangeDisplaySettingsEx` (Win32) reachable from Python via `pywin32`. With the `CDS_UPDATEREGISTRY` flag, resolution changes are a per-user setting and do **not** require elevation. `EnumDisplayDevices` lets us target the projector specifically without touching the monitor. Both displays stay enumerable even when the monitor is physically powered off, since they're still electrically connected.
-
-**Why not the alternatives:**
-- **In-process backend service on the laptop** — Original spec recommended this, but the laptop server can't reach the desktop's display devices. Wrong architecture.
-- **QRes / NirCmd / DisplaySwitch.exe** — external binaries, weaker per-display targeting, extra moving parts. Skip.
-- **Separate elevated helper process** — unnecessary since admin isn't required. Adds complexity for no gain.
-- **Switching the active display via Win+P / `DisplaySwitch.exe /external`** — out of scope. Anthony handles "which screen is on" physically (powering the monitor off, switching projector input). Resolution-only is the right scope.
-
-**Recommended implementation (when this work starts):**
-
-1. **New standalone agent** `backend/services/pc_agent/display_agent.py` following the `activity_detector.py` template. Runs on the desktop. Polls `GET /api/automation/activity` every ~5 seconds. On transitions into/out of `movie` mode, calls `win32api.ChangeDisplaySettingsEx` to swap projector resolution. Skips cleanly on non-Windows (`sys.platform != "win32"`).
-2. **Identify displays by friendly name** (`DeviceString`, e.g., "Dell U2719D" / "BenQ HT2050A"), not by `\\.\DISPLAY1` / `\\.\DISPLAY2` — those aren't stable across driver reinstalls. Resolve friendly name → current device name at runtime.
-3. **Snapshot the monitor's current refresh rate at agent startup** and restore it when leaving movie mode. Critical if the monitor runs >60 Hz, otherwise it'll silently drop.
-4. **Trigger on `movie` mode only** (manual override) — **not** `watching`, since that auto-detects whenever VLC opens at the desk.
-5. **No-op early-return** when already at target resolution to avoid double-flicker on repeated triggers.
-6. **Force-restore on agent startup** in case the agent died while in projector mode and the monitor was left at 1080p. Config flag controls this.
-7. **Local config file** in the agent's working directory (e.g., `display_config.json`):
-   ```json
-   {
-     "monitor": {"friendly_name": "...", "default_width": 2560, "default_height": 1440, "default_refresh": null},
-     "projector": {"friendly_name": "...", "default_width": 2560, "default_height": 1440, "movie_width": 1920, "movie_height": 1080, "refresh": 60},
-     "trigger_mode": "movie",
-     "restore_on_startup": true,
-     "enabled": true
-   }
-   ```
-   No server-side persistence needed — the agent owns its own state.
-8. **Optional later:** a `POST /api/automation/display/notify` endpoint so the agent can push current resolution to the dashboard for display. Defer until the dashboard actually wants to show it.
-9. **Dependencies:** `pywin32>=305` — added to a new `backend/services/pc_agent/requirements.txt` (desktop-only deps), not to the main backend requirements.
-
-**Verification when built:**
-- Run `python -m backend.services.pc_agent.display_agent` on the desktop → log shows current detected displays + friendly names.
-- `POST /api/automation/override {"mode":"movie"}` (against the laptop server) → desktop agent picks up the change on next poll → projector flips to 1920x1080 within ~5s, monitor untouched. Reverse on switching back.
-- Toggle movie mode twice in a row — confirm no second flicker (early-return path).
-- Kill agent while in projector mode, restart — confirm restore-on-startup works.
-- If monitor runs >60 Hz — confirm refresh rate is preserved across the round trip.
-
-**Out of scope on purpose:** active-display switching, primary-display changes, multi-monitor topology rearrangement, per-application resolution profiles, anything non-Windows.
-
 ### Music Overhaul
 
 - **Vibe-based mapping** — Replace single-favorite-per-mode with vibe tags per mode (e.g., gaming = "high energy, electronic, instrumental"). Multiple Sonos favorites tagged per vibe, system picks or rotates.
@@ -1300,7 +1251,7 @@ The system observes everything and evolves from rules to autopilot:
 
 **Phase 1 — Fauxmo (free, local, immediate):**
 - Python library emulating WeMo devices on LAN
-- Alexa discovers virtual devices: "gaming mode", "relax mode", "movie night"
+- Alexa discovers virtual devices: "gaming mode", "relax mode", "cooking mode"
 - Each device calls the corresponding API endpoint (override, play favorite, activate scene)
 - Sub-second latency, $0 cost, runs alongside the server
 - Limitation: simple on/off per device, no parameters
@@ -1505,7 +1456,7 @@ cleanup landed:
 - ✓ **Rule Engine v1** (Phase 3b) — `RuleEngineService` learns time-based mode patterns from 30 days of activity events (70%+ confidence, 3+ samples). Regenerates every 6h. `LearnedRule` table with day_of_week + hour → predicted_mode. 7 REST endpoints under `/api/rules/`
 - ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons, 20s auto-dismiss
 - ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route. Originally mode distribution donut, quick stats, hourly patterns, learned rules, recent activity, top Sonos/scenes. Redesigned April 15 as a live decision pipeline dashboard: SVG confidence ring at top showing fused confidence (0-100%), 5 signal cards (process, camera, audio ML, behavioral predictor, rule engine) with animated confidence bars and agreement indicators, output card showing effective mode + lights, decision history. Historical analytics moved to a collapsible section below.
-- ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (movie night, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
+- ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (cooking mode, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
 - ✓ **WiFi Presence Detection** (Phase 3e) — `PresenceService` pings iPhone every 30s via ICMP. 10-min timeout triggers gradual departure (30s light fade, Sonos pause). Arrival triggers choreographed welcome-home: sequential light wave (kitchen door → kitchen back → living room → bedroom), adaptive TTS greeting (time/weather/duration-aware), dynamic Hue effect, music auto-play. ARP fallback for DHCP IP changes. Config persisted to `presence_config` in `app_settings`. Phase 2 planned: BLE proximity for "at the door" precision
 - Override pattern analysis tracked via `override_rate` in patterns API. v1 was nudge-only; auto-apply shipped April 15 via confidence fusion (Phase 4.5 ML Phase 3)
 

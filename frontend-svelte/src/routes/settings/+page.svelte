@@ -10,7 +10,7 @@
     working: 'Working',
     watching: 'Watching',
     relax: 'Relax',
-    movie: 'Movie',
+    cooking: 'Cooking',
     social: 'Social',
   }
 

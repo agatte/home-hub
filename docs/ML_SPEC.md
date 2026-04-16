@@ -264,7 +264,7 @@ that learns from richer features.
 | **Input** | `activity_events` table + time features + optional weather |
 | **Feature engineering** | `day_of_week`, `hour`, `minute_bucket` (15-min bins), `is_weekend`, `minutes_since_last_mode_change`, `previous_mode`, `previous_mode_duration`, `time_since_wake` (first non-away event), `weather_condition` (from cache), `season`, `manual_override_rate_7d` |
 | **Model** | LightGBM (`GradientBoostingClassifier`). Trains in seconds on CPU. Model file <1MB. scikit-learn fallback if LightGBM dep is unwanted. |
-| **Output** | Multi-class probabilities: gaming, working, watching, relax, social, movie. Top class + confidence score. |
+| **Output** | Multi-class probabilities: gaming, working, watching, relax, social, cooking. Top class + confidence score. |
 | **Inference frequency** | Every 60 seconds (piggyback on automation loop). Only consulted when current mode is idle/away (same gate as `check_rules`). |
 | **Integration point** | New `BehavioralPredictor` class called from `AutomationEngine.run_loop()`. Shares the same interface as `RuleEngineService.check_rules()`: returns `Optional[dict]` with `predicted_mode` and `confidence`. |
 | **Training schedule** | Nightly at 4 AM via `AsyncScheduler`. Scans all activity_events within 60-day rolling window. Training completes in <5 seconds. |
@@ -1423,8 +1423,7 @@ which ML feature addresses it.
 |-----------|--------------|------|------------|
 | Max brightness: gaming | 200 | 30 | Lighting preference learner |
 | Max brightness: watching | 80 | 31 | Lighting preference learner |
-| Max brightness: movie | 80 | 32 | Lighting preference learner |
-| Default max brightness | 80 | 34 | Lighting preference learner |
+| Default max brightness | 80 | 33 | Lighting preference learner |
 | Min brightness | 15 | 35 | — (keep as safety floor) |
 | Smoothing alpha | 0.3 | 53 | — (could adapt based on content type) |
 
