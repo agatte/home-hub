@@ -31,6 +31,7 @@ from backend.services.pc_agent.game_list import (
     BROWSER_PROCESSES,
     GAME_PROCESSES,
     MEDIA_PROCESSES,
+    WATCHING_TITLE_KEYWORDS,
     WORK_PROCESSES,
 )
 
@@ -77,6 +78,15 @@ LATE_NIGHT_START = 21  # 9 PM
 SLEEP_DETECT_HOUR = 22    # 10 PM
 SLEEP_DETECT_MINUTE = 30  # :30
 SLEEP_IDLE_THRESHOLD = 900  # 15 minutes
+
+# Hysteresis — how long a candidate mode must persist before the detector
+# commits to it. Prevents quick alt-tabs (e.g. peeking at Slack mid-video,
+# running a one-line command mid-YouTube) from churning the lights/music.
+DWELL_DEFAULT = 30.0           # All transitions default to 30s of sustained focus
+DWELL_LEAVE_WATCHING_DAY = 10.0    # Returning to work from a video — be responsive
+DWELL_LEAVE_WATCHING_NIGHT = 300.0  # Sticky watching at night (5 min) — no lights flip when running a quick command in bed
+NIGHT_START_HOUR = 21
+NIGHT_END_HOUR = 6
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +201,12 @@ class ActivityDetector:
     """
 
     def __init__(self) -> None:
-        self._last_mode: Optional[str] = None
-        self._media_paused: bool = False  # Track if we already paused media this sleep cycle
+        self._last_mode: Optional[str] = None              # Committed mode after dwell
+        self._last_reported_mode: Optional[str] = None      # Last mode the loop POSTed
+        self._media_paused: bool = False                    # Track if we already paused media this sleep cycle
+        # Hysteresis state — the candidate mode we'd report once the dwell expires.
+        self._pending_mode: Optional[str] = None
+        self._pending_since: Optional[float] = None
 
     def _get_running_process_names(self) -> set[str]:
         """Get lowercase names of all running processes."""
@@ -255,12 +269,40 @@ class ActivityDetector:
             or (now.hour < 6)  # Also covers past midnight
         )
 
-    def detect(self) -> str:
+    def _get_foreground_window(self) -> tuple[Optional[str], Optional[str]]:
         """
-        Determine the current activity mode based on running processes.
+        Get the (process_name, window_title) of the currently focused window.
 
-        Returns:
-            One of: "gaming", "watching", "working", "idle", "away", "sleeping".
+        Uses Win32 GetForegroundWindow + GetWindowTextW. Returns (None, None)
+        on failure or when nothing is focused (e.g. desktop visible).
+        """
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
+                return None, None
+
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value or ""
+
+            pid = ctypes.wintypes.DWORD()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            try:
+                proc_name = psutil.Process(pid.value).name().lower()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                proc_name = None
+
+            return proc_name, title
+        except Exception:
+            return None, None
+
+    def _classify(self) -> str:
+        """
+        Compute the *candidate* activity mode from current process + focus state.
+
+        This is the raw read every poll; hysteresis is applied separately in
+        ``detect()`` so quick alt-tabs don't churn the reported mode.
         """
         idle_seconds = self._get_idle_seconds()
         processes = self._get_running_process_names()
@@ -291,22 +333,101 @@ class ActivityDetector:
         if processes & MEDIA_PROCESSES:
             return "watching"
 
-        # Dev/terminal processes = working
-        if processes & WORK_PROCESSES:
-            return "working"
+        # Dev/terminal processes = working — but check the foreground window first
+        # to disambiguate (e.g. terminal is open but YouTube is the focused tab).
+        work_running = bool(processes & WORK_PROCESSES)
+        browser_running = bool(processes & BROWSER_PROCESSES)
+
+        if work_running or browser_running:
+            fg_proc, fg_title = self._get_foreground_window()
+            if (
+                fg_proc in BROWSER_PROCESSES
+                and fg_title
+                and any(kw in fg_title.lower() for kw in WATCHING_TITLE_KEYWORDS)
+            ):
+                return "watching"
+            if work_running:
+                return "working"
 
         # Browser running late at night = working
         current_hour = datetime.now().hour
         if current_hour >= LATE_NIGHT_START or current_hour < 6:
-            if processes & BROWSER_PROCESSES:
+            if browser_running:
                 return "working"
 
         return "idle"
 
+    def _dwell_threshold(self, from_mode: Optional[str], to_mode: str) -> float:
+        """
+        How long the candidate mode must persist before we commit to reporting it.
+
+        Most transitions use DWELL_DEFAULT. Leaving ``watching`` is special:
+        responsive by day so going back to terminal feels snappy, but very
+        sticky at night so a quick command run while watching in bed doesn't
+        flip the lights to working.
+        """
+        if from_mode == "watching" and to_mode != "watching":
+            hour = datetime.now().hour
+            is_night = hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
+            return DWELL_LEAVE_WATCHING_NIGHT if is_night else DWELL_LEAVE_WATCHING_DAY
+        return DWELL_DEFAULT
+
+    def detect(self) -> str:
+        """
+        Return the currently committed mode, applying hysteresis to the raw read.
+
+        A candidate mode must persist for the dwell threshold (see
+        ``_dwell_threshold``) before it becomes the reported mode.
+        """
+        candidate = self._classify()
+        now = time.time()
+
+        # First poll — accept immediately, no dwell.
+        if self._last_mode is None:
+            self._last_mode = candidate
+            self._pending_mode = None
+            self._pending_since = None
+            return candidate
+
+        # Candidate matches the committed mode — clear any pending switch.
+        if candidate == self._last_mode:
+            if self._pending_mode is not None:
+                logger.debug(
+                    "Pending switch to %s aborted (returned to %s)",
+                    self._pending_mode, self._last_mode,
+                )
+            self._pending_mode = None
+            self._pending_since = None
+            return self._last_mode
+
+        # New candidate — start (or restart) the dwell timer.
+        if self._pending_mode != candidate:
+            self._pending_mode = candidate
+            self._pending_since = now
+            logger.debug(
+                "Pending switch %s → %s (dwell %.0fs required)",
+                self._last_mode, candidate,
+                self._dwell_threshold(self._last_mode, candidate),
+            )
+            return self._last_mode
+
+        # Same candidate as last poll — has it persisted long enough to commit?
+        threshold = self._dwell_threshold(self._last_mode, candidate)
+        if (now - (self._pending_since or now)) >= threshold:
+            logger.info(
+                "Mode committed: %s → %s (dwelled %.0fs)",
+                self._last_mode, candidate, threshold,
+            )
+            self._last_mode = candidate
+            self._pending_mode = None
+            self._pending_since = None
+
+        return self._last_mode
+
     def has_changed(self, mode: str) -> bool:
-        """Check if the mode has changed since last report."""
-        changed = mode != self._last_mode
-        self._last_mode = mode
+        """Check if the reported mode has changed since the last call."""
+        changed = mode != self._last_reported_mode
+        self._last_reported_mode = mode
         return changed
 
 

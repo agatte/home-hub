@@ -65,6 +65,15 @@ BROWSER_PROCESSES: set[str] = {
     "brave.exe",
 }
 
+# Window-title keywords that mark a focused browser tab as "watching".
+# Matched case-insensitively against the foreground window title — Firefox,
+# Chrome, etc. all surface the active page title in their window title bar.
+# Kept conservative on purpose: only video-watching sites belong here, not
+# music sites (Spotify, SoundCloud) since music shouldn't flip the mode.
+WATCHING_TITLE_KEYWORDS: tuple[str, ...] = (
+    "youtube",
+)
+
 # Dev/terminal processes — also count as "working"
 WORK_PROCESSES: set[str] = {
     "windowsterminal.exe",
