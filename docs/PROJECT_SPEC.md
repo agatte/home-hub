@@ -1524,9 +1524,9 @@ cleanup landed:
 ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
-- ✓ **ML Phase 1 (Complete — April 2026):** Behavioral mode prediction (LightGBM, shadow mode collecting data), adaptive lighting preferences (EMA from manual adjustments), ML decision logger (every mode decision with reasoning), model manager (persistence + nightly retraining at 4 AM), feature builder (temporal + behavioral extraction), full `/api/learning/` REST API (status, decisions, accuracy, predictor promote/demote, lighting prefs, retrain, reset), `ml_decisions` + `ml_metrics` DB tables
-- **ML Phase 2 (in progress):** ✓ Smart screen sync (K-means MiniBatchKMeans replacing pixel averaging), ✓ Music selection bandit (Thompson sampling with Beta priors). Remaining: camera presence/posture (MediaPipe), YAMNet audio scene classification
-- **ML Phase 3 (months 6+):** Autonomous mode switching with confidence-gated actions (95%+ auto-apply, 70-95% suggest via toast)
+- ✓ **ML Phase 1 (Complete):** Behavioral mode prediction (LightGBM, shadow mode), adaptive lighting preferences (EMA), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables
+- ✓ **ML Phase 2 (Complete):** Smart screen sync (K-means), music selection bandit (Thompson sampling), YAMNet audio scene classification (shadow mode), MediaPipe camera presence detection (15s away)
+- **ML Phase 3 (In Progress):** ✓ Confidence fusion — 5-signal weighted ensemble (`ConfidenceFusion` service, 228 LOC) combining process detection, camera, audio classifier, behavioral predictor, and rule engine. Auto-apply at 95%+ when idle/away, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. Remaining: accuracy-driven weight learning, override rate tracking
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
 ### Phase 5: Polish & Expand (September 2026+)

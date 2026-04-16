@@ -6,8 +6,8 @@
 > audio classification), and evolve toward autonomous operation.
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
-> **Status:** Phase 1 complete, Phase 2 complete (screen sync, music bandit, YAMNet audio, camera presence all shipped)
-> **Last updated:** April 14, 2026
+> **Status:** Phase 1 complete, Phase 2 complete, Phase 3 started (confidence fusion shipped)
+> **Last updated:** April 15, 2026
 
 ---
 
@@ -57,7 +57,7 @@ rare.
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
 | **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection). Remaining for Phase 2b: posture classification (BlazePose upgrade) | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
-| **Phase 3: Autonomous Operation** | Months 6-12 | Confidence-gated auto-apply, full prediction pipeline, decision explainability | Fewer than 2 manual overrides per day |
+| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (5-signal weighted ensemble, auto-apply at 95%+, stale override at 98%+). ✓ Live pipeline dashboard with per-signal gauges. Remaining: accuracy-driven weight learning, A/B comparison vs rule engine, override rate tracking | Fewer than 2 manual overrides per day |
 
 ### Design Principles
 
@@ -108,6 +108,7 @@ backend/services/ml/
     __init__.py
     audio_classifier.py      # Phase 2: YAMNet audio scene classification (shadow mode, runs on desktop)
     behavioral_predictor.py  # Phase 1: LightGBM mode prediction (shadow mode)
+    confidence_fusion.py     # Phase 3: Weighted ensemble of all signal sources
     lighting_learner.py      # Phase 1: Adaptive per-light preferences
     music_bandit.py          # Phase 2: Thompson sampling playlist selection
     feature_builder.py       # Shared: Feature engineering from event tables
@@ -136,13 +137,22 @@ confident prediction:
 
 ```
 1. Manual override          → Always wins (4h timeout)
-2. Activity detection       → Process-based (gaming, working, watching)
-   + Camera presence        → Absent/present/posture (Phase 2)
-   + Audio classification   → Speech, music, silence (Phase 1)
-3. ML behavioral prediction → LightGBM mode prediction (Phase 1)
-4. Rule engine              → Frequency-based day+hour rules (existing)
-5. Time-based rules         → Hardcoded schedule defaults (existing)
+2. Confidence fusion        → Weighted ensemble of all signals below (Phase 3)
+   - Can auto-apply at 95%+ when idle/away
+   - Can override stale process detection at 98%+ with 80%+ agreement
+3. Activity detection       → Process-based (gaming, working, watching)
+   + Camera presence        → Absent/present (Phase 2)
+   + Audio classification   → Speech, music, silence (Phase 2)
+4. ML behavioral prediction → LightGBM mode prediction (Phase 1)
+5. Rule engine              → Frequency-based day+hour rules
+6. Time-based rules         → Hardcoded schedule defaults
 ```
+
+**Confidence fusion** (Phase 3, `confidence_fusion.py`) combines 5 signal sources
+into a weighted ensemble: process detection (wt 0.35), camera presence (0.20),
+behavioral predictor (0.20), audio classifier (0.15), rule engine (0.10). Weights
+start at these defaults and update nightly from measured per-signal accuracy.
+Stale signals (>5 min) are excluded and their weight redistributed.
 
 ### Data Flow Diagram
 
@@ -1222,19 +1232,33 @@ Audio classifier promotion from shadow to active
 
 **Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ Away detection under 30 seconds (achieved 15s). Posture and audio promotion deferred to Phase 2b.
 
-### Phase 3: Autonomous Operation (Months 6+)
+### Phase 3: Autonomous Operation (In Progress — April 2026+)
+
+**Shipped (April 15, 2026):**
+- ✓ `ConfidenceFusion` service — 5-signal weighted ensemble (228 LOC)
+- ✓ Fusion integrated into automation loop — computes every 60s cycle
+- ✓ Auto-apply at 95%+ confidence when idle/away
+- ✓ Stale process override at 98%+ confidence with 80%+ signal agreement
+- ✓ Live pipeline dashboard — SVG confidence ring, per-signal gauge cards
+- ✓ Decision logging with `decision_source="fusion"`
+
+**Remaining:**
+- Accuracy-driven weight learning (nightly update from `ml_metrics`)
+- A/B comparison: fusion decisions vs rule engine vs priority-only
+- Override rate tracking dashboard
+- Threshold tuning based on observed false positive rate
 
 ```
-Month 6-8:  Conservative auto-apply at 95%+ confidence
-            Toast suggestions at 70-95%
-            Decision log building trust
+Current:    Fusion shipped with static default weights.
+            Auto-apply at 95%+, suggest at 70-95%,
+            stale override at 98%+ with 80%+ agreement.
 
-Month 8-10: Evaluate override rate
-            If <2/day average, maintain current thresholds
-            If >2/day, investigate false positives, adjust
+Next:       Nightly weight update from per-signal accuracy.
+            Override rate monitoring on analytics page.
+            Lower auto-apply threshold if false positives < 1/day.
 
-Month 10+:  Steady state — system runs autonomously with
-            manual override as escape hatch
+Target:     Fewer than 2 manual overrides per day, sustained
+            over 30 days.
 ```
 
 **Phase 3 exit criteria:** Fewer than 2 manual overrides per day, sustained

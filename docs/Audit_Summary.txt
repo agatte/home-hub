@@ -14,18 +14,19 @@ Dev:    Windows desktop at 192.168.1.30
 Repo:   github.com/agatte/home-hub (200 tracked files, no credential leaks)
 
 Changes since last audit (April 12, 2026):
-  - ML Phase 1+2 shipped: 7 ML services (1,865 LOC) in backend/services/ml/
+  - ML Phase 1+2 shipped: 8 ML services (2,093 LOC) in backend/services/ml/
   - BehavioralPredictor (LightGBM), AudioClassifier (YAMNet, shadow mode)
   - LightingPreferenceLearner (EMA), MusicBandit (Thompson sampling)
+  - ConfidenceFusion: 5-signal weighted ensemble (Phase 3 start)
   - MediaPipe camera presence detection (15s away, opt-in)
   - Smart screen sync (K-means color clustering replaces naive averaging)
-  - Analytics page with ML decision pipeline visualization
+  - Live pipeline dashboard with fusion ring + per-signal gauge cards
   - Rule engine with learned time-based mode patterns
   - Ambient sound service (browser-based, weather-reactive)
   - NWS weather migration (replaces OpenWeatherMap, no API key needed)
-  - WiFi presence detection (replacing Alexa geofence)
+  - WiFi presence detection with arrival/departure choreography
   - Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
-  - Gaming lights revamp (classic RGB with saturated purple/blue/teal)
+  - Gaming lights: dim accents (bri 8-30) so screen sync dominates
   - Test suite expanded: 101 → 183 tests across 12 files
   - Event logging: 6 tables (activity, lights, sonos, scenes, ml_decisions,
     ml_metrics)
@@ -43,8 +44,8 @@ Changes since last audit (April 12, 2026):
   Design / UX             B+      B+      Gaming lights revamp. Otherwise stable
   Security                C       D       CORS fixed, rate limiting, WS validation.
                                           Still no auth, no file upload limits
-  Machine Learning        B+      N/A     NEW: 7 services, shadow-before-promote,
-                                          local-only, graceful degradation
+  Machine Learning        B+      N/A     NEW: 8 services, confidence fusion,
+                                          shadow-before-promote, local-only
   Performance             B-      B-      K-means screen sync heavier but better.
                                           Camera adds load (opt-in mitigates)
   Observability           C       D+      ML decision logging, 6 event tables,
@@ -56,8 +57,8 @@ Changes since last audit (April 12, 2026):
   DevOps / Deployment     C+      C+      Unified supervisor. DB backup + CI
                                           active. Still no rollback
   Tooling / DX            B+      B+      MCP, hooks, skills, CI all solid
-  Future Readiness        A-      B+      ML Phase 1+2 complete, rule engine,
-                                          analytics, WiFi presence all shipped
+  Future Readiness        A-      B+      ML Phase 1-3 in progress, confidence
+                                          fusion shipped, analytics, WiFi presence
   ---------------------   -----   -----   ----------------------------------------
   OVERALL GRADE           B+      B       ML layer is a genuine differentiator.
                                           Testing improved. Security D → C.
@@ -197,15 +198,19 @@ Changes since last audit (April 12, 2026):
 --------------------------------------------------------------------------------
 
   Architecture:
-  - 7 ML services in backend/services/ml/ (1,865 LOC total)
+  - 8 ML services in backend/services/ml/ (2,093 LOC total)
   - All services follow shadow-before-promote pattern
   - Local-only processing -- no cloud APIs for inference
   - Every ML feature has a non-ML fallback (graceful degradation)
-  - Confidence gating: 95%+ auto-apply, 70-95% suggest, <70% silent
+  - Confidence fusion: 5-signal weighted ensemble for mode decisions
   - Nightly retraining at 4 AM via AsyncScheduler
   - Auto-demotion: accuracy < baseline for 3 consecutive nights
 
   Services:
+  - ConfidenceFusion (228 LOC) -- weighted ensemble of process, camera,
+    audio, predictor, and rule engine signals. Auto-apply at 95%+ when
+    idle/away, override stale processes at 98%+ with 80%+ agreement.
+    Default weights with nightly accuracy-driven updates
   - ModelManager (193 LOC) -- model persistence, versioning, metadata
   - BehavioralPredictor (327 LOC) -- LightGBM mode prediction from 10
     temporal + behavioral features. Shadow mode, needs 500+ events to train
@@ -424,21 +429,22 @@ Changes since last audit (April 12, 2026):
 --------------------------------------------------------------------------------
 
   Strengths:
-  - ML Phase 1+2 fully shipped -- behavioral prediction, lighting learning,
-    audio classification, camera presence, music bandit, K-means screen sync
+  - ML Phase 1+2 fully shipped, Phase 3 started with confidence fusion
+  - ConfidenceFusion: 5-signal weighted ensemble with auto-apply + stale
+    override capabilities -- the core of autonomous operation
+  - Live pipeline dashboard shows all signals competing in real-time
   - Rule engine active -- generating learned time-based mode patterns
   - Event logging capturing data across 6 tables for future learning
-  - Analytics page provides ML decision transparency
-  - WiFi presence detection shipping (replaces Alexa geofence dependency)
+  - WiFi presence detection with arrival/departure choreography
   - Shadow-before-promote pattern ensures safe ML rollouts
-  - Phase 3 roadmap (autonomous operation) is well-defined in ML_SPEC.md
   - All ML features designed with graceful degradation for cold start
 
-  Path to Phase 3 (Autonomous Operation):
+  Path to full autonomy (remaining):
+  - Accuracy-driven weight learning from ml_metrics (nightly)
+  - Override rate tracking to validate fusion quality
   - Behavioral predictor needs 500+ events (~1 week) for first training
-  - Audio classifier needs accuracy comparison with RMS detector
-  - Confidence fusion across all signals enables auto-apply
-  - Auto-demotion prevents ML from degrading system quality
+  - Audio classifier promotion from shadow to active
+  - Lower auto-apply threshold once false positive rate < 1/day
 
 ================================================================================
                             ACTIVE BUGS
@@ -495,8 +501,11 @@ Changes since last audit (April 12, 2026):
   [x]  NWS weather migration (replaces OpenWeatherMap)
   [x]  WiFi presence detection (replaces Alexa geofence)
   [x]  Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
-  [x]  Gaming lights revamp (saturated purple/blue/teal)
+  [x]  Gaming lights revamp (dim accents so screen sync dominates)
   [x]  Test suite expansion (101 → 183 tests, 8 → 12 files)
+  [x]  Confidence fusion: 5-signal weighted ensemble (Phase 3 start)
+  [x]  Live pipeline dashboard with fusion ring + signal gauge cards
+  [x]  Collapsible analytics on pipeline page
 
   REMAINING -- THIS MONTH:
   -----------------------------------------------------------------------
@@ -514,7 +523,7 @@ Changes since last audit (April 12, 2026):
   [ ]  Add deploy.sh rollback capability
   [ ]  Migrate Plant App integration to HTTPS
   [ ]  Promote audio classifier from shadow to active (needs data)
-  [ ]  Implement Phase 3 confidence-gated auto-apply
+  [ ]  Implement accuracy-driven fusion weight learning (nightly update)
   [ ]  Add pytest-cov for coverage reporting
   [ ]  Add frontend testing (Playwright or vitest)
 
@@ -551,15 +560,12 @@ Changes since last audit (April 12, 2026):
     already classifies these -- just needs a response layer.
     Touches: audio_classifier.py (new callback), automation_engine.py
 
-  Multi-Signal Confidence Fusion                              [Hard]
-    Build a meta-model combining confidence scores from BehavioralPredictor,
-    camera presence, WiFi presence, audio classification, and time-of-day
-    into a single "apartment state confidence" score. When all signals agree
-    (camera sees you at desk, WiFi shows phone home, audio hears keyboard,
-    time is weekday afternoon), confidence approaches 100% and auto-apply
-    triggers. When signals disagree, confidence drops to suggest-only mode.
-    This is the Phase 3 endgame -- prototype as a simple weighted average.
-    Touches: new confidence_fusion.py service, automation_engine.py
+  Multi-Signal Confidence Fusion                              [SHIPPED]
+    5-signal weighted ensemble combining process detection, camera, audio
+    classifier, behavioral predictor, and rule engine. Auto-apply at 95%+
+    when idle/away, stale process override at 98%+ with 80%+ agreement.
+    Live pipeline dashboard with SVG confidence ring and signal gauge cards.
+    Shipped April 15 as first Phase 3 deliverable.
 
   Sleep Quality Inference from Sensor Fusion                  [Medium]
     Combine sleeping mode entry/exit times, camera presence during sleep

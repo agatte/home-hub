@@ -1,173 +1,131 @@
 # Future Development Ideas
 
-> Brainstormed feature ideas beyond the current roadmap. Mix of large architectural changes and smaller quality-of-life improvements.
+> Feature ideas beyond the current roadmap — large and small.
 >
-> **Last updated:** 2026-04-13
+> **Last updated:** 2026-04-15
 
 ---
 
 ## Large Ideas
 
-### 1. Weather-Reactive Lighting
+### 1. Dashboard "Replay" / Time Machine
 
-Layer weather conditions on top of the current mode-based lighting. The weather service already polls OpenWeatherMap every 10 minutes — use that data to subtly influence light states.
-
-- **Thunderstorm:** Shift to deep blue/purple with occasional sparkle effects simulating lightning
-- **Sunny morning:** Push CT warmer and brighter
-- **Rainy evening:** Soft amber candle tones
-- **Snow:** Cool white with gentle brightness pulses
-
-Weather influence layers *on top of* the active mode rather than replacing it. Background scenes could react too — rain particles on the parallax city, darker skies on the pixel scene, storm clouds on the aurora.
-
-**Touches:** `automation_engine.py`, `weather_service.py`, background scene components
-
----
-
-### 2. Dashboard "Replay" / Time Machine
-
-A visual timeline page where you can scrub through your day and see exactly what the apartment looked like at any point — what mode was active, what lights were set to, what was playing.
-
-- Horizontal timeline with color-coded mode blocks
-- Expandable to show individual light states and track changes per block
-- Weekly/monthly heatmaps showing when you game, work, relax
-- Foundation for the learning engine — visually *see* patterns before the system starts predicting them
-
-The event data (activity_events, light_adjustments, sonos_playback_events) is already being logged. This is a frontend visualization layer on top of existing data.
+Scrub through any day to see what the apartment looked like at any point — mode, light states, music playing. Horizontal timeline with color-coded mode blocks, expandable per-light detail, weekly/monthly heatmaps. All event data already logged — pure frontend visualization.
 
 **Touches:** New route (`/timeline`), `event_query_service.py`, new Svelte components
 
 ---
 
-### 3. Ambient Sound Layer
+### 2. Contextual Quick Actions (Macro Engine)
 
-Add a software-based ambient sound layer that plays independently of Sonos — rain on a window, coffee shop murmur, fireplace crackle, lo-fi static, forest sounds.
+Orchestrate multi-step sequences with configurable delays. Example "Movie Night": dim lights → bias lighting → movie playlist → volume 15 → screen sync → TTS. Macro builder UI in Settings — no code for new macros.
 
-- Local audio files served from the backend, played through the Latitude's speakers
-- Creates background texture underneath whatever Sonos is playing
-- Mode-mapped: rain for working, fireplace for relax, crowd noise for social
-- Weather-reactive: real rain outside triggers rain sounds inside
-- Volume independent of Sonos, controllable from dashboard
-
-**Touches:** New `AmbientSoundService`, new API routes, new dashboard widget, audio file management
+**Touches:** New `MacroEngine` service, new DB table (`macros`), Settings page builder UI
 
 ---
 
-### 4. Contextual Quick Actions (Macro Engine)
+### 3. Sleep Analytics Dashboard
 
-Replace one-dimensional quick actions with a macro engine where a single action orchestrates a *sequence* of steps with configurable delays.
+Dedicated sleep insights page: bedtime consistency, fade duration, overnight overrides, morning routine timing, "sleep score" trend charts. The 3D moon scene could encode last night's data. All data already in event tables.
 
-Example "Movie Night" macro:
-1. Dim lights over 5 seconds
-2. Activate bias lighting scene
-3. Switch Sonos to movie soundtrack playlist
-4. Set volume to 15
-5. Enable screen sync
-6. TTS: "Movie night, enjoy"
-
-- Macro builder UI in Settings page — no code needed for new macros
-- Each step has a configurable delay, action type, and parameters
-- Atomic execution with rollback on failure
-- Turns Home Hub from a control panel into a choreography engine
-
-**Touches:** New `MacroEngine` service, new DB table (`macros`), Settings page builder UI, updated quick action components
+**Touches:** New route (`/sleep`), `event_query_service.py`, new Svelte components
 
 ---
 
-### 5. Sleep Analytics Dashboard
+### 4. "Do Not Disturb" Mode
 
-Extend sleeping mode detection into a dedicated sleep insights page.
-
-- When you went to bed, how long the fade took
-- Whether you manually overrode anything during the night
-- When the morning routine triggered
-- "Sleep score" based on consistency (bedtime regularity, override frequency)
-- Trend charts over weeks/months
-- The 3D moon scene could subtly encode last night's data (brighter stars = better consistency)
-
-The sleeping mode transition and morning routine events are already logged. This is aggregation + visualization.
-
-**Touches:** New route (`/sleep`), new query methods in `event_query_service.py`, new Svelte components
-
----
-
-## Smaller Ideas
-
-### 6. Presence Detection via Network Ping
-
-Ping your phone's IP on the LAN every 30 seconds. Phone present = home, phone gone for 5+ minutes = away. Replaces the Win32 idle timer for away detection, works even when the PC is off. No new hardware needed.
-
-**Touches:** New detector in `pc_agent/`, or a lightweight service in the backend
-
----
-
-### 7. "Do Not Disturb" Mode
-
-A toggle that locks the current state — no mode changes, no auto-play, no TTS, no routine triggers. Useful when you have someone over and don't want the apartment randomly shifting. Auto-expires after 2 hours or until manually cleared. Subtle DND indicator on the dashboard.
+Toggle that locks current state — no mode changes, no auto-play, no TTS, no routines. Auto-expires after 2 hours. Subtle DND indicator on dashboard. Useful when you have someone over.
 
 **Touches:** `automation_engine.py` (check flag before transitions), dashboard toggle component
 
 ---
 
-### 8. Light Color History / Favorites
+### 5. Sonos Volume Curves Per Mode
 
-Track which manual light colors you set most often from the dashboard. Surface a "recent colors" and "favorite colors" palette in the light controls. The light_adjustments event log already captures hue/sat/bri — just aggregate and surface the top 10.
-
-**Touches:** New query in `event_query_service.py`, updated `LightGrid` component
-
----
-
-### 9. Morning Routine Outfit Suggestion
-
-The morning routine already fetches weather and generates TTS. Add a simple outfit layer:
-- < 50°F → mention a jacket
-- Rain forecasted → mention an umbrella
-- \> 85°F → mention it's shorts weather
-
-Three lines of logic on top of existing weather data. Makes the morning TTS feel genuinely useful.
-
-**Touches:** `morning_routine.py` (TTS script generation)
-
----
-
-### 10. Mode Streak / Stats Widget
-
-A small home page widget showing fun stats:
-- "You've been in working mode for 3h 12m"
-- "Gaming streak: 4 days in a row"
-- "Most used mode this week: working (62%)"
-
-Gamifies productivity. Event data is already there — pure frontend work.
-
-**Touches:** New widget component, queries against `activity_events`
-
----
-
-### 11. Sonos Volume Curves Per Mode
-
-Configurable volume targets per mode (gaming: 25, working: 12, relax: 18, sleeping: 0). Mode transitions smoothly adjust volume alongside lighting. Evening working could auto-lower to 8. Pairs naturally with the existing mode brightness multipliers.
+Per-mode volume targets (gaming: 25, working: 12, relax: 18, sleeping: 0). Mode transitions smoothly adjust volume alongside lighting. Pairs with existing mode brightness multipliers.
 
 **Touches:** `music_mapper.py`, new `mode_volume_config` in `app_settings`, Settings UI
 
 ---
 
-### 12. Scene Scheduling
+### 6. Dashboard Screensaver Mode
 
-Let users schedule specific scenes to activate at specific times, independent of mode. "Every Friday at 6pm, activate Golden Hour" or "Every morning at 7am, activate Energize." Extends the existing scheduler with user-created entries.
-
-**Touches:** `scheduler.py`, new DB table (`scheduled_scenes`), Settings UI
-
----
-
-### 13. Dashboard Screensaver Mode
-
-After the 60-second idle auto-hide, instead of just showing the background, cycle through useful ambient info: current time (big, minimal), weather, next routine, now playing art. A smart clock / ambient display overlay. The background animations are already beautiful — layer minimal info on top during idle.
+After 60s idle auto-hide, cycle through ambient info: clock, weather, next routine, now playing art. Smart clock overlay on top of the mode backgrounds.
 
 **Touches:** New `ScreensaverOverlay.svelte` component, `activity.js` store integration
 
 ---
 
-### 14. Pi-hole "Who's Busy" Widget
+## ML Ideas
 
-Show which devices on your network are most active right now by DNS query volume. A simple bar chart of device hostnames. Useful for spotting devices phoning home excessively or forgotten devices being chatty.
+### 7. Mood Drift Detection
 
-**Touches:** `pihole_service.py` (new query), updated `PiholeCard` component
+Track the *derivative* of lighting preferences — if manual overrides consistently trend warmer/dimmer over a week, detect a seasonal mood shift and proactively adjust baselines. Operates on multi-day override patterns, not per-event EMA.
+
+**Touches:** `lighting_learner.py`, new drift analysis module
+
+---
+
+### 8. Contextual Music Memory
+
+Extend MusicBandit arms to include (mode, day_of_week, weather) context. "Rainy Friday relax" maps to different playlists than "sunny Saturday relax." Hierarchical priors from parent mode+period arms for cold start.
+
+**Touches:** `music_bandit.py` (expand arm key), `weather_service.py` integration
+
+---
+
+### 9. Anomaly-Triggered Automation Pause
+
+Use YAMNet's doorbell/alarm/glass-break classifications to auto-pause mode transitions for 5 minutes when anomalous sounds are detected. Prevents awkward automation during unusual situations.
+
+**Touches:** `audio_classifier.py` (new callback), `automation_engine.py`
+
+---
+
+### 10. Sleep Quality Inference
+
+Fuse sleeping mode times + camera presence (restless vs. still) + ambient audio (quiet vs. disrupted) + morning override behavior into a nightly sleep quality score. No wearable needed — purely from existing sensors. Trend chart on analytics page.
+
+**Touches:** New `sleep_quality.py`, analytics page components
+
+---
+
+## General Ideas
+
+### 11. Adaptive Transition Choreography
+
+Stagger light transitions room-to-room on mode change. Morning: bedroom → living room. Evening: reverse. Purely a timing layer with `asyncio.sleep()` offsets between `set_light()` calls.
+
+**Touches:** `automation_engine.py` (transition sequencer), new config in `app_settings`
+
+---
+
+### 12. Guest Wi-Fi Landing Page
+
+`guest.homehub.local` landing page with Wi-Fi password, Party Mode QR code, now playing, "request a song" form, house rules. Pi-hole DNS already handles local domains.
+
+**Touches:** New frontend route (`/guest`), Pi-hole DNS entry, new song queue API
+
+---
+
+### 13. Power Outage Recovery
+
+Detect cold boot (uptime < 5min + no clean shutdown event), restore exact pre-outage state from event log — mode, light colors, music. Outage > 30min falls through to normal time-based.
+
+**Touches:** `main.py` (startup check), `event_query_service.py`
+
+---
+
+### 14. Seasonal Lighting Profiles
+
+Day-of-year sine wave modifier on color temperature and hue ranges. Winter: cooler whites, blue accents. Summer: warmer tones, golden hour emphasis. Imperceptible day-to-day, noticeable season-to-season.
+
+**Touches:** `automation_engine.py` (seasonal modifier function)
+
+---
+
+### 15. Dashboard Vital Signs Strip
+
+Always-visible 20px strip at kiosk bottom: Hue latency, Sonos status, ML fusion confidence, WiFi devices, Pi-hole blocks today, CPU temp. Turns red on anomalies.
+
+**Touches:** New `VitalStrip.svelte`, new `/api/vitals` endpoint
