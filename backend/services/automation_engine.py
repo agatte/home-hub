@@ -978,9 +978,14 @@ class AutomationEngine:
         # POST /api/automation/screen-color and are gated by SCREEN_SYNC_MODES
         # at the route handler. No engine-side action needed when modes change.
 
-        # Always stop effects on mode change to prevent carry-over
-        if self._hue_v2 and self._hue_v2.connected:
-            await self._hue_v2.stop_effect_all()
+        # Determine what effect should be active for this mode+period.
+        # Only stop effects when switching to a different effect — stopping
+        # and re-applying the same effect every cycle resets the brightness
+        # base on the bridge, causing dim flickering instead of bright.
+        desired_effect = self._get_desired_effect(mode)
+        if desired_effect != self._active_effect_name:
+            if self._hue_v2 and self._hue_v2.connected and self._active_effect_name:
+                await self._hue_v2.stop_effect_all()
             self._active_effect_name = None
 
         # Clear dedup cache so the new state is always applied — effects and
@@ -1015,11 +1020,10 @@ class AutomationEngine:
                     await _activate_per_light(preset["lights"], self._hue)
             # Still apply auto-effects on top of scene overrides
             if self._hue_v2 and self._hue_v2.connected:
-                effect_map = EFFECT_AUTO_MAP.get(mode, {})
-                auto_effect = effect_map.get(period)
-                if auto_effect and auto_effect != self._active_effect_name:
-                    await self._hue_v2.set_effect_all(auto_effect)
-                    self._active_effect_name = auto_effect
+                if desired_effect and desired_effect != self._active_effect_name:
+                    await asyncio.sleep(0.3)
+                    await self._hue_v2.set_effect_all(desired_effect)
+                    self._active_effect_name = desired_effect
             return
 
         if mode in ACTIVITY_LIGHT_STATES:
@@ -1062,21 +1066,16 @@ class AutomationEngine:
             tt = MODE_TRANSITION_TIME.get(mode)
             await self._apply_state(state, transitiontime=tt)
 
-            # Apply dynamic effects based on mode + time period.
-            # Weather can override the effect when no mode-specific one is set.
+            # Apply effect if it changed — delay lets the bridge process
+            # the light state first so the effect inherits correct brightness.
             if self._hue_v2 and self._hue_v2.connected:
-                effect_map = EFFECT_AUTO_MAP.get(mode, {})
-                auto_effect = effect_map.get(period)
-                if not auto_effect:
-                    weather_effect = self._get_weather_effect()
-                    if weather_effect and (
-                        period in ("evening", "night")
-                        or weather_effect == "sparkle"
-                    ):
-                        auto_effect = weather_effect
-                if auto_effect and auto_effect != self._active_effect_name:
-                    await self._hue_v2.set_effect_all(auto_effect)
-                    self._active_effect_name = auto_effect
+                if desired_effect and desired_effect != self._active_effect_name:
+                    await asyncio.sleep(0.3)
+                    await self._hue_v2.set_effect_all(desired_effect)
+                    self._active_effect_name = desired_effect
+                elif not desired_effect and self._active_effect_name:
+                    await self._hue_v2.stop_effect_all()
+                    self._active_effect_name = None
         else:
             # Unknown mode — fall back to time-based
             await self._apply_time_based()
@@ -1361,6 +1360,28 @@ class AutomationEngine:
                 if -30 <= minutes_to_sunset <= 30:
                     return "golden_hour"
         return None
+
+    def _get_desired_effect(self, mode: str) -> str | None:
+        """Determine what dynamic effect should be active for a mode.
+
+        Checks mode-specific auto-effects first (EFFECT_AUTO_MAP), then
+        falls back to weather-driven effects for eligible periods.
+        Returns None for modes that manage their own effects (sleeping,
+        social) or when no effect should be active.
+        """
+        if mode in ("sleeping", "social"):
+            return None
+        period = self._get_time_period()
+        effect_map = EFFECT_AUTO_MAP.get(mode, {})
+        auto_effect = effect_map.get(period)
+        if not auto_effect:
+            weather_effect = self._get_weather_effect()
+            if weather_effect and (
+                period in ("evening", "night")
+                or weather_effect == "sparkle"
+            ):
+                auto_effect = weather_effect
+        return auto_effect
 
     def _get_weather_effect(self) -> str | None:
         """Return an effect override based on current weather, or None."""
