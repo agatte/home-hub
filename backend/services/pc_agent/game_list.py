@@ -55,6 +55,8 @@ MEDIA_PROCESSES: set[str] = {
     "wmplayer.exe",
     "stremio.exe",
     "stremio service.exe",
+    "stremio-runtime.exe",   # Modern Stremio shell (5.x+)
+    "stremio-shell-ng.exe",  # Modern Stremio main window
 }
 
 # Browser processes — used for "working" detection (late night + no game)
