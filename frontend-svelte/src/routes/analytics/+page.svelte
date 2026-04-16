@@ -4,10 +4,9 @@
   import { modeColor, modeLabel } from '$lib/theme.js'
   import DecisionPipeline from '$lib/components/DecisionPipeline.svelte'
 
-  let view = 'analytics'
-
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+  let analyticsOpen = false
   let summary = null
   let patterns = null
   let activity = null
@@ -101,226 +100,246 @@
 </script>
 
 <main class="analytics-page">
-  <div class="view-toggle">
-    <button class:active={view === 'analytics'} on:click={() => view = 'analytics'}>Analytics</button>
-    <button class:active={view === 'pipeline'} on:click={() => view = 'pipeline'}>Pipeline</button>
-  </div>
+  <!-- Pipeline: primary content -->
+  <DecisionPipeline />
 
-  {#if view === 'pipeline'}
-    <DecisionPipeline />
-  {:else if loading}
-    <div class="analytics-loading">Loading analytics...</div>
-  {:else}
-    <div class="page-grid">
+  <!-- Collapsible Analytics -->
+  <section class="analytics-collapse">
+    <button class="analytics-toggle" on:click={() => analyticsOpen = !analyticsOpen}>
+      <h2 class="analytics-toggle-label">ANALYTICS</h2>
+      <span class="chevron" class:open={analyticsOpen}>&#9662;</span>
+    </button>
 
-      <!-- Mode Distribution Donut -->
-      <section class="widget">
-        <h2 class="widget-title">Mode Distribution (30 days)</h2>
-        {#if modeDistribution.length}
-          <div class="analytics-donut-container">
-            <div class="analytics-donut" style="background: conic-gradient({donutGradient})">
-              <div class="analytics-donut-hole">
-                <span class="analytics-donut-total">{summary?.activity?.total_transitions || 0}</span>
-                <span class="analytics-donut-label">transitions</span>
+    {#if analyticsOpen}
+      {#if loading}
+        <div class="analytics-loading">Loading analytics...</div>
+      {:else}
+        <div class="page-grid">
+
+          <!-- Mode Distribution Donut -->
+          <section class="widget">
+            <h2 class="widget-title">Mode Distribution (30 days)</h2>
+            {#if modeDistribution.length}
+              <div class="analytics-donut-container">
+                <div class="analytics-donut" style="background: conic-gradient({donutGradient})">
+                  <div class="analytics-donut-hole">
+                    <span class="analytics-donut-total">{summary?.activity?.total_transitions || 0}</span>
+                    <span class="analytics-donut-label">transitions</span>
+                  </div>
+                </div>
+                <div class="analytics-legend">
+                  {#each modeDistribution.filter(m => m.pct >= 2) as { mode, count, pct }}
+                    <div class="analytics-legend-item">
+                      <span class="analytics-legend-dot" style="background: {modeColor(mode)}"></span>
+                      <span class="analytics-legend-name">{modeLabel(mode)}</span>
+                      <span class="analytics-legend-value">{pct}%</span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {:else}
+              <p class="analytics-empty">No activity data yet</p>
+            {/if}
+          </section>
+
+          <!-- Quick Stats -->
+          <section class="widget">
+            <h2 class="widget-title">Quick Stats</h2>
+            <div class="analytics-stats-grid">
+              <div class="analytics-stat">
+                <span class="analytics-stat-value">{fmtNum(summary?.activity?.total_transitions || 0)}</span>
+                <span class="analytics-stat-label">Mode Changes</span>
+              </div>
+              <div class="analytics-stat">
+                <span class="analytics-stat-value">{overrideRate}%</span>
+                <span class="analytics-stat-label">Manual Override</span>
+              </div>
+              <div class="analytics-stat">
+                <span class="analytics-stat-value" style="color: {topMode ? modeColor(topMode.mode) : 'inherit'}">{topMode ? modeLabel(topMode.mode) : '\u2014'}</span>
+                <span class="analytics-stat-label">Top Mode</span>
+              </div>
+              <div class="analytics-stat">
+                <span class="analytics-stat-value">{fmtNum(summary?.scenes?.total_activations || 0)}</span>
+                <span class="analytics-stat-label">Scenes Used</span>
               </div>
             </div>
-            <div class="analytics-legend">
-              {#each modeDistribution.filter(m => m.pct >= 2) as { mode, count, pct }}
-                <div class="analytics-legend-item">
-                  <span class="analytics-legend-dot" style="background: {modeColor(mode)}"></span>
-                  <span class="analytics-legend-name">{modeLabel(mode)}</span>
-                  <span class="analytics-legend-value">{pct}%</span>
-                </div>
-              {/each}
+          </section>
+
+          <!-- Hourly Patterns -->
+          <section class="widget widget-full">
+            <h2 class="widget-title">Hourly Patterns</h2>
+            {#if patterns?.by_hour?.length}
+              <div class="analytics-hours">
+                {#each patterns.by_hour as { hour, mode, pct }}
+                  <div class="analytics-hour-row">
+                    <span class="analytics-hour-label">{hour.toString().padStart(2, '0')}:00</span>
+                    <div class="analytics-hour-bar-bg">
+                      <div
+                        class="analytics-hour-bar"
+                        style="width: {pct}%; background: {modeColor(mode)}"
+                      ></div>
+                    </div>
+                    <span class="analytics-hour-mode" style="color: {modeColor(mode)}">{modeLabel(mode)}</span>
+                    <span class="analytics-hour-pct">{pct}%</span>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="analytics-empty">Not enough data for hourly patterns</p>
+            {/if}
+          </section>
+
+          <!-- Learned Rules -->
+          <section class="widget">
+            <h2 class="widget-title">
+              Learned Rules
+              <button class="analytics-regen-btn" on:click={forceRegenerate}>Regenerate</button>
+            </h2>
+            {#if rules?.rules?.length}
+              <div class="analytics-rules-list">
+                {#each rules.rules as rule}
+                  <div class="analytics-rule-row">
+                    <span class="analytics-rule-time">{DAY_NAMES[rule.day_of_week]} {rule.hour.toString().padStart(2, '0')}:00</span>
+                    <span class="analytics-rule-mode" style="color: {modeColor(rule.predicted_mode)}">{modeLabel(rule.predicted_mode)}</span>
+                    <span class="analytics-rule-conf">{rule.confidence}%</span>
+                    <button
+                      class="analytics-rule-toggle"
+                      class:enabled={rule.enabled}
+                      on:click={() => toggleRule(rule.id, rule.enabled)}
+                    >{rule.enabled ? 'On' : 'Off'}</button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="analytics-empty">No rules yet — the engine needs more data (70%+ confidence, 3+ samples per time slot)</p>
+            {/if}
+          </section>
+
+          <!-- Recent Activity -->
+          <section class="widget">
+            <h2 class="widget-title">Recent Activity (7 days)</h2>
+            {#if activity?.events?.length}
+              <div class="analytics-activity-list">
+                {#each activity.events as event}
+                  <div class="analytics-activity-row">
+                    <span class="analytics-activity-dot" style="background: {modeColor(event.mode)}"></span>
+                    <span class="analytics-activity-mode">{modeLabel(event.mode)}</span>
+                    <span class="analytics-activity-source">{event.source}</span>
+                    <span class="analytics-activity-duration">{event.duration_minutes ? event.duration_minutes + 'm' : '\u2014'}</span>
+                    <span class="analytics-activity-time">{fmtTime(event.timestamp)}</span>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="analytics-empty">No recent activity</p>
+            {/if}
+          </section>
+
+          <!-- Top Favorites & Scenes -->
+          <section class="widget widget-full">
+            <h2 class="widget-title">Top Sonos & Scenes</h2>
+            <div class="analytics-top-grid">
+              <div>
+                <h3 class="analytics-sub-title">Sonos Favorites</h3>
+                {#if summary?.sonos?.top_favorites?.length}
+                  {#each summary.sonos.top_favorites as fav}
+                    <div class="analytics-top-row">
+                      <span class="analytics-top-name">{fav.title}</span>
+                      <span class="analytics-top-count">{fav.count} plays</span>
+                    </div>
+                  {/each}
+                {:else}
+                  <p class="analytics-empty">No Sonos data</p>
+                {/if}
+              </div>
+              <div>
+                <h3 class="analytics-sub-title">Scenes</h3>
+                {#if summary?.scenes?.top_scenes?.length}
+                  {#each summary.scenes.top_scenes as scene}
+                    <div class="analytics-top-row">
+                      <span class="analytics-top-name">{scene.name}</span>
+                      <span class="analytics-top-count">{scene.count} uses</span>
+                    </div>
+                  {/each}
+                {:else}
+                  <p class="analytics-empty">No scene data</p>
+                {/if}
+              </div>
             </div>
-          </div>
-        {:else}
-          <p class="analytics-empty">No activity data yet</p>
-        {/if}
-      </section>
+          </section>
 
-      <!-- Quick Stats -->
-      <section class="widget">
-        <h2 class="widget-title">Quick Stats</h2>
-        <div class="analytics-stats-grid">
-          <div class="analytics-stat">
-            <span class="analytics-stat-value">{fmtNum(summary?.activity?.total_transitions || 0)}</span>
-            <span class="analytics-stat-label">Mode Changes</span>
-          </div>
-          <div class="analytics-stat">
-            <span class="analytics-stat-value">{overrideRate}%</span>
-            <span class="analytics-stat-label">Manual Override</span>
-          </div>
-          <div class="analytics-stat">
-            <span class="analytics-stat-value" style="color: {topMode ? modeColor(topMode.mode) : 'inherit'}">{topMode ? modeLabel(topMode.mode) : '—'}</span>
-            <span class="analytics-stat-label">Top Mode</span>
-          </div>
-          <div class="analytics-stat">
-            <span class="analytics-stat-value">{fmtNum(summary?.scenes?.total_activations || 0)}</span>
-            <span class="analytics-stat-label">Scenes Used</span>
-          </div>
         </div>
-      </section>
-
-      <!-- Hourly Patterns -->
-      <section class="widget widget-full">
-        <h2 class="widget-title">Hourly Patterns</h2>
-        {#if patterns?.by_hour?.length}
-          <div class="analytics-hours">
-            {#each patterns.by_hour as { hour, mode, pct }}
-              <div class="analytics-hour-row">
-                <span class="analytics-hour-label">{hour.toString().padStart(2, '0')}:00</span>
-                <div class="analytics-hour-bar-bg">
-                  <div
-                    class="analytics-hour-bar"
-                    style="width: {pct}%; background: {modeColor(mode)}"
-                  ></div>
-                </div>
-                <span class="analytics-hour-mode" style="color: {modeColor(mode)}">{modeLabel(mode)}</span>
-                <span class="analytics-hour-pct">{pct}%</span>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="analytics-empty">Not enough data for hourly patterns</p>
-        {/if}
-      </section>
-
-      <!-- Learned Rules -->
-      <section class="widget">
-        <h2 class="widget-title">
-          Learned Rules
-          <button class="analytics-regen-btn" on:click={forceRegenerate}>Regenerate</button>
-        </h2>
-        {#if rules?.rules?.length}
-          <div class="analytics-rules-list">
-            {#each rules.rules as rule}
-              <div class="analytics-rule-row">
-                <span class="analytics-rule-time">{DAY_NAMES[rule.day_of_week]} {rule.hour.toString().padStart(2, '0')}:00</span>
-                <span class="analytics-rule-mode" style="color: {modeColor(rule.predicted_mode)}">{modeLabel(rule.predicted_mode)}</span>
-                <span class="analytics-rule-conf">{rule.confidence}%</span>
-                <button
-                  class="analytics-rule-toggle"
-                  class:enabled={rule.enabled}
-                  on:click={() => toggleRule(rule.id, rule.enabled)}
-                >{rule.enabled ? 'On' : 'Off'}</button>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="analytics-empty">No rules yet — the engine needs more data (70%+ confidence, 3+ samples per time slot)</p>
-        {/if}
-      </section>
-
-      <!-- Recent Activity -->
-      <section class="widget">
-        <h2 class="widget-title">Recent Activity (7 days)</h2>
-        {#if activity?.events?.length}
-          <div class="analytics-activity-list">
-            {#each activity.events as event}
-              <div class="analytics-activity-row">
-                <span class="analytics-activity-dot" style="background: {modeColor(event.mode)}"></span>
-                <span class="analytics-activity-mode">{modeLabel(event.mode)}</span>
-                <span class="analytics-activity-source">{event.source}</span>
-                <span class="analytics-activity-duration">{event.duration_minutes ? event.duration_minutes + 'm' : '—'}</span>
-                <span class="analytics-activity-time">{fmtTime(event.timestamp)}</span>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="analytics-empty">No recent activity</p>
-        {/if}
-      </section>
-
-      <!-- Top Favorites & Scenes -->
-      <section class="widget widget-full">
-        <h2 class="widget-title">Top Sonos & Scenes</h2>
-        <div class="analytics-top-grid">
-          <div>
-            <h3 class="analytics-sub-title">Sonos Favorites</h3>
-            {#if summary?.sonos?.top_favorites?.length}
-              {#each summary.sonos.top_favorites as fav}
-                <div class="analytics-top-row">
-                  <span class="analytics-top-name">{fav.title}</span>
-                  <span class="analytics-top-count">{fav.count} plays</span>
-                </div>
-              {/each}
-            {:else}
-              <p class="analytics-empty">No Sonos data</p>
-            {/if}
-          </div>
-          <div>
-            <h3 class="analytics-sub-title">Scenes</h3>
-            {#if summary?.scenes?.top_scenes?.length}
-              {#each summary.scenes.top_scenes as scene}
-                <div class="analytics-top-row">
-                  <span class="analytics-top-name">{scene.name}</span>
-                  <span class="analytics-top-count">{scene.count} uses</span>
-                </div>
-              {/each}
-            {:else}
-              <p class="analytics-empty">No scene data</p>
-            {/if}
-          </div>
-        </div>
-      </section>
-
-    </div>
-  {/if}
+      {/if}
+    {/if}
+  </section>
 </main>
 
 <style>
   .analytics-page {
     padding: 24px 20px 100px;
-    max-width: 960px;
+    max-width: 700px;
     margin: 0 auto;
   }
 
-  .view-toggle {
+  /* Analytics collapse toggle */
+  .analytics-collapse {
+    margin-top: 28px;
+  }
+
+  .analytics-toggle {
     display: flex;
-    justify-content: center;
-    gap: 0;
-    margin-bottom: 24px;
-  }
-  .view-toggle button {
-    padding: 8px 24px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.4);
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 15px;
-    letter-spacing: 1.5px;
+    align-items: center;
+    gap: 10px;
+    background: none;
+    border: none;
     cursor: pointer;
-    transition: all 0.2s ease;
+    padding: 8px 4px;
+    width: 100%;
   }
-  .view-toggle button:first-child {
-    border-radius: 20px 0 0 20px;
-    border-right: none;
+  .analytics-toggle:hover .analytics-toggle-label {
+    color: rgba(255, 255, 255, 0.6);
   }
-  .view-toggle button:last-child {
-    border-radius: 0 20px 20px 0;
+
+  .analytics-toggle-label {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 18px;
+    letter-spacing: 3px;
+    color: rgba(255, 255, 255, 0.35);
+    margin: 0;
+    transition: color 0.2s ease;
   }
-  .view-toggle button.active {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.85);
-    border-color: rgba(255, 255, 255, 0.15);
+
+  .chevron {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.25);
+    transition: transform 0.3s ease;
   }
-  .view-toggle button:hover:not(.active) {
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.55);
+  .chevron.open {
+    transform: rotate(180deg);
   }
 
   .analytics-loading {
     text-align: center;
-    padding: 60px 0;
-    color: var(--text-muted);
-    font-family: var(--font-body);
+    padding: 40px 0;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 14px;
   }
 
   .analytics-empty {
-    color: var(--text-muted);
+    color: rgba(255, 255, 255, 0.3);
     font-size: 13px;
     margin: 8px 0 0;
+  }
+
+  .page-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    margin-top: 16px;
+  }
+
+  .widget-full {
+    grid-column: 1 / -1;
   }
 
   /* Donut chart */
@@ -597,7 +616,10 @@
     font-size: 12px;
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 700px) {
+    .page-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
     .analytics-donut-container { flex-direction: column; }
     .analytics-top-grid { grid-template-columns: 1fr; gap: 16px; }
   }

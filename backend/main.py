@@ -319,6 +319,13 @@ async def lifespan(app: FastAPI):
         app_logger.warning("lightgbm not installed — behavioral predictor disabled")
         app.state.behavioral_predictor = None
 
+    # Confidence fusion — multi-signal ensemble
+    from backend.services.ml.confidence_fusion import ConfidenceFusion
+    confidence_fusion = ConfidenceFusion()
+    app.state.confidence_fusion = confidence_fusion
+    automation._confidence_fusion = confidence_fusion
+    app_logger.info("Confidence fusion initialized")
+
     # Music bandit — Thompson sampling playlist selection
     from backend.services.ml.music_bandit import MusicBandit
     music_bandit = MusicBandit(model_manager)
