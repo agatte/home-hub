@@ -540,6 +540,10 @@ class AutomationEngine:
         self._scene_overrides: dict[str, dict[str, str]] = {}  # {mode: {period: scene_id}}
         self._scene_override_sources: dict[str, dict[str, str]] = {}  # {mode: {period: source}}
 
+        # Confidence fusion (set by main.py after construction)
+        self._confidence_fusion = None
+        self._last_fusion_result: Optional[dict] = None
+
         # Decision pipeline — real-time snapshot of all inputs → output
         self._screen_sync = None  # Set by main.py after construction
         self._pipeline_history: list[dict] = []
@@ -841,6 +845,13 @@ class AutomationEngine:
         self._mode_source = source
         self._last_activity = mode
         self._last_activity_change = datetime.now(tz=TZ)
+
+        # Report to confidence fusion
+        fusion = getattr(self, "_confidence_fusion", None)
+        if fusion:
+            # Process detection is binary — 1.0 confidence when active
+            signal_confidence = 1.0 if source == "process" else 0.8
+            fusion.report_signal(source, mode, signal_confidence)
 
         # If manual override is active, update detected mode silently but
         # never clear the override — only the user or the 4h timeout should.
@@ -1581,6 +1592,14 @@ class AutomationEngine:
                     prediction = await predictor.predict(
                         current_mode=self._current_mode,
                     )
+                    if prediction:
+                        fusion = getattr(self, "_confidence_fusion", None)
+                        if fusion:
+                            fusion.report_signal(
+                                "behavioral",
+                                prediction["predicted_mode"],
+                                prediction["confidence"],
+                            )
                     if prediction and not prediction.get("shadow"):
                         confidence = prediction["confidence"]
                         if confidence >= 0.95:
@@ -1621,6 +1640,67 @@ class AutomationEngine:
                 rule_engine = getattr(self, "_rule_engine", None)
                 if rule_engine and not self._manual_override and self._current_mode in ("idle", "away"):
                     await rule_engine.check_rules(self._current_mode)
+
+                # Confidence fusion — compute and optionally act
+                fusion = getattr(self, "_confidence_fusion", None)
+                if fusion:
+                    fusion_result = fusion.compute_fusion()
+                    if fusion_result:
+                        self._last_fusion_result = fusion_result
+                        fc = fusion_result["fused_confidence"]
+                        fm = fusion_result["fused_mode"]
+
+                        # Can override stale process detection at 98%+
+                        # with 80%+ agreement
+                        if (
+                            fusion_result.get("can_override")
+                            and not self._manual_override
+                            and self._current_mode not in ("idle", "away")
+                            and fm != self._current_mode
+                        ):
+                            logger.info(
+                                "Fusion override: %s -> %s "
+                                "(%.0f%% confidence, %.0f%% agreement)",
+                                self._current_mode, fm, fc * 100,
+                                fusion_result["agreement"] * 100,
+                            )
+                            await self.set_manual_override(fm)
+                            if ml_logger:
+                                await ml_logger.log_decision(
+                                    predicted_mode=fm,
+                                    confidence=fc,
+                                    decision_source="fusion",
+                                    factors={
+                                        "agreement": fusion_result["agreement"],
+                                        "signals": len([
+                                            s for s in
+                                            fusion_result["signals"].values()
+                                            if not s["stale"]
+                                        ]),
+                                    },
+                                    applied=True,
+                                )
+                        elif (
+                            fc >= 0.95
+                            and not self._manual_override
+                            and self._current_mode in ("idle", "away")
+                        ):
+                            logger.info(
+                                "Fusion auto-apply: %s (%.0f%% confidence)",
+                                fm, fc * 100,
+                            )
+                            await self.set_manual_override(fm)
+                            if ml_logger:
+                                await ml_logger.log_decision(
+                                    predicted_mode=fm,
+                                    confidence=fc,
+                                    decision_source="fusion",
+                                    factors={
+                                        "agreement":
+                                            fusion_result["agreement"],
+                                    },
+                                    applied=True,
+                                )
 
                 # Periodic pipeline broadcast — keeps the pipeline view fresh
                 # even when no mode changes occur (e.g., time period transitions)
@@ -1797,11 +1877,15 @@ class AutomationEngine:
             "lights": dict(self._last_applied_per_light),
         }
 
+        # Add fusion state
+        fusion_data = getattr(self, "_last_fusion_result", None)
+
         return {
             "timestamp": now.isoformat(),
             "inputs": inputs,
             "resolution": resolution,
             "output": output,
+            "fusion": fusion_data,
         }
 
     @staticmethod
