@@ -44,7 +44,7 @@ Start-Process "$ProjectRoot\venv\Scripts\pythonw.exe" `
 
 Start-Sleep -Seconds 4
 
-# Verify — check for any pythonw process running the supervisor
+# Verify - check for any pythonw process running the supervisor
 $running = Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object {
     $_.CommandLine -match "supervisor"
 }
@@ -53,5 +53,5 @@ if ($running) {
     Write-Host "OK: supervisor running (PID $($running.ProcessId))" -ForegroundColor Green
     Write-Host "Logs: $LogFile" -ForegroundColor Cyan
 } else {
-    Write-Host "ERROR: supervisor not found — check $LogFile" -ForegroundColor Red
+    Write-Host "ERROR: supervisor not found - check $LogFile" -ForegroundColor Red
 }
