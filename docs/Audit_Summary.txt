@@ -1,56 +1,68 @@
 ================================================================================
                         HOME HUB - FULL APPLICATION AUDIT
-                    Date: April 12, 2026 (updated same day)
+                    Date: April 15, 2026 (complete rewrite)
 ================================================================================
 
-Comprehensive audit covering backend, frontend, security, performance,
-observability, documentation, DevOps, tooling, and future roadmap.
+Comprehensive audit covering backend, frontend, machine learning, security,
+performance, observability, documentation, DevOps, tooling, and future roadmap.
 
-System: Single-user, always-on home automation dashboard
-Stack:  FastAPI + SvelteKit + SQLite + WebSocket + Pi-hole (Docker)
+System: Single-user, always-on home automation dashboard with ML intelligence
+Stack:  FastAPI + SvelteKit + SQLite + WebSocket + LightGBM + YAMNet +
+        MediaPipe + Pi-hole (Docker)
 Prod:   Dell Latitude 7420 (Ubuntu 24.04) kiosk mode at 192.168.1.210
 Dev:    Windows desktop at 192.168.1.30
+Repo:   github.com/agatte/home-hub (200 tracked files, no credential leaks)
 
-Post-audit additions (2026-04-12):
-  - Pi-hole v6 DNS ad blocker (Docker, host networking on Latitude)
-  - 2M+ domain blocklist (10 curated lists: ads, malware, tracking, telemetry)
-  - Local DNS for all network devices (homehub.local, pihole.local, etc.)
-  - Network widget on dashboard + Settings page management (DNS + blocklists)
-  - Per-device DNS config (desktop + iPhone → 192.168.1.210)
+Changes since last audit (April 12, 2026):
+  - ML Phase 1+2 shipped: 7 ML services (1,865 LOC) in backend/services/ml/
+  - BehavioralPredictor (LightGBM), AudioClassifier (YAMNet, shadow mode)
+  - LightingPreferenceLearner (EMA), MusicBandit (Thompson sampling)
+  - MediaPipe camera presence detection (15s away, opt-in)
+  - Smart screen sync (K-means color clustering replaces naive averaging)
+  - Analytics page with ML decision pipeline visualization
+  - Rule engine with learned time-based mode patterns
+  - Ambient sound service (browser-based, weather-reactive)
+  - NWS weather migration (replaces OpenWeatherMap, no API key needed)
+  - WiFi presence detection (replacing Alexa geofence)
+  - Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
+  - Gaming lights revamp (classic RGB with saturated purple/blue/teal)
+  - Test suite expanded: 101 → 183 tests across 12 files
+  - Event logging: 6 tables (activity, lights, sonos, scenes, ml_decisions,
+    ml_metrics)
 
 ================================================================================
                               GRADING SUMMARY
 ================================================================================
 
-  Category                Grade   Summary
-  ---------------------   -----   --------------------------------------------------
-  Backend Architecture    B       Good separation of concerns, async throughout,
-                                  but large files and tight coupling to app.state
-  Frontend / UI           B       Clean component structure, good reactivity.
-                                  Dead code removed. Now Playing idle overlay added
-  Design / UX             B+      Bold, distinctive aesthetic with generative
-                                  canvas + glass cards. Responsive untested
-  Security                C       CORS locked to LAN origins, rate limiting added,
-                                  WebSocket validated. Still no auth, file upload risks
-  Performance             B-      Aggressive polling (1-2s), canvas perf OK
-                                  but no lazy loading for Three.js
-  Observability           C       Log rotation + JSON structured logs added.
-                                  Uptime Kuma monitoring active. No metrics yet
-  Testing                 C+      pytest suite: 101 tests (automation, music
-                                  mapper, scheduler, weather, pihole, API
-                                  routes, WS). GitHub Actions runs full suite
-  Documentation           B+      PROJECT_SPEC is excellent, CLAUDE.md thorough,
-                                  but some staleness and missing ops runbook
-  DevOps / Deployment     C+      deploy.sh works, systemd files versioned,
-                                  DB backup cron, Uptime Kuma. No rollback yet
-  Tooling / DX            B+      MCP integration excellent, Claude Code hooks,
-                                  GitHub Actions CI, pre-push hook, pytest
-  Future Readiness        B+      Phase 3 (Intelligence) complete: event query
-                                  API, rule engine, nudge UI, analytics page
-  ---------------------   -----   --------------------------------------------------
-  OVERALL GRADE           B       Strong vision and solid core. Phase 3
-                                  intelligence layer shipped. Security and
-                                  observability remain areas for improvement
+  Category                Grade   Prev    Summary
+  ---------------------   -----   -----   ----------------------------------------
+  Backend Architecture    B       B       37 services, solid ML design, but
+                                          automation_engine.py grew to 1,825 lines
+  Frontend / UI           B       B       36 components, 12 stores, 4 routes.
+                                          Analytics page + pipeline viz added
+  Design / UX             B+      B+      Gaming lights revamp. Otherwise stable
+  Security                C       D       CORS fixed, rate limiting, WS validation.
+                                          Still no auth, no file upload limits
+  Machine Learning        B+      N/A     NEW: 7 services, shadow-before-promote,
+                                          local-only, graceful degradation
+  Performance             B-      B-      K-means screen sync heavier but better.
+                                          Camera adds load (opt-in mitigates)
+  Observability           C       D+      ML decision logging, 6 event tables,
+                                          analytics page. No Prometheus yet
+  Testing                 B-      C+      183 tests / 12 files (was 101 / 8).
+                                          Still no frontend or integration tests
+  Documentation           A-      B+      ML_SPEC.md (1,397 lines) is exceptional.
+                                          PROJECT_SPEC.md comprehensive
+  DevOps / Deployment     C+      C+      Unified supervisor. DB backup + CI
+                                          active. Still no rollback
+  Tooling / DX            B+      B+      MCP, hooks, skills, CI all solid
+  Future Readiness        A-      B+      ML Phase 1+2 complete, rule engine,
+                                          analytics, WiFi presence all shipped
+  ---------------------   -----   -----   ----------------------------------------
+  OVERALL GRADE           B+      B       ML layer is a genuine differentiator.
+                                          Testing improved. Security D → C.
+                                          System evolved from reactive control
+                                          panel to anticipatory intelligence
 
 ================================================================================
                             CATEGORY DETAILS
@@ -61,62 +73,63 @@ Post-audit additions (2026-04-12):
 --------------------------------------------------------------------------------
 
   Strengths:
-  - Clean service layer pattern (HueService, SonosService, AutomationEngine)
-  - Async/await used correctly throughout; blocking Hue calls wrapped in
+  - Clean service layer pattern with 37 services across core, ML, and PC agent
+  - Async/await used correctly throughout; blocking calls wrapped in
     asyncio.to_thread()
   - WebSocket + polling hybrid catches external changes (Alexa, Hue app)
   - Mode-change callback system is elegant and extensible
   - SQLAlchemy 2.0 async ORM with proper parameterized queries
+  - ML services follow clean embedded pattern with graceful degradation --
+    every ML feature has a non-ML fallback
+  - Rule engine adds learned time-based patterns from event data
+  - Event logging system is comprehensive (6 tables, fire-and-forget pattern)
+  - NWS weather migration removed paid API dependency
+  - WiFi presence detection replacing Alexa geofence
+  - Rate limiting via slowapi (120 req/min default, 10/min on TTS)
 
   Issues:
-  - automation_engine.py is 1,093 lines -- should split into mode logic,
-    light state calculator, and effect manager
-  - main.py lifespan function is 200+ lines initializing 10+ services --
-    extract to a bootstrap.py
-  - scenes.py route file is 637 lines with inline SQL via text() -- should
-    use ORM queries
+  - automation_engine.py is 1,825 lines (grew from 1,093 since last audit) --
+    urgently needs splitting into mode logic, light state calculator, and
+    effect manager
+  - main.py lifespan function is ~350 lines initializing 20+ services --
+    extract to a bootstrap.py or service registry
+  - scenes.py route file is 768 lines with 20 preset definitions inline --
+    extract presets to a separate module
   - Light IDs are strings in some places, ints in others -- inconsistent typing
   - 22+ bare "except Exception" clauses across the backend -- should catch
-    specific exceptions
+    specific exceptions on critical paths
   - No middleware for request logging/tracing
   - No circuit breaker for Hue/Sonos API calls (if bridge hangs, polling blocks)
-
-  Active bugs found in logs:
-  - TypeError: can't subtract offset-naive and offset-aware datetimes
-    in event_logger.py (repeats 6x)
-  - NameError: name 'make_udp_sock' is not defined in fauxmo_service.py --
-    voice control is completely broken
 
 --------------------------------------------------------------------------------
 2. FRONTEND / UI -- Grade: B
 --------------------------------------------------------------------------------
 
   Strengths:
-  - Clean Svelte store pattern with WebSocket dispatch
+  - Clean Svelte store pattern with WebSocket dispatch (12 stores)
+  - 36 components with clear single-responsibility
+  - 4 routes: Home, Music, Analytics (new), Settings
   - Generative canvas is visually distinctive -- not generic AI dashboard
   - Good idle detection (60s timeout, auto-hide UI elements)
   - WebSocket reconnection with build_id auto-reload is clever
   - Playing-card deck for mode selection is unique
+  - DecisionPipeline + PipelineHistory components visualize ML reasoning
+  - ModeSuggestionToast surfaces rule engine predictions to user
 
   Issues:
-  - Memory leaks: GenerativeCanvas.svelte lines 40-61 -- three store
-    subscriptions (unsubMode, unsubLights, unsubSonos) cleanup may not
-    catch all paths
-  - Dead code: Sidebar.svelte (fully implemented, never imported),
-    Header.svelte (empty with "replaced by" comment) -- delete both
-  - Race condition: ws.js line 51 -- knownBuildId is module-level, shared
-    across potential multiple socket instances
-  - Silent API failures: api.js lines 27/41/50 -- .catch(() => ({}))
-    swallows all errors, UI never shows failure state
+  - Memory leaks: GenerativeCanvas.svelte -- three store subscriptions
+    cleanup may not catch all paths
+  - Silent API failures: api.js -- .catch(() => ({})) swallows all errors,
+    UI never shows failure state
   - Accessibility gaps:
     * Empty alt text on album art images
     * Slider missing aria-labelledby
     * --text-muted color (#5c5e6a on #08080c) fails WCAG AA (~2.5:1)
     * No <html lang="en">
   - No component tests or E2E tests
-  - Bundle concerns: Three.js (~500KB) + Threlte (~100KB) loaded
-    unconditionally, even when MoonScene isn't active
-  - Deprecated function: modeIcon() in theme.js still exported
+  - Three.js (~500KB) + Threlte (~100KB) loaded unconditionally, even when
+    MoonScene (sleeping mode) isn't active
+  - No prefers-reduced-motion gate on heavy animations
 
 --------------------------------------------------------------------------------
 3. DESIGN / UX -- Grade: B+
@@ -125,9 +138,11 @@ Post-audit additions (2026-04-12):
   Strengths:
   - Generative Perlin noise canvas reacting to mode/lights/music is impressive
   - Glass-card aesthetic with Bebas Neue display font is cohesive
-  - MoonScene sleeping overlay (GLSL sky shader, moon orbit, city silhouette)
+  - 5 distinct mode backgrounds (pixel art, parallax city, aurora, 3D moon,
+    generative canvas fallback)
   - Mode card deck with flip animation is memorable
-  - NowPlayingChip is clean and unobtrusive
+  - NowPlayingChip and NowPlayingIdle are clean and unobtrusive
+  - Gaming lights revamp -- saturated purple/blue/teal with wider color spread
 
   Issues:
   - No prefers-reduced-motion gate on heavy animations
@@ -137,45 +152,124 @@ Post-audit additions (2026-04-12):
   - Mobile responsive breakpoints exist but untested on actual devices
 
 --------------------------------------------------------------------------------
-4. SECURITY -- Grade: D
+4. SECURITY -- Grade: C (was D)
 --------------------------------------------------------------------------------
 
-  CRITICAL:
-  - CORS: main.py:323 -- allow_origins=["*"] with allow_credentials=True.
-    Any website can make authenticated requests. Even on a LAN, this allows
-    drive-by attacks from any browser tab.
-  - Zero authentication: Every API endpoint is fully open. Anyone on the
-    WiFi can control lights, play audio, upload files, read all data.
-  - WebSocket unvalidated: main.py:397 -- json.loads(raw) with no try-catch,
-    no schema validation. Malformed JSON crashes the handler. Arbitrary keys
-    pass through to hue.set_light().
+  FIXED since last audit:
+  - CORS locked to specific LAN origins (was allow_origins=["*"])
+  - Rate limiting via slowapi on all endpoints
+  - WebSocket JSON parsing wrapped in try-catch with validation
+
+  REMAINING CRITICAL:
+  - Zero authentication: Every API endpoint is fully open. Anyone on WiFi
+    can control lights, play audio, upload files, read all data. All 80+
+    endpoints, including ML model promotion/demotion, camera enable/disable,
+    and rule engine management are unprotected.
+  - File upload: music.py -- No file size limit, no content-type validation,
+    no XXE protection on XML parsing (Apple Music import).
 
   HIGH:
-  - File upload: music.py:96-123 -- No file size limit, no content-type
-    validation, predictable filename, no XXE protection on XML parsing.
-  - Preview URL injection: music.py:190 -- preview_url passed directly to
+  - Preview URL injection: music.py -- preview_url passed directly to
     sonos.play_uri() with no URL validation (SSRF risk).
+  - Plant App sends email + password in JSON body over HTTP (not HTTPS).
 
   MEDIUM:
-  - MCP query_db: Accepts arbitrary SELECT including UNION attacks.
-  - No rate limiting: No slowapi or equivalent on any endpoint.
+  - MCP query_db accepts arbitrary SELECT including UNION attacks.
+  - CORS origins list exposes LAN topology (192.168.1.x addresses).
+  - Camera service has no auth -- anyone on LAN can enable/disable face
+    detection via POST /api/camera/enable.
   - HTTP only: No TLS. Acceptable for LAN-only but blocks Cloudflare Tunnel.
 
   Verified safe:
-  - .env IS in .gitignore (line 2) -- secrets not committed
+  - .env IS in .gitignore -- secrets not committed (verified across all
+    171+ commits in git history, zero matches)
+  - .env.example uses only placeholder values -- safe on GitHub
+  - No hardcoded secrets in any Python or JavaScript source files
   - subprocess.run() uses list args (no shell injection)
   - SQL in route files uses parameterized :placeholder syntax
+  - data/ directory (SQLite DB, ML models) fully gitignored
+  - *.png gitignored (except frontend background assets)
+  - .mcp.json contains only command definition, no secrets
+  - ML model files contain only learned weights, no PII
 
 --------------------------------------------------------------------------------
-5. PERFORMANCE -- Grade: B-
+5. MACHINE LEARNING / INTELLIGENCE -- Grade: B+ (NEW)
+--------------------------------------------------------------------------------
+
+  Architecture:
+  - 7 ML services in backend/services/ml/ (1,865 LOC total)
+  - All services follow shadow-before-promote pattern
+  - Local-only processing -- no cloud APIs for inference
+  - Every ML feature has a non-ML fallback (graceful degradation)
+  - Confidence gating: 95%+ auto-apply, 70-95% suggest, <70% silent
+  - Nightly retraining at 4 AM via AsyncScheduler
+  - Auto-demotion: accuracy < baseline for 3 consecutive nights
+
+  Services:
+  - ModelManager (193 LOC) -- model persistence, versioning, metadata
+  - BehavioralPredictor (327 LOC) -- LightGBM mode prediction from 10
+    temporal + behavioral features. Shadow mode, needs 500+ events to train
+  - LightingPreferenceLearner (208 LOC) -- EMA (alpha=0.3) per-light
+    preferences from manual adjustments. Needs 5+ adjustments per combo
+  - AudioClassifier (504 LOC) -- YAMNet (TFLite) 521 AudioSet classes
+    mapped to 9 Home Hub classes. Shadow mode, 2-3s inference cycle
+  - MusicBandit (260 LOC) -- Thompson sampling playlist selection with
+    Beta(alpha, beta) distributions per arm. Active, exploring
+  - FeatureBuilder (202 LOC) -- temporal + behavioral feature engineering
+  - MLDecisionLogger (170 LOC) -- decision logging with reasoning chains,
+    backfills actual_mode on next transition
+
+  Additional ML-adjacent:
+  - CameraService (371 LOC) -- MediaPipe face detection, 15s away detection,
+    opt-in via camera_enabled setting, frames never persisted
+  - Smart screen sync -- K-means (n=5) dominant color extraction, replaces
+    naive pixel averaging
+  - RuleEngineService (295 LOC) -- frequency-based time patterns from events
+
+  Privacy:
+  - Camera frames: numpy arrays in memory only, overwritten each 5s cycle.
+    Never serialized, persisted, networked, or logged
+  - Audio: raw PCM overwritten each 1s read cycle. Mel-spectrograms are
+    one-way (cannot invert to intelligible audio). Only labels persist
+  - Models: aggregate statistical patterns only. No PII reconstructable
+  - Full ML data wipe available from Settings (models + decisions + metrics)
+  - 90-day rolling retention on event tables
+
+  Model files (all in data/models/, gitignored):
+  - yamnet.tflite (16 MB) -- auto-downloaded from Google GCS
+  - yamnet_class_map.csv (14 KB) -- auto-downloaded
+  - blaze_face_short_range.tflite (225 KB) -- auto-downloaded
+  - mode_predictor.lgb -- created after 500+ events (pending)
+  - lighting_prefs.json -- created after 5+ adjustments per combo (pending)
+  - music_bandit.json -- created on first playlist selection
+  - model_meta.json -- tracks version, accuracy, status per model
+
+  Issues:
+  - No ML-specific tests yet (spec defines test_feature_builder.py,
+    test_behavioral_predictor.py, test_audio_classifier.py but only
+    test_audio_classifier.py and test_camera_service.py are implemented)
+  - BehavioralPredictor in cold start period -- needs 500+ activity events
+    (~1 week of data) before first training
+  - AudioClassifier still in shadow mode -- needs accuracy comparison with
+    existing RMS detector before promotion
+  - Phase 3 (autonomous operation) not started
+  - No A/B testing framework for comparing ML vs rule engine decisions
+  - lightgbm is optional dependency -- silent graceful degradation means
+    predictor failures could go unnoticed without monitoring
+
+--------------------------------------------------------------------------------
+6. PERFORMANCE -- Grade: B-
 --------------------------------------------------------------------------------
 
   Issues:
-  - Hue polling at 1s intervals (hue_service.py:214) -- aggressive for
-    6 bulbs. 3-5s would be fine
-  - Sonos polling at 2s intervals (sonos_service.py:447) -- could be 5s
+  - Hue polling at 1s intervals -- aggressive for 6 bulbs. 3-5s would work
+  - Sonos polling at 2s intervals -- could be 5s
   - Individual WebSocket broadcasts per light on scene activation (N sends
     instead of batched)
+  - K-means screen sync is heavier than naive averaging (~10ms per frame)
+    but produces significantly better color selection
+  - MediaPipe face detection adds CPU load (~2%, mitigated by opt-in toggle
+    and 5s capture interval)
   - LightGrid.svelte runs Object.values($lights).sort() on every reactive
     change -- should memoize
   - GenerativeCanvas particle count resizes array frame-by-frame during
@@ -185,72 +279,104 @@ Post-audit additions (2026-04-12):
   - Three.js + Threlte loaded unconditionally (~600KB) even when sleeping
     mode isn't active
 
+  ML performance budget (sustained):
+  - Audio classifier: 5% CPU, 50-200MB RAM, every 2-3s
+  - Camera service: 2% CPU, 50-100MB RAM, every 5s
+  - Behavioral predictor: <1% CPU, <10MB RAM, every 60s
+  - Music bandit: <1% CPU, <1KB RAM, on mode change
+  - Lighting learner: <1% CPU, <1MB RAM, on mode change
+  - Total ML overhead: <10% CPU, 200-400MB RAM
+
   OK:
   - 15fps cap on GenerativeCanvas is appropriate
   - asyncio.to_thread() correctly used for blocking Hue bridge calls
-  - SQLite is fine for current data volume (148KB DB)
+  - SQLite is fine for current data volume (~184KB DB)
+  - Music bandit is O(1) per decision -- negligible overhead
 
 --------------------------------------------------------------------------------
-6. OBSERVABILITY -- Grade: D+
+7. OBSERVABILITY -- Grade: C (was D+)
 --------------------------------------------------------------------------------
 
   What exists:
   - /health endpoint with Hue/Sonos connectivity status
-  - File logging to logs/home_hub.log (5.6MB, 114K lines)
-  - MCP get_health() and get_event_summary() tools
-
-  Fixed:
   - Log rotation: RotatingFileHandler (5MB, 3 backups, 20MB max)
   - Structured logging: python-json-logger (JSON to file, text to console)
-  - Uptime monitoring: Uptime Kuma on :3002 watching /health + Pi-hole
+  - Uptime Kuma monitoring on :3002 (HTTP health check)
+  - MCP get_health() and get_event_summary() tools
+  - ML decision logging with full reasoning chains (ml_decisions table)
+  - Event logging across 6 tables with fire-and-forget pattern
+  - Analytics page with decision pipeline visualization
+  - ML accuracy metrics tracked in ml_metrics table (nightly)
 
   What's still missing:
-  - No metrics endpoint -- No Prometheus /metrics, no error rate tracking
+  - No Prometheus /metrics endpoint -- no error rate, latency, or throughput
   - No alerting on Hue/Sonos disconnections (Uptime Kuma only checks HTTP)
-  - No request tracing -- No request IDs, can't correlate actions to logs
-  - No database health in /health -- Only checks Hue/Sonos, not SQLite
+  - No request tracing -- no request IDs, can't correlate actions to logs
+  - No database health in /health -- only checks Hue/Sonos, not SQLite
+  - No ML model health alerts (if predictor silently fails, no notification)
   - Timestamp format missing timezone in log output
 
 --------------------------------------------------------------------------------
-7. TESTING -- Grade: F
+8. TESTING -- Grade: B- (was C+)
 --------------------------------------------------------------------------------
 
   What exists:
-  - pytest suite: 101 tests across 8 files
-  - Coverage: automation engine, music mapper, scheduler, weather service,
-    pihole service, API routes, WebSocket protocol, health/CORS
+  - pytest suite: 183 tests across 12 files
+  - Test breakdown:
+    * test_automation_engine.py (23 tests)
+    * test_audio_classifier.py (26 tests) -- NEW since last audit
+    * test_music_mapper.py (22 tests)
+    * test_event_query.py (21 tests) -- NEW since last audit
+    * test_camera_service.py (16 tests) -- NEW since last audit
+    * test_api_routes.py (15 tests)
+    * test_rule_engine.py (15 tests) -- NEW since last audit
+    * test_scheduler.py (13 tests)
+    * test_pihole_service.py (12 tests)
+    * test_api_health.py (7 tests)
+    * test_weather_service.py (7 tests)
+    * test_websocket.py (6 tests)
   - Mock infrastructure in conftest.py (Hue, Sonos, WebSocket, DB)
   - GitHub Actions CI runs full suite on push + pull_request
   - pyproject.toml: asyncio_mode = "auto", testpaths = ["tests"]
 
   What's missing:
-  - No frontend tests (vitest, Playwright)
+  - No frontend tests (vitest, Playwright, or similar)
   - No integration tests (end-to-end mode change → lights → music)
-  - Services without tests: Hue, Sonos, TTS, screen sync, routines
-  - No coverage reporting
+  - Services without tests: Hue, Sonos, TTS, screen sync, routines,
+    event_logger, recommendation_service, library_import_service
+  - ML services partially tested: audio_classifier and camera have tests,
+    but behavioral_predictor, lighting_learner, music_bandit,
+    feature_builder, and ml_logger do not
+  - No coverage reporting (pytest-cov not configured)
+  - No load/stress testing
 
 --------------------------------------------------------------------------------
-8. DOCUMENTATION -- Grade: B+
+9. DOCUMENTATION -- Grade: A- (was B+)
 --------------------------------------------------------------------------------
 
   Strengths:
   - PROJECT_SPEC.md is exceptional -- covers vision, architecture, API
-    schema, database schema, roadmap
+    schema, database schema, roadmap, target state
+  - ML_SPEC.md is outstanding -- 1,397 lines covering vision, phased
+    rollout, architecture, features, data pipelines, model selection,
+    testing strategy, deployment plan, performance budgets, privacy design
   - CLAUDE.md is thorough -- patterns, commands, network devices, file
-    structure
+    structure, developer patterns with code examples
+  - Future_Development.md has 14 well-described feature ideas
   - Commit messages follow conventional format (fix:, feat:, docs:)
   - API routes fully documented with method, path, purpose tables
 
   Issues:
-  - PROJECT_SPEC slightly stale on PC Agent location
-  - Systemd service files not documented (mentioned but not in repo)
-  - No ops runbook -- how to troubleshoot, check logs, recover
+  - Future_Development.md references OpenWeatherMap (line 13) -- should be
+    NWS API since the migration shipped
+  - No ops runbook -- how to troubleshoot, check logs, recover from failures
   - No changelog for breaking changes
-  - No database migration documentation
-  - .env.example missing PLANT_APP_PASSWORD, PLANT_APP_EMAIL, HOME_HUB_URL
+  - No database migration documentation (migrations are inline in database.py)
+  - .env.example could document which keys are optional vs required more
+    clearly
 
 --------------------------------------------------------------------------------
-9. DEVOPS / DEPLOYMENT -- Grade: C-
+10. DEVOPS / DEPLOYMENT -- Grade: C+
 --------------------------------------------------------------------------------
 
   What works:
@@ -259,55 +385,72 @@ Post-audit additions (2026-04-12):
   - set -euo pipefail for safety
   - git pull --ff-only prevents accidental merge commits
   - Kiosk auto-reload via WebSocket build_id handshake
+  - Systemd service files version-controlled in deployment/
+  - Daily SQLite backup cron on Latitude (4 AM, 7-day retention)
+  - GitHub Actions CI (lint + test on push/PR)
+  - Unified PC agent supervisor replaces 3 Task Scheduler tasks
+  - Pre-push git hook catches lint errors
 
   What's missing:
-  - No rollback: If health check fails, system is left in broken state
-  - No database backup: 148KB SQLite with all config, scenes, playlists --
-    one corruption = total loss
-  - No CI/CD: Zero GitHub Actions, no automated linting or build verification
-  - Systemd files not in repo: If Latitude dies, service definitions lost
-  - No pre-commit hooks: Linting only via Claude Code hooks, not git
-  - Health check timing: 3s sleep may not be enough for full startup
+  - No rollback: If health check fails after deploy, system is left broken
   - No staging environment: Changes go straight from dev to production
+  - Health check timing: 3s sleep may not be enough for full startup with
+    ML model loading
+  - No WebSocket health check (only HTTP /health is verified)
+  - No automated frontend build verification in CI (only Python lint + test)
 
 --------------------------------------------------------------------------------
-10. TOOLING / DX -- Grade: B
+11. TOOLING / DX -- Grade: B+
 --------------------------------------------------------------------------------
 
   Strengths:
   - MCP server with 20+ tools -- verify changes without leaving Claude Code
   - Claude Code hooks auto-run ruff + ESLint on save
   - /api-audit and /ui-audit skills for systematic checking
+  - /deploy-home skill for one-command production deploys
   - Frontend hot reload via Vite dev server with API proxy
+  - Pre-push git hook catches lint errors
+  - GitHub Actions CI (ruff lint + pytest on push/PR)
+  - Bundle analyzer via npm run analyze (vite-plugin-visualizer)
+  - py-spy + httpie available on Latitude for production debugging
 
-  Missing tools:
-  - Pre-push git hook -- catch lint/type errors before pushing
-  - DB Browser for SQLite -- visual data exploration on dev machine
-  - py-spy -- attach to running uvicorn for production profiling
-  - Uptime Kuma -- lightweight self-hosted monitoring on Latitude
-  - python-json-logger -- structured JSON logs for debugging
-  - Bundle analyzer -- vite-plugin-visualizer for Three.js size tracking
-  - httpie -- readable HTTP client for ad-hoc API testing
+  Missing:
+  - pytest-cov for coverage reporting
+  - Playwright or vitest for frontend testing
+  - DB Browser for SQLite (visual data exploration, optional desktop GUI)
+
+--------------------------------------------------------------------------------
+12. FUTURE READINESS -- Grade: A- (was B+)
+--------------------------------------------------------------------------------
+
+  Strengths:
+  - ML Phase 1+2 fully shipped -- behavioral prediction, lighting learning,
+    audio classification, camera presence, music bandit, K-means screen sync
+  - Rule engine active -- generating learned time-based mode patterns
+  - Event logging capturing data across 6 tables for future learning
+  - Analytics page provides ML decision transparency
+  - WiFi presence detection shipping (replaces Alexa geofence dependency)
+  - Shadow-before-promote pattern ensures safe ML rollouts
+  - Phase 3 roadmap (autonomous operation) is well-defined in ML_SPEC.md
+  - All ML features designed with graceful degradation for cold start
+
+  Path to Phase 3 (Autonomous Operation):
+  - Behavioral predictor needs 500+ events (~1 week) for first training
+  - Audio classifier needs accuracy comparison with RMS detector
+  - Confidence fusion across all signals enables auto-apply
+  - Auto-demotion prevents ML from degrading system quality
 
 ================================================================================
-                            ACTIVE BUGS FOUND
+                            ACTIVE BUGS
 ================================================================================
 
   Bug                                           Location              Status
   -------------------------------------------   -------------------   --------
-  TypeError: can't subtract offset-naive and    event_logger.py       FIXED
-  offset-aware datetimes                        (commit 3482ecc)      (hardened)
-
-  NameError: name 'make_udp_sock' is not        fauxmo_service.py     FIXED
-  defined (voice control broken)                                      (was stale)
-
   Memory leak in GenerativeCanvas store         GenerativeCanvas      OPEN
-  subscriptions                                 .svelte:40-61
+  subscriptions -- cleanup may miss paths       .svelte:40-61
 
-  Silent API error swallowing                   api.js:27/41/50       OPEN
-
-  WebSocket JSON parse crash on malformed       main.py:418           FIXED
-  messages                                      (commit 3482ecc)
+  Silent API error swallowing -- .catch(()      api.js                OPEN
+  => ({})) hides all failures from UI
 
 ================================================================================
                         TOP PRIORITY ACTION ITEMS
@@ -315,149 +458,189 @@ Post-audit additions (2026-04-12):
 
   COMPLETED (April 12, 2026):
   -----------------------------------------------------------------------
-  [x] 1.  Fix CORS to specific origins (commit 3482ecc)
-  [x] 2.  Fix event_logger datetime timezone bug (commit 3482ecc)
-  [x] 3.  Fix fauxmo make_udp_sock -- already fixed in current code
-  [x] 4.  Add RotatingFileHandler to logger.py (commit 3482ecc)
-  [x] 5.  Add try-catch around WebSocket json.loads() (commit 3482ecc)
-  [x] 6.  Add daily SQLite backup cron on Latitude (4 AM, 7-day retention)
-  [x] 7.  Add pytest test suite -- 101 tests (expanded from 36)
-  [x] 8.  Add GitHub Actions workflow -- now runs full suite
-  [x] 9.  Version-control systemd service files in deployment/
-  [x] 12. Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
-  [x] 14. Add rate limiting via slowapi (commit f376e26)
-  [x] 19. Add pre-push git hook (commit f376e26)
-  [x] --  Add ruff config in pyproject.toml (ignore pre-existing E402/E731/E741)
-  [x] --  Fix weather widget high/low (was showing current temp for both)
+  [x]  Fix CORS to specific origins
+  [x]  Fix event_logger datetime timezone bug
+  [x]  Fix fauxmo make_udp_sock error
+  [x]  Add RotatingFileHandler to logger.py
+  [x]  Add try-catch around WebSocket json.loads()
+  [x]  Add daily SQLite backup cron on Latitude
+  [x]  Add pytest suite (36 → 101 tests)
+  [x]  Add GitHub Actions CI workflow
+  [x]  Version-control systemd service files in deployment/
+  [x]  Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
+  [x]  Add rate limiting via slowapi
+  [x]  Add pre-push git hook
+  [x]  Add ruff config in pyproject.toml
+  [x]  Fix weather widget high/low display
+  [x]  Now Playing Ambient Typography (NowPlayingIdle.svelte)
+  [x]  Sunrise Alarm Light Ramp (30-min warm-up before routine)
+  [x]  Weather-Reactive Lighting (condition-based ambient adjustments)
+  [x]  Uptime Kuma monitoring on Latitude
+  [x]  python-json-logger (structured JSON file logs)
+  [x]  vite-plugin-visualizer (bundle size analysis)
+  [x]  py-spy + httpie ops tools on Latitude
 
-  COMPLETED -- Tier 2 features (April 12, 2026):
+  COMPLETED (April 12-15, 2026):
   -----------------------------------------------------------------------
-  [x] Now Playing Ambient Typography (NowPlayingIdle.svelte)
-  [x] Sunrise Alarm Light Ramp (30-min bedroom lamp warm-up before routine)
-  [x] Weather-Reactive Lighting (subtle ambient adjustments by condition)
-
-  COMPLETED -- Tooling & Observability (April 12, 2026):
-  -----------------------------------------------------------------------
-  [x] 13. Uptime Kuma on Latitude (port 3002, monitoring Home Hub + Pi-hole)
-  [x] --  python-json-logger (structured JSON file logs)
-  [x] --  vite-plugin-visualizer (npm run analyze for bundle size)
-  [x] --  py-spy + httpie ops tools (requirements-ops.txt on Latitude)
-  [x] --  Test suite expanded: 36 → 101 tests, CI runs full suite
+  [x]  ML Phase 1: BehavioralPredictor, LightingLearner, MLDecisionLogger,
+       FeatureBuilder, ModelManager
+  [x]  ML Phase 2: AudioClassifier (YAMNet), MusicBandit (Thompson sampling),
+       CameraService (MediaPipe), Smart ScreenSync (K-means)
+  [x]  Analytics page with decision pipeline visualization
+  [x]  Learning API routes (/api/learning/*)
+  [x]  Camera API routes (/api/camera/*)
+  [x]  Event logging system (6 tables, fire-and-forget)
+  [x]  Rule engine with learned time-based patterns
+  [x]  Ambient sound service (browser-based, weather-reactive)
+  [x]  NWS weather migration (replaces OpenWeatherMap)
+  [x]  WiFi presence detection (replaces Alexa geofence)
+  [x]  Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
+  [x]  Gaming lights revamp (saturated purple/blue/teal)
+  [x]  Test suite expansion (101 → 183 tests, 8 → 12 files)
 
   REMAINING -- THIS MONTH:
   -----------------------------------------------------------------------
-  [ ] 10. Add Pydantic schemas for WebSocket messages
-  [ ] 11. Add file upload size limit + content-type validation
+  [ ]  Add Pydantic schemas for WebSocket messages
+  [ ]  Add file upload size limit + content-type validation (music import)
+  [ ]  Add ML test suite for untested services (behavioral_predictor,
+       lighting_learner, music_bandit, feature_builder, ml_logger)
 
   REMAINING -- NEXT QUARTER:
   -----------------------------------------------------------------------
-  [ ] 15. Add simple API key auth for write endpoints
-  [ ] 16. Add Prometheus /metrics endpoint
-  [ ] 17. Split automation_engine.py into smaller modules
-  [ ] 18. Extract main.py lifespan to bootstrap.py
-  [ ] 20. Add deploy.sh rollback capability
+  [ ]  Add simple API key auth for write endpoints
+  [ ]  Add Prometheus /metrics endpoint
+  [ ]  Split automation_engine.py into smaller modules (1,825 lines)
+  [ ]  Extract main.py lifespan to bootstrap.py
+  [ ]  Add deploy.sh rollback capability
+  [ ]  Migrate Plant App integration to HTTPS
+  [ ]  Promote audio classifier from shadow to active (needs data)
+  [ ]  Implement Phase 3 confidence-gated auto-apply
+  [ ]  Add pytest-cov for coverage reporting
+  [ ]  Add frontend testing (Playwright or vitest)
 
 ================================================================================
                           CREATIVE FEATURE IDEAS
 ================================================================================
 
-  WEEKEND PROJECTS (1-2 days each)
+  MACHINE LEARNING IDEAS (novel)
   -----------------------------------------------------------------------
 
-  Now Playing Ambient Typography                              [SHIPPED]
-    Giant song title/artist fills 1080p kiosk when idle + music playing.
-    Album art as blurred ambient glow. Bebas Neue, gentle float animation.
-    Component: NowPlayingIdle.svelte (commit 4d1867a)
+  Mood Drift Detection                                        [Medium]
+    Use LightingPreferenceLearner's override history to detect multi-day
+    preference trends. If manual overrides consistently trend warmer/dimmer
+    over a week, infer a seasonal mood shift and proactively adjust lighting
+    baselines. Operates on the derivative of preferences (rate of change),
+    catching slow drifts that per-event EMA smoothing misses. Could also
+    detect pre-illness patterns (dimmer + warmer = feeling off).
+    Touches: lighting_learner.py, new drift_detector module
 
-  Sunrise Alarm Light Ramp                                    [SHIPPED]
-    30-min bedroom lamp ramp before morning routine. CT 500→250, bri 1→150
-    over 15 steps. Registered as ScheduledTask. (commit 4d1867a)
+  Contextual Music Memory                                     [Medium]
+    Extend MusicBandit with episodic context: when a playlist plays during a
+    specific (mode, day_of_week, weather_condition) tuple and the user never
+    skips, that context-playlist association strengthens. Over time, "rainy
+    Friday evening + relax" maps to a specific playlist while "sunny Saturday
+    relax" maps to a different one. Currently the bandit only conditions on
+    mode + time_period.
+    Touches: music_bandit.py (expand arm key), weather_service integration
+
+  Anomaly-Triggered Automation Pause                          [Easy]
+    Use AudioClassifier's YAMNet output to detect anomalous sounds (doorbell,
+    smoke alarm, glass break, dog barking) and auto-pause all automation
+    transitions for 5 minutes. Prevents awkward mode changes during unusual
+    situations (package delivery, fire alarm test, neighbor's dog). YAMNet
+    already classifies these -- just needs a response layer.
+    Touches: audio_classifier.py (new callback), automation_engine.py
+
+  Multi-Signal Confidence Fusion                              [Hard]
+    Build a meta-model combining confidence scores from BehavioralPredictor,
+    camera presence, WiFi presence, audio classification, and time-of-day
+    into a single "apartment state confidence" score. When all signals agree
+    (camera sees you at desk, WiFi shows phone home, audio hears keyboard,
+    time is weekday afternoon), confidence approaches 100% and auto-apply
+    triggers. When signals disagree, confidence drops to suggest-only mode.
+    This is the Phase 3 endgame -- prototype as a simple weighted average.
+    Touches: new confidence_fusion.py service, automation_engine.py
+
+  Sleep Quality Inference from Sensor Fusion                  [Medium]
+    Combine sleeping mode entry/exit times, camera presence during sleep
+    (face visible vs. absent = restless), ambient audio levels (quiet vs.
+    disrupted), and morning routine override behavior (snooze = poor sleep)
+    into a nightly sleep quality score. No wearable needed -- purely from
+    existing Home Hub sensors. Display as a trend chart on the analytics
+    page. Could feed into smart sleep-debt alarm adjustments.
+    Touches: new sleep_quality.py, analytics page components
+
+
+  GENERAL HOME HUB IDEAS (novel)
+  -----------------------------------------------------------------------
+
+  Adaptive Transition Choreography                            [Medium]
+    Instead of all lights transitioning simultaneously on mode change, create
+    staggered "light waves" where lights transition in sequence from one room
+    to another with configurable direction and speed. Morning: bedroom →
+    living room (follow your path). Evening: living room → bedroom (retreat).
+    The wave pattern changes by time of day. Purely a timing layer on top of
+    existing mode transitions -- no new hardware.
+    Touches: automation_engine.py (transition sequencer), new config in
+    app_settings
+
+  Guest Wi-Fi Landing Page                                    [Medium]
+    When guests connect to apartment Wi-Fi, serve a landing page at
+    guest.homehub.local with: Wi-Fi password display, QR code for Party
+    Mode, current music playing, a "request a song" form that queues on
+    Sonos, and apartment "house rules" (tongue-in-cheek). Pi-hole DNS
+    already handles local domains. Combine with the existing QR code
+    library (qrcode npm package already installed).
+    Touches: new frontend route (/guest), Pi-hole DNS entry, new API
+    endpoint for song queue
+
+  Power Outage Recovery Intelligence                          [Easy]
+    Detect when the Latitude reboots after a power outage: check system
+    uptime < 5 minutes at startup + last known state was not a clean
+    shutdown. Auto-restore the exact apartment state from the last event
+    log entry -- correct mode, light colors, Sonos playback. Currently a
+    power outage leaves everything in default Hue state (warm white, 100%
+    brightness) with no music. Event data already exists to restore from.
+    Touches: main.py (startup check), event_query_service.py
+
+  Seasonal Lighting Profiles                                  [Easy]
+    Define four seasonal color palettes that subtly shift base color
+    temperature and hue ranges for all modes throughout the year. Winter:
+    cooler whites, blue accents. Summer: warmer tones, golden hour emphasis.
+    Spring/Fall: transitional. The shift is gradual -- changes daily by tiny
+    increments based on day-of-year, so you never notice the change but the
+    apartment "feels" different in December vs. July. Applied as a modifier
+    layer on top of existing ACTIVITY_LIGHT_STATES.
+    Touches: automation_engine.py (seasonal modifier), new config
+
+  Dashboard Vital Signs Strip                                 [Easy]
+    A minimal always-visible strip at the bottom of the kiosk showing 5-6
+    real-time system health indicators: Hue bridge latency (ms), Sonos
+    connection, ML model confidence (%), WiFi devices detected, Pi-hole
+    queries/blocks today, Latitude CPU temp. Turns red on any anomaly.
+    Like a car's instrument cluster -- glanceable system health without
+    opening Settings. Could double as a debugging aid during development.
+    Touches: new VitalStrip.svelte component, new /api/vitals endpoint
+
+
+  PREVIOUSLY LISTED (unshipped, still valid)
+  -----------------------------------------------------------------------
 
   Color of the Day                                            [Easy]
-    Daily auto-rotate through curated scenes. Day-of-year mod scene count.
-    One new ScheduledTask, no new files.
-
   QR Code Party Mode                                          [Easy]
-    Social mode shows QR code on kiosk linking to /party -- a guest DJ
-    page with big Sonos favorites and volume slider. qrcode npm package
-    already installed.
-
   Activity Heatmap Widget                                     [Medium]
-    GitHub-style contribution heatmap of apartment activity. New
-    /api/events/heatmap endpoint with GROUP BY date, hour. EventLogger
-    data already exists.
-
   NFC Tap-to-Scene                                            [Easy/HW]
-    NFC215 tags ($5/10-pack) around apartment. Each opens
-    GET /api/quick/{slug} URL. Tap nightstand = sleeping. Tap desk =
-    working. Zero latency, no app needed.
-
-
-  MULTI-DAY PROJECTS (3-7 days)
-  -----------------------------------------------------------------------
-
-  Weather-Reactive Lighting                                   [SHIPPED]
-    Subtle ambient adjustments during idle modes: thunderstorm = purple
-    tint, rain = cooler CT, clear sunset = golden hour, snow = brighter +
-    cooler, overcast = 10% dimmer. (commit 4d1867a)
-
   Beat-Reactive Lighting                                      [Medium]
-    Extend ambient_monitor with numpy FFT to extract bass energy
-    (20-200Hz). POST beat pulses to new endpoint. Map to brightness
-    bumps on all lights. Party vibes.
-
-  Network Presence Detection                                  [Medium]
-    ARP sweep every 30s to detect known phones joining WiFi. Map MAC
-    addresses to names. Feed social mode detection + personalized TTS
-    greetings. New standalone agent.
-
   Smart Sleep-Debt Alarm                                      [Easy]
-    Morning routine queries last night's sleep start from activity_events.
-    If sleep started at 2 AM instead of 10:30 PM, delay alarm
-    proportionally. Small change to morning_routine.py.
-
   Time Machine Replay                                         [Medium]
-    Scrub through any past day's events via timeline slider. See what
-    the apartment looked like at any moment. New endpoint + component.
-
   Audio Fingerprinting                                        [Medium]
-    Blue Yeti mic + shazamio library identifies what Sonos is playing.
-    Gets rich metadata (genre, BPM) even when Sonos shows generic
-    "Apple Music". Enables BPM-aware lighting.
-
-
-  AMBITIOUS STRETCH GOALS (1-4 weeks)
-  -----------------------------------------------------------------------
-
   Colts Game Day Engine                                       [Hard]
-    ESPN free API polling during game windows. Touchdown = Colts blue
-    flash + TTS + celebration clip. Field goal = subtle pulse. Opponent
-    scores = red flash. New GameDayEngine service + GameDayCard.svelte
-    + pixel art field overlay.
-
   WLED LED Strip Integration                                  [Medium/HW]
-    ESP32 + WS2812B strip ($15 total). WLED REST API similar to Hue.
-    Addressable LEDs for color chasing, rainbow waves, audio-reactive
-    effects. New WledService.
-
   Apartment Digital Twin                                      [Hard]
-    3D model of apartment in Threlte. Real-time light colors mapped to
-    Three.js point lights. The ultimate "that's so cool" idle screen.
-    Threlte experience already exists from MoonScene.
-
-  Learning Engine v1                                          [Hard]
-    Nightly pattern detection: group 30 days of events by (day_of_week,
-    hour, mode). If a mode occurs >80% at a specific time, generate a
-    learned rule. Surface predictions on dashboard. No ML needed --
-    pure frequency analysis.
-
   Full Room Audio Analysis Dashboard                          [Hard]
-    Combine beat detection + audio fingerprinting + ambient noise levels
-    into a real-time audio visualization on the kiosk. Waveform,
-    frequency spectrum, BPM counter. Uses existing Blue Yeti hardware.
 
 ================================================================================
-                        RECOMMENDED TOOLS TO ADD
+                        RECOMMENDED TOOLS
 ================================================================================
 
   Tool                      Purpose                           Status
@@ -465,46 +648,58 @@ Post-audit additions (2026-04-12):
   pytest + pytest-asyncio   Backend test suite                ADDED
   RotatingFileHandler       Log rotation (stdlib)             ADDED
   slowapi                   Rate limiting for FastAPI         ADDED
-  GitHub Actions            Lint + type-check on push         ADDED
+  GitHub Actions            Lint + test on push               ADDED
   pre-push git hook         Catch lint errors before push     ADDED
   python-json-logger        Structured JSON logs (file)       ADDED
   Uptime Kuma               Self-hosted monitoring on 3002    ADDED
   vite-plugin-visualizer    Bundle size analysis              ADDED
   py-spy                    Production profiling              ADDED
   httpie                    Readable HTTP testing via SSH     ADDED
-  DB Browser for SQLite     Visual data exploration           Optional (desktop GUI)
+  lightgbm                  Behavioral mode prediction        ADDED
+  scikit-learn              K-means screen sync clustering    ADDED
+  ai-edge-litert            TFLite runtime for YAMNet         ADDED
+  mediapipe                 Face detection (camera presence)  ADDED
+  opencv-python-headless    Camera capture (no GUI)           ADDED
+  pytest-cov                Coverage reporting                TODO
+  Playwright / vitest       Frontend testing                  TODO
 
 ================================================================================
                            DEV SETUP NOTES
 ================================================================================
 
   Current workflow:
-  - Windows desktop: code editing, git push, local testing, runs PC
-    activity detector via Task Scheduler
-  - Latitude (192.168.1.210): Ubuntu 24.04, runs FastAPI backend +
-    ambient monitor as systemd user services, Firefox kiosk via GNOME
+  - Windows desktop: code editing, git push, local testing
+  - PC agents: unified supervisor (pythonw.exe) manages activity_detector,
+    ambient_monitor, and screen_sync_agent via Task Scheduler
+  - Latitude (192.168.1.210): Ubuntu 24.04, runs FastAPI backend + ambient
+    monitor + camera service (opt-in) as systemd user services, Firefox
+    kiosk via GNOME autostart
   - Deploy: ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
   - MCP server uses HOME_HUB_URL Windows env var to point at Latitude
 
-  Now version-controlled in deployment/:
+  Version-controlled in deployment/:
   - systemd service files (home-hub.service, home-hub-ambient.service)
   - Firefox kiosk desktop entry (home-hub-kiosk.desktop)
   - Database backup script (scripts/backup-db.sh, cron active on Latitude)
 
-  Still not version-controlled:
-  - Uptime monitoring configuration (Uptime Kuma not yet installed)
+  Weather: NWS API (api.weather.gov) -- free, no API key needed
+  Camera: opt-in via camera_enabled app_setting, default disabled
 
 ================================================================================
                           VERIFICATION PLAN
 ================================================================================
 
-  After implementing fixes:
+  After implementing changes:
   1. Run /api-audit to verify all endpoints still work
   2. Run /ui-audit to screenshot all pages at desktop + mobile widths
   3. Check mcp get_health for Hue/Sonos connectivity
   4. Verify log rotation: check logs/ for rotated files
   5. Verify backup: check data/backups/ on Latitude
-  6. Run pytest (once test suite exists)
-  7. Check GitHub Actions (once CI exists)
+  6. Run pytest (183 tests expected)
+  7. Check GitHub Actions for CI pass
+  8. Verify ML services: GET /api/learning/status
+  9. Verify camera opt-in: GET /api/camera/status
+  10. Verify WiFi presence: check presence_service logs
+  11. Check analytics page renders decision pipeline
 
 ================================================================================

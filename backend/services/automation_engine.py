@@ -114,11 +114,11 @@ WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 # Auto-activate effects based on mode + time period.
 # None = no auto effect. Social mode handles its own effects via SOCIAL_STYLES.
 EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
-    "relax":    {"day": "opal",    "evening": "candle",  "night": "candle"},
+    "relax":    {"day": "opal",    "evening": "candle",  "night": "fire"},
     "working":  {"day": None,      "evening": None,      "night": None},
     "gaming":   {"day": None,      "evening": None,      "night": None},
     "movie":    {"day": None,      "evening": None,      "night": None},
-    "watching": {"day": None,      "evening": None,      "night": None},
+    "watching": {"day": None,      "evening": "glisten", "night": "glisten"},
 }
 
 # Mode-specific transition speeds (deciseconds: 10 = 1 second).
@@ -127,7 +127,7 @@ MODE_TRANSITION_TIME: dict[str, int] = {
     "working":  20,   # 2s smooth
     "gaming":    5,   # 0.5s snappy
     "watching": 30,   # 3s cinematic fade
-    "relax":    40,   # 4s gentle
+    "relax":    50,   # 5s gentle (slower for moodier vibe)
     "social":   10,   # 1s
     "sleeping": 50,   # 5s gradual
     "movie":    30,   # 3s
@@ -136,163 +136,129 @@ MODE_TRANSITION_TIME: dict[str, int] = {
 }
 
 
-def _uniform(bri: int, hue: int, sat: int) -> dict[str, dict]:
-    """Build a per-light dict where all 4 lights get the same state."""
-    state = {"on": True, "bri": bri, "hue": hue, "sat": sat}
-    return {"1": state, "2": state.copy(), "3": state.copy(), "4": state.copy()}
-
-
-def _uniform_ct(bri: int, ct: int) -> dict[str, dict]:
-    """Build a per-light dict where all 4 lights get the same CT state."""
-    state = {"on": True, "bri": bri, "ct": ct}
-    return {"1": state, "2": state.copy(), "3": state.copy(), "4": state.copy()}
-
-
-def _gaming_state(bri: int, hue: int, sat: int) -> dict[str, dict]:
-    """Build gaming state: lights 1/3/4 warm bias, light 2 fallback (screen sync overrides)."""
-    bias = {"on": True, "bri": bri, "hue": hue, "sat": sat}
-    return {
-        "1": bias,
-        "2": bias.copy(),  # Fallback — screen sync overrides this immediately
-        "3": bias.copy(),
-        "4": bias.copy(),
-    }
-
-
-def _watching_state(bri: int, hue: int, sat: int) -> dict[str, dict]:
-    """Build watching/movie state: bedroom lamp on, others off."""
-    return {
-        "1": _LIGHT_OFF,
-        "2": {"on": True, "bri": bri, "hue": hue, "sat": sat},
-        "3": _LIGHT_OFF,
-        "4": _LIGHT_OFF,
-    }
-
-
 ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # ── Gaming ────────────────────────────────────────────────────────
-    # Classic RGB: purple wash (L1), blue bias (L2, sync overrides),
-    # blue + purple accents (L3/L4). All HSB, high saturation.
-    # Prism effect on evening/night adds slow color cycling.
+    # Dim blue-violet ambient — screen sync on L2 is the star. Accents
+    # stay very low so the screen color dominates the room. All HSB.
     "gaming": {
         "day": {
-            "1": {"on": True, "bri": 140, "hue": 49000, "sat": 200},   # Purple ambient wash
-            "2": {"on": True, "bri": 200, "hue": 46920, "sat": 200},   # Blue bias (sync overrides)
-            "3": {"on": True, "bri": 100, "hue": 44000, "sat": 230},   # Deep blue accent
-            "4": {"on": True, "bri": 80,  "hue": 57000, "sat": 210},   # Magenta accent
+            "1": {"on": True, "bri": 30,  "hue": 47000, "sat": 100},   # Muted blue-violet wash
+            "2": {"on": True, "bri": 200, "hue": 46920, "sat": 200},   # Fallback (screen sync overrides)
+            "3": {"on": True, "bri": 20,  "hue": 47000, "sat": 80},    # Dim blue accent
+            "4": {"on": True, "bri": 15,  "hue": 48000, "sat": 90},    # Faintest depth fill
         },
         "evening": {
-            "1": {"on": True, "bri": 100, "hue": 50000, "sat": 230},   # Deeper purple wash
-            "2": {"on": True, "bri": 140, "hue": 46920, "sat": 220},   # Blue bias (sync overrides)
-            "3": {"on": True, "bri": 70,  "hue": 44000, "sat": 250},   # Vivid deep blue
-            "4": {"on": True, "bri": 55,  "hue": 57000, "sat": 230},   # Magenta accent
+            "1": {"on": True, "bri": 22,  "hue": 47000, "sat": 120},   # Slightly richer wash
+            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 220},   # Fallback (screen sync overrides)
+            "3": {"on": True, "bri": 15,  "hue": 47000, "sat": 100},   # Dimmer accent
+            "4": {"on": True, "bri": 10,  "hue": 48000, "sat": 110},   # Near-invisible
         },
         "night": {
-            "1": {"on": True, "bri": 55,  "hue": 50000, "sat": 254},   # Deep purple glow
-            "2": {"on": True, "bri": 80,  "hue": 46920, "sat": 240},   # Blue bias (sync overrides)
-            "3": {"on": True, "bri": 35,  "hue": 44000, "sat": 254},   # Deep blue glow
-            "4": {"on": True, "bri": 28,  "hue": 57000, "sat": 254},   # Dim magenta
+            "1": {"on": True, "bri": 12,  "hue": 47000, "sat": 140},   # Barely there glow
+            "2": {"on": True, "bri": 100, "hue": 46920, "sat": 240},   # Fallback (screen sync overrides)
+            "3": {"on": True, "bri": 8,   "hue": 47000, "sat": 120},   # Ghost light
+            "4": {"on": True, "bri": 6,   "hue": 48000, "sat": 130},   # Almost off
         },
     },
     # ── Working ───────────────────────────────────────────────────────
     # Clean ct-mode whites only. Per-light brightness gradient creates
-    # depth instead of flat uniform lighting. Night: desk lamp (L2)
-    # bright enough to reduce monitor contrast to ~3:1, ambient fill
-    # from L1 + L4 eliminates the dark-cave feeling.
+    # depth instead of flat uniform lighting. Evening shifts noticeably
+    # warmer. Night: desk lamp functional + ghost-light ambient fill.
     "working": {
         "day": {
-            "1": {"on": True, "bri": 200, "ct": 220},    # Bright neutral fill
-            "2": {"on": True, "bri": 254, "ct": 200},    # Max brightness desk lamp
-            "3": {"on": True, "bri": 170, "ct": 233},    # Good kitchen fill
-            "4": {"on": True, "bri": 150, "ct": 250},    # Slightly warmer back fill
+            "1": {"on": True, "bri": 180, "ct": 233},    # Bright neutral fill
+            "2": {"on": True, "bri": 254, "ct": 210},    # Max bright, slightly cool desk lamp
+            "3": {"on": True, "bri": 140, "ct": 250},    # Kitchen fill
+            "4": {"on": True, "bri": 100, "ct": 270},    # Warmer back fill
         },
         "evening": {
-            "1": {"on": True, "bri": 140, "ct": 300},    # Warm-neutral fill
-            "2": {"on": True, "bri": 200, "ct": 270},    # Still bright desk lamp
-            "3": {"on": True, "bri": 110, "ct": 320},    # Warmer kitchen
-            "4": {"on": True, "bri": 90,  "ct": 340},    # Warmest back
+            "1": {"on": True, "bri": 100, "ct": 340},    # Noticeably warmer, dimmer
+            "2": {"on": True, "bri": 180, "ct": 300},    # Still functional desk, warmer
+            "3": {"on": True, "bri": 60,  "ct": 370},    # Low warm kitchen
+            "4": {"on": True, "bri": 35,  "ct": 400},    # Warm background
         },
         "night": {
-            "1": {"on": True, "bri": 45,  "ct": 420},    # Dim warm ambient glow
-            "2": {"on": True, "bri": 150, "ct": 310},    # Adequate desk light (3200K)
-            "3": _LIGHT_OFF,                               # Kitchen front off
-            "4": {"on": True, "bri": 25,  "ct": 454},    # Ultra-dim warm wash
+            "1": {"on": True, "bri": 25,  "ct": 440},    # Faint warm glow
+            "2": {"on": True, "bri": 130, "ct": 350},    # Late-night desk (functional, warm)
+            "3": _LIGHT_OFF,                               # Kitchen off
+            "4": {"on": True, "bri": 10,  "ct": 454},    # Ghost light depth fill
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
-    # SMPTE-inspired bias lighting: neutral ct on L2 (behind screen),
-    # minimal fill elsewhere to avoid washing out the picture.
+    # Soft warm ambient with warm-neutral bias on L2 (behind screen).
+    # More lights stay on than before for comfortable viewing.
     "watching": {
         "day": {
-            "1": {"on": True, "bri": 40,  "ct": 330},    # Dim warm fill
-            "2": {"on": True, "bri": 60,  "ct": 200},    # Neutral bias behind screen
+            "1": {"on": True, "bri": 50,  "ct": 370},    # Soft warm ambient
+            "2": {"on": True, "bri": 45,  "ct": 280},    # Warm-neutral bias behind screen
             "3": _LIGHT_OFF,
-            "4": _LIGHT_OFF,
+            "4": {"on": True, "bri": 25,  "ct": 400},    # Warm depth fill
         },
         "evening": {
-            "1": _LIGHT_OFF,
-            "2": {"on": True, "bri": 35,  "ct": 233},    # Neutral bias
+            "1": {"on": True, "bri": 30,  "ct": 420},    # Dim warm glow
+            "2": {"on": True, "bri": 35,  "ct": 310},    # Warm bias
             "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 15,  "ct": 454},    # Ultra-dim warm wash
+            "4": {"on": True, "bri": 15,  "ct": 454},    # Very dim warm wash
         },
         "night": {
-            "1": _LIGHT_OFF,
-            "2": {"on": True, "bri": 20,  "ct": 200},    # Minimal neutral bias
+            "1": {"on": True, "bri": 12,  "ct": 454},    # Barely-there amber
+            "2": {"on": True, "bri": 20,  "ct": 350},    # Minimal warm bias
             "3": _LIGHT_OFF,
-            "4": _LIGHT_OFF,
+            "4": {"on": True, "bri": 8,   "ct": 454},    # Ghost light
         },
     },
-    # Base state for social/party — no time awareness (flat, no period keys)
+    # Base state for social/party — no time awareness (flat, no period keys).
+    # Warm amber-peach palette; sub-styles override when active.
     "social": {
-        "1": {"on": True, "bri": 200, "hue": 0, "sat": 254},
-        "2": {"on": True, "bri": 200, "hue": 0, "sat": 254},
-        "3": {"on": True, "bri": 200, "hue": 0, "sat": 254},
-        "4": {"on": True, "bri": 200, "hue": 0, "sat": 254},
+        "1": {"on": True, "bri": 200, "hue": 7000,  "sat": 200},   # Warm amber-peach
+        "2": {"on": True, "bri": 180, "hue": 56000, "sat": 180},   # Soft magenta-pink
+        "3": {"on": True, "bri": 220, "hue": 5000,  "sat": 220},   # Rich amber (kitchen gathering)
+        "4": {"on": True, "bri": 160, "hue": 10000, "sat": 160},   # Warm coral
     },
     # ── Relax ─────────────────────────────────────────────────────────
-    # Warm gradient — each light gets different warmth/brightness to
-    # create spatial depth instead of flat amber. Paired with opal (day)
-    # and candle (evening/night) effects.
+    # Full HSB warm gradient — amber/gold/ember tones only. Each light
+    # gets deeper amber as you move from L1→L4. Paired with opal (day),
+    # candle (evening), fire (night) effects.
     "relax": {
         "day": {
-            "1": {"on": True, "bri": 190, "ct": 370},                   # Warm white
-            "2": {"on": True, "bri": 170, "hue": 7000,  "sat": 160},   # Golden accent
-            "3": {"on": True, "bri": 130, "ct": 400},                   # Warmer
-            "4": {"on": True, "bri": 110, "hue": 5500,  "sat": 140},   # Amber accent
+            "1": {"on": True, "bri": 100, "hue": 5000,  "sat": 200},   # Warm amber wash
+            "2": {"on": True, "bri": 80,  "hue": 6500,  "sat": 180},   # Softer orange-gold
+            "3": {"on": True, "bri": 55,  "hue": 4000,  "sat": 220},   # Deeper amber
+            "4": {"on": True, "bri": 40,  "hue": 3000,  "sat": 240},   # Burnt orange depth
         },
         "evening": {
-            "1": {"on": True, "bri": 110, "hue": 6000,  "sat": 200},   # Deep amber
-            "2": {"on": True, "bri": 90,  "hue": 5000,  "sat": 180},   # Golden
-            "3": {"on": True, "bri": 70,  "hue": 7500,  "sat": 220},   # Orange
-            "4": {"on": True, "bri": 50,  "hue": 4500,  "sat": 254},   # Deep gold
+            "1": {"on": True, "bri": 55,  "hue": 4000,  "sat": 240},   # Deep amber
+            "2": {"on": True, "bri": 45,  "hue": 5500,  "sat": 220},   # Warm gold
+            "3": {"on": True, "bri": 30,  "hue": 3000,  "sat": 254},   # Ember glow
+            "4": {"on": True, "bri": 20,  "hue": 2000,  "sat": 254},   # Deep red-amber
         },
         "night": {
-            "1": {"on": True, "bri": 45,  "hue": 5500,  "sat": 220},   # Dim amber
-            "2": {"on": True, "bri": 35,  "hue": 4000,  "sat": 200},   # Dim gold
-            "3": {"on": True, "bri": 25,  "hue": 6500,  "sat": 240},   # Dim orange
-            "4": {"on": True, "bri": 20,  "ct": 500},                   # Ultra-warm white
+            "1": {"on": True, "bri": 25,  "hue": 3000,  "sat": 254},   # Dim ember
+            "2": {"on": True, "bri": 20,  "hue": 4000,  "sat": 240},   # Faint warm glow
+            "3": {"on": True, "bri": 12,  "hue": 2000,  "sat": 254},   # Near-invisible ember
+            "4": {"on": True, "bri": 8,   "hue": 1500,  "sat": 254},   # Dying coal
         },
     },
     # ── Movie ─────────────────────────────────────────────────────────
     # Same bias-light approach as watching.
     "movie": {
         "day": {
-            "1": {"on": True, "bri": 40,  "ct": 330},
-            "2": {"on": True, "bri": 60,  "ct": 200},
+            "1": {"on": True, "bri": 50,  "ct": 370},
+            "2": {"on": True, "bri": 45,  "ct": 280},
             "3": _LIGHT_OFF,
-            "4": _LIGHT_OFF,
+            "4": {"on": True, "bri": 25,  "ct": 400},
         },
         "evening": {
-            "1": _LIGHT_OFF,
-            "2": {"on": True, "bri": 35,  "ct": 233},
+            "1": {"on": True, "bri": 30,  "ct": 420},
+            "2": {"on": True, "bri": 35,  "ct": 310},
             "3": _LIGHT_OFF,
             "4": {"on": True, "bri": 15,  "ct": 454},
         },
         "night": {
-            "1": _LIGHT_OFF,
-            "2": {"on": True, "bri": 20,  "ct": 200},
+            "1": {"on": True, "bri": 12,  "ct": 454},
+            "2": {"on": True, "bri": 20,  "ct": 350},
             "3": _LIGHT_OFF,
-            "4": _LIGHT_OFF,
+            "4": {"on": True, "bri": 8,   "ct": 454},
         },
     },
 }
@@ -304,40 +270,40 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
 SOCIAL_STYLES: dict[str, dict[str, Any]] = {
     "color_cycle": {
         "display_name": "Color Cycle",
-        "description": "Slow rotation through all colors",
-        "base_state": None,  # Uses default social base state
+        "description": "Slow warm-toned color rotation",
+        "base_state": None,  # Uses the new social base state
         "effect": "prism",
     },
     "club": {
         "display_name": "Club",
         "description": "Deep purple and magenta with sparkle",
         "base_state": {
-            "1": {"on": True, "bri": 180, "hue": 50000, "sat": 254},
-            "2": {"on": True, "bri": 180, "hue": 54000, "sat": 254},
-            "3": {"on": True, "bri": 180, "hue": 50000, "sat": 254},
-            "4": {"on": True, "bri": 180, "hue": 54000, "sat": 254},
+            "1": {"on": True, "bri": 180, "hue": 50000, "sat": 254},   # Purple
+            "2": {"on": True, "bri": 200, "hue": 54000, "sat": 240},   # Magenta
+            "3": {"on": True, "bri": 160, "hue": 48000, "sat": 254},   # Blue-purple
+            "4": {"on": True, "bri": 140, "hue": 56000, "sat": 220},   # Pink-magenta
         },
         "effect": "sparkle",
     },
     "rave": {
         "display_name": "Rave",
-        "description": "High energy rapid color changes",
+        "description": "High energy, max brightness, every color",
         "base_state": {
-            "1": {"on": True, "bri": 254, "hue": 0, "sat": 254},
-            "2": {"on": True, "bri": 254, "hue": 21845, "sat": 254},
-            "3": {"on": True, "bri": 254, "hue": 43690, "sat": 254},
-            "4": {"on": True, "bri": 254, "hue": 10922, "sat": 254},
+            "1": {"on": True, "bri": 254, "hue": 0,     "sat": 254},   # Red
+            "2": {"on": True, "bri": 254, "hue": 25500, "sat": 254},   # Green
+            "3": {"on": True, "bri": 254, "hue": 46920, "sat": 254},   # Blue
+            "4": {"on": True, "bri": 254, "hue": 12750, "sat": 254},   # Yellow
         },
         "effect": "prism",
     },
     "fire_and_ice": {
         "display_name": "Fire & Ice",
-        "description": "Warm red/orange meets cool blue",
+        "description": "Warm reds vs cool blues — temperature contrast",
         "base_state": {
-            "1": {"on": True, "bri": 200, "hue": 2000, "sat": 254},
-            "2": {"on": True, "bri": 200, "hue": 3000, "sat": 254},
-            "3": {"on": True, "bri": 200, "hue": 46920, "sat": 254},
-            "4": {"on": True, "bri": 200, "hue": 46920, "sat": 254},
+            "1": {"on": True, "bri": 200, "hue": 3000,  "sat": 254},   # Deep orange
+            "2": {"on": True, "bri": 180, "hue": 1000,  "sat": 254},   # Red-orange
+            "3": {"on": True, "bri": 200, "hue": 44000, "sat": 220},   # Cool blue
+            "4": {"on": True, "bri": 180, "hue": 48000, "sat": 200},   # Blue-purple
         },
         "effect": None,
     },

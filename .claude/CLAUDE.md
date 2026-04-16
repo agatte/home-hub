@@ -213,7 +213,7 @@ Key additions beyond current:
 - **`hue_v2_service.py`** — CLIP API v2/httpx: native bridge scenes and dynamic effects. Maintains v1↔v2 UUID mapping cache.
 - **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
 - **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
-- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
+- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time; weather effects (rain→candle, storm→sparkle) overlay when no mode effect is set. Effects are only stopped/restarted on change — same-effect cycles are skipped to preserve brightness base. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
 - **`weather_service.py`** — NWS API (api.weather.gov) with 5-minute cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset. Active severe weather alerts checked every 2 min — alert descriptions override stale observation data so automation catches storms immediately. Sunrise/sunset from sunrise-sunset.org (24h cache). No API key needed.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
 - **`presence_service.py`** — WiFi presence detection. Pings iPhone (192.168.1.148) every 30s. 10-min timeout → gradual departure fade → Sonos pause → away. Arrival → choreographed light wave (L3→L4→L1→L2, 1s staggers) + adaptive TTS greeting + weather-aware effect + music auto-play. ARP fallback for DHCP IP changes. Config in `app_settings` key `presence_config`.
@@ -513,6 +513,8 @@ Activated via `POST /api/scenes/effects/{name}` (all lights) or `POST /api/scene
 - `relax`: opal (day), candle (evening), candle (night)
 - `gaming`: none (day), glisten (evening), glisten (night)
 - `working`, `watching`, `movie`: none (all periods)
+
+**Weather effect fallback:** When a mode has no auto-effect, weather can overlay one — rain→candle, thunderstorm→sparkle, snow→opal (evening/night only, except sparkle fires any time). Effects are only stopped/restarted when switching to a different effect — same-effect cycles are skipped to preserve the brightness base on the bridge.
 
 ---
 
