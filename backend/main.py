@@ -34,6 +34,7 @@ from backend.api.routes.weather import router as weather_router
 from backend.api.routes.ambient import router as ambient_router
 from backend.api.routes.learning import router as learning_router
 from backend.api.routes.camera import router as camera_router
+from backend.api.routes.debug import router as debug_router
 from backend.api.routes.pihole_proxy import router as pihole_proxy_router
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
@@ -551,6 +552,7 @@ app.include_router(rules_router)
 app.include_router(ambient_router)
 app.include_router(learning_router)
 app.include_router(camera_router)
+app.include_router(debug_router)
 
 # Pi-hole reverse proxy — must come AFTER all API routers so our own
 # /api/* routes match first.  Only unmatched /api/* paths (Pi-hole's

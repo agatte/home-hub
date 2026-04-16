@@ -382,48 +382,16 @@ async def get_event_summary(days: int = 7) -> dict:
     Returns mode transition counts, most-adjusted lights, and most-played
     Sonos favorites. Useful for understanding usage patterns and debugging.
 
+    Hits the live backend at HOME_HUB_URL — i.e. queries production data,
+    not a stale local dev DB.
+
     Args:
         days: Number of days to look back (default 7).
     """
-    import aiosqlite
-    from datetime import datetime, timedelta, timezone
-
-    from backend.config import DATA_DIR
-
-    db_path = DATA_DIR / "home_hub.db"
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-    result: dict = {"days": days, "mode_transitions": {}, "light_adjustments": [], "sonos_events": []}
-
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Mode transition counts
-        async with db.execute(
-            "SELECT mode, COUNT(*) as count FROM activity_events "
-            "WHERE timestamp >= ? GROUP BY mode ORDER BY count DESC",
-            (since,),
-        ) as cursor:
-            result["mode_transitions"] = {row["mode"]: row["count"] for row in await cursor.fetchall()}
-
-        # Most-adjusted lights
-        async with db.execute(
-            "SELECT light_name, light_id, COUNT(*) as count FROM light_adjustments "
-            "WHERE timestamp >= ? GROUP BY light_id ORDER BY count DESC LIMIT 5",
-            (since,),
-        ) as cursor:
-            result["light_adjustments"] = [dict(row) for row in await cursor.fetchall()]
-
-        # Most-played Sonos favorites
-        async with db.execute(
-            "SELECT favorite_title, event_type, COUNT(*) as count FROM sonos_playback_events "
-            "WHERE timestamp >= ? AND favorite_title IS NOT NULL "
-            "GROUP BY favorite_title, event_type ORDER BY count DESC LIMIT 10",
-            (since,),
-        ) as cursor:
-            result["sonos_events"] = [dict(row) for row in await cursor.fetchall()]
-
-    return result
+    async with _client() as c:
+        r = await c.get("/api/debug/event-summary", params={"days": days})
+        r.raise_for_status()
+        return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +419,9 @@ async def query_db(sql: str) -> list[dict]:
     Run a read-only SQL query against the Home Hub SQLite database.
     Only SELECT statements are permitted.
 
+    Hits the live backend at HOME_HUB_URL — i.e. queries production data,
+    not a stale local dev DB.
+
     Args:
         sql: A SELECT query, e.g. "SELECT * FROM mode_playlists"
 
@@ -464,17 +435,10 @@ async def query_db(sql: str) -> list[dict]:
     if not stripped.startswith("SELECT"):
         raise ValueError("Only SELECT queries are permitted via this tool.")
 
-    import aiosqlite
-
-    from backend.config import DATA_DIR
-
-    db_path = DATA_DIR / "home_hub.db"
-
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(sql) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+    async with _client() as c:
+        r = await c.get("/api/debug/query", params={"sql": sql})
+        r.raise_for_status()
+        return r.json()["result"]
 
 
 if __name__ == "__main__":
