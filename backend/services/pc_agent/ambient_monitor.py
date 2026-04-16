@@ -62,6 +62,11 @@ YAMNET_SAMPLES = 15600
 # Shadow logging throttle — log on class change or every N seconds
 SHADOW_LOG_INTERVAL = 30
 
+# Heartbeat — re-post current state at this cadence even without an edge,
+# so the audio_ml lane in confidence fusion (300 s stale threshold) stays
+# fresh while ambient noise sits steadily on either side of the threshold.
+HEARTBEAT_INTERVAL = 60
+
 
 class AmbientMonitor:
     """
@@ -394,6 +399,7 @@ def run_monitor(
     # Shadow logging throttle state
     last_logged_class: Optional[str] = None
     last_log_time: float = 0.0
+    last_heartbeat: float = 0.0
 
     try:
         while not _stop.is_set():
@@ -413,8 +419,27 @@ def run_monitor(
                     )
                     resp.raise_for_status()
                     logger.info(f"Reported '{mode}' to server (RMS)")
+                    last_heartbeat = time.time()
                 except httpx.HTTPError as e:
                     logger.warning(f"Failed to report RMS result to server: {e}")
+            else:
+                # No edge fired — emit a heartbeat so audio_ml fusion stays fresh.
+                now_hb = time.time()
+                if now_hb - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    mode = "social" if monitor._is_social else "idle"
+                    try:
+                        resp = client.post(
+                            activity_endpoint,
+                            json={
+                                "mode": mode,
+                                "source": "ambient",
+                                "detected_at": datetime.now().isoformat(),
+                            },
+                        )
+                        resp.raise_for_status()
+                        last_heartbeat = now_hb
+                    except httpx.HTTPError as e:
+                        logger.debug("Heartbeat post failed: %s", e)
 
             # ── YAMNet classification ──────────────────────────
             if classifier_enabled:
