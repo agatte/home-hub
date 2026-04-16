@@ -620,7 +620,7 @@ augmentation is weather conditions from the cached OpenWeatherMap response
 
 ### Integration Patterns
 
-ML components integrate with the existing codebase using four patterns that
+ML components integrate with the existing codebase using five patterns that
 match the established service conventions:
 
 **Pattern 1: Activity Source**
@@ -635,7 +635,8 @@ await automation.report_activity(mode="away", source="camera")
 
 The existing `MODE_PRIORITY` dict arbitrates between sources. Camera "absent"
 overrides idle (faster away detection). Audio "social" uses the same priority=4
-as the current ambient monitor.
+as the current ambient monitor. Activity reports also feed into `ConfidenceFusion`
+as signal inputs (Pattern 5).
 
 **Pattern 2: Prediction Replacement**
 The behavioral predictor replaces the rule engine's `check_rules()` with a
@@ -676,6 +677,30 @@ automation.register_on_mode_change(ml_logger.on_mode_change)
 automation.register_on_mode_change(music_bandit.on_mode_change)
 ```
 
+**Pattern 5: Fusion Signal Reporting**
+Signal sources that produce mode predictions with confidence scores report to
+the confidence fusion service, which computes a weighted ensemble across all
+active signals:
+
+```python
+# In AutomationEngine.report_activity() — any activity source:
+fusion.report_signal("process", mode, confidence=1.0)
+fusion.report_signal("camera", mode, confidence=0.9)
+fusion.report_signal("audio_ml", mode, confidence=0.8)
+
+# In AutomationEngine.run_loop() — behavioral predictor:
+fusion.report_signal("behavioral", prediction["mode"], prediction["confidence"])
+
+# Rule engine reports matched rules:
+fusion.report_signal("rule_engine", rule.predicted_mode, rule.confidence)
+```
+
+Each cycle, `fusion.compute_fusion()` returns a `FusionResult` with fused mode,
+fused confidence, per-signal breakdown, and action flags (`auto_apply`,
+`can_override`). The automation engine acts on high-confidence results and
+broadcasts the full result in every pipeline state update so the dashboard can
+render signal gauges in real-time.
+
 ### WebSocket Events
 
 New event types for ML status and predictions:
@@ -685,15 +710,20 @@ New event types for ML status and predictions:
 | `ml_prediction` | On prediction (auto-applied or suggested) | `{predicted_mode, confidence, source, factors, applied}` |
 | `ml_status` | On model health change | `{model_name, status, last_trained, accuracy}` |
 | `ml_decision` | On any mode switch | `{mode, decision_chain, factors}` (see Explainability) |
+| `pipeline_state` | On state change (throttled to 1s) | Now includes a `fusion` field with `{fused_mode, fused_confidence, agreement, auto_apply, can_override, signals: {process, camera, audio_ml, behavioral, rule_engine}}` for each active signal |
 
 ### Confidence-Gated Actions
 
+Applies to both individual ML predictions and the fused ensemble score:
+
 ```
->=95% confidence  →  Auto-apply mode. Log decision. No toast.
-70-95% confidence →  Show ModeSuggestionToast with reasoning.
-                      User accepts or dismisses. Log outcome.
-<70% confidence   →  Silent. Log prediction for shadow evaluation.
-                      Fall through to rule engine or time rules.
+>=98% fused confidence  →  Can override stale process detection
+                            (requires 80%+ signal agreement)
+>=95% fused confidence  →  Auto-apply mode when idle/away. Log decision.
+70-95% confidence       →  Show ModeSuggestionToast with reasoning.
+                            User accepts or dismisses. Log outcome.
+<70% confidence         →  Silent. Log prediction for shadow evaluation.
+                            Fall through to rule engine or time rules.
 ```
 
 ---
@@ -719,7 +749,7 @@ class MLDecision(Base):
     actual_mode = Column(String(50), nullable=True)  # Filled on next transition
     applied = Column(Boolean, nullable=False)         # Was the prediction acted on?
     confidence = Column(Float, nullable=True)
-    decision_source = Column(String(30), nullable=False)  # "ml", "rule", "time", "manual"
+    decision_source = Column(String(30), nullable=False)  # "ml", "rule", "time", "manual", "fusion"
     factors = Column(JSON, nullable=True)             # Reasoning chain
 ```
 

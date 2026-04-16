@@ -77,7 +77,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
 - **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
 - **Weather widget** — NWS API current conditions with 5-minute cache + active severe weather alerts
-- Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (mode distribution, patterns, rules, activity feed), Settings (configuration)
+- Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (live decision pipeline with fusion ring + per-signal gauge cards + collapsible historical analytics), Settings (configuration)
 - Real-time WebSocket sync — changes from Alexa, Hue app, or physical switches reflected instantly
 - PWA-capable for phone/tablet kiosk mode
 - Optimistic updates for responsive feel
@@ -1504,10 +1504,10 @@ cleanup landed:
 - ✓ **Event Query API** (Phase 3a) — 6 endpoints under `/api/events/` for aggregation, pattern detection, filtering, and timeline visualization over all 4 event tables
 - ✓ **Rule Engine v1** (Phase 3b) — `RuleEngineService` learns time-based mode patterns from 30 days of activity events (70%+ confidence, 3+ samples). Regenerates every 6h. `LearnedRule` table with day_of_week + hour → predicted_mode. 7 REST endpoints under `/api/rules/`
 - ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons, 20s auto-dismiss
-- ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route with mode distribution donut, quick stats, hourly pattern bars, learned rules list with enable/disable toggles, recent activity feed, top Sonos favorites and scenes
+- ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route. Originally mode distribution donut, quick stats, hourly patterns, learned rules, recent activity, top Sonos/scenes. Redesigned April 15 as a live decision pipeline dashboard: SVG confidence ring at top showing fused confidence (0-100%), 5 signal cards (process, camera, audio ML, behavioral predictor, rule engine) with animated confidence bars and agreement indicators, output card showing effective mode + lights, decision history. Historical analytics moved to a collapsible section below.
 - ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (movie night, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
 - ✓ **WiFi Presence Detection** (Phase 3e) — `PresenceService` pings iPhone every 30s via ICMP. 10-min timeout triggers gradual departure (30s light fade, Sonos pause). Arrival triggers choreographed welcome-home: sequential light wave (kitchen door → kitchen back → living room → bedroom), adaptive TTS greeting (time/weather/duration-aware), dynamic Hue effect, music auto-play. ARP fallback for DHCP IP changes. Config persisted to `presence_config` in `app_settings`. Phase 2 planned: BLE proximity for "at the door" precision
-- Override pattern analysis tracked via `override_rate` in patterns API — auto-apply deferred to future (v1 is nudge-only)
+- Override pattern analysis tracked via `override_rate` in patterns API. v1 was nudge-only; auto-apply shipped April 15 via confidence fusion (Phase 4.5 ML Phase 3)
 
 ### Phase 4: Game Day (July-August 2026)
 

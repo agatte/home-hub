@@ -40,7 +40,7 @@ Changes since last audit (April 12, 2026):
   Backend Architecture    B       B       37 services, solid ML design, but
                                           automation_engine.py grew to 1,825 lines
   Frontend / UI           B       B       36 components, 12 stores, 4 routes.
-                                          Analytics page + pipeline viz added
+                                          Analytics page = live fusion dashboard
   Design / UX             B+      B+      Gaming lights revamp. Otherwise stable
   Security                C       D       CORS fixed, rate limiting, WS validation.
                                           Still no auth, no file upload limits
@@ -109,12 +109,14 @@ Changes since last audit (April 12, 2026):
   Strengths:
   - Clean Svelte store pattern with WebSocket dispatch (12 stores)
   - 36 components with clear single-responsibility
-  - 4 routes: Home, Music, Analytics (new), Settings
+  - 4 routes: Home, Music, Analytics, Settings
+  - Analytics page is now a live decision pipeline dashboard -- SVG
+    confidence ring, 5 animated signal cards, collapsible historical
+    analytics. Real-time fusion scores update on every pipeline broadcast
   - Generative canvas is visually distinctive -- not generic AI dashboard
   - Good idle detection (60s timeout, auto-hide UI elements)
   - WebSocket reconnection with build_id auto-reload is clever
   - Playing-card deck for mode selection is unique
-  - DecisionPipeline + PipelineHistory components visualize ML reasoning
   - ModeSuggestionToast surfaces rule engine predictions to user
 
   Issues:
