@@ -43,6 +43,7 @@ class RuleEngineService:
         self._min_samples = min_samples
         self._cooldowns: dict[int, datetime] = {}  # rule_id → last nudged at
         self._last_suggestion: Optional[dict[str, Any]] = None
+        self._fusion = None  # ConfidenceFusion handle, injected by main.py
 
     # ------------------------------------------------------------------
     # Rule generation
@@ -146,15 +147,14 @@ class RuleEngineService:
         """
         Check if a learned rule matches the current time and suggest a mode.
 
-        Only fires when the user is idle/away. Respects a 1-hour cooldown
-        per rule to avoid repeated nudges.
+        Always reports the matched rule to confidence fusion (rule_engine
+        is a fusion voter — weight 0.10). Only nudges the user via
+        WebSocket when current_mode is idle/away. Respects a 1-hour
+        cooldown per rule to avoid repeated nudges.
 
         Returns:
             Suggestion dict if a nudge was sent, None otherwise.
         """
-        if current_mode not in ("idle", "away"):
-            return None
-
         now = datetime.now(TZ)
         day = now.weekday()
         hour = now.hour
@@ -170,6 +170,18 @@ class RuleEngineService:
             rule = result.scalar_one_or_none()
 
         if not rule:
+            return None
+
+        # Vote in confidence fusion regardless of current mode — fusion
+        # weighs this against the active signals.
+        if self._fusion:
+            self._fusion.report_signal(
+                "rule_engine", rule.predicted_mode, rule.confidence,
+            )
+
+        # Nudges are only useful when we don't already know what the user
+        # is doing — skip the suggestion path otherwise.
+        if current_mode not in ("idle", "away"):
             return None
 
         # Cooldown — don't nudge more than once per hour per rule

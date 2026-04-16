@@ -324,6 +324,7 @@ async def lifespan(app: FastAPI):
     confidence_fusion = ConfidenceFusion()
     app.state.confidence_fusion = confidence_fusion
     automation._confidence_fusion = confidence_fusion
+    rule_engine._fusion = confidence_fusion
     app_logger.info("Confidence fusion initialized")
 
     # Music bandit — Thompson sampling playlist selection

@@ -188,6 +188,15 @@ class CameraService:
                 self._last_confidence = confidence
                 self._last_ambient_lux = ambient_lux
 
+                # Keep the camera lane fresh in confidence fusion every cycle.
+                # The edge-triggered report_activity() calls below drive actual
+                # mode changes; this keeps fusion's signal alive while the user
+                # sits steadily and no transition fires.
+                fusion = getattr(self._automation, "_confidence_fusion", None)
+                if fusion and status in ("present", "absent"):
+                    inferred = "idle" if status == "present" else "away"
+                    fusion.report_signal("camera", inferred, confidence)
+
                 if status == "present":
                     was_absent = self._consecutive_absent >= ABSENT_THRESHOLD
                     self._consecutive_absent = 0

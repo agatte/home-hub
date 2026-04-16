@@ -783,6 +783,18 @@ class AutomationEngine:
         if not self._enabled:
             return
 
+        # Report to confidence fusion BEFORE mode-change guards — fusion is a
+        # voting system, every signal should be heard even when it loses the
+        # mode-change vote. "ambient" (RMS) aliases to the audio_ml lane.
+        fusion = getattr(self, "_confidence_fusion", None)
+        if fusion:
+            if source == "process":
+                fusion.report_signal("process", mode, 1.0)
+            elif source == "ambient":
+                fusion.report_signal("audio_ml", mode, 0.7)
+            else:
+                fusion.report_signal(source, mode, 0.8)
+
         # Ambient "idle" should not override process-detected activity
         if source == "ambient" and mode == "idle":
             if self._mode_source == "process" and self._current_mode != "idle":
@@ -811,13 +823,6 @@ class AutomationEngine:
         self._mode_source = source
         self._last_activity = mode
         self._last_activity_change = datetime.now(tz=TZ)
-
-        # Report to confidence fusion
-        fusion = getattr(self, "_confidence_fusion", None)
-        if fusion:
-            # Process detection is binary — 1.0 confidence when active
-            signal_confidence = 1.0 if source == "process" else 0.8
-            fusion.report_signal(source, mode, signal_confidence)
 
         # If manual override is active, update detected mode silently but
         # never clear the override — only the user or the 4h timeout should.
@@ -1547,14 +1552,14 @@ class AutomationEngine:
                             weather_condition, self._current_mode,
                         )
 
-                # ML behavioral predictor (primary, if active)
+                # ML behavioral predictor — runs every cycle so it stays a fresh
+                # voter in fusion. Acting on its prediction is still gated to
+                # idle/away below (the predictor is most useful when there's no
+                # confident signal driving the current mode).
                 predictor = getattr(self, "_behavioral_predictor", None)
                 ml_logger = getattr(self, "_ml_logger", None)
-                if (
-                    predictor
-                    and not self._manual_override
-                    and self._current_mode in ("idle", "away")
-                ):
+                prediction = None
+                if predictor and not self._manual_override:
                     prediction = await predictor.predict(
                         current_mode=self._current_mode,
                     )
@@ -1566,7 +1571,12 @@ class AutomationEngine:
                                 prediction["predicted_mode"],
                                 prediction["confidence"],
                             )
-                    if prediction and not prediction.get("shadow"):
+                if (
+                    prediction
+                    and not self._manual_override
+                    and self._current_mode in ("idle", "away")
+                ):
+                    if not prediction.get("shadow"):
                         confidence = prediction["confidence"]
                         if confidence >= 0.95:
                             # Auto-apply at high confidence
@@ -1602,9 +1612,11 @@ class AutomationEngine:
                             applied=False,
                         )
 
-                # Rule engine fallback (fires if ML didn't produce a result)
+                # Rule engine — runs every cycle to keep its fusion vote
+                # fresh; check_rules() internally only nudges the user when
+                # current_mode is idle/away.
                 rule_engine = getattr(self, "_rule_engine", None)
-                if rule_engine and not self._manual_override and self._current_mode in ("idle", "away"):
+                if rule_engine and not self._manual_override:
                     await rule_engine.check_rules(self._current_mode)
 
                 # Confidence fusion — compute and optionally act
