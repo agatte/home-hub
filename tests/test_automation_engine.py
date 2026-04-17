@@ -42,7 +42,7 @@ class TestModePriority:
         assert MODE_PRIORITY["away"] == 0
 
     def test_all_expected_modes_present(self):
-        expected = {"sleeping", "away", "idle", "working", "watching", "social", "gaming"}
+        expected = {"sleeping", "away", "idle", "working", "watching", "cooking", "social", "gaming"}
         assert set(MODE_PRIORITY.keys()) == expected
 
 
