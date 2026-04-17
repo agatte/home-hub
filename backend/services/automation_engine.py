@@ -185,7 +185,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 60,  "ct": 400},    # Kitchen back: PAIRED with L3
         },
         "night": {
-            "1": {"on": True, "bri": 25,  "ct": 440},    # Living room: faint warm ember (2270K)
+            "1": {"on": True, "bri": 60,  "ct": 440},    # Living room: warm ambient (2270K)
             "2": {"on": True, "bri": 130, "ct": 370},    # Desk: readable + 2700K (cutoff)
             "3": _LIGHT_OFF,                              # Kitchen front: off (behind user)
             "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
