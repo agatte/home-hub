@@ -207,13 +207,13 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 30,  "ct": 333},    # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 50,  "ct": 400},    # Living room: warm (2500K)
+            "1": {"on": True, "bri": 65,  "ct": 400},    # Living room: warm, visible through hallway spill (2500K)
             "2": {"on": True, "bri": 40,  "ct": 400},    # Bedroom: warm bias dimmer
             "3": _LIGHT_OFF,                              # Kitchen off — minimize projection wash
             "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
         },
         "night": {
-            "1": {"on": True, "bri": 25,  "ct": 454},    # Living room: candle-like amber (2200K)
+            "1": {"on": True, "bri": 45,  "ct": 454},    # Living room: candle-like amber, visible from bedroom (2200K)
             "2": {"on": True, "bri": 20,  "ct": 454},    # Bedroom: very warm, very dim
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,                              # PAIRED off
