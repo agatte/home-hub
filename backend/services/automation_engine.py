@@ -140,72 +140,82 @@ MODE_TRANSITION_TIME: dict[str, int] = {
 ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # ── Gaming ────────────────────────────────────────────────────────
     # Dim blue-violet ambient — screen sync on L2 is the star. Accents
-    # stay very low so the screen color dominates the room. All HSB.
+    # stay very low so the screen color dominates the room. HSB only,
+    # no auto-effects (per user feedback — glisten was removed). Kitchen
+    # L3/L4 are PAIRED as violet accents. Brightness steps down progressively
+    # after sunset so the screen still dominates at night.
     "gaming": {
         "day": {
-            "1": {"on": True, "bri": 30,  "hue": 47000, "sat": 100},   # Muted blue-violet wash
-            "2": {"on": True, "bri": 200, "hue": 46920, "sat": 200},   # Fallback (screen sync overrides)
-            "3": {"on": True, "bri": 20,  "hue": 47000, "sat": 80},    # Dim blue accent
-            "4": {"on": True, "bri": 15,  "hue": 48000, "sat": 90},    # Faintest depth fill
+            "1": {"on": True, "bri": 30,  "hue": 47000, "sat": 220},   # Living room: blue-violet wash
+            "2": {"on": True, "bri": 200, "hue": 46920, "sat": 220},   # Desk fallback (screen-sync overrides)
+            "3": {"on": True, "bri": 20,  "hue": 50000, "sat": 220},   # Kitchen front: violet accent
+            "4": {"on": True, "bri": 20,  "hue": 50000, "sat": 220},   # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 22,  "hue": 47000, "sat": 120},   # Slightly richer wash
-            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 220},   # Fallback (screen sync overrides)
-            "3": {"on": True, "bri": 15,  "hue": 47000, "sat": 100},   # Dimmer accent
-            "4": {"on": True, "bri": 10,  "hue": 48000, "sat": 110},   # Near-invisible
+            "1": {"on": True, "bri": 22,  "hue": 47000, "sat": 230},
+            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 230},   # Fallback (screen-sync caps to 150)
+            "3": {"on": True, "bri": 15,  "hue": 50000, "sat": 230},
+            "4": {"on": True, "bri": 15,  "hue": 50000, "sat": 230},   # PAIRED
         },
         "night": {
-            "1": {"on": True, "bri": 12,  "hue": 47000, "sat": 140},   # Barely there glow
-            "2": {"on": True, "bri": 100, "hue": 46920, "sat": 240},   # Fallback (screen sync overrides)
-            "3": {"on": True, "bri": 8,   "hue": 47000, "sat": 120},   # Ghost light
-            "4": {"on": True, "bri": 6,   "hue": 48000, "sat": 130},   # Almost off
+            "1": {"on": True, "bri": 12,  "hue": 47000, "sat": 240},
+            "2": {"on": True, "bri": 100, "hue": 46920, "sat": 240},   # Fallback (screen-sync caps to 100)
+            "3": {"on": True, "bri": 8,   "hue": 50000, "sat": 240},
+            "4": {"on": True, "bri": 8,   "hue": 50000, "sat": 240},   # PAIRED
         },
     },
     # ── Working ───────────────────────────────────────────────────────
     # Clean ct-mode whites only. Per-light brightness gradient creates
-    # depth instead of flat uniform lighting. Evening shifts noticeably
-    # warmer. Night: desk lamp functional + ghost-light ambient fill.
+    # depth, L2 (bedroom desk lamp) dominates. Evening shifts to 3000K
+    # (ct≥333) to respect the strict post-sunset warmth cutoff. Night:
+    # IES 1:3 monitor-ambient contrast — bright warm desk, minimal L1
+    # ember, kitchen pair fully off so it doesn't distract from focus.
+    # Kitchen L3/L4 are PAIRED in this functional mode.
     "working": {
         "day": {
-            "1": {"on": True, "bri": 180, "ct": 233},    # Bright neutral fill
-            "2": {"on": True, "bri": 254, "ct": 210},    # Max bright, slightly cool desk lamp
-            "3": {"on": True, "bri": 140, "ct": 250},    # Kitchen fill
-            "4": {"on": True, "bri": 100, "ct": 270},    # Warmer back fill
+            "1": {"on": True, "bri": 180, "ct": 233},    # Living room: bright neutral fill (4300K)
+            "2": {"on": True, "bri": 254, "ct": 210},    # Desk lamp: max bright, cool (4800K)
+            "3": {"on": True, "bri": 140, "ct": 250},    # Kitchen front: modest fill (4000K)
+            "4": {"on": True, "bri": 140, "ct": 250},    # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 100, "ct": 340},    # Noticeably warmer, dimmer
-            "2": {"on": True, "bri": 180, "ct": 300},    # Still functional desk, warmer
-            "3": {"on": True, "bri": 60,  "ct": 370},    # Low warm kitchen
-            "4": {"on": True, "bri": 35,  "ct": 400},    # Warm background
+            "1": {"on": True, "bri": 100, "ct": 370},    # Living room: warm fill (2700K)
+            "2": {"on": True, "bri": 180, "ct": 333},    # Desk: still functional, 3000K (cutoff)
+            "3": {"on": True, "bri": 60,  "ct": 400},    # Kitchen front: low warm (2500K)
+            "4": {"on": True, "bri": 60,  "ct": 400},    # Kitchen back: PAIRED with L3
         },
         "night": {
-            "1": {"on": True, "bri": 25,  "ct": 440},    # Faint warm glow
-            "2": {"on": True, "bri": 130, "ct": 350},    # Late-night desk (functional, warm)
-            "3": _LIGHT_OFF,                               # Kitchen off
-            "4": {"on": True, "bri": 10,  "ct": 454},    # Ghost light depth fill
+            "1": {"on": True, "bri": 25,  "ct": 440},    # Living room: faint warm ember (2270K)
+            "2": {"on": True, "bri": 130, "ct": 370},    # Desk: readable + 2700K (cutoff)
+            "3": _LIGHT_OFF,                              # Kitchen front: off (behind user)
+            "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
-    # Soft warm ambient with warm-neutral bias on L2 (behind screen).
-    # More lights stay on than before for comfortable viewing.
+    # Bias lighting behind the screen (L2, bedroom — verify at implementation
+    # if TV is actually in living room; if so, swap L1/L2 roles here).
+    # Daytime L2 = true D65 6500K (MediaLight standard, ~10% of screen bri).
+    # Evening + night warm to 3000K/2700K to respect the strict post-sunset
+    # cutoff — loses some bias-light color accuracy but keeps the room's
+    # evening character consistent. Kitchen L3/L4 are PAIRED (OFF evening+).
     "watching": {
         "day": {
-            "1": {"on": True, "bri": 50,  "ct": 370},    # Soft warm ambient
-            "2": {"on": True, "bri": 45,  "ct": 280},    # Warm-neutral bias behind screen
-            "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 25,  "ct": 400},    # Warm depth fill
+            "1": {"on": True, "bri": 80,  "ct": 280},    # Living room: warm ambient (3600K)
+            "2": {"on": True, "bri": 80,  "ct": 154},    # Bias light: D65 (6500K)
+            "3": {"on": True, "bri": 40,  "ct": 320},    # Kitchen front: modest fill (3100K)
+            "4": {"on": True, "bri": 40,  "ct": 320},    # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 30,  "ct": 420},    # Dim warm glow
-            "2": {"on": True, "bri": 35,  "ct": 310},    # Warm bias
-            "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 15,  "ct": 454},    # Very dim warm wash
+            "1": {"on": True, "bri": 60,  "ct": 370},    # Living room: warm (2700K)
+            "2": {"on": True, "bri": 60,  "ct": 333},    # Bias warms to 3000K (strict cutoff)
+            "3": _LIGHT_OFF,                              # Kitchen off — avoid screen reflection
+            "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
         },
         "night": {
-            "1": {"on": True, "bri": 12,  "ct": 454},    # Barely-there amber
-            "2": {"on": True, "bri": 20,  "ct": 350},    # Minimal warm bias
+            "1": {"on": True, "bri": 35,  "ct": 454},    # Living room: faint amber (2200K)
+            "2": {"on": True, "bri": 35,  "ct": 370},    # Bias: warmer still (2700K)
             "3": _LIGHT_OFF,
-            "4": {"on": True, "bri": 8,   "ct": 454},    # Ghost light
+            "4": _LIGHT_OFF,                              # PAIRED off
         },
     },
     # Base state for social/party — no time awareness (flat, no period keys).
@@ -217,53 +227,53 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "4": {"on": True, "bri": 160, "hue": 10000, "sat": 160},   # Warm coral
     },
     # ── Relax ─────────────────────────────────────────────────────────
-    # Full HSB warm gradient — amber/gold/ember tones only. Each light
-    # gets deeper amber as you move from L1→L4. Paired with opal (day),
-    # candle (evening), fire (night) effects.
+    # HSB warm gradient, amber/gold tones. Kitchen L3/L4 are FREE to diverge
+    # here (and in social) — the point is depth through per-light variance.
+    # Effects: opal (day), candle (evening/night) per EFFECT_AUTO_MAP.
     "relax": {
         "day": {
-            "1": {"on": True, "bri": 100, "hue": 5000,  "sat": 200},   # Warm amber wash
-            "2": {"on": True, "bri": 80,  "hue": 6500,  "sat": 180},   # Softer orange-gold
-            "3": {"on": True, "bri": 55,  "hue": 4000,  "sat": 220},   # Deeper amber
-            "4": {"on": True, "bri": 40,  "hue": 3000,  "sat": 240},   # Burnt orange depth
+            "1": {"on": True, "bri": 100, "hue": 7000, "sat": 220},   # Warm yellow-amber wash
+            "2": {"on": True, "bri": 80,  "hue": 8000, "sat": 200},   # Warmer yellow
+            "3": {"on": True, "bri": 60,  "hue": 6000, "sat": 230},   # Yellow-orange
+            "4": {"on": True, "bri": 50,  "hue": 5500, "sat": 240},   # Deepest orange
         },
         "evening": {
-            "1": {"on": True, "bri": 55,  "hue": 4000,  "sat": 240},   # Deep amber
-            "2": {"on": True, "bri": 45,  "hue": 5500,  "sat": 220},   # Warm gold
-            "3": {"on": True, "bri": 30,  "hue": 3000,  "sat": 254},   # Ember glow
-            "4": {"on": True, "bri": 20,  "hue": 2000,  "sat": 254},   # Deep red-amber
+            "1": {"on": True, "bri": 70,  "hue": 6500, "sat": 230},   # Amber
+            "2": {"on": True, "bri": 50,  "hue": 7500, "sat": 220},   # Warm yellow
+            "3": {"on": True, "bri": 40,  "hue": 5500, "sat": 240},   # Orange
+            "4": {"on": True, "bri": 30,  "hue": 5000, "sat": 250},   # Deep orange
         },
         "night": {
-            "1": {"on": True, "bri": 25,  "hue": 3000,  "sat": 254},   # Dim ember
-            "2": {"on": True, "bri": 20,  "hue": 4000,  "sat": 240},   # Faint warm glow
-            "3": {"on": True, "bri": 12,  "hue": 2000,  "sat": 254},   # Near-invisible ember
-            "4": {"on": True, "bri": 8,   "hue": 1500,  "sat": 254},   # Dying coal
+            "1": {"on": True, "bri": 40,  "hue": 5500, "sat": 240},   # Dim warm amber
+            "2": {"on": True, "bri": 25,  "hue": 6000, "sat": 230},   # Faint amber glow
+            "3": {"on": True, "bri": 15,  "hue": 4500, "sat": 254},   # Ember
+            "4": {"on": True, "bri": 8,   "hue": 4000, "sat": 254},   # Dying coal
         },
     },
     # ── Cooking ───────────────────────────────────────────────────────
-    # Kitchen-focused: L3 + L4 boosted to high brightness with neutral
-    # ~3500K (ct≈286) for accurate food colors. L1 stays a warm ambient
-    # for the rest of the apartment, L2 (bedroom desk) drops low so it
-    # doesn't compete with the prep counter. Late-night cooking shifts
-    # warmer to avoid blasting your eyes at 11pm.
+    # Kitchen pair at peak brightness with 3500K (ct=286) for accurate food
+    # colors during the day. L1 provides warm ambient, L2 dim so it doesn't
+    # compete. Evening shifts kitchen to 3000K (ct=333, strict cutoff). Night
+    # at 2700K/bri=180 — still ~500 lux on the counter for safe prep without
+    # blasting eyes at 11pm. Kitchen L3/L4 are PAIRED always.
     "cooking": {
         "day": {
-            "1": {"on": True, "bri": 150, "ct": 320},   # Living room: warm-neutral ambient
-            "2": {"on": True, "bri": 80,  "ct": 333},   # Bedroom: dim warm
-            "3": {"on": True, "bri": 254, "ct": 286},   # Kitchen front: max bright, 3500K
-            "4": {"on": True, "bri": 230, "ct": 286},   # Kitchen back: bright, 3500K
+            "1": {"on": True, "bri": 150, "ct": 320},   # Living room: warm ambient (3100K)
+            "2": {"on": True, "bri": 80,  "ct": 333},   # Bedroom: dim warm (3000K)
+            "3": {"on": True, "bri": 254, "ct": 286},   # Kitchen front: max, 3500K (food color)
+            "4": {"on": True, "bri": 254, "ct": 286},   # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 100, "ct": 370},
-            "2": {"on": True, "bri": 50,  "ct": 400},
-            "3": {"on": True, "bri": 230, "ct": 320},
-            "4": {"on": True, "bri": 200, "ct": 320},
+            "1": {"on": True, "bri": 100, "ct": 370},   # (2700K)
+            "2": {"on": True, "bri": 50,  "ct": 400},   # (2500K)
+            "3": {"on": True, "bri": 230, "ct": 333},   # 3000K (strict cutoff)
+            "4": {"on": True, "bri": 230, "ct": 333},   # PAIRED
         },
         "night": {
-            "1": {"on": True, "bri": 60,  "ct": 420},
-            "2": {"on": True, "bri": 25,  "ct": 454},
-            "3": {"on": True, "bri": 180, "ct": 370},
-            "4": {"on": True, "bri": 150, "ct": 370},
+            "1": {"on": True, "bri": 60,  "ct": 420},   # (2380K)
+            "2": {"on": True, "bri": 25,  "ct": 454},   # (2200K)
+            "3": {"on": True, "bri": 180, "ct": 370},   # 2700K — warm but still usable
+            "4": {"on": True, "bri": 180, "ct": 370},   # PAIRED
         },
     },
 }
@@ -953,6 +963,30 @@ class AutomationEngine:
     # Light state application
     # ------------------------------------------------------------------
 
+    async def _reconcile_effect(self, desired_effect: Optional[str]) -> None:
+        """
+        Transition from the currently-active v2 effect to the desired one.
+
+        MUST be called AFTER the new light state / scene is on the bridge,
+        so stopping the old effect doesn't pop brightness to 100%. The
+        bridge will hold the last-set brightness target and return to it
+        once the effect releases.
+
+        When starting a new effect, a 0.5s bridge-processing guard separates
+        stop-and-start so the two commands don't race.
+        """
+        if not self._hue_v2 or not self._hue_v2.connected:
+            return
+        if desired_effect == self._active_effect_name:
+            return  # No change — leave the running effect alone
+        if self._active_effect_name:
+            await self._hue_v2.stop_effect_all()
+            self._active_effect_name = None
+        if desired_effect:
+            await asyncio.sleep(0.5)
+            await self._hue_v2.set_effect_all(desired_effect)
+            self._active_effect_name = desired_effect
+
     async def _apply_mode(self, mode: str) -> None:
         """Apply light state for a given mode."""
         # Cancel any in-progress sleep fade if switching to an active mode
@@ -966,14 +1000,12 @@ class AutomationEngine:
         # at the route handler. No engine-side action needed when modes change.
 
         # Determine what effect should be active for this mode+period.
-        # Only stop effects when switching to a different effect — stopping
-        # and re-applying the same effect every cycle resets the brightness
-        # base on the bridge, causing dim flickering instead of bright.
+        # IMPORTANT: don't stop the current effect yet. Stopping an active
+        # effect before the new brightness target is on the bridge causes the
+        # bridge to reset brightness to 100%, producing the visible "pop" on
+        # mode change. We reconcile effects at the END of this function, after
+        # _apply_state (or scene activation) has established the new target.
         desired_effect = self._get_desired_effect(mode)
-        if desired_effect != self._active_effect_name:
-            if self._hue_v2 and self._hue_v2.connected and self._active_effect_name:
-                await self._hue_v2.stop_effect_all()
-            self._active_effect_name = None
 
         # Clear dedup cache so the new state is always applied — effects and
         # external apps change bridge state independently, making the cache stale.
@@ -981,12 +1013,17 @@ class AutomationEngine:
 
         # Sleep mode: gradual fade over 10 minutes then lights off
         if mode == "sleeping":
+            # Stop any active effect; the fade sets brightness directly so a
+            # lingering candle/glisten would fight it.
+            if self._active_effect_name and self._hue_v2 and self._hue_v2.connected:
+                await self._hue_v2.stop_effect_all()
+                self._active_effect_name = None
             if self._sleep_fade_task and not self._sleep_fade_task.done():
                 return  # Fade already in progress
             self._sleep_fade_task = asyncio.create_task(self._sleep_fade())
             return
 
-        # Social mode: route through party sub-mode system
+        # Social mode: route through party sub-mode system (handles own effects)
         if mode == "social":
             await self._apply_social_style()
             return
@@ -1005,12 +1042,9 @@ class AutomationEngine:
                 preset = SCENE_PRESETS.get(override_scene)
                 if preset:
                     await _activate_per_light(preset["lights"], self._hue)
-            # Still apply auto-effects on top of scene overrides
-            if self._hue_v2 and self._hue_v2.connected:
-                if desired_effect and desired_effect != self._active_effect_name:
-                    await asyncio.sleep(0.3)
-                    await self._hue_v2.set_effect_all(desired_effect)
-                    self._active_effect_name = desired_effect
+            # Reconcile effect AFTER scene activation so the bridge has a
+            # brightness target set before we stop any old effect.
+            await self._reconcile_effect(desired_effect)
             return
 
         if mode in ACTIVITY_LIGHT_STATES:
@@ -1053,16 +1087,10 @@ class AutomationEngine:
             tt = MODE_TRANSITION_TIME.get(mode)
             await self._apply_state(state, transitiontime=tt)
 
-            # Apply effect if it changed — delay lets the bridge process
-            # the light state first so the effect inherits correct brightness.
-            if self._hue_v2 and self._hue_v2.connected:
-                if desired_effect and desired_effect != self._active_effect_name:
-                    await asyncio.sleep(0.3)
-                    await self._hue_v2.set_effect_all(desired_effect)
-                    self._active_effect_name = desired_effect
-                elif not desired_effect and self._active_effect_name:
-                    await self._hue_v2.stop_effect_all()
-                    self._active_effect_name = None
+            # Reconcile effect AFTER the state is on the bridge — this
+            # avoids the brightness pop that happens when an effect is
+            # stopped before the target brightness is known to the bridge.
+            await self._reconcile_effect(desired_effect)
         else:
             # Unknown mode — fall back to time-based
             await self._apply_time_based()
@@ -1078,12 +1106,10 @@ class AutomationEngine:
         else:
             await self._apply_state(ACTIVITY_LIGHT_STATES["social"])
 
-        # Apply effect
-        effect = style.get("effect")
-        if effect and self._hue_v2 and self._hue_v2.connected:
-            if effect != self._active_effect_name:
-                await self._hue_v2.set_effect_all(effect)
-                self._active_effect_name = effect
+        # Reconcile the effect AFTER state is on the bridge. Uses the shared
+        # helper so sub-styles with effect=None correctly stop a previously
+        # running effect (e.g. prism from color_cycle → None from fire_and_ice).
+        await self._reconcile_effect(style.get("effect"))
 
     async def _sleep_fade(self) -> None:
         """
@@ -1236,9 +1262,13 @@ class AutomationEngine:
         """
         if not self._scene_drift_enabled:
             return
-        # Only drift during active modes (not idle/away/sleeping/social)
+        # Drift is aesthetic variation — it only belongs in relax. Functional
+        # modes (working/gaming/watching/cooking) need stable, predictable light
+        # values; independent per-light deltas there make paired lights look
+        # randomly unequal. Social has its own sub-style cycling; sleeping/idle/
+        # away are handled by other paths.
         mode = self.current_mode
-        if mode in ("idle", "away", "sleeping", "social"):
+        if mode != "relax":
             return
 
         now = datetime.now(tz=TZ)

@@ -3,9 +3,18 @@ Philips Hue bridge service — wraps phue2 for light control.
 """
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger("home_hub.hue")
+
+# Extra buffer (seconds) added to a transition's own duration before the
+# polling loop is allowed to broadcast again. Absorbs bridge processing lag.
+INFLIGHT_BUFFER_SECONDS = 0.5
+
+# Fallback assumed transition when the caller doesn't supply one. Matches
+# phue2's default (4 deciseconds = 0.4s).
+DEFAULT_TRANSITION_SECONDS = 0.4
 
 
 class HueService:
@@ -22,6 +31,10 @@ class HueService:
         self._bridge = None
         self._connected = False
         self._last_states: dict[str, dict] = {}
+        # light_id -> monotonic deadline. While now() < deadline, the polling
+        # loop skips that light so mid-transition bridge reads don't bounce
+        # the UI back to stale values.
+        self._inflight_until: dict[str, float] = {}
 
     @property
     def connected(self) -> bool:
@@ -121,6 +134,11 @@ class HueService:
                 command["sat"] = max(0, min(254, int(state["sat"])))
             if "ct" in state:
                 command["ct"] = max(153, min(500, int(state["ct"])))
+                # Force desaturation when switching to CT: without this the bridge
+                # keeps residual hue/sat from the previous HSB mode and tints the
+                # "white," producing the greenish/pinkish bedroom lamp bug.
+                if "sat" not in state:
+                    command["sat"] = 0
             if "transitiontime" in state:
                 command["transitiontime"] = int(state["transitiontime"])
 
@@ -131,6 +149,16 @@ class HueService:
                 self._bridge.set_light, lid, command
             )
             logger.info(f"Set light {light_id}: {command}")
+
+            # Mark light in-flight so the polling loop doesn't broadcast
+            # mid-transition bridge reads (which would bounce the UI back).
+            if "transitiontime" in command:
+                transition_seconds = command["transitiontime"] / 10.0
+            else:
+                transition_seconds = DEFAULT_TRANSITION_SECONDS
+            self._inflight_until[light_id] = (
+                time.monotonic() + transition_seconds + INFLIGHT_BUFFER_SECONDS
+            )
             return True
         except Exception as e:
             logger.error(f"Error setting light {light_id}: {e}")
@@ -202,9 +230,16 @@ class HueService:
         while True:
             try:
                 lights = await self.get_all_lights()
+                now = time.monotonic()
 
                 for light in lights:
                     lid = light["light_id"]
+
+                    # Skip lights that were just written: their bridge state
+                    # is mid-transition and would bounce the UI to a stale value.
+                    if now < self._inflight_until.get(lid, 0.0):
+                        continue
+
                     prev = self._last_states.get(lid)
 
                     if prev != light:
