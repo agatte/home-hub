@@ -25,10 +25,11 @@ def client():
 class TestWeatherAPI:
     """Verify /api/weather endpoint."""
 
-    def test_weather_returns_200_or_503(self, client):
+    def test_weather_returns_200_or_unavailable(self, client):
         resp = client.get("/api/weather")
-        # 200 if API key configured, 503 if not (CI has no key)
-        assert resp.status_code in (200, 503)
+        # 200 if NWS fetch succeeded, 502 if upstream failed (CI network),
+        # 503 if the service is not initialized at all.
+        assert resp.status_code in (200, 502, 503)
 
 
 # ---------------------------------------------------------------------------
