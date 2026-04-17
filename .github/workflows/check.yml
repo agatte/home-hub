@@ -28,7 +28,8 @@ jobs:
         run: |
           pip install fastapi uvicorn[standard] websockets aiosqlite "sqlalchemy[asyncio]" \
             pydantic-settings python-dotenv httpx aiofiles slowapi phue2 fauxmo soco \
-            python-json-logger edge-tts psutil mss python-multipart pytest pytest-asyncio
+            python-json-logger edge-tts psutil mss python-multipart pytest pytest-asyncio \
+            numpy
 
       - name: Run tests
         run: python -m pytest tests/ -v
