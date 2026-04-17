@@ -134,11 +134,16 @@ class HueService:
                 command["sat"] = max(0, min(254, int(state["sat"])))
             if "ct" in state:
                 command["ct"] = max(153, min(500, int(state["ct"])))
-                # Force desaturation when switching to CT: without this the bridge
-                # keeps residual hue/sat from the previous HSB mode and tints the
-                # "white," producing the greenish/pinkish bedroom lamp bug.
-                if "sat" not in state:
-                    command["sat"] = 0
+                # CT is exclusive of HSB on the Hue bridge. Force sat=0 and
+                # drop any hue so the bulb cleanly uses CT. Without this,
+                # residual hue/sat (either cached on the bridge from a prior
+                # HSB mode, or re-introduced by the LightingPreferenceLearner
+                # overlay) tints the "white," producing the greenish-bedroom
+                # bug. This override always wins — any sat/hue the caller
+                # passes alongside ct is dropped, matching Hue API semantics
+                # where colormode is exclusive.
+                command["sat"] = 0
+                command.pop("hue", None)
             if "transitiontime" in state:
                 command["transitiontime"] = int(state["transitiontime"])
 
