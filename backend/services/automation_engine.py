@@ -146,22 +146,22 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # after sunset so the screen still dominates at night.
     "gaming": {
         "day": {
-            "1": {"on": True, "bri": 30,  "hue": 47000, "sat": 220},   # Living room: blue-violet wash
+            "1": {"on": True, "bri": 60,  "hue": 47000, "sat": 220},   # Living room: blue-violet wash
             "2": {"on": True, "bri": 200, "hue": 46920, "sat": 220},   # Desk fallback (screen-sync overrides)
-            "3": {"on": True, "bri": 20,  "hue": 50000, "sat": 220},   # Kitchen front: violet accent
-            "4": {"on": True, "bri": 20,  "hue": 50000, "sat": 220},   # Kitchen back: PAIRED with L3
+            "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},   # Kitchen front: violet accent
+            "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},   # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 22,  "hue": 47000, "sat": 230},
+            "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 230},
             "2": {"on": True, "bri": 150, "hue": 46920, "sat": 230},   # Fallback (screen-sync caps to 150)
-            "3": {"on": True, "bri": 15,  "hue": 50000, "sat": 230},
-            "4": {"on": True, "bri": 15,  "hue": 50000, "sat": 230},   # PAIRED
+            "3": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},
+            "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},   # PAIRED
         },
         "night": {
-            "1": {"on": True, "bri": 12,  "hue": 47000, "sat": 240},
+            "1": {"on": True, "bri": 25,  "hue": 47000, "sat": 240},
             "2": {"on": True, "bri": 100, "hue": 46920, "sat": 240},   # Fallback (screen-sync caps to 100)
-            "3": {"on": True, "bri": 8,   "hue": 50000, "sat": 240},
-            "4": {"on": True, "bri": 8,   "hue": 50000, "sat": 240},   # PAIRED
+            "3": {"on": True, "bri": 12,  "hue": 50000, "sat": 240},
+            "4": {"on": True, "bri": 12,  "hue": 50000, "sat": 240},   # PAIRED
         },
     },
     # ── Working ───────────────────────────────────────────────────────
