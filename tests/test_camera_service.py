@@ -43,6 +43,20 @@ def _mock_detection(score: float):
     return det
 
 
+@pytest.fixture(autouse=True)
+def _stub_cv2_and_mediapipe():
+    """Inject fake cv2 + mediapipe modules so camera_service's lazy imports succeed in CI."""
+    mock_cv2 = MagicMock()
+    # Pass frames through unchanged — preserves numpy array mean() for ambient_lux tests
+    mock_cv2.resize.side_effect = lambda frame, size: frame
+    mock_cv2.cvtColor.side_effect = lambda frame, code: frame
+
+    mock_mp = MagicMock()
+
+    with patch.dict("sys.modules", {"cv2": mock_cv2, "mediapipe": mock_mp}):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
