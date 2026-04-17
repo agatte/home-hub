@@ -158,10 +158,10 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},   # PAIRED
         },
         "night": {
-            "1": {"on": True, "bri": 25,  "hue": 47000, "sat": 240},
-            "2": {"on": True, "bri": 100, "hue": 46920, "sat": 240},   # Fallback (screen-sync caps to 100)
-            "3": {"on": True, "bri": 12,  "hue": 50000, "sat": 240},
-            "4": {"on": True, "bri": 12,  "hue": 50000, "sat": 240},   # PAIRED
+            "1": {"on": True, "bri": 40,  "hue": 47000, "sat": 240},
+            "2": {"on": True, "bri": 140, "hue": 46920, "sat": 240},   # Fallback (screen-sync active during gaming)
+            "3": {"on": True, "bri": 18,  "hue": 50000, "sat": 240},
+            "4": {"on": True, "bri": 18,  "hue": 50000, "sat": 240},   # PAIRED
         },
     },
     # ── Working ───────────────────────────────────────────────────────

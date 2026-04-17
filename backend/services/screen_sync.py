@@ -36,7 +36,8 @@ MIN_BRIGHTNESS = 15
 # Per-mode minimum brightness — gaming stays visible even on dark scenes;
 # watching allows dim bias lighting.
 MODE_MIN_BRIGHTNESS: dict[str, int] = {
-    "gaming": 50,     # Was 80 — allow darker on dark scenes since accents are very dim
+    "gaming": 85,     # Hold a comfortable bedroom bias level even on dark scenes
+                      # so the desk lamp doesn't drop below ~1:3 monitor contrast.
 }
 
 
