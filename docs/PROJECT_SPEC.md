@@ -30,16 +30,21 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Color temperature (CT/mirek) support** — first-class parameter alongside HSB for precise Kelvin control (2000K–6500K)
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
 - Activity-driven modes: gaming, working, watching, relax, cooking, social — each with per-light state definitions
-- **Science-based per-mode lighting** — each mode uses distinct per-light variation (not uniform): working uses ct-mode clean whites, gaming uses blue/purple accents, relax uses warm gradients, watching uses SMPTE-inspired neutral bias. Night working: desk lamp at 3200K (bri=150) + dim ambient fill to reduce monitor contrast to ~3:1
+- **Colorspace exclusivity** — CT and HSB are never mixed in the command sent to the bridge. `hue_service.set_light` emits `sat=0` before `ct` (bridge is JSON-order-sensitive) and drops any stray `hue`/`sat` in the payload when `ct` is present. Prevents residual HSB on the bridge (or a learner overlay) from tinting "white" CT commands — the fix for the "greenish bedroom" bug.
+- **Kitchen pair rule** — L3 (kitchen front) and L4 (kitchen back) always match `bri` and on/off in **functional** modes (working, gaming, watching, cooking). In **aesthetic** modes (relax, social) they're free to diverge for intentional depth.
+- **Post-sunset warmth cutoff** — no CT-mode light drops below `ct=333` (~3000K) in evening/night across any mode. Watching loses true D65 bias-light color accuracy after sunset in favor of room-wide evening consistency; gaming HSB tightens brightness caps progressively.
+- **Science-based per-mode lighting** — each mode uses distinct per-light variation: working uses ct-mode clean whites with IES 1:3 monitor-ambient contrast at night (desk lamp at 2700K/bri=130 + warm ambient fill); gaming uses blue/purple HSB accents; relax uses warm amber gradients; watching uses D65 bias (daytime) warming after sunset; cooking uses neutral 3500K kitchen peak for accurate food color.
 - **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching cinematic (3s), cooking quick (1s), sleeping gradual (5s) via MODE_TRANSITION_TIME
-- **Scene drift** — subtle random perturbation (±15 bri, ±1500 hue) every 30min during long sessions with 10s imperceptible transitions
+- **Scene drift** — subtle random perturbation (±15 bri, ±1500 hue) every 30min during long sessions with 10s imperceptible transitions. **Relax-only**: drift is aesthetic variation and would make paired lights in functional modes look randomly unequal, so it's gated to relax.
+- **Effect reconciliation** — `_reconcile_effect` helper applies state FIRST, then stops/starts v2 effects with a 0.5s bridge-processing guard. Order matters: stopping an effect before the new brightness target is on the bridge produces a brightness pop to 100% (the old mode-switch "flash" bug).
+- **Polling in-flight window** — `hue_service` tracks per-light deadlines; the 1s polling loop skips broadcasting `light_update` for a light that was just written until its transition + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition reads.
 - **Mode → scene overrides** — any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, checked before hardcoded ACTIVITY_LIGHT_STATES
 - **20 curated scenes** across 7 categories (functional, cozy, moody, vibrant, nature, entertainment, social) using color harmony theory — each scene defines per-light states with varied hue, saturation, and brightness for depth
 - **Custom scene CRUD** — user-created scenes persisted to SQLite with category and optional paired effect
-- **Effect auto-activation** — EFFECT_AUTO_MAP: opal (relax/day), candle (relax/eve+night), glisten (gaming/eve+night)
+- **Effect auto-activation** — EFFECT_AUTO_MAP: opal (relax/day), candle (relax/eve+night). Gaming no longer auto-runs effects (they compete with screen sync and read as "RGB gamer strip").
 - Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal) with 5-min cache on bridge scene fetches
 - Social mode sub-styles (color cycle, club, rave, fire & ice)
-- Screen sync for gaming (bedroom lamp mirrors dominant screen color via mss capture)
+- Screen sync for gaming (bedroom lamp mirrors dominant screen color via mss capture). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor.
 - Manual override with 4-hour auto-timeout
 - Configurable per-mode brightness multipliers
 
@@ -100,6 +105,14 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - ~~Evening transition is too abrupt~~ — fixed: 30-minute gradual lerp before winddown_start_hour
 - ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social/working
 - ~~Mode detection has noticeable lag between activity start and mode switch~~ — fixed: dropped PC agent POLL_INTERVAL from 15s to 5s (worst-case 5s, average ~2.5s). The backend processes activity reports synchronously on POST, so the polling interval was the entire lag budget.
+
+**Lighting mode-switch quality (April 2026):**
+- ~~"Greenish bedroom" in working mode~~ — fixed: Hue bridge stored residual HSB on CT-mode lights (either cached from a prior HSB mode or injected by the LightingPreferenceLearner overlay). `hue_service.set_light` now always emits `sat=0` before `ct` in the JSON body and drops any stray `hue`/`sat` when `ct` is present — the bridge is key-order-sensitive and rejects `sat=0` that follows `ct`.
+- ~~Kitchen lights drifted to random different brightness~~ — fixed: scene drift is now relax-only (was applied to all active modes, producing independent ±15 bri deltas on paired L3/L4). Kitchen pairing is the baseline expectation in working/gaming/watching/cooking.
+- ~~Brightness pop/flash when effects stop/start on mode change~~ — fixed: new `_reconcile_effect` helper applies state to the bridge FIRST (establishing the brightness target), then stops the old effect and starts the new one with a 0.5s guard. Previously the effect was stopped before the target was on the bridge, so the bridge defaulted to 100% brightness until the next command landed.
+- ~~UI bounces back to old light values mid-transition~~ — fixed: `hue_service` tracks per-light in-flight deadlines (transition time + 0.5s buffer); the polling loop skips broadcasting `light_update` for a light that was just written so the frontend doesn't receive stale mid-transition reads.
+- ~~Monitor-ambient contrast too aggressive for eyes during gaming at night~~ — fixed: raised screen-sync `MODE_MIN_BRIGHTNESS` for gaming from 50 to 85 so L2 (bedroom lamp) never drops below a comfortable bias level regardless of screen content. Gaming-night L2 fallback bumped to 140 for non-sync moments.
+- ~~Per-mode lighting felt arbitrary and inconsistent~~ — fixed: full ACTIVITY_LIGHT_STATES redesign anchored on IES 1:3 monitor-ambient contrast for work, D65 bias for daytime watching, kitchen functional pairing, post-sunset ct≥333 strict cutoff. Plan at `.claude/plans/let-s-take-a-look-foamy-ripple.md`.
 
 **Music:**
 - ~~Mode-to-playlist mapping is too rigid~~ — fixed: vibe tagging supports multiple favorites per mode with energetic/focus/mellow/background/hype tags
@@ -1073,22 +1086,27 @@ scheduler.add_task(task)
 
 ### Pattern 7: Adding Light States for a New Mode
 
-Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`. Each light should have **different** values to create spatial depth — avoid `_uniform()`:
+Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`. A few invariants from the April 2026 lighting redesign must hold:
+
+1. **One colorspace per state dict.** Functional modes (working, watching, cooking) use `ct` only. Aesthetic modes (gaming, relax, social) use `hue`/`sat` only. Never mix — `hue_service.set_light` will drop stray `hue`/`sat` from CT commands anyway (colorspace exclusivity), but keeping it clean in the state dict avoids confusion.
+2. **Kitchen pair in functional modes.** L3 (kitchen front) and L4 (kitchen back) must have matching `bri` and on/off state in working, gaming, watching, and cooking. They may have slight `ct` variance for depth. In relax/social, they're free to diverge.
+3. **Post-sunset warmth cutoff.** Evening and night periods must not emit `ct<333` (cooler than ~3000K). Watching's D65 (6500K) bias is a daytime-only exception; evening and night warm to 3000K or warmer.
+4. **Night working contrast target.** If the mode is meant to co-exist with an active monitor at night, keep ambient visible enough to hit IES 1:3 contrast (desk lamp at ~2700K/bri=130, living room ambient at ~2200K/bri=60 for the current apartment).
 
 ```python
 "new_mode": {
     "day": {
-        "1": {"on": True, "bri": 200, "ct": 220},     # Living room: bright neutral
-        "2": {"on": True, "bri": 254, "ct": 200},     # Bedroom/desk: max brightness
-        "3": {"on": True, "bri": 170, "ct": 233},     # Kitchen front: fill
-        "4": {"on": True, "bri": 150, "ct": 250},     # Kitchen back: warmer fill
+        "1": {"on": True, "bri": 180, "ct": 233},    # Living room: ambient fill (4300K)
+        "2": {"on": True, "bri": 254, "ct": 210},    # Bedroom/desk: dominant (4800K)
+        "3": {"on": True, "bri": 140, "ct": 250},    # Kitchen front (4000K)
+        "4": {"on": True, "bri": 140, "ct": 250},    # Kitchen back: PAIRED with L3
     },
-    "evening": { ... },  # Warmer ct values, reduced brightness
-    "night": { ... },     # Dim ambient fill + adequate desk light
+    "evening": { ... },  # ct>=333 (strict cutoff), reduced bri
+    "night":   { ... },  # Dim ambient + adequate desk, kitchen often OFF
 }
 ```
 
-**How it works:** The engine first checks `mode_scene_overrides` table for user-mapped Hue scenes, then falls through to `ACTIVITY_LIGHT_STATES`. Time period (day/evening/night from schedule config) + current mode determines the per-light states. Brightness multipliers applied on top. `MODE_TRANSITION_TIME` controls fade speed per mode.
+**How it works:** The engine first checks `mode_scene_overrides` table for user-mapped Hue scenes, then falls through to `ACTIVITY_LIGHT_STATES`. Time period (day/evening/night from schedule config) + current mode determines the per-light states. `LightingPreferenceLearner.get_overlay` merges learned per-property values on top (but CT-vs-HSB exclusivity is enforced at the `set_light` layer, so learner overlays can't tint a CT command). Brightness multipliers apply on top of that. `MODE_TRANSITION_TIME` controls fade speed per mode. Scene drift (relax-only) adds ±15 bri / ±1500 hue perturbation every 30min during long sessions. `_reconcile_effect` runs AFTER `_apply_state` so effect changes don't pop brightness.
 
 ### Pattern 8: Adding Event Logging
 

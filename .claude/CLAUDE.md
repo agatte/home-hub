@@ -477,20 +477,30 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | Mode | Detection | Lighting Strategy | Notes |
 |------|-----------|-------------------|-------|
 | `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
-| `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites with per-light brightness gradient. Night: desk lamp bri=150/3200K + dim warm ambient fill (L1+L4). | Designed to reduce monitor contrast ratio to ~3:1 |
-| `watching` | VLC, Plex, Stremio, media players | SMPTE-inspired neutral bias (6500K) on desk lamp, peripherals off/ultra-dim. | Screen sync on L2 |
+| `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites, desk-dominant. Night: L2 desk bri=130/2700K + L1 ambient bri=60/2270K + kitchen OFF. | IES 1:3 monitor-ambient contrast |
+| `watching` | VLC, Plex, Stremio, media players | L2 D65 bias (6500K) in daytime, warming to 3000K after sunset per strict cutoff. Kitchen OFF evening+. | Screen sync on L2 when mss active |
 | `social` | Blue Yeti ambient noise >2min + no game | Sub-modes: color_cycle, club, rave, fire_and_ice | Party lighting |
-| `relax` | Manual override | Warm gradient — each light different warmth/brightness for spatial depth. | opal effect (day), candle effect (eve/night) |
-| `movie` | Manual override | Same bias-light approach as watching | |
+| `relax` | Manual override | HSB warm amber gradient. Kitchen L3/L4 free to diverge for depth. | opal (day), candle (eve), fire (night) |
+| `cooking` | Manual override | L3+L4 paired peak (3500K for accurate food colors), L1 warm ambient, L2 dim | 1s snap transition |
 | `sleeping` | 10:30pm + 15min idle → psutil | 10-min fade → off | Also pauses media |
 | `idle` | No process detected | Falls through to time-based rules | |
 | `away` | Win32 idle >10min | Falls through to time-based | |
 
-**Mode priority (engine enforces):** gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0)
+**Mode priority (engine enforces):** gaming (5) > social (4) > watching/cooking (3) > working (2) > idle (1) > away (0)
 
-**Mode transition speeds:** gaming 0.5s (snappy), working 2s, watching/movie 3s (cinematic), relax 4s (gentle), sleeping 5s (gradual)
+**Mode transition speeds:** gaming 0.5s (snappy), working 2s, watching 3s (cinematic), cooking 1s (snappy), relax 4s (gentle), sleeping 5s (gradual)
 
-**Scene drift:** After 30min in any active mode, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness.
+**Scene drift:** After 30min in **relax** mode, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness. Scoped to relax only — functional modes (working, gaming, watching, cooking) need stable, paired values; independent per-light drift there made L3/L4 look randomly unequal.
+
+**Kitchen pair rule:** L3 (kitchen front) and L4 (kitchen back) must match `bri` and on/off in functional modes (working, gaming, watching, cooking). Free to diverge in relax/social.
+
+**Post-sunset warmth cutoff:** No CT-mode light drops below `ct=333` (~3000K) in evening/night. Watching's D65 bias is a daytime-only exception.
+
+**Colorspace exclusivity:** `hue_service.set_light` forces `sat=0` and drops stray `hue` when `ct` is in the payload, and emits them in `sat`-before-`ct` JSON order. The bridge is order-sensitive; `{ct, sat: 0}` leaves residual tint, `{sat: 0, ct}` produces clean white. Prevents the "greenish bedroom" bug from a stale bridge state or a LightingPreferenceLearner overlay that mixed colorspaces.
+
+**Effect reconciliation:** `_reconcile_effect` runs AFTER `_apply_state` so the bridge has the target brightness before the old effect stops. Stopping an effect first would pop brightness to 100% (the old mode-switch flash). 0.5s guard separates stop and start.
+
+**In-flight window:** `hue_service` tracks per-light deadlines; the polling loop skips broadcasting `light_update` for a light that was just written until transition time + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition bridge reads.
 
 **Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
 
@@ -510,9 +520,9 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 Activated via `POST /api/scenes/effects/{name}` (all lights) or `POST /api/scenes/effects/{name}/light/{id}` (single light).
 
 **EFFECT_AUTO_MAP** (auto-activated by mode+time):
-- `relax`: opal (day), candle (evening), candle (night)
-- `gaming`: none (day), glisten (evening), glisten (night)
-- `working`, `watching`, `movie`: none (all periods)
+- `relax`: opal (day), candle (evening), fire (night)
+- `watching`: none (day), glisten (evening), glisten (night)
+- `gaming`, `working`, `cooking`: none (all periods) — gaming previously ran glisten but it competed with screen sync and read as "RGB gamer strip"
 
 **Weather effect fallback:** When a mode has no auto-effect, weather can overlay one — rain→candle, thunderstorm→sparkle, snow→opal (evening/night only, except sparkle fires any time). Effects are only stopped/restarted when switching to a different effect — same-effect cycles are skipped to preserve the brightness base on the bridge.
 

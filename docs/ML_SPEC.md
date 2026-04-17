@@ -328,7 +328,7 @@ apply them as an overlay on the hardcoded defaults.
 | **Model** | Exponential moving average (EMA) per (light_id, mode, time_period) combination. For each combo with 5+ manual adjustments, compute decay-weighted average of the "after" values (more recent adjustments weighted higher). No ML library needed — pure math. |
 | **Output** | Adjusted light state values that overlay `ACTIVITY_LIGHT_STATES`. Example: if the user consistently sets bedroom lamp to bri=180 during working/night (vs hardcoded 150), the learner outputs `{"2": {"bri": 180}}` for that slot. |
 | **Inference frequency** | Recalculated daily at 4 AM. Applied on every mode change via the existing `_resolve_activity_state()` path. |
-| **Integration point** | New `LightingPreferenceLearner` produces an overlay dict matching the `ACTIVITY_LIGHT_STATES` structure. `AutomationEngine._apply_mode()` checks for learned preferences first, falls back to hardcoded values for any missing slots. |
+| **Integration point** | New `LightingPreferenceLearner` produces an overlay dict matching the `ACTIVITY_LIGHT_STATES` structure. `AutomationEngine._apply_mode()` checks for learned preferences first, falls back to hardcoded values for any missing slots. **Colorspace safety:** if a mode's hardcoded state uses `ct`, any learner-overlayed `hue`/`sat` is silently dropped at the `hue_service.set_light` layer (CT and HSB are mutually exclusive on the Hue bridge). This was the root cause of the April 2026 "greenish bedroom" bug — a learner that had seen the user set warm amber values during relax was re-applying `hue`/`sat` to working-mode CT commands, and the bridge was merging them into tinted "white". The fix lives in the set_light layer, so learner output never needs to know about colorspace. |
 | **Cold start** | Hardcoded `ACTIVITY_LIGHT_STATES` remain the defaults. Learned values only override when 5+ manual changes exist for a given (light, mode, period). |
 | **Storage** | `data/models/lighting_prefs.json` — simple JSON dict of learned values |
 | **Expected improvement** | Fewer manual corrections over time. Measurable as: manual light adjustments per day trending downward. |
@@ -344,7 +344,8 @@ for adjustment in sorted_by_timestamp:
 
 **Files touched:**
 - New `backend/services/ml/lighting_learner.py`
-- `backend/services/automation_engine.py` — `_resolve_activity_state()` checks learned overlay before hardcoded values
+- `backend/services/automation_engine.py` — `_apply_mode()` merges the learner overlay on top of `ACTIVITY_LIGHT_STATES`
+- `backend/services/hue_service.py` — `set_light` enforces CT/HSB exclusivity so learner-overlayed hue/sat never contaminates a CT command (prevents the "greenish bedroom" tint)
 
 ---
 
