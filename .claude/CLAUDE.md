@@ -478,7 +478,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 |------|-----------|-------------------|-------|
 | `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
 | `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites, desk-dominant. Night: L2 desk bri=130/2700K + L1 ambient bri=60/2270K + kitchen OFF. | IES 1:3 monitor-ambient contrast |
-| `watching` | VLC, Plex, Stremio, media players | L2 D65 bias (6500K) in daytime, warming to 3000K after sunset per strict cutoff. Kitchen OFF evening+. | Screen sync on L2 when mss active |
+| `watching` | VLC, Plex, Stremio, media players | Projector-friendly: warm throughout (no D65), dim, L2 as soft bias from across the room. Kitchen OFF evening+. | Screen sync on L2 — projector on HDMI from dev PC, so mss captures the projected frames |
 | `social` | Blue Yeti ambient noise >2min + no game | Sub-modes: color_cycle, club, rave, fire_and_ice | Party lighting |
 | `relax` | Manual override | HSB warm amber gradient. Kitchen L3/L4 free to diverge for depth. | opal (day), candle (eve), fire (night) |
 | `cooking` | Manual override | L3+L4 paired peak (3500K for accurate food colors), L1 warm ambient, L2 dim | 1s snap transition |

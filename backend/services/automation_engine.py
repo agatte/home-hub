@@ -192,28 +192,29 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
-    # Bias lighting behind the screen (L2, bedroom — verify at implementation
-    # if TV is actually in living room; if so, swap L1/L2 roles here).
-    # Daytime L2 = true D65 6500K (MediaLight standard, ~10% of screen bri).
-    # Evening + night warm to 3000K/2700K to respect the strict post-sunset
-    # cutoff — loses some bias-light color accuracy but keeps the room's
-    # evening character consistent. Kitchen L3/L4 are PAIRED (OFF evening+).
+    # Projector-friendly: warm throughout (no D65), dim. The projector is
+    # on HDMI from the dev PC so L2 is a screen-sync target during watching
+    # — the values below are the FALLBACK when sync isn't actively pushing
+    # (idle desktop, just-entered mode, etc). Sync caps L2 at bri=80 so it
+    # stays subtle. L2 sits on the wall opposite the projection surface,
+    # so its light doesn't fall directly on the projected image. Kitchen
+    # L3/L4 PAIRED (subtle in day, OFF evening+ to minimize wall bounce).
     "watching": {
         "day": {
-            "1": {"on": True, "bri": 80,  "ct": 280},    # Living room: warm ambient (3600K)
-            "2": {"on": True, "bri": 80,  "ct": 154},    # Bias light: D65 (6500K)
-            "3": {"on": True, "bri": 40,  "ct": 320},    # Kitchen front: modest fill (3100K)
-            "4": {"on": True, "bri": 40,  "ct": 320},    # Kitchen back: PAIRED with L3
+            "1": {"on": True, "bri": 80,  "ct": 320},    # Living room: warm ambient (3100K)
+            "2": {"on": True, "bri": 70,  "ct": 370},    # Bedroom: warm soft bias (2700K)
+            "3": {"on": True, "bri": 30,  "ct": 333},    # Kitchen front: subtle (3000K)
+            "4": {"on": True, "bri": 30,  "ct": 333},    # Kitchen back: PAIRED with L3
         },
         "evening": {
-            "1": {"on": True, "bri": 60,  "ct": 370},    # Living room: warm (2700K)
-            "2": {"on": True, "bri": 60,  "ct": 333},    # Bias warms to 3000K (strict cutoff)
-            "3": _LIGHT_OFF,                              # Kitchen off — avoid screen reflection
+            "1": {"on": True, "bri": 50,  "ct": 400},    # Living room: warm (2500K)
+            "2": {"on": True, "bri": 40,  "ct": 400},    # Bedroom: warm bias dimmer
+            "3": _LIGHT_OFF,                              # Kitchen off — minimize projection wash
             "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
         },
         "night": {
-            "1": {"on": True, "bri": 35,  "ct": 454},    # Living room: faint amber (2200K)
-            "2": {"on": True, "bri": 35,  "ct": 370},    # Bias: warmer still (2700K)
+            "1": {"on": True, "bri": 25,  "ct": 454},    # Living room: candle-like amber (2200K)
+            "2": {"on": True, "bri": 20,  "ct": 454},    # Bedroom: very warm, very dim
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,                              # PAIRED off
         },

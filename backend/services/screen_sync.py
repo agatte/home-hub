@@ -25,7 +25,9 @@ logger = logging.getLogger("home_hub.screen_sync")
 
 # Per-mode max brightness clamps for the synced lamp.
 # Gaming gets a higher cap so the lamp can pop on bright moments; watching
-# stays subtle so the screen color doesn't fight the screen itself.
+# stays subtle so the mirrored projected content doesn't wash the image.
+# The projector is on HDMI from the dev PC, so mss captures the same frames
+# that are being projected — L2 mirrors the actual content, not the dashboard.
 MODE_MAX_BRIGHTNESS = {
     "gaming": 200,
     "watching": 80,
@@ -33,8 +35,9 @@ MODE_MAX_BRIGHTNESS = {
 DEFAULT_MAX_BRIGHTNESS = 80
 MIN_BRIGHTNESS = 15
 
-# Per-mode minimum brightness — gaming stays visible even on dark scenes;
-# watching allows dim bias lighting.
+# Per-mode minimum brightness — gaming stays visible even on dark scenes.
+# Watching allows dim bias lighting (dark scenes → dim L2 → projection stays
+# the room's brightest surface, which is what we want).
 MODE_MIN_BRIGHTNESS: dict[str, int] = {
     "gaming": 85,     # Hold a comfortable bedroom bias level even on dark scenes
                       # so the desk lamp doesn't drop below ~1:3 monitor contrast.
