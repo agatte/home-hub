@@ -122,28 +122,32 @@ class HueService:
             # phue2 expects int light IDs
             lid = int(light_id)
 
-            # Build command dict — only include valid Hue API keys
+            # Build command dict — only include valid Hue API keys. KEY ORDER
+            # MATTERS: the Hue bridge processes JSON keys in order and is
+            # sensitive to HSB keys that follow `ct`. Empirically verified:
+            # sending `{ct: 400, sat: 0}` leaves the bulb with residual sat
+            # (greenish-white), but `{sat: 0, ct: 400}` produces clean white.
+            # So: always emit sat BEFORE ct, and drop any hue when ct is set.
+            wants_ct = "ct" in state
             command: dict[str, Any] = {}
             if "on" in state:
                 command["on"] = bool(state["on"])
             if "bri" in state:
                 command["bri"] = max(1, min(254, int(state["bri"])))
-            if "hue" in state:
-                command["hue"] = max(0, min(65535, int(state["hue"])))
-            if "sat" in state:
-                command["sat"] = max(0, min(254, int(state["sat"])))
-            if "ct" in state:
-                command["ct"] = max(153, min(500, int(state["ct"])))
-                # CT is exclusive of HSB on the Hue bridge. Force sat=0 and
-                # drop any hue so the bulb cleanly uses CT. Without this,
-                # residual hue/sat (either cached on the bridge from a prior
-                # HSB mode, or re-introduced by the LightingPreferenceLearner
-                # overlay) tints the "white," producing the greenish-bedroom
-                # bug. This override always wins — any sat/hue the caller
-                # passes alongside ct is dropped, matching Hue API semantics
-                # where colormode is exclusive.
+            if wants_ct:
+                # CT is exclusive of HSB. Force sat=0 (desaturate) and drop
+                # hue so the bulb cleanly adopts the target color temperature.
+                # Without this, residual hue/sat (either cached on the bridge
+                # from a prior HSB mode, or re-introduced by the
+                # LightingPreferenceLearner overlay) tints the "white,"
+                # producing the greenish-bedroom bug.
                 command["sat"] = 0
-                command.pop("hue", None)
+                command["ct"] = max(153, min(500, int(state["ct"])))
+            else:
+                if "hue" in state:
+                    command["hue"] = max(0, min(65535, int(state["hue"])))
+                if "sat" in state:
+                    command["sat"] = max(0, min(254, int(state["sat"])))
             if "transitiontime" in state:
                 command["transitiontime"] = int(state["transitiontime"])
 
