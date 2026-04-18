@@ -8,8 +8,14 @@
 
 $TaskName = "Home Hub Agent Supervisor"
 $ProjectRoot = "C:\Users\antho\Desktop\home-hub"
-$PythonW = "$ProjectRoot\venv\Scripts\pythonw.exe"
-$Arguments = "-m backend.services.pc_agent.supervisor --server http://192.168.1.210:8000 --classifier --shadow"
+
+# Invoke system Python directly via a wrapper script that sets PYTHONPATH
+# to the venv's site-packages. Skipping venv\Scripts\pythonw.exe avoids
+# Python 3.13's venv launcher-subprocess pattern (1.5MB stub → 66MB real
+# interpreter) which produced a confusing duplicate pythonw.exe on every
+# launch.
+$Executable = "powershell.exe"
+$Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ProjectRoot\scripts\start-supervisor.ps1`""
 
 # ── Remove old individual tasks ────────────────────────────────────────
 $OldTasks = @(
@@ -50,7 +56,7 @@ if ($existing) {
 
 # ── Create the new supervisor task ─────────────────────────────────────
 $action = New-ScheduledTaskAction `
-    -Execute $PythonW `
+    -Execute $Executable `
     -Argument $Arguments `
     -WorkingDirectory $ProjectRoot
 
