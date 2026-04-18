@@ -978,14 +978,21 @@ class AutomationEngine:
 
         When starting a new effect, a 0.5s bridge-processing guard separates
         stop-and-start so the two commands don't race.
+
+        The same-effect early-return (4ded643) is kept only when desired is
+        non-None — repeated candle/glisten cycles preserve their brightness
+        base. When desired is None, we always call stop_effect_all even if
+        our tracker agrees, because effects activated via scenes API routes,
+        presence/winddown services, or left running across a server restart
+        never update `_active_effect_name` — so the tracker can falsely
+        report "None running" while the bridge is still flickering candle.
         """
         if not self._hue_v2 or not self._hue_v2.connected:
             return
-        if desired_effect == self._active_effect_name:
-            return  # No change — leave the running effect alone
-        if self._active_effect_name:
-            await self._hue_v2.stop_effect_all()
-            self._active_effect_name = None
+        if desired_effect and desired_effect == self._active_effect_name:
+            return  # Same effect running — leave it to preserve brightness base
+        await self._hue_v2.stop_effect_all()
+        self._active_effect_name = None
         if desired_effect:
             await asyncio.sleep(0.5)
             await self._hue_v2.set_effect_all(desired_effect)
