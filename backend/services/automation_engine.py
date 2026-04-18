@@ -30,7 +30,10 @@ SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
 
 # Modes that skip weather-reactive lighting adjustments entirely.
 # Social has its own party lighting; sleeping is a gradual fade sequence.
-WEATHER_SKIP_MODES = frozenset(("social", "sleeping"))
+# Working/cooking/gaming opt out because they're task- or screen-focused —
+# weather-dim-for-cozy is backwards there: overcast days need lamps to
+# compensate for dim natural light, not further dim with it.
+WEATHER_SKIP_MODES = frozenset(("social", "sleeping", "working", "cooking", "gaming"))
 
 # Weather condition → effect override. When a weather condition matches and
 # the mode has no auto-effect already, this effect is applied on top.
@@ -146,8 +149,8 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # after sunset so the screen still dominates at night.
     "gaming": {
         "day": {
-            "1": {"on": True, "bri": 60,  "hue": 47000, "sat": 220},   # Living room: blue-violet wash
-            "2": {"on": True, "bri": 200, "hue": 46920, "sat": 220},   # Desk fallback (screen-sync overrides)
+            "1": {"on": True, "bri": 130, "hue": 47000, "sat": 220},   # Living room: blue-violet wash, bright enough for overcast
+            "2": {"on": True, "bri": 240, "hue": 46920, "sat": 220},   # Desk fallback (screen-sync overrides, cap raised to 240)
             "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},   # Kitchen front: violet accent
             "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},   # Kitchen back: PAIRED with L3
         },

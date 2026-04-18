@@ -29,7 +29,7 @@ logger = logging.getLogger("home_hub.screen_sync")
 # The projector is on HDMI from the dev PC, so mss captures the same frames
 # that are being projected — L2 mirrors the actual content, not the dashboard.
 MODE_MAX_BRIGHTNESS = {
-    "gaming": 200,
+    "gaming": 240,
     "watching": 80,
 }
 DEFAULT_MAX_BRIGHTNESS = 80
