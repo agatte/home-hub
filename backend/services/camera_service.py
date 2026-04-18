@@ -277,75 +277,74 @@ class CameraService:
             self._calibrating = False
 
     def _calibrate_exposure_sync(self) -> dict:
-        """Blocking calibration search. Runs in executor."""
+        """Blocking calibration. Runs in executor.
+
+        Iteratively picks a fixed exposure value that produces a steady-state
+        ``gray.mean()`` reading near the target, then records the actual
+        steady-state mean as the baseline. The measurement cadence intentionally
+        mirrors the live ``poll_loop`` (sleep between reads, single-frame
+        captures) so the recorded baseline reflects what live polling will
+        actually see — burst reads were inflating prior calibrations because
+        the webcam's auto-gain wound up high during rapid frame reads but
+        settled back down between sparse live polls.
+        """
+        import time
+
         import cv2
 
         # Switch to manual exposure so our writes take effect.
         self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAP_AUTO_EXPOSURE_MANUAL)
 
-        # DShow range varies by driver (Latitude webcam clamps around -13).
-        # Start wide so we avoid bottoming out the search unnecessarily — if
-        # the driver clamps further, measure() still returns the clamped-value
-        # reading and the search converges on whatever the camera can deliver.
-        lo, hi = -20.0, 5.0
+        # Sensible DShow exposure range — staying inside the driver's normal
+        # bounds avoids the over-dark territory (~-20+) where the sensor is
+        # at its noise floor and dynamic range collapses.
+        EXPOSURE_MIN = -12.0
+        EXPOSURE_MAX = 0.0
+        ACCEPT_LO, ACCEPT_HI = 60.0, 180.0  # Range we'll stop searching in
+        AGC_SETTLE_S = 3.0                  # Sleep so auto-gain reaches idle
+        FRAME_INTERVAL_S = 0.5              # Spacing between baseline frames
+        BASELINE_FRAMES = 3
 
-        def measure(exposure: float) -> float:
+        def steady_measure(exposure: float) -> float:
+            """Set exposure, wait for AGC, take a poll-cadence measurement."""
             self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
-            # Let the sensor settle — drop 3 frames, average the rest
-            for _ in range(3):
-                self._cap.read()
-            readings = []
-            for _ in range(CALIBRATION_FRAMES):
+            time.sleep(AGC_SETTLE_S)
+            self._cap.read()  # Drop the first frame after settle
+            readings: list[float] = []
+            for _ in range(BASELINE_FRAMES):
                 ret, frame = self._cap.read()
-                if not ret or frame is None:
-                    continue
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                readings.append(float(gray.mean()))
+                if ret and frame is not None:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    readings.append(float(gray.mean()))
+                time.sleep(FRAME_INTERVAL_S)
             if not readings:
                 return -1.0
             return sum(readings) / len(readings)
 
-        # Widen the bracket if target is outside [measure(lo), measure(hi)]
-        lo_lux = measure(lo)
-        hi_lux = measure(hi)
-        if lo_lux < 0 or hi_lux < 0:
-            return {"status": "error", "detail": "camera read failed during calibration"}
-
-        # Ensure the target is inside the bracket (grow outward up to 2 tries)
-        tries = 0
-        while hi_lux < EXPOSURE_TARGET_LUX - EXPOSURE_TOLERANCE and tries < 2:
-            hi += 2.0
-            hi_lux = measure(hi)
-            tries += 1
-        tries = 0
-        while lo_lux > EXPOSURE_TARGET_LUX + EXPOSURE_TOLERANCE and tries < 2:
-            lo -= 2.0
-            lo_lux = measure(lo)
-            tries += 1
-
-        # Binary search
-        best_exposure = (lo + hi) / 2
-        best_lux = 0.0
-        for _ in range(8):  # 8 iterations → ~0.04 exposure resolution
-            mid = (lo + hi) / 2
-            mid_lux = measure(mid)
-            if mid_lux < 0:
-                return {"status": "error", "detail": "camera read failed mid-search"}
-            best_exposure, best_lux = mid, mid_lux
-            if abs(mid_lux - EXPOSURE_TARGET_LUX) <= EXPOSURE_TOLERANCE:
+        # Start at a sensible middle and adjust by ±2 stops until the steady
+        # reading sits in [60, 180]. Worst case: 6 attempts × ~5s = 30s.
+        exposure = -6.0
+        measured = -1.0
+        for _ in range(6):
+            measured = steady_measure(exposure)
+            if measured < 0:
+                return {"status": "error", "detail": "camera read failed"}
+            if ACCEPT_LO <= measured <= ACCEPT_HI:
                 break
-            if mid_lux < EXPOSURE_TARGET_LUX:
-                lo = mid  # Need brighter → increase exposure
+            # Adjust toward target. Each ±2 roughly halves/doubles brightness.
+            if measured > ACCEPT_HI:
+                exposure -= 2.0
             else:
-                hi = mid  # Too bright → decrease exposure
+                exposure += 2.0
+            exposure = max(EXPOSURE_MIN, min(EXPOSURE_MAX, exposure))
 
         return {
             "status": "ok",
-            "exposure_value": best_exposure,
-            "measured_lux": best_lux,
+            "exposure_value": exposure,
+            "measured_lux": measured,
             "detail": (
-                f"calibrated: exposure={best_exposure:.2f}, "
-                f"measured_lux={best_lux:.1f}"
+                f"calibrated: exposure={exposure:.2f}, "
+                f"baseline_lux={measured:.1f}"
             ),
         }
 
