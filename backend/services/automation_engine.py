@@ -94,19 +94,26 @@ LUX_MULT_EPSILON = 0.03      # Skip re-apply if multiplier change < 3%
 LUX_STALE_SECONDS = 30       # Ignore readings older than this
 
 
-def lux_to_multiplier(lux: float) -> float:
+def lux_to_multiplier(lux: float, baseline: float = 90.0) -> float:
     """Piecewise-linear interpolation across LUX_CURVE anchors.
+
+    The ``baseline`` argument shifts the curve so the user's calibrated
+    "normal room" reading lands at the middle anchor (multiplier = 1.00).
+    Default baseline of 90 matches the raw LUX_CURVE anchors — used when
+    no calibration baseline is available yet.
 
     Clamps to the first/last anchor's multiplier when lux is outside the
     anchor range. Dark rooms (low lux) lift brightness; bright rooms dim.
     """
-    if lux <= LUX_CURVE[0][0]:
+    # Shift lux so that the calibrated baseline maps to the curve's midpoint.
+    effective = lux - baseline + LUX_CURVE[1][0]
+    if effective <= LUX_CURVE[0][0]:
         return LUX_CURVE[0][1]
-    if lux >= LUX_CURVE[-1][0]:
+    if effective >= LUX_CURVE[-1][0]:
         return LUX_CURVE[-1][1]
     for (x0, y0), (x1, y1) in zip(LUX_CURVE, LUX_CURVE[1:]):
-        if x0 <= lux <= x1:
-            frac = (lux - x0) / (x1 - x0) if x1 != x0 else 0.0
+        if x0 <= effective <= x1:
+            frac = (effective - x0) / (x1 - x0) if x1 != x0 else 0.0
             return y0 + frac * (y1 - y0)
     return 1.0  # Unreachable
 
@@ -846,7 +853,11 @@ class AutomationEngine:
         if age > LUX_STALE_SECONDS:
             return state
 
-        raw_mult = lux_to_multiplier(float(ema))
+        # Baseline shifts the curve so the user's calibrated "normal" room
+        # sits at multiplier = 1.00. Legacy configs (no baseline_lux) fall
+        # back to the raw LUX_CURVE anchor (90) for backwards compatibility.
+        baseline = getattr(camera, "baseline_lux", None)
+        raw_mult = lux_to_multiplier(float(ema), float(baseline) if baseline else 90.0)
         # Hysteresis: if we're within the epsilon of the last multiplier,
         # keep the old value so the state dict stays bit-identical and the
         # downstream per-light dedupe skips writes.

@@ -84,6 +84,7 @@ class CameraService:
         # Ambient lux calibration + smoothing
         self._calibrated: bool = False
         self._exposure_value: Optional[float] = None
+        self._baseline_lux: Optional[float] = None
         self._ema_lux: Optional[float] = None
         self._last_lux_update: Optional[datetime] = None
         self._calibrating: bool = False
@@ -209,11 +210,13 @@ class CameraService:
             self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAP_AUTO_EXPOSURE_MANUAL)
             self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
             self._exposure_value = exposure
+            baseline = config.get("baseline_lux")
+            self._baseline_lux = float(baseline) if baseline is not None else None
             self._calibrated = True
             logger.info(
-                "Applied lux calibration: exposure=%.2f, target_lux=%d",
+                "Applied lux calibration: exposure=%.2f, baseline_lux=%s",
                 exposure,
-                int(config.get("target_lux", EXPOSURE_TARGET_LUX)),
+                f"{self._baseline_lux:.1f}" if self._baseline_lux is not None else "unset",
             )
         except Exception as exc:
             logger.error("Failed to apply lux calibration: %s", exc, exc_info=True)
@@ -245,20 +248,23 @@ class CameraService:
             from backend.api.routes.routines import save_setting
 
             now = datetime.now(timezone.utc).isoformat()
+            baseline = float(result["measured_lux"])
             await save_setting(
                 LUX_CALIBRATION_SETTING_KEY,
                 {
                     "exposure_value": result["exposure_value"],
                     "target_lux": EXPOSURE_TARGET_LUX,
+                    "baseline_lux": baseline,
                     "calibrated_at": now,
                 },
             )
             self._exposure_value = result["exposure_value"]
+            self._baseline_lux = baseline
             self._calibrated = True
             logger.info(
-                "Calibration complete: exposure=%.2f, measured_lux=%.1f",
+                "Calibration complete: exposure=%.2f, baseline_lux=%.1f",
                 result["exposure_value"],
-                result["measured_lux"],
+                baseline,
             )
             return result
         finally:
@@ -271,10 +277,11 @@ class CameraService:
         # Switch to manual exposure so our writes take effect.
         self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAP_AUTO_EXPOSURE_MANUAL)
 
-        # Typical DShow range is roughly -13 (darkest) to 0 (brightest).
-        # V4L2 ranges differ; we widen the search if the initial edges don't
-        # bracket the target.
-        lo, hi = -10.0, 0.0
+        # DShow range varies by driver (Latitude webcam clamps around -13).
+        # Start wide so we avoid bottoming out the search unnecessarily — if
+        # the driver clamps further, measure() still returns the clamped-value
+        # reading and the search converges on whatever the camera can deliver.
+        lo, hi = -20.0, 5.0
 
         def measure(exposure: float) -> float:
             self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
@@ -355,6 +362,11 @@ class CameraService:
     def last_lux_update(self) -> Optional[datetime]:
         """UTC timestamp of the most recent lux read (used for staleness checks)."""
         return self._last_lux_update
+
+    @property
+    def baseline_lux(self) -> Optional[float]:
+        """Calibrated "normal room" lux reading — center of the multiplier curve."""
+        return self._baseline_lux
 
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
@@ -441,7 +453,10 @@ class CameraService:
                 current_multiplier = 1.0
                 if self._calibrated and self._ema_lux is not None:
                     from backend.services.automation_engine import lux_to_multiplier
-                    current_multiplier = lux_to_multiplier(float(self._ema_lux))
+                    baseline = self._baseline_lux if self._baseline_lux is not None else 90.0
+                    current_multiplier = lux_to_multiplier(
+                        float(self._ema_lux), float(baseline)
+                    )
                 await self._ws_manager.broadcast(
                     "camera_update",
                     {
@@ -449,6 +464,7 @@ class CameraService:
                         "confidence": confidence,
                         "ambient_lux": ambient_lux,
                         "ema_lux": self._ema_lux,
+                        "baseline_lux": self._baseline_lux,
                         "calibrated": self._calibrated,
                         "current_multiplier": current_multiplier,
                         "consecutive_absent": self._consecutive_absent,
@@ -575,6 +591,7 @@ class CameraService:
             "confidence": self._last_confidence,
             "ambient_lux": self._last_ambient_lux,
             "ema_lux": self._ema_lux,
+            "baseline_lux": self._baseline_lux,
             "calibrated": self._calibrated,
             "calibrating": self._calibrating,
             "exposure_value": self._exposure_value,

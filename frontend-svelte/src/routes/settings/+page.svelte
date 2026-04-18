@@ -468,8 +468,10 @@
             <div class="setting-info">
               <span class="setting-label">Ambient Lux</span>
               <span class="setting-hint">
-                {#if $cameraStore.calibrated}
-                  Adapts working/relax brightness (×{($cameraStore.current_multiplier ?? 1).toFixed(2)})
+                {#if $cameraStore.calibrated && $cameraStore.baseline_lux != null}
+                  lux {($cameraStore.ema_lux ?? $cameraStore.ambient_lux ?? 0).toFixed(0)} / baseline {$cameraStore.baseline_lux.toFixed(0)} → ×{($cameraStore.current_multiplier ?? 1).toFixed(2)}
+                {:else if $cameraStore.calibrated}
+                  Calibrated (pre-baseline) — recalibrate to anchor curve
                 {:else}
                   Uncalibrated — auto-exposure defeats the signal
                 {/if}

@@ -31,7 +31,8 @@ def _current_multiplier(service) -> float:
     age = (datetime.now(timezone.utc) - last).total_seconds()
     if age > LUX_STALE_SECONDS:
         return 1.0
-    return lux_to_multiplier(float(ema))
+    baseline = getattr(service, "baseline_lux", None)
+    return lux_to_multiplier(float(ema), float(baseline) if baseline else 90.0)
 
 
 @router.get("/status")
