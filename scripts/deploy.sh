@@ -112,14 +112,23 @@ fi
 if [[ "$RESTART_BACKEND" == "1" ]]; then
     echo "→ Restarting home-hub.service..."
     systemctl --user restart home-hub.service
-    sleep 3
-    if ! curl -sf http://localhost:8000/health > /dev/null; then
-        echo "✗ Health check failed after backend restart!"
+    # Poll health — FastAPI typically binds in 2-5s but can take longer
+    # on first-deploy (cold import tree). Retry for up to 20s.
+    HEALTHY=0
+    for attempt in $(seq 1 20); do
+        sleep 1
+        if curl -sf http://localhost:8000/health > /dev/null; then
+            HEALTHY=1
+            echo "  ✓ Backend healthy (${attempt}s)"
+            break
+        fi
+    done
+    if [[ "$HEALTHY" != "1" ]]; then
+        echo "✗ Health check failed after 20s!"
         echo
         systemctl --user status home-hub.service --no-pager | tail -20
         exit 1
     fi
-    echo "  ✓ Backend healthy"
 fi
 
 if [[ "$RESTART_AMBIENT" == "1" ]]; then
