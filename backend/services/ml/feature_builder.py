@@ -20,6 +20,22 @@ logger = logging.getLogger("home_hub.ml")
 PREDICTABLE_MODES = ("gaming", "working", "watching", "relax", "social", "cooking")
 
 
+def _to_utc(dt: datetime) -> datetime:
+    """Coerce a DateTime read from SQLite into a tz-aware UTC value.
+
+    SQLAlchemy's SQLite driver deserializes DateTime(timezone=True) columns
+    without the tzinfo even though we wrote them as UTC. Any comparison
+    against a tz-aware `datetime.now(timezone.utc)` blows up with
+    "can't compare offset-naive and offset-aware datetimes". Normalize on
+    read so comparisons don't trip.
+    """
+    if dt is None:
+        return dt
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def get_time_period(timestamp: datetime) -> str:
     """Determine time period from a timestamp.
 
@@ -120,6 +136,12 @@ async def build_training_data(days: int = 60) -> list[dict]:
 
     if not events:
         return []
+
+    # Normalize each event's timestamp to tz-aware UTC once so downstream
+    # comparisons with datetime.now(timezone.utc) don't blow up on SQLite's
+    # tz-naive deserialization.
+    for ev in events:
+        ev.timestamp = _to_utc(ev.timestamp)
 
     # Pre-compute per-day "wake time" (first non-away event each day)
     wake_times: dict[str, datetime] = {}
