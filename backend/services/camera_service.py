@@ -260,6 +260,12 @@ class CameraService:
             )
             self._exposure_value = result["exposure_value"]
             self._baseline_lux = baseline
+            # Reset EMA to the fresh baseline so the multiplier reports 1.00
+            # immediately. Without this reset, the smoothed value keeps
+            # decaying from the previous calibration's readings for ~2 min,
+            # showing a spurious modulation while the math catches up.
+            self._ema_lux = baseline
+            self._last_lux_update = datetime.now(timezone.utc)
             self._calibrated = True
             logger.info(
                 "Calibration complete: exposure=%.2f, baseline_lux=%.1f",
