@@ -23,6 +23,21 @@ logger = logging.getLogger("home_hub.events")
 class EventLogger:
     """Thin async wrapper for writing behavioral events to the database."""
 
+    def __init__(self) -> None:
+        # Count of events dropped due to DB errors, keyed by event family.
+        # Surfaced via get_drop_counts() and the /health endpoint so the
+        # fire-and-forget pattern stays observable.
+        self._drop_count: dict[str, int] = {
+            "mode": 0,
+            "light": 0,
+            "scene": 0,
+            "sonos": 0,
+        }
+
+    def get_drop_counts(self) -> dict[str, int]:
+        """Return cumulative drop counts since process start."""
+        return dict(self._drop_count)
+
     async def log_mode_change(
         self,
         mode: str,
@@ -81,6 +96,7 @@ class EventLogger:
                 ))
                 await session.commit()
         except Exception as e:
+            self._drop_count["mode"] += 1
             logger.error(f"Failed to log mode change: {e}", exc_info=True)
 
     async def log_light_adjustment(
@@ -143,6 +159,7 @@ class EventLogger:
                 ))
                 await session.commit()
         except Exception as e:
+            self._drop_count["light"] += 1
             logger.error(f"Failed to log light adjustment: {e}", exc_info=True)
 
     async def log_scene_activation(
@@ -171,6 +188,7 @@ class EventLogger:
                 ))
                 await session.commit()
         except Exception as e:
+            self._drop_count["scene"] += 1
             logger.error(f"Failed to log scene activation: {e}", exc_info=True)
 
     async def log_sonos_event(
@@ -202,4 +220,5 @@ class EventLogger:
                 ))
                 await session.commit()
         except Exception as e:
+            self._drop_count["sonos"] += 1
             logger.error(f"Failed to log Sonos event: {e}", exc_info=True)

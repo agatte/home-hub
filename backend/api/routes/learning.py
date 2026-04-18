@@ -222,6 +222,37 @@ async def retrain_all(request: Request) -> dict:
     return {"status": "ok", "models": mgr.get_health()}
 
 
+@router.post("/retune-weights")
+async def retune_weights(request: Request) -> dict:
+    """Manually trigger the fusion weight-tuning job.
+
+    Normally runs nightly at 3:30 AM. This endpoint exposes the same path
+    for validation — e.g. after shipping a change to the factors payload,
+    call this to confirm weights update without waiting for the cron.
+    """
+    ml_logger = getattr(request.app.state, "ml_logger", None)
+    fusion = getattr(request.app.state, "confidence_fusion", None)
+    if not ml_logger or not fusion:
+        raise HTTPException(
+            status_code=503,
+            detail="ml_logger or confidence_fusion not initialized",
+        )
+
+    before = dict(fusion.get_state()["weights"])
+    acc = await ml_logger.compute_accuracy_by_source(days=14)
+    if acc:
+        fusion.update_weights_from_accuracy(acc)
+    after = dict(fusion.get_state()["weights"])
+    return {
+        "status": "ok",
+        "applied": bool(acc),
+        "window_days": 14,
+        "accuracy_by_source": acc,
+        "weights_before": before,
+        "weights_after": after,
+    }
+
+
 @router.delete("/reset")
 async def reset_ml(request: Request) -> dict:
     """Wipe all ML models and decision/metric tables.

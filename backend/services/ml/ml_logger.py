@@ -168,3 +168,63 @@ class MLDecisionLogger:
         except Exception as exc:
             logger.error("Failed to compute accuracy: %s", exc, exc_info=True)
             return {"total": 0, "correct": 0, "accuracy": None, "window_days": days}
+
+    async def compute_accuracy_by_source(
+        self, days: int = 14,
+    ) -> dict[str, float]:
+        """Per-signal accuracy for fusion weight learning.
+
+        Walks ``ml_decisions`` rows where ``decision_source='fusion'`` and
+        ``factors`` contains a ``signal_details`` dict (added by the
+        automation engine at each fusion log site). For each signal source
+        (process / camera / audio_ml / behavioral / rule_engine), computes
+        how often that source's per-decision mode vote matched the eventual
+        ``actual_mode``. Stale signals are excluded.
+
+        The returned dict is consumable directly by
+        ``ConfidenceFusion.update_weights_from_accuracy``. Sources that
+        have no usable samples in the window are omitted — the fusion
+        method falls back to DEFAULT_WEIGHTS for anything missing.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(MLDecision.factors, MLDecision.actual_mode)
+                    .where(
+                        MLDecision.decision_source == "fusion",
+                        MLDecision.actual_mode.isnot(None),
+                        MLDecision.timestamp >= cutoff,
+                    )
+                )
+                rows = result.all()
+
+            totals: dict[str, int] = {}
+            correct: dict[str, int] = {}
+            for factors, actual in rows:
+                if not factors or not isinstance(factors, dict):
+                    continue
+                signal_details = factors.get("signal_details") or {}
+                for src, sig in signal_details.items():
+                    if not isinstance(sig, dict):
+                        continue
+                    if sig.get("stale"):
+                        continue
+                    mode = sig.get("mode")
+                    if not mode:
+                        continue
+                    totals[src] = totals.get(src, 0) + 1
+                    if mode == actual:
+                        correct[src] = correct.get(src, 0) + 1
+
+            return {
+                src: correct.get(src, 0) / totals[src]
+                for src in totals
+                if totals[src] > 0
+            }
+        except Exception as exc:
+            logger.error(
+                "Failed to compute per-source accuracy: %s", exc,
+                exc_info=True,
+            )
+            return {}

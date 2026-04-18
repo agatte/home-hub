@@ -110,6 +110,7 @@ export function initStores() {
           }))
           break
         default:
+          console.warn('[ws] Unknown message type:', type, data)
           break
       }
     },

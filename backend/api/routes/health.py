@@ -38,6 +38,10 @@ async def health_check(request: Request) -> dict:
     if hasattr(app.state, "ws_manager"):
         ws_count = app.state.ws_manager.connection_count
 
+    event_logger_drops: dict = {}
+    if hasattr(app.state, "event_logger"):
+        event_logger_drops = app.state.event_logger.get_drop_counts()
+
     return {
         "status": "healthy",
         "service": "Home Hub",
@@ -49,4 +53,5 @@ async def health_check(request: Request) -> dict:
             "fauxmo": fauxmo_connected,
         },
         "websocket_clients": ws_count,
+        "event_logger_drops": event_logger_drops,
     }

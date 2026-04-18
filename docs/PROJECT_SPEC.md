@@ -68,6 +68,23 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
 
+### ML Operational Status
+
+The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 services), but components sit in three distinct states. Spec entries elsewhere use these labels consistently.
+
+**Active** (running, affecting behavior today):
+- `LightingPreferenceLearner` — EMA-based (α=0.3) per-light preference overlay on `ACTIVITY_LIGHT_STATES`. Overlay applications are logged as `ml_decisions` rows with `decision_source="lighting_learner"` so the Analytics dashboard can audit when the learner is actually changing a value
+- `MusicBandit` — Thompson sampling for mode → Sonos favorite selection
+- `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15s away detection vs the 10-min idle timer
+- `ScreenSyncService` K-means — 5-cluster dominant color extraction (saturation-weighted 0.7 + luminance balance 0.3)
+- `MLDecisionLogger` — every mode decision logged to `ml_decisions` with source (fusion/ml/rule/time/manual/lighting_learner) + factors
+- `ConfidenceFusion` — 5-signal weighted ensemble (process, camera, audio, behavioral, rule) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence
+- **Nightly fusion weight tuning** — `fusion_weight_tuning` ScheduledTask runs daily at 3:30 AM (30 min before `ml_nightly_training` at 4:00 AM). `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion decisions where `factors.signal_details` is present and computes per-source accuracy; `ConfidenceFusion.update_weights_from_accuracy()` normalizes those values into new weights. Sources without usable samples fall back to `DEFAULT_WEIGHTS`. Manual trigger via `POST /api/learning/retune-weights` returns before/after weights for validation
+
+**Shadow** (running, logging predictions, not yet authoritative):
+- `BehavioralPredictor` (LightGBM) — **BLOCKED**: `lightgbm` not installed on the Latitude, so the predictor is disabled entirely (`main.py:320` logs "lightgbm not installed — behavioral predictor disabled") and writes zero rows to `ml_decisions`. Fix: `pip install lightgbm` on the Latitude, then wait ~7 days for shadow-mode data before promotion is meaningful
+- `AudioClassifier` (YAMNet, 521 AudioSet classes → 9 Home Hub scenes) — 17,922 shadow-mode predictions logged to date, but only 2/81 (2.5%) are correct when `actual_mode` is backfilled. Classifier predicts "idle" for "silence" most of the time, so it never matches transitions into user modes. Promotion blocked until the audio-scene → mode mapping is reworked. Target remains ML > RMS + 10pp before flip
+
 ### Dashboard — Themed Backgrounds
 
 - **Per-mode themed backgrounds** — each mode has a distinct visual scene:
@@ -142,9 +159,20 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - ~~No bundle analysis~~ — fixed: vite-plugin-visualizer (`npm run analyze` generates interactive treemap)
 - No authentication on API endpoints (acceptable for LAN-only, revisit if Cloudflare Tunnel added)
 
+**Structural / tech debt:**
+- `automation_engine.py` is a 1,944-LOC single-file monolith. Mode rules, effect reconciliation, fusion wiring, learner overlay application, and the 60s loop all live in one module. Refactor candidate — split into `mode_resolver`, `light_applicator`, `effect_reconciler`, `engine_loop`
+- Apple Music XML upload (`POST /api/music/import`) has no enforced size limit. A multi-GB library file could OOM the backend before the parser rejects it
+- Zero authentication middleware anywhere. Acceptable while LAN-only, becomes a hard blocker the moment a Cloudflare Tunnel is opened for the custom Alexa Skill (Phase 5)
+- ~~`EventLogger` swallows exceptions silently~~ — fixed: `_drop_count` dict tracks per-family (mode/light/scene/sonos) drop counts, surfaced in `/health` JSON under `event_logger_drops` so Uptime Kuma can alert on growth
+- ~~Automation-triggered light changes aren't logged to `light_adjustments`~~ — fixed: `_apply_uniform` and `_apply_per_light` in `automation_engine.py` now call `log_light_adjustment(trigger="automation")` with before/after values when state actually changes (dedup check prevents hot-path spam)
+- ~~`LightingPreferenceLearner.get_overlay` merges learned deltas invisibly~~ — fixed: when the overlay actually changes a value, an `ml_decisions` row is written with `decision_source="lighting_learner"` and the per-light deltas in `factors`
+
 **Open bugs (from April 2026 audit):**
 - ~~GenerativeCanvas store subscriptions may leak memory~~ — false positive: subscriptions are manual `subscribe()` calls with proper `onDestroy` cleanup (lines 218-224)
 - ~~Silent API error swallowing~~ — fixed: `api.js` now uses `safeFetch()` wrapper that pushes errors to an `errors` store. `ErrorToast.svelte` renders red toasts in bottom-left with 5s auto-dismiss
+- ~~Per-light manual override has no per-entry expiration~~ — fixed: the 60s automation loop now sweeps `_manual_light_overrides`, dropping entries older than `_override_timeout_hours` (same 4h window as the mode-level override). Expiration logs at INFO
+- ~~Scene override silent failure~~ — fixed: both the v2 `activate_scene` path and the preset fallback are wrapped in try/except. On total failure the engine emits a `scene_failed` WebSocket event (`{mode, time_period, scene_id, source, reason}`) and falls through to the hardcoded `ACTIVITY_LIGHT_STATES` path instead of leaving lights stale
+- ~~WebSocket unknown-type messages silently dropped~~ — fixed: the frontend dispatcher in `stores/init.js` now has a `default` branch that `console.warn`s the unknown type + payload so mismatched server/frontend builds are visible in DevTools
 
 **Ambient intelligence features (April 2026):**
 - ~~Now Playing Ambient Typography~~ — shipped: `NowPlayingIdle.svelte` fills kiosk with giant song title/artist when idle + Sonos playing; album art as blurred ambient glow
@@ -429,25 +457,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | duration_seconds | Integer | Computed on end |
 | skipped | Boolean | Was track skipped before finishing |
 
-### Future Database Tables
-
-**routine_executions** — Routine run log
-| Column | Type | Notes |
-|--------|------|-------|
-| id | Integer | PK, auto-increment |
-| routine_name | String(50) | morning_routine, winddown_routine |
-| status | String(20) | success, partial_failure, skipped, error |
-| error_message | String(500) | Nullable |
-| executed_at | DateTime | UTC |
-
-**user_interactions** — Dashboard action log
-| Column | Type | Notes |
-|--------|------|-------|
-| id | Integer | PK, auto-increment |
-| action | String(50) | page_view, mode_override, light_tap, quick_action, etc. |
-| detail | JSON | Action-specific data |
-| page | String(50) | Which page/section |
-| created_at | DateTime | UTC |
+### Additional Live Tables (Phase 3 + ML)
 
 **mode_scene_overrides** — Maps mode+time to a Hue scene, overriding default ACTIVITY_LIGHT_STATES
 | Column | Type | Notes |
@@ -495,6 +505,30 @@ UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30
 | metric_name | String(50) | e.g. "accuracy", "override_rate" |
 | value | Float | Metric value |
 | extra | JSON | Nullable, additional context |
+
+### Future Database Tables
+
+Not yet in `backend/models.py`. Listed here so the schema shape is decided when they land.
+
+**routine_executions** — Routine run log
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| routine_name | String(50) | morning_routine, winddown_routine |
+| status | String(20) | success, partial_failure, skipped, error |
+| error_message | String(500) | Nullable |
+| executed_at | DateTime | UTC |
+
+**user_interactions** — Dashboard action log
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| action | String(50) | page_view, mode_override, light_tap, quick_action, etc. |
+| detail | JSON | Action-specific data |
+| page | String(50) | Which page/section |
+| created_at | DateTime | UTC |
+
+*(Phase 4 Game Day will add `game_schedule` and `celebration_log` — see the Game Day Engine section.)*
 
 **Data retention policy:** 90-day rolling window for raw events. Older data aggregated into daily/weekly summaries stored in a separate `event_summaries` table. Aggregation runs as a scheduled task in the learning engine.
 
@@ -781,10 +815,10 @@ Maps modes to Sonos favorites with vibe-based matching and smart auto-play logic
 | `get_best_match` | `(mode: str) → Optional[str]` | Pick highest-priority matching favorite for mode |
 | `on_mode_change` | `(mode: str) → Optional[dict]` | Smart play/suggest — plays if idle, suggests if busy |
 
-### Future Services
+### Additional Services
 
-#### EventLogger
-Middleware service that intercepts all state changes and writes to event tables.
+#### EventLogger (live)
+Middleware service that intercepts all state changes and writes to event tables. Wired into `routes/lights.py` and `routes/music.py`. `log_routine` and `log_interaction` are designed but unused — the `routine_executions` and `user_interactions` tables don't exist yet (see Future Database Tables). Exception handling at `event_logger.py:83-84` is fire-and-forget and currently silent on DB errors — tracked in Known Issues.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -797,8 +831,8 @@ Middleware service that intercepts all state changes and writes to event tables.
 
 **Implementation note:** Events are buffered in memory and flushed every 5 seconds or when buffer exceeds 50 items. This avoids write contention on SQLite and reduces Postgres round-trips.
 
-#### LearningEngine (separate process)
-Reads event data, detects patterns, generates rules, serves predictions.
+#### RuleEngineService (live) + LearningEngine (future separate process)
+`RuleEngineService` is live in-process: regenerates `LearnedRule` rows every 6 hours from 30 days of `activity_events` (70%+ confidence, 3+ samples), drives the nudge WebSocket messages, exposes 7 endpoints under `/api/rules/`. The table below is the **target separate-process design** — still aspirational; kept as a north star for when event volume justifies splitting out of the main process.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -814,8 +848,8 @@ Reads event data, detects patterns, generates rules, serves predictions.
 - `GET /patterns` → detected patterns for dashboard display
 - `GET /status` → engine health, last analysis time, data freshness
 
-#### FauxmoService
-Manages Alexa virtual device registration and command handling.
+#### FauxmoService (live)
+Manages Alexa virtual device registration and command handling. 7 virtual WeMo devices, deterministic port allocation for stable Alexa discovery across restarts. Enabled via `FAUXMO_ENABLED=true` in `.env`.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -1422,7 +1456,7 @@ and Sonos speaker are LAN-only.
 - ✓ Fix automation timing: gradual evening transitions (30-min lerp before winddown_start_hour)
 - ✓ Activity-aware wind-down: delays 30 min and retries up to 4x if gaming/watching/social/working
 - ✓ Add vibe tagging to mode-playlist mapping (multiple favorites per mode with vibe column)
-- ✓ Event logging tables live: activity_events, light_adjustments, sonos_playback_events + EventLogger service
+- ✓ Event logging tables live: `activity_events`, `light_adjustments`, `sonos_playback_events`, `scene_activations`, plus `learned_rules` / `ml_decisions` / `ml_metrics` added alongside the Phase 3 + ML work. `EventLogger` service wired into `routes/lights.py` and `routes/music.py`
 - ✓ Fix music auto-play reliability
 - ✓ Deploy server to dedicated laptop, confirm always-on stability (Dell Latitude 7420, Ubuntu 24.04, 2026-04-11 — systemd user services, Firefox kiosk auto-launch, parallel-forever dev→prod workflow via `scripts/deploy.sh`)
 
@@ -1493,9 +1527,9 @@ cleanup landed:
 ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
-- ✓ **ML Phase 1 (Complete):** Behavioral mode prediction (LightGBM, shadow mode), adaptive lighting preferences (EMA), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables
-- ✓ **ML Phase 2 (Complete):** Smart screen sync (K-means), music selection bandit (Thompson sampling), YAMNet audio scene classification (shadow mode), MediaPipe camera presence detection (15s away)
-- **ML Phase 3 (In Progress):** ✓ Confidence fusion — 5-signal weighted ensemble (`ConfidenceFusion` service, 228 LOC) combining process detection, camera, audio classifier, behavioral predictor, and rule engine. Auto-apply at 95%+ when idle/away, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. Remaining: accuracy-driven weight learning, override rate tracking
+- ✓ **ML Phase 1 (Code complete):** Behavioral mode prediction (LightGBM, **shadow mode — not yet promoted, pending ~500 activity events**), adaptive lighting preferences (EMA — **active**), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables. Original Phase 1 exit criteria ("audio classifier active, behavioral outperforming rules") are not yet met — both predictors sit in shadow mode
+- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**, 15s away)
+- **ML Phase 3 (In Progress):** ✓ Confidence fusion — 5-signal weighted ensemble (`ConfidenceFusion` service, 228 LOC) combining process detection, camera, audio classifier, behavioral predictor, and rule engine. Auto-apply at 95%+ when idle/away, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. **Remaining:** override rate tracking, A/B comparison of fusion vs rule-engine-only vs priority-only decisions
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
 ### Phase 5: Polish & Expand (September 2026+)

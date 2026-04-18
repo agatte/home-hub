@@ -443,6 +443,31 @@ async def lifespan(app: FastAPI):
         enabled=True,
     ))
 
+    # Nightly fusion weight tuning at 3:30 AM — runs 30 min before the model
+    # retrain so yesterday's fusion decisions (which carry per-source signal
+    # details in `factors`) feed into the weight update before the newly
+    # trained models start producing tomorrow's decisions.
+    async def fusion_weight_tuning() -> None:
+        acc = await ml_logger.compute_accuracy_by_source(days=14)
+        if acc:
+            confidence_fusion.update_weights_from_accuracy(acc)
+            app_logger.info(
+                "fusion_weight_tuning: updated weights from %d sources", len(acc),
+            )
+        else:
+            app_logger.info(
+                "fusion_weight_tuning: no usable per-source accuracy data yet — weights unchanged",
+            )
+
+    scheduler.add_task(ScheduledTask(
+        name="fusion_weight_tuning",
+        hour=3,
+        minute=30,
+        weekdays=[0, 1, 2, 3, 4, 5, 6],
+        callback=fusion_weight_tuning,
+        enabled=True,
+    ))
+
     app.state.scheduler = scheduler
 
     # Background tasks

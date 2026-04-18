@@ -1044,19 +1044,53 @@ class AutomationEngine:
         override_scene = self._scene_overrides.get(mode, {}).get(period)
         if override_scene and self._hue_v2 and self._hue_v2.connected:
             source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
-            if source == "bridge":
-                await self._hue_v2.activate_scene(override_scene)
-                logger.info("Applied scene override for %s/%s: %s", mode, period, override_scene)
-            elif source == "preset":
-                # Preset scenes are handled via the scenes route — activate by name
-                from backend.api.routes.scenes import SCENE_PRESETS, _activate_per_light
-                preset = SCENE_PRESETS.get(override_scene)
-                if preset:
-                    await _activate_per_light(preset["lights"], self._hue)
-            # Reconcile effect AFTER scene activation so the bridge has a
-            # brightness target set before we stop any old effect.
-            await self._reconcile_effect(desired_effect)
-            return
+            override_applied = False
+            failure_reason: str | None = None
+            try:
+                if source == "bridge":
+                    await self._hue_v2.activate_scene(override_scene)
+                    logger.info(
+                        "Applied scene override for %s/%s: %s",
+                        mode, period, override_scene,
+                    )
+                    override_applied = True
+                elif source == "preset":
+                    # Preset scenes are handled via the scenes route — activate by name
+                    from backend.api.routes.scenes import SCENE_PRESETS, _activate_per_light
+                    preset = SCENE_PRESETS.get(override_scene)
+                    if preset:
+                        await _activate_per_light(preset["lights"], self._hue)
+                        override_applied = True
+                    else:
+                        failure_reason = f"preset '{override_scene}' not in SCENE_PRESETS"
+            except Exception as e:
+                failure_reason = f"{type(e).__name__}: {e}"
+                logger.error(
+                    "Scene override failed for %s/%s (%s): %s",
+                    mode, period, override_scene, e,
+                    exc_info=True,
+                )
+
+            if override_applied:
+                # Reconcile effect AFTER scene activation so the bridge has a
+                # brightness target set before we stop any old effect.
+                await self._reconcile_effect(desired_effect)
+                return
+
+            # Both paths failed — notify the frontend and fall through to the
+            # hardcoded ACTIVITY_LIGHT_STATES path below so lights don't stay
+            # in their prior state silently.
+            await self._ws_manager.broadcast("scene_failed", {
+                "mode": mode,
+                "time_period": period,
+                "scene_id": override_scene,
+                "source": source,
+                "reason": failure_reason or "unknown",
+            })
+            logger.warning(
+                "Falling back to ACTIVITY_LIGHT_STATES for %s/%s after scene override failure",
+                mode, period,
+            )
 
         if mode in ACTIVITY_LIGHT_STATES:
             mode_states = ACTIVITY_LIGHT_STATES[mode]
@@ -1088,9 +1122,33 @@ class AutomationEngine:
             if lighting_learner:
                 overlay = lighting_learner.get_overlay(mode, period)
                 if overlay:
+                    deltas: dict[str, dict] = {}
                     for light_id, prefs in overlay.items():
                         if light_id in state:
-                            state[light_id] = {**state[light_id], **prefs}
+                            pre = state[light_id]
+                            # Only fields the overlay actually changed (pre
+                            # value differs from the overlay value) count —
+                            # avoids logging no-op merges.
+                            light_deltas = {
+                                k: {"before": pre.get(k), "after": v}
+                                for k, v in prefs.items()
+                                if pre.get(k) != v
+                            }
+                            if light_deltas:
+                                deltas[light_id] = light_deltas
+                            state[light_id] = {**pre, **prefs}
+                    ml_logger_ref = getattr(self, "_ml_logger", None)
+                    if deltas and ml_logger_ref:
+                        await ml_logger_ref.log_decision(
+                            predicted_mode=mode,
+                            confidence=None,
+                            decision_source="lighting_learner",
+                            factors={
+                                "period": period,
+                                "deltas": deltas,
+                            },
+                            applied=True,
+                        )
 
             state = self._apply_brightness_multiplier(state, mode)
             if mode not in WEATHER_SKIP_MODES:
@@ -1215,12 +1273,25 @@ class AutomationEngine:
         if per_light == self._last_applied_per_light:
             return
 
+        prev_snapshot = {lid: (self._last_applied_per_light.get(lid) or {}).copy() for lid in ("1", "2", "3", "4")}
         self._last_applied_per_light = {lid: state.copy() for lid in ("1", "2", "3", "4")}
         cmd = {**state}
         if transitiontime is not None:
             cmd["transitiontime"] = transitiontime
         await self._hue.set_all_lights(cmd)
         logger.info(f"Applied uniform state: bri={state.get('bri')}, hue={state.get('hue')}")
+        if self._event_logger:
+            for lid in ("1", "2", "3", "4"):
+                prev = prev_snapshot.get(lid, {})
+                await self._event_logger.log_light_adjustment(
+                    light_id=lid,
+                    bri_before=prev.get("bri"), bri_after=state.get("bri"),
+                    hue_before=prev.get("hue"), hue_after=state.get("hue"),
+                    sat_before=prev.get("sat"), sat_after=state.get("sat"),
+                    ct_before=prev.get("ct"), ct_after=state.get("ct"),
+                    mode_at_time=self._current_mode,
+                    trigger="automation",
+                )
 
     async def _apply_per_light(
         self, states: dict[str, dict], transitiontime: int | None = None,
@@ -1249,9 +1320,12 @@ class AutomationEngine:
         # Build list of lights that actually changed
         tasks = []
         changed_ids = []
+        # Keep the pre-change value per light so we can log accurate before/after pairs
+        pre_values: dict[str, dict] = {}
         for light_id, state in states.items():
             last = self._last_applied_per_light.get(light_id)
             if state != last:
+                pre_values[light_id] = (last or {}).copy()
                 cmd = {**state}
                 if transitiontime is not None:
                     cmd["transitiontime"] = transitiontime
@@ -1264,6 +1338,19 @@ class AutomationEngine:
             on_ids = [lid for lid in changed_ids if states[lid].get("on", True)]
             off_ids = [lid for lid in changed_ids if not states[lid].get("on", True)]
             logger.info(f"Applied per-light state: on={on_ids}, off={off_ids}")
+            if self._event_logger:
+                for lid in changed_ids:
+                    new = states[lid]
+                    prev = pre_values.get(lid, {})
+                    await self._event_logger.log_light_adjustment(
+                        light_id=lid,
+                        bri_before=prev.get("bri"), bri_after=new.get("bri"),
+                        hue_before=prev.get("hue"), hue_after=new.get("hue"),
+                        sat_before=prev.get("sat"), sat_after=new.get("sat"),
+                        ct_before=prev.get("ct"), ct_after=new.get("ct"),
+                        mode_at_time=self._current_mode,
+                        trigger="automation",
+                    )
 
     async def _maybe_drift(self) -> None:
         """
@@ -1566,6 +1653,22 @@ class AutomationEngine:
                         )
                         await self.clear_override()
 
+                # Expire stale per-light overrides (same 4h window as the
+                # mode-level override, tracked per-entry via the datetime
+                # stamped in mark_light_manual).
+                if self._manual_light_overrides:
+                    cutoff = timedelta(hours=self._override_timeout_hours)
+                    expired = [
+                        lid for lid, ts in self._manual_light_overrides.items()
+                        if now - ts > cutoff
+                    ]
+                    for lid in expired:
+                        del self._manual_light_overrides[lid]
+                        logger.info(
+                            f"Per-light override on light {lid} expired "
+                            f"after {self._override_timeout_hours}h"
+                        )
+
                 # Check for external off (Alexa geofence)
                 if await self._check_external_off():
                     await asyncio.sleep(60)
@@ -1696,11 +1799,12 @@ class AutomationEngine:
                                     decision_source="fusion",
                                     factors={
                                         "agreement": fusion_result["agreement"],
-                                        "signals": len([
+                                        "active_signals": len([
                                             s for s in
                                             fusion_result["signals"].values()
                                             if not s["stale"]
                                         ]),
+                                        "signal_details": fusion_result["signals"],
                                     },
                                     applied=True,
                                 )
@@ -1722,6 +1826,8 @@ class AutomationEngine:
                                     factors={
                                         "agreement":
                                             fusion_result["agreement"],
+                                        "signal_details":
+                                            fusion_result["signals"],
                                     },
                                     applied=True,
                                 )

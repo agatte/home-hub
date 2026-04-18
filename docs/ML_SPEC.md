@@ -1235,10 +1235,14 @@ except ImportError:
 - ✓ `ml_decisions` + `ml_metrics` database tables with indexes.
 - ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle/away, ML logger registered as mode-change callback.
 
-**Current state:** All services running on production (Latitude). Behavioral predictor in shadow mode, collecting activity events toward the 500-event training threshold. Lighting learner collecting manual adjustments. Audio classifier (YAMNet) shipped in Phase 2, running in shadow mode on Windows desktop (Blue Yeti mic) via Task Scheduler. Camera presence detection (MediaPipe FaceDetector) shipped in Phase 2, active on Latitude webcam with 15s away detection.
+**Current state (as of 2026-04-18):**
+- **Behavioral predictor — BLOCKED**: `lightgbm` is not installed on the Latitude. `main.py:320` logs "lightgbm not installed — behavioral predictor disabled" at startup and the predictor writes zero rows to `ml_decisions`. There's sufficient training data in principle (765 activity events across 8 days, above the 500 threshold) but no inference is happening until `pip install lightgbm` lands on the Latitude. Re-evaluate ~7 days after that change.
+- **Lighting learner**: active on production. Overlay applications are now logged to `ml_decisions` with `decision_source="lighting_learner"`.
+- **Audio classifier (YAMNet)**: shadow mode on Windows desktop (Blue Yeti mic). 17,922 predictions logged to date. Of the 81 rows with `actual_mode` backfilled, only **2 are correct (2.5%)** — the classifier is predicting "idle" for "silence" almost every cycle and missing mode transitions. The 521→9 → user-mode mapping needs rework before promotion is meaningful. Kept in shadow.
+- **Camera presence (MediaPipe)**: active on Latitude webcam with 15s away detection.
 
 **Phase 1 exit criteria:** ~~Audio classifier active,~~ behavioral predictor
-outperforming rules, lighting learner active for 2+ lights. Manual overrides
+outperforming rules (blocked on lightgbm install), lighting learner active for 2+ lights. Manual overrides
 down 30% from baseline.
 
 ### Phase 2: Computer Vision & Learning (✓ Complete)
@@ -1273,19 +1277,21 @@ Audio classifier promotion from shadow to active
 - ✓ Live pipeline dashboard — SVG confidence ring, per-signal gauge cards
 - ✓ Decision logging with `decision_source="fusion"`
 
+**Shipped (April 18, 2026):**
+- ✓ **Accuracy-driven weight learning** — `fusion_weight_tuning` ScheduledTask at 3:30 AM daily. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion rows with `factors.signal_details`, derives per-source accuracy, hands it to `ConfidenceFusion.update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. Full `signals` dict now persisted in `MLDecision.factors` so historical decisions carry the per-source vote context.
+
 **Remaining:**
-- Accuracy-driven weight learning (nightly update from `ml_metrics`)
 - A/B comparison: fusion decisions vs rule engine vs priority-only
 - Override rate tracking dashboard
 - Threshold tuning based on observed false positive rate
 
 ```
-Current:    Fusion shipped with static default weights.
-            Auto-apply at 95%+, suggest at 70-95%,
-            stale override at 98%+ with 80%+ agreement.
+Current:    Weight tuning wired. Meaningful updates accumulate
+            as fusion decisions with signal_details factor data
+            build up and get actual_mode backfills.
 
-Next:       Nightly weight update from per-signal accuracy.
-            Override rate monitoring on analytics page.
+Next:       Override rate monitoring on analytics page.
+            A/B compare against rule-only baseline.
             Lower auto-apply threshold if false positives < 1/day.
 
 Target:     Fewer than 2 manual overrides per day, sustained

@@ -290,16 +290,18 @@ Now away total ≈ 0.19 × 4 ≈ ~0.76 which is still not 98%. **The 98% overrid
 
 ---
 
-## Accuracy-Driven Weight Learning (Designed, Not Yet Shipped)
+## Accuracy-Driven Weight Learning (Shipped)
 
-The static weights above are reasonable guesses based on signal characteristics. The next iteration learns weights from measured accuracy:
+The static weights above are the starting point. Accuracy-driven tuning runs nightly at **3:30 AM** (30 min before `ml_nightly_training` at 4:00 AM — the gap ensures yesterday's fusion decisions are weighted before the models that produce today's decisions get retrained).
 
-1. Nightly, query `ml_decisions` for the last 30 days where `decision_source` matches each signal
-2. For each signal, compute accuracy = (predictions where predicted_mode == actual_mode) / total
-3. Normalize those accuracies so they sum to 1.0
-4. Update the weights via `ConfidenceFusion.update_weights_from_accuracy()`
+**How it works:**
 
-Example after 30 days of observation:
+1. Every fusion auto-apply or override writes an `ml_decisions` row with `decision_source="fusion"`. The automation engine stamps `factors.signal_details` with a per-source dict (each source's voted mode + confidence + stale flag) at log time.
+2. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks those rows where `actual_mode` has been backfilled, and for each non-stale signal source, computes `correct / total` (correct = the source's vote matched the eventual `actual_mode`).
+3. `ConfidenceFusion.update_weights_from_accuracy()` normalizes those accuracies so the active weights sum to 1.0. Sources with zero usable samples in the window fall back to `DEFAULT_WEIGHTS`.
+4. The `fusion_weight_tuning` ScheduledTask wires steps 2–3 into the 30-second scheduler loop. `POST /api/learning/retune-weights` is the manual-trigger equivalent — returns `weights_before` + `weights_after` + the derived `accuracy_by_source` so you can validate without waiting for the cron.
+
+Example after 14 days of observation:
 
 ```
 process:     95% accurate  →  raw weight 0.95
@@ -320,7 +322,7 @@ New normalized weights:
 
 Notice process detection's weight drops from 0.35 → 0.25 because accuracy-weighted math treats all signals more equally. Signals that consistently predict the right mode earn more trust. Signals that fire on stale or bad data lose trust.
 
-The method is already implemented (`update_weights_from_accuracy`) — what's missing is the nightly job that reads `ml_metrics`, computes the accuracies, and calls it.
+**Rollout note:** Meaningful weight updates only begin once enough fusion decisions with the expanded `signal_details` factor have accumulated *and* enough of them have `actual_mode` backfilled (which happens on the next mode transition). Expect weights to keep falling back to defaults for the first few days after the factor-payload change ships, then start drifting as data builds.
 
 ---
 
@@ -342,4 +344,4 @@ The whole thing updates in real-time via the existing `pipeline_state` WebSocket
 
 Fusion is the piece that makes Home Hub's ML actually *feel* intelligent. Before, each specialist knew part of the story. Now the system has a shared view of what's happening and can catch cases no individual signal could catch on its own — like realizing you've left even when a game process is still running.
 
-It's also the foundation for Phase 3 full autonomy. Once accuracy-driven weight learning ships and the override rate drops below 2/day sustained over 30 days, the system has earned the right to run on autopilot.
+It's also the foundation for Phase 3 full autonomy. With accuracy-driven weight learning shipped, the remaining gate is: override rate sustained below 2/day for 30 days → the system has earned the right to run on autopilot.
