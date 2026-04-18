@@ -14,7 +14,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -82,6 +82,33 @@ DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
     "cooking": 1.0,
     "social": 1.0,
 }
+
+# Ambient lux adaptive brightness — piecewise-linear curve mapping
+# camera-derived room brightness (gray.mean, 0–255) to a brightness multiplier.
+# Only applied in modes where ambient adaptation is desirable; functional
+# modes (gaming, watching, cooking) and scene-override-driven activation
+# bypass this stage so spatial design stays predictable.
+LUX_MODES = frozenset(("working", "relax"))
+LUX_CURVE: list[tuple[float, float]] = [(40.0, 1.15), (90.0, 1.00), (180.0, 0.85)]
+LUX_MULT_EPSILON = 0.03      # Skip re-apply if multiplier change < 3%
+LUX_STALE_SECONDS = 30       # Ignore readings older than this
+
+
+def lux_to_multiplier(lux: float) -> float:
+    """Piecewise-linear interpolation across LUX_CURVE anchors.
+
+    Clamps to the first/last anchor's multiplier when lux is outside the
+    anchor range. Dark rooms (low lux) lift brightness; bright rooms dim.
+    """
+    if lux <= LUX_CURVE[0][0]:
+        return LUX_CURVE[0][1]
+    if lux >= LUX_CURVE[-1][0]:
+        return LUX_CURVE[-1][1]
+    for (x0, y0), (x1, y1) in zip(LUX_CURVE, LUX_CURVE[1:]):
+        if x0 <= lux <= x1:
+            frac = (lux - x0) / (x1 - x0) if x1 != x0 else 0.0
+            return y0 + frac * (y1 - y0)
+    return 1.0  # Unreachable
 
 
 # Light ID → room mapping for readability
@@ -529,6 +556,16 @@ class AutomationEngine:
         self._confidence_fusion = None
         self._last_fusion_result: Optional[dict] = None
 
+        # Camera service (set when camera is enabled via /api/camera/enable
+        # or by main.py boot if camera_enabled setting is true). Used by
+        # _apply_lux_multiplier to read the smoothed ambient lux reading.
+        self._camera_service = None
+        # Last applied lux multiplier — if the new multiplier is within
+        # LUX_MULT_EPSILON of this, we keep using the old value so the final
+        # state dict is identical and the per-light dedupe at _apply_state
+        # naturally skips the bridge write.
+        self._last_lux_multiplier: float = 1.0
+
         # Decision pipeline — real-time snapshot of all inputs → output
         self._screen_sync = None  # Set by main.py after construction
         self._pipeline_history: list[dict] = []
@@ -763,6 +800,83 @@ class AutomationEngine:
             if result.get("on", True) and "bri" in result:
                 result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
             return result
+
+    def set_camera_service(self, camera) -> None:
+        """Wire the camera service so ambient lux can modulate brightness.
+
+        Called by main.py at boot (if the camera is already enabled) and by
+        the /api/camera/enable route when the camera is toggled on.
+        """
+        self._camera_service = camera
+
+    # Backwards-compat for tests / callers referencing the classmethod form
+    _lux_to_multiplier = staticmethod(lux_to_multiplier)
+
+    def _apply_lux_multiplier(
+        self, state: dict[str, Any], mode: str
+    ) -> dict[str, Any]:
+        """Adjust per-light brightness by camera-derived ambient lux.
+
+        Early-returns the state unchanged when:
+          - mode is not in LUX_MODES (only working / relax adapt)
+          - no camera service wired up, or it's disabled / paused
+          - the camera has not been calibrated (auto-exposure defeats the signal)
+          - the last lux reading is older than LUX_STALE_SECONDS
+          - the computed multiplier change vs last is below LUX_MULT_EPSILON
+            (in that case we reuse the last multiplier, so the result is the
+            same state dict the per-light dedupe already skips)
+        """
+        if mode not in LUX_MODES:
+            return state
+
+        camera = self._camera_service
+        if camera is None or not getattr(camera, "enabled", False):
+            return state
+        if getattr(camera, "_paused", False):
+            return state
+
+        ema = getattr(camera, "ema_lux", None)
+        if ema is None:
+            return state  # Not calibrated or no readings yet
+
+        last_update = getattr(camera, "last_lux_update", None)
+        if last_update is None:
+            return state
+        age = (datetime.now(timezone.utc) - last_update).total_seconds()
+        if age > LUX_STALE_SECONDS:
+            return state
+
+        raw_mult = lux_to_multiplier(float(ema))
+        # Hysteresis: if we're within the epsilon of the last multiplier,
+        # keep the old value so the state dict stays bit-identical and the
+        # downstream per-light dedupe skips writes.
+        if abs(raw_mult - self._last_lux_multiplier) < LUX_MULT_EPSILON:
+            multiplier = self._last_lux_multiplier
+        else:
+            multiplier = raw_mult
+            self._last_lux_multiplier = raw_mult
+
+        if multiplier == 1.0:
+            return state
+
+        # Per-light dict vs flat state (mirrors _apply_brightness_multiplier)
+        is_per_light = all(
+            isinstance(v, dict) for v in state.values()
+        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
+
+        if is_per_light:
+            result: dict[str, Any] = {}
+            for lid, ls in state.items():
+                ls_copy = ls.copy()
+                if ls_copy.get("on", True) and "bri" in ls_copy:
+                    ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * multiplier)))
+                result[lid] = ls_copy
+            return result
+
+        result = state.copy()
+        if result.get("on", True) and "bri" in result:
+            result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
+        return result
 
     def register_on_mode_change(self, callback) -> None:
         """
@@ -1151,6 +1265,7 @@ class AutomationEngine:
                         )
 
             state = self._apply_brightness_multiplier(state, mode)
+            state = self._apply_lux_multiplier(state, mode)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
             tt = MODE_TRANSITION_TIME.get(mode)
@@ -1408,6 +1523,7 @@ class AutomationEngine:
             drifted[lid] = d
 
         drifted = self._apply_brightness_multiplier(drifted, mode)
+        drifted = self._apply_lux_multiplier(drifted, mode)
         if mode not in WEATHER_SKIP_MODES:
             drifted = self._weather_adjust(drifted)
         self._last_applied_per_light = {}  # Force apply

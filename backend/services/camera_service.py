@@ -17,6 +17,7 @@ Privacy guarantees:
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,6 +29,18 @@ FRAME_WIDTH = 320       # Downsampled frame size for inference
 FRAME_HEIGHT = 240
 ABSENT_THRESHOLD = 3    # Consecutive absent frames before reporting away (15s)
 MIN_FACE_CONFIDENCE = 0.5
+
+# Ambient lux calibration constants. Auto-exposure is disabled when a
+# calibration is present so gray.mean() reflects actual room brightness
+# instead of the webcam compensating with its aperture.
+EXPOSURE_TARGET_LUX = 100   # Target frame mean at calibration time
+EXPOSURE_TOLERANCE = 10     # Accept calibration within target ± tolerance
+CALIBRATION_FRAMES = 10     # Frames averaged per exposure probe
+LUX_EMA_ALPHA = 0.1         # Smoothing factor (α*raw + (1-α)*ema)
+LUX_CALIBRATION_SETTING_KEY = "lux_calibration_config"
+# OpenCV DirectShow/V4L2 auto-exposure magic numbers:
+#   0.25 = manual exposure, 0.75 = auto (on Windows DShow backend)
+CAP_AUTO_EXPOSURE_MANUAL = 0.25
 
 # Model file for MediaPipe Tasks API (v0.10.20+)
 MODEL_DIR = Path("data/models")
@@ -68,6 +81,13 @@ class CameraService:
         self._last_ambient_lux: float = 0.0
         self._was_absent: bool = False
 
+        # Ambient lux calibration + smoothing
+        self._calibrated: bool = False
+        self._exposure_value: Optional[float] = None
+        self._ema_lux: Optional[float] = None
+        self._last_lux_update: Optional[datetime] = None
+        self._calibrating: bool = False
+
     @property
     def enabled(self) -> bool:
         """Whether the camera service is active and polling."""
@@ -101,6 +121,7 @@ class CameraService:
 
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+            await self._load_calibration()
         except Exception as exc:
             logger.error("Failed to open webcam: %s", exc, exc_info=True)
             self._cap = None
@@ -164,6 +185,177 @@ class CameraService:
             logger.error("Failed to download face detection model: %s", exc)
             return False
 
+    async def _load_calibration(self) -> None:
+        """Load persisted exposure calibration and apply it to the webcam.
+
+        If no calibration exists, auto-exposure stays on and ambient_lux is
+        effectively uncalibrated (the room-brightness signal compresses to
+        ~80–140 regardless of actual conditions). The automation engine's
+        lux multiplier guards against this via the ``calibrated`` flag.
+        """
+        from backend.api.routes.routines import load_setting
+
+        config = await load_setting(LUX_CALIBRATION_SETTING_KEY)
+        if not config or "exposure_value" not in config:
+            logger.warning(
+                "Ambient lux uncalibrated — POST /api/camera/calibrate to enable "
+                "brightness adaptation (working / relax modes)"
+            )
+            return
+
+        try:
+            import cv2
+            exposure = float(config["exposure_value"])
+            self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAP_AUTO_EXPOSURE_MANUAL)
+            self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+            self._exposure_value = exposure
+            self._calibrated = True
+            logger.info(
+                "Applied lux calibration: exposure=%.2f, target_lux=%d",
+                exposure,
+                int(config.get("target_lux", EXPOSURE_TARGET_LUX)),
+            )
+        except Exception as exc:
+            logger.error("Failed to apply lux calibration: %s", exc, exc_info=True)
+
+    async def calibrate_exposure(self) -> dict:
+        """Binary-search webcam exposure until gray.mean() ≈ EXPOSURE_TARGET_LUX.
+
+        Runs the blocking OpenCV loop in a thread pool. Persists the discovered
+        exposure value to ``app_settings`` under ``lux_calibration_config`` so
+        subsequent service restarts can re-apply it without re-calibrating.
+
+        Returns:
+            ``{status, exposure_value, measured_lux, detail}``.
+        """
+        if not self._enabled or self._cap is None or not self._cap.isOpened():
+            return {"status": "error", "detail": "camera not available"}
+        if self._paused:
+            return {"status": "error", "detail": "camera paused (sleeping mode)"}
+        if self._calibrating:
+            return {"status": "error", "detail": "calibration already in progress"}
+
+        self._calibrating = True
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, self._calibrate_exposure_sync)
+            if result.get("status") != "ok":
+                return result
+
+            from backend.api.routes.routines import save_setting
+
+            now = datetime.now(timezone.utc).isoformat()
+            await save_setting(
+                LUX_CALIBRATION_SETTING_KEY,
+                {
+                    "exposure_value": result["exposure_value"],
+                    "target_lux": EXPOSURE_TARGET_LUX,
+                    "calibrated_at": now,
+                },
+            )
+            self._exposure_value = result["exposure_value"]
+            self._calibrated = True
+            logger.info(
+                "Calibration complete: exposure=%.2f, measured_lux=%.1f",
+                result["exposure_value"],
+                result["measured_lux"],
+            )
+            return result
+        finally:
+            self._calibrating = False
+
+    def _calibrate_exposure_sync(self) -> dict:
+        """Blocking calibration search. Runs in executor."""
+        import cv2
+
+        # Switch to manual exposure so our writes take effect.
+        self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAP_AUTO_EXPOSURE_MANUAL)
+
+        # Typical DShow range is roughly -13 (darkest) to 0 (brightest).
+        # V4L2 ranges differ; we widen the search if the initial edges don't
+        # bracket the target.
+        lo, hi = -10.0, 0.0
+
+        def measure(exposure: float) -> float:
+            self._cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+            # Let the sensor settle — drop 3 frames, average the rest
+            for _ in range(3):
+                self._cap.read()
+            readings = []
+            for _ in range(CALIBRATION_FRAMES):
+                ret, frame = self._cap.read()
+                if not ret or frame is None:
+                    continue
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                readings.append(float(gray.mean()))
+            if not readings:
+                return -1.0
+            return sum(readings) / len(readings)
+
+        # Widen the bracket if target is outside [measure(lo), measure(hi)]
+        lo_lux = measure(lo)
+        hi_lux = measure(hi)
+        if lo_lux < 0 or hi_lux < 0:
+            return {"status": "error", "detail": "camera read failed during calibration"}
+
+        # Ensure the target is inside the bracket (grow outward up to 2 tries)
+        tries = 0
+        while hi_lux < EXPOSURE_TARGET_LUX - EXPOSURE_TOLERANCE and tries < 2:
+            hi += 2.0
+            hi_lux = measure(hi)
+            tries += 1
+        tries = 0
+        while lo_lux > EXPOSURE_TARGET_LUX + EXPOSURE_TOLERANCE and tries < 2:
+            lo -= 2.0
+            lo_lux = measure(lo)
+            tries += 1
+
+        # Binary search
+        best_exposure = (lo + hi) / 2
+        best_lux = 0.0
+        for _ in range(8):  # 8 iterations → ~0.04 exposure resolution
+            mid = (lo + hi) / 2
+            mid_lux = measure(mid)
+            if mid_lux < 0:
+                return {"status": "error", "detail": "camera read failed mid-search"}
+            best_exposure, best_lux = mid, mid_lux
+            if abs(mid_lux - EXPOSURE_TARGET_LUX) <= EXPOSURE_TOLERANCE:
+                break
+            if mid_lux < EXPOSURE_TARGET_LUX:
+                lo = mid  # Need brighter → increase exposure
+            else:
+                hi = mid  # Too bright → decrease exposure
+
+        return {
+            "status": "ok",
+            "exposure_value": best_exposure,
+            "measured_lux": best_lux,
+            "detail": (
+                f"calibrated: exposure={best_exposure:.2f}, "
+                f"measured_lux={best_lux:.1f}"
+            ),
+        }
+
+    def _update_ema_lux(self, raw_lux: float) -> None:
+        """Update exponential moving average of ambient lux (α=0.1)."""
+        if self._ema_lux is None:
+            self._ema_lux = raw_lux
+        else:
+            self._ema_lux = LUX_EMA_ALPHA * raw_lux + (1 - LUX_EMA_ALPHA) * self._ema_lux
+        self._last_lux_update = datetime.now(timezone.utc)
+
+    @property
+    def ema_lux(self) -> Optional[float]:
+        """Smoothed ambient lux reading, or None if no calibration / no data."""
+        if not self._calibrated:
+            return None
+        return self._ema_lux
+
+    @property
+    def last_lux_update(self) -> Optional[datetime]:
+        """UTC timestamp of the most recent lux read (used for staleness checks)."""
+        return self._last_lux_update
+
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
         loop = asyncio.get_event_loop()
@@ -187,6 +379,7 @@ class CameraService:
                 self._last_detection = status
                 self._last_confidence = confidence
                 self._last_ambient_lux = ambient_lux
+                self._update_ema_lux(ambient_lux)
 
                 # Keep the camera lane fresh in confidence fusion every cycle.
                 # The edge-triggered report_activity() calls below drive actual
@@ -245,12 +438,19 @@ class CameraService:
                     )
 
                 # Broadcast status via WebSocket
+                current_multiplier = 1.0
+                if self._calibrated and self._ema_lux is not None:
+                    from backend.services.automation_engine import lux_to_multiplier
+                    current_multiplier = lux_to_multiplier(float(self._ema_lux))
                 await self._ws_manager.broadcast(
                     "camera_update",
                     {
                         "detection": status,
                         "confidence": confidence,
                         "ambient_lux": ambient_lux,
+                        "ema_lux": self._ema_lux,
+                        "calibrated": self._calibrated,
+                        "current_multiplier": current_multiplier,
                         "consecutive_absent": self._consecutive_absent,
                     },
                 )
@@ -374,6 +574,10 @@ class CameraService:
             "last_detection": self._last_detection,
             "confidence": self._last_confidence,
             "ambient_lux": self._last_ambient_lux,
+            "ema_lux": self._ema_lux,
+            "calibrated": self._calibrated,
+            "calibrating": self._calibrating,
+            "exposure_value": self._exposure_value,
             "consecutive_absent": self._consecutive_absent,
             "poll_interval": POLL_INTERVAL,
             "absent_threshold": ABSENT_THRESHOLD,

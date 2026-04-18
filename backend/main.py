@@ -494,6 +494,7 @@ async def lifespan(app: FastAPI):
             if camera_service.enabled:
                 app.state.camera_service = camera_service
                 automation.register_on_mode_change(camera_service.on_mode_change)
+                automation.set_camera_service(camera_service)
                 tasks.append(asyncio.create_task(camera_service.poll_loop()))
                 app_logger.info("Camera presence detection started")
             else:

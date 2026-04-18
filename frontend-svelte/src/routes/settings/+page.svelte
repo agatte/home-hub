@@ -231,6 +231,20 @@
     saving = null
   }
 
+  let calibrateResult = null
+  async function calibrateLux() {
+    saving = 'calibrate'
+    calibrateResult = null
+    try {
+      const resp = await apiPost('/api/camera/calibrate', {})
+      calibrateResult = resp
+      $cameraStore = await apiGet('/api/camera/status')
+    } catch (err) {
+      calibrateResult = { status: 'error', detail: err?.message ?? 'failed' }
+    }
+    saving = null
+  }
+
   // ----- Pi-hole DNS & Blocklist management -----
 
   const RECOMMENDED_LISTS = [
@@ -452,11 +466,39 @@
           </div>
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label">Webcam Brightness</span>
+              <span class="setting-label">Ambient Lux</span>
+              <span class="setting-hint">
+                {#if $cameraStore.calibrated}
+                  Adapts working/relax brightness (×{($cameraStore.current_multiplier ?? 1).toFixed(2)})
+                {:else}
+                  Uncalibrated — auto-exposure defeats the signal
+                {/if}
+              </span>
             </div>
             <span class="setting-value">
-              {$cameraStore.ambient_lux?.toFixed(0) ?? '--'} / 255
+              {$cameraStore.ema_lux?.toFixed(0) ?? $cameraStore.ambient_lux?.toFixed(0) ?? '--'} / 255
             </span>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Calibrate Ambient Light</span>
+              <span class="setting-hint">
+                {#if calibrateResult?.status === 'ok'}
+                  Calibrated: exposure {calibrateResult.exposure_value?.toFixed(2)}, lux ~{calibrateResult.measured_lux?.toFixed(0)}
+                {:else if calibrateResult?.status === 'error'}
+                  Failed: {calibrateResult.detail}
+                {:else}
+                  Run once under typical lighting
+                {/if}
+              </span>
+            </div>
+            <button
+              class="toggle-btn"
+              on:click={calibrateLux}
+              disabled={saving === 'calibrate' || $cameraStore.paused}
+            >
+              {saving === 'calibrate' ? '...' : 'Calibrate'}
+            </button>
           </div>
           {#if $cameraStore.paused}
             <div class="setting-row">

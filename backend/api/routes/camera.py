@@ -1,8 +1,8 @@
-"""Camera presence detection endpoints — status, enable/disable toggle."""
+"""Camera presence detection endpoints — status, enable/disable, calibrate."""
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger("home_hub.camera")
@@ -16,13 +16,53 @@ class CameraToggle(BaseModel):
     enabled: bool
 
 
+def _current_multiplier(service) -> float:
+    """Current lux multiplier for the UI readout (1.0 if uncalibrated / stale)."""
+    from datetime import datetime, timezone
+
+    from backend.services.automation_engine import LUX_STALE_SECONDS, lux_to_multiplier
+
+    ema = getattr(service, "ema_lux", None)
+    if ema is None:
+        return 1.0
+    last = getattr(service, "last_lux_update", None)
+    if last is None:
+        return 1.0
+    age = (datetime.now(timezone.utc) - last).total_seconds()
+    if age > LUX_STALE_SECONDS:
+        return 1.0
+    return lux_to_multiplier(float(ema))
+
+
 @router.get("/status")
 async def get_status(request: Request) -> dict:
-    """Return camera service status."""
+    """Return camera service status (includes lux calibration + current multiplier)."""
     service = getattr(request.app.state, "camera_service", None)
     if service is None:
         return {"status": "ok", "enabled": False, "available": False}
-    return {"status": "ok", **service.get_status()}
+    return {
+        "status": "ok",
+        **service.get_status(),
+        "current_multiplier": _current_multiplier(service),
+    }
+
+
+@router.post("/calibrate")
+async def calibrate_exposure(request: Request) -> dict:
+    """Calibrate fixed exposure so gray.mean() ≈ 100 under current room light.
+
+    Must be called with the camera enabled and during lighting representative
+    of your typical usage (normal evening room light works well). Binary-
+    searches ``CAP_PROP_EXPOSURE`` until the calibration target is hit, then
+    persists the result to ``app_settings`` so future restarts re-apply it.
+    """
+    service = getattr(request.app.state, "camera_service", None)
+    if service is None or not service.enabled:
+        raise HTTPException(status_code=409, detail="camera is not enabled")
+    result = await service.calibrate_exposure()
+    if result.get("status") != "ok":
+        raise HTTPException(status_code=500, detail=result.get("detail", "calibration failed"))
+    return result
 
 
 @router.post("/enable")
@@ -57,6 +97,7 @@ async def toggle_camera(body: CameraToggle, request: Request) -> dict:
             if camera.enabled:
                 request.app.state.camera_service = camera
                 automation.register_on_mode_change(camera.on_mode_change)
+                automation.set_camera_service(camera)
                 asyncio.create_task(camera.poll_loop())
                 logger.info("Camera service started via API toggle")
                 return {"status": "ok", "detail": "Camera enabled", **camera.get_status()}
@@ -77,5 +118,7 @@ async def toggle_camera(body: CameraToggle, request: Request) -> dict:
         if service:
             await service.close()
             request.app.state.camera_service = None
+            automation = request.app.state.automation
+            automation.set_camera_service(None)
             logger.info("Camera service stopped via API toggle")
         return {"status": "ok", "detail": "Camera disabled"}
