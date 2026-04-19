@@ -363,9 +363,9 @@ detection from the Latitude's 720p webcam.
 
 | Attribute | Value |
 |-----------|-------|
-| **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Downsampled to 320x240 for inference. |
-| **Preprocessing** | Capture one frame every 2 seconds (not continuous video). Downsample via `cv2.resize()`. No image enhancement. |
-| **Model** | MediaPipe BlazePose (lite variant). Pretrained, runs on CPU at 15-30 FPS at 640x480. For presence-only detection (Phase 2a, shipped): MediaPipe Face Detection (even lighter, ~5ms). |
+| **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Captured at 640×480 for inference (bumped from 320×240 on 2026-04-19 after observing marginal face-detection gains and better future-feature headroom — requires lux recalibration on any change). |
+| **Preprocessing** | Capture one frame every 2 seconds (not continuous video). `cv2.resize()` downsample is a safety no-op when the webcam honors the capture-resolution hint. No image enhancement. |
+| **Model** | MediaPipe BlazePose (lite variant, shipped 2026-04-19 as a fallback signal). Runs alongside full-range BlazeFace: face first (~15ms at 640×480), pose as fallback on face-miss (~60ms). Presence declared if either detector hits. |
 | **Output classes** | `present_upright`, `present_reclined`, `present_unknown_posture`, `absent` |
 | **Inference frequency** | Every 2 seconds (one frame capture + inference). Triggers "absent" after 7 consecutive absent frames (~14 seconds). |
 | **Integration point** | New `CameraService` reports to `AutomationEngine.report_activity(source="camera")`. |
