@@ -38,7 +38,7 @@ Start-Sleep -Seconds 2
 
 Write-Host "Starting agent supervisor..."
 Start-Process "$ProjectRoot\venv\Scripts\pythonw.exe" `
-    -ArgumentList "-m","backend.services.pc_agent.supervisor","--server","http://192.168.1.210:8000","--classifier","--shadow" `
+    -ArgumentList "-m","backend.services.pc_agent.supervisor","--server","http://192.168.1.210:8000","--classifier","--active" `
     -WorkingDirectory $ProjectRoot `
     -WindowStyle Hidden
 
