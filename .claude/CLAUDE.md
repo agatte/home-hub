@@ -44,9 +44,6 @@ The dashboard is a living interface with bold, mode-aware themed backgrounds —
 # Start the server
 python run.py
 
-# Start with uvicorn directly
-python -c "import uvicorn; uvicorn.run('backend.main:app', host='0.0.0.0', port=8000)"
-
 # PC activity detector (separate terminal)
 python -m backend.services.pc_agent.activity_detector
 
@@ -64,12 +61,6 @@ pip install -r requirements.txt
 
 # Install frontend dependencies
 cd frontend-svelte && npm install
-
-# First time setup
-python -m venv venv
-venv/Scripts/pip install -r requirements.txt
-cp .env.example .env  # Edit with your values
-cd frontend-svelte && npm install && npm run build
 ```
 
 Server runs at http://localhost:8000. Frontend dev server: `cd frontend-svelte && npm run dev` on port 3001 (proxies API to 8000).
@@ -225,9 +216,9 @@ Key additions beyond current:
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML (plistlib). Extracts artist play counts, genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` for discovery. Caches in DB (30-day TTL). Mode-specific seed selection with cross-mode dedup.
 - **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
-- **`camera_service.py`** — MediaPipe face detection on the Latitude webcam, opt-in via `camera_enabled`. Polls every 2s at 320×240. 7 absent frames (~14s) → `report_activity(mode="away", source="camera")`. Same frames produce an EMA-smoothed ambient lux reading (α=0.3, ~20s to 95%) that feeds `AutomationEngine._apply_lux_multiplier` for working/relax modes (±15% bri swing, anchored at the user's calibrated baseline). `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records `baseline_lux` using a poll-cadence measurement (burst reads inflate the baseline because auto-gain winds up high — don't remove the sleeps). Pauses during sleeping mode (camera LED off).
+- **`camera_service.py`** — MediaPipe face + pose detection on the Latitude webcam, opt-in via `camera_enabled`. Polls every 2s at 320×240. Face (full-range BlazeFace, `MIN_FACE_CONFIDENCE=0.2`) runs first (~5ms); if it misses, pose landmarker (lite) runs (~25ms) — "present" is declared if ≥3 of {nose, left/right shoulder, left/right hip} have visibility ≥0.5. Either hit wins. `detection_source` (`"face"` | `"pose"` | `None`) flows through `/api/camera/status`, the `camera_update` WebSocket event, and the ML logger. 7 absent frames across both paths (~14s) → `report_activity(mode="away", source="camera")`. Pose fallback exists because the corner-position Latitude puts Anthony in deep profile during working sessions, where face scores unreliably. `GET /api/camera/snapshot?annotate=true` returns a JPEG annotated with face box + torso skeleton + lux readout; shares the capture handle with the poll loop via `_cap_lock`. Same frames produce an EMA-smoothed ambient lux reading (α=0.3, ~20s to 95%) that feeds `AutomationEngine._apply_lux_multiplier` for working/relax modes (±15% bri swing, anchored at the user's calibrated baseline). `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records `baseline_lux` using a poll-cadence measurement (burst reads inflate the baseline because auto-gain winds up high — don't remove the sleeps). Pauses during sleeping mode (camera LED off).
 - **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 5s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`. `GAME_PROCESSES` in `game_list.py` is intentionally narrow — `javaw.exe` was removed because it matched every JVM process (JetBrains IDEs, Gradle, build tools), silently forcing "gaming" over working since gaming has priority 5. OSRS is still caught via `runelite.exe` / `osclient.exe`.
-- **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS measurement. Party detection: sustained noise >2min + no game = "social". Never records audio.
+- **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS + YAMNet classification. RMS produces only the "idle" edge (60s of below-threshold quiet) and the heartbeat. **Social is YAMNet-gated** — requires `speech_multiple` class at ≥0.80 confidence sustained 30s (see `MODE_THRESHOLDS` in `backend/services/ml/audio_classifier.py`). Requires `--classifier --active` flags; in `--shadow` or default mode, social is manual-only. RMS alone cannot distinguish conversation from HVAC + typing, and previously latched social on any sustained background noise. Never records audio.
 
 ---
 
@@ -298,7 +289,7 @@ All messages: JSON with `type` + `data` fields.
 | Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
 | Routines | `/api/routines` | Morning + winddown config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
-| Camera | `/api/camera` | Status (detection, lux, baseline, multiplier), enable/disable, calibrate exposure |
+| Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -311,167 +302,25 @@ All messages: JSON with `type` + `data` fields.
 
 ## Developer Patterns
 
-> These patterns are the conventions for this codebase. Follow them precisely when adding features.
+Conventions for this codebase — only what's non-obvious. Standard Python/FastAPI/asyncio scaffolding is assumed.
 
-### Pattern 1: Mode-Change Callback
+**Mode-change callback.** `automation.register_on_mode_change(async_fn)` in `main.py` lifespan after the engine is created. Callbacks run async in registration order — keep them fast; dispatch long work as background tasks.
 
-```python
-# Define async callback in your service
-async def on_mode_change(mode: str) -> None:
-    if mode == "gaming":
-        await do_something()
+**New backend service.** Shape: `_connected: bool` + `connected` property, `async connect()` / `async poll_state_loop(ws_manager)` / `async close()`. Wire-up in `main.py` lifespan: create → `await service.connect()` → `app.state.new_service = service` → add poll loop to `tasks` list → register mode-change callback if relevant.
 
-# Register in main.py lifespan, AFTER automation engine is created
-automation.register_on_mode_change(my_service.on_mode_change)
-```
-Callbacks are async, called in registration order. Keep fast — dispatch long work as background tasks.
+**API route.** Prefix `/api/{domain}/`. GET reads, POST actions, PUT updates, DELETE removals. Return `{"status": "ok"}` or `{"status": "error", "detail": "..."}`. Register in `main.py` **before** the `/{path:path}` frontend catch-all.
 
-### Pattern 2: New Backend Service
+**WebSocket.** `await self._ws_manager.broadcast("{domain}_{event}", {...})` — e.g. `light_update`, `game_update`. Handle client→server messages in `main.py` websocket handler.
 
-```python
-# backend/services/new_service.py
-class NewService:
-    def __init__(self, ws_manager, hue_service=None):
-        self._ws_manager = ws_manager
-        self._connected = False
+**Activity detector (standalone script).** POST `{mode, source}` to `/api/automation/activity`. Engine enforces priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
 
-    @property
-    def connected(self) -> bool:
-        return self._connected
+**Scheduled routine.** Build a `ScheduledTask` (from `backend.services.scheduler`) with `name, hour, minute, weekdays, callback, enabled` and call `scheduler.add_task(task)`. Persist config in `app_settings` under `{routine_name}_config`. Expose `POST /api/routines/{name}/test`.
 
-    async def connect(self) -> None:
-        try:
-            self._connected = True
-            logger.info("NewService connected")
-        except Exception as e:
-            logger.error("NewService connection failed: %s", e, exc_info=True)
-            self._connected = False
+**New automation mode.** Add per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES` under `day` / `evening` / `night` (+ `late_night` if needed). Each light should differ (spatial depth) — avoid `_uniform()`. Engine checks `mode_scene_overrides` DB table first, then falls through to `ACTIVITY_LIGHT_STATES`. Mode brightness multipliers applied on top; `MODE_TRANSITION_TIME` controls per-mode speed.
 
-    async def poll_state_loop(self, ws_manager) -> None:
-        while True:
-            try:
-                # detect changes, broadcast via ws_manager
-                pass
-            except Exception as e:
-                logger.error("NewService poll error: %s", e)
-            await asyncio.sleep(2)
+**Event logging (future).** `event_logger.log_mode_change(...)`, `.log_light_adjustment(...)`, `.log_interaction(...)` on every POST/PUT that changes state. Buffered, flushes every 5s or 50 items.
 
-    async def close(self) -> None:
-        self._connected = False
-```
-
-Register in `main.py` lifespan: create → connect → `app.state.new_service = service` → add to `tasks` list → register mode-change callback.
-
-### Pattern 3: API Route
-
-```python
-# backend/api/routes/new_feature.py
-from fastapi import APIRouter, Request
-router = APIRouter(prefix="/api/new-feature", tags=["new-feature"])
-
-@router.get("/")
-async def get_status(request: Request):
-    service = request.app.state.new_service
-    return {"status": "ok", "data": service.get_state()}
-
-@router.post("/{id}/action")
-async def perform_action(id: str, body: RequestModel, request: Request):
-    result = await request.app.state.new_service.do_action(id, body)
-    return {"status": "ok" if result else "error"}
-```
-
-- Prefix: `/api/{domain}/`
-- GET for reads, POST for actions, PUT for updates, DELETE for removals
-- Always return `{"status": "ok"}` or `{"status": "error", "detail": "..."}`
-- Register in `main.py` BEFORE the `/{path:path}` frontend catch-all
-
-### Pattern 4: WebSocket Broadcast
-
-```python
-# Server → Client
-await self._ws_manager.broadcast("event_type", {"key": "value"})
-
-# Client → Server (in main.py websocket handler)
-elif data["type"] == "new_command":
-    result = await app.state.new_service.handle(data["data"])
-    await ws_manager.broadcast("new_command_result", result)
-```
-Naming: `{domain}_{event}` — e.g., `light_update`, `game_update`.
-
-### Pattern 5: Activity Detector (standalone script)
-
-```python
-# backend/services/pc_agent/new_detector.py
-SERVER_URL = "http://192.168.1.30:8000"  # Laptop IP
-
-def detect_mode() -> str:
-    return "idle"  # or gaming, working, etc.
-
-def main():
-    while True:
-        mode = detect_mode()
-        requests.post(f"{SERVER_URL}/api/automation/activity",
-                      json={"mode": mode, "source": "new_detector"}, timeout=5)
-        time.sleep(15)
-```
-Mode priority enforced by engine: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
-
-### Pattern 6: Scheduled Routine
-
-```python
-from backend.services.scheduler import ScheduledTask
-
-task = ScheduledTask(
-    name="new_routine",
-    hour=12, minute=0,
-    weekdays=[0, 1, 2, 3, 4],  # 0=Monday
-    callback=routine_service.execute,
-    enabled=True,
-)
-scheduler.add_task(task)
-```
-Routine config persisted in `app_settings` table (key: `{routine_name}_config`). Expose test endpoint: `POST /api/routines/{name}/test`.
-
-### Pattern 7: New Automation Mode Light States
-
-Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`. Each light should have **different** brightness/color to create spatial depth — avoid `_uniform()` for new modes:
-
-```python
-"new_mode": {
-    "day": {
-        "1": {"on": True, "bri": 200, "ct": 220},     # Living room: bright neutral
-        "2": {"on": True, "bri": 254, "ct": 200},     # Bedroom/desk: max brightness
-        "3": {"on": True, "bri": 170, "ct": 233},     # Kitchen front: fill
-        "4": {"on": True, "bri": 150, "ct": 250},     # Kitchen back: warmer fill
-    },
-    "evening": { ... },  # Warmer ct values, reduced brightness
-    "night": { ... },     # Dim ambient fill + adequate desk light
-}
-```
-Engine checks `mode_scene_overrides` table first (user-mapped Hue scenes), then falls through to `ACTIVITY_LIGHT_STATES`. Mode brightness multipliers applied on top. `MODE_TRANSITION_TIME` controls transition speed per mode.
-
-### Pattern 8: Event Logging (future)
-
-```python
-event_logger = request.app.state.event_logger
-await event_logger.log_mode_change(mode="gaming", previous="idle", source="manual")
-await event_logger.log_light_adjustment(light_id="1", state={"on": True, "bri": 200}, trigger="manual")
-await event_logger.log_interaction(action="quick_action", detail={"name": "movie_night"}, page="home")
-```
-Every POST/PUT that changes state should log. EventLogger buffers + flushes every 5s or 50 items.
-
-### Pattern 9: App Settings (SQLite persistence)
-
-All service config is stored in the `app_settings` key-value table:
-
-```python
-# Save
-await save_setting(db, "my_service_config", {"key": "value"})
-
-# Load
-config = await load_setting(db, "my_service_config")
-```
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`, `camera_enabled`, `lux_calibration_config`.
+**App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`, `camera_enabled`, `lux_calibration_config`.
 
 ---
 
@@ -482,14 +331,14 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | `gaming` | LeagueofLegends.exe, RuneLite, 20+ specific game binaries (NOT `javaw.exe` — too generic, used by JetBrains IDEs etc.) | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
 | `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites, desk-dominant. Night: L2 desk bri=130/2700K + L1 ambient bri=60/2270K + kitchen OFF. | IES 1:3 monitor-ambient contrast |
 | `watching` | VLC, Plex, Stremio, media players | Projector-friendly: warm throughout (no D65), dim, L2 as soft bias from across the room. Kitchen OFF evening+. | Screen sync on L2 — projector on HDMI from dev PC, so mss captures the projected frames |
-| `social` | Blue Yeti ambient noise >2min + no game | "Velvet Speakeasy" — single static palette: L1 dusty rose (statement), L2 cognac amber, L3/L4 matched burnt-orange pair. Dim but visible for faces and drinks. | No effect (static) — saturation does the work. 1s snap |
+| `social` | YAMNet `speech_multiple` ≥0.80 confidence for 30s (requires supervisor `--active`) or manual override | "Velvet Speakeasy" — single static palette: L1 dusty rose (statement), L2 cognac amber, L3/L4 matched burnt-orange pair. Dim but visible for faces and drinks. | No effect (static) — saturation does the work. 1s snap |
 | `relax` | Manual override | "Moss & Candlelight" biophilic: L1/L2 warm ember/honey, L3/L4 muted moss/sage (foliage-shadow canopy). Kitchen free to diverge; pair the sage values by day, deepen through evening. Late-night ("Moss & Ember") after 23:00: deeper ember + hunter-green shadow. | opal (day, all lights), candle (eve) / fire (night + late_night) scoped to **L1/L2 only** so moss pendants stay static |
 | `cooking` | Manual override | L3+L4 paired peak (3500K for accurate food colors), L1 warm ambient, L2 dim | 1s snap transition |
 | `sleeping` | 10:30pm + 15min idle → psutil | Apply dim initial (bri=20 deep ember) BEFORE stopping the active effect to prevent the bridge's brightness-to-100% pop, then fade. Manual trigger: ~24s fade to off. Auto-detected: 10-min gradual stepwise fade. | Persistent override — no 4h timeout; must be cleared manually. Also pauses media |
 | `idle` | No process detected | Falls through to time-based rules | |
 | `away` | Win32 idle >10min | Falls through to time-based | |
 
-**Mode priority (engine enforces):** gaming (5) > social (4) > watching/cooking (3) > working (2) > idle (1) > away (0)
+**Mode priority (engine enforces):** gaming (5) > social (4) > watching/cooking (3) > working (2) > idle (1) > away (0). `report_activity` applies this as a universal guard: a lower-priority mode from a *different* source can't displace a fresh higher-priority current mode; same-source updates always go through. `SOURCE_STALE_SECONDS = 300` — an owning source that hasn't reported in 5 min is considered dead and yields to lower-priority reports, preventing stale-lock.
 
 **Mode transition speeds:** gaming 0.5s (snappy), working 2s, watching 3s (cinematic), cooking 1s (snappy), relax 4s (gentle), sleeping 5s (gradual)
 

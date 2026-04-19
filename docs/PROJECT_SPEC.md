@@ -228,11 +228,15 @@ Uptime Kuma (Docker container, port 3002, same machine)
    └── louislam/uptime-kuma:1 ─────> monitors Home Hub :8000/health + Pi-hole :8080
        └── Alerting via Telegram/Pushover on downtime
 
-PC Agent (split across two machines, parallel-forever architecture)
+PC Agent (supervised on the dev machine only, 2026-04-19+)
    ├── activity_detector.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
-   │                         (psutil process detection only useful where Anthony games/works)
-   └── ambient_monitor.py    ON Latitude (192.168.1.210) ────> POST http://localhost:8000/api/automation/activity
-                             (PyAudio RMS via built-in mic near the apartment living space)
+   │                         (psutil process detection)
+   ├── ambient_monitor.py    ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
+   │                         (Blue Yeti PyAudio RMS + YAMNet speech_multiple classifier — --classifier --active)
+   └── screen_sync_agent.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/screen-color
+                             (Three agents managed by supervisor.py; Latitude built-in mic no longer runs
+                              ambient_monitor — systemd unit disabled because RMS in the corner environment
+                              was false-latching social mode. Blue Yeti is the sole audio source.)
 ```
 
 **Deployment note:** As of 2026-04-11 the "dedicated laptop" from the
@@ -736,7 +740,8 @@ All messages are JSON with `type` + `data` fields.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/camera/status` | Enabled flag, last detection, confidence, EMA lux, baseline, current multiplier, exposure value |
+| GET | `/api/camera/status` | Enabled flag, last detection, `detection_source` (face/pose/None), confidence, `pose_available`, EMA lux, baseline, current multiplier, exposure value |
+| GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
 
