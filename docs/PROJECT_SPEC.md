@@ -741,7 +741,7 @@ All messages are JSON with `type` + `data` fields.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/camera/status` | Enabled flag, last detection, `detection_source` (face/pose/None), confidence, `pose_available`, EMA lux, baseline, current multiplier, exposure value |
+| GET | `/api/camera/status` | Enabled flag, last detection, `detection_source` (face/pose/None), confidence, `pose_available`, `zone` (`desk`/`bed`/None — committed after 15s hysteresis) + `candidate_zone` (pending commit), EMA lux, baseline, current multiplier, exposure value |
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
