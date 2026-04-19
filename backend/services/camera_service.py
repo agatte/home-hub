@@ -43,13 +43,18 @@ LUX_CALIBRATION_SETTING_KEY = "lux_calibration_config"
 #   0.25 = manual exposure, 0.75 = auto (on Windows DShow backend)
 CAP_AUTO_EXPOSURE_MANUAL = 0.25
 
-# Model file for MediaPipe Tasks API (v0.10.20+)
+# Model file for MediaPipe Tasks API (v0.10.20+).
+# Using the full-range BlazeFace model: the Latitude dashboard sits in a
+# corner ~2–3m from Anthony at the desk, past the short-range model's
+# comfortable detection envelope (<2m, frontal-preferred). The full-range
+# variant keeps faces in the frame under three-quarter profile toward the
+# monitor, which is the dominant pose during working mode.
 MODEL_DIR = Path("data/models")
-MODEL_FILENAME = "blaze_face_short_range.tflite"
+MODEL_FILENAME = "blaze_face_full_range.tflite"
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
-    "face_detector/blaze_face_short_range/float16/latest/"
-    "blaze_face_short_range.tflite"
+    "face_detector/blaze_face_full_range/float16/latest/"
+    "blaze_face_full_range.tflite"
 )
 
 
