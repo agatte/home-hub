@@ -13,8 +13,20 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("home_hub.ml")
+
+_LOCAL_TZ = ZoneInfo("America/Indiana/Indianapolis")
+
+
+def _is_late_night_local() -> bool:
+    """True during the evening-to-dawn window when process detection is
+    least reliable (stale dev tools left open, etc.). Matches the
+    automation engine's late_night_start_hour=22 / wake_hour=6 defaults.
+    """
+    hour = datetime.now(_LOCAL_TZ).hour
+    return hour >= 22 or hour < 6
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -36,9 +48,15 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 }
 
 AUTO_APPLY_THRESHOLD = 0.95
-OVERRIDE_THRESHOLD = 0.98
+OVERRIDE_THRESHOLD = 0.92
 SUGGEST_THRESHOLD = 0.70
 STALE_SIGNAL_SECONDS = 300  # 5 minutes
+
+# Late-night decay applied to the process-detection lane. Stale dev tools
+# (terminals, editors) left open at night mislead process detection into
+# reporting "working" when the user is actually winding down, so we let
+# the other signals carry more weight.
+LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6
 
 
 @dataclass
@@ -117,13 +135,23 @@ class ConfidenceFusion:
         if not active:
             return None
 
+        # Apply a late-night decay on the process lane before normalization.
+        effective_weights = {
+            s: (
+                self._weights[s] * LATE_NIGHT_PROCESS_WEIGHT_FACTOR
+                if s == "process" and _is_late_night_local()
+                else self._weights[s]
+            )
+            for s in active
+        }
+
         # Redistribute stale weights to active sources proportionally
-        active_weight_sum = sum(self._weights[s] for s in active)
+        active_weight_sum = sum(effective_weights.values())
         if active_weight_sum <= 0:
             return None
 
         normalized_weights: dict[str, float] = {
-            s: self._weights[s] / active_weight_sum for s in active
+            s: effective_weights[s] / active_weight_sum for s in active
         }
 
         # Group votes by mode, sum (weight * confidence) per mode
