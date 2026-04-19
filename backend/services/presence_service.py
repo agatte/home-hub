@@ -311,6 +311,24 @@ class PresenceService:
 
     async def _on_departure(self) -> None:
         """Start the departure sequence as a background task."""
+        # Skip departure if a manual override is active. An explicit mode
+        # (relax, social, cooking, watching, sleeping, etc.) is strong
+        # presence evidence — a 10-min ping silence during live use is
+        # almost always phone-side (charger + DND, weak signal, iOS network
+        # throttling) rather than an actual departure. Reset the countdown
+        # so the next real ping failure is evaluated freshly after the
+        # override clears.
+        if self._automation and self._automation.manual_override:
+            logger.info(
+                "Presence: phone unreachable for %ds but manual override "
+                "is active (%s) — skipping departure, resetting countdown",
+                self._config.away_timeout,
+                self._automation.override_mode,
+            )
+            self._last_seen = datetime.now(tz=TZ)
+            self._consecutive_failures = 0
+            return
+
         if self._arrival_task and not self._arrival_task.done():
             self._arrival_task.cancel()
             self._arrival_task = None
