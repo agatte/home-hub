@@ -163,9 +163,12 @@ class PresenceConfigSchema(BaseModel):
     enabled: bool = Field(default=True, description="Enable/disable presence detection")
     phone_ip: str = Field(default="192.168.1.148", description="Phone IP address")
     phone_mac: str = Field(default="A2:DD:D9:65:EE:F8", description="Phone MAC address")
-    ping_interval: int = Field(default=30, ge=10, le=120, description="Seconds between pings")
+    probe_interval: int = Field(
+        default=20, ge=5, le=120,
+        description="Seconds between active ARP probes",
+    )
     away_timeout: int = Field(
-        default=600, ge=60, le=3600,
+        default=180, ge=60, le=3600,
         description="Seconds without response before marking away",
     )
     short_absence_threshold: int = Field(

@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # Fauxmo Alexa integration (Phase 3 voice control)
     FAUXMO_ENABLED: bool = False
 
+    # Presence webhook — shared secret for iPhone Shortcut POSTs to
+    # /api/automation/presence/{arrived,departed}. When unset, the
+    # webhook endpoints reject all requests (disabled).
+    PRESENCE_WEBHOOK_TOKEN: Optional[str] = None
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5

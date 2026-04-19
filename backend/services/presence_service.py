@@ -1,11 +1,23 @@
 """
 Presence detection service — monitors iPhone on WiFi to detect home/away.
 
-Replaces Alexa geofence with native presence detection. Pings the phone
-every 30 seconds. After 10 minutes of no response, triggers a gradual
-departure (fade lights, pause Sonos, report away). When the phone
-reappears, runs a welcome-home arrival sequence with choreographed
-lights, contextual TTS greeting, and music.
+Two independent signals:
+
+1. **iPhone Shortcut webhook (primary).** iOS Personal Automations fire
+   POST /api/automation/presence/{arrived,departed} on WiFi
+   connect/disconnect. Those route into `on_shortcut_arrival` /
+   `on_shortcut_departure` — instant, no network probing, bypasses
+   debounce.
+
+2. **Active ARP probe (backup).** Every ``probe_interval`` seconds the
+   loop runs ``arping -c 1`` against the phone's IP. ARP queries the L2
+   binding directly, which is far more reliable than ICMP ping on iOS —
+   the phone keeps its AP association alive even when it's ignoring
+   pings in battery-saver. Catches cases where the Shortcut didn't fire
+   (iOS killed background tasks, phone rebooted, etc.).
+
+ICMP ping was removed 2026-04-19 after it produced ten phantom `away`
+events in one stay-home day on prod.
 
 Phase 2 (planned): BLE proximity detection for "at the door" precision.
 """
@@ -64,8 +76,8 @@ class PresenceConfig:
     enabled: bool = True
     phone_ip: str = "192.168.1.148"
     phone_mac: str = "A2:DD:D9:65:EE:F8"
-    ping_interval: int = 30
-    away_timeout: int = 600               # 10 minutes
+    probe_interval: int = 20              # Seconds between ARP probes
+    away_timeout: int = 180               # 3 min — active ARP is reliable
     short_absence_threshold: int = 1800   # 30 min — skip ceremony
     arrival_volume: int = 25
     departure_fade_seconds: int = 30
@@ -73,6 +85,10 @@ class PresenceConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PresenceConfig":
         """Create config from a dict, ignoring unknown keys."""
+        data = dict(data)
+        # Back-compat: legacy `ping_interval` key from before the ARP switch
+        if "ping_interval" in data and "probe_interval" not in data:
+            data["probe_interval"] = data.pop("ping_interval")
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in data.items() if k in valid_keys})
 
@@ -81,13 +97,23 @@ class PresenceService:
     """
     WiFi-based phone presence detection with arrival/departure sequences.
 
-    Runs as a background task in the FastAPI lifespan. Pings the configured
-    phone IP every ``ping_interval`` seconds. Transitions:
+    Runs as a background task in the FastAPI lifespan. Every
+    ``probe_interval`` seconds it runs an active ARP probe against the
+    configured phone IP. Arrival/departure can also be signalled directly
+    via ``on_shortcut_arrival`` / ``on_shortcut_departure`` from an iPhone
+    Personal Automation webhook, which is the preferred path — it fires
+    immediately and bypasses the ARP debounce.
 
-    - **home → away**: After ``away_timeout`` seconds with no ping response,
-      runs a gradual departure sequence (fade lights, pause Sonos).
-    - **away → home**: On first successful ping, runs the arrival sequence
-      (light wave, TTS greeting, music auto-play).
+    Transitions:
+
+    - **home → away**: After ``away_timeout`` seconds with no ARP hit
+      (and no Shortcut keepalive), runs a gradual departure sequence.
+    - **away → home (ARP path)**: Requires 2 consecutive successful
+      probes to fire the arrival sequence. Absorbs transient ARP misses
+      and prevents phantom arrivals from brief WiFi stutter.
+    - **away → home (Shortcut path)**: Fires immediately on webhook.
+    - **departing → home**: Immediate cancel + arrival (mid-fade; no
+      debounce — the phone is clearly still here).
     - **unknown → home/away**: On startup, sets state without triggering
       sequences (prevents false arrival on server restart).
     """
@@ -120,10 +146,12 @@ class PresenceService:
         self._last_seen: Optional[datetime] = None
         self._away_since: Optional[datetime] = None
         self._consecutive_failures: int = 0
+        self._pending_arrival_confirms: int = 0
         self._departure_task: Optional[asyncio.Task] = None
         self._arrival_task: Optional[asyncio.Task] = None
 
         self._is_linux = platform.system() == "Linux"
+        self._probe_iface: Optional[str] = None   # Detected at first probe
 
     # ------------------------------------------------------------------
     # Public API
@@ -171,15 +199,75 @@ class PresenceService:
         )
         logger.info("Presence config updated: %s", new_config)
 
+    async def on_shortcut_arrival(self, source: str = "ios_shortcut") -> str:
+        """
+        Explicit arrival signal from an iPhone Personal Automation (or
+        similar external source). Fires the welcome-home ceremony
+        immediately, bypassing the ARP debounce.
+
+        Returns a short status token: ``"fired"`` if the ceremony was
+        triggered, ``"noop"`` if the state was already home/arriving,
+        or ``"silent"`` if the signal landed during startup (state set
+        to home without ceremony).
+        """
+        now = datetime.now(tz=TZ)
+        self._consecutive_failures = 0
+        self._pending_arrival_confirms = 0
+        self._last_seen = now
+
+        if self._state in ("home", "arriving"):
+            logger.info(
+                "Shortcut arrival (%s) — already %s, skipping ceremony",
+                source, self._state,
+            )
+            return "noop"
+
+        if self._state in ("unknown", "startup_away"):
+            # Backend just started; signal is the first ground truth.
+            # User has been home — no ceremony.
+            self._state = "home"
+            logger.info(
+                "Shortcut arrival (%s) on startup — state set to home",
+                source,
+            )
+            await self._broadcast_state()
+            return "silent"
+
+        # away / departing → full ceremony
+        logger.info("Shortcut arrival (%s) — firing ceremony", source)
+        await self._on_arrival()
+        return "fired"
+
+    async def on_shortcut_departure(self, source: str = "ios_shortcut") -> str:
+        """
+        Explicit departure signal from an iPhone Personal Automation.
+        Bypasses the manual-override guard — WiFi disconnect is direct
+        evidence that the phone left the apartment.
+
+        Returns ``"fired"`` if departure started, ``"noop"`` if already
+        away/departing.
+        """
+        if self._state in ("away", "departing", "startup_away"):
+            logger.info(
+                "Shortcut departure (%s) — already %s, skipping",
+                source, self._state,
+            )
+            return "noop"
+
+        logger.info("Shortcut departure (%s) — starting fade sequence", source)
+        await self._on_departure(skip_override_guard=True)
+        return "fired"
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     async def run_loop(self) -> None:
-        """Background task — ping phone every interval, manage state."""
+        """Background task — ARP probe every interval, manage state."""
         logger.info(
-            "Presence detection started (phone=%s, timeout=%ds)",
+            "Presence detection started (phone=%s, interval=%ds, away_timeout=%ds)",
             self._config.phone_ip,
+            self._config.probe_interval,
             self._config.away_timeout,
         )
 
@@ -190,7 +278,7 @@ class PresenceService:
                     continue
 
                 now = datetime.now(tz=TZ)
-                reachable = await self._ping(self._config.phone_ip)
+                reachable = await self._arp_probe(self._config.phone_ip)
 
                 if reachable:
                     self._consecutive_failures = 0
@@ -199,14 +287,34 @@ class PresenceService:
                     if self._state in ("unknown", "startup_away"):
                         # Startup — set home without triggering arrival
                         self._state = "home"
+                        self._pending_arrival_confirms = 0
                         logger.info("Initial presence: home")
-                    elif self._state in ("away", "departing"):
+                    elif self._state == "departing":
+                        # Mid-fade and phone came back — cancel immediately.
+                        # No debounce: state hasn't committed to away yet,
+                        # and the user is clearly still here.
+                        self._pending_arrival_confirms = 0
                         await self._on_arrival()
+                    elif self._state == "away":
+                        # Committed-away → require 2 consecutive probes
+                        # before firing the ceremony. Protects against
+                        # transient ARP misses and brief WiFi stutter.
+                        self._pending_arrival_confirms += 1
+                        if self._pending_arrival_confirms >= 2:
+                            self._pending_arrival_confirms = 0
+                            await self._on_arrival()
+                        else:
+                            logger.info(
+                                "Arrival probe %d/2 — waiting for confirmation",
+                                self._pending_arrival_confirms,
+                            )
 
                 else:
                     self._consecutive_failures += 1
+                    self._pending_arrival_confirms = 0
 
-                    # After 3 failures, try ARP lookup for IP change
+                    # Opportunistic MAC → IP re-binding after 3 misses
+                    # (covers DHCP-assigned new IP while we were away)
                     if (
                         self._consecutive_failures == 3
                         and self._is_linux
@@ -225,7 +333,7 @@ class PresenceService:
 
                     if self._state == "unknown":
                         # First failure on startup — use interim state
-                        # so a successful ping next cycle sets "home"
+                        # so a successful probe next cycle sets "home"
                         # instead of triggering a false arrival
                         self._state = "startup_away"
                         self._away_since = now
@@ -255,16 +363,60 @@ class PresenceService:
             except Exception as e:
                 logger.error("Presence loop error: %s", e, exc_info=True)
 
-            await asyncio.sleep(self._config.ping_interval)
+            await asyncio.sleep(self._config.probe_interval)
 
     # ------------------------------------------------------------------
-    # Ping / ARP
+    # ARP probe (active L2 detection) + cache lookup (IP re-binding)
     # ------------------------------------------------------------------
 
-    async def _ping(self, ip: str) -> bool:
-        """ICMP ping with 2-second timeout. Returns True if reachable."""
+    async def _arp_probe(self, ip: str) -> bool:
+        """
+        Active ARP probe via `arping -c 1 -w 2`. Returns True if the
+        phone's L2 address is on the network.
+
+        Prefer this over ICMP ping — iOS gates ICMP aggressively when
+        the phone is locked / in WiFi power-save, producing frequent
+        false "away" events. The L2 association survives power-save,
+        so ARP is the reliable signal.
+
+        On non-Linux platforms falls back to ICMP ping (dev machines).
+        """
+        if not self._is_linux:
+            return await self._icmp_ping(ip)
+
+        iface = await self._detect_interface(ip)
+        cmd = ["arping", "-c", "1", "-w", "2"]
+        if iface:
+            cmd.extend(["-I", iface])
+        cmd.append(ip)
+
         try:
-            if self._is_linux:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=4.0)
+            return proc.returncode == 0
+        except FileNotFoundError:
+            # arping not installed — fall back to ICMP once and log loudly
+            logger.warning(
+                "arping not found — install iputils-arping for reliable "
+                "presence detection. Falling back to ICMP ping."
+            )
+            self._is_linux = False  # Skip the arping path for the rest of the session
+            return await self._icmp_ping(ip)
+        except (asyncio.TimeoutError, OSError) as e:
+            logger.debug("ARP probe failed for %s: %s", ip, e)
+            return False
+
+    async def _icmp_ping(self, ip: str) -> bool:
+        """
+        ICMP fallback — used only on non-Linux (dev machines) or when
+        `arping` isn't installed on the host.
+        """
+        try:
+            if platform.system() == "Linux":
                 cmd = ["ping", "-c", "1", "-W", "2", ip]
             else:
                 cmd = ["ping", "-n", "1", "-w", "2000", ip]
@@ -277,8 +429,33 @@ class PresenceService:
             await asyncio.wait_for(proc.wait(), timeout=5.0)
             return proc.returncode == 0
         except (asyncio.TimeoutError, OSError) as e:
-            logger.debug("Ping failed for %s: %s", ip, e)
+            logger.debug("ICMP ping failed for %s: %s", ip, e)
             return False
+
+    async def _detect_interface(self, ip: str) -> Optional[str]:
+        """
+        Resolve the outbound interface for ``ip`` once and cache it.
+        ``arping -I`` needs an explicit interface; picking the one the
+        kernel would actually use avoids probing the wrong NIC.
+        """
+        if self._probe_iface:
+            return self._probe_iface
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "-o", "route", "get", ip,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            # Format: "192.168.1.148 dev wlp2s0 src 192.168.1.210 uid 1000"
+            parts = stdout.decode().split()
+            if "dev" in parts:
+                self._probe_iface = parts[parts.index("dev") + 1]
+                logger.info("Presence probe interface: %s", self._probe_iface)
+        except (asyncio.TimeoutError, OSError, ValueError):
+            # Let arping pick its own default — not fatal
+            pass
+        return self._probe_iface
 
     async def _arp_lookup(self, mac: str) -> Optional[str]:
         """Check ARP table for a MAC address, return its IP if found."""
@@ -309,16 +486,27 @@ class PresenceService:
     # Departure
     # ------------------------------------------------------------------
 
-    async def _on_departure(self) -> None:
-        """Start the departure sequence as a background task."""
+    async def _on_departure(self, *, skip_override_guard: bool = False) -> None:
+        """
+        Start the departure sequence as a background task.
+
+        ``skip_override_guard`` lets the Shortcut webhook bypass the
+        manual-override check below — an iPhone "disconnected from
+        home WiFi" event is explicit evidence of leaving, stronger than
+        any active mode.
+        """
         # Skip departure if a manual override is active. An explicit mode
         # (relax, social, cooking, watching, sleeping, etc.) is strong
-        # presence evidence — a 10-min ping silence during live use is
+        # presence evidence — a long ARP silence during live use is
         # almost always phone-side (charger + DND, weak signal, iOS network
         # throttling) rather than an actual departure. Reset the countdown
-        # so the next real ping failure is evaluated freshly after the
-        # override clears.
-        if self._automation and self._automation.manual_override:
+        # so the next real miss is evaluated freshly after the override
+        # clears.
+        if (
+            not skip_override_guard
+            and self._automation
+            and self._automation.manual_override
+        ):
             logger.info(
                 "Presence: phone unreachable for %ds but manual override "
                 "is active (%s) — skipping departure, resetting countdown",

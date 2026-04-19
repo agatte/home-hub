@@ -9,6 +9,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from backend.config import settings
 from backend.rate_limit import limiter
 
 from backend.api.routes.routines import load_setting, save_setting
@@ -553,3 +554,78 @@ async def test_arrival(request: Request) -> dict:
         )
     asyncio.create_task(presence._arrival_sequence(timedelta(hours=2)))
     return {"status": "ok", "message": "Test arrival sequence triggered"}
+
+
+# ---------------------------------------------------------------------------
+# Shortcut webhooks — iPhone Personal Automations POST here on WiFi
+# connect/disconnect. Shared-secret auth via X-Presence-Token header.
+# ---------------------------------------------------------------------------
+
+
+def _authorize_presence_webhook(request: Request) -> None:
+    """Reject the request unless it carries the configured shared secret."""
+    expected = settings.PRESENCE_WEBHOOK_TOKEN
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Presence webhook disabled — PRESENCE_WEBHOOK_TOKEN not set",
+        )
+    supplied = request.headers.get("x-presence-token")
+    if supplied != expected:
+        raise HTTPException(status_code=401, detail="Invalid presence token")
+
+
+async def _read_webhook_source(request: Request) -> str:
+    """Pull ``source`` from the JSON body, defaulting to ios_shortcut."""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            source = body.get("source")
+            if isinstance(source, str) and source:
+                return source[:64]  # Cap for log hygiene
+    except Exception:
+        pass
+    return "ios_shortcut"
+
+
+@router.post("/presence/arrived")
+@limiter.limit("20/minute")
+async def presence_arrived(request: Request) -> dict:
+    """
+    Webhook: phone just connected to home WiFi.
+
+    Fires the welcome-home ceremony immediately, bypassing the ARP
+    debounce. Idempotent — returns ``noop`` if already home.
+    """
+    _authorize_presence_webhook(request)
+    presence = getattr(request.app.state, "presence", None)
+    if not presence:
+        raise HTTPException(
+            status_code=503, detail="Presence service not initialized"
+        )
+
+    source = await _read_webhook_source(request)
+    result = await presence.on_shortcut_arrival(source=source)
+    return {"status": "ok", "action": result, "state": presence.get_status()["state"]}
+
+
+@router.post("/presence/departed")
+@limiter.limit("20/minute")
+async def presence_departed(request: Request) -> dict:
+    """
+    Webhook: phone just disconnected from home WiFi.
+
+    Fires the departure sequence immediately, bypassing the manual
+    override guard (WiFi disconnect is direct evidence of leaving).
+    Idempotent — returns ``noop`` if already away.
+    """
+    _authorize_presence_webhook(request)
+    presence = getattr(request.app.state, "presence", None)
+    if not presence:
+        raise HTTPException(
+            status_code=503, detail="Presence service not initialized"
+        )
+
+    source = await _read_webhook_source(request)
+    result = await presence.on_shortcut_departure(source=source)
+    return {"status": "ok", "action": result, "state": presence.get_status()["state"]}
