@@ -285,8 +285,12 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     "social": {
         "1": {"on": True, "bri": 140, "hue": 58500, "sat": 160},   # Dusty rose (statement)
         "2": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},   # Cognac amber
-        "3": {"on": True, "bri": 110, "hue": 4000,  "sat": 220},   # Burnt orange (matched pair)
-        "4": {"on": True, "bri": 110, "hue": 4000,  "sat": 220},   # Burnt orange (matched pair)
+        # L3/L4 tuned 2026-04-18 — bri dropped from 110 → 70 to respect the
+        # clear-glass pendant rule (≤50 outside cooking, slight exception for
+        # social to keep kitchen visible). Max saturation makes the deep
+        # burnt-ember read as "lounge" instead of "hotel lobby."
+        "3": {"on": True, "bri": 70, "hue": 4000, "sat": 254},   # Deep burnt ember (matched pair)
+        "4": {"on": True, "bri": 70, "hue": 4000, "sat": 254},   # Deep burnt ember (matched pair)
     },
     # ── Relax ─────────────────────────────────────────────────────────
     # "Moss & Candlelight" biophilic forest-floor palette. Living-room
@@ -296,35 +300,41 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # than drowning the room in uniform amber. Kitchen L3/L4 are FREE to
     # diverge (depth via per-light variance).
     # Candle/fire effects are scoped to L1/L2 in EFFECT_AUTO_MAP so the
-    # moss pendants stay static.
-    # Hue anchors: 4500=warm red, 6000–8000=amber/honey, 23500–25500=sage→forest.
+    # pendants stay static.
+    # Hue anchors: 4500=warm red, 6000–8000=amber/honey, 20000=olive/yellow-green.
+    # Kitchen L3/L4 tuned 2026-04-19: shifted from pure green (hue 24000–25500,
+    # sat 140–240 — read as bright mint through the clear-glass pendants despite
+    # spec intent) to desaturated olive (hue 20000, sat 100) for a dusty-sage
+    # read. Hue bulbs' native green LED peak lands at mint regardless of sat
+    # or brightness; shifting warm (toward yellow-green) + low sat produces
+    # the closest feasible "muted sage" on these fixtures.
     "relax": {
         "day": {
             "1": {"on": True, "bri": 95, "hue": 7500,  "sat": 200},   # Honey amber
             "2": {"on": True, "bri": 85, "hue": 8000,  "sat": 190},   # Warm honey
-            "3": {"on": True, "bri": 60, "hue": 23500, "sat": 140},   # Dusty sage
-            "4": {"on": True, "bri": 55, "hue": 24000, "sat": 150},   # Dusty sage
+            "3": {"on": True, "bri": 30, "hue": 20000, "sat": 100},   # Dusty sage wash
+            "4": {"on": True, "bri": 30, "hue": 20000, "sat": 100},   # Dusty sage wash
         },
         "evening": {
             "1": {"on": True, "bri": 70, "hue": 6000,  "sat": 230},   # Ember
             "2": {"on": True, "bri": 55, "hue": 6500,  "sat": 220},   # Warm ember
-            "3": {"on": True, "bri": 40, "hue": 24000, "sat": 180},   # Muted moss
-            "4": {"on": True, "bri": 32, "hue": 24500, "sat": 190},   # Deeper moss
+            "3": {"on": True, "bri": 15, "hue": 20000, "sat": 100},   # Muted olive
+            "4": {"on": True, "bri": 15, "hue": 20000, "sat": 100},   # Muted olive
         },
         "night": {
             "1": {"on": True, "bri": 38, "hue": 5000,  "sat": 254},   # Deep ember
             "2": {"on": True, "bri": 28, "hue": 4500,  "sat": 254},   # Deeper ember
-            "3": {"on": True, "bri": 14, "hue": 25000, "sat": 210},   # Forest shadow
-            "4": {"on": True, "bri": 10, "hue": 25000, "sat": 220},   # Forest shadow
+            "3": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},   # Sage shadow
+            "4": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},   # Sage shadow
         },
         # "Moss & Ember" — post-11pm cave/den variant. Deeper ember on lamps,
-        # hunter-green shadow in the kitchen. Only relax defines late_night;
+        # barely-there sage in the kitchen. Only relax defines late_night;
         # other modes fall back to their night state.
         "late_night": {
             "1": {"on": True, "bri": 28, "hue": 3000,  "sat": 254},   # Deep ember red-orange
             "2": {"on": True, "bri": 22, "hue": 2500,  "sat": 254},   # Deeper ember
-            "3": {"on": True, "bri": 8,  "hue": 25500, "sat": 240},   # Hunter green shadow
-            "4": {"on": True, "bri": 6,  "hue": 25500, "sat": 240},   # Hunter green shadow
+            "3": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},   # Sage trace
+            "4": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},   # Sage trace
         },
     },
     # ── Cooking ───────────────────────────────────────────────────────
