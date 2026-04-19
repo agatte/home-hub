@@ -10,7 +10,7 @@ import logging
 
 logger = logging.getLogger("home_hub.winddown")
 
-_ACTIVE_MODES = frozenset({"gaming", "watching", "social", "working"})
+_ACTIVE_MODES = frozenset({"gaming", "watching", "social"})
 
 
 class WinddownRoutineService:
@@ -101,7 +101,7 @@ class WinddownRoutineService:
         try:
             if self._tts:
                 await self._tts.speak(
-                    "Wind-down time. Lights dimmed, volume lowered.",
+                    "Unwinding for the night. Lights dimmed, volume lowered.",
                     volume=self._volume,
                 )
         except Exception as e:
