@@ -233,9 +233,13 @@ class PresenceService:
             await self._broadcast_state()
             return "silent"
 
-        # away / departing → full ceremony
+        # away / departing → full ceremony. force_ceremony=True bypasses
+        # the short_absence_threshold skip — a Shortcut firing means the
+        # phone physically left WiFi range and returned, which is explicit
+        # "went out and came back" evidence and always deserves the
+        # welcome-home sequence regardless of how long they were gone.
         logger.info("Shortcut arrival (%s) — firing ceremony", source)
-        await self._on_arrival()
+        await self._on_arrival(force_ceremony=True)
         return "fired"
 
     async def on_shortcut_departure(self, source: str = "ios_shortcut") -> str:
@@ -595,8 +599,16 @@ class PresenceService:
     # Arrival
     # ------------------------------------------------------------------
 
-    async def _on_arrival(self) -> None:
-        """Start the arrival sequence as a background task."""
+    async def _on_arrival(self, *, force_ceremony: bool = False) -> None:
+        """
+        Start the arrival sequence as a background task.
+
+        ``force_ceremony`` bypasses the short-absence gate in
+        ``_arrival_sequence``. Set by the Shortcut path, where a
+        WiFi disconnect+reconnect is explicit "left and returned"
+        evidence — the ceremony should always fire, regardless of
+        how brief the trip was.
+        """
         # Cancel any in-progress departure
         if self._departure_task and not self._departure_task.done():
             self._departure_task.cancel()
@@ -614,22 +626,41 @@ class PresenceService:
         self._state = "arriving"
         self._away_since = None
         logger.info(
-            "Arrival detected — away for %d minutes",
+            "Arrival detected — away for %d minutes%s",
             int(duration_away.total_seconds() / 60),
+            " (forced ceremony)" if force_ceremony else "",
         )
         self._arrival_task = asyncio.create_task(
-            self._arrival_sequence(duration_away)
+            self._arrival_sequence(duration_away, force_ceremony=force_ceremony)
         )
 
-    async def _arrival_sequence(self, duration_away: timedelta) -> None:
-        """Choreographed welcome-home sequence."""
+    async def _arrival_sequence(
+        self,
+        duration_away: timedelta,
+        *,
+        force_ceremony: bool = False,
+    ) -> None:
+        """
+        Choreographed welcome-home sequence.
+
+        When ``force_ceremony`` is False (ARP-detected arrivals), absences
+        shorter than ``short_absence_threshold`` skip the ceremony and
+        just restore lights. When True (Shortcut-fired arrivals), the
+        full sequence always runs.
+        """
         try:
             now = datetime.now(tz=TZ)
             time_of_day = self._classify_time(now.hour)
             away_minutes = duration_away.total_seconds() / 60
 
-            # Short absence (<30 min) — just restore lights, skip ceremony
-            if away_minutes < self._config.short_absence_threshold / 60:
+            # Short absence (<30 min) — just restore lights, skip ceremony.
+            # Shortcut-sourced arrivals bypass this: a WiFi
+            # disconnect+reconnect is explicit evidence of a real trip,
+            # however brief, and always deserves the welcome sequence.
+            if (
+                not force_ceremony
+                and away_minutes < self._config.short_absence_threshold / 60
+            ):
                 logger.info(
                     "Short absence (%d min) — restoring lights only",
                     int(away_minutes),
