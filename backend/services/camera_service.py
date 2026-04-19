@@ -29,7 +29,13 @@ POLL_INTERVAL = 2       # Seconds between frame captures
 FRAME_WIDTH = 320       # Downsampled frame size for inference
 FRAME_HEIGHT = 240
 ABSENT_THRESHOLD = 7    # Consecutive absent frames before reporting away (~14s)
-MIN_FACE_CONFIDENCE = 0.5
+# Full-range BlazeFace returns noticeably lower scores than short-range at our
+# corner-view working distance (~2–3m, three-quarter profile toward the
+# monitor). Steady-state detections land in the 0.3–0.6 range; a 0.5 threshold
+# flickered in and out as the score grazed the boundary. 0.3 keeps detection
+# stable without introducing false positives — the fixed corner view has no
+# other face-like regions to trip the model.
+MIN_FACE_CONFIDENCE = 0.3
 
 # Ambient lux calibration constants. Auto-exposure is disabled when a
 # calibration is present so gray.mean() reflects actual room brightness
