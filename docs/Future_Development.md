@@ -181,3 +181,27 @@ Pure read over existing `event_logger` tables — no new data sources. Writes to
 **Distinct from #1 Dashboard Replay:** Replay is real-time visual scrubbing. Logbook is compact, searchable, linkable prose. **Distinct from #3 Sleep Analytics:** Sleep is focused on sleep quality. Logbook covers the whole day as narrative.
 
 **Touches:** new `journal_service.py` (scheduled at 2am), new `/journal` frontend route
+
+---
+
+### 20. Zone-Driven Mode Transitions
+
+Zone mapping (desk vs bed, shipped 2026-04-19) currently drives a brightness-only actuation for watching-at-desk. The next step is letting zone drive *mode* changes, not just brightness tweaks within a mode.
+
+Primary candidate rule: `zone=bed sustained ≥N minutes + process idle + no manual override + no projector/Sonos active → nudge toward relax`. Dependency — **do not break Anthony's "watch projector from bed" habit**; the rule must gate on whether content is actively playing. A second rule set candidates: `zone=desk + process=working + late-night` bypasses the 22:00 late-night-rescue (keep Anthony in working when he's actively at the keyboard past 22:00).
+
+Strongly depends on posture classification (see `docs/ML_SPEC.md` §3.4) landing first so `reclined on bed` is a far stronger gate than `zone=bed` alone. Observe 1–2 days of `ml_decisions` zone data before picking thresholds.
+
+**Touches:** `automation_engine.py` (new rule in `report_activity` or a dedicated `zone_rules_service.py`), possibly `confidence_fusion.py` new lane if fusion integration preferred over direct rule.
+
+---
+
+### 21. Pose Landmarks Over WebSocket (Kiosk Debug Widget)
+
+Currently the camera service computes per-frame pose landmarks but only derived labels cross the wire (presence/absence, detection source, zone). A kiosk dashboard widget could visualize the pose landmarks live — a mini stick-figure rendered in a corner of the screen showing what the Latitude sees — useful for debugging camera angle and verifying detection quality without curl'ing snapshots.
+
+Gated behind a config flag for privacy (pose coordinates are more informative than presence). Default off. When enabled, extends `camera_update` WebSocket event with a `pose_landmarks` payload (normalized 0–1 coordinates + visibility) and a new `<PoseWidget.svelte>` consumer draws the skeleton.
+
+**Distinct from annotated snapshots:** Snapshot is a one-shot image, includes full frame. Pose widget is continuous, landmarks-only, no image data.
+
+**Touches:** `camera_service.py` (optional `publish_pose_landmarks` setting), WebSocket payload extension, new `PoseWidget.svelte`, Settings toggle.
