@@ -24,10 +24,10 @@ from typing import Any, Optional
 logger = logging.getLogger("home_hub.camera")
 
 # Polling and detection constants
-POLL_INTERVAL = 5       # Seconds between frame captures
+POLL_INTERVAL = 2       # Seconds between frame captures
 FRAME_WIDTH = 320       # Downsampled frame size for inference
 FRAME_HEIGHT = 240
-ABSENT_THRESHOLD = 3    # Consecutive absent frames before reporting away (15s)
+ABSENT_THRESHOLD = 7    # Consecutive absent frames before reporting away (~14s)
 MIN_FACE_CONFIDENCE = 0.5
 
 # Ambient lux calibration constants. Auto-exposure is disabled when a
@@ -36,7 +36,7 @@ MIN_FACE_CONFIDENCE = 0.5
 EXPOSURE_TARGET_LUX = 100   # Target frame mean at calibration time
 EXPOSURE_TOLERANCE = 10     # Accept calibration within target ± tolerance
 CALIBRATION_FRAMES = 10     # Frames averaged per exposure probe
-LUX_EMA_ALPHA = 0.1         # Smoothing factor (α*raw + (1-α)*ema)
+LUX_EMA_ALPHA = 0.3         # Smoothing factor (α*raw + (1-α)*ema) — ~20s to 95%
 LUX_CALIBRATION_SETTING_KEY = "lux_calibration_config"
 # OpenCV DirectShow/V4L2 auto-exposure magic numbers:
 #   0.25 = manual exposure, 0.75 = auto (on Windows DShow backend)
