@@ -1,16 +1,24 @@
-"""Camera presence detection — MediaPipe face detection on the Latitude webcam.
+"""Camera presence detection — MediaPipe face + pose on the Latitude webcam.
 
-Captures one frame every 5 seconds from the built-in webcam, runs MediaPipe
-Face Detection to determine room occupancy, and reports presence/absence to the
-automation engine. Also measures ambient light level from frame luminance.
+Captures one frame every ``POLL_INTERVAL`` seconds, runs MediaPipe Face
+Detection first, and falls back to MediaPipe Pose Landmarker when face
+detection misses. Reports presence/absence to the automation engine and
+measures ambient light level from frame luminance.
 
-Phase 2a: Presence only (face detection, ~5ms per frame).
-Phase 2b (future): Posture classification via BlazePose (upright vs reclined).
+The pose fallback exists because the Latitude sits in a corner ~2–3m from
+the desk; the user spends most working sessions in deep three-quarter
+profile toward the monitor, which BlazeFace (even full-range) scores
+unreliably. Body pose is invariant to head angle at that distance.
+
+Phase 2a: Presence via face OR pose (~5ms face, ~25ms pose-on-miss).
+Phase 2b (future): Posture classification (upright vs reclined) using the
+    same pose landmarks.
 
 Privacy guarantees:
   - Frames are numpy arrays in memory only, overwritten each cycle.
   - Frames never touch disk, network, logs, or any API response.
-  - Only derived labels (present/absent), confidence, and lux values persist.
+  - Only derived labels (present/absent), confidence, detection source,
+    and lux values persist. Pose landmark coordinates stay in-process.
   - Opt-in via camera_enabled app setting (default false).
   - Dell Latitude camera LED activates when capturing (hardware-enforced).
 """
@@ -28,10 +36,10 @@ logger = logging.getLogger("home_hub.camera")
 POLL_INTERVAL = 2       # Seconds between frame captures
 FRAME_WIDTH = 320       # Downsampled frame size for inference
 FRAME_HEIGHT = 240
-# Hysteresis against full-range model's noisy per-frame detections at distance.
-# At 2s poll cadence, 12 consecutive misses is 24s — longer than any brief
-# profile-view dropout but still well under genuine walk-away absence.
-ABSENT_THRESHOLD = 12
+# Seven consecutive misses (~14s) before flipping to away. With pose as a
+# backup signal to face detection, brief profile-view dropouts rarely cost
+# more than one poll, so we don't need extra hysteresis here.
+ABSENT_THRESHOLD = 7
 # Full-range BlazeFace returns noticeably lower scores than short-range at our
 # corner-view working distance (~2–3m, three-quarter profile toward the
 # monitor). Snapshot sampling showed hits at 0.38 confidence and misses
@@ -39,6 +47,32 @@ ABSENT_THRESHOLD = 12
 # detection stable; the fixed corner view has no other face-like regions on
 # the bed / wall art to false-trigger on.
 MIN_FACE_CONFIDENCE = 0.2
+# Pose fallback — MediaPipe Pose Landmarker (Tasks API). Declares "present"
+# when enough torso landmarks (nose, shoulders, hips) are visible above
+# MIN_POSE_VISIBILITY. This catches Anthony at the desk in deep profile,
+# where BlazeFace scores are too noisy to rely on alone.
+MIN_POSE_VISIBILITY = 0.5
+POSE_MIN_LANDMARKS = 3
+# BlazePose landmark indices for the torso skeleton. See:
+# https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker#pose_landmarker_model
+POSE_NOSE = 0
+POSE_LEFT_SHOULDER = 11
+POSE_RIGHT_SHOULDER = 12
+POSE_LEFT_HIP = 23
+POSE_RIGHT_HIP = 24
+POSE_TORSO_INDICES = (
+    POSE_NOSE, POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER,
+    POSE_LEFT_HIP, POSE_RIGHT_HIP,
+)
+# Edges drawn between landmarks in snapshot annotations (stick-figure torso).
+POSE_SKELETON_EDGES = (
+    (POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER),
+    (POSE_LEFT_SHOULDER, POSE_LEFT_HIP),
+    (POSE_RIGHT_SHOULDER, POSE_RIGHT_HIP),
+    (POSE_LEFT_HIP, POSE_RIGHT_HIP),
+    (POSE_NOSE, POSE_LEFT_SHOULDER),
+    (POSE_NOSE, POSE_RIGHT_SHOULDER),
+)
 
 # Ambient lux calibration constants. Auto-exposure is disabled when a
 # calibration is present so gray.mean() reflects actual room brightness
@@ -52,7 +86,7 @@ LUX_CALIBRATION_SETTING_KEY = "lux_calibration_config"
 #   0.25 = manual exposure, 0.75 = auto (on Windows DShow backend)
 CAP_AUTO_EXPOSURE_MANUAL = 0.25
 
-# Model file for MediaPipe Tasks API (v0.10.20+).
+# Model files for MediaPipe Tasks API (v0.10.20+).
 # Using the full-range BlazeFace model: the Latitude dashboard sits in a
 # corner ~2–3m from Anthony at the desk, past the short-range model's
 # comfortable detection envelope (<2m, frontal-preferred). The full-range
@@ -64,6 +98,14 @@ MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
     "face_detector/blaze_face_full_range/float16/latest/"
     "blaze_face_full_range.tflite"
+)
+# Pose Landmarker (lite variant ≈ 5 MB). Runs only when face detection
+# misses in the poll loop, and always during snapshot annotation.
+POSE_MODEL_FILENAME = "pose_landmarker_lite.task"
+POSE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_lite/float16/latest/"
+    "pose_landmarker_lite.task"
 )
 
 
@@ -89,11 +131,13 @@ class CameraService:
         self._cap = None
         self._cap_lock = threading.Lock()  # Serializes poll-loop and snapshot reads
         self._face_detector = None
+        self._pose_landmarker = None
 
         # Detection state
         self._consecutive_absent: int = 0
         self._last_detection: str = "unknown"
         self._last_confidence: float = 0.0
+        self._last_detection_source: Optional[str] = None  # "face" | "pose" | None
         self._last_ambient_lux: float = 0.0
         self._was_absent: bool = False
 
@@ -111,10 +155,12 @@ class CameraService:
         return self._enabled
 
     async def start(self) -> None:
-        """Open the webcam and initialize MediaPipe face detection.
+        """Open the webcam and initialize MediaPipe face + pose models.
 
         Fails gracefully if the camera is unavailable (busy, missing, etc.).
-        Downloads the face detection model on first run (~230KB).
+        Downloads the face detection model on first run (~1 MB) and the
+        pose landmarker model (~5 MB). Pose init is best-effort — if it
+        fails the service falls back to face-only detection.
         """
         try:
             import cv2
@@ -145,9 +191,9 @@ class CameraService:
             return
 
         # Ensure face detection model is available
-        model_path = MODEL_DIR / MODEL_FILENAME
-        if not model_path.exists():
-            if not self._download_model(model_path):
+        face_model_path = MODEL_DIR / MODEL_FILENAME
+        if not face_model_path.exists():
+            if not self._download_model(face_model_path, MODEL_URL, "face detection"):
                 if self._cap:
                     self._cap.release()
                     self._cap = None
@@ -160,7 +206,7 @@ class CameraService:
             FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
 
             options = FaceDetectorOptions(
-                base_options=BaseOptions(model_asset_path=str(model_path)),
+                base_options=BaseOptions(model_asset_path=str(face_model_path)),
                 min_detection_confidence=MIN_FACE_CONFIDENCE,
             )
             self._face_detector = FaceDetector.create_from_options(options)
@@ -175,12 +221,47 @@ class CameraService:
                 self._cap = None
             return
 
+        # Initialize MediaPipe Pose Landmarker (fallback for profile views).
+        # Best-effort: if this fails, we stay face-only.
+        pose_model_path = MODEL_DIR / POSE_MODEL_FILENAME
+        if not pose_model_path.exists():
+            if not self._download_model(pose_model_path, POSE_MODEL_URL, "pose"):
+                logger.warning(
+                    "Pose model unavailable — continuing with face-only detection"
+                )
+                pose_model_path = None
+
+        if pose_model_path is not None:
+            try:
+                PoseLandmarker = mp.tasks.vision.PoseLandmarker
+                PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+                pose_options = PoseLandmarkerOptions(
+                    base_options=BaseOptions(model_asset_path=str(pose_model_path)),
+                    num_poses=1,
+                    min_pose_detection_confidence=0.5,
+                    min_pose_presence_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                self._pose_landmarker = PoseLandmarker.create_from_options(pose_options)
+                logger.info("Pose landmarker initialized (fallback for face-miss frames)")
+            except Exception as exc:
+                logger.warning(
+                    "Pose landmarker init failed — continuing with face-only: %s",
+                    exc,
+                )
+                self._pose_landmarker = None
+
         self._enabled = True
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
 
     @staticmethod
-    def _download_model(model_path: Path) -> bool:
-        """Download the BlazeFace short-range model from Google.
+    def _download_model(model_path: Path, url: str, label: str) -> bool:
+        """Download a MediaPipe model asset from the given URL.
+
+        Args:
+            model_path: Filesystem destination (parent is mkdir'd).
+            url: HTTPS URL of the model file.
+            label: Human-readable name for log messages (e.g. "face detection").
 
         Returns:
             True if download succeeded.
@@ -189,17 +270,17 @@ class CameraService:
             import httpx
 
             model_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info("Downloading face detection model...")
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                resp = client.get(MODEL_URL)
+            logger.info("Downloading %s model...", label)
+            with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+                resp = client.get(url)
                 resp.raise_for_status()
                 model_path.write_bytes(resp.content)
             logger.info(
-                "Face detection model saved (%d bytes)", len(resp.content)
+                "%s model saved (%d bytes)", label.capitalize(), len(resp.content)
             )
             return True
         except Exception as exc:
-            logger.error("Failed to download face detection model: %s", exc)
+            logger.error("Failed to download %s model: %s", label, exc)
             return False
 
     async def _load_calibration(self) -> None:
@@ -407,10 +488,13 @@ class CameraService:
 
                 status = result["status"]
                 confidence = result["confidence"]
+                source = result.get("source")
+                pose_landmark_count = result.get("pose_landmark_count", 0)
                 ambient_lux = result["ambient_lux"]
 
                 self._last_detection = status
                 self._last_confidence = confidence
+                self._last_detection_source = source
                 self._last_ambient_lux = ambient_lux
                 self._update_ema_lux(ambient_lux)
 
@@ -434,9 +518,11 @@ class CameraService:
                             mode="idle", source="camera"
                         )
                         logger.info(
-                            "Presence detected — reported idle "
-                            "(confidence: %.2f, lux: %.0f)",
+                            "Presence detected via %s — reported idle "
+                            "(confidence: %.2f, landmarks: %d, lux: %.0f)",
+                            source or "unknown",
                             confidence,
+                            pose_landmark_count,
                             ambient_lux,
                         )
                 elif status == "absent":
@@ -448,7 +534,7 @@ class CameraService:
                             mode="away", source="camera"
                         )
                         logger.info(
-                            "No face detected for %ds — reported away",
+                            "No person detected for %ds — reported away",
                             ABSENT_THRESHOLD * POLL_INTERVAL,
                         )
 
@@ -461,6 +547,8 @@ class CameraService:
                         decision_source="camera",
                         factors={
                             "detection": status,
+                            "detection_source": source,
+                            "pose_landmark_count": pose_landmark_count,
                             "consecutive_absent": self._consecutive_absent,
                             "ambient_lux": ambient_lux,
                         },
@@ -482,7 +570,9 @@ class CameraService:
                     "camera_update",
                     {
                         "detection": status,
+                        "detection_source": source,
                         "confidence": confidence,
+                        "pose_landmark_count": pose_landmark_count,
                         "ambient_lux": ambient_lux,
                         "ema_lux": self._ema_lux,
                         "baseline_lux": self._baseline_lux,
@@ -498,14 +588,40 @@ class CameraService:
                 logger.error("Camera poll error: %s", exc, exc_info=True)
                 await asyncio.sleep(POLL_INTERVAL)
 
+    def _evaluate_pose(self, pose_result: Any) -> tuple[bool, float, int]:
+        """Decide whether a pose result constitutes a visible person.
+
+        Counts torso landmarks (nose, shoulders, hips) whose visibility
+        exceeds ``MIN_POSE_VISIBILITY``. Returns ``(is_present, mean_vis, count)``
+        where ``mean_vis`` is the average visibility over the torso landmarks
+        that passed the threshold (used as pose-path "confidence" for logging
+        and fusion).
+        """
+        if pose_result is None or not getattr(pose_result, "pose_landmarks", None):
+            return False, 0.0, 0
+        landmarks = pose_result.pose_landmarks[0]
+        visibilities: list[float] = []
+        for idx in POSE_TORSO_INDICES:
+            if idx < len(landmarks):
+                vis = float(getattr(landmarks[idx], "visibility", 0.0))
+                if vis >= MIN_POSE_VISIBILITY:
+                    visibilities.append(vis)
+        count = len(visibilities)
+        if count < POSE_MIN_LANDMARKS:
+            return False, 0.0, count
+        mean_vis = sum(visibilities) / count
+        return True, mean_vis, count
+
     def _process_frame(self) -> Optional[dict]:
-        """Capture a frame, run face detection, compute ambient lux.
+        """Capture a frame, run face detection (then pose if face missed),
+        compute ambient lux.
 
         Runs in a thread pool executor. Frames never leave this method —
         they are overwritten and dereferenced before returning.
 
         Returns:
-            Dict with status, confidence, and ambient_lux, or None on failure.
+            Dict with status, confidence, source, ambient_lux, and
+            pose_landmark_count, or None on failure.
         """
         import cv2
 
@@ -529,31 +645,43 @@ class CameraService:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             ambient_lux = float(gray.mean())
 
-            # Convert to RGB for MediaPipe
+            # Convert to RGB for MediaPipe (reused across both detectors)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            # Wrap in MediaPipe Image for Tasks API
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-            # Run face detection
-            results = self._face_detector.detect(mp_image)
-
-            # Determine presence
-            if results.detections:
-                # Take highest confidence detection
+            # Fast path — face detection (~5ms)
+            face_results = self._face_detector.detect(mp_image)
+            if face_results.detections:
                 best = max(
-                    results.detections,
+                    face_results.detections,
                     key=lambda d: d.categories[0].score,
                 )
-                status = "present"
-                confidence = float(best.categories[0].score)
-            else:
-                status = "absent"
-                confidence = 0.0
+                return {
+                    "status": "present",
+                    "confidence": float(best.categories[0].score),
+                    "source": "face",
+                    "pose_landmark_count": 0,
+                    "ambient_lux": ambient_lux,
+                }
+
+            # Fallback — pose landmarker (~25ms, only when face missed)
+            if self._pose_landmarker is not None:
+                pose_result = self._pose_landmarker.detect(mp_image)
+                is_present, mean_vis, count = self._evaluate_pose(pose_result)
+                if is_present:
+                    return {
+                        "status": "present",
+                        "confidence": mean_vis,
+                        "source": "pose",
+                        "pose_landmark_count": count,
+                        "ambient_lux": ambient_lux,
+                    }
 
             return {
-                "status": status,
-                "confidence": confidence,
+                "status": "absent",
+                "confidence": 0.0,
+                "source": None,
+                "pose_landmark_count": 0,
                 "ambient_lux": ambient_lux,
             }
 
@@ -593,14 +721,22 @@ class CameraService:
         rgb = None
         try:
             if annotate:
+                frame_h, frame_w = frame.shape[:2]
+                pose_count = 0
+                pose_vis = 0.0
                 try:
                     import mediapipe as mp
 
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    results = self._face_detector.detect(mp_image) if self._face_detector else None
-                    if results and results.detections:
-                        for det in results.detections:
+
+                    # Face box
+                    face_results = (
+                        self._face_detector.detect(mp_image)
+                        if self._face_detector else None
+                    )
+                    if face_results and face_results.detections:
+                        for det in face_results.detections:
                             bbox = det.bounding_box
                             x1, y1 = int(bbox.origin_x), int(bbox.origin_y)
                             x2, y2 = x1 + int(bbox.width), y1 + int(bbox.height)
@@ -616,6 +752,34 @@ class CameraService:
                                 1,
                                 cv2.LINE_AA,
                             )
+
+                    # Pose skeleton (always draw when available for richer debug)
+                    if self._pose_landmarker is not None:
+                        pose_result = self._pose_landmarker.detect(mp_image)
+                        _, pose_vis, pose_count = self._evaluate_pose(pose_result)
+                        if pose_result and pose_result.pose_landmarks:
+                            landmarks = pose_result.pose_landmarks[0]
+
+                            def to_px(idx: int) -> Optional[tuple[int, int]]:
+                                if idx >= len(landmarks):
+                                    return None
+                                lm = landmarks[idx]
+                                if float(getattr(lm, "visibility", 0.0)) < MIN_POSE_VISIBILITY:
+                                    return None
+                                return (int(lm.x * frame_w), int(lm.y * frame_h))
+
+                            # Torso edges (cyan lines)
+                            for a, b in POSE_SKELETON_EDGES:
+                                pa = to_px(a)
+                                pb = to_px(b)
+                                if pa and pb:
+                                    cv2.line(frame, pa, pb, (255, 200, 0), 1, cv2.LINE_AA)
+
+                            # Landmark dots (yellow)
+                            for idx in POSE_TORSO_INDICES:
+                                p = to_px(idx)
+                                if p:
+                                    cv2.circle(frame, p, 3, (0, 255, 255), -1, cv2.LINE_AA)
                 except Exception as exc:
                     logger.warning("Snapshot annotation failed: %s", exc)
 
@@ -630,6 +794,8 @@ class CameraService:
                     f"baseline={self._baseline_lux:.1f}" if self._baseline_lux is not None else "baseline=--",
                     f"mult={multiplier:.2f}" if multiplier is not None else "mult=--",
                     f"detection={self._last_detection}",
+                    f"src={self._last_detection_source or '--'}",
+                    f"pose_vis={pose_vis:.2f} ({pose_count}/{len(POSE_TORSO_INDICES)})" if pose_count else "pose_vis=--",
                 ]
                 for i, line in enumerate(overlay_lines):
                     y = 14 + i * 14
@@ -688,6 +854,9 @@ class CameraService:
         if self._face_detector:
             self._face_detector.close()
             self._face_detector = None
+        if self._pose_landmarker:
+            self._pose_landmarker.close()
+            self._pose_landmarker = None
         logger.info("Camera service stopped")
 
     def get_status(self) -> dict:
@@ -696,7 +865,9 @@ class CameraService:
             "enabled": self._enabled,
             "paused": self._paused,
             "last_detection": self._last_detection,
+            "detection_source": self._last_detection_source,
             "confidence": self._last_confidence,
+            "pose_available": self._pose_landmarker is not None,
             "ambient_lux": self._last_ambient_lux,
             "ema_lux": self._ema_lux,
             "baseline_lux": self._baseline_lux,
