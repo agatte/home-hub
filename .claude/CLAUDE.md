@@ -155,11 +155,11 @@ Browser / Phone (PWA)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
    │   └── mode-change callbacks ──> MusicMapper, MLLogger, [future: GameDayEngine]
-   ├── ML Services (planned) ──────> see docs/ML_SPEC.md
+   ├── ML Services (shipped) ──────> see docs/ML_SPEC.md
    │   ├── AudioClassifier ────────> YAMNet audio scene classification
    │   ├── BehavioralPredictor ────> LightGBM mode prediction
    │   ├── LightingLearner ────────> adaptive per-light preferences
-   │   ├── CameraService ──────────> MediaPipe presence/posture (opt-in)
+   │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax)
    │   └── MusicBandit ────────────> Thompson sampling playlist selection
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
@@ -225,6 +225,7 @@ Key additions beyond current:
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML (plistlib). Extracts artist play counts, genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` for discovery. Caches in DB (30-day TTL). Mode-specific seed selection with cross-mode dedup.
 - **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
+- **`camera_service.py`** — MediaPipe face detection on the Latitude webcam, opt-in via `camera_enabled`. Polls every 2s at 320×240. 7 absent frames (~14s) → `report_activity(mode="away", source="camera")`. Same frames produce an EMA-smoothed ambient lux reading (α=0.3, ~20s to 95%) that feeds `AutomationEngine._apply_lux_multiplier` for working/relax modes (±15% bri swing, anchored at the user's calibrated baseline). `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records `baseline_lux` using a poll-cadence measurement (burst reads inflate the baseline because auto-gain winds up high — don't remove the sleeps). Pauses during sleeping mode (camera LED off).
 - **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 5s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`.
 - **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS measurement. Party detection: sustained noise >2min + no game = "social". Never records audio.
 
@@ -297,6 +298,7 @@ All messages: JSON with `type` + `data` fields.
 | Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
 | Routines | `/api/routines` | Morning + winddown config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
+| Camera | `/api/camera` | Status (detection, lux, baseline, multiplier), enable/disable, calibrate exposure |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -469,7 +471,7 @@ await save_setting(db, "my_service_config", {"key": "value"})
 # Load
 config = await load_setting(db, "my_service_config")
 ```
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`.
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`, `camera_enabled`, `lux_calibration_config`.
 
 ---
 
@@ -580,6 +582,8 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 | `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ...}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
 | `presence_config` | `{enabled, phone_ip, phone_mac, ping_interval, away_timeout, short_absence_threshold, arrival_volume, departure_fade_seconds}` |
+| `camera_enabled` | `{enabled: bool}` — opt-in toggle for the MediaPipe camera service |
+| `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure calibration + baseline for adaptive brightness (working/relax). Written by `POST /api/camera/calibrate`. |
 
 ---
 

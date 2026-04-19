@@ -364,10 +364,10 @@ detection from the Latitude's 720p webcam.
 | Attribute | Value |
 |-----------|-------|
 | **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Downsampled to 320x240 for inference. |
-| **Preprocessing** | Capture one frame every 5 seconds (not continuous video). Downsample via `cv2.resize()`. No image enhancement. |
-| **Model** | MediaPipe BlazePose (lite variant). Pretrained, runs on CPU at 15-30 FPS at 640x480. For presence-only detection (Phase 2a): MediaPipe Face Detection (even lighter, ~5ms). |
+| **Preprocessing** | Capture one frame every 2 seconds (not continuous video). Downsample via `cv2.resize()`. No image enhancement. |
+| **Model** | MediaPipe BlazePose (lite variant). Pretrained, runs on CPU at 15-30 FPS at 640x480. For presence-only detection (Phase 2a, shipped): MediaPipe Face Detection (even lighter, ~5ms). |
 | **Output classes** | `present_upright`, `present_reclined`, `present_unknown_posture`, `absent` |
-| **Inference frequency** | Every 5 seconds (one frame capture + inference). Triggers "absent" after 3 consecutive absent frames (15 seconds). |
+| **Inference frequency** | Every 2 seconds (one frame capture + inference). Triggers "absent" after 7 consecutive absent frames (~14 seconds). |
 | **Integration point** | New `CameraService` reports to `AutomationEngine.report_activity(source="camera")`. |
 | **CPU cost** | 30-50ms per inference every 5 seconds = <2% CPU sustained |
 | **RAM** | 50-100MB (MediaPipe + OpenCV) |
@@ -399,16 +399,54 @@ else:
 | idle (no process) | reclined | likely watching/relaxing |
 | any | absent (3 frames) | away (within 15s, not 10min) |
 
-**Ambient light measurement (bonus, no additional model):**
+**Ambient light measurement — adaptive brightness (shipped April 18 2026):**
+
+The same webcam frame used for face detection produces a grayscale-mean
+reading that drives a brightness multiplier for `working` and `relax`
+modes. Implementation details:
 
 ```python
-# Average frame luminance as a lux-like reading
+# Per-frame in camera_service.py
 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-ambient_lux = gray.mean()  # 0-255 scale
-# Feed into brightness decisions:
-# dark room (< 50) → lower light brightness to reduce eye strain
-# bright room (> 150) → higher brightness to compensate daylight
+raw_lux = gray.mean()                          # 0-255 scale
+self._ema_lux = α*raw + (1-α)*self._ema_lux    # α = 0.3, 2s polling → ~20s to 95%
+
+# Per-tick in automation_engine.py
+effective = ema_lux - baseline_lux + 90        # shift curve by calibrated baseline
+multiplier = piecewise_linear(                 # LUX_CURVE anchors:
+    effective,                                 #   40  → 1.15 (dark room, lift)
+    [(40, 1.15), (90, 1.00), (180, 0.85)]      #   90  → 1.00 (at calibrated baseline)
+)                                              #   180 → 0.85 (bright room, dim)
+state[light]["bri"] *= multiplier              # per-light, post mode_brightness_config
 ```
+
+**Calibration:** auto-exposure must be off — otherwise the sensor
+compensates and `gray.mean()` becomes a constant. `POST /api/camera/calibrate`
+iteratively picks a fixed exposure in `[-12, 0]` whose steady-state
+reading lands in `[60, 180]`, then records that reading as `baseline_lux`.
+The measurement cadence intentionally mirrors `poll_loop` (sleep, single
+frame) so auto-gain control (AGC) reaches its idle state — a prior
+burst-mode binary search inflated readings by ~5× because AGC wound up
+high during rapid frame reads but settled down between sparse live polls.
+
+**Guardrails:**
+- Only `working` and `relax` modes modulate (`LUX_MODES`). Functional
+  modes (gaming, watching, cooking, social) stay predictable.
+- Mode-scene overrides (`activate_scene` path) bypass the multiplier
+  entirely — explicit intent wins over adaptation.
+- Manual light overrides (4h timeout) are filtered downstream of the
+  multiplier, so hand-set lamps aren't re-modulated.
+- Hysteresis: skip re-apply if multiplier change < 3%.
+- Stale readings (> 30s old) ignored — protects against paused camera.
+- Kitchen-pair rule preserved (multiplier is a scalar, scales both L3/L4
+  identically).
+- Post-sunset CT cutoff (`ct ≥ 333`) untouched — multiplier only affects
+  `bri`, never color.
+
+**Config:** `lux_calibration_config` in `app_settings` —
+`{exposure_value, target_lux, baseline_lux, calibrated_at}`. Missing
+`baseline_lux` (legacy configs from before Apr 18) falls back to the
+default curve center of 90, preserving old behavior until recalibration.
 
 **Privacy (critical):**
 - Frames are `numpy.ndarray` objects in the camera thread. Never serialized to
@@ -421,11 +459,13 @@ ambient_lux = gray.mean()  # 0-255 scale
 - A `CAMERA_ENABLED` env var / app_setting controls the feature. The service
   does not initialize if disabled.
 
-**Files touched:**
-- New `backend/services/ml/camera_service.py`
-- New `backend/api/routes/camera.py` — Settings/status endpoints only, no image streaming
-- `backend/services/automation_engine.py` — Accept camera activity reports
-- `frontend-svelte/src/routes/settings/+page.svelte` — Camera toggle + calibration UI
+**Files (shipped Phase 2a + Adaptive Lux):**
+- `backend/services/camera_service.py` — face detection, calibration, EMA lux, poll loop
+- `backend/api/routes/camera.py` — status, enable, calibrate endpoints (no image streaming)
+- `backend/services/automation_engine.py` — `_apply_lux_multiplier`, `lux_to_multiplier`, camera activity reports
+- `frontend-svelte/src/routes/settings/+page.svelte` — Camera toggle + Calibrate button + live lux/baseline/multiplier readout
+- `frontend-svelte/src/lib/stores/camera.js` + `init.js` — camera store, WS handler
+- `tests/test_camera_service.py` + `tests/test_lux_multiplier.py` — 55 tests
 
 ---
 
@@ -1251,14 +1291,14 @@ down 30% from baseline.
 - ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
 - ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others. Rewards from play/skip behavior in `sonos_playback_events`. Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`. Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate.
 - ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `speech_multiple` ≥80% for 30s → social, `silence` ≥70% for 60s → exit social. Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
-- ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. Captures one frame every 5s, downsampled to 320×240, runs face detection (~5ms CPU). 3 consecutive absent frames (15s) triggers `away` mode — 40× faster than 10-minute idle timer. Also measures ambient light from frame luminance (grayscale mean, 0–255). Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera source priority: `away` does not override process-detected gaming/working/watching; `idle` (present) does not downgrade higher-priority modes. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
+- ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. Captures one frame every 2s, downsampled to 320×240, runs face detection (~5ms CPU). 7 consecutive absent frames (~14s) triggers `away` mode — 40× faster than 10-minute idle timer. Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera source priority: `away` does not override process-detected gaming/working/watching; `idle` (present) does not downgrade higher-priority modes. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
+- ✓ **Adaptive Lux Brightness (shipped April 18, 2026)** — Same camera frames feed a per-poll grayscale mean (`ambient_lux`), EMA-smoothed (α=0.3, 2s poll → ~20s to 95% response), that drives a piecewise-linear brightness multiplier for `working` and `relax` modes only. `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records steady-state `baseline_lux` (typical value 80–150). The multiplier curve is anchored at the calibrated baseline: `(baseline−50 → 1.15×, baseline → 1.00×, baseline+90 → 0.85×)`, clamped outside. Integrated into `AutomationEngine._apply_lux_multiplier` between `_apply_brightness_multiplier` and `_weather_adjust`, skipping mode-scene-override paths and functional modes. Kitchen-pair and post-sunset CT rules preserved (multiplier is scalar, only affects `bri`). 39 unit tests under `tests/test_lux_multiplier.py`.
 
 **Remaining (Phase 2b, deferred):**
 ```
 Camera posture classification (BlazePose upgrade)
   - Posture feeds mode disambiguation (upright vs reclined)
   - Calibration flow in Settings (30s sit/recline)
-  - Ambient lux feeding brightness multipliers
 
 Audio classifier promotion from shadow to active
   - After 7+ days of shadow data, compare ML vs RMS accuracy

@@ -75,7 +75,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 **Active** (running, affecting behavior today):
 - `LightingPreferenceLearner` — EMA-based (α=0.3) per-light preference overlay on `ACTIVITY_LIGHT_STATES`. Overlay applications are logged as `ml_decisions` rows with `decision_source="lighting_learner"` so the Analytics dashboard can audit when the learner is actually changing a value
 - `MusicBandit` — Thompson sampling for mode → Sonos favorite selection
-- `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15s away detection vs the 10-min idle timer
+- `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15s away detection vs the 10-min idle timer. Also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) feeding an adaptive brightness multiplier in working + relax modes so lights subtly adapt to real room conditions (clouds, sunset, lamps)
 - `ScreenSyncService` K-means — 5-cluster dominant color extraction (saturation-weighted 0.7 + luminance balance 0.3)
 - `MLDecisionLogger` — every mode decision logged to `ml_decisions` with source (fusion/ml/rule/time/manual/lighting_learner) + factors
 - `ConfidenceFusion` — 5-signal weighted ensemble (process, camera, audio, behavioral, rule) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence
@@ -343,7 +343,7 @@ External APIs (cloud):
 | value | JSON | Serialized config object |
 | updated_at | DateTime | UTC, auto-updated |
 
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`.
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`, `camera_enabled`, `lux_calibration_config`.
 
 **scenes** — User-created light presets
 | Column | Type | Notes |
@@ -728,6 +728,14 @@ All messages are JSON with `type` + `data` fields.
 | DELETE | `/api/rules/{id}` | Delete a learned rule |
 | POST | `/api/rules/suggestion/accept` | Accept suggestion → set_manual_override |
 | POST | `/api/rules/suggestion/dismiss` | Dismiss current suggestion |
+
+#### Camera — `/api/camera/`
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/camera/status` | Enabled flag, last detection, confidence, EMA lux, baseline, current multiplier, exposure value |
+| POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
+| POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
 
 #### Game Day — `/api/gameday/` **(future)**
 
@@ -1528,7 +1536,7 @@ ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
 - ✓ **ML Phase 1 (Code complete):** Behavioral mode prediction (LightGBM, **shadow mode — not yet promoted, pending ~500 activity events**), adaptive lighting preferences (EMA — **active**), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables. Original Phase 1 exit criteria ("audio classifier active, behavioral outperforming rules") are not yet met — both predictors sit in shadow mode
-- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**, 15s away)
+- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**, 15s away), adaptive lux brightness for working + relax modes (**active** — shipped April 18: calibrated fixed exposure, baseline-anchored piecewise-linear curve, EMA α=0.3 at 2s poll, ±15% bri swing, kitchen-pair-preserving)
 - **ML Phase 3 (In Progress):** ✓ Confidence fusion — 5-signal weighted ensemble (`ConfidenceFusion` service, 228 LOC) combining process detection, camera, audio classifier, behavioral predictor, and rule engine. Auto-apply at 95%+ when idle/away, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. **Remaining:** override rate tracking, A/B comparison of fusion vs rule-engine-only vs priority-only decisions
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
