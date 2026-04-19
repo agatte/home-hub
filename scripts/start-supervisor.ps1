@@ -22,4 +22,4 @@ Set-Location $ProjectRoot
 & $SystemPythonW -m backend.services.pc_agent.supervisor `
     --server http://192.168.1.210:8000 `
     --classifier `
-    --shadow
+    --active

@@ -130,7 +130,8 @@ LIGHT_IDS = {
     "kitchen_back": "4",
 }
 
-# Mode priority — higher index wins when multiple sources report
+# Mode priority — higher index wins when multiple sources report.
+# Enforced universally by the priority guard in report_activity().
 MODE_PRIORITY = {
     "sleeping": 0,
     "away": 0,
@@ -141,6 +142,13 @@ MODE_PRIORITY = {
     "social": 4,
     "gaming": 5,
 }
+
+# Source-staleness cutoff for the priority guard. A current-mode source that
+# hasn't reported in this many seconds is considered dead, and a lower-priority
+# report from a different source may take over. Prevents an abandoned
+# high-priority signal (e.g. stale social) from permanently locking out fresh
+# lower-priority reports. 300s matches the confidence-fusion stale window.
+SOURCE_STALE_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Activity light states — time-aware per-light states
@@ -529,6 +537,8 @@ class AutomationEngine:
         self._override_time: Optional[datetime] = None
         self._last_activity: Optional[str] = None
         self._last_activity_change: Optional[datetime] = None
+        # Per-source liveness for the priority guard (source → last report time).
+        self._last_mode_source_report_at: dict[str, datetime] = {}
 
         # Per-light state tracking for deduplication
         self._last_applied_per_light: dict[str, dict] = {}
@@ -943,34 +953,42 @@ class AutomationEngine:
             else:
                 fusion.report_signal(source, mode, 0.8)
 
-        # Ambient "idle" should not override process-detected activity
-        if source == "ambient" and mode == "idle":
-            if self._mode_source == "process" and self._current_mode != "idle":
-                return
+        # Priority guard — a lower-priority mode can't displace a higher-priority
+        # current mode unless the report comes from the source that owns it
+        # (sources can always update themselves) or the owning source has gone
+        # stale. Enforces MODE_PRIORITY universally so every signal is subject
+        # to the same rule.
+        now = datetime.now(tz=TZ)
+        current_priority = MODE_PRIORITY.get(self._current_mode, 0)
+        new_priority = MODE_PRIORITY.get(mode, 0)
+        if new_priority < current_priority and source != self._mode_source:
+            last_report = self._last_mode_source_report_at.get(self._mode_source)
+            if last_report is not None:
+                age = (now - last_report).total_seconds()
+                if age < SOURCE_STALE_SECONDS:
+                    logger.debug(
+                        "Priority guard: ignored %s %s (p=%d) — %s %s (p=%d) "
+                        "still fresh (age %.0fs)",
+                        source, mode, new_priority,
+                        self._mode_source, self._current_mode,
+                        current_priority, age,
+                    )
+                    # Still update liveness for the reporting source so a fresh
+                    # source doesn't age out while being guarded against.
+                    self._last_mode_source_report_at[source] = now
+                    return
 
-        # Camera "away" should not override active process detection
-        if source == "camera" and mode == "away":
-            if self._mode_source == "process" and self._current_mode not in ("idle", "away"):
-                return
-
-        # Camera "idle" (present) should not downgrade higher-priority modes
-        if source == "camera" and mode == "idle":
-            current_priority = MODE_PRIORITY.get(self._current_mode, 0)
-            if current_priority > MODE_PRIORITY.get("idle", 1):
-                return
+        # Record this source's last-seen time regardless of whether the report
+        # caused a mode change. Source freshness tracks liveness, not edges.
+        self._last_mode_source_report_at[source] = now
 
         old_mode = self._current_mode
-
-        # Ambient social can override process idle, but not gaming
-        if source == "ambient" and mode == "social":
-            if self._current_mode == "gaming":
-                return
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
         self._mode_source = source
         self._last_activity = mode
-        self._last_activity_change = datetime.now(tz=TZ)
+        self._last_activity_change = now
 
         # If manual override is active, update detected mode silently but
         # never clear the override — only the user or the 4h timeout should.

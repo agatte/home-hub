@@ -51,8 +51,12 @@ FORMAT_WIDTH = 2  # 16-bit audio = 2 bytes
 
 # Detection settings
 WINDOW_SECONDS = 5  # RMS averaging window
-SUSTAINED_SECONDS = 120  # 2 minutes of sustained noise = social
-QUIET_SECONDS = 60  # 1 minute of quiet resets social detection
+# RMS now only produces "quiet" edges for the idle/quiet path. Social is
+# YAMNet-gated (speech_multiple class, 0.80 confidence, 30s sustained — see
+# MODE_THRESHOLDS in backend/services/ml/audio_classifier.py). RMS alone
+# can't distinguish "people chatting" from "HVAC humming + typing" and
+# previously latched social on any sustained background noise.
+QUIET_SECONDS = 60  # 1 minute of quiet → report idle
 POLL_INTERVAL = 1  # Read mic every second
 DEFAULT_THRESHOLD = 800  # RMS threshold (calibrated per environment)
 
@@ -87,9 +91,10 @@ class AmbientMonitor:
     ) -> None:
         self._threshold = threshold
         self._rms_history: deque[float] = deque(maxlen=WINDOW_SECONDS)
-        self._loud_start: Optional[float] = None
+        # Track sustained-quiet only — the former sustained-loud/social flag
+        # was removed when YAMNet became the authoritative social gate.
         self._quiet_start: Optional[float] = None
-        self._is_social = False
+        self._was_quiet: bool = False
         self._stream = None
         self._audio = None
 
@@ -211,11 +216,17 @@ class AmbientMonitor:
 
     def check(self) -> Optional[str]:
         """
-        Read audio level and determine if we're in social mode.
+        Read audio level and return a "quiet" edge when the room stays
+        below threshold for ``QUIET_SECONDS``.
+
+        Social detection is delegated to the YAMNet classifier via
+        ``classify_scene()``. RMS alone can't distinguish social chatter
+        from ambient background noise and previously caused false-social
+        latching.
 
         Returns:
-            "social" if sustained noise detected, "quiet" if noise stopped,
-            None if no change.
+            "quiet" if sustained low-noise detected (edge-triggered once
+            per quiet session), None otherwise.
         """
         read_result = self._read_rms()
         if read_result is None:
@@ -235,32 +246,21 @@ class AmbientMonitor:
         now = time.time()
 
         if avg_rms > self._threshold:
-            # Noise above threshold
+            # Above threshold — reset the quiet timer, but don't report
+            # anything (YAMNet is the only path to social now).
             self._quiet_start = None
+            self._was_quiet = False
+            return None
 
-            if self._loud_start is None:
-                self._loud_start = now
+        # Below threshold — accumulate quiet time.
+        if self._quiet_start is None:
+            self._quiet_start = now
+            return None
 
-            elif now - self._loud_start >= SUSTAINED_SECONDS and not self._is_social:
-                self._is_social = True
-                logger.info(
-                    f"Social mode detected — sustained noise for "
-                    f"{SUSTAINED_SECONDS}s (avg RMS: {avg_rms:.0f})"
-                )
-                return "social"
-
-        else:
-            # Below threshold
-            self._loud_start = None
-
-            if self._is_social:
-                if self._quiet_start is None:
-                    self._quiet_start = now
-                elif now - self._quiet_start >= QUIET_SECONDS:
-                    self._is_social = False
-                    self._quiet_start = None
-                    logger.info("Social mode ended — room is quiet")
-                    return "quiet"
+        if not self._was_quiet and now - self._quiet_start >= QUIET_SECONDS:
+            self._was_quiet = True
+            logger.info("Ambient quiet for %ds (avg RMS: %.0f)", QUIET_SECONDS, avg_rms)
+            return "quiet"
 
         return None
 
@@ -404,34 +404,38 @@ def run_monitor(
     try:
         while not _stop.is_set():
             # ── RMS-based detection (always runs) ──────────────
+            # RMS produces "quiet" edges only. Social detection belongs to
+            # YAMNet (see classifier block below). The ambient lane posts
+            # "idle" on quiet edges and on heartbeat to keep the audio_ml
+            # confidence-fusion lane fresh; it never claims "social" from
+            # RMS alone anymore.
             rms_result = monitor.check()
 
-            if rms_result in ("social", "quiet"):
-                mode = "social" if rms_result == "social" else "idle"
+            if rms_result == "quiet":
                 try:
                     resp = client.post(
                         activity_endpoint,
                         json={
-                            "mode": mode,
+                            "mode": "idle",
                             "source": "ambient",
                             "detected_at": datetime.now().isoformat(),
                         },
                     )
                     resp.raise_for_status()
-                    logger.info(f"Reported '{mode}' to server (RMS)")
+                    logger.info("Reported 'idle' to server (RMS quiet edge)")
                     last_heartbeat = time.time()
                 except httpx.HTTPError as e:
                     logger.warning(f"Failed to report RMS result to server: {e}")
             else:
-                # No edge fired — emit a heartbeat so audio_ml fusion stays fresh.
+                # No edge fired — emit an idle heartbeat so audio_ml fusion
+                # stays fresh. Never claims social; YAMNet owns that signal.
                 now_hb = time.time()
                 if now_hb - last_heartbeat >= HEARTBEAT_INTERVAL:
-                    mode = "social" if monitor._is_social else "idle"
                     try:
                         resp = client.post(
                             activity_endpoint,
                             json={
-                                "mode": mode,
+                                "mode": "idle",
                                 "source": "ambient",
                                 "detected_at": datetime.now().isoformat(),
                             },
