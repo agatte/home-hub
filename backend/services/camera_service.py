@@ -725,16 +725,20 @@ class CameraService:
     def _apply_posture_hysteresis(self, candidate: Optional[str]) -> None:
         """Update ``self._last_posture`` via a sustained-candidate rule.
 
-        Mirrors ``_apply_zone_hysteresis``: brief blanks (face-path hits,
-        pose misses) preserve the committed posture; a new posture must
-        hold for ``POSTURE_HYSTERESIS_SECONDS`` before replacing the
-        committed value.
+        Mirrors ``_apply_zone_hysteresis`` with one key difference: posture
+        only fires on pose-path polls, and pose is the fallback (~1 in ~10
+        polls at 2–3m corner distance — face path dominates). Treating a
+        ``None`` as "reset the pending candidate" would erase progress on
+        every intervening face-only poll and posture would never commit.
+
+        So ``None`` means "signal not observed this poll" — preserve the
+        pending candidate and its start time. The next non-None poll either
+        reinforces the candidate (letting elapsed time commit it) or
+        replaces it with a new candidate and restarts the timer.
         """
         now = datetime.now(timezone.utc)
 
         if candidate is None:
-            self._candidate_posture = None
-            self._candidate_posture_since = None
             return
 
         if candidate == self._last_posture:
