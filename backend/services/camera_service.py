@@ -80,6 +80,25 @@ POSE_SKELETON_EDGES = (
     (POSE_NOSE, POSE_RIGHT_SHOULDER),
 )
 
+# Zone mapping — the Latitude's corner view splits the bedroom into two
+# semantic zones along the horizontal axis: the desk (left ~1/3 of frame)
+# where working / gaming / watching happen, and the bed (right ~2/3) where
+# relax / sleeping happen. The detected person's center-X (from face bbox
+# or pose torso) is classified against ZONE_DESK_THRESHOLD.
+#
+# Expose-only in this pass — zone is published to status / WebSocket /
+# ML logger but no automation behavior consumes it yet.
+ZONE_DESK = "desk"
+ZONE_BED = "bed"
+# Normalized X (detected center / frame width). Corner view places desk
+# around ~0.15 and bed roughly 0.4–0.9; 0.40 catches the accent-chair
+# transition region. Hysteresis (below) absorbs brief crossings.
+ZONE_DESK_THRESHOLD = 0.40
+# A new candidate zone must hold this many seconds before it replaces the
+# committed zone. 15s matches the "sustained detection" character of the
+# absent threshold (7 frames × 2s poll ≈ 14s).
+ZONE_HYSTERESIS_SECONDS = 15
+
 # Ambient lux calibration constants. Auto-exposure is disabled when a
 # calibration is present so gray.mean() reflects actual room brightness
 # instead of the webcam compensating with its aperture.
@@ -146,6 +165,11 @@ class CameraService:
         self._last_detection_source: Optional[str] = None  # "face" | "pose" | None
         self._last_ambient_lux: float = 0.0
         self._was_absent: bool = False
+
+        # Zone mapping — committed zone + pending-candidate state (hysteresis).
+        self._last_zone: Optional[str] = None            # "desk" | "bed" | None
+        self._candidate_zone: Optional[str] = None       # pending zone awaiting commit
+        self._candidate_zone_since: Optional[datetime] = None
 
         # Ambient lux calibration + smoothing
         self._calibrated: bool = False
@@ -497,12 +521,15 @@ class CameraService:
                 source = result.get("source")
                 pose_landmark_count = result.get("pose_landmark_count", 0)
                 ambient_lux = result["ambient_lux"]
+                frame_zone = result.get("zone")
 
                 self._last_detection = status
                 self._last_confidence = confidence
                 self._last_detection_source = source
                 self._last_ambient_lux = ambient_lux
                 self._update_ema_lux(ambient_lux)
+                # Run zone hysteresis — may commit a new self._last_zone.
+                self._apply_zone_hysteresis(frame_zone)
 
                 # Keep the camera lane fresh in confidence fusion every cycle.
                 # The edge-triggered report_activity() calls below drive actual
@@ -557,6 +584,8 @@ class CameraService:
                             "pose_landmark_count": pose_landmark_count,
                             "consecutive_absent": self._consecutive_absent,
                             "ambient_lux": ambient_lux,
+                            "zone": self._last_zone,
+                            "frame_zone": frame_zone,
                         },
                         applied=self._consecutive_absent >= ABSENT_THRESHOLD or (
                             status == "present" and self._was_absent is False
@@ -585,6 +614,7 @@ class CameraService:
                         "calibrated": self._calibrated,
                         "current_multiplier": current_multiplier,
                         "consecutive_absent": self._consecutive_absent,
+                        "zone": self._last_zone,
                     },
                 )
 
@@ -593,6 +623,50 @@ class CameraService:
             except Exception as exc:
                 logger.error("Camera poll error: %s", exc, exc_info=True)
                 await asyncio.sleep(POLL_INTERVAL)
+
+    def _apply_zone_hysteresis(self, candidate: Optional[str]) -> None:
+        """Update ``self._last_zone`` via a sustained-candidate rule.
+
+        - ``candidate is None`` (no detection this frame): clear any pending
+          candidacy but keep the committed zone intact — a brief absence
+          must not lose the last known zone.
+        - ``candidate == self._last_zone``: steady state, clear candidacy.
+        - Otherwise: start or continue a candidacy timer; only commit the new
+          zone after ``ZONE_HYSTERESIS_SECONDS`` of sustained detection. This
+          absorbs transient detections (e.g. walking through the accent chair
+          region between desk and bed) without changing the zone.
+        """
+        now = datetime.now(timezone.utc)
+
+        if candidate is None:
+            self._candidate_zone = None
+            self._candidate_zone_since = None
+            return
+
+        if candidate == self._last_zone:
+            self._candidate_zone = None
+            self._candidate_zone_since = None
+            return
+
+        if candidate != self._candidate_zone:
+            self._candidate_zone = candidate
+            self._candidate_zone_since = now
+            return
+
+        if self._candidate_zone_since is None:
+            self._candidate_zone_since = now
+            return
+
+        elapsed = (now - self._candidate_zone_since).total_seconds()
+        if elapsed >= ZONE_HYSTERESIS_SECONDS:
+            previous = self._last_zone or "unknown"
+            logger.info(
+                "Zone changed %s → %s (held %.1fs)",
+                previous, candidate, elapsed,
+            )
+            self._last_zone = candidate
+            self._candidate_zone = None
+            self._candidate_zone_since = None
 
     def _evaluate_pose(self, pose_result: Any) -> tuple[bool, float, int]:
         """Decide whether a pose result constitutes a visible person.
@@ -655,32 +729,52 @@ class CameraService:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-            # Fast path — face detection (~5ms)
+            # Fast path — face detection (~15ms at 640×480)
             face_results = self._face_detector.detect(mp_image)
             if face_results.detections:
                 best = max(
                     face_results.detections,
                     key=lambda d: d.categories[0].score,
                 )
+                # Zone from face bbox center-X (normalized by frame width).
+                bbox = best.bounding_box
+                cx = (bbox.origin_x + bbox.width / 2) / max(w, 1)
+                zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
                 return {
                     "status": "present",
                     "confidence": float(best.categories[0].score),
                     "source": "face",
                     "pose_landmark_count": 0,
                     "ambient_lux": ambient_lux,
+                    "zone": zone,
                 }
 
-            # Fallback — pose landmarker (~25ms, only when face missed)
+            # Fallback — pose landmarker (~60ms at 640×480, only on face miss)
             if self._pose_landmarker is not None:
                 pose_result = self._pose_landmarker.detect(mp_image)
                 is_present, mean_vis, count = self._evaluate_pose(pose_result)
                 if is_present:
+                    # Zone from torso midline (average of visible shoulder X).
+                    zone = None
+                    landmarks = pose_result.pose_landmarks[0]
+                    shoulders = [
+                        landmarks[idx]
+                        for idx in (POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER)
+                        if idx < len(landmarks)
+                        and float(getattr(landmarks[idx], "visibility", 0.0))
+                        >= MIN_POSE_VISIBILITY
+                    ]
+                    if shoulders:
+                        # MediaPipe pose landmark .x is already normalized 0–1.
+                        cx = sum(s.x for s in shoulders) / len(shoulders)
+                        zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
                     return {
                         "status": "present",
                         "confidence": mean_vis,
                         "source": "pose",
                         "pose_landmark_count": count,
                         "ambient_lux": ambient_lux,
+                        "zone": zone,
                     }
 
             return {
@@ -689,6 +783,7 @@ class CameraService:
                 "source": None,
                 "pose_landmark_count": 0,
                 "ambient_lux": ambient_lux,
+                "zone": None,
             }
 
         finally:
@@ -789,11 +884,36 @@ class CameraService:
                 except Exception as exc:
                     logger.warning("Snapshot annotation failed: %s", exc)
 
+                # Zone threshold line + DESK/BED labels so framing and zone
+                # classification are visible side-by-side in the overlay.
+                try:
+                    zone_x = int(ZONE_DESK_THRESHOLD * frame_w)
+                    cv2.line(frame, (zone_x, 0), (zone_x, frame_h),
+                             (180, 180, 180), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "DESK", (6, frame_h - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, "DESK", (6, frame_h - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (220, 220, 220), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "BED", (zone_x + 6, frame_h - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, "BED", (zone_x + 6, frame_h - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (220, 220, 220), 1, cv2.LINE_AA)
+                except Exception as exc:
+                    logger.debug("Zone overlay failed: %s", exc)
+
                 multiplier: Optional[float] = None
                 if self._calibrated and self._ema_lux is not None:
                     from backend.services.automation_engine import lux_to_multiplier
                     baseline = self._baseline_lux if self._baseline_lux is not None else 90.0
                     multiplier = lux_to_multiplier(float(self._ema_lux), float(baseline))
+
+                zone_display = self._last_zone or "--"
+                if self._candidate_zone and self._candidate_zone != self._last_zone:
+                    zone_display += f" (→{self._candidate_zone})"
 
                 overlay_lines = [
                     f"ema_lux={self._ema_lux:.1f}" if self._ema_lux is not None else "ema_lux=--",
@@ -802,6 +922,7 @@ class CameraService:
                     f"detection={self._last_detection}",
                     f"src={self._last_detection_source or '--'}",
                     f"pose_vis={pose_vis:.2f} ({pose_count}/{len(POSE_TORSO_INDICES)})" if pose_count else "pose_vis=--",
+                    f"zone={zone_display}",
                 ]
                 for i, line in enumerate(overlay_lines):
                     y = 14 + i * 14
@@ -883,4 +1004,6 @@ class CameraService:
             "consecutive_absent": self._consecutive_absent,
             "poll_interval": POLL_INTERVAL,
             "absent_threshold": ABSENT_THRESHOLD,
+            "zone": self._last_zone,
+            "candidate_zone": self._candidate_zone,
         }
