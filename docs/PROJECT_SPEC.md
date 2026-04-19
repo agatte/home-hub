@@ -698,12 +698,15 @@ All messages are JSON with `type` + `data` fields.
 | GET | `/api/learning/status` | ML model health, lighting learner + behavioral predictor status |
 | GET | `/api/learning/decisions` | Recent ML decisions with reasoning (`?limit=20`) |
 | GET | `/api/learning/accuracy` | Prediction accuracy over time window (`?days=7`) |
+| GET | `/api/learning/override-rate` | User override rate (7d + 30d). Primary Phase 3 autonomy gate metric (<2/day, 30d). `?window_minutes=5` tunes the "override" window |
+| GET | `/api/learning/compare` | A/B accuracy of fusion vs rule-engine vs process-priority on the same backfilled row set (`?days=14`) |
 | GET | `/api/learning/lighting` | Current learned lighting preferences |
 | POST | `/api/learning/lighting/recalculate` | Trigger immediate lighting preference recalculation |
 | GET | `/api/learning/predictor` | Behavioral predictor detailed status |
 | POST | `/api/learning/predictor/promote` | Promote predictor from shadow to active |
 | POST | `/api/learning/predictor/demote` | Demote predictor back to shadow mode |
 | POST | `/api/learning/retrain` | Trigger immediate retrain of all ML models |
+| POST | `/api/learning/retune-weights` | Manually trigger the fusion weight-tuning job (normally 3:30 AM cron) |
 | DELETE | `/api/learning/reset` | Wipe all ML models and decision/metric tables |
 
 #### Events — `/api/events/`
@@ -1572,5 +1575,4 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 - **Not a full smart home OS** — Not replacing Home Assistant, HomeKit, or SmartThings. This is a personal dashboard and automation layer.
 - **Not an Alexa replacement** — Alexa handles general voice commands. Home Hub extends it for custom automation via Fauxmo/custom skill.
 - **Not a sports app** — Game Day is for the Colts experience, not a general sports tracker
-- **Not a music streaming service** — Sonos and Apple Music handle playback. Home Hub orchestrates what plays and when.
 - **Not a music streaming service** — Sonos and Apple Music handle playback. Home Hub orchestrates what plays and when.

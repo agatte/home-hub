@@ -57,7 +57,7 @@ rare.
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
 | **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection). Remaining for Phase 2b: posture classification (BlazePose upgrade) | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
-| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (5-signal weighted ensemble, auto-apply at 95%+, stale override at 98%+). ✓ Live pipeline dashboard with per-signal gauges. Remaining: accuracy-driven weight learning, A/B comparison vs rule engine, override rate tracking | Fewer than 2 manual overrides per day |
+| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (5-signal weighted ensemble, auto-apply at 95%+, stale override at 92%+). ✓ Live pipeline dashboard with per-signal gauges. ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: analytics-page dashboard UI, threshold tuning on live FP data | Fewer than 2 manual overrides per day |
 
 ### Design Principles
 
@@ -1320,18 +1320,22 @@ Audio classifier promotion from shadow to active
 **Shipped (April 18, 2026):**
 - ✓ **Accuracy-driven weight learning** — `fusion_weight_tuning` ScheduledTask at 3:30 AM daily. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion rows with `factors.signal_details`, derives per-source accuracy, hands it to `ConfidenceFusion.update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. Full `signals` dict now persisted in `MLDecision.factors` so historical decisions carry the per-source vote context.
 
+**Shipped (April 19, 2026):**
+- ✓ **Fusion shadow logging** — every 60s tick writes an `applied=False, broadcast=False` row to `ml_decisions` with full `signal_details`. Previously only acting decisions were logged (1 row ever), so weight tuning had nothing to learn from. Shadow rows persist to SQLite but don't broadcast — keeps the pipeline WebSocket quiet.
+- ✓ **Windowed `actual_mode` backfill** — `MLDecisionLogger.on_mode_change` tracks `_last_mode` and `_last_transition_at` and bulk-UPDATEs every row in the just-ended session window. Capped at 2h so system-start / overnight gaps can't mislabel. Was single-row before, which left 99%+ of shadow rows without ground truth.
+- ✓ **Override-rate metric** — `GET /api/learning/override-rate` returns 7d + 30d rates. An "override" is a `source='manual'` event whose mode differs from the nearest prior `activity_events` row within `window_minutes` (default 5). Cold manual switches (no differing prior event) don't count. Primary Phase 3 autonomy gate metric.
+- ✓ **A/B comparison endpoint** — `GET /api/learning/compare` computes fusion vs rule-engine-only vs process-priority accuracy on the same fusion-decision row set (where `actual_mode` is backfilled). All three strategies read from the same `factors.signal_details` rows, so the comparison is apples-to-apples.
+
 **Remaining:**
-- A/B comparison: fusion decisions vs rule engine vs priority-only
-- Override rate tracking dashboard
-- Threshold tuning based on observed false positive rate
+- Analytics-page dashboard UI (frontend Svelte card) surfacing `/override-rate` and `/compare`
+- Threshold tuning based on observed false positive rate once ≥30 days of shadow+backfill data accrues
 
 ```
-Current:    Weight tuning wired. Meaningful updates accumulate
-            as fusion decisions with signal_details factor data
-            build up and get actual_mode backfills.
+Current:    Shadow logging + backfill now live. By 2026-04-22 cron,
+            expect hundreds of fusion rows with actual_mode filled.
+            /override-rate and /compare answer immediately.
 
-Next:       Override rate monitoring on analytics page.
-            A/B compare against rule-only baseline.
+Next:       Analytics card surfacing override rate + strategy A/B.
             Lower auto-apply threshold if false positives < 1/day.
 
 Target:     Fewer than 2 manual overrides per day, sustained

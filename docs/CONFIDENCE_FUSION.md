@@ -344,4 +344,4 @@ The whole thing updates in real-time via the existing `pipeline_state` WebSocket
 
 Fusion is the piece that makes Home Hub's ML actually *feel* intelligent. Before, each specialist knew part of the story. Now the system has a shared view of what's happening and can catch cases no individual signal could catch on its own — like realizing you've left even when a game process is still running.
 
-It's also the foundation for Phase 3 full autonomy. With accuracy-driven weight learning shipped, the remaining gate is: override rate sustained below 2/day for 30 days → the system has earned the right to run on autopilot.
+It's also the foundation for Phase 3 full autonomy. With accuracy-driven weight learning shipped, the remaining gate is: override rate sustained below 2/day for 30 days → the system has earned the right to run on autopilot. Rate is tracked at `GET /api/learning/override-rate` (7d + 30d windows). A/B accuracy of fusion vs rule-engine vs process-priority on the same backfilled row set lives at `GET /api/learning/compare`.
