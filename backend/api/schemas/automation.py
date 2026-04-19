@@ -87,10 +87,6 @@ class AutomationConfig(BaseModel):
         default=None,
         description="Hue effect to activate in gaming mode (e.g., 'candle')",
     )
-    social_effect: Optional[str] = Field(
-        default="prism",
-        description="Hue effect to activate in social/party mode",
-    )
 
 
 class DayScheduleSchema(BaseModel):
@@ -102,6 +98,10 @@ class DayScheduleSchema(BaseModel):
     ramp_duration_minutes: int = Field(default=60, ge=10, le=240)
     evening_start_hour: int = Field(default=18, ge=0, le=23)
     winddown_start_hour: int = Field(default=21, ge=0, le=23)
+    late_night_start_hour: int = Field(
+        default=23, ge=0, le=23,
+        description="Hour after which relax enters the Moss & Ember late-night palette",
+    )
 
     @model_validator(mode="after")
     def validate_hour_order(self):
@@ -110,6 +110,8 @@ class DayScheduleSchema(BaseModel):
             raise ValueError("Ramp must start at or after wake time")
         if self.evening_start_hour >= self.winddown_start_hour:
             raise ValueError("Wind-down must start after evening")
+        if self.late_night_start_hour < self.winddown_start_hour:
+            raise ValueError("Late night must start at or after wind-down")
         return self
 
 

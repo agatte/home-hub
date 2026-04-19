@@ -187,9 +187,3 @@ class TestAutomationEngine:
         engine.override_timeout_hours = 0
         assert engine.override_timeout_hours >= 1
 
-    def test_social_style_setter_validates(self, engine):
-        engine.social_style = "club"
-        assert engine.social_style == "club"
-        engine.social_style = "nonexistent_style"
-        # Should stay at previous valid value
-        assert engine.social_style == "club"

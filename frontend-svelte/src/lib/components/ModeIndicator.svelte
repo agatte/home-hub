@@ -2,15 +2,7 @@
   import { automation } from '$lib/stores/automation.js'
   import { MODE_CONFIG, modeColor } from '$lib/theme.js'
 
-  const SOCIAL_STYLE_LABELS = {
-    color_cycle: 'Color Cycle',
-    club: 'Club',
-    rave: 'Rave',
-    fire_and_ice: 'Fire & Ice',
-  }
-
   $: config = MODE_CONFIG[$automation.mode] || MODE_CONFIG.idle
-  $: showSocialDetail = $automation.mode === 'social' && $automation.social_style
   $: color = modeColor($automation.mode)
 </script>
 
@@ -19,9 +11,6 @@
   <div class="mode-detail">
     <span class="mode-label-text" style="color: {color}">
       {config.label}
-      {#if showSocialDetail}
-        <span class="mode-sub"> — {SOCIAL_STYLE_LABELS[$automation.social_style ?? ''] || $automation.social_style}</span>
-      {/if}
     </span>
   </div>
 </div>
@@ -55,10 +44,5 @@
     font-family: var(--font-body);
     font-size: 14px;
     font-weight: 500;
-  }
-
-  .mode-sub {
-    font-weight: 400;
-    color: var(--text-secondary);
   }
 </style>

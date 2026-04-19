@@ -590,46 +590,6 @@ button:active, .btn:active, [role="button"]:active {
   opacity: 0.7;
 }
 
-/* Party style bar */
-.social-style-bar {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-  padding: 8px 0;
-}
-
-.social-style-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.social-style-btn:hover {
-  background: var(--bg-card-hover);
-  border-color: #f472b6;
-  color: var(--text-primary);
-}
-
-.social-style-btn-active {
-  background: #f472b6;
-  border-color: #f472b6;
-  color: white;
-}
-
-.social-style-btn-active:hover {
-  background: #ec4899;
-  color: white;
-}
-
 /* Native scenes & effects */
 .native-scene-section {
   margin-top: 16px;

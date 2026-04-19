@@ -1,9 +1,8 @@
 <script>
   import { automation } from '$lib/stores/automation.js'
-  import { setManualMode, setSocialStyle } from '$lib/stores/init.js'
+  import { setManualMode } from '$lib/stores/init.js'
   import { apiPost } from '$lib/api.js'
   import { modeColor } from '$lib/theme.js'
-  import { slide } from 'svelte/transition'
   import { Power, Gamepad2, Monitor, Tv, ChefHat, Flame, PartyPopper, Moon, Bot } from 'lucide-svelte'
 
   const CARDS = [
@@ -18,17 +17,8 @@
     { id: 'auto',      label: 'Auto',      icon: Bot,          isAction: false },
   ]
 
-  const SOCIAL_STYLES = [
-    { id: 'color_cycle',  label: 'Cycle' },
-    { id: 'club',         label: 'Club' },
-    { id: 'rave',         label: 'Rave' },
-    { id: 'fire_and_ice', label: 'Fire & Ice' },
-  ]
-
   $: currentMode = $automation.mode
   $: manualOverride = $automation.manual_override
-  $: socialStyle = $automation.social_style
-  $: showSocialStyles = currentMode === 'social'
 
   // Build a reactive map of which card is active — recalculates when
   // currentMode or manualOverride change, which fixes the Svelte 4
@@ -93,20 +83,6 @@
       </button>
     {/each}
   </div>
-
-  {#if showSocialStyles}
-    <div class="social-row" transition:slide={{ duration: 250 }}>
-      {#each SOCIAL_STYLES as style}
-        <button
-          class="social-pill"
-          class:social-pill-active={socialStyle === style.id}
-          on:click={() => setSocialStyle(style.id)}
-        >
-          {style.label}
-        </button>
-      {/each}
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -495,44 +471,6 @@
   @keyframes dotFadeIn {
     from { opacity: 0; transform: translateX(-50%) scale(0); }
     to { opacity: 1; transform: translateX(-50%) scale(1); }
-  }
-
-  /* --- Social sub-style pills --- */
-  .social-row {
-    display: flex;
-    gap: 8px;
-    justify-content: center;
-    margin-top: 14px;
-    flex-wrap: wrap;
-  }
-
-  .social-pill {
-    padding: 6px 16px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-secondary);
-    font-family: var(--font-body);
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .social-pill:hover {
-    border-color: var(--border-hover);
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .social-pill-active {
-    background: rgba(244, 114, 182, 0.15);
-    border-color: rgba(244, 114, 182, 0.3);
-    color: #f472b6;
-  }
-
-  .social-pill:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
 
   /* --- Reduced motion --- */

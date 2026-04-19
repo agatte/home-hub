@@ -145,48 +145,6 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
     return {"status": "ok", "mode": override.mode, "source": "manual"}
 
 
-@router.get("/social-styles")
-async def get_social_styles(request: Request) -> dict:
-    """List available party sub-modes for social mode."""
-    from backend.services.automation_engine import SOCIAL_STYLES
-
-    engine = getattr(request.app.state, "automation", None)
-    current = engine.social_style if engine else "color_cycle"
-
-    return {
-        "styles": [
-            {
-                "id": style_id,
-                "display_name": style["display_name"],
-                "description": style["description"],
-            }
-            for style_id, style in SOCIAL_STYLES.items()
-        ],
-        "active": current,
-    }
-
-
-@router.post("/social-style")
-async def set_social_style(request: Request) -> dict:
-    """Switch the active party sub-mode."""
-    engine = getattr(request.app.state, "automation", None)
-    if not engine:
-        raise HTTPException(status_code=503, detail="Automation engine not initialized")
-
-    body = await request.json()
-    style = body.get("style", "")
-
-    from backend.services.automation_engine import SOCIAL_STYLES
-    if style not in SOCIAL_STYLES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown style: {style}. Options: {list(SOCIAL_STYLES.keys())}",
-        )
-
-    await engine.set_social_style(style)
-    return {"status": "ok", "style": style}
-
-
 @router.post("/screen-color")
 async def receive_screen_color(report: ScreenColorReport, request: Request) -> dict:
     """
@@ -296,7 +254,6 @@ async def get_config(request: Request) -> AutomationConfig:
         enabled=engine.enabled,
         override_timeout_hours=engine.override_timeout_hours,
         gaming_effect=engine.gaming_effect,
-        social_effect=engine.social_effect,
     )
 
 
@@ -310,7 +267,6 @@ async def update_config(config: AutomationConfig, request: Request) -> dict:
     engine.enabled = config.enabled
     engine.override_timeout_hours = config.override_timeout_hours
     engine.gaming_effect = config.gaming_effect
-    engine.social_effect = config.social_effect
 
     logger.info(f"Automation config updated: enabled={config.enabled}")
     return {"status": "ok"}
@@ -351,6 +307,7 @@ async def get_schedule(request: Request) -> dict:
             "ramp_duration_minutes": sc.weekday.ramp_duration_minutes,
             "evening_start_hour": sc.weekday.evening_start_hour,
             "winddown_start_hour": sc.weekday.winddown_start_hour,
+            "late_night_start_hour": sc.weekday.late_night_start_hour,
         },
         "weekend": {
             "wake_hour": sc.weekend.wake_hour,
@@ -359,6 +316,7 @@ async def get_schedule(request: Request) -> dict:
             "ramp_duration_minutes": sc.weekend.ramp_duration_minutes,
             "evening_start_hour": sc.weekend.evening_start_hour,
             "winddown_start_hour": sc.weekend.winddown_start_hour,
+            "late_night_start_hour": sc.weekend.late_night_start_hour,
         },
     }
 

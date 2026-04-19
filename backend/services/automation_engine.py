@@ -59,6 +59,10 @@ class DaySchedule:
     ramp_duration_minutes: int = 60
     evening_start_hour: int = 18
     winddown_start_hour: int = 21
+    # Late-night period (relax-only override). From this hour until wake_hour
+    # the relax palette switches to "Moss & Ember" — deeper, mossier, cave/den.
+    # Modes that don't define a late_night state fall back to their night state.
+    late_night_start_hour: int = 23
 
 
 @dataclass
@@ -150,13 +154,29 @@ _LIGHT_OFF = {"on": False}
 WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
 
 # Auto-activate effects based on mode + time period.
-# None = no auto effect. Social mode handles its own effects via SOCIAL_STYLES.
-EFFECT_AUTO_MAP: dict[str, dict[str, str | None]] = {
-    "relax":    {"day": "opal",    "evening": "candle",  "night": "fire"},
-    "working":  {"day": None,      "evening": None,      "night": None},
-    "gaming":   {"day": None,      "evening": None,      "night": None},
-    "cooking":  {"day": None,      "evening": None,      "night": None},
-    "watching": {"day": None,      "evening": "glisten", "night": "glisten"},
+# Each cell is either:
+#   None           — no effect
+#   {"effect": name, "lights": None}          — apply to all mapped lights
+#   {"effect": name, "lights": ["1", "2"]}    — apply to specific v1 light IDs only
+# Relax uses per-light targeting so the moss-shadow kitchen pendants
+# (L3/L4) don't get masked by flame-colored candle/fire flicker.
+# Social is static (no cycling) so it has no entry and _get_desired_effect
+# returns None for it.
+EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
+    "relax": {
+        "day":        {"effect": "opal",   "lights": None},         # All lights
+        "evening":    {"effect": "candle", "lights": ["1", "2"]},   # Living only
+        "night":      {"effect": "fire",   "lights": ["1", "2"]},   # Living only
+        "late_night": {"effect": "fire",   "lights": ["1", "2"]},   # Living only
+    },
+    "working":  {"day": None, "evening": None, "night": None},
+    "gaming":   {"day": None, "evening": None, "night": None},
+    "cooking":  {"day": None, "evening": None, "night": None},
+    "watching": {
+        "day":     None,
+        "evening": {"effect": "glisten", "lights": None},
+        "night":   {"effect": "glisten", "lights": None},
+    },
 }
 
 # Mode-specific transition speeds (deciseconds: 10 = 1 second).
@@ -256,36 +276,55 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": _LIGHT_OFF,                              # PAIRED off
         },
     },
-    # Base state for social/party — no time awareness (flat, no period keys).
-    # Warm amber-peach palette; sub-styles override when active.
+    # ── Social ────────────────────────────────────────────────────────
+    # "Velvet Speakeasy" — single static palette for small hangouts (drinks,
+    # 2–4 guests, chill entertaining). Dusty rose statement on L1 is the
+    # industry skin-flatter key; matched burnt-orange pendants provide room
+    # glow. No time awareness, no sub-styles, no cycling effect — static
+    # saturation does the work.
     "social": {
-        "1": {"on": True, "bri": 200, "hue": 7000,  "sat": 200},   # Warm amber-peach
-        "2": {"on": True, "bri": 180, "hue": 56000, "sat": 180},   # Soft magenta-pink
-        "3": {"on": True, "bri": 220, "hue": 5000,  "sat": 220},   # Rich amber (kitchen gathering)
-        "4": {"on": True, "bri": 160, "hue": 10000, "sat": 160},   # Warm coral
+        "1": {"on": True, "bri": 140, "hue": 58500, "sat": 160},   # Dusty rose (statement)
+        "2": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},   # Cognac amber
+        "3": {"on": True, "bri": 110, "hue": 4000,  "sat": 220},   # Burnt orange (matched pair)
+        "4": {"on": True, "bri": 110, "hue": 4000,  "sat": 220},   # Burnt orange (matched pair)
     },
     # ── Relax ─────────────────────────────────────────────────────────
-    # HSB warm gradient, amber/gold tones. Kitchen L3/L4 are FREE to diverge
-    # here (and in social) — the point is depth through per-light variance.
-    # Effects: opal (day), candle (evening/night) per EFFECT_AUTO_MAP.
+    # "Moss & Candlelight" biophilic forest-floor palette. Living-room
+    # fabric-shaded lamps (L1/L2) run warm ember; kitchen pendants (L3/L4)
+    # hold muted moss/sage so they read as foliage-shadow canopy — echoing
+    # the plants and the apartment's olive/sage/teal accent palette rather
+    # than drowning the room in uniform amber. Kitchen L3/L4 are FREE to
+    # diverge (depth via per-light variance).
+    # Candle/fire effects are scoped to L1/L2 in EFFECT_AUTO_MAP so the
+    # moss pendants stay static.
+    # Hue anchors: 4500=warm red, 6000–8000=amber/honey, 23500–25500=sage→forest.
     "relax": {
         "day": {
-            "1": {"on": True, "bri": 100, "hue": 7000, "sat": 220},   # Warm yellow-amber wash
-            "2": {"on": True, "bri": 80,  "hue": 8000, "sat": 200},   # Warmer yellow
-            "3": {"on": True, "bri": 60,  "hue": 6000, "sat": 230},   # Yellow-orange
-            "4": {"on": True, "bri": 50,  "hue": 5500, "sat": 240},   # Deepest orange
+            "1": {"on": True, "bri": 95, "hue": 7500,  "sat": 200},   # Honey amber
+            "2": {"on": True, "bri": 85, "hue": 8000,  "sat": 190},   # Warm honey
+            "3": {"on": True, "bri": 60, "hue": 23500, "sat": 140},   # Dusty sage
+            "4": {"on": True, "bri": 55, "hue": 24000, "sat": 150},   # Dusty sage
         },
         "evening": {
-            "1": {"on": True, "bri": 70,  "hue": 6500, "sat": 230},   # Amber
-            "2": {"on": True, "bri": 50,  "hue": 7500, "sat": 220},   # Warm yellow
-            "3": {"on": True, "bri": 40,  "hue": 5500, "sat": 240},   # Orange
-            "4": {"on": True, "bri": 30,  "hue": 5000, "sat": 250},   # Deep orange
+            "1": {"on": True, "bri": 70, "hue": 6000,  "sat": 230},   # Ember
+            "2": {"on": True, "bri": 55, "hue": 6500,  "sat": 220},   # Warm ember
+            "3": {"on": True, "bri": 40, "hue": 24000, "sat": 180},   # Muted moss
+            "4": {"on": True, "bri": 32, "hue": 24500, "sat": 190},   # Deeper moss
         },
         "night": {
-            "1": {"on": True, "bri": 40,  "hue": 5500, "sat": 240},   # Dim warm amber
-            "2": {"on": True, "bri": 25,  "hue": 6000, "sat": 230},   # Faint amber glow
-            "3": {"on": True, "bri": 15,  "hue": 4500, "sat": 254},   # Ember
-            "4": {"on": True, "bri": 8,   "hue": 4000, "sat": 254},   # Dying coal
+            "1": {"on": True, "bri": 38, "hue": 5000,  "sat": 254},   # Deep ember
+            "2": {"on": True, "bri": 28, "hue": 4500,  "sat": 254},   # Deeper ember
+            "3": {"on": True, "bri": 14, "hue": 25000, "sat": 210},   # Forest shadow
+            "4": {"on": True, "bri": 10, "hue": 25000, "sat": 220},   # Forest shadow
+        },
+        # "Moss & Ember" — post-11pm cave/den variant. Deeper ember on lamps,
+        # hunter-green shadow in the kitchen. Only relax defines late_night;
+        # other modes fall back to their night state.
+        "late_night": {
+            "1": {"on": True, "bri": 28, "hue": 3000,  "sat": 254},   # Deep ember red-orange
+            "2": {"on": True, "bri": 22, "hue": 2500,  "sat": 254},   # Deeper ember
+            "3": {"on": True, "bri": 8,  "hue": 25500, "sat": 240},   # Hunter green shadow
+            "4": {"on": True, "bri": 6,  "hue": 25500, "sat": 240},   # Hunter green shadow
         },
     },
     # ── Cooking ───────────────────────────────────────────────────────
@@ -313,52 +352,6 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 180, "ct": 370},   # 2700K — warm but still usable
             "4": {"on": True, "bri": 180, "ct": 370},   # PAIRED
         },
-    },
-}
-
-# ---------------------------------------------------------------------------
-# Party sub-modes for social mode
-# ---------------------------------------------------------------------------
-
-SOCIAL_STYLES: dict[str, dict[str, Any]] = {
-    "color_cycle": {
-        "display_name": "Color Cycle",
-        "description": "Slow warm-toned color rotation",
-        "base_state": None,  # Uses the new social base state
-        "effect": "prism",
-    },
-    "club": {
-        "display_name": "Club",
-        "description": "Deep purple and magenta with sparkle",
-        "base_state": {
-            "1": {"on": True, "bri": 180, "hue": 50000, "sat": 254},   # Purple
-            "2": {"on": True, "bri": 200, "hue": 54000, "sat": 240},   # Magenta
-            "3": {"on": True, "bri": 160, "hue": 48000, "sat": 254},   # Blue-purple
-            "4": {"on": True, "bri": 140, "hue": 56000, "sat": 220},   # Pink-magenta
-        },
-        "effect": "sparkle",
-    },
-    "rave": {
-        "display_name": "Rave",
-        "description": "High energy, max brightness, every color",
-        "base_state": {
-            "1": {"on": True, "bri": 254, "hue": 0,     "sat": 254},   # Red
-            "2": {"on": True, "bri": 254, "hue": 25500, "sat": 254},   # Green
-            "3": {"on": True, "bri": 254, "hue": 46920, "sat": 254},   # Blue
-            "4": {"on": True, "bri": 254, "hue": 12750, "sat": 254},   # Yellow
-        },
-        "effect": "prism",
-    },
-    "fire_and_ice": {
-        "display_name": "Fire & Ice",
-        "description": "Warm reds vs cool blues — temperature contrast",
-        "base_state": {
-            "1": {"on": True, "bri": 200, "hue": 3000,  "sat": 254},   # Deep orange
-            "2": {"on": True, "bri": 180, "hue": 1000,  "sat": 254},   # Red-orange
-            "3": {"on": True, "bri": 200, "hue": 44000, "sat": 220},   # Cool blue
-            "4": {"on": True, "bri": 180, "hue": 48000, "sat": 200},   # Blue-purple
-        },
-        "effect": None,
     },
 }
 
@@ -479,6 +472,9 @@ def _resolve_activity_state(
     # Time-aware entries have period keys
     if "day" in entry:
         period = time_period or _get_time_period_static()
+        # late_night falls back to night for modes that don't define it
+        if period == "late_night" and "late_night" not in entry:
+            period = "night"
         return entry.get(period, entry.get("night", {}))
     # Flat per-light dict (social — no time awareness)
     return entry
@@ -543,8 +539,11 @@ class AutomationEngine:
         self._enabled: bool = True
         self._override_timeout_hours: int = 4
         self._gaming_effect: Optional[str] = None
-        self._social_style: str = "color_cycle"
         self._active_effect_name: Optional[str] = None  # Name of active Hue dynamic effect
+        # Light IDs targeted by the active effect, or None when the effect runs
+        # on all lights. Used by _reconcile_effect to detect target-set changes
+        # (e.g., candle → fire on {"1","2"} vs opal on None) and reset cleanly.
+        self._active_effect_lights: Optional[list[str]] = None
 
         # Configurable schedule and mode brightness
         self._schedule_config = schedule_config or ScheduleConfig()
@@ -631,32 +630,6 @@ class AutomationEngine:
     def gaming_effect(self, value: Optional[str]) -> None:
         self._gaming_effect = value
 
-    @property
-    def social_style(self) -> str:
-        return self._social_style
-
-    @social_style.setter
-    def social_style(self, value: str) -> None:
-        if value in SOCIAL_STYLES:
-            self._social_style = value
-        else:
-            logger.warning(f"Unknown social style: {value}")
-
-    @property
-    def social_effect(self) -> str:
-        """Backward-compatible accessor — returns effect for current social style."""
-        style = SOCIAL_STYLES.get(self._social_style, {})
-        return style.get("effect", "prism") or "prism"
-
-    @social_effect.setter
-    def social_effect(self, value: str) -> None:
-        """Backward-compatible setter — maps effect name to a social style."""
-        for style_name, style in SOCIAL_STYLES.items():
-            if style.get("effect") == value:
-                self._social_style = style_name
-                return
-        self._social_style = "color_cycle"
-
     # ------------------------------------------------------------------
     # Schedule + brightness config
     # ------------------------------------------------------------------
@@ -702,7 +675,13 @@ class AutomationEngine:
         logger.info(f"Mode brightness updated: {brightness}")
 
     def _get_time_period(self) -> str:
-        """Determine the current time period using the schedule config."""
+        """Determine the current time period using the schedule config.
+
+        Returns one of: "day", "evening", "night", "late_night". The
+        late_night slot runs from schedule.late_night_start_hour until the
+        next day's wake_hour — modes without a late_night state fall back
+        to their night state via _resolve_activity_state.
+        """
         now = datetime.now(tz=TZ)
         hour = now.hour
         schedule = (
@@ -716,10 +695,12 @@ class AutomationEngine:
 
         if day_start <= hour < schedule.evening_start_hour:
             return "day"
-        elif schedule.evening_start_hour <= hour < schedule.winddown_start_hour:
+        if schedule.evening_start_hour <= hour < schedule.winddown_start_hour:
             return "evening"
-        else:
-            return "night"
+        # late_night wraps across midnight: [late_night_start_hour, 24) ∪ [0, wake_hour)
+        if hour >= schedule.late_night_start_hour or hour < schedule.wake_hour:
+            return "late_night"
+        return "night"
 
     def _build_time_rules(self, schedule: DaySchedule) -> list:
         """
@@ -1032,7 +1013,14 @@ class AutomationEngine:
             )
 
     async def clear_override(self) -> None:
-        """Clear the manual override and return to automatic mode."""
+        """Clear the manual override and return to automatic mode.
+
+        Special case: if we were sleeping, don't re-apply anything. The fade
+        already finished hours ago and lights are off. Re-applying a detected
+        mode (working/idle with its time-based night rule, etc.) would blast
+        bright lights on while the user is still asleep — exactly the
+        "lights turn back on" bug.
+        """
         old_effective = self._override_mode
         self._manual_override = False
         self._override_mode = None
@@ -1040,6 +1028,12 @@ class AutomationEngine:
 
         self._clear_per_light_overrides()
         logger.info("Manual override cleared — returning to auto")
+
+        if old_effective == "sleeping":
+            # User is (probably) still asleep or just waking — they'll pick a
+            # new mode on the dashboard. Leave lights off.
+            await self._broadcast_mode()
+            return
 
         # Re-apply current detected mode or time-based
         if self._current_mode in ("idle", "away"):
@@ -1069,30 +1063,13 @@ class AutomationEngine:
             )
             self._manual_light_overrides.clear()
 
-    async def set_social_style(self, style: str) -> None:
-        """
-        Switch the active party sub-mode and apply it immediately.
-
-        Args:
-            style: One of SOCIAL_STYLES keys.
-        """
-        if style not in SOCIAL_STYLES:
-            logger.warning(f"Unknown social style: {style}")
-            return
-
-        self._social_style = style
-        logger.info(f"Social style changed to: {style}")
-
-        # Re-apply if currently in social mode
-        if self.current_mode == "social":
-            await self._apply_mode("social")
-            await self._broadcast_mode()
-
     # ------------------------------------------------------------------
     # Light state application
     # ------------------------------------------------------------------
 
-    async def _reconcile_effect(self, desired_effect: Optional[str]) -> None:
+    async def _reconcile_effect(
+        self, desired: Optional[str | dict[str, Any]],
+    ) -> None:
         """
         Transition from the currently-active v2 effect to the desired one.
 
@@ -1101,27 +1078,66 @@ class AutomationEngine:
         bridge will hold the last-set brightness target and return to it
         once the effect releases.
 
-        When starting a new effect, a 0.5s bridge-processing guard separates
-        stop-and-start so the two commands don't race.
+        `desired` accepts three shapes:
+          - None:                 no effect should be active
+          - str (e.g., "candle"): apply effect to all lights (legacy shape,
+                                  used by weather-effect fallback and callers
+                                  that don't need per-light targeting)
+          - dict {"effect": name, "lights": list[str] | None}:
+              explicit — `lights=None` means all mapped lights; a list scopes
+              the effect to specific v1 light IDs (e.g., candle on living-room
+              lamps while kitchen pendants stay static in relax mode).
 
-        The same-effect early-return (4ded643) is kept only when desired is
-        non-None — repeated candle/glisten cycles preserve their brightness
-        base. When desired is None, we always call stop_effect_all even if
-        our tracker agrees, because effects activated via scenes API routes,
-        presence/winddown services, or left running across a server restart
-        never update `_active_effect_name` — so the tracker can falsely
-        report "None running" while the bridge is still flickering candle.
+        The same-effect short-circuit kicks in only when BOTH the effect name
+        and the target light set match — repeated candle/glisten cycles with
+        the same scope preserve the brightness base on the bridge. When
+        `desired` is None we always call stop_effect_all (even if our tracker
+        agrees none is running) to handle effects activated out-of-band by
+        the scenes API, presence/winddown services, or left across a restart.
+
+        A 0.5s guard separates stop and start so the two commands don't race.
         """
         if not self._hue_v2 or not self._hue_v2.connected:
             return
-        if desired_effect and desired_effect == self._active_effect_name:
-            return  # Same effect running — leave it to preserve brightness base
+
+        # Normalize desired to (effect_name, target_lights)
+        if desired is None:
+            desired_effect: Optional[str] = None
+            desired_lights: Optional[list[str]] = None
+        elif isinstance(desired, str):
+            desired_effect = desired
+            desired_lights = None
+        else:
+            desired_effect = desired.get("effect")
+            desired_lights = desired.get("lights")
+
+        # Same-effect + same-target short-circuit
+        if (
+            desired_effect
+            and desired_effect == self._active_effect_name
+            and desired_lights == self._active_effect_lights
+        ):
+            return
+
+        # Clear current effect — always call stop_effect_all to handle
+        # out-of-band activations cleanly
         await self._hue_v2.stop_effect_all()
         self._active_effect_name = None
-        if desired_effect:
-            await asyncio.sleep(0.5)
+        self._active_effect_lights = None
+
+        if not desired_effect:
+            return
+
+        await asyncio.sleep(0.5)
+        if desired_lights is None:
             await self._hue_v2.set_effect_all(desired_effect)
-            self._active_effect_name = desired_effect
+        else:
+            await asyncio.gather(*(
+                self._hue_v2.set_effect(lid, desired_effect)
+                for lid in desired_lights
+            ))
+        self._active_effect_name = desired_effect
+        self._active_effect_lights = desired_lights
 
     async def _apply_mode(self, mode: str) -> None:
         """Apply light state for a given mode."""
@@ -1147,15 +1163,28 @@ class AutomationEngine:
         # external apps change bridge state independently, making the cache stale.
         self._last_applied_per_light = {}
 
-        # Sleep mode: gradual fade over 10 minutes then lights off
+        # Sleep mode: dim the bridge FIRST, then stop the effect, then fade to off.
+        # Stopping an active effect before setting a brightness target pops the
+        # bridge to 100% (same root cause as the mode-change flash documented
+        # in _reconcile_effect). Apply a very low target first so the bridge
+        # holds it when the effect releases.
         if mode == "sleeping":
-            # Stop any active effect; the fade sets brightness directly so a
-            # lingering candle/glisten would fight it.
+            if self._sleep_fade_task and not self._sleep_fade_task.done():
+                return  # Fade already in progress
+
+            # Apply dim initial target — deep ember at bri=20. 1s snap so the
+            # first thing Anthony sees (already in bed) is sleep-friendly.
+            initial_state = {"on": True, "bri": 20, "hue": 5000, "sat": 254}
+            self._last_applied_per_light = {}
+            await self._apply_state(initial_state, transitiontime=10)
+            await asyncio.sleep(1.2)  # Let the bridge settle the target
+
+            # Now stop the effect — bridge holds bri=20 instead of popping to 100%
             if self._active_effect_name and self._hue_v2 and self._hue_v2.connected:
                 await self._hue_v2.stop_effect_all()
                 self._active_effect_name = None
-            if self._sleep_fade_task and not self._sleep_fade_task.done():
-                return  # Fade already in progress
+                self._active_effect_lights = None
+
             self._sleep_fade_task = asyncio.create_task(self._sleep_fade())
             return
 
@@ -1291,63 +1320,70 @@ class AutomationEngine:
             await self._apply_time_based()
 
     async def _apply_social_style(self) -> None:
-        """Apply the current party sub-mode (base colors + effect)."""
-        style = SOCIAL_STYLES.get(self._social_style, SOCIAL_STYLES["color_cycle"])
+        """Apply the Velvet Speakeasy social palette — static, no effect.
 
-        # Apply base state (per-light or default social)
-        base = style.get("base_state")
-        if base:
-            await self._apply_state(base)
-        else:
-            await self._apply_state(ACTIVITY_LIGHT_STATES["social"])
-
-        # Reconcile the effect AFTER state is on the bridge. Uses the shared
-        # helper so sub-styles with effect=None correctly stop a previously
-        # running effect (e.g. prism from color_cycle → None from fire_and_ice).
-        await self._reconcile_effect(style.get("effect"))
+        Single-palette replacement for the old sub-style system (color_cycle/
+        club/rave/fire_and_ice). The dusty-rose + cognac + burnt-orange
+        combination is intentionally static: warm deep saturation flatters
+        skin and drinks without cycling that reads as "RGB gamer strip".
+        """
+        await self._apply_state(
+            ACTIVITY_LIGHT_STATES["social"],
+            transitiontime=MODE_TRANSITION_TIME["social"],
+        )
+        await self._reconcile_effect(None)
 
     async def _sleep_fade(self) -> None:
         """
-        Gradually dim lights then turn off.
+        Dim lights then turn off.
 
-        Manual trigger: quick 2-minute fade (you asked for lights off).
-        Auto-detected: slow 10-minute fade (you drifted off naturally).
+        Manual trigger: quick ~24s fade from the bri=20 initial set by
+            _apply_mode's sleeping branch down to off. Anthony is already
+            in bed when he triggers this — he doesn't want to wait.
+        Auto-detected: slow 10-minute stepwise fade from the current
+            brightness (drifted off naturally, let him down gently).
 
         Runs as a background task so it doesn't block the automation loop.
-        Cancellable if the user wakes up (mouse/keyboard activity detected).
+        Cancellable if the user wakes up (activity detector fires).
         """
         try:
-            # Get current brightness from first light as baseline
-            lights = await self._hue.get_all_lights()
-            if not lights:
-                return
-            current_bri = lights[0].get("bri", 80)
-
-            # Manual = quick fade (2 min), auto = slow fade (10 min)
             if self._manual_override:
-                steps = 4
-                step_interval = 30  # 4 steps × 30s = 2 minutes
-            else:
-                steps = 6
-                step_interval = 100  # 6 steps × 100s ≈ 10 minutes
+                # Manual: _apply_mode already set bri=20 deep ember. Brief hold
+                # so the dim start is visible, then smooth 20s slide to near-off,
+                # then off.
+                await asyncio.sleep(2.0)
+                self._last_applied_per_light = {}
+                await self._apply_state(
+                    {"on": True, "bri": 1, "hue": 5000, "sat": 254},
+                    transitiontime=200,  # 20s
+                )
+                await asyncio.sleep(22)
+                self._last_applied_per_light = {}
+                await self._apply_state({"on": False})
+                logger.info("Sleep fade complete (manual, ~24s)")
+                return
 
+            # Auto-detected: 10-minute gradual stepwise fade from the current
+            # bridge brightness. Use a conservative default if the bridge read
+            # fails so the fade still lands.
+            lights = await self._hue.get_all_lights()
+            current_bri = lights[0].get("bri", 80) if lights else 80
+            steps = 6
+            step_interval = 100  # 6 × 100s ≈ 10 min
             bri_step = current_bri / steps
-            total_min = steps * step_interval // 60
 
             logger.info(
-                f"Sleep fade started: {current_bri} → off over "
-                f"{total_min} minutes ({'manual' if self._manual_override else 'auto'})"
+                f"Sleep fade started: {current_bri} → off over ~10 minutes (auto)"
             )
 
             for i in range(1, steps + 1):
                 await asyncio.sleep(step_interval)
                 new_bri = max(1, int(current_bri - bri_step * i))
                 state = {"on": True, "bri": new_bri, "hue": 6000, "sat": 200}
-                self._last_applied_per_light = {}  # Force apply
+                self._last_applied_per_light = {}
                 await self._apply_state(state)
                 logger.info(f"Sleep fade step {i}/{steps}: bri={new_bri}")
 
-            # Final: lights off
             await asyncio.sleep(step_interval)
             self._last_applied_per_light = {}
             await self._apply_state({"on": False})
@@ -1603,27 +1639,37 @@ class AutomationEngine:
                     return "golden_hour"
         return None
 
-    def _get_desired_effect(self, mode: str) -> str | None:
+    def _get_desired_effect(
+        self, mode: str,
+    ) -> Optional[str | dict[str, Any]]:
         """Determine what dynamic effect should be active for a mode.
 
-        Checks mode-specific auto-effects first (EFFECT_AUTO_MAP), then
-        falls back to weather-driven effects for eligible periods.
-        Returns None for modes that manage their own effects (sleeping,
-        social) or when no effect should be active.
+        Returns either:
+          - None                                   (no effect)
+          - str                                    (weather fallback, all lights)
+          - {"effect": name, "lights": list|None}  (mode-specific, per-light scope)
+
+        Sleeping and social manage their own effects (sleeping = none,
+        social = none per Velvet Speakeasy static palette).
         """
         if mode in ("sleeping", "social"):
             return None
         period = self._get_time_period()
         effect_map = EFFECT_AUTO_MAP.get(mode, {})
         auto_effect = effect_map.get(period)
-        if not auto_effect:
-            weather_effect = self._get_weather_effect()
-            if weather_effect and (
-                period in ("evening", "night")
-                or weather_effect == "sparkle"
-            ):
-                auto_effect = weather_effect
-        return auto_effect
+        # late_night falls back to night for modes that don't define it
+        if auto_effect is None and period == "late_night":
+            auto_effect = effect_map.get("night")
+        if auto_effect:
+            return auto_effect
+        # Weather-driven fallback: bare string → applied to all lights
+        weather_effect = self._get_weather_effect()
+        if weather_effect and (
+            period in ("evening", "night", "late_night")
+            or weather_effect == "sparkle"
+        ):
+            return weather_effect
+        return None
 
     def _get_weather_effect(self) -> str | None:
         """Return an effect override based on current weather, or None."""
@@ -1770,8 +1816,16 @@ class AutomationEngine:
 
                 now = datetime.now(tz=TZ)
 
-                # Check manual override timeout
-                if self._manual_override and self._override_time:
+                # Check manual override timeout. Sleeping is persistent:
+                # a 4-hour timeout at ~3am would hand control back to the
+                # detected-mode path, which can turn lights on while the
+                # user is still asleep. Anthony clears sleeping manually
+                # when he wakes up.
+                if (
+                    self._manual_override
+                    and self._override_time
+                    and self._override_mode != "sleeping"
+                ):
                     elapsed = now - self._override_time
                     if elapsed > timedelta(hours=self._override_timeout_hours):
                         logger.info(
@@ -2127,9 +2181,6 @@ class AutomationEngine:
             "mode": mode,
             "time_period": period,
             "effect": self._active_effect_name,
-            "social_style": (
-                self._social_style if mode == "social" else None
-            ),
             "brightness_multiplier": brightness_mult,
             "lights": dict(self._last_applied_per_light),
         }
@@ -2182,6 +2233,5 @@ class AutomationEngine:
             "mode": self.current_mode,
             "source": self.mode_source,
             "manual_override": self._manual_override,
-            "social_style": self._social_style,
         })
         await self._broadcast_pipeline()

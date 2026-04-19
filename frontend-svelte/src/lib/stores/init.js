@@ -49,7 +49,6 @@ export function initStores() {
         mode: d.current_mode,
         source: d.mode_source,
         manual_override: d.manual_override,
-        social_style: d.social_style ?? 'color_cycle',
       })
     })
     .catch(() => {})
@@ -175,11 +174,6 @@ export async function setManualMode(mode) {
     modeUpdateLockUntil = 0
     console.error('Mode override failed:', e)
   }
-}
-
-/** @param {string} style */
-export async function setSocialStyle(style) {
-  await apiPost('/api/automation/social-style', { style })
 }
 
 /** @param {string} title */

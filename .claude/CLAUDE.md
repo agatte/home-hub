@@ -482,10 +482,10 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
 | `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites, desk-dominant. Night: L2 desk bri=130/2700K + L1 ambient bri=60/2270K + kitchen OFF. | IES 1:3 monitor-ambient contrast |
 | `watching` | VLC, Plex, Stremio, media players | Projector-friendly: warm throughout (no D65), dim, L2 as soft bias from across the room. Kitchen OFF evening+. | Screen sync on L2 — projector on HDMI from dev PC, so mss captures the projected frames |
-| `social` | Blue Yeti ambient noise >2min + no game | Sub-modes: color_cycle, club, rave, fire_and_ice | Party lighting |
-| `relax` | Manual override | HSB warm amber gradient. Kitchen L3/L4 free to diverge for depth. | opal (day), candle (eve), fire (night) |
+| `social` | Blue Yeti ambient noise >2min + no game | "Velvet Speakeasy" — single static palette: L1 dusty rose (statement), L2 cognac amber, L3/L4 matched burnt-orange pair. Dim but visible for faces and drinks. | No effect (static) — saturation does the work. 1s snap |
+| `relax` | Manual override | "Moss & Candlelight" biophilic: L1/L2 warm ember/honey, L3/L4 muted moss/sage (foliage-shadow canopy). Kitchen free to diverge; pair the sage values by day, deepen through evening. Late-night ("Moss & Ember") after 23:00: deeper ember + hunter-green shadow. | opal (day, all lights), candle (eve) / fire (night + late_night) scoped to **L1/L2 only** so moss pendants stay static |
 | `cooking` | Manual override | L3+L4 paired peak (3500K for accurate food colors), L1 warm ambient, L2 dim | 1s snap transition |
-| `sleeping` | 10:30pm + 15min idle → psutil | 10-min fade → off | Also pauses media |
+| `sleeping` | 10:30pm + 15min idle → psutil | Apply dim initial (bri=20 deep ember) BEFORE stopping the active effect to prevent the bridge's brightness-to-100% pop, then fade. Manual trigger: ~24s fade to off. Auto-detected: 10-min gradual stepwise fade. | Persistent override — no 4h timeout; must be cleared manually. Also pauses media |
 | `idle` | No process detected | Falls through to time-based rules | |
 | `away` | Win32 idle >10min | Falls through to time-based | |
 
@@ -522,10 +522,13 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 
 Activated via `POST /api/scenes/effects/{name}` (all lights) or `POST /api/scenes/effects/{name}/light/{id}` (single light).
 
-**EFFECT_AUTO_MAP** (auto-activated by mode+time):
-- `relax`: opal (day), candle (evening), fire (night)
-- `watching`: none (day), glisten (evening), glisten (night)
+**EFFECT_AUTO_MAP** entries are `{"effect": name, "lights": [...] | None}` — `lights=None` means all mapped lights, a list scopes the effect to specific v1 light IDs so some bulbs stay static while others flicker. Weather-driven fallbacks still pass as bare strings (applied to all lights).
+- `relax`: opal day (all), candle evening and fire night + late_night — **candle/fire scoped to L1/L2 only** so the moss-shadow kitchen pendants (L3/L4) stay on their static sage/green color
+- `watching`: none (day), glisten (evening, all), glisten (night, all)
+- `social`: no entry — Velvet Speakeasy is intentionally static, no cycling
 - `gaming`, `working`, `cooking`: none (all periods) — gaming previously ran glisten but it competed with screen sync and read as "RGB gamer strip"
+
+**Time periods:** `_get_time_period()` returns `day` / `evening` / `night` / `late_night`. The `late_night` slot runs from `DaySchedule.late_night_start_hour` (default 23) until `wake_hour` the next day. Only relax defines a `late_night` state ("Moss & Ember" cave/den variant); other modes fall back to their `night` state via `_resolve_activity_state`.
 
 **Weather effect fallback:** When a mode has no auto-effect, weather can overlay one — rain→candle, thunderstorm→sparkle, snow→opal (evening/night only, except sparkle fires any time). Effects are only stopped/restarted when switching to a different effect — same-effect cycles are skipped to preserve the brightness base on the bridge.
 
@@ -579,7 +582,7 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 |-----|---------|
 | `morning_routine_config` | `{hour, minute, enabled, volume}` |
 | `winddown_routine_config` | `{hour, minute, enabled, volume, candlelight, weekdays_only}` |
-| `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ...}, weekend: {...}}` |
+| `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ..., late_night_start_hour}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
 | `presence_config` | `{enabled, phone_ip, phone_mac, ping_interval, away_timeout, short_absence_threshold, arrival_volume, departure_fade_seconds}` |
 | `camera_enabled` | `{enabled: bool}` — opt-in toggle for the MediaPipe camera service |

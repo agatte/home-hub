@@ -185,14 +185,6 @@ export const VIBE_COLORS = {
   hype:       '#f87171',
 }
 
-/** @type {Array<{ id: string, label: string, icon: string }>} */
-export const SOCIAL_STYLES = [
-  { id: 'color_cycle',   label: 'Color Cycle',   icon: '🌈' },
-  { id: 'club',          label: 'Club',          icon: '💃' },
-  { id: 'rave',          label: 'Rave',          icon: '⚡' },
-  { id: 'fire_and_ice',  label: 'Fire & Ice',    icon: '❄️' },
-]
-
 export function modeColor(mode) {
   return MODE_CONFIG[mode]?.color ?? MODE_CONFIG.idle.color
 }

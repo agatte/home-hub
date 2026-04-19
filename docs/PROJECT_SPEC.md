@@ -43,7 +43,8 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Custom scene CRUD** — user-created scenes persisted to SQLite with category and optional paired effect
 - **Effect auto-activation** — EFFECT_AUTO_MAP: opal (relax/day), candle (relax/eve+night). Gaming no longer auto-runs effects (they compete with screen sync and read as "RGB gamer strip").
 - Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal) with 5-min cache on bridge scene fetches
-- Social mode sub-styles (color cycle, club, rave, fire & ice)
+- Social mode — "Velvet Speakeasy" single static palette (dusty rose statement on L1 + cognac amber L2 + matched burnt-orange kitchen pendants). Sub-styles removed in favor of a grown-up cocktail-lounge aesthetic tuned for small hangouts.
+- Relax mode — "Moss & Candlelight" biophilic palette: warm ember on living-room lamps (L1/L2) with muted moss/sage kitchen pendants (L3/L4) that echo the plants and olive/sage/teal accents in the room. Candle/fire effects are scoped to L1/L2 so the moss pendants stay static. Late-night variant ("Moss & Ember") kicks in after 23:00 — deeper ember + hunter-green shadow for the cave/den feel.
 - Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image.
 - Manual override with 4-hour auto-timeout
 - Configurable per-mode brightness multipliers
@@ -628,8 +629,6 @@ All messages are JSON with `type` + `data` fields.
 | PUT | `/api/automation/mode-brightness` | Update multipliers |
 | POST | `/api/automation/activity` | Report activity (`{mode, source}`) |
 | POST | `/api/automation/override` | Manual mode override |
-| GET | `/api/automation/social-styles` | List social sub-styles |
-| POST | `/api/automation/social-style` | Set active sub-style |
 | GET | `/api/automation/presence/status` | Current presence state (home/away/arriving) |
 | GET | `/api/automation/presence/config` | Presence detection config |
 | PUT | `/api/automation/presence/config` | Update presence config |
