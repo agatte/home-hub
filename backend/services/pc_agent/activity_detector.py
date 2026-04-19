@@ -329,25 +329,38 @@ class ActivityDetector:
         if processes & GAME_PROCESSES:
             return "gaming"
 
-        # Media player = watching
-        if processes & MEDIA_PROCESSES:
-            return "watching"
-
-        # Dev/terminal processes = working — but check the foreground window first
-        # to disambiguate (e.g. terminal is open but YouTube is the focused tab).
+        # Media / work / browser disambiguation via foreground window.
+        # Media apps (especially Stremio) leave background services running
+        # after the main window closes; those services must not be classified
+        # as "watching" when a dev tool is the actual foreground. Resolution:
+        # check the foreground first, and only return "watching" when either
+        # (a) a media app is the foreground window, (b) a browser tab title
+        # looks like media playback, or (c) media is running and no work
+        # tools are present (preserves passive media-watching behavior).
+        media_running = bool(processes & MEDIA_PROCESSES)
         work_running = bool(processes & WORK_PROCESSES)
         browser_running = bool(processes & BROWSER_PROCESSES)
 
-        if work_running or browser_running:
+        if media_running or work_running or browser_running:
             fg_proc, fg_title = self._get_foreground_window()
+
+            if fg_proc in MEDIA_PROCESSES:
+                return "watching"
+
             if (
                 fg_proc in BROWSER_PROCESSES
                 and fg_title
                 and any(kw in fg_title.lower() for kw in WATCHING_TITLE_KEYWORDS)
             ):
                 return "watching"
+
             if work_running:
                 return "working"
+
+            if media_running:
+                # Media running with no work tools and foreground isn't
+                # recognized — likely passive watching (e.g. tray media player).
+                return "watching"
 
         # Browser running late at night = working
         current_hour = datetime.now().hour

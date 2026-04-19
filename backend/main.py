@@ -505,6 +505,19 @@ async def lifespan(app: FastAPI):
     else:
         app_logger.info("Camera service disabled (camera_enabled=false)")
 
+    # Transit lighting — brighten kitchen/living-room when Anthony steps out
+    # of the bedroom with his phone still on Wi-Fi. Depends on camera presence
+    # + WiFi presence, so only makes sense once those are both running.
+    from backend.services.transit_lighting_service import TransitLightingService
+    transit_lighting = TransitLightingService(
+        automation_engine=automation,
+        camera_service=getattr(app.state, "camera_service", None),
+        presence_service=presence,
+    )
+    app.state.transit_lighting = transit_lighting
+    tasks.append(asyncio.create_task(transit_lighting.poll_loop()))
+    app_logger.info("Transit lighting service started")
+
     app_logger.info("Home Hub is ready")
 
     yield
@@ -524,6 +537,9 @@ async def lifespan(app: FastAPI):
     camera = getattr(app.state, "camera_service", None)
     if camera:
         await camera.close()
+    transit = getattr(app.state, "transit_lighting", None)
+    if transit:
+        await transit.close()
 
 
 # Rate limiter — prevents abuse from rogue LAN clients

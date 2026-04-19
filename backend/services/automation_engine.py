@@ -547,6 +547,13 @@ class AutomationEngine:
         # Lights in this dict are protected from automation until next mode change
         self._manual_light_overrides: dict[str, datetime] = {}
 
+        # Per-light transit-lighting overrides — maps light_id → expiration deadline.
+        # Set by TransitLightingService when Anthony steps out of the bedroom while
+        # kitchen/living-room are dim. Cleared by the service when the camera sees
+        # him again, or auto-expired at the deadline. Reconciliation skips these
+        # lights the same way _manual_light_overrides does.
+        self._transit_light_overrides: dict[str, datetime] = {}
+
         # Track if lights were turned off externally (Alexa geofence)
         self._external_off_detected: bool = False
 
@@ -1104,6 +1111,101 @@ class AutomationEngine:
             )
             self._manual_light_overrides.clear()
 
+    def _prune_expired_transit_overrides(self) -> None:
+        """Remove transit overrides whose deadline has passed.
+
+        Called before the skip filter consults the dict so expired entries
+        don't stale-lock automation from reasserting a light.
+        """
+        if not self._transit_light_overrides:
+            return
+        now = datetime.now(tz=TZ)
+        expired = [
+            lid for lid, deadline in self._transit_light_overrides.items()
+            if deadline <= now
+        ]
+        for lid in expired:
+            del self._transit_light_overrides[lid]
+        if expired:
+            logger.info(
+                "Transit overrides auto-expired for lights %s",
+                expired,
+            )
+
+    async def apply_transit_override(
+        self,
+        states: dict[str, dict],
+        duration_seconds: int = 600,
+        transition_time: int = 20,
+    ) -> None:
+        """Apply temporary per-light brightness for transit-navigation lighting.
+
+        Writes the given per-light states directly to the bridge and protects
+        those lights from mode-driven automation until ``clear_transit_override``
+        is called or the deadline elapses. Used by ``TransitLightingService``
+        when the camera loses Anthony while his phone is still on Wi-Fi — the
+        apartment briefly brightens along his likely walking path without
+        changing the current mode.
+
+        Args:
+            states: light_id → state dict (``{"on": True, "bri": ..., "ct": ...}``)
+            duration_seconds: max protection window before auto-expiry (default 10 min)
+            transition_time: deciseconds for the Hue transition (20 = 2s)
+        """
+        if not self._hue or not self._hue.connected:
+            return
+        deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
+        tasks = []
+        for light_id, state in states.items():
+            cmd = {**state, "transitiontime": transition_time}
+            tasks.append(self._hue.set_light(light_id, cmd))
+            self._transit_light_overrides[light_id] = deadline
+            # Seed dedup so a concurrent reconcile cycle doesn't re-send the
+            # previous mode state for these lights before the skip filter runs.
+            self._last_applied_per_light[light_id] = {k: v for k, v in state.items() if k != "transitiontime"}
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info(
+            "Transit override applied to lights %s (expires %s)",
+            list(states.keys()),
+            deadline.strftime("%H:%M:%S"),
+        )
+
+    async def clear_transit_override(
+        self,
+        light_ids: Optional[list[str]] = None,
+        transition_time: int = 30,
+    ) -> None:
+        """Remove transit overrides and revert the affected lights to the current mode.
+
+        Args:
+            light_ids: lights to clear. If None, clears all active transit overrides.
+            transition_time: deciseconds for the revert (30 = 3s — fast-but-not-jarring).
+        """
+        if not self._transit_light_overrides:
+            return
+        if light_ids is None:
+            light_ids = list(self._transit_light_overrides.keys())
+        cleared = []
+        for lid in light_ids:
+            if lid in self._transit_light_overrides:
+                del self._transit_light_overrides[lid]
+                cleared.append(lid)
+        if not cleared:
+            return
+        # Drop dedup cache for reverted lights so _apply_mode will actually
+        # re-send the mode's state to them.
+        for lid in cleared:
+            self._last_applied_per_light.pop(lid, None)
+        logger.info(
+            "Transit override cleared for lights %s — reverting to mode %s",
+            cleared, self._current_mode,
+        )
+        # Re-apply the current mode's full light state. Dedup cache will no-op
+        # on any lights that weren't in the transit set, so only the cleared
+        # lights receive new Hue commands.
+        await self._apply_mode(self._current_mode)
+
     # ------------------------------------------------------------------
     # Light state application
     # ------------------------------------------------------------------
@@ -1465,8 +1567,12 @@ class AutomationEngine:
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
         """Apply the same state to all lights (backward-compatible path)."""
-        # If any lights have manual overrides, fall through to per-light path
-        if self._manual_light_overrides:
+        # Prune expired transit overrides before consulting them.
+        self._prune_expired_transit_overrides()
+
+        # If any lights have manual or transit overrides, fall through to the
+        # per-light path so the filter can skip the protected lights.
+        if self._manual_light_overrides or self._transit_light_overrides:
             per_light = {lid: state for lid in ("1", "2", "3", "4")}
             await self._apply_per_light(per_light, transitiontime)
             return
@@ -1500,21 +1606,25 @@ class AutomationEngine:
         self, states: dict[str, dict], transitiontime: int | None = None,
     ) -> None:
         """Apply individual states to each light (parallel when possible)."""
-        # Filter out lights with active manual overrides
-        if self._manual_light_overrides:
-            skipped = [lid for lid in states if lid in self._manual_light_overrides]
+        # Drop any transit overrides whose deadline has passed before we check.
+        self._prune_expired_transit_overrides()
+
+        # Filter out lights with active manual or transit overrides.
+        # Both dicts freeze their lights against mode-driven automation.
+        protected = set(self._manual_light_overrides) | set(self._transit_light_overrides)
+        if protected:
+            skipped = [lid for lid in states if lid in protected]
             if skipped:
                 states = {
-                    lid: s for lid, s in states.items()
-                    if lid not in self._manual_light_overrides
+                    lid: s for lid, s in states.items() if lid not in protected
                 }
-                logger.debug(f"Skipping manually overridden lights: {skipped}")
+                logger.debug(f"Skipping overridden lights: {skipped}")
                 if not states:
                     return
 
         # Optimization: if all lights get the same state, use the uniform path
         unique_states = list(states.values())
-        if not self._manual_light_overrides and all(
+        if not protected and all(
             s == unique_states[0] for s in unique_states
         ):
             await self._apply_uniform(unique_states[0], transitiontime)
