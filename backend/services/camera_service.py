@@ -500,6 +500,15 @@ class CameraService:
         """Calibrated "normal room" lux reading — center of the multiplier curve."""
         return self._baseline_lux
 
+    @property
+    def zone(self) -> Optional[str]:
+        """Currently committed zone after hysteresis — 'desk' | 'bed' | None.
+
+        None when no zone has yet committed (camera just started, or the user
+        hasn't been detected yet). Brief absences preserve the committed zone.
+        """
+        return self._last_zone
+
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
         loop = asyncio.get_event_loop()

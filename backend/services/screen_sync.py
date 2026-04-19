@@ -43,6 +43,15 @@ MODE_MIN_BRIGHTNESS: dict[str, int] = {
                       # so the desk lamp doesn't drop below ~1:3 monitor contrast.
 }
 
+# Zone-aware brightness overrides. When the detected camera zone matches, the
+# per-mode cap is raised — used for "watching at the desk" (YouTube on monitor)
+# where the projector isn't running so dim bias lighting is unnecessarily dark.
+# Falls through to MODE_MAX_BRIGHTNESS when zone is not in this map, or when
+# camera zone is unavailable.
+MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
+    ("watching", "desk"): 180,
+}
+
 
 class ScreenSyncService:
     """
@@ -77,7 +86,13 @@ class ScreenSyncService:
         return self._last_source
 
     async def apply_color(
-        self, r: int, g: int, b: int, mode: str, source: str = "desktop"
+        self,
+        r: int,
+        g: int,
+        b: int,
+        mode: str,
+        source: str = "desktop",
+        zone: Optional[str] = None,
     ) -> None:
         """
         Apply an RGB color to the bedroom lamp.
@@ -86,8 +101,16 @@ class ScreenSyncService:
             r, g, b: 0-255 RGB values from a screen capture.
             mode: Current automation mode — used to look up the brightness clamp.
             source: "desktop" or "laptop" — recorded for status reporting only.
+            zone: Optional camera-detected zone ("desk" | "bed"). When provided,
+                ``MODE_ZONE_MAX_BRIGHTNESS`` is consulted first so the cap can
+                differ between watching-at-desk (brighter bias) and watching-
+                in-bed (dim for projector). Falls back to the mode-only cap.
         """
-        max_bri = MODE_MAX_BRIGHTNESS.get(mode, DEFAULT_MAX_BRIGHTNESS)
+        max_bri: Optional[int] = None
+        if zone is not None:
+            max_bri = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone))
+        if max_bri is None:
+            max_bri = MODE_MAX_BRIGHTNESS.get(mode, DEFAULT_MAX_BRIGHTNESS)
         min_bri = MODE_MIN_BRIGHTNESS.get(mode, MIN_BRIGHTNESS)
         h, s, br = self._rgb_to_hue_hsb((r, g, b), max_bri, min_bri)
         sh, ss, sb = self._smooth(h, s, br)

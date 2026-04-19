@@ -910,6 +910,57 @@ class AutomationEngine:
             result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
         return result
 
+    def _apply_zone_overlay(
+        self, state: dict[str, Any], mode: str, period: str,
+    ) -> dict[str, Any]:
+        """Zone-aware per-light adjustments applied as the final overlay.
+
+        Currently the only rule: when the user is at the desk (``zone=desk``)
+        and the mode is watching, lift L2 (bedroom bias lamp) brightness above
+        the projector-safe defaults. Watching-at-desk is YouTube / streaming
+        on the monitor — the projector isn't running so the ultra-dim L2
+        that watching mode sets by default feels unnecessarily dark.
+
+        Only LIFTS brightness — never lowers. If a higher value was already
+        set (learned overlay, lux multiplier, etc.), it's preserved. Zone
+        must be explicitly ``desk`` to trigger; ``None`` / ``bed`` both fall
+        through unchanged so the projector-from-bed dim stays correct.
+        """
+        camera = self._camera_service
+        zone = getattr(camera, "zone", None) if camera else None
+        if zone != "desk" or mode != "watching":
+            return state
+
+        # Period-matched targets — still dim enough to read as bias lighting,
+        # not drown the monitor. Tuned to feel like "working-lite" L2, not
+        # full working brightness.
+        zone_bri_by_period = {
+            "day": 160,
+            "evening": 110,
+            "night": 70,
+            "late_night": 50,
+        }
+        target_bri = zone_bri_by_period.get(period)
+        if target_bri is None:
+            return state
+
+        # Only per-light states have an L2 entry to lift.
+        is_per_light = all(isinstance(v, dict) for v in state.values()) and "2" in state
+        if not is_per_light:
+            return state
+
+        current_bri = int(state["2"].get("bri", 0))
+        if current_bri >= target_bri:
+            return state  # Already at or above target — don't lower.
+
+        new_state = {lid: dict(ls) for lid, ls in state.items()}
+        new_state["2"]["bri"] = target_bri
+        logger.debug(
+            "Zone overlay: lifting L2 bri %d → %d (watching+desk, period=%s)",
+            current_bri, target_bri, period,
+        )
+        return new_state
+
     def register_on_mode_change(self, callback) -> None:
         """
         Register a callback to be invoked when the active mode changes.
@@ -1449,6 +1500,7 @@ class AutomationEngine:
 
             state = self._apply_brightness_multiplier(state, mode)
             state = self._apply_lux_multiplier(state, mode)
+            state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
             tt = MODE_TRANSITION_TIME.get(mode)
