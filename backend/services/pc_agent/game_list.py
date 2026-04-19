@@ -14,8 +14,9 @@ GAME_PROCESSES: set[str] = {
     "league of legends.exe",
     "valorant.exe",
     "valorant-win64-shipping.exe",
-    # Jagex / OSRS
-    "javaw.exe",
+    # Jagex / OSRS — javaw.exe is too generic (matches every JVM process:
+    # JetBrains IDEs, Gradle, build tools, etc.), so rely on the specific
+    # Jagex client binaries instead.
     "runelite.exe",
     "osclient.exe",
     # Rocket League
