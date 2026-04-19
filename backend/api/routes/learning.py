@@ -91,6 +91,45 @@ async def get_accuracy(request: Request, days: int = 7) -> dict:
     return {"status": "ok", **accuracy}
 
 
+@router.get("/compare")
+async def compare_strategies(request: Request, days: int = 14) -> dict:
+    """A/B comparison of fusion vs rule-engine vs process-priority accuracy.
+
+    All three strategies are evaluated on the same fusion-decision row
+    set (where ``actual_mode`` has been backfilled), so the comparison
+    is apples-to-apples. Useful for deciding whether fusion actually
+    beats the pre-fusion process-priority baseline.
+    """
+    ml_log = _get_ml_logger(request)
+    window = max(1, min(days, 90))
+    return {
+        "status": "ok",
+        "window_days": window,
+        "strategies": await ml_log.compare_strategies(days=window),
+    }
+
+
+@router.get("/override-rate")
+async def get_override_rate(
+    request: Request, window_minutes: int = 5,
+) -> dict:
+    """Return user override rates at 7d and 30d windows.
+
+    Phase 3 autonomy gate requires <2 overrides/day sustained 30 days.
+    ``window_minutes`` defines how recent a preceding automation event
+    must be for a manual switch to count as an "override" vs a cold
+    manual choice.
+    """
+    ml_log = _get_ml_logger(request)
+    window = max(1, min(window_minutes, 60))
+    return {
+        "status": "ok",
+        "window_minutes": window,
+        "7d": await ml_log.compute_override_rate(days=7, window_minutes=window),
+        "30d": await ml_log.compute_override_rate(days=30, window_minutes=window),
+    }
+
+
 # ------------------------------------------------------------------
 # Audio classifier (shadow mode logging)
 # ------------------------------------------------------------------

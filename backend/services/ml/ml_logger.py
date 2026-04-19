@@ -13,10 +13,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, func, select, update
 
 from backend.database import async_session
-from backend.models import MLDecision
+from backend.models import ActivityEvent, MLDecision
 
 logger = logging.getLogger("home_hub.ml")
 
@@ -24,8 +24,16 @@ logger = logging.getLogger("home_hub.ml")
 class MLDecisionLogger:
     """Logs ML decisions to the database and broadcasts via WebSocket."""
 
+    # Retroactive backfill is capped so system-start, overnight, or
+    # long-idle gaps can't be mislabeled with stale mode state.
+    _BACKFILL_MAX_HOURS = 2
+
     def __init__(self, ws_manager: Any) -> None:
         self._ws_manager = ws_manager
+        # Tracks the session state for windowed actual_mode backfill.
+        # Populated by on_mode_change; prior mode + its start time.
+        self._last_mode: Optional[str] = None
+        self._last_transition_at: Optional[datetime] = None
 
     async def log_decision(
         self,
@@ -35,15 +43,19 @@ class MLDecisionLogger:
         factors: Optional[dict] = None,
         *,
         applied: bool = False,
+        broadcast: bool = True,
     ) -> Optional[int]:
-        """Record a mode decision and broadcast via WebSocket.
+        """Record a mode decision and optionally broadcast via WebSocket.
 
         Args:
             predicted_mode: The mode that was predicted or chosen.
             confidence: Confidence score (0.0-1.0), or None for manual/time.
-            decision_source: One of "ml", "rule", "time", "manual".
+            decision_source: One of "ml", "rule", "time", "manual", "fusion".
             factors: Reasoning chain (JSON-serializable dict).
             applied: Whether the prediction was actually acted on.
+            broadcast: Whether to emit the ml_decision WebSocket event.
+                Set False for high-frequency shadow writes (fusion computes
+                every 60s) to avoid flooding the pipeline view.
 
         Returns:
             The decision row ID, or None on failure.
@@ -61,17 +73,17 @@ class MLDecisionLogger:
                 await session.commit()
                 await session.refresh(decision)
 
-                # Broadcast for frontend consumption
-                await self._ws_manager.broadcast(
-                    "ml_decision",
-                    {
-                        "id": decision.id,
-                        "predicted_mode": predicted_mode,
-                        "confidence": confidence,
-                        "decision_source": decision_source,
-                        "applied": applied,
-                    },
-                )
+                if broadcast:
+                    await self._ws_manager.broadcast(
+                        "ml_decision",
+                        {
+                            "id": decision.id,
+                            "predicted_mode": predicted_mode,
+                            "confidence": confidence,
+                            "decision_source": decision_source,
+                            "applied": applied,
+                        },
+                    )
                 return decision.id
         except Exception as exc:
             logger.error("Failed to log ML decision: %s", exc, exc_info=True)
@@ -80,8 +92,9 @@ class MLDecisionLogger:
     async def backfill_actual(self, actual_mode: str) -> None:
         """Fill in actual_mode on the most recent decision that lacks one.
 
-        Called on every mode transition so we can later compute accuracy
-        (predicted_mode vs actual_mode).
+        Kept for backwards compatibility. New callers should prefer
+        ``backfill_actual_range`` which tags every shadow row in the
+        session window, not just the last one.
         """
         try:
             async with async_session() as session:
@@ -98,9 +111,60 @@ class MLDecisionLogger:
         except Exception as exc:
             logger.error("Failed to backfill actual mode: %s", exc, exc_info=True)
 
+    async def backfill_actual_range(
+        self, actual_mode: str, since: Optional[datetime],
+    ) -> int:
+        """Tag every decision row in [since, now] that lacks actual_mode.
+
+        Fusion shadow-logs once per 60s, so single-row backfill would
+        leave 99%+ of rows without ground truth. This bulk UPDATE tags
+        every row in the just-ended session window with the mode that
+        was actually active during it.
+
+        The window is capped at ``_BACKFILL_MAX_HOURS`` so system-start,
+        overnight sleeps, or long-idle gaps can't be mislabeled — rows
+        older than the cap stay NULL and correctly drop out of
+        ``compute_accuracy_by_source``.
+
+        Returns the number of rows updated (0 on error or empty window).
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            cap_cutoff = now - timedelta(hours=self._BACKFILL_MAX_HOURS)
+            effective_since = max(since, cap_cutoff) if since else cap_cutoff
+
+            async with async_session() as session:
+                result = await session.execute(
+                    update(MLDecision)
+                    .where(
+                        MLDecision.actual_mode.is_(None),
+                        MLDecision.timestamp >= effective_since,
+                    )
+                    .values(actual_mode=actual_mode)
+                )
+                await session.commit()
+                return result.rowcount or 0
+        except Exception as exc:
+            logger.error(
+                "Failed to backfill actual mode range: %s", exc, exc_info=True,
+            )
+            return 0
+
     async def on_mode_change(self, new_mode: str) -> None:
-        """Mode-change callback — backfills the previous decision's actual_mode."""
-        await self.backfill_actual(new_mode)
+        """Mode-change callback — backfills the just-ended session window.
+
+        Tags every decision row written between the previous transition
+        (or a 2h cap, whichever is smaller) and now with the mode that
+        was active during that window. The first call after startup has
+        no previous mode to backfill — it just records state.
+        """
+        now = datetime.now(timezone.utc)
+        if self._last_mode is not None:
+            await self.backfill_actual_range(
+                self._last_mode, self._last_transition_at,
+            )
+        self._last_mode = new_mode
+        self._last_transition_at = now
 
     async def get_recent(self, limit: int = 10) -> list[dict]:
         """Return recent decisions for the API."""
@@ -228,3 +292,155 @@ class MLDecisionLogger:
                 exc_info=True,
             )
             return {}
+
+    async def compare_strategies(self, days: int = 14) -> dict:
+        """A/B comparison of fusion vs rule-engine-only vs process-priority.
+
+        All three strategies are evaluated on the same row set: fusion
+        decisions with backfilled ``actual_mode``. For each row, we
+        read the per-signal votes from ``factors.signal_details`` and
+        compare each signal's mode vote to the eventual ``actual_mode``.
+        Stale or missing signals are skipped for that row only.
+
+        Returns a dict keyed by strategy with ``total``, ``correct``,
+        and ``accuracy`` fields.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(
+                        MLDecision.predicted_mode,
+                        MLDecision.actual_mode,
+                        MLDecision.factors,
+                    )
+                    .where(
+                        MLDecision.decision_source == "fusion",
+                        MLDecision.actual_mode.isnot(None),
+                        MLDecision.timestamp >= cutoff,
+                    )
+                )
+                rows = result.all()
+
+            strategies = ("fusion", "rule_engine", "process")
+            totals = {s: 0 for s in strategies}
+            correct = {s: 0 for s in strategies}
+
+            for predicted, actual, factors in rows:
+                # fusion: compare the decision's chosen mode to actual.
+                totals["fusion"] += 1
+                if predicted == actual:
+                    correct["fusion"] += 1
+
+                if not factors or not isinstance(factors, dict):
+                    continue
+                signal_details = factors.get("signal_details") or {}
+
+                for strat in ("rule_engine", "process"):
+                    sig = signal_details.get(strat)
+                    if not isinstance(sig, dict) or sig.get("stale"):
+                        continue
+                    mode = sig.get("mode")
+                    if not mode:
+                        continue
+                    totals[strat] += 1
+                    if mode == actual:
+                        correct[strat] += 1
+
+            return {
+                strat: {
+                    "total": totals[strat],
+                    "correct": correct[strat],
+                    "accuracy": (
+                        correct[strat] / totals[strat]
+                        if totals[strat] > 0 else None
+                    ),
+                }
+                for strat in strategies
+            }
+        except Exception as exc:
+            logger.error(
+                "Failed to compare strategies: %s", exc, exc_info=True,
+            )
+            return {}
+
+    async def compute_override_rate(
+        self, days: int = 7, window_minutes: int = 5,
+    ) -> dict:
+        """Count user overrides vs cold manual switches.
+
+        An *override* is a ``source='manual'`` activity event whose mode
+        differs from the nearest preceding event (any source) within
+        ``window_minutes``. A *cold switch* is any other manual event —
+        either no prior event in the window, or the prior event already
+        agreed with the user's choice.
+
+        Phase 3's autonomy gate is <2 overrides/day sustained 30 days
+        (docs/CONFIDENCE_FUSION.md). This is the primary tracking metric.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            window = timedelta(minutes=window_minutes)
+
+            async with async_session() as session:
+                result = await session.execute(
+                    select(
+                        ActivityEvent.timestamp,
+                        ActivityEvent.mode,
+                        ActivityEvent.source,
+                    )
+                    .where(ActivityEvent.timestamp >= cutoff)
+                    .order_by(ActivityEvent.timestamp.asc())
+                )
+                rows = result.all()
+
+            overrides = 0
+            cold = 0
+            total_manual = 0
+            # Two-pointer walk: for each manual row, look back for the
+            # nearest prior event still within the window.
+            for i, row in enumerate(rows):
+                if row.source != "manual":
+                    continue
+                total_manual += 1
+                # SQLite returns naive datetimes; normalize.
+                row_ts = row.timestamp
+                if row_ts.tzinfo is None:
+                    row_ts = row_ts.replace(tzinfo=timezone.utc)
+
+                prior_mode = None
+                for j in range(i - 1, -1, -1):
+                    prior = rows[j]
+                    prior_ts = prior.timestamp
+                    if prior_ts.tzinfo is None:
+                        prior_ts = prior_ts.replace(tzinfo=timezone.utc)
+                    if row_ts - prior_ts > window:
+                        break
+                    prior_mode = prior.mode
+                    break
+
+                if prior_mode is not None and prior_mode != row.mode:
+                    overrides += 1
+                else:
+                    cold += 1
+
+            return {
+                "total_manual": total_manual,
+                "overrides": overrides,
+                "cold_switches": cold,
+                "overrides_per_day": overrides / days if days > 0 else 0,
+                "window_minutes": window_minutes,
+                "window_days": days,
+            }
+        except Exception as exc:
+            logger.error(
+                "Failed to compute override rate: %s", exc, exc_info=True,
+            )
+            return {
+                "total_manual": 0,
+                "overrides": 0,
+                "cold_switches": 0,
+                "overrides_per_day": 0,
+                "window_minutes": window_minutes,
+                "window_days": days,
+            }

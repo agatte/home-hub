@@ -1998,8 +1998,9 @@ class AutomationEngine:
                         self._last_fusion_result = fusion_result
                         fc = fusion_result["fused_confidence"]
                         fm = fusion_result["fused_mode"]
+                        acted = False
 
-                        # Can override stale process detection at 98%+
+                        # Can override stale process detection at 92%+
                         # with 80%+ agreement
                         if (
                             fusion_result.get("can_override")
@@ -2014,6 +2015,7 @@ class AutomationEngine:
                                 fusion_result["agreement"] * 100,
                             )
                             await self.set_manual_override(fm)
+                            acted = True
                             if ml_logger:
                                 await ml_logger.log_decision(
                                     predicted_mode=fm,
@@ -2027,6 +2029,7 @@ class AutomationEngine:
                                             if not s["stale"]
                                         ]),
                                         "signal_details": fusion_result["signals"],
+                                        "action": "override",
                                     },
                                     applied=True,
                                 )
@@ -2040,6 +2043,7 @@ class AutomationEngine:
                                 fm, fc * 100,
                             )
                             await self.set_manual_override(fm)
+                            acted = True
                             if ml_logger:
                                 await ml_logger.log_decision(
                                     predicted_mode=fm,
@@ -2050,9 +2054,29 @@ class AutomationEngine:
                                             fusion_result["agreement"],
                                         "signal_details":
                                             fusion_result["signals"],
+                                        "action": "auto_apply",
                                     },
                                     applied=True,
                                 )
+
+                        # Shadow-log every silent fusion tick so
+                        # compute_accuracy_by_source has per-signal data
+                        # to tune weights against. broadcast=False to
+                        # avoid flooding the pipeline WebSocket at 1/min.
+                        if not acted and ml_logger:
+                            await ml_logger.log_decision(
+                                predicted_mode=fm,
+                                confidence=fc,
+                                decision_source="fusion",
+                                factors={
+                                    "agreement": fusion_result["agreement"],
+                                    "signal_details": fusion_result["signals"],
+                                    "current_mode": self._current_mode,
+                                    "action": "shadow",
+                                },
+                                applied=False,
+                                broadcast=False,
+                            )
 
                 # Periodic pipeline broadcast — keeps the pipeline view fresh
                 # even when no mode changes occur (e.g., time period transitions)
