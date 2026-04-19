@@ -516,6 +516,7 @@ class AutomationEngine:
         self._event_logger = event_logger
         self._weather_service = weather_service
         self._music_mapper = None  # Set by main.py after construction
+        self._sonos = None  # Set by main.py after construction — used by late-night rescue
 
         # Weather condition tracking for music suggestions
         self._last_weather_condition: Optional[str] = None
@@ -711,6 +712,18 @@ class AutomationEngine:
         if hour >= schedule.late_night_start_hour or hour < schedule.wake_hour:
             return "late_night"
         return "night"
+
+    async def _sonos_is_playing(self) -> bool:
+        """Check if Sonos is actively playing. Used by the late-night rescue
+        so intentional late listening isn't interrupted by an auto-relax flip.
+        """
+        if not self._sonos:
+            return False
+        try:
+            status = await self._sonos.get_status()
+            return status.get("state") == "PLAYING"
+        except Exception:
+            return False
 
     def _build_time_rules(self, schedule: DaySchedule) -> list:
         """
@@ -1864,6 +1877,24 @@ class AutomationEngine:
                 if await self._check_external_off():
                     await asyncio.sleep(60)
                     continue
+
+                # Late-night rescue — after late_night_start_hour, prefer relax
+                # over "still working" or idle when no Sonos media is playing.
+                # Complements winddown (which expires at 4h) and handles the
+                # 02:00+ edge when someone's still at the desk. Guarded so real
+                # gaming/watching/social/sleeping are respected, and music
+                # playback counts as intentional activity.
+                if (
+                    not self._manual_override
+                    and self._get_time_period() == "late_night"
+                    and self._current_mode in ("working", "idle")
+                    and not await self._sonos_is_playing()
+                ):
+                    logger.info(
+                        "Late-night rescue: switching to relax from %s",
+                        self._current_mode,
+                    )
+                    await self.set_manual_override("relax")
 
                 # If no activity override and no manual override, apply time-based
                 if (

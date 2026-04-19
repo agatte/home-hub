@@ -193,6 +193,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.automation = automation
     automation._screen_sync = screen_sync
+    automation._sonos = sonos
     await automation.load_scene_overrides()
 
     # Restore laptop loopback state from persisted setting (default off)
