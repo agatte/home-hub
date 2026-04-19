@@ -11,8 +11,9 @@ profile toward the monitor, which BlazeFace (even full-range) scores
 unreliably. Body pose is invariant to head angle at that distance.
 
 Phase 2a: Presence via face OR pose (~5ms face, ~25ms pose-on-miss).
-Phase 2b (future): Posture classification (upright vs reclined) using the
-    same pose landmarks.
+Phase 2b: Posture classification (upright vs reclined) from the same pose
+    landmarks — expose-only (published via status / WS / ml_decisions, no
+    automation behavior consumes it yet).
 
 Privacy guarantees:
   - Frames are numpy arrays in memory only, overwritten each cycle.
@@ -99,6 +100,29 @@ ZONE_DESK_THRESHOLD = 0.40
 # absent threshold (7 frames × 2s poll ≈ 14s).
 ZONE_HYSTERESIS_SECONDS = 15
 
+# Posture classification — derived from pose landmarks when the pose path
+# fires. Compares mean shoulder-Y to mean hip-Y in MediaPipe's normalized
+# 0–1 coordinate space (Y=0 top, Y=1 bottom): upright torsos sit vertically
+# on-screen (hips below shoulders), reclined torsos collapse that delta
+# toward zero. Face-path hits and absent frames emit posture=None (hips
+# are not available) — hysteresis preserves the last committed value
+# through brief blanks, so a face-only session doesn't erase a prior
+# upright/reclined commit.
+#
+# Expose-only: published via status / WebSocket / ml_decisions, no
+# automation behavior consumes it yet. Future use: zone + posture gate
+# for mode-transition actuation (e.g. zone=bed + reclined sustained →
+# nudge toward relax, while carving out the watch-projector-from-bed
+# pattern where zone=bed but posture is upright).
+POSTURE_UPRIGHT = "upright"
+POSTURE_RECLINED = "reclined"
+# Minimum (hip_y - shoulder_y) in normalized coords to classify upright.
+# For Anthony at 2–3m in profile, typical uprights produce ~0.20 and
+# reclined ~0.05 — 0.12 splits the distribution cleanly.
+POSTURE_UPRIGHT_MIN_DELTA = 0.12
+# Hysteresis mirrors the zone rule (15s sustained before commit).
+POSTURE_HYSTERESIS_SECONDS = 15
+
 # Ambient lux calibration constants. Auto-exposure is disabled when a
 # calibration is present so gray.mean() reflects actual room brightness
 # instead of the webcam compensating with its aperture.
@@ -170,6 +194,11 @@ class CameraService:
         self._last_zone: Optional[str] = None            # "desk" | "bed" | None
         self._candidate_zone: Optional[str] = None       # pending zone awaiting commit
         self._candidate_zone_since: Optional[datetime] = None
+
+        # Posture classification — same hysteresis pattern as zone.
+        self._last_posture: Optional[str] = None         # "upright" | "reclined" | None
+        self._candidate_posture: Optional[str] = None
+        self._candidate_posture_since: Optional[datetime] = None
 
         # Ambient lux calibration + smoothing
         self._calibrated: bool = False
@@ -509,6 +538,16 @@ class CameraService:
         """
         return self._last_zone
 
+    @property
+    def posture(self) -> Optional[str]:
+        """Currently committed posture after hysteresis — 'upright' | 'reclined' | None.
+
+        None when no posture has yet committed (pose has never fired with
+        visible hips). Face-only sessions and brief pose misses preserve the
+        committed value.
+        """
+        return self._last_posture
+
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
         loop = asyncio.get_event_loop()
@@ -531,14 +570,16 @@ class CameraService:
                 pose_landmark_count = result.get("pose_landmark_count", 0)
                 ambient_lux = result["ambient_lux"]
                 frame_zone = result.get("zone")
+                frame_posture = result.get("posture")
 
                 self._last_detection = status
                 self._last_confidence = confidence
                 self._last_detection_source = source
                 self._last_ambient_lux = ambient_lux
                 self._update_ema_lux(ambient_lux)
-                # Run zone hysteresis — may commit a new self._last_zone.
+                # Run zone + posture hysteresis — may commit new committed values.
                 self._apply_zone_hysteresis(frame_zone)
+                self._apply_posture_hysteresis(frame_posture)
 
                 # Keep the camera lane fresh in confidence fusion every cycle.
                 # The edge-triggered report_activity() calls below drive actual
@@ -595,6 +636,8 @@ class CameraService:
                             "ambient_lux": ambient_lux,
                             "zone": self._last_zone,
                             "frame_zone": frame_zone,
+                            "posture": self._last_posture,
+                            "frame_posture": frame_posture,
                         },
                         applied=self._consecutive_absent >= ABSENT_THRESHOLD or (
                             status == "present" and self._was_absent is False
@@ -624,6 +667,8 @@ class CameraService:
                         "current_multiplier": current_multiplier,
                         "consecutive_absent": self._consecutive_absent,
                         "zone": self._last_zone,
+                        "posture": self._last_posture,
+                        "candidate_posture": self._candidate_posture,
                     },
                 )
 
@@ -677,6 +722,46 @@ class CameraService:
             self._candidate_zone = None
             self._candidate_zone_since = None
 
+    def _apply_posture_hysteresis(self, candidate: Optional[str]) -> None:
+        """Update ``self._last_posture`` via a sustained-candidate rule.
+
+        Mirrors ``_apply_zone_hysteresis``: brief blanks (face-path hits,
+        pose misses) preserve the committed posture; a new posture must
+        hold for ``POSTURE_HYSTERESIS_SECONDS`` before replacing the
+        committed value.
+        """
+        now = datetime.now(timezone.utc)
+
+        if candidate is None:
+            self._candidate_posture = None
+            self._candidate_posture_since = None
+            return
+
+        if candidate == self._last_posture:
+            self._candidate_posture = None
+            self._candidate_posture_since = None
+            return
+
+        if candidate != self._candidate_posture:
+            self._candidate_posture = candidate
+            self._candidate_posture_since = now
+            return
+
+        if self._candidate_posture_since is None:
+            self._candidate_posture_since = now
+            return
+
+        elapsed = (now - self._candidate_posture_since).total_seconds()
+        if elapsed >= POSTURE_HYSTERESIS_SECONDS:
+            previous = self._last_posture or "unknown"
+            logger.info(
+                "Posture changed %s → %s (held %.1fs)",
+                previous, candidate, elapsed,
+            )
+            self._last_posture = candidate
+            self._candidate_posture = None
+            self._candidate_posture_since = None
+
     def _evaluate_pose(self, pose_result: Any) -> tuple[bool, float, int]:
         """Decide whether a pose result constitutes a visible person.
 
@@ -700,6 +785,32 @@ class CameraService:
             return False, 0.0, count
         mean_vis = sum(visibilities) / count
         return True, mean_vis, count
+
+    def _evaluate_posture(self, pose_result: Any) -> Optional[str]:
+        """Derive upright vs reclined from shoulder/hip Y in normalized coords.
+
+        Returns None when hip visibility is too low to compute a meaningful
+        delta — hysteresis preserves the last committed posture through brief
+        pose misses rather than treating the blank as a posture change.
+        """
+        if pose_result is None or not getattr(pose_result, "pose_landmarks", None):
+            return None
+        landmarks = pose_result.pose_landmarks[0]
+
+        def _mean_y(indices: tuple[int, ...]) -> Optional[float]:
+            ys = [
+                float(landmarks[i].y) for i in indices
+                if i < len(landmarks)
+                and float(getattr(landmarks[i], "visibility", 0.0)) >= MIN_POSE_VISIBILITY
+            ]
+            return sum(ys) / len(ys) if ys else None
+
+        shoulder_y = _mean_y((POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER))
+        hip_y = _mean_y((POSE_LEFT_HIP, POSE_RIGHT_HIP))
+        if shoulder_y is None or hip_y is None:
+            return None
+        delta = hip_y - shoulder_y
+        return POSTURE_UPRIGHT if delta >= POSTURE_UPRIGHT_MIN_DELTA else POSTURE_RECLINED
 
     def _process_frame(self) -> Optional[dict]:
         """Capture a frame, run face detection (then pose if face missed),
@@ -756,6 +867,7 @@ class CameraService:
                     "pose_landmark_count": 0,
                     "ambient_lux": ambient_lux,
                     "zone": zone,
+                    "posture": None,  # Face path can't derive torso geometry
                 }
 
             # Fallback — pose landmarker (~60ms at 640×480, only on face miss)
@@ -777,6 +889,7 @@ class CameraService:
                         # MediaPipe pose landmark .x is already normalized 0–1.
                         cx = sum(s.x for s in shoulders) / len(shoulders)
                         zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
+                    posture = self._evaluate_posture(pose_result)
                     return {
                         "status": "present",
                         "confidence": mean_vis,
@@ -784,6 +897,7 @@ class CameraService:
                         "pose_landmark_count": count,
                         "ambient_lux": ambient_lux,
                         "zone": zone,
+                        "posture": posture,
                     }
 
             return {
@@ -793,6 +907,7 @@ class CameraService:
                 "pose_landmark_count": 0,
                 "ambient_lux": ambient_lux,
                 "zone": None,
+                "posture": None,
             }
 
         finally:
@@ -1015,4 +1130,6 @@ class CameraService:
             "absent_threshold": ABSENT_THRESHOLD,
             "zone": self._last_zone,
             "candidate_zone": self._candidate_zone,
+            "posture": self._last_posture,
+            "candidate_posture": self._candidate_posture,
         }
