@@ -34,8 +34,14 @@ logger = logging.getLogger("home_hub.camera")
 
 # Polling and detection constants
 POLL_INTERVAL = 2       # Seconds between frame captures
-FRAME_WIDTH = 320       # Downsampled frame size for inference
-FRAME_HEIGHT = 240
+# 640x480 gives BlazeFace enough pixel detail to score Anthony's profile view
+# at 2-3m (corner position) noticeably higher than 320x240 did. Pose landmarker
+# was already solid at the lower resolution; face scores are the beneficiary.
+# Lux calibration (exposure + baseline_lux) MUST be re-run after any change to
+# these constants — gray.mean() at the new pixel count will differ from the
+# value the stored baseline was recorded at.
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
 # Seven consecutive misses (~14s) before flipping to away. With pose as a
 # backup signal to face detection, brief profile-view dropouts rarely cost
 # more than one poll, so we don't need extra hysteresis here.
