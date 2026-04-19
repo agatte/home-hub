@@ -214,19 +214,19 @@ Key additions beyond current:
 - **`hue_v2_service.py`** — CLIP API v2/httpx: native bridge scenes and dynamic effects. Maintains v1↔v2 UUID mapping cache.
 - **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
 - **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
-- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time; weather effects (rain→candle, storm→sparkle) overlay when no mode effect is set. Effects are only stopped/restarted on change — same-effect cycles are skipped to preserve brightness base. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0).
+- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time; weather effects (rain→candle, storm→sparkle) overlay when no mode effect is set. Effects are only stopped/restarted on change — same-effect cycles are skipped to preserve brightness base. `MODE_TRANSITION_TIME` gives each mode a different transition feel. Scene drift applies subtle variation during long sessions. Mode → scene overrides (from DB) checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0). Late-night rescue (23:00+, no override, mode ∈ {working, idle}, Sonos not playing) auto-applies relax to cover the edge after winddown's override expires.
 - **`weather_service.py`** — NWS API (api.weather.gov) with 5-minute cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset. Active severe weather alerts checked every 2 min — alert descriptions override stale observation data so automation catches storms immediately. Sunrise/sunset from sunrise-sunset.org (24h cache). No API key needed.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
 - **`presence_service.py`** — WiFi presence detection. Pings iPhone (192.168.1.148) every 30s. 10-min timeout → gradual departure fade → Sonos pause → away. Arrival → choreographed light wave (L3→L4→L1→L2, 1s staggers) + adaptive TTS greeting + weather-aware effect + music auto-play. ARP fallback for DHCP IP changes. Config in `app_settings` key `presence_config`.
 - **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing (α=0.3), 2.5s interval, 2s transitions. Auto-starts in watching/gaming mode.
 - **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning + wind-down routines.
 - **`morning_routine.py`** — Fetches weather (via shared WeatherService) + commute (Google Maps), generates TTS, plays on Sonos.
-- **`winddown_routine.py`** — Evening relax: activates candlelight + dims lights + lowers volume + brief TTS.
+- **`winddown_routine.py`** — Evening relax: activates candlelight + dims lights + lowers volume + brief TTS. Current config fires at 22:00 weekdays. `_ACTIVE_MODES = {gaming, watching, social}` is what *delays* the routine (via `skip_if_active`) — "working" is intentionally NOT in the set so late-night dev sessions don't block it. TTS says "Unwinding for the night..." (not "Wind-down", which neural TTS mispronounces as moving air).
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML (plistlib). Extracts artist play counts, genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` for discovery. Caches in DB (30-day TTL). Mode-specific seed selection with cross-mode dedup.
 - **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
 - **`camera_service.py`** — MediaPipe face detection on the Latitude webcam, opt-in via `camera_enabled`. Polls every 2s at 320×240. 7 absent frames (~14s) → `report_activity(mode="away", source="camera")`. Same frames produce an EMA-smoothed ambient lux reading (α=0.3, ~20s to 95%) that feeds `AutomationEngine._apply_lux_multiplier` for working/relax modes (±15% bri swing, anchored at the user's calibrated baseline). `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records `baseline_lux` using a poll-cadence measurement (burst reads inflate the baseline because auto-gain winds up high — don't remove the sleeps). Pauses during sleeping mode (camera LED off).
-- **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 5s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`.
+- **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 5s. Gaming, working, watching, sleeping, away detection. POSTs to `/api/automation/activity`. `GAME_PROCESSES` in `game_list.py` is intentionally narrow — `javaw.exe` was removed because it matched every JVM process (JetBrains IDEs, Gradle, build tools), silently forcing "gaming" over working since gaming has priority 5. OSRS is still caught via `runelite.exe` / `osclient.exe`.
 - **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS measurement. Party detection: sustained noise >2min + no game = "social". Never records audio.
 
 ---
@@ -479,7 +479,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 
 | Mode | Detection | Lighting Strategy | Notes |
 |------|-----------|-------------------|-------|
-| `gaming` | LeagueofLegends.exe, javaw.exe (OSRS), 20+ game processes | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
+| `gaming` | LeagueofLegends.exe, RuneLite, 20+ specific game binaries (NOT `javaw.exe` — too generic, used by JetBrains IDEs etc.) | Per-light: neutral fill + blue/purple accents on peripherals, warm bias on desk lamp (sync overrides). Night: deep blue ambient glow. | Screen sync on L2, glisten effect eve/night |
 | `working` | windowsterminal, powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains IDEs, modern terminals (wezterm, alacritty, etc.) | ct-mode clean whites, desk-dominant. Night: L2 desk bri=130/2700K + L1 ambient bri=60/2270K + kitchen OFF. | IES 1:3 monitor-ambient contrast |
 | `watching` | VLC, Plex, Stremio, media players | Projector-friendly: warm throughout (no D65), dim, L2 as soft bias from across the room. Kitchen OFF evening+. | Screen sync on L2 — projector on HDMI from dev PC, so mss captures the projected frames |
 | `social` | Blue Yeti ambient noise >2min + no game | "Velvet Speakeasy" — single static palette: L1 dusty rose (statement), L2 cognac amber, L3/L4 matched burnt-orange pair. Dim but visible for faces and drinks. | No effect (static) — saturation does the work. 1s snap |
@@ -506,6 +506,14 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 **In-flight window:** `hue_service` tracks per-light deadlines; the polling loop skips broadcasting `light_update` for a light that was just written until transition time + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition bridge reads.
 
 **Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
+
+**Late-night autopilot cascade:** Three layers stack so no manual override is needed at night:
+
+1. **22:00 weekdays** — `winddown_routine` fires, sets manual override to `relax`, lowers Sonos volume, plays brief TTS. Skipped only if actively in gaming/watching/social (not working — dev sessions shouldn't block it).
+2. **22:00–06:00** — `ConfidenceFusion` applies a `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` multiplier to the process-detection lane. Stale dev tools left open no longer lock the fused mode to "working"; behavioral + rule + audio lanes carry more weight.
+3. **23:00+ (late_night period), no override, no Sonos playback, detected mode ∈ {working, idle}** — `run_loop` auto-applies `relax` as a safety net for when winddown's 4h override expires. Real gaming/watching/social/sleeping are respected.
+
+Fusion override threshold is `0.92` (was 0.98) — 0.98 was so tight it never tripped in practice. 80% agreement is the safety net.
 
 ---
 

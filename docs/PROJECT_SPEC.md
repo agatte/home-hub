@@ -79,7 +79,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15s away detection vs the 10-min idle timer. Also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) feeding an adaptive brightness multiplier in working + relax modes so lights subtly adapt to real room conditions (clouds, sunset, lamps)
 - `ScreenSyncService` K-means — 5-cluster dominant color extraction (saturation-weighted 0.7 + luminance balance 0.3)
 - `MLDecisionLogger` — every mode decision logged to `ml_decisions` with source (fusion/ml/rule/time/manual/lighting_learner) + factors
-- `ConfidenceFusion` — 5-signal weighted ensemble (process, camera, audio, behavioral, rule) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence
+- `ConfidenceFusion` — 5-signal weighted ensemble (process, camera, audio, behavioral, rule) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence, and can override an active detected mode at `OVERRIDE_THRESHOLD = 0.92` + 80% agreement (lowered from 0.98 on April 19 — 0.98 was mathematically impossible to trip in practice). During 22:00–06:00 local, the process-detection lane is decayed by `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` so stale dev tools left open don't dominate the ensemble
 - **Nightly fusion weight tuning** — `fusion_weight_tuning` ScheduledTask runs daily at 3:30 AM (30 min before `ml_nightly_training` at 4:00 AM). `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion decisions where `factors.signal_details` is present and computes per-source accuracy; `ConfidenceFusion.update_weights_from_accuracy()` normalizes those values into new weights. Sources without usable samples fall back to `DEFAULT_WEIGHTS`. Manual trigger via `POST /api/learning/retune-weights` returns before/after weights for validation
 
 **Shadow** (running, logging predictions, not yet authoritative):
@@ -121,7 +121,8 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 
 **Automation timing:**
 - ~~Evening transition is too abrupt~~ — fixed: 30-minute gradual lerp before winddown_start_hour
-- ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social/working
+- ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social. "working" was later removed from the skip set (April 19) — late-night dev sessions are exactly when winddown should fire, not when it should defer
+- ~~Clearing override at 12:45 AM left lights in gaming/night's deep-blue ambient glow because gaming has no `late_night` state — forced manual relax every night~~ — fixed: three-layer autopilot cascade. (1) `javaw.exe` removed from `GAME_PROCESSES` (it had been silently forcing "gaming" on any JVM process). (2) Winddown enabled at 22:00 weekdays so the transition is proactive. (3) Late-night rescue in `run_loop` auto-applies relax after 23:00 when no override is set, detected mode is working/idle, and Sonos isn't playing — covers the edge after winddown's 4h override expires. Plan at `.claude/plans/let-s-look-at-the-serene-leaf.md`
 - ~~Mode detection has noticeable lag between activity start and mode switch~~ — fixed: dropped PC agent POLL_INTERVAL from 15s to 5s (worst-case 5s, average ~2.5s). The backend processes activity reports synchronously on POST, so the polling interval was the entire lag budget.
 
 **Lighting mode-switch quality (April 2026):**
@@ -810,6 +811,8 @@ Core brain — combines time rules with activity detection.
 | `run_loop` | `() → None` | Background loop (60s interval) |
 | `update_schedule_config` | `(config) → None` | Hot-reload schedule |
 | `update_mode_brightness` | `(brightness: dict) → None` | Hot-reload brightness |
+
+**Late-night rescue** — inside `run_loop`, after the external-off check and before time-based application: if `_get_time_period() == "late_night"` (23:00+), no manual override is active, `_current_mode ∈ {"working", "idle"}`, and `_sonos_is_playing()` returns False, the engine auto-applies `set_manual_override("relax")`. Respects real entertainment modes (gaming, watching, social, sleeping) and music playback as intentional signals. Complements the winddown routine (which runs at 22:00 and sets a 4h override) by covering the 02:00+ edge after that override expires.
 
 #### MusicMapper
 Maps modes to Sonos favorites with vibe-based matching and smart auto-play logic.
