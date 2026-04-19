@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 logger = logging.getLogger("home_hub.camera")
@@ -46,6 +46,31 @@ async def get_status(request: Request) -> dict:
         **service.get_status(),
         "current_multiplier": _current_multiplier(service),
     }
+
+
+@router.get("/snapshot")
+async def get_snapshot(request: Request, annotate: bool = False) -> Response:
+    """Return a single JPEG frame from the webcam.
+
+    Opt-in: requires ``camera_enabled``. The frame is captured through the
+    running camera service (shares the existing ``cv2.VideoCapture`` handle)
+    and is never written to disk or cached server-side. When ``annotate`` is
+    true, the response overlays the face bounding box and the current lux +
+    multiplier readout for framing / calibration verification.
+    """
+    service = getattr(request.app.state, "camera_service", None)
+    if service is None or not service.enabled:
+        raise HTTPException(status_code=409, detail="camera is not enabled")
+    if getattr(service, "_paused", False):
+        raise HTTPException(status_code=503, detail="camera paused (sleeping mode)")
+    jpeg = await service.capture_snapshot(annotate=annotate)
+    if jpeg is None:
+        raise HTTPException(status_code=503, detail="capture failed")
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/calibrate")

@@ -17,6 +17,7 @@ Privacy guarantees:
 
 import asyncio
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -72,6 +73,7 @@ class CameraService:
         self._enabled = False
         self._paused = False  # Paused during sleeping mode
         self._cap = None
+        self._cap_lock = threading.Lock()  # Serializes poll-loop and snapshot reads
         self._face_detector = None
 
         # Detection state
@@ -496,7 +498,8 @@ class CameraService:
         if self._cap is None or not self._cap.isOpened():
             return None
 
-        ret, frame = self._cap.read()
+        with self._cap_lock:
+            ret, frame = self._cap.read()
         if not ret or frame is None:
             return None
 
@@ -545,6 +548,92 @@ class CameraService:
             frame = None  # noqa: F841
             rgb = None  # noqa: F841
             gray = None  # noqa: F841
+
+    async def capture_snapshot(self, annotate: bool = False) -> Optional[bytes]:
+        """Grab one frame from the existing capture device and return JPEG bytes.
+
+        Returns None if the service is disabled, paused (sleeping mode), still
+        calibrating, or the capture handle is unavailable. Frame bytes are
+        never persisted to disk — only the encoded JPEG buffer is returned.
+        """
+        if not self._enabled or self._paused or self._calibrating:
+            return None
+        if self._cap is None or not self._cap.isOpened():
+            return None
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._capture_snapshot_sync, annotate)
+
+    def _capture_snapshot_sync(self, annotate: bool) -> Optional[bytes]:
+        """Blocking snapshot worker. Runs in the default executor."""
+        import cv2
+
+        with self._cap_lock:
+            if self._cap is None or not self._cap.isOpened():
+                return None
+            ret, frame = self._cap.read()
+
+        if not ret or frame is None:
+            return None
+
+        jpeg: Optional[bytes] = None
+        rgb = None
+        try:
+            if annotate:
+                try:
+                    import mediapipe as mp
+
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                    results = self._face_detector.detect(mp_image) if self._face_detector else None
+                    if results and results.detections:
+                        for det in results.detections:
+                            bbox = det.bounding_box
+                            x1, y1 = int(bbox.origin_x), int(bbox.origin_y)
+                            x2, y2 = x1 + int(bbox.width), y1 + int(bbox.height)
+                            conf = float(det.categories[0].score) if det.categories else 0.0
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            cv2.putText(
+                                frame,
+                                f"{conf:.2f}",
+                                (x1, max(y1 - 6, 12)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.45,
+                                (0, 0, 255),
+                                1,
+                                cv2.LINE_AA,
+                            )
+                except Exception as exc:
+                    logger.warning("Snapshot annotation failed: %s", exc)
+
+                multiplier: Optional[float] = None
+                if self._calibrated and self._ema_lux is not None:
+                    from backend.services.automation_engine import lux_to_multiplier
+                    baseline = self._baseline_lux if self._baseline_lux is not None else 90.0
+                    multiplier = lux_to_multiplier(float(self._ema_lux), float(baseline))
+
+                overlay_lines = [
+                    f"ema_lux={self._ema_lux:.1f}" if self._ema_lux is not None else "ema_lux=--",
+                    f"baseline={self._baseline_lux:.1f}" if self._baseline_lux is not None else "baseline=--",
+                    f"mult={multiplier:.2f}" if multiplier is not None else "mult=--",
+                    f"detection={self._last_detection}",
+                ]
+                for i, line in enumerate(overlay_lines):
+                    y = 14 + i * 14
+                    cv2.putText(frame, line, (5, y), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, line, (5, y), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not ok:
+                return None
+            jpeg = buf.tobytes()
+        finally:
+            # Privacy: drop frame references before returning.
+            frame = None  # noqa: F841
+            rgb = None  # noqa: F841
+
+        return jpeg
 
     async def on_mode_change(self, new_mode: str) -> None:
         """Mode-change callback — pause polling during sleeping mode.

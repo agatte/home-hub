@@ -155,6 +155,30 @@ async def get_presence_status() -> dict:
 
 
 @mcp.tool()
+async def get_camera_snapshot(annotate: bool = True) -> Any:
+    """Capture one JPEG frame from the Latitude's webcam and return it to the agent.
+
+    Requires the camera service to be enabled (opt-in via POST /api/camera/enable).
+    Frames are never written to disk; the JPEG is returned once and not cached.
+    When ``annotate`` is true the image includes the MediaPipe face box plus a
+    readout of current ambient lux, baseline, multiplier, and last detection.
+    Returns a plain string error (e.g. "camera is not enabled") when the service
+    is disabled, paused, or capture fails.
+    """
+    from fastmcp.utilities.types import Image
+
+    async with _client() as c:
+        r = await c.get(f"/api/camera/snapshot?annotate={'true' if annotate else 'false'}")
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+            return Image(data=r.content, format="jpeg")
+        try:
+            detail = r.json().get("detail", r.text)
+        except Exception:
+            detail = r.text
+        return f"snapshot unavailable (HTTP {r.status_code}): {detail}"
+
+
+@mcp.tool()
 async def set_mode(mode: str) -> dict:
     """
     Manually override the automation mode.
