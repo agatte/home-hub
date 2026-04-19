@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB - FULL APPLICATION AUDIT
-                    Date: April 15, 2026 (complete rewrite)
+                    Date: April 16, 2026 (independent re-audit)
 ================================================================================
 
 Comprehensive audit covering backend, frontend, machine learning, security,
@@ -11,23 +11,34 @@ Stack:  FastAPI + SvelteKit + SQLite + WebSocket + LightGBM + YAMNet +
         MediaPipe + Pi-hole (Docker)
 Prod:   Dell Latitude 7420 (Ubuntu 24.04) kiosk mode at 192.168.1.210
 Dev:    Windows desktop at 192.168.1.30
-Repo:   github.com/agatte/home-hub (200 tracked files, no credential leaks)
+Repo:   github.com/agatte/home-hub (200+ tracked files, no credential leaks)
 
-Changes since last audit (April 12, 2026):
+Changes since last audit (April 15, 2026):
+  - Lighting redesign landed: per-light spatial variation, kitchen pair rule
+    in functional modes, post-sunset ct>=333 cutoff, colorspace exclusivity
+    (sat=0 before ct), _reconcile_effect fix for mode-switch brightness pop
+  - Watching mode tuned for projector (L2 from-across-room bias, no D65)
+  - Gaming watching-mode L1/L2 evening/night retuned (50->65, 25->45)
+  - docs/LIGHTING_EXPANSION.md added (Hue/Zigbee hardware wishlist)
+  - CLAUDE.md source-of-truth block references LIGHTING_EXPANSION.md
+  - automation_engine.py grew 1,825 -> 1,944 lines (+119) in one day
+
+Baseline from April 15 (carried forward):
   - ML Phase 1+2 shipped: 8 ML services (2,093 LOC) in backend/services/ml/
-  - BehavioralPredictor (LightGBM), AudioClassifier (YAMNet, shadow mode)
-  - LightingPreferenceLearner (EMA), MusicBandit (Thompson sampling)
-  - ConfidenceFusion: 5-signal weighted ensemble (Phase 3 start)
+  - BehavioralPredictor, AudioClassifier, LightingPreferenceLearner, MusicBandit
+  - ConfidenceFusion: 5-signal weighted ensemble (Phase 3 start, wired into
+    automation_engine.py at lines 805, 1603, 1659-1661)
+  - Behavioral predictor queried at automation_engine.py:1595-1599
   - MediaPipe camera presence detection (15s away, opt-in)
   - Smart screen sync (K-means color clustering replaces naive averaging)
   - Live pipeline dashboard with fusion ring + per-signal gauge cards
   - Rule engine with learned time-based mode patterns
   - Ambient sound service (browser-based, weather-reactive)
   - NWS weather migration (replaces OpenWeatherMap, no API key needed)
-  - WiFi presence detection with arrival/departure choreography
+  - WiFi presence detection with arrival/departure choreography and ARP
+    fallback (presence_service.py:283) after 3 ping failures
   - Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
-  - Gaming lights: dim accents (bri 8-30) so screen sync dominates
-  - Test suite expanded: 101 → 183 tests across 12 files
+  - Test suite: 183 tests across 12 files
   - Event logging: 6 tables (activity, lights, sonos, scenes, ml_decisions,
     ml_metrics)
 
@@ -37,11 +48,14 @@ Changes since last audit (April 12, 2026):
 
   Category                Grade   Prev    Summary
   ---------------------   -----   -----   ----------------------------------------
-  Backend Architecture    B       B       37 services, solid ML design, but
-                                          automation_engine.py grew to 1,825 lines
+  Backend Architecture    B-      B       Solid ML design, but automation_engine.py
+                                          hit 1,944 lines (+119 in one day) and
+                                          main.py still injects deps via attrs
   Frontend / UI           B       B       36 components, 12 stores, 4 routes.
                                           Analytics page = live fusion dashboard
-  Design / UX             B+      B+      Gaming lights revamp. Otherwise stable
+  Design / UX             A-      B+      Full lighting redesign: per-light spatial
+                                          variation, kitchen pair rule, ct>=333
+                                          cutoff, colorspace exclusivity
   Security                C       D       CORS fixed, rate limiting, WS validation.
                                           Still no auth, no file upload limits
   Machine Learning        B+      N/A     NEW: 8 services, confidence fusion,
@@ -89,11 +103,28 @@ Changes since last audit (April 12, 2026):
   - Rate limiting via slowapi (120 req/min default, 10/min on TTS)
 
   Issues:
-  - automation_engine.py is 1,825 lines (grew from 1,093 since last audit) --
+  - automation_engine.py is 1,944 lines (grew from 1,825 in one day) --
     urgently needs splitting into mode logic, light state calculator, and
-    effect manager
+    effect manager. The file keeps absorbing every new capability
   - main.py lifespan function is ~350 lines initializing 20+ services --
     extract to a bootstrap.py or service registry
+  - Service dependency injection via direct attribute assignment at
+    main.py:314-328 (automation._confidence_fusion = ..., _behavioral_predictor
+    = ..., rule_engine._fusion = ...). Invisible coupling; not discoverable
+    from __init__ signatures. Refactor to constructor args
+  - Incomplete shutdown in lifespan finally block: only hue_v2, rec_service,
+    and camera get close() called. Sonos, TTS, music_mapper, automation,
+    scheduler, rule_engine, presence, ambient_sound, pihole, bar, and plant
+    services leak open sockets/sessions on shutdown
+  - Event logger silent-drop pattern: event_logger.py:83-84, :146, :174,
+    :205 catch bare Exception and log-only. ML training data gaps accumulate
+    invisibly -- no retry queue, no alert on repeated failures
+  - Per-light manual override expiration not enforced in code. Mode-level
+    4h timeout works (automation_engine.py:1552), but _manual_light_overrides
+    dict only clears via clear_override() -- no per-entry timeout
+  - Scene override silent fallback hole at automation_engine.py:1034-1045:
+    if both v2 scene and preset fallback fail, lights stay in prior state
+    with no ERROR-level log
   - scenes.py route file is 768 lines with 20 preset definitions inline --
     extract presets to a separate module
   - Light IDs are strings in some places, ints in others -- inconsistent typing
@@ -124,6 +155,21 @@ Changes since last audit (April 12, 2026):
     cleanup may not catch all paths
   - Silent API failures: api.js -- .catch(() => ({})) swallows all errors,
     UI never shows failure state
+  - api.js has no AbortController/timeout on apiGet/apiPost -- slow
+    backend hangs fetches indefinitely
+  - WebSocket unknown-type messages silently dropped (init.js:68-114 has
+    no `default` case in the type switch)
+  - ws.js build_id reload calls window.location.reload() unconditionally --
+    no error path if the reload itself fails during a deploy race
+  - ParallaxScene.svelte rAF loop has no FPS cap (unlike GenerativeCanvas
+    which caps at 15fps); paints ~9x as much work on a 144Hz display
+  - Modal portal duplication risk: PlantWidget and BarWidget each append
+    modals to document.body via a local portal action with no singleton
+    guard. Two-mount = duplicated listeners
+  - ErrorToast.svelte lacks role="alert" / aria-live -- screen readers
+    silently miss the toast
+  - LightCard.svelte:11-19 redefines color presets already in
+    theme.js:147-156. Deduplicate to prevent drift
   - Accessibility gaps:
     * Empty alt text on album art images
     * Slider missing aria-labelledby
@@ -145,7 +191,14 @@ Changes since last audit (April 12, 2026):
     generative canvas fallback)
   - Mode card deck with flip animation is memorable
   - NowPlayingChip and NowPlayingIdle are clean and unobtrusive
-  - Gaming lights revamp -- saturated purple/blue/teal with wider color spread
+  - April 16 lighting redesign shipped: per-light spatial variation (no
+    more _uniform), kitchen pair rule in functional modes, post-sunset
+    ct>=333 cutoff, colorspace exclusivity (sat=0 before ct), watching
+    tuned for projector (L2 from-across-room bias, no D65), gaming uses
+    dim accents so screen sync dominates
+  - _reconcile_effect applies state FIRST then effect, with 0.5s guard --
+    fixes the mode-switch brightness pop bug; greenish-bedroom fix stable
+    via hue_service.py:144 (sat=0 before ct, drop hue when ct present)
 
   Issues:
   - No prefers-reduced-motion gate on heavy animations
@@ -153,6 +206,8 @@ Changes since last audit (April 12, 2026):
   - rotateY(540deg) on card flip is 3x more rotation than needed
   - No loading/skeleton states for async data (weather, Sonos status)
   - Mobile responsive breakpoints exist but untested on actual devices
+  - Mobile touch targets: FloatingNav.svelte shrinks to 40x40px at 480
+    breakpoint (WCAG wants 48x48); LightCard color swatches are 20x20
 
 --------------------------------------------------------------------------------
 4. SECURITY -- Grade: C (was D)
@@ -252,14 +307,20 @@ Changes since last audit (April 12, 2026):
   - model_meta.json -- tracks version, accuracy, status per model
 
   Issues:
-  - No ML-specific tests yet (spec defines test_feature_builder.py,
-    test_behavioral_predictor.py, test_audio_classifier.py but only
-    test_audio_classifier.py and test_camera_service.py are implemented)
+  - ML test coverage still patchy: audio_classifier (26) + camera_service
+    (16) have tests. behavioral_predictor, lighting_learner, music_bandit,
+    feature_builder, ml_logger, confidence_fusion, rule_engine do NOT
   - BehavioralPredictor in cold start period -- needs 500+ activity events
     (~1 week of data) before first training
   - AudioClassifier still in shadow mode -- needs accuracy comparison with
     existing RMS detector before promotion
-  - Phase 3 (autonomous operation) not started
+  - ConfidenceFusion wired into automation_engine.py:1659-1661 but fusion
+    *weights* still hardcoded -- no nightly accuracy-driven update. The
+    promised weight-learning step from ml_metrics is not shipped
+  - Lighting-learner overlay applied silently: automation_engine.py:1077-1083
+    applies the LightingPreferenceLearner delta to the target state but no
+    ml_decisions row is written for the overlay. Hard to tell from logs
+    whether the learner is actually touching a light on any given cycle
   - No A/B testing framework for comparing ML vs rule engine decisions
   - lightgbm is optional dependency -- silent graceful degradation means
     predictor failures could go unnoticed without monitoring
@@ -320,6 +381,10 @@ Changes since last audit (April 12, 2026):
   - No alerting on Hue/Sonos disconnections (Uptime Kuma only checks HTTP)
   - No request tracing -- no request IDs, can't correlate actions to logs
   - No database health in /health -- only checks Hue/Sonos, not SQLite
+  - No background-task heartbeat in /health. Polling loops (hue, sonos),
+    automation loop, scheduler, rule_engine, camera service, presence
+    service can hang while /health still returns 200. Should expose a
+    last_heartbeat timestamp per task and flag stale ones
   - No ML model health alerts (if predictor silently fails, no notification)
   - Timestamp format missing timezone in log output
 
@@ -367,15 +432,18 @@ Changes since last audit (April 12, 2026):
   - ML_SPEC.md is outstanding -- 1,397 lines covering vision, phased
     rollout, architecture, features, data pipelines, model selection,
     testing strategy, deployment plan, performance budgets, privacy design
+  - LIGHTING_EXPANSION.md is the hardware wishlist by category and price
+    tier, with per-apartment placement and integration notes. Referenced
+    from CLAUDE.md source-of-truth block
   - CLAUDE.md is thorough -- patterns, commands, network devices, file
     structure, developer patterns with code examples
-  - Future_Development.md has 14 well-described feature ideas
+  - Future_Development.md holds 15 well-described feature ideas (to which
+    this audit appends 4 more: Override Reason Classifier, Transition-Curve
+    Preference Learning, Focus Envelope, Apartment Logbook)
   - Commit messages follow conventional format (fix:, feat:, docs:)
   - API routes fully documented with method, path, purpose tables
 
   Issues:
-  - Future_Development.md references OpenWeatherMap (line 13) -- should be
-    NWS API since the migration shipped
   - No ops runbook -- how to troubleshoot, check logs, recover from failures
   - No changelog for breaking changes
   - No database migration documentation (migrations are inline in database.py)
@@ -460,6 +528,18 @@ Changes since last audit (April 12, 2026):
   Silent API error swallowing -- .catch(()      api.js                OPEN
   => ({})) hides all failures from UI
 
+  Per-light manual override has no per-entry    automation_engine     OPEN
+  expiration -- _manual_light_overrides dict    .py:933, :942
+  only clears via clear_override(), not a 4h
+  timeout like the mode-level override
+
+  Scene override silent failure if both v2      automation_engine     OPEN
+  scene activation AND preset fallback fail --  .py:1034-1045
+  lights stay in prior state, no ERROR log
+
+  WebSocket unknown-type messages silently      init.js:68-114        OPEN
+  dropped; no `default` case in type switch
+
 ================================================================================
                         TOP PRIORITY ACTION ITEMS
 ================================================================================
@@ -520,7 +600,7 @@ Changes since last audit (April 12, 2026):
   -----------------------------------------------------------------------
   [ ]  Add simple API key auth for write endpoints
   [ ]  Add Prometheus /metrics endpoint
-  [ ]  Split automation_engine.py into smaller modules (1,825 lines)
+  [ ]  Split automation_engine.py into smaller modules (1,944 lines)
   [ ]  Extract main.py lifespan to bootstrap.py
   [ ]  Add deploy.sh rollback capability
   [ ]  Migrate Plant App integration to HTTPS
@@ -533,102 +613,82 @@ Changes since last audit (April 12, 2026):
                           CREATIVE FEATURE IDEAS
 ================================================================================
 
-  MACHINE LEARNING IDEAS (novel)
+  The standing backlog lives in docs/Future_Development.md (15 ideas across
+  ML + general). Ideas moved from this doc into that backlog since the last
+  audit: Mood Drift Detection, Contextual Music Memory, Anomaly-Triggered
+  Automation Pause, Sleep Quality Inference, Adaptive Transition Choreo-
+  graphy, Guest Wi-Fi Landing Page, Power Outage Recovery, Seasonal Lighting
+  Profiles, Dashboard Vital Signs Strip. Shipped since last audit: Multi-
+  Signal Confidence Fusion (April 15, first Phase 3 deliverable).
+
+  The four ideas below are new this audit -- none overlap Future_Development
+  .md's existing 15 entries or the parking lot at the bottom of this section.
+
+
+  MACHINE LEARNING IDEAS (new, April 16)
   -----------------------------------------------------------------------
 
-  Mood Drift Detection                                        [Medium]
-    Use LightingPreferenceLearner's override history to detect multi-day
-    preference trends. If manual overrides consistently trend warmer/dimmer
-    over a week, infer a seasonal mood shift and proactively adjust lighting
-    baselines. Operates on the derivative of preferences (rate of change),
-    catching slow drifts that per-event EMA smoothing misses. Could also
-    detect pre-illness patterns (dimmer + warmer = feeling off).
-    Touches: lighting_learner.py, new drift_detector module
+  Override Reason Classifier with Soft Counterfactuals        [Medium]
+    Train a lightweight sequence classifier on the 90s of sensor state
+    leading up to every manual override (time-of-day, prior 3 modes,
+    weather, last playback, camera presence, ambient audio). Model output
+    is a cluster label for the *reason* the user overrode: "too bright
+    for evening screen time", "relax-mode picked wrong music for my mood",
+    "winddown too early while guests present". On the NEXT occurrence of
+    a matching context, do NOT auto-apply -- surface a soft counterfactual
+    toast: "Last Tuesday at 9pm raining, you switched working -> relax.
+    Try that now, or stay working?" Distinct from Mood Drift Detection
+    (which tracks multi-day *derivative* of preferences); this tracks the
+    *reason* for single overrides and drives surgical interventions.
+    Touches: new override_reason_classifier.py, ml_logger.py,
+    ModeSuggestionToast.svelte, confidence_fusion.py (new signal lane)
 
-  Contextual Music Memory                                     [Medium]
-    Extend MusicBandit with episodic context: when a playlist plays during a
-    specific (mode, day_of_week, weather_condition) tuple and the user never
-    skips, that context-playlist association strengthens. Over time, "rainy
-    Friday evening + relax" maps to a specific playlist while "sunny Saturday
-    relax" maps to a different one. Currently the bandit only conditions on
-    mode + time_period.
-    Touches: music_bandit.py (expand arm key), weather_service integration
-
-  Anomaly-Triggered Automation Pause                          [Easy]
-    Use AudioClassifier's YAMNet output to detect anomalous sounds (doorbell,
-    smoke alarm, glass break, dog barking) and auto-pause all automation
-    transitions for 5 minutes. Prevents awkward mode changes during unusual
-    situations (package delivery, fire alarm test, neighbor's dog). YAMNet
-    already classifies these -- just needs a response layer.
-    Touches: audio_classifier.py (new callback), automation_engine.py
-
-  Multi-Signal Confidence Fusion                              [SHIPPED]
-    5-signal weighted ensemble combining process detection, camera, audio
-    classifier, behavioral predictor, and rule engine. Auto-apply at 95%+
-    when idle/away, stale process override at 98%+ with 80%+ agreement.
-    Live pipeline dashboard with SVG confidence ring and signal gauge cards.
-    Shipped April 15 as first Phase 3 deliverable.
-
-  Sleep Quality Inference from Sensor Fusion                  [Medium]
-    Combine sleeping mode entry/exit times, camera presence during sleep
-    (face visible vs. absent = restless), ambient audio levels (quiet vs.
-    disrupted), and morning routine override behavior (snooze = poor sleep)
-    into a nightly sleep quality score. No wearable needed -- purely from
-    existing Home Hub sensors. Display as a trend chart on the analytics
-    page. Could feed into smart sleep-debt alarm adjustments.
-    Touches: new sleep_quality.py, analytics page components
+  Per-User Transition-Curve Preference Learning               [Medium]
+    Learn not just WHICH mode, but HOW each mode should transition. Do
+    you prefer bri-first-then-color, crossfade, or snap? At what speed?
+    Data source: mid-transition manual light adjustments already captured
+    in light_adjustments. If the user consistently nudges brightness up
+    during a 4s crossfade (they keep wanting it brighter sooner), the
+    model learns to lead with brightness next time. Autonomously updates
+    MODE_TRANSITION_TIME and transition *order* per (mode, time-of-day)
+    bucket. Graceful degradation: falls back to hardcoded defaults when
+    N < 20 transitions observed for that bucket. All existing ML features
+    personalize the destination *state*; this personalizes the *trajectory*.
+    Touches: new transition_curve_learner.py, automation_engine.py
+    (_apply_state pre-hook), new transition_preferences column
 
 
-  GENERAL HOME HUB IDEAS (novel)
+  GENERAL HOME HUB IDEAS (new, April 16)
   -----------------------------------------------------------------------
 
-  Adaptive Transition Choreography                            [Medium]
-    Instead of all lights transitioning simultaneously on mode change, create
-    staggered "light waves" where lights transition in sequence from one room
-    to another with configurable direction and speed. Morning: bedroom →
-    living room (follow your path). Evening: living room → bedroom (retreat).
-    The wave pattern changes by time of day. Purely a timing layer on top of
-    existing mode transitions -- no new hardware.
-    Touches: automation_engine.py (transition sequencer), new config in
-    app_settings
+  Focus Envelope                                              [Medium]
+    A pomodoro-by-lights mode. During focus sessions, the ambient lights
+    smoothly constrict toward desk-dominant (kitchen fades, L1 dims, L2
+    desk stays solid); during breaks, they diffuse back outward. The
+    brightness envelope itself IS the pomodoro timer -- no distracting
+    clock, no sound, no overlay. Auto-triggers when Cursor / VSCode /
+    `claude` is focused for >25 min with no alt-tab >18 min. Break
+    envelope: 5 min diffuse + ambient noise shift. User sets session:break
+    ratio. Distinct from existing `working` mode (which is static) and
+    from Adaptive Transition Choreography in Future_Development.md (which
+    is a staggered wave on mode *change*): Focus Envelope is a continuous
+    low-amplitude modulation *during* a mode, with semantic meaning.
+    Touches: new focus_envelope.py, Settings toggle, FocusChip.svelte
 
-  Guest Wi-Fi Landing Page                                    [Medium]
-    When guests connect to apartment Wi-Fi, serve a landing page at
-    guest.homehub.local with: Wi-Fi password display, QR code for Party
-    Mode, current music playing, a "request a song" form that queues on
-    Sonos, and apartment "house rules" (tongue-in-cheek). Pi-hole DNS
-    already handles local domains. Combine with the existing QR code
-    library (qrcode npm package already installed).
-    Touches: new frontend route (/guest), Pi-hole DNS entry, new API
-    endpoint for song queue
-
-  Power Outage Recovery Intelligence                          [Easy]
-    Detect when the Latitude reboots after a power outage: check system
-    uptime < 5 minutes at startup + last known state was not a clean
-    shutdown. Auto-restore the exact apartment state from the last event
-    log entry -- correct mode, light colors, Sonos playback. Currently a
-    power outage leaves everything in default Hue state (warm white, 100%
-    brightness) with no music. Event data already exists to restore from.
-    Touches: main.py (startup check), event_query_service.py
-
-  Seasonal Lighting Profiles                                  [Easy]
-    Define four seasonal color palettes that subtly shift base color
-    temperature and hue ranges for all modes throughout the year. Winter:
-    cooler whites, blue accents. Summer: warmer tones, golden hour emphasis.
-    Spring/Fall: transitional. The shift is gradual -- changes daily by tiny
-    increments based on day-of-year, so you never notice the change but the
-    apartment "feels" different in December vs. July. Applied as a modifier
-    layer on top of existing ACTIVITY_LIGHT_STATES.
-    Touches: automation_engine.py (seasonal modifier), new config
-
-  Dashboard Vital Signs Strip                                 [Easy]
-    A minimal always-visible strip at the bottom of the kiosk showing 5-6
-    real-time system health indicators: Hue bridge latency (ms), Sonos
-    connection, ML model confidence (%), WiFi devices detected, Pi-hole
-    queries/blocks today, Latitude CPU temp. Turns red on any anomaly.
-    Like a car's instrument cluster -- glanceable system health without
-    opening Settings. Could double as a debugging aid during development.
-    Touches: new VitalStrip.svelte component, new /api/vitals endpoint
+  Apartment Logbook -- Nightly Auto-Journal                   [Easy]
+    A silent nightly (2am) job writes a single-file Markdown journal entry
+    summarizing the day in narrative prose: "Worked 4h12m (9:14am-2:05pm,
+    paused at 11:30 for kitchen). Gaming 1h48m. Rain rolled in at 2:14pm,
+    which triggered candle effect twice and shifted winddown 12 min
+    early. Overrode the winddown routine once (stayed on watching until
+    11:52pm)." Pure read over existing event_logger tables -- no new
+    data sources. Writes to data/journal/YYYY-MM-DD.md. Surfaced behind
+    a /journal route (hidden from main nav). Also primes any future
+    LLM-backed features: the journal file is ready-made grounding context.
+    Distinct from Dashboard Replay (visual scrubbing) and Sleep Analytics
+    (sleep-focused) -- this is a compact narrative summary of the whole
+    day, with search-friendly prose.
+    Touches: new journal_service.py (scheduled at 2am), /journal route
 
 
   PREVIOUSLY LISTED (unshipped, still valid)
