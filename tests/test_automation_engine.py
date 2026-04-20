@@ -4,7 +4,7 @@ Tests for the automation engine — mode priority, overrides, time periods.
 These test the pure logic of the AutomationEngine without touching any real
 hardware. Hue, Sonos, and WebSocket are all mocked.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -186,4 +186,137 @@ class TestAutomationEngine:
     def test_override_timeout_clamps(self, engine):
         engine.override_timeout_hours = 0
         assert engine.override_timeout_hours >= 1
+
+
+# ---------------------------------------------------------------------------
+# Zone+posture → relax rule
+# ---------------------------------------------------------------------------
+
+class _FakeCamera:
+    """Minimal camera stub exposing the attributes the rule reads."""
+
+    def __init__(self, zone=None, posture=None):
+        self.zone = zone
+        self.posture = posture
+
+
+class _FakeMLLogger:
+    """Capture log_decision calls for assertion."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def log_decision(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+class TestZonePostureRule:
+    """Rule gates and dwell for the zone+posture → relax actuation."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+        eng._ml_logger = _FakeMLLogger()
+        eng._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        return eng
+
+    # Thursday (weekday) 8pm — past evening_start_hour, eligible
+    EVENING = datetime(2026, 4, 16, 20, 0, tzinfo=TZ)
+    # Thursday 10am — morning, NOT eligible
+    WEEKDAY_MORNING = datetime(2026, 4, 16, 10, 0, tzinfo=TZ)
+    # Saturday 2pm — weekend afternoon, eligible
+    WEEKEND_AFTERNOON = datetime(2026, 4, 18, 14, 0, tzinfo=TZ)
+
+    async def _tick(self, engine, now, dwell_offset_seconds=0):
+        """Run the rule at ``now`` with the dwell timer started in the past."""
+        if dwell_offset_seconds > 0:
+            engine._zone_posture_reclined_since = (
+                now - timedelta(seconds=dwell_offset_seconds)
+            )
+        await engine._evaluate_zone_posture_rule(now)
+
+    async def test_fires_in_shadow_mode_after_dwell(self, engine):
+        """All gates pass, dwell met — logs applied=False by default."""
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        calls = engine._ml_logger.calls
+        assert len(calls) == 1
+        assert calls[0]["decision_source"] == "zone_posture_rule"
+        assert calls[0]["predicted_mode"] == "relax"
+        assert calls[0]["applied"] is False  # shadow-mode default
+        assert engine.manual_override is False  # did not actuate
+
+    async def test_actuates_when_apply_flag_true(self, engine):
+        """settings.ZONE_POSTURE_RULE_APPLY=True → override fires."""
+        with patch(
+            "backend.services.automation_engine.settings.ZONE_POSTURE_RULE_APPLY",
+            True,
+        ):
+            await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine.manual_override is True
+        assert engine.override_mode == "relax"
+        assert engine._ml_logger.calls[0]["applied"] is True
+
+    async def test_projector_from_bed_does_not_trigger(self, engine):
+        """Sitting up in bed to watch the projector: zone=bed but upright."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="upright")
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+        assert engine._zone_posture_reclined_since is None
+
+    async def test_desk_zone_does_not_trigger(self, engine):
+        engine._camera_service = _FakeCamera(zone="desk", posture="upright")
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+
+    async def test_ineligible_mode_does_not_trigger(self, engine):
+        """Gaming / watching / sleeping etc. block the rule."""
+        await engine.report_activity("gaming", source="pc_agent")
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+
+    async def test_manual_override_suppresses(self, engine):
+        """If the user (or rule) already set an override, rule stands down."""
+        await engine.set_manual_override("social")
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+        assert engine._zone_posture_reclined_since is None
+
+    async def test_morning_does_not_trigger(self, engine):
+        """Weekday morning: reclined on bed means 'still sleeping', not relax."""
+        await self._tick(engine, self.WEEKDAY_MORNING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+
+    async def test_weekend_afternoon_triggers(self, engine):
+        """Sat/Sun afternoon: eligible even though not 'evening'."""
+        await self._tick(
+            engine, self.WEEKEND_AFTERNOON, dwell_offset_seconds=301
+        )
+        assert len(engine._ml_logger.calls) == 1
+        assert engine._ml_logger.calls[0]["factors"]["trigger"] == "weekend_afternoon"
+
+    async def test_dwell_not_met_does_not_trigger(self, engine):
+        """Under the 5-min threshold: start timer, don't fire yet."""
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=60)
+        assert engine._ml_logger.calls == []
+        # Timer is set, waiting for more time to elapse
+        assert engine._zone_posture_reclined_since is not None
+
+    async def test_refractory_suppresses_refire(self, engine):
+        """Recent fire (within override_timeout_hours) blocks re-fire."""
+        engine._zone_posture_last_fired_at = self.EVENING - timedelta(hours=1)
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+
+    async def test_conditions_breaking_resets_dwell(self, engine):
+        """If posture flips mid-dwell, timer resets."""
+        # Start dwell with good conditions
+        engine._zone_posture_reclined_since = self.EVENING - timedelta(minutes=3)
+        # Conditions break (user sat up)
+        engine._camera_service = _FakeCamera(zone="bed", posture="upright")
+        await engine._evaluate_zone_posture_rule(self.EVENING)
+        assert engine._zone_posture_reclined_since is None
 

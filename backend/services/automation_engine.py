@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from backend.config import settings
+
 logger = logging.getLogger("home_hub.automation")
 
 # Indianapolis timezone (Indiana doesn't follow standard Eastern DST rules)
@@ -43,6 +45,26 @@ WEATHER_EFFECT_MAP: dict[str, str | None] = {
     "rain": "candle",
     "snow": "opal",
 }
+
+# Zone+posture → relax rule — first mode-changing sensor actuation. Auto-
+# applies the "relax" manual override when the camera sees bed+reclined for
+# a sustained window. Ships in shadow mode (settings.ZONE_POSTURE_RULE_APPLY
+# defaults False) so the firing pattern can be observed via ml_decisions
+# before flipping to live actuation. Full spec in docs/PROJECT_SPEC.md.
+#
+# Design notes:
+# - Dwell (5 min) filters brief lean-backs and phone-checks.
+# - Projector-from-bed carves itself out: sitting up against the headboard
+#   keeps posture=upright, so the (bed, reclined) gate never trips.
+# - Re-fire suppression reuses `_override_timeout_hours` so shadow and live
+#   cadence match: once the rule logs/fires, it won't re-fire for 4h.
+# - Eligible modes exclude everything except idle/away/working — we never
+#   stomp explicit modes like gaming / watching / social / cooking /
+#   sleeping / relax.
+# - Time gate: evening always; weekend afternoons (≥13:00) also eligible.
+ZONE_POSTURE_RULE_DWELL_SECONDS = 300
+ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
+ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "away", "working"))
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +616,13 @@ class AutomationEngine:
         # or by main.py boot if camera_enabled setting is true). Used by
         # _apply_lux_multiplier to read the smoothed ambient lux reading.
         self._camera_service = None
+        # Zone+posture → relax rule state. `_reclined_since` tracks the
+        # dwell timer (set on first poll with bed+reclined, cleared when
+        # conditions or gates break). `_last_fired_at` is the re-fire
+        # suppression stamp — matches live override_timeout_hours so
+        # shadow cadence tracks what live cadence would look like.
+        self._zone_posture_reclined_since: Optional[datetime] = None
+        self._zone_posture_last_fired_at: Optional[datetime] = None
         # Last applied lux multiplier — if the new multiplier is within
         # LUX_MULT_EPSILON of this, we keep using the old value so the final
         # state dict is identical and the per-light dedupe at _apply_state
@@ -2258,6 +2287,13 @@ class AutomationEngine:
                                 broadcast=False,
                             )
 
+                # Zone+posture → relax actuation (shadow-mode by default).
+                # Safe to run late in the loop: uses committed camera state
+                # that doesn't mutate during this tick, and only acts via
+                # set_manual_override which will be respected by the next
+                # tick's own manual_override gates.
+                await self._evaluate_zone_posture_rule(now)
+
                 # Periodic pipeline broadcast — keeps the pipeline view fresh
                 # even when no mode changes occur (e.g., time period transitions)
                 await self._broadcast_pipeline()
@@ -2270,6 +2306,118 @@ class AutomationEngine:
             except Exception as e:
                 logger.error(f"Automation engine error: {e}", exc_info=True)
                 await asyncio.sleep(60)
+
+    async def _evaluate_zone_posture_rule(self, now: datetime) -> None:
+        """Zone+posture → relax actuation rule.
+
+        First mode-changing sensor actuation — fires when the camera
+        observes bed+reclined sustained for ``ZONE_POSTURE_RULE_DWELL_SECONDS``,
+        subject to mode / override / time-of-day / refractory gates. Logs
+        ml_decisions with ``decision_source="zone_posture_rule"`` on every
+        fire or shadow-would-fire so the pattern is visible.
+
+        Shadow vs live is controlled by ``settings.ZONE_POSTURE_RULE_APPLY``:
+        shadow mode logs applied=False and does not call set_manual_override;
+        live mode logs applied=True and applies the override. Both paths use
+        the same gates, so shadow data is a faithful preview of live
+        behavior.
+        """
+        camera = self._camera_service
+        if camera is None:
+            return
+
+        # Gate 1: any active manual override (user or rule) takes precedence.
+        if self._manual_override:
+            self._zone_posture_reclined_since = None
+            return
+
+        # Gate 2: recent fire suppression — parallels override_timeout_hours
+        # so shadow logging cadence matches what live firing would produce.
+        # Once a live fire sets an override, gate 1 handles suppression for
+        # the full override window; when the override expires this gate lets
+        # a fresh dwell accumulate for the next legitimate trigger.
+        if self._zone_posture_last_fired_at and (
+            (now - self._zone_posture_last_fired_at).total_seconds()
+            < self._override_timeout_hours * 3600
+        ):
+            self._zone_posture_reclined_since = None
+            return
+
+        # Gate 3: the core condition — committed zone + posture.
+        zone = camera.zone
+        posture = camera.posture
+        if zone != "bed" or posture != "reclined":
+            self._zone_posture_reclined_since = None
+            return
+
+        # Gate 4: eligible current mode. Explicit activity modes (gaming,
+        # watching, social, cooking, sleeping) and relax itself are excluded.
+        if self._current_mode not in ZONE_POSTURE_RULE_ELIGIBLE_MODES:
+            self._zone_posture_reclined_since = None
+            return
+
+        # Gate 5: time-of-day — evening always; weekends also allow afternoon.
+        is_weekend = now.weekday() >= 5
+        schedule = (
+            self._schedule_config.weekend if is_weekend
+            else self._schedule_config.weekday
+        )
+        afternoon_ok = (
+            is_weekend and now.hour >= ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR
+        )
+        evening_ok = now.hour >= schedule.evening_start_hour
+        if not (afternoon_ok or evening_ok):
+            self._zone_posture_reclined_since = None
+            return
+
+        # All gates pass — start / continue the dwell timer.
+        if self._zone_posture_reclined_since is None:
+            self._zone_posture_reclined_since = now
+            return
+
+        elapsed = (now - self._zone_posture_reclined_since).total_seconds()
+        if elapsed < ZONE_POSTURE_RULE_DWELL_SECONDS:
+            return
+
+        # Dwell met — fire (live) or shadow-log.
+        should_apply = bool(settings.ZONE_POSTURE_RULE_APPLY)
+        trigger_reason = "evening" if evening_ok else "weekend_afternoon"
+        factors = {
+            "zone": zone,
+            "posture": posture,
+            "current_mode": self._current_mode,
+            "dwell_seconds": int(elapsed),
+            "is_weekend": is_weekend,
+            "hour": now.hour,
+            "trigger": trigger_reason,
+        }
+
+        if should_apply:
+            logger.info(
+                "Zone+posture rule firing: %s + %s held %.0fs → relax",
+                zone, posture, elapsed,
+            )
+            await self.set_manual_override("relax")
+        else:
+            logger.info(
+                "Zone+posture rule would fire (shadow): %s + %s held %.0fs",
+                zone, posture, elapsed,
+            )
+
+        ml_logger = getattr(self, "_ml_logger", None)
+        if ml_logger:
+            await ml_logger.log_decision(
+                predicted_mode="relax",
+                confidence=1.0,
+                decision_source="zone_posture_rule",
+                factors=factors,
+                applied=should_apply,
+            )
+
+        # Record fire time; reset dwell so next eligible window needs fresh
+        # accumulation (not just surviving override expiry instantly).
+        self._zone_posture_last_fired_at = now
+        self._zone_posture_reclined_since = None
 
     async def _check_external_off(self) -> bool:
         """

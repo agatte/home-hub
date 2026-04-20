@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     # webhook endpoints reject all requests (disabled).
     PRESENCE_WEBHOOK_TOKEN: Optional[str] = None
 
+    # Zone+posture → relax rule — when enabled, the automation engine
+    # auto-applies the "relax" manual override after 5 min of sustained
+    # zone=bed + posture=reclined (evening or weekend afternoons only,
+    # no active override, eligible current mode). Defaults to False —
+    # the rule logs shadow decisions to ml_decisions (applied=False) so
+    # the firing pattern can be observed before actuation. Flip to True
+    # after ~2–3 days of clean shadow data.
+    ZONE_POSTURE_RULE_APPLY: bool = False
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5

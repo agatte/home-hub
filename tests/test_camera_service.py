@@ -34,12 +34,19 @@ def _make_service(
     return CameraService(ws_manager=ws, automation_engine=auto, ml_logger=ml)
 
 
-def _mock_detection(score: float):
-    """Create a mock MediaPipe Tasks API detection result."""
+def _mock_detection(score: float, origin_x: int = 100, width: int = 50):
+    """Create a mock MediaPipe Tasks API detection result.
+
+    ``origin_x`` + ``width`` populate the ``bounding_box`` used by the
+    zone-mapping code in ``_process_frame``. Defaults sit center-ish in
+    a 320×240 frame so the computed zone is deterministic in tests.
+    """
     category = MagicMock()
     category.score = score
     det = MagicMock()
     det.categories = [category]
+    det.bounding_box.origin_x = origin_x
+    det.bounding_box.width = width
     return det
 
 
