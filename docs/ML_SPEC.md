@@ -1486,10 +1486,11 @@ which ML feature addresses it.
 
 | Threshold | Current Value | Line | ML Feature |
 |-----------|--------------|------|------------|
-| Minimum confidence | 70% | 38 | Behavioral predictor (replaces entire engine) |
-| Minimum samples | 3 | 39 | Behavioral predictor (uses richer features) |
-| Generation interval | 6 hours | 29 | Behavioral predictor (retrains nightly) |
-| Data window | 30 days | 62 | Behavioral predictor (60-day window) |
+| Minimum confidence | 70% | 53 | Behavioral predictor (replaces entire engine) |
+| Minimum samples | 3 | 54 | Behavioral predictor (uses richer features) |
+| Generation interval | 6 hours | 44 | Behavioral predictor (retrains nightly) |
+| Data window | 30 days | 78 | Behavioral predictor (60-day window) |
+| Source weights (ambient/audio_ml=0.5, camera=0.8, rest=1.0) | `_SOURCE_WEIGHTS` | 34 | Behavioral predictor (learns per-source reliability directly) |
 
 ---
 
