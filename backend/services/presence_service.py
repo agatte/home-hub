@@ -391,9 +391,13 @@ class PresenceService:
                     self._last_seen = now
 
                     if self._state in ("unknown", "startup_away"):
-                        # Startup — set home without triggering arrival
+                        # Startup — set home without triggering arrival.
+                        # Clear _away_since so the public status doesn't
+                        # show a stale disconnect timestamp that was set
+                        # by the startup-away branch.
                         self._state = "home"
                         self._pending_arrival_confirms = 0
+                        self._away_since = None
                         logger.info("Initial presence: home")
                     elif self._state == "departing":
                         # Mid-fade and phone came back — cancel immediately.
