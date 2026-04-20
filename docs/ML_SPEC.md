@@ -366,27 +366,31 @@ detection from the Latitude's 720p webcam.
 | **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Captured at 640×480 for inference (bumped from 320×240 on 2026-04-19 after observing marginal face-detection gains and better future-feature headroom — requires lux recalibration on any change). |
 | **Preprocessing** | Capture one frame every 2 seconds (not continuous video). `cv2.resize()` downsample is a safety no-op when the webcam honors the capture-resolution hint. No image enhancement. |
 | **Model** | MediaPipe BlazePose (lite variant, shipped 2026-04-19 as a fallback signal). Runs alongside full-range BlazeFace: face first (~15ms at 640×480), pose as fallback on face-miss (~60ms). Presence declared if either detector hits. |
-| **Output classes** | Presence: `present` / `absent`. Zone (shipped 2026-04-19, expose-only): `desk` / `bed` / `None`, computed from detected center-X vs `ZONE_DESK_THRESHOLD=0.40`, with 15-second hysteresis on commits. Future: `present_upright` / `present_reclined` from shoulder-Y vs hip-Y landmark comparison. |
+| **Output classes** | Presence: `present` / `absent`. Zone (shipped 2026-04-19, expose-only): `desk` / `bed` / `None`, computed from detected center-X vs `ZONE_DESK_THRESHOLD=0.40`, with 15-second hysteresis on commits. Posture (shipped 2026-04-19, expose-only): `upright` / `reclined` / `None`, computed from `mean(hip_y) - mean(shoulder_y)` vs `POSTURE_UPRIGHT_MIN_DELTA=0.12`, same 15s hysteresis. `None` when hips aren't visible (face-path hits, pose misses) — hysteresis preserves the committed value through those blanks. |
 | **Inference frequency** | Every 2 seconds (one frame capture + inference). Triggers "absent" after 7 consecutive absent frames (~14 seconds). |
 | **Integration point** | New `CameraService` reports to `AutomationEngine.report_activity(source="camera")`. |
 | **CPU cost** | 30-50ms per inference every 5 seconds = <2% CPU sustained |
 | **RAM** | 50-100MB (MediaPipe + OpenCV) |
 | **Cold start** | MediaPipe is pretrained. Works immediately. Posture thresholds may need one-time calibration (30-second "sit normally, then recline" flow in Settings). |
 
-**Posture classification logic:**
+**Posture classification logic (shipped 2026-04-19, commit `1afb41a` + `4ad373a`):**
 
 ```python
-# From MediaPipe BlazePose landmarks
-shoulder_y = (left_shoulder.y + right_shoulder.y) / 2
-hip_y = (left_hip.y + right_hip.y) / 2
-torso_angle = abs(shoulder_y - hip_y)  # Normalized 0-1
+# From MediaPipe BlazePose landmarks (normalized 0–1 coords, Y=0 top)
+shoulder_y = mean(left_shoulder.y, right_shoulder.y)  # visible only
+hip_y      = mean(left_hip.y,      right_hip.y)       # visible only
+delta      = hip_y - shoulder_y   # positive when hips below shoulders
 
-if torso_angle > UPRIGHT_THRESHOLD:    # ~0.15 (calibrated)
-    posture = "present_upright"        # Working, gaming
-elif torso_angle > RECLINE_THRESHOLD:  # ~0.08
-    posture = "present_reclined"       # Watching, relaxing
+if delta >= POSTURE_UPRIGHT_MIN_DELTA:   # 0.12 — midpoint of observed 0.20 / 0.05
+    posture = "upright"    # Working at desk, standing, sitting up
 else:
-    posture = "present_unknown_posture"
+    posture = "reclined"   # Lying down; torso axis horizontal on-screen
+
+# When shoulders or hips aren't visible (face-only detection, pose miss):
+# posture = None. The hysteresis layer preserves the last committed value
+# through these blanks rather than treating None as a reset — pose at
+# Anthony's 2–3m corner distance only fires on ~1 in ~10 polls, so
+# resetting on None would prevent any commit from ever happening.
 ```
 
 **Mode disambiguation from posture:**

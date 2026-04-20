@@ -186,13 +186,14 @@ Pure read over existing `event_logger` tables — no new data sources. Writes to
 
 ### 20. Zone-Driven Mode Transitions
 
-Zone mapping (desk vs bed, shipped 2026-04-19) currently drives a brightness-only actuation for watching-at-desk. The next step is letting zone drive *mode* changes, not just brightness tweaks within a mode.
+**Status: zone+posture → relax rule shipped 2026-04-19 in shadow mode (commit `36072e5`).** Fires `set_manual_override("relax")` when the camera sustains `zone=bed + posture=reclined` ≥5 min, gated on eligible current_mode + no active override + evening/weekend-afternoon + 4h refractory. Projector-from-bed carves itself out because the sit-up-against-headboard pose keeps `posture=upright`. Currently logging `ml_decisions` with `applied=False` under `settings.ZONE_POSTURE_RULE_APPLY=false`; flip to true after observation (see memory `project_zone_posture_checkback.md`, review date 2026-04-22). Implementation lives in `backend/services/automation_engine.py::_evaluate_zone_posture_rule`.
 
-Primary candidate rule: `zone=bed sustained ≥N minutes + process idle + no manual override + no projector/Sonos active → nudge toward relax`. Dependency — **do not break Anthony's "watch projector from bed" habit**; the rule must gate on whether content is actively playing. A second rule set candidates: `zone=desk + process=working + late-night` bypasses the 22:00 late-night-rescue (keep Anthony in working when he's actively at the keyboard past 22:00).
+**Remaining under this banner:**
+- Second rule set candidate: `zone=desk + process=working + late-night` bypasses the 22:00 late-night-rescue (keep Anthony in working when he's actively at the keyboard past 22:00).
+- Fusion integration — current rule calls `set_manual_override` directly. Future option: publish as a new signal lane in `confidence_fusion.py` so zone+posture can vote alongside process/camera/audio/behavioral/rule_engine instead of acting unilaterally. Worth considering once shadow data shows the rule is reliable — fusion gives finer-grained tuning.
+- Morning-specific carve-outs: the current time gate blocks mornings globally. If Anthony lies back down for a post-wake rest, we may eventually want a specific "morning lounge" nudge rather than nothing.
 
-Strongly depends on posture classification (see `docs/ML_SPEC.md` §3.4) landing first so `reclined on bed` is a far stronger gate than `zone=bed` alone. Observe 1–2 days of `ml_decisions` zone data before picking thresholds.
-
-**Touches:** `automation_engine.py` (new rule in `report_activity` or a dedicated `zone_rules_service.py`), possibly `confidence_fusion.py` new lane if fusion integration preferred over direct rule.
+**Touches (for the remaining items):** `automation_engine.py` (new gate in `_evaluate_zone_posture_rule` for the late-night-working carve), `confidence_fusion.py` (new signal lane if we go that route).
 
 ---
 
