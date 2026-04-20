@@ -68,6 +68,24 @@ ARRIVAL_MUSIC_MODES: dict[str, Optional[str]] = {
     "night": None,
 }
 
+# iOS WiFi-flap filters. The Shortcut "Disconnected from [home SSID]"
+# automation fires on *any* drop — including brief power-save cycles and
+# handoffs where the phone never physically leaves the apartment. Without
+# filters, each flap triggers a full welcome-home ceremony.
+#
+# Layer 1 — departure debounce: when /departed arrives, delay the fade
+# sequence by this many seconds. If /arrived fires before the timer
+# elapses, the pending departure is cancelled and presence state never
+# leaves "home" — invisible flap.
+DEPARTURE_DEBOUNCE_SECONDS = 45
+# Layer 2 — flap gate on arrival: if the actual disconnect duration is
+# under this threshold, suppress the ceremony even when the Shortcut
+# path requested force_ceremony. Catches ARP-path aways where the phone
+# was power-save-silent rather than actually gone. Tradeoff chosen:
+# genuine 5-min mailbox errands run silent (accepted in exchange for
+# filtering iOS power-save gaps that can stretch several minutes).
+FLAP_THRESHOLD_MINUTES = 5
+
 
 @dataclass
 class PresenceConfig:
@@ -149,6 +167,10 @@ class PresenceService:
         self._pending_arrival_confirms: int = 0
         self._departure_task: Optional[asyncio.Task] = None
         self._arrival_task: Optional[asyncio.Task] = None
+        # Shortcut /departed debounce. Holds a pending task that will call
+        # _on_departure after DEPARTURE_DEBOUNCE_SECONDS unless cancelled
+        # by a subsequent /arrived firing first (the iOS WiFi flap pattern).
+        self._pending_departure_task: Optional[asyncio.Task] = None
 
         self._is_linux = platform.system() == "Linux"
         self._probe_iface: Optional[str] = None   # Detected at first probe
@@ -207,13 +229,32 @@ class PresenceService:
 
         Returns a short status token: ``"fired"`` if the ceremony was
         triggered, ``"noop"`` if the state was already home/arriving,
-        or ``"silent"`` if the signal landed during startup (state set
-        to home without ceremony).
+        ``"flap_cancelled"`` if a pending-departure task was cancelled
+        (iOS WiFi flap), or ``"silent"`` if the signal landed during
+        startup.
         """
         now = datetime.now(tz=TZ)
         self._consecutive_failures = 0
         self._pending_arrival_confirms = 0
         self._last_seen = now
+
+        # Short-circuit the iOS WiFi flap pattern: if a /departed is pending
+        # debounce (no fade has started yet), cancel it silently. State
+        # stayed "home" the whole time — no ceremony, no fade, no user-
+        # visible twitch. This is the dominant fix path for the reported
+        # multiple-ceremony bug.
+        if (
+            self._pending_departure_task
+            and not self._pending_departure_task.done()
+        ):
+            self._pending_departure_task.cancel()
+            self._pending_departure_task = None
+            logger.info(
+                "Shortcut arrival (%s) — cancelled pending departure "
+                "(iOS WiFi flap within %ds debounce)",
+                source, DEPARTURE_DEBOUNCE_SECONDS,
+            )
+            return "flap_cancelled"
 
         if self._state in ("home", "arriving"):
             logger.info(
@@ -245,11 +286,20 @@ class PresenceService:
     async def on_shortcut_departure(self, source: str = "ios_shortcut") -> str:
         """
         Explicit departure signal from an iPhone Personal Automation.
-        Bypasses the manual-override guard — WiFi disconnect is direct
-        evidence that the phone left the apartment.
 
-        Returns ``"fired"`` if departure started, ``"noop"`` if already
-        away/departing.
+        Does NOT start the fade sequence immediately — schedules it for
+        ``DEPARTURE_DEBOUNCE_SECONDS`` from now. If a subsequent
+        ``on_shortcut_arrival`` lands before the timer elapses, the
+        pending task is cancelled silently (iOS WiFi flap). Only real
+        departures (disconnect held > debounce window) fire the fade.
+
+        Bypasses the manual-override guard when it does commit — a WiFi
+        disconnect held past the flap window is strong enough evidence
+        of actual departure to override any active mode.
+
+        Returns ``"pending"`` if the debounced task was scheduled,
+        ``"noop"`` if state is already away/departing or a pending task
+        already exists.
         """
         if self._state in ("away", "departing", "startup_away"):
             logger.info(
@@ -258,9 +308,43 @@ class PresenceService:
             )
             return "noop"
 
-        logger.info("Shortcut departure (%s) — starting fade sequence", source)
-        await self._on_departure(skip_override_guard=True)
-        return "fired"
+        if (
+            self._pending_departure_task
+            and not self._pending_departure_task.done()
+        ):
+            logger.info(
+                "Shortcut departure (%s) — already debounced, waiting",
+                source,
+            )
+            return "noop"
+
+        logger.info(
+            "Shortcut departure (%s) — pending for %ds",
+            source, DEPARTURE_DEBOUNCE_SECONDS,
+        )
+        self._pending_departure_task = asyncio.create_task(
+            self._deferred_departure(source)
+        )
+        return "pending"
+
+    async def _deferred_departure(self, source: str) -> None:
+        """Wait out the debounce window, then commit the departure.
+
+        Cancelled silently by ``on_shortcut_arrival`` when the phone
+        reconnects within the window (iOS WiFi flap).
+        """
+        try:
+            await asyncio.sleep(DEPARTURE_DEBOUNCE_SECONDS)
+            logger.info(
+                "Shortcut departure (%s) — committing after %ds debounce",
+                source, DEPARTURE_DEBOUNCE_SECONDS,
+            )
+            await self._on_departure(skip_override_guard=True)
+        except asyncio.CancelledError:
+            logger.debug("Deferred departure cancelled (flap)")
+            raise
+        finally:
+            self._pending_departure_task = None
 
     # ------------------------------------------------------------------
     # Main loop
@@ -526,6 +610,10 @@ class PresenceService:
             self._arrival_task = None
 
         self._state = "departing"
+        # Set _away_since up-front so any subsequent arrival — even one that
+        # cancels this fade mid-flight — sees the correct disconnect
+        # duration and can evaluate the flap gate accurately.
+        self._away_since = datetime.now(tz=TZ)
         logger.info("Departure detected — starting fade sequence")
         self._departure_task = asyncio.create_task(
             self._departure_sequence()
@@ -575,7 +663,8 @@ class PresenceService:
             await self._automation.report_activity("away", "presence")
 
             self._state = "away"
-            self._away_since = datetime.now(tz=TZ)
+            # _away_since was set at _on_departure entry; don't reset it here
+            # (preserves the actual disconnect timestamp for flap-gate math).
             await self._broadcast_state()
             logger.info("Departure complete — all lights off, mode=away")
 
@@ -652,6 +741,26 @@ class PresenceService:
             now = datetime.now(tz=TZ)
             time_of_day = self._classify_time(now.hour)
             away_minutes = duration_away.total_seconds() / 60
+
+            # iOS WiFi-flap gate (applies even when force_ceremony=True). A
+            # disconnect shorter than FLAP_THRESHOLD_MINUTES was almost
+            # certainly iOS power-save / roaming handoff, not an actual
+            # trip. Silent restore, no ceremony.
+            if away_minutes < FLAP_THRESHOLD_MINUTES:
+                logger.info(
+                    "Arrival: brief disconnect (%d min) — treating as "
+                    "flap, no ceremony",
+                    int(away_minutes),
+                )
+                if self._automation.current_mode in ("idle", "away"):
+                    await self._automation._apply_time_based()
+                else:
+                    await self._automation._apply_mode(
+                        self._automation.current_mode
+                    )
+                self._state = "home"
+                await self._broadcast_state()
+                return
 
             # Short absence (<30 min) — just restore lights, skip ceremony.
             # Shortcut-sourced arrivals bypass this: a WiFi
