@@ -26,6 +26,21 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 # Modes that aren't worth predicting — "you're usually idle" isn't helpful
 _SKIP_MODES = frozenset(("idle", "away"))
 
+# Per-source vote weights. Ambient/audio_ml post per-second, so without
+# weighting they flood buckets (a podcast in the background produces
+# 60 social votes to 12 working votes per minute). Process detector and
+# manual overrides are authoritative; camera is reliable but posts often;
+# ambient/audio_ml are noisy.
+_SOURCE_WEIGHTS: dict[str, float] = {
+    "manual": 1.0,
+    "process": 1.0,
+    "presence": 1.0,
+    "camera": 0.8,
+    "ambient": 0.5,
+    "audio_ml": 0.5,
+}
+_DEFAULT_SOURCE_WEIGHT = 1.0
+
 GENERATION_INTERVAL_HOURS = 6
 
 
@@ -67,8 +82,11 @@ class RuleEngineService:
                 select(ActivityEvent).where(ActivityEvent.timestamp >= since)
             )).scalars().all()
 
-        # Aggregate by (day, hour, mode) in local timezone
-        slot_counts: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        # Aggregate by (day, hour, mode) in local timezone. Track raw counts
+        # (for the sample-count threshold) and source-weighted votes (for
+        # dominant-mode selection and confidence).
+        slot_raw: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        slot_weighted: dict[tuple[int, int], dict[str, float]] = defaultdict(lambda: defaultdict(float))
         for row in rows:
             ts = row.timestamp
             if ts is None:
@@ -78,24 +96,39 @@ class RuleEngineService:
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             local = ts.astimezone(TZ)
-            slot_counts[(local.weekday(), local.hour)][row.mode] += 1
+            key = (local.weekday(), local.hour)
+            weight = _SOURCE_WEIGHTS.get(row.source, _DEFAULT_SOURCE_WEIGHT)
+            slot_raw[key][row.mode] += 1
+            slot_weighted[key][row.mode] += weight
 
-        # Determine which slots qualify as rules
+        # Determine which slots qualify as rules. Skip-modes (idle/away) are
+        # excluded from both dominant-mode selection and the denominator —
+        # they aren't worth predicting and shouldn't dilute confidence of
+        # genuine activity modes.
         qualified: dict[tuple[int, int], dict[str, Any]] = {}
-        for (day, hour), mode_counts in slot_counts.items():
-            total = sum(mode_counts.values())
-            top_mode = max(mode_counts, key=mode_counts.get)
-            confidence = mode_counts[top_mode] / total
+        for key, raw_counts in slot_raw.items():
+            weighted_counts = slot_weighted[key]
+            candidate_weights = {
+                m: w for m, w in weighted_counts.items() if m not in _SKIP_MODES
+            }
+            weighted_total = sum(candidate_weights.values())
+            if weighted_total <= 0:
+                continue
+
+            top_mode = max(candidate_weights, key=candidate_weights.get)
+            confidence = candidate_weights[top_mode] / weighted_total
+            sample_count = sum(
+                c for m, c in raw_counts.items() if m not in _SKIP_MODES
+            )
 
             if (
-                top_mode not in _SKIP_MODES
-                and confidence >= self._min_confidence
-                and total >= self._min_samples
+                confidence >= self._min_confidence
+                and sample_count >= self._min_samples
             ):
-                qualified[(day, hour)] = {
+                qualified[key] = {
                     "predicted_mode": top_mode,
                     "confidence": round(confidence, 3),
-                    "sample_count": total,
+                    "sample_count": sample_count,
                 }
 
         # Upsert qualified rules, delete stale ones

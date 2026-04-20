@@ -117,6 +117,80 @@ class TestRuleGeneration:
         # Same number of rules (upserted, not duplicated)
         assert len(rules_first) == len(rules_second)
 
+    async def test_idle_events_do_not_dilute_confidence(self, db_and_service):
+        """Idle/away events in a slot shouldn't push non-skip modes below the
+        confidence threshold (regression: live data had working=3, idle=10 in
+        the same bucket and no rule generated because 3/13 = 23%)."""
+        _, service, _, session_factory = db_and_service
+        now = datetime.now(timezone.utc)
+        target = now.replace(minute=30, second=0, microsecond=0) + timedelta(hours=5)
+        async with session_factory() as session:
+            for i in range(3):
+                session.add(ActivityEvent(
+                    timestamp=target - timedelta(weeks=i),
+                    mode="working", previous_mode="idle",
+                    source="process", duration_seconds=3600,
+                ))
+            for i in range(10):
+                session.add(ActivityEvent(
+                    timestamp=target - timedelta(weeks=i, seconds=(i + 1) * 2),
+                    mode="idle", previous_mode="working",
+                    source="process", duration_seconds=60,
+                ))
+            await session.commit()
+
+        await service.regenerate_rules()
+        rules = await service.get_rules()
+        local_target = target.astimezone(TZ)
+        matching = [
+            r for r in rules
+            if r["day_of_week"] == local_target.weekday() and r["hour"] == local_target.hour
+        ]
+        assert len(matching) == 1
+        assert matching[0]["predicted_mode"] == "working"
+        assert matching[0]["confidence"] == 100  # 3 working / 3 non-skip = 100%
+        assert matching[0]["sample_count"] == 3  # skip modes excluded from count
+
+    async def test_ambient_noise_downweighted_so_process_signal_wins(self, db_and_service):
+        """Per-source weighting should let a process-driven working signal
+        cross the confidence threshold even with ambient noise in the slot.
+        Raw: 10 working / 17 = 59%, no rule. Weighted: 10.0 / (10.0 + 3.5) =
+        74%, rule fires. Regression from live bug where ambient=social events
+        flooded working buckets and no rules formed outside Monday mornings."""
+        _, service, _, session_factory = db_and_service
+        now = datetime.now(timezone.utc)
+        target = now.replace(minute=30, second=0, microsecond=0) + timedelta(hours=6)
+        async with session_factory() as session:
+            # 10 process=working events (weighted 10.0)
+            for i in range(10):
+                session.add(ActivityEvent(
+                    timestamp=target - timedelta(seconds=i * 5),
+                    mode="working", previous_mode="idle",
+                    source="process", duration_seconds=5,
+                ))
+            # 7 ambient=social events (weighted 3.5 — raw count would pull
+            # working confidence below 70%, weighted keeps it above)
+            for i in range(7):
+                session.add(ActivityEvent(
+                    timestamp=target - timedelta(seconds=i * 3 + 1),
+                    mode="social", previous_mode="idle",
+                    source="ambient", duration_seconds=1,
+                ))
+            await session.commit()
+
+        await service.regenerate_rules()
+        rules = await service.get_rules()
+        local_target = target.astimezone(TZ)
+        matching = [
+            r for r in rules
+            if r["day_of_week"] == local_target.weekday() and r["hour"] == local_target.hour
+        ]
+        assert len(matching) == 1
+        assert matching[0]["predicted_mode"] == "working"
+        assert matching[0]["confidence"] >= 70
+        # sample_count is raw event count for non-skip modes: 10 + 7 = 17
+        assert matching[0]["sample_count"] == 17
+
     async def test_deletes_stale_rules(self, db_and_service):
         engine, service, _, session_factory = db_and_service
         await service.regenerate_rules()
