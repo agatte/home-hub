@@ -78,13 +78,20 @@ ARRIVAL_MUSIC_MODES: dict[str, Optional[str]] = {
 # elapses, the pending departure is cancelled and presence state never
 # leaves "home" — invisible flap.
 DEPARTURE_DEBOUNCE_SECONDS = 45
-# Layer 2 — flap gate on arrival: if the actual disconnect duration is
-# under this threshold, suppress the ceremony even when the Shortcut
-# path requested force_ceremony. Catches ARP-path aways where the phone
-# was power-save-silent rather than actually gone. Tradeoff chosen:
-# genuine 5-min mailbox errands run silent (accepted in exchange for
-# filtering iOS power-save gaps that can stretch several minutes).
-FLAP_THRESHOLD_MINUTES = 5
+# Layer 2 — flap gate on arrival: if the actual disconnect duration
+# (back-dated to `_last_seen` when ARP triggered the departure, or set
+# at Shortcut-receive time for the /departed path) is under the
+# threshold, suppress the ceremony. Two thresholds so we can trust
+# explicit Shortcut signals more than ARP-only detection:
+# - FLAP_THRESHOLD_MINUTES_SHORTCUT (2 min): when /arrived fires, iOS
+#   had an explicit connect event, so the disconnect was real from
+#   iOS's perspective. Filter only rapid flaps.
+# - FLAP_THRESHOLD_MINUTES_ARP (5 min): when arrival came via ARP
+#   2-probe debounce with no Shortcut, be conservative because ARP
+#   can miss the phone during deep iOS power-save for 3–5 min stretches
+#   even while the user is home.
+FLAP_THRESHOLD_MINUTES_SHORTCUT = 2
+FLAP_THRESHOLD_MINUTES_ARP = 5
 
 
 @dataclass
@@ -249,6 +256,10 @@ class PresenceService:
         ):
             self._pending_departure_task.cancel()
             self._pending_departure_task = None
+            # Flap never committed to departing, so the pre-set _away_since
+            # must be cleared — otherwise a later genuine trip would be
+            # back-dated to the flap's disconnect time.
+            self._away_since = None
             logger.info(
                 "Shortcut arrival (%s) — cancelled pending departure "
                 "(iOS WiFi flap within %ds debounce)",
@@ -322,6 +333,13 @@ class PresenceService:
             "Shortcut departure (%s) — pending for %ds",
             source, DEPARTURE_DEBOUNCE_SECONDS,
         )
+        # Capture the actual disconnect moment now. If the deferred task
+        # commits (real trip), duration_away on the arrival side measures
+        # from here instead of the commit time 45s later — otherwise real
+        # sub-minute absences read as 0-minute and get flap-gated away.
+        # Cleared by on_shortcut_arrival when it cancels the pending task.
+        if self._away_since is None:
+            self._away_since = datetime.now(tz=TZ)
         self._pending_departure_task = asyncio.create_task(
             self._deferred_departure(source)
         )
@@ -610,10 +628,14 @@ class PresenceService:
             self._arrival_task = None
 
         self._state = "departing"
-        # Set _away_since up-front so any subsequent arrival — even one that
-        # cancels this fade mid-flight — sees the correct disconnect
-        # duration and can evaluate the flap gate accurately.
-        self._away_since = datetime.now(tz=TZ)
+        # Back-date _away_since to when the phone actually became
+        # unreachable (not when we decided to declare away). For ARP-
+        # triggered aways, `_last_seen` holds the final successful
+        # probe — a real trip will show its true length on the arrival
+        # side. For Shortcut-triggered aways, `on_shortcut_departure`
+        # pre-sets _away_since at Shortcut-receive time; don't overwrite.
+        if self._away_since is None:
+            self._away_since = self._last_seen or datetime.now(tz=TZ)
         logger.info("Departure detected — starting fade sequence")
         self._departure_task = asyncio.create_task(
             self._departure_sequence()
@@ -742,15 +764,23 @@ class PresenceService:
             time_of_day = self._classify_time(now.hour)
             away_minutes = duration_away.total_seconds() / 60
 
-            # iOS WiFi-flap gate (applies even when force_ceremony=True). A
-            # disconnect shorter than FLAP_THRESHOLD_MINUTES was almost
-            # certainly iOS power-save / roaming handoff, not an actual
-            # trip. Silent restore, no ceremony.
-            if away_minutes < FLAP_THRESHOLD_MINUTES:
+            # iOS WiFi-flap gate. Threshold differs by arrival source:
+            # Shortcut-fired arrivals (force_ceremony=True) get a tight
+            # 2-min filter because iOS already provided an explicit
+            # connect event — a real trip well exceeds 2 min and a true
+            # flap is sub-minute. ARP-only arrivals get 5 min because
+            # ARP can miss the phone during iOS power-save for 3–5 min
+            # stretches even when the phone is physically home.
+            flap_threshold = (
+                FLAP_THRESHOLD_MINUTES_SHORTCUT
+                if force_ceremony
+                else FLAP_THRESHOLD_MINUTES_ARP
+            )
+            if away_minutes < flap_threshold:
                 logger.info(
-                    "Arrival: brief disconnect (%d min) — treating as "
-                    "flap, no ceremony",
-                    int(away_minutes),
+                    "Arrival: brief disconnect (%d min, threshold %d) — "
+                    "treating as flap, no ceremony",
+                    int(away_minutes), flap_threshold,
                 )
                 if self._automation.current_mode in ("idle", "away"):
                     await self._automation._apply_time_based()
