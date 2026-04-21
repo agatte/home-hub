@@ -189,6 +189,19 @@ export function modeColor(mode) {
   return MODE_CONFIG[mode]?.color ?? MODE_CONFIG.idle.color
 }
 
+/** Return a mode color with the supplied alpha applied as an rgba() string.
+ * Used by the analytics constellation so glows/outlines share one palette.
+ * @param {string} mode
+ * @param {number} alpha 0..1
+ */
+export function modeColorSoft(mode, alpha = 0.2) {
+  const hex = modeColor(mode).replace('#', '')
+  const r = parseInt(hex.slice(0, 2), 16)
+  const g = parseInt(hex.slice(2, 4), 16)
+  const b = parseInt(hex.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
 export function modeLabel(mode) {
   return MODE_CONFIG[mode]?.label ?? mode
 }

@@ -2,7 +2,8 @@
   import { onMount } from 'svelte'
   import { apiGet, apiPost } from '$lib/api.js'
   import { modeColor, modeLabel } from '$lib/theme.js'
-  import DecisionPipeline from '$lib/components/DecisionPipeline.svelte'
+  import ConstellationView from '$lib/components/constellation/ConstellationView.svelte'
+  import HistoryDrawer from '$lib/components/constellation/HistoryDrawer.svelte'
 
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -100,8 +101,11 @@
 </script>
 
 <main class="analytics-page">
-  <!-- Pipeline: primary content -->
-  <DecisionPipeline />
+  <!-- Live signal constellation: primary content -->
+  <ConstellationView />
+
+  <!-- Slim history strip (expands into a drawer) -->
+  <HistoryDrawer />
 
   <!-- Collapsible Analytics -->
   <section class="analytics-collapse">
@@ -277,8 +281,11 @@
 <style>
   .analytics-page {
     padding: 24px 20px 100px;
-    max-width: 700px;
+    max-width: 900px;
     margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
   /* Analytics collapse toggle */

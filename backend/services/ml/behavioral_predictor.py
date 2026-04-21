@@ -51,6 +51,67 @@ FEATURE_COLUMNS = [
 AUTO_APPLY_THRESHOLD = 0.95
 SUGGEST_THRESHOLD = 0.70
 
+# Human-readable labels and display formatters for the analytics constellation.
+_FEATURE_LABELS: dict[str, str] = {
+    "hour": "Hour",
+    "minute_bucket": "Quarter",
+    "day_of_week": "Day",
+    "is_weekend": "Weekend",
+    "season_enc": "Season",
+    "previous_mode": "Prev Mode",
+    "previous_mode_duration_min": "Dwell",
+    "minutes_since_wake": "Since Wake",
+    "mode_transitions_today": "Transitions",
+    "manual_override_count_7d": "Overrides 7d",
+}
+
+_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_SEASON_NAMES = ("Winter", "Spring", "Summer", "Fall")
+
+
+def _format_feature_display(col: str, value: Any) -> str:
+    """Format a raw feature value into a UI-friendly string."""
+    if value is None:
+        return "—"
+    if col == "hour":
+        try:
+            return f"{int(value):02d}:00"
+        except (TypeError, ValueError):
+            return str(value)
+    if col == "day_of_week":
+        try:
+            idx = int(value)
+            return _DAY_NAMES[idx] if 0 <= idx < len(_DAY_NAMES) else str(value)
+        except (TypeError, ValueError):
+            return str(value)
+    if col == "season_enc":
+        try:
+            idx = int(value)
+            return _SEASON_NAMES[idx] if 0 <= idx < len(_SEASON_NAMES) else str(value)
+        except (TypeError, ValueError):
+            return str(value)
+    if col == "is_weekend":
+        return "yes" if value else "no"
+    if col == "previous_mode":
+        # Reverse-encoded lookup — MODE_ENCODING lives in feature_builder.
+        try:
+            from backend.services.ml.feature_builder import MODE_ENCODING
+            reverse = {v: k for k, v in MODE_ENCODING.items()}
+            return reverse.get(int(value), str(value))
+        except Exception:
+            return str(value)
+    if col in ("previous_mode_duration_min", "minutes_since_wake"):
+        try:
+            return f"{float(value):.0f}m"
+        except (TypeError, ValueError):
+            return str(value)
+    if col == "minute_bucket":
+        try:
+            return f":{int(value) * 15:02d}"
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
 
 class BehavioralPredictor:
     """LightGBM mode predictor with shadow mode support.
@@ -284,6 +345,7 @@ class BehavioralPredictor:
             "confidence": confidence,
             "source": "behavioral_predictor",
             "factors": factors[:5],  # top 5 features
+            "fusion_factors": self._build_fusion_factors(features),
         }
 
         # Shadow mode: return prediction for logging but caller should
@@ -292,6 +354,57 @@ class BehavioralPredictor:
             result["shadow"] = True
 
         return result
+
+    def get_feature_importances(self) -> dict[str, float]:
+        """Return per-feature importance scores normalized to [0, 1].
+
+        Used by the analytics constellation to size/rank the behavioral
+        lane's sub-factor pips. Returns empty dict if the model isn't
+        loaded or doesn't expose importances (e.g. the shadow stub).
+        """
+        model = self._model
+        if model is None:
+            return {}
+        try:
+            raw = model.feature_importance()
+        except Exception:
+            return {}
+        total = float(sum(raw)) or 1.0
+        return {
+            col: float(raw[i]) / total
+            for i, col in enumerate(FEATURE_COLUMNS)
+            if i < len(raw)
+        }
+
+    def _build_fusion_factors(self, features: dict) -> list[dict]:
+        """Produce constellation-shaped factors from a feature vector.
+
+        Returns at most 3 entries ranked by model importance (falls back
+        to a hand-picked default when the model isn't loaded) and with
+        human-readable ``display`` values.
+        """
+        importances = self.get_feature_importances()
+        if importances:
+            ranked = sorted(
+                FEATURE_COLUMNS, key=lambda c: importances.get(c, 0), reverse=True,
+            )
+        else:
+            # Default ordering when no trained model is available.
+            ranked = ["hour", "day_of_week", "previous_mode"]
+
+        factors: list[dict] = []
+        for col in ranked[:3]:
+            if col not in features:
+                continue
+            raw_value = features[col]
+            factors.append({
+                "key": col,
+                "label": _FEATURE_LABELS.get(col, col),
+                "value": raw_value,
+                "display": _format_feature_display(col, raw_value),
+                "impact": round(max(0.0, min(1.0, importances.get(col, 0.5))), 3),
+            })
+        return factors
 
     # ------------------------------------------------------------------
     # Status management

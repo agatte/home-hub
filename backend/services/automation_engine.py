@@ -1017,13 +1017,22 @@ class AutomationEngine:
     # Activity reporting
     # ------------------------------------------------------------------
 
-    async def report_activity(self, mode: str, source: str) -> None:
+    async def report_activity(
+        self,
+        mode: str,
+        source: str,
+        factors: Optional[list[dict]] = None,
+    ) -> None:
         """
         Process an activity report from the PC agent, ambient monitor, or camera.
 
         Args:
             mode: Detected mode (gaming, watching, working, social, idle, away).
             source: Detection source ("process", "ambient", "audio_ml", or "camera").
+            factors: Optional sub-factor list surfaced to the analytics
+                constellation (foreground app / idle bucket / YAMNet classes /
+                etc). Passed through to the confidence fusion without affecting
+                fusion math.
         """
         if not self._enabled:
             return
@@ -1034,11 +1043,11 @@ class AutomationEngine:
         fusion = getattr(self, "_confidence_fusion", None)
         if fusion:
             if source == "process":
-                fusion.report_signal("process", mode, 1.0)
+                fusion.report_signal("process", mode, 1.0, factors=factors)
             elif source == "ambient":
-                fusion.report_signal("audio_ml", mode, 0.7)
+                fusion.report_signal("audio_ml", mode, 0.7, factors=factors)
             else:
-                fusion.report_signal(source, mode, 0.8)
+                fusion.report_signal(source, mode, 0.8, factors=factors)
 
         # Priority guard — a lower-priority mode can't displace a higher-priority
         # current mode unless the report comes from the source that owns it
@@ -2150,6 +2159,7 @@ class AutomationEngine:
                                 "behavioral",
                                 prediction["predicted_mode"],
                                 prediction["confidence"],
+                                factors=prediction.get("fusion_factors"),
                             )
                 if (
                     prediction

@@ -58,6 +58,47 @@ STALE_SIGNAL_SECONDS = 300  # 5 minutes
 # the other signals carry more weight.
 LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6
 
+# Max sub-factors surfaced per lane (keeps the analytics constellation readable).
+MAX_FACTORS_PER_LANE = 4
+
+
+def _clean_factors(
+    factors: Optional[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Normalize a caller-supplied factor list into a safe shape.
+
+    Drops malformed entries, clamps ``impact`` to [0, 1], coerces
+    ``stale`` to bool, and truncates to MAX_FACTORS_PER_LANE.
+    """
+    if not factors:
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for f in factors:
+        if not isinstance(f, dict):
+            continue
+        key = f.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        try:
+            impact = max(0.0, min(1.0, float(f.get("impact", 0.5))))
+        except (TypeError, ValueError):
+            impact = 0.5
+        value = f.get("value")
+        display = f.get("display")
+        if display is None:
+            display = "" if value is None else str(value)
+        cleaned.append({
+            "key": key,
+            "label": str(f.get("label") or key),
+            "value": value,
+            "display": str(display),
+            "impact": round(impact, 3),
+            "stale": bool(f.get("stale", False)),
+        })
+        if len(cleaned) >= MAX_FACTORS_PER_LANE:
+            break
+    return cleaned
+
 
 @dataclass
 class Signal:
@@ -67,6 +108,11 @@ class Signal:
     mode: str
     confidence: float
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Sub-factors the lane considered when voting. Each entry:
+    # {"key": str, "label": str, "value": any, "display": str,
+    #  "impact": float in [0,1], "stale": bool}
+    # Surfaced to the analytics constellation UI; not used for fusion math.
+    factors: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ConfidenceFusion:
@@ -86,7 +132,13 @@ class ConfidenceFusion:
     # Public API
     # ------------------------------------------------------------------
 
-    def report_signal(self, source: str, mode: str, confidence: float) -> None:
+    def report_signal(
+        self,
+        source: str,
+        mode: str,
+        confidence: float,
+        factors: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
         """Store the latest reading from a signal source.
 
         Fire-and-forget — never raises.  Invalid inputs are logged and
@@ -96,6 +148,10 @@ class ConfidenceFusion:
             source: One of SIGNAL_SOURCES.
             mode: Detected mode (must be in VALID_MODES).
             confidence: Confidence score in [0, 1].
+            factors: Optional list of sub-factor dicts surfaced to the
+                analytics constellation UI. Each entry should include
+                keys ``key``, ``label``, ``value``, ``display``, ``impact``
+                (float in [0,1]) and optionally ``stale``. Capped at 4.
         """
         try:
             if source not in SIGNAL_SOURCES:
@@ -110,6 +166,7 @@ class ConfidenceFusion:
                 source=source,
                 mode=mode,
                 confidence=confidence,
+                factors=_clean_factors(factors),
             )
         except Exception:
             logger.exception("Error recording signal from %s", source)
@@ -188,6 +245,7 @@ class ConfidenceFusion:
                     "stale": is_stale,
                     "agrees": sig.mode == fused_mode and not is_stale,
                     "last_update": sig.timestamp.isoformat(),
+                    "factors": list(sig.factors),
                 }
             else:
                 signals_detail[src] = {
@@ -197,6 +255,7 @@ class ConfidenceFusion:
                     "stale": True,
                     "agrees": False,
                     "last_update": None,
+                    "factors": [],
                 }
 
         return {

@@ -443,6 +443,81 @@ class ActivityDetector:
         self._last_reported_mode = mode
         return changed
 
+    def build_factors(self) -> list[dict]:
+        """Build sub-factor list describing what this lane is seeing.
+
+        Surfaced to the analytics constellation UI. Keeps shape consistent
+        with the fusion ``factors`` contract — each entry is a dict with
+        ``key``/``label``/``value``/``display``/``impact`` keys.
+        """
+        fg_proc, fg_title = self._get_foreground_window()
+        idle_seconds = self._get_idle_seconds()
+        processes = self._get_running_process_names()
+
+        # Foreground bucket — what category is the current focus?
+        if fg_proc and fg_proc in GAME_PROCESSES:
+            fg_kind = "game"
+        elif fg_proc and fg_proc in MEDIA_PROCESSES:
+            fg_kind = "media"
+        elif fg_proc and fg_proc in WORK_PROCESSES:
+            fg_kind = "dev"
+        elif fg_proc and fg_proc in BROWSER_PROCESSES:
+            fg_kind = "browser"
+        elif fg_proc:
+            fg_kind = "other"
+        else:
+            fg_kind = "none"
+
+        # Idle bucket with a readable display
+        if idle_seconds < 60:
+            idle_display = "active"
+            idle_impact = 1.0
+        elif idle_seconds < IDLE_THRESHOLD:
+            idle_display = f"{idle_seconds // 60}m idle"
+            idle_impact = 0.6
+        else:
+            idle_display = f"{idle_seconds // 60}m idle"
+            idle_impact = 0.3
+
+        factors: list[dict] = [
+            {
+                "key": "foreground",
+                "label": "Foreground",
+                "value": fg_proc or "none",
+                "display": (fg_proc or "none"),
+                "impact": 1.0 if fg_kind in ("game", "media", "dev") else 0.5,
+            },
+            {
+                "key": "idle",
+                "label": "Input",
+                "value": idle_seconds,
+                "display": idle_display,
+                "impact": idle_impact,
+            },
+            {
+                "key": "foreground_kind",
+                "label": "Kind",
+                "value": fg_kind,
+                "display": fg_kind,
+                "impact": 0.7,
+            },
+        ]
+
+        # Only surface browser flag when it's actually load-bearing (late night).
+        current_hour = datetime.now().hour
+        is_late = current_hour >= LATE_NIGHT_START or current_hour < 6
+        if is_late:
+            browser_running = bool(processes & BROWSER_PROCESSES)
+            factors.append({
+                "key": "browser",
+                "label": "Browser",
+                "value": browser_running,
+                "display": "on" if browser_running else "off",
+                "impact": 0.8 if browser_running else 0.2,
+            })
+
+        return factors[:4]
+
 
 def run_agent(
     server_url: str,
@@ -490,6 +565,7 @@ def run_agent(
                                 "mode": mode,
                                 "source": "process",
                                 "detected_at": datetime.now().isoformat(),
+                                "factors": detector.build_factors(),
                             },
                         )
                         resp.raise_for_status()

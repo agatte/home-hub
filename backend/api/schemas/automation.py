@@ -23,6 +23,13 @@ class ActivityReport(BaseModel):
         default=None,
         description="ISO timestamp of when the activity was detected",
     )
+    factors: Optional[list[dict]] = Field(
+        default=None,
+        description="Optional sub-factors the lane considered (foreground app, "
+        "idle bucket, top YAMNet classes, etc). Surfaced to the analytics "
+        "constellation UI — not used for fusion math. Each entry shape: "
+        "{key, label, value, display, impact∈[0,1], stale?}.",
+    )
 
 
 class AutomationStatus(BaseModel):

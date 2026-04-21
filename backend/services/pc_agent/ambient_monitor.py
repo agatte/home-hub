@@ -72,6 +72,62 @@ SHADOW_LOG_INTERVAL = 30
 HEARTBEAT_INTERVAL = 60
 
 
+def _build_audio_factors(
+    rms_edge: Optional[str],
+    ml_result: Optional[dict],
+) -> list[dict]:
+    """Build the sub-factor list surfaced on the audio_ml lane.
+
+    Composes the top YAMNet classes (when available) plus an RMS state
+    pill. Shape matches the fusion ``factors`` contract.
+    """
+    factors: list[dict] = []
+
+    # RMS state always present — it's the only thing we have when YAMNet
+    # hasn't loaded, and a useful ground-truth when it has.
+    rms_display = "quiet" if rms_edge == "quiet" else "normal"
+    factors.append({
+        "key": "rms",
+        "label": "Ambient RMS",
+        "value": rms_edge or "normal",
+        "display": rms_display,
+        "impact": 1.0 if rms_edge == "quiet" else 0.4,
+    })
+
+    if ml_result and ml_result.get("all_scores"):
+        scores: dict = ml_result["all_scores"] or {}
+        # Top 2 classes by score, skip any at zero
+        ranked = sorted(
+            scores.items(), key=lambda kv: float(kv[1] or 0), reverse=True,
+        )
+        for cls, score in ranked[:2]:
+            try:
+                impact = max(0.0, min(1.0, float(score)))
+            except (TypeError, ValueError):
+                impact = 0.0
+            if impact <= 0.01:
+                continue
+            factors.append({
+                "key": f"yamnet_{cls}",
+                "label": cls.replace("_", " ").title(),
+                "value": round(impact, 3),
+                "display": f"{int(round(impact * 100))}%",
+                "impact": impact,
+            })
+
+        inference_ms = ml_result.get("inference_ms")
+        if inference_ms is not None:
+            factors.append({
+                "key": "inference_ms",
+                "label": "Inference",
+                "value": round(float(inference_ms), 1),
+                "display": f"{float(inference_ms):.0f}ms",
+                "impact": 0.3,
+            })
+
+    return factors[:4]
+
+
 class AmbientMonitor:
     """
     Monitors ambient audio levels from the Blue Yeti microphone.
@@ -400,6 +456,10 @@ def run_monitor(
     last_logged_class: Optional[str] = None
     last_log_time: float = 0.0
     last_heartbeat: float = 0.0
+    # Cache latest YAMNet result so RMS posts can attach factors even
+    # though classification runs later in the loop. It's <1 cycle stale,
+    # which beats an empty factor list on the constellation view.
+    latest_ml_result: Optional[dict] = None
 
     try:
         while not _stop.is_set():
@@ -419,6 +479,7 @@ def run_monitor(
                             "mode": "idle",
                             "source": "ambient",
                             "detected_at": datetime.now().isoformat(),
+                            "factors": _build_audio_factors(rms_result, latest_ml_result),
                         },
                     )
                     resp.raise_for_status()
@@ -438,6 +499,7 @@ def run_monitor(
                                 "mode": "idle",
                                 "source": "ambient",
                                 "detected_at": datetime.now().isoformat(),
+                                "factors": _build_audio_factors(rms_result, latest_ml_result),
                             },
                         )
                         resp.raise_for_status()
@@ -449,6 +511,7 @@ def run_monitor(
             if classifier_enabled:
                 ml_result = monitor.classify_scene()
                 if ml_result is not None:
+                    latest_ml_result = ml_result
                     mode_signal = ml_result["mode_signal"]
 
                     # Determine what mode the ML would set
@@ -476,6 +539,7 @@ def run_monitor(
                                     "mode": ml_mode,
                                     "source": "audio_ml",
                                     "detected_at": datetime.now().isoformat(),
+                                    "factors": _build_audio_factors(rms_result, ml_result),
                                 },
                             )
                             resp.raise_for_status()

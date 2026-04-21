@@ -548,6 +548,80 @@ class CameraService:
         """
         return self._last_posture
 
+    def _build_fusion_factors(
+        self,
+        status: str,
+        detection_source: Optional[str],
+        confidence: float,
+        multiplier: float,
+    ) -> list[dict]:
+        """Build the camera lane's sub-factors for the analytics constellation.
+
+        Returns four pips: presence (face/pose/absent), zone, posture, and
+        a lux band. Uses currently-committed hysteresis values so pips
+        don't flicker on single-frame misses.
+        """
+        if status == "absent":
+            presence_display = "absent"
+            presence_impact = 0.3
+        elif detection_source == "pose":
+            presence_display = "pose"
+            presence_impact = max(0.5, min(1.0, confidence))
+        else:
+            presence_display = detection_source or "face"
+            presence_impact = max(0.6, min(1.0, confidence))
+
+        factors: list[dict] = [
+            {
+                "key": "presence",
+                "label": "Presence",
+                "value": status,
+                "display": presence_display,
+                "impact": round(presence_impact, 3),
+            },
+        ]
+
+        # Zone pip — only surface when we've actually committed a zone.
+        if self._last_zone is not None:
+            factors.append({
+                "key": "zone",
+                "label": "Zone",
+                "value": self._last_zone,
+                "display": self._last_zone,
+                "impact": 0.8,
+            })
+
+        # Posture pip — only surface when pose has committed a value.
+        if self._last_posture is not None:
+            factors.append({
+                "key": "posture",
+                "label": "Posture",
+                "value": self._last_posture,
+                "display": self._last_posture,
+                "impact": 0.7,
+            })
+
+        # Lux band pip — only meaningful after calibration.
+        if self._calibrated and self._ema_lux is not None:
+            if multiplier >= 1.08:
+                lux_display = "dark"
+                lux_impact = 1.0
+            elif multiplier <= 0.92:
+                lux_display = "bright"
+                lux_impact = 1.0
+            else:
+                lux_display = "normal"
+                lux_impact = 0.4
+            factors.append({
+                "key": "lux",
+                "label": "Light",
+                "value": round(float(self._ema_lux), 1),
+                "display": lux_display,
+                "impact": lux_impact,
+            })
+
+        return factors[:4]
+
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
         loop = asyncio.get_event_loop()
@@ -581,6 +655,27 @@ class CameraService:
                 self._apply_zone_hysteresis(frame_zone)
                 self._apply_posture_hysteresis(frame_posture)
 
+                # Compute the lux multiplier once — used by fusion factors,
+                # the ML logger below, and the WebSocket broadcast at the end.
+                current_multiplier = 1.0
+                if self._calibrated and self._ema_lux is not None:
+                    from backend.services.automation_engine import lux_to_multiplier
+                    baseline = self._baseline_lux if self._baseline_lux is not None else 90.0
+                    current_multiplier = lux_to_multiplier(
+                        float(self._ema_lux), float(baseline)
+                    )
+
+                # Build factors once and reuse for both the freshness report
+                # below and any edge-triggered report_activity() call, so the
+                # edge call doesn't overwrite the fusion slot with an empty
+                # factors list.
+                camera_factors = self._build_fusion_factors(
+                    status=status,
+                    detection_source=source,
+                    confidence=confidence,
+                    multiplier=current_multiplier,
+                )
+
                 # Keep the camera lane fresh in confidence fusion every cycle.
                 # The edge-triggered report_activity() calls below drive actual
                 # mode changes; this keeps fusion's signal alive while the user
@@ -588,7 +683,9 @@ class CameraService:
                 fusion = getattr(self._automation, "_confidence_fusion", None)
                 if fusion and status in ("present", "absent"):
                     inferred = "idle" if status == "present" else "away"
-                    fusion.report_signal("camera", inferred, confidence)
+                    fusion.report_signal(
+                        "camera", inferred, confidence, factors=camera_factors,
+                    )
 
                 if status == "present":
                     was_absent = self._consecutive_absent >= ABSENT_THRESHOLD
@@ -598,7 +695,7 @@ class CameraService:
                     if was_absent or self._was_absent:
                         self._was_absent = False
                         await self._automation.report_activity(
-                            mode="idle", source="camera"
+                            mode="idle", source="camera", factors=camera_factors,
                         )
                         logger.info(
                             "Presence detected via %s — reported idle "
@@ -614,7 +711,7 @@ class CameraService:
                     if self._consecutive_absent == ABSENT_THRESHOLD:
                         self._was_absent = True
                         await self._automation.report_activity(
-                            mode="away", source="camera"
+                            mode="away", source="camera", factors=camera_factors,
                         )
                         logger.info(
                             "No person detected for %ds — reported away",
@@ -645,14 +742,7 @@ class CameraService:
                         ),
                     )
 
-                # Broadcast status via WebSocket
-                current_multiplier = 1.0
-                if self._calibrated and self._ema_lux is not None:
-                    from backend.services.automation_engine import lux_to_multiplier
-                    baseline = self._baseline_lux if self._baseline_lux is not None else 90.0
-                    current_multiplier = lux_to_multiplier(
-                        float(self._ema_lux), float(baseline)
-                    )
+                # Broadcast status via WebSocket (multiplier already computed above)
                 await self._ws_manager.broadcast(
                     "camera_update",
                     {

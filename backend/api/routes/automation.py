@@ -53,7 +53,7 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
     if not engine:
         raise HTTPException(status_code=503, detail="Automation engine not initialized")
 
-    await engine.report_activity(report.mode, report.source)
+    await engine.report_activity(report.mode, report.source, factors=report.factors)
 
     return {
         "status": "ok",

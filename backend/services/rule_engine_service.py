@@ -43,6 +43,46 @@ _DEFAULT_SOURCE_WEIGHT = 1.0
 
 GENERATION_INTERVAL_HOURS = 6
 
+_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _build_rule_factors(rule: "LearnedRule") -> list[dict]:
+    """Describe a matching learned rule as constellation sub-factors.
+
+    Returned shape follows the fusion ``factors`` contract. Exposes the
+    slot (day + hour), sample count, and per-rule confidence so the
+    analytics view shows *why* the rule engine is voting.
+    """
+    try:
+        day_label = _DAY_NAMES[rule.day_of_week] if 0 <= rule.day_of_week < 7 else "?"
+    except (TypeError, IndexError):
+        day_label = "?"
+
+    sample_impact = min(1.0, (rule.sample_count or 0) / 30.0)
+    return [
+        {
+            "key": "slot",
+            "label": "Slot",
+            "value": f"{rule.day_of_week}:{rule.hour}",
+            "display": f"{day_label} {rule.hour:02d}:00",
+            "impact": 1.0,
+        },
+        {
+            "key": "samples",
+            "label": "Samples",
+            "value": int(rule.sample_count or 0),
+            "display": f"n={int(rule.sample_count or 0)}",
+            "impact": round(sample_impact, 3),
+        },
+        {
+            "key": "rule_confidence",
+            "label": "Rule conf.",
+            "value": float(rule.confidence or 0.0),
+            "display": f"{int(round((rule.confidence or 0) * 100))}%",
+            "impact": float(rule.confidence or 0.0),
+        },
+    ]
+
 
 class RuleEngineService:
     """Frequency-based rule engine — learns and suggests modes from patterns."""
@@ -209,7 +249,10 @@ class RuleEngineService:
         # weighs this against the active signals.
         if self._fusion:
             self._fusion.report_signal(
-                "rule_engine", rule.predicted_mode, rule.confidence,
+                "rule_engine",
+                rule.predicted_mode,
+                rule.confidence,
+                factors=_build_rule_factors(rule),
             )
 
         # Nudges are only useful when we don't already know what the user
