@@ -6,7 +6,29 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-04-15
+> **Last updated:** 2026-04-21 (v2)
+
+## v2 Changelog (2026-04-21)
+
+Presence (phone on home WiFi) joined the ensemble as a 6th voter. Prior
+voter weights were scaled by 0.82 so everything still sums to 1.0.
+
+| Signal | v1 weight | v2 weight |
+|--------|-----------|-----------|
+| Process detection | 0.35 | 0.287 |
+| Camera presence | 0.20 | 0.164 |
+| Behavioral predictor | 0.20 | 0.164 |
+| Audio classifier | 0.15 | 0.123 |
+| Rule engine | 0.10 | 0.082 |
+| **Presence (new)** | — | **0.180** |
+
+Presence votes `away` at confidence 0.95 when the phone is off home WiFi
+(the single most reliable "not home" signal the system collects) and a
+low-conf `idle` (0.30) when home — home doesn't predict a specific
+activity, so the lane stays visible without drowning out process/camera.
+
+The worked examples below still use the v1 weights for illustration; the
+math is identical, just re-normalize through the v2 values when adapting.
 
 ---
 
@@ -74,9 +96,9 @@ The signals never talked to each other. Each layer ran sequentially, and if one 
 
 Fusion takes the independent signals and makes them **vote together**:
 
-**Before:** 5 separate specialists, each running in their own lane. Decisions cascaded — behavioral predictor first, then rules, then time. Only the first one to produce a high-confidence result mattered.
+**Before:** 5 separate specialists, each running in their own lane (presence sat outside fusion entirely). Decisions cascaded — behavioral predictor first, then rules, then time. Only the first one to produce a high-confidence result mattered.
 
-**After:** All 5 signals report their current best guess + confidence into a shared pool. The fusion service weights them, groups votes by mode, computes an ensemble confidence score, and asks "do enough signals agree?"
+**After:** All 6 signals report their current best guess + confidence into a shared pool. The fusion service weights them, groups votes by mode, computes an ensemble confidence score, and asks "do enough signals agree?"
 
 **New capability:** Fusion can **override stale process detection**. If you close a game but the client is still running, pre-fusion the system would keep saying "gaming" forever. Now, if camera says absent + audio says silence + WiFi says phone gone, fusion can hit 98%+ confidence and override the stale process state.
 
@@ -93,13 +115,14 @@ Fusion takes the independent signals and makes them **vote together**:
 
 Every signal has a weight representing "how much I trust this signal's opinion":
 
-| Signal | Weight | Why |
-|--------|--------|-----|
-| Process detection | **0.35** | Most reliable — if `LeagueofLegends.exe` is running, you're gaming |
-| Camera presence | 0.20 | Good but can be fooled by sitting still outside frame |
-| Behavioral predictor | 0.20 | Useful but new, needs training data |
-| Audio classifier | 0.15 | Still in shadow mode, less trusted |
-| Rule engine | 0.10 | Simple frequency patterns, lowest trust |
+| Signal | Weight (v2) | Why |
+|--------|-------------|-----|
+| Process detection | **0.287** | Most reliable — if `LeagueofLegends.exe` is running, you're gaming |
+| Presence (phone WiFi) | 0.180 | Rock-solid "not home" signal; low-conf `idle` vote when home |
+| Camera presence | 0.164 | Good but can be fooled by sitting still outside frame |
+| Behavioral predictor | 0.164 | Useful but new, needs training data |
+| Audio classifier | 0.123 | Still in shadow mode, less trusted |
+| Rule engine | 0.082 | Simple frequency patterns, lowest trust |
 
 These sum to exactly 1.0. That matters for the math later.
 
@@ -331,7 +354,7 @@ Notice process detection's weight drops from 0.35 → 0.25 because accuracy-weig
 Every pipeline state broadcast includes the full fusion result. The frontend renders:
 
 - **SVG confidence ring** at the top — arc length = fused confidence, color transitions from gray (<70%) → amber (70-90%) → green (90-95%) → bright green with pulse (95%+)
-- **5 signal cards** showing each source's mode, confidence bar, weight, and agreement indicator
+- **6 signal cards** (constellation satellites in v2) showing each source's mode, confidence, weight, and agreement indicator
 - Cards dim to 30% opacity and show "STALE" when a signal expires
 - Cards show "No data" when a signal has never reported
 - Winner highlight on the highest-weighted agreeing signal

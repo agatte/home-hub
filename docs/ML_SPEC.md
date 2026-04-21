@@ -57,7 +57,7 @@ rare.
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
 | **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection). Remaining for Phase 2b: posture classification (BlazePose upgrade) | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
-| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (5-signal weighted ensemble, auto-apply at 95%+, stale override at 92%+). ✓ Live pipeline dashboard with per-signal gauges. ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: analytics-page dashboard UI, threshold tuning on live FP data | Fewer than 2 manual overrides per day |
+| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (6-signal weighted ensemble in v2 with presence; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
 
 ### Design Principles
 
@@ -148,10 +148,11 @@ confident prediction:
 6. Time-based rules         → Hardcoded schedule defaults
 ```
 
-**Confidence fusion** (Phase 3, `confidence_fusion.py`) combines 5 signal sources
-into a weighted ensemble: process detection (wt 0.35), camera presence (0.20),
-behavioral predictor (0.20), audio classifier (0.15), rule engine (0.10). Weights
-start at these defaults and update nightly from measured per-signal accuracy.
+**Confidence fusion** (Phase 3, `confidence_fusion.py`) combines 6 signal sources
+into a weighted ensemble: process detection (wt 0.287), presence/phone-WiFi
+(0.180), camera presence (0.164), behavioral predictor (0.164), audio classifier
+(0.123), rule engine (0.082). Weights start at these defaults and update nightly
+from measured per-signal accuracy.
 Stale signals (>5 min) are excluded and their weight redistributed.
 
 ### Data Flow Diagram
@@ -1314,12 +1315,17 @@ Audio classifier promotion from shadow to active
 ### Phase 3: Autonomous Operation (In Progress — April 2026+)
 
 **Shipped (April 15, 2026):**
-- ✓ `ConfidenceFusion` service — 5-signal weighted ensemble (228 LOC)
+- ✓ `ConfidenceFusion` service — weighted ensemble (228 LOC; v1 was 5-signal, v2 is 6-signal after presence joined 2026-04-21)
 - ✓ Fusion integrated into automation loop — computes every 60s cycle
 - ✓ Auto-apply at 95%+ confidence when idle/away
 - ✓ Stale process override at 98%+ confidence with 80%+ signal agreement
-- ✓ Live pipeline dashboard — SVG confidence ring, per-signal gauge cards
+- ✓ Live pipeline dashboard — replaced with the force-directed signal constellation in v2
 - ✓ Decision logging with `decision_source="fusion"`
+
+**Shipped (April 21, 2026) — v2:**
+- ✓ **Presence joined as 6th voter** (weight 0.18). Prior voter weights scaled by 0.82. Votes `away` at conf 0.95 when phone is off home WiFi; abstaining-ish `idle` at 0.30 when home. Closes the gap where camera false-negatived in low light and no signal in fusion knew the user had left.
+- ✓ **Per-lane sub-factors** — every fusion signal now carries a `factors: [{key, label, value, display, impact, stale}, ...]` list so the analytics constellation can expose the concrete data each lane is considering (foreground app, YAMNet scores, zone/posture/lux, top behavioral features, matching rule slot, presence state/last-seen).
+- ✓ **Camera low-light tuning** — `MIN_FACE_CONFIDENCE` 0.2→0.15 and `ABSENT_THRESHOLD` 7→15 frames (~14s→~30s). Dampens the reading-in-bed scenario where detection flapped and fusion flipped to away.
 
 **Shipped (April 18, 2026):**
 - ✓ **Accuracy-driven weight learning** — `fusion_weight_tuning` ScheduledTask at 3:30 AM daily. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion rows with `factors.signal_details`, derives per-source accuracy, hands it to `ConfidenceFusion.update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. Full `signals` dict now persisted in `MLDecision.factors` so historical decisions carry the per-source vote context.
