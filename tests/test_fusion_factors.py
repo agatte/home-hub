@@ -121,8 +121,30 @@ class TestFusionReportsFactors:
         fusion.report_signal("process", "working", 1.0, factors=self._factors_for("fg"))
         result = fusion.compute_fusion()
         # Lanes that never reported still appear with empty factors
-        for src in ("camera", "audio_ml", "behavioral", "rule_engine"):
+        for src in ("camera", "audio_ml", "behavioral", "rule_engine", "presence"):
             assert result["signals"][src]["factors"] == []
+
+    def test_presence_lane_is_a_voter(self):
+        """Presence joined as the 6th voter in v2 — it must be in
+        SIGNAL_SOURCES, carry a non-zero weight, and round-trip its
+        factors the same way the other lanes do."""
+        from backend.services.ml.confidence_fusion import DEFAULT_WEIGHTS
+
+        assert "presence" in SIGNAL_SOURCES
+        assert DEFAULT_WEIGHTS["presence"] > 0
+        # Total weight across all sources must still be ~1.0 after rebalance.
+        assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 0.01
+
+        fusion = ConfidenceFusion()
+        fusion.report_signal(
+            "presence", "away", 0.95, factors=self._factors_for("state"),
+        )
+        result = fusion.compute_fusion()
+        assert result is not None
+        presence = result["signals"]["presence"]
+        assert presence["mode"] == "away"
+        assert presence["confidence"] == 0.95
+        assert presence["factors"][0]["key"] == "state"
 
     def test_factors_replaced_on_subsequent_report(self):
         fusion = ConfidenceFusion()

@@ -37,14 +37,21 @@ VALID_MODES = frozenset({
     "cooking", "idle", "away", "sleeping",
 })
 
-SIGNAL_SOURCES = ("process", "camera", "audio_ml", "behavioral", "rule_engine")
+SIGNAL_SOURCES = (
+    "process", "camera", "audio_ml", "behavioral", "rule_engine", "presence",
+)
 
+# Presence (phone on home WiFi) joined the ensemble after the low-light
+# camera flap scenario showed that the most reliable "user is not home"
+# signal was sitting outside fusion entirely. It weighs 0.18; prior voter
+# weights were scaled by 0.82 so everything still sums to 1.0.
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "process": 0.35,
-    "camera": 0.20,
-    "audio_ml": 0.15,
-    "behavioral": 0.20,
-    "rule_engine": 0.10,
+    "process":     0.287,
+    "camera":      0.164,
+    "audio_ml":    0.123,
+    "behavioral":  0.164,
+    "rule_engine": 0.082,
+    "presence":    0.180,
 }
 
 AUTO_APPLY_THRESHOLD = 0.95

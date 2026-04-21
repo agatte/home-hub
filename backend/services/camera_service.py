@@ -43,17 +43,21 @@ POLL_INTERVAL = 2       # Seconds between frame captures
 # value the stored baseline was recorded at.
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-# Seven consecutive misses (~14s) before flipping to away. With pose as a
-# backup signal to face detection, brief profile-view dropouts rarely cost
-# more than one poll, so we don't need extra hysteresis here.
-ABSENT_THRESHOLD = 7
+# Fifteen consecutive misses (~30s) before flipping to away. Extended past
+# the original seven (~14s) after a live low-light scenario (reading in bed
+# at ema_lux ~30, 20% of baseline) showed face/pose detection flapping 25-40%
+# and the mode flipping to away on brief misses. Brief dropouts in dim light
+# are the common case, not the exception, so we want more dampening.
+ABSENT_THRESHOLD = 15
 # Full-range BlazeFace returns noticeably lower scores than short-range at our
 # corner-view working distance (~2–3m, three-quarter profile toward the
 # monitor). Snapshot sampling showed hits at 0.38 confidence and misses
-# sharing the same pose — the score sits in the 0.2–0.4 range. 0.2 keeps
-# detection stable; the fixed corner view has no other face-like regions on
-# the bed / wall art to false-trigger on.
-MIN_FACE_CONFIDENCE = 0.2
+# sharing the same pose — the score sits in the 0.2–0.4 range. Loosened to
+# 0.15 from 0.2 after low-light bed scenario (ema_lux 31 vs baseline 148)
+# showed face model only clearing 0.2 intermittently. Pip-level flicker is
+# dampened by the larger ABSENT_THRESHOLD above. Fixed corner view has no
+# other face-like regions (bed / wall art) that false-trigger at this score.
+MIN_FACE_CONFIDENCE = 0.15
 # Pose fallback — MediaPipe Pose Landmarker (Tasks API). Declares "present"
 # when enough torso landmarks (nose, shoulders, hips) are visible above
 # MIN_POSE_VISIBILITY. This catches Anthony at the desk in deep profile,

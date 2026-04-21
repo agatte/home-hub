@@ -14,6 +14,8 @@ import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
 import { pipeline } from './pipeline.js'
+import { presence } from './presence.js'
+import { startWeatherPolling, stopWeatherPolling } from './weather.js'
 
 /** @type {HubSocket | null} */
 let socket = null
@@ -59,6 +61,13 @@ export function initStores() {
       pipeline.set({ current: d.current, history: d.history || [] })
     })
     .catch(() => {})
+
+  apiGet('/api/automation/presence/status')
+    .then((data) => presence.set(/** @type {any} */ (data)))
+    .catch(() => {})
+
+  // Weather polls every 5 min — matches the backend NWS cache.
+  startWeatherPolling()
 
   // WebSocket dispatch — parity with HubContext.handleMessage in the React app.
   socket = new HubSocket(
@@ -108,6 +117,9 @@ export function initStores() {
             history: [...prev.history.slice(-29), data],
           }))
           break
+        case 'presence_update':
+          presence.set(data)
+          break
         default:
           console.warn('[ws] Unknown message type:', type, data)
           break
@@ -120,6 +132,7 @@ export function initStores() {
   return () => {
     socket?.close()
     socket = null
+    stopWeatherPolling()
   }
 }
 

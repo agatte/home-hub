@@ -167,7 +167,7 @@ class TestAbsentCountdown:
 
     @pytest.mark.asyncio
     async def test_absent_triggers_after_threshold(self):
-        """3 consecutive absent frames → reports away."""
+        """ABSENT_THRESHOLD consecutive absent frames → reports away."""
         automation = AsyncMock()
         service = _make_service(automation=automation)
         service._enabled = True

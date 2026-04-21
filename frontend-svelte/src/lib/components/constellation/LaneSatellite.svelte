@@ -50,6 +50,11 @@
     {:else if node.icon === 'clock'}
       <circle cx="11" cy="11" r="9.5" />
       <path d="M11 5v6l4 2" />
+    {:else if node.icon === 'wifi'}
+      <path d="M1 8.5a14 14 0 0 1 20 0" />
+      <path d="M4 12.5a10 10 0 0 1 14 0" />
+      <path d="M7 16.5a6 6 0 0 1 8 0" />
+      <circle cx="11" cy="20" r="1.5" fill="currentColor" />
     {/if}
   </g>
 

@@ -282,6 +282,10 @@ async def lifespan(app: FastAPI):
         ws_manager=ws_manager,
         event_logger=event_logger,
         config=presence_config or {},
+        # Presence is a voter in ConfidenceFusion as of v2 — "phone on home
+        # WiFi" is the most reliable "user is (not) home" signal the system
+        # has. Fusion lives on the automation engine.
+        fusion=getattr(automation, "_confidence_fusion", None),
     )
     app.state.presence = presence
     logger.info(

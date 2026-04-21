@@ -19,9 +19,9 @@
     <span class="pct">{confPct}%</span>
   </div>
   <div class="row hint">
-    <span>size = weight</span>
+    <span>inner = voters</span>
     <span class="sep">·</span>
-    <span>color = voted mode</span>
+    <span>outer = context</span>
     <span class="sep">·</span>
     <span>distance = inverse weight</span>
   </div>

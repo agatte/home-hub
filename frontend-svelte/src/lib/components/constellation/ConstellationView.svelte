@@ -4,11 +4,12 @@
     forceSimulation, forceLink, forceManyBody, forceCollide,
     forceRadial, forceX, forceY,
   } from 'd3-force'
-  import { constellation } from '$lib/stores/constellation.js'
+  import { constellationWithContext } from '$lib/stores/constellation.js'
   import { modeColor, modeColorSoft, modeLabel } from '$lib/theme.js'
   import ModeNucleus from './ModeNucleus.svelte'
   import LaneSatellite from './LaneSatellite.svelte'
   import FactorPip from './FactorPip.svelte'
+  import ContextBubble from './ContextBubble.svelte'
   import ConstellationEdge from './ConstellationEdge.svelte'
   import ConstellationLegend from './ConstellationLegend.svelte'
   import ConstellationMobile from './ConstellationMobile.svelte'
@@ -127,15 +128,31 @@
     return { cx: width / 2, cy: height / 2 }
   }
 
-  // Evenly space the 5 lanes around the nucleus so the starting layout
+  // Evenly space the 6 lanes around the nucleus so the starting layout
   // doesn't all clump into one hemisphere. The simulation will refine from
   // here, but the clock-position is deterministic.
   const LANE_ANGLE = {
-    process:     -Math.PI / 2,             // 12 o'clock
-    camera:      -Math.PI / 2 + (2 * Math.PI) / 5,       // ~4:30
-    audio_ml:    -Math.PI / 2 + (4 * Math.PI) / 5,       // ~7:00
-    behavioral:  -Math.PI / 2 + (6 * Math.PI) / 5,       // ~9:00
-    rule_engine: -Math.PI / 2 + (8 * Math.PI) / 5,       // ~1:30
+    process:     -Math.PI / 2,                         // 12 o'clock
+    camera:      -Math.PI / 2 + (1 * Math.PI) / 3,     // 2 o'clock
+    audio_ml:    -Math.PI / 2 + (2 * Math.PI) / 3,     // 4 o'clock
+    behavioral:  -Math.PI / 2 + (3 * Math.PI) / 3,     // 6 o'clock
+    rule_engine: -Math.PI / 2 + (4 * Math.PI) / 3,     // 8 o'clock
+    presence:    -Math.PI / 2 + (5 * Math.PI) / 3,     // 10 o'clock
+  }
+
+  // Outer context ring — 5 non-voting bubbles at a fixed radius, offset by
+  // 36° (π/5) from the lane angles so context doesn't sit directly over a
+  // voter's line-of-sight to the nucleus. Radius chosen so context sits
+  // outside the furthest-reach factor pip (~lane R_MAX + factor distance,
+  // ≈290+90=380) with breathing room.
+  const CONTEXT_RADIUS = 410
+  const CONTEXT_KEYS = ['time', 'weather', 'presence', 'override', 'sonos']
+  const CONTEXT_ANGLE_OFFSET = Math.PI / 5
+  /** @param {string} key */
+  function contextAngle(key) {
+    const i = CONTEXT_KEYS.indexOf(key)
+    if (i < 0) return 0
+    return -Math.PI / 2 + CONTEXT_ANGLE_OFFSET + (i * 2 * Math.PI) / CONTEXT_KEYS.length
   }
 
   function buildSimNodes(graph) {
@@ -172,6 +189,10 @@
         const r = factorDistance(n.impact)
         x = px + Math.cos(angle) * r
         y = py + Math.sin(angle) * r
+      } else if (n.type === 'context') {
+        const angle = contextAngle(n.key)
+        x = cx + Math.cos(angle) * CONTEXT_RADIUS
+        y = cy + Math.sin(angle) * CONTEXT_RADIUS
       }
       return Object.assign({}, n, {
         x, y, vx: 0, vy: 0,
@@ -219,10 +240,15 @@
         .alphaMin(0)
         .alpha(0.1)
         .velocityDecay(0.6)
-        .force('charge', forceManyBody().strength((n) => n.type === 'factor' ? -40 : -140))
+        .force('charge', forceManyBody().strength((n) => (
+          n.type === 'factor' ? -40 :
+          n.type === 'context' ? -20 :
+          -140
+        )))
         .force('collide', forceCollide().radius((n) => (
           n.type === 'nucleus' ? 100 :
           n.type === 'lane' ? 52 :
+          n.type === 'context' ? 34 :
           22 + (n.impact || 0.5) * 12
         )).strength(0.9))
         .force('link', forceLink(simLinks).id((n) => n.id).distance((l) => (
@@ -231,6 +257,12 @@
         .force('laneRing', forceRadial((n) => (
           n.type === 'lane' ? targetDistanceForLane(n) : 0
         ), cx, cy).strength((n) => n.type === 'lane' ? 0.6 : 0))
+        // Outer context ring — pins context bubbles at CONTEXT_RADIUS so
+        // they orbit visibly outside the voter constellation.
+        .force('contextRing', forceRadial(
+          (n) => (n.type === 'context' ? CONTEXT_RADIUS : 0),
+          cx, cy,
+        ).strength((n) => (n.type === 'context' ? 0.65 : 0)))
         .force('factorOrbit', forceFactorOrbit(simNodes))
         .force('ambient', forceAmbientDrift(simNodes))
         // Mild centering so drifting pips don't escape the canvas.
@@ -256,6 +288,10 @@
       sim.force('laneRing', forceRadial((n) => (
         n.type === 'lane' ? targetDistanceForLane(n) : 0
       ), cx, cy).strength((n) => n.type === 'lane' ? 0.6 : 0))
+      sim.force('contextRing', forceRadial(
+        (n) => (n.type === 'context' ? CONTEXT_RADIUS : 0),
+        cx, cy,
+      ).strength((n) => (n.type === 'context' ? 0.65 : 0)))
       // Brief kick to let the ring reshuffle after new data lands, then
       // settle back to the constant idle alpha.
       sim.alpha(0.3).restart()
@@ -278,7 +314,11 @@
       }
       sim.force('laneRing', forceRadial((n) => (
         n.type === 'lane' ? targetDistanceForLane(n) : 0
-      ), cx, cy).strength((n) => n.type === 'lane' ? 0.5 : 0))
+      ), cx, cy).strength((n) => n.type === 'lane' ? 0.6 : 0))
+      sim.force('contextRing', forceRadial(
+        (n) => (n.type === 'context' ? CONTEXT_RADIUS : 0),
+        cx, cy,
+      ).strength((n) => (n.type === 'context' ? 0.65 : 0)))
       sim.force('x', forceX(cx).strength(0.02))
       sim.force('y', forceY(cy).strength(0.02))
       sim.alpha(0.3).restart()
@@ -297,7 +337,7 @@
       resize()
     }
 
-    const unsub = constellation.subscribe((graph) => {
+    const unsub = constellationWithContext.subscribe((graph) => {
       if (!graph || graph.nodes.length === 0) return
       rebuildSimulation(graph)
     })
@@ -317,12 +357,12 @@
   })
 
   // Reactive derived pieces for the nucleus label
-  $: fusedMode = $constellation.fusedMode || 'idle'
-  $: fusedConf = $constellation.fusedConfidence || 0
+  $: fusedMode = $constellationWithContext.fusedMode || 'idle'
+  $: fusedConf = $constellationWithContext.fusedConfidence || 0
 </script>
 
 {#if isMobile}
-  <ConstellationMobile graph={$constellation} />
+  <ConstellationMobile graph={$constellationWithContext} />
 {:else}
   <section class="constellation" bind:this={container}>
     <svg
@@ -349,7 +389,14 @@
         class="aura"
       />
 
-      <!-- Edges (beneath nodes) -->
+      <!-- Context ring (outermost, beneath the voter edges) -->
+      <g class="context-ring">
+        {#each tickNodes.filter((n) => n.type === 'context') as node (node.id)}
+          <ContextBubble {node} {fusedMode} />
+        {/each}
+      </g>
+
+      <!-- Edges (beneath voter nodes) -->
       <g class="edges">
         {#each tickLinks as link (link.source.id + '-' + link.target.id)}
           <ConstellationEdge {link} {fusedMode} />
@@ -391,8 +438,8 @@
     max-width: 960px;
     margin: 0 auto;
     aspect-ratio: 1 / 1;
-    min-height: 440px;
-    max-height: 780px;
+    min-height: 500px;
+    max-height: 900px;
   }
   .canvas {
     width: 100%;

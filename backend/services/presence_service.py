@@ -155,6 +155,7 @@ class PresenceService:
         ws_manager,
         event_logger=None,
         config: Optional[dict[str, Any]] = None,
+        fusion=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
@@ -165,6 +166,7 @@ class PresenceService:
         self._music_mapper = music_mapper
         self._ws_manager = ws_manager
         self._event_logger = event_logger
+        self._fusion = fusion
 
         self._config = PresenceConfig.from_dict(config or {})
         self._state: str = "unknown"
@@ -227,6 +229,70 @@ class PresenceService:
             {**asdict(self._config), **new_config}
         )
         logger.info("Presence config updated: %s", new_config)
+
+    def _report_to_fusion(self) -> None:
+        """Publish the current presence state to ConfidenceFusion.
+
+        Fire-and-forget — if no fusion reference is wired in, this is a
+        no-op. Called on every state change and from the ARP poll loop
+        at a roughly-60s heartbeat cadence so fusion's 300s staleness
+        window never trips.
+
+        Vote semantics:
+          - ``state in ("away", "startup_away", "departing")`` → vote
+            ``"away"`` at 0.95 confidence. Phone-off-WiFi is the single
+            most reliable "not home" signal in the system.
+          - ``state in ("home", "arriving")`` → vote ``"idle"`` at
+            0.30 confidence. "Home" doesn't predict a specific activity;
+            a low-confidence idle vote lets the lane show up without
+            drowning out process/camera.
+          - ``state == "unknown"`` → no report, lane shows as stale.
+        """
+        fusion = self._fusion
+        if fusion is None:
+            return
+        state = self._state
+        now = datetime.now(tz=TZ)
+
+        factors: list[dict[str, Any]] = [
+            {
+                "key": "state",
+                "label": "State",
+                "value": state,
+                "display": state,
+                "impact": 1.0,
+            },
+        ]
+        if self._last_seen:
+            age_s = int((now - self._last_seen).total_seconds())
+            if age_s < 60:
+                seen_display = "just now"
+            elif age_s < 3600:
+                seen_display = f"{age_s // 60}m ago"
+            else:
+                seen_display = f"{age_s // 3600}h ago"
+            factors.append({
+                "key": "last_seen",
+                "label": "Last seen",
+                "value": age_s,
+                "display": seen_display,
+                "impact": max(0.3, 1.0 - min(1.0, age_s / 300.0)),
+            })
+        if self._away_since and state in ("away", "departing", "startup_away"):
+            away_min = max(0, int((now - self._away_since).total_seconds() / 60))
+            factors.append({
+                "key": "away_duration",
+                "label": "Away",
+                "value": away_min,
+                "display": f"{away_min}m",
+                "impact": min(1.0, away_min / 30.0 + 0.3),
+            })
+
+        if state in ("away", "startup_away", "departing"):
+            fusion.report_signal("presence", "away", 0.95, factors=factors)
+        elif state in ("home", "arriving"):
+            fusion.report_signal("presence", "idle", 0.30, factors=factors)
+        # state == "unknown" → don't report; lane reads as stale/no-data.
 
     async def on_shortcut_arrival(self, source: str = "ios_shortcut") -> str:
         """
@@ -1000,8 +1066,13 @@ class PresenceService:
     # ------------------------------------------------------------------
 
     async def _broadcast_state(self) -> None:
-        """Broadcast presence state to all WebSocket clients."""
+        """Broadcast presence state to all WebSocket clients and to the
+        confidence-fusion ensemble. Re-reports to fusion every call so
+        the 300s staleness window in ConfidenceFusion never trips — the
+        ARP poll loop calls this every ``probe_interval`` seconds, and
+        every state-transition path also routes through here."""
         if self._ws_manager:
             await self._ws_manager.broadcast(
                 "presence_update", self.get_status()
             )
+        self._report_to_fusion()
