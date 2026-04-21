@@ -9,6 +9,11 @@
   export let liveUpdate = true
   /** @type {(v: number) => void} */
   export let onChange = () => {}
+  /** Always fires on release with the final value, even when liveUpdate is true.
+   *  Lets the parent flush any pending throttled updates so the bulb lands on
+   *  the user's final position. */
+  /** @type {(v: number) => void} */
+  export let onCommit = () => {}
 
   let displayValue = value
   $: if (!dragging) displayValue = value
@@ -16,7 +21,7 @@
   let dragging = false
 
   /** @param {Event} e */
-  function onInput(e) {
+  function handleInput(e) {
     dragging = true
     const target = /** @type {HTMLInputElement} */ (e.target)
     displayValue = Number(target.value)
@@ -24,11 +29,12 @@
   }
 
   /** @param {Event} e */
-  function onCommit(e) {
+  function handleCommit(e) {
     const target = /** @type {HTMLInputElement} */ (e.target)
     const val = Number(target.value)
     displayValue = val
     if (!liveUpdate) onChange(val)
+    onCommit(val)
     dragging = false
   }
 </script>
@@ -42,8 +48,10 @@
     {min}
     {max}
     value={displayValue}
-    on:input={onInput}
-    on:change={onCommit}
+    on:input={handleInput}
+    on:change={handleCommit}
+    on:pointerup={handleCommit}
+    on:pointercancel={handleCommit}
     class="slider-input"
   />
   <span class="slider-value">{displayValue}</span>

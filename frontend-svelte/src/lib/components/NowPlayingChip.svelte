@@ -29,8 +29,8 @@
 <style>
   .now-playing-chip {
     position: fixed;
-    bottom: 20px;
-    right: 20px;
+    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    right: calc(20px + env(safe-area-inset-right, 0px));
     display: flex;
     align-items: center;
     gap: 10px;
@@ -107,16 +107,16 @@
 
   @media (max-width: 768px) {
     .now-playing-chip {
-      bottom: 76px;
-      right: 12px;
+      bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      right: calc(12px + env(safe-area-inset-right, 0px));
       max-width: 200px;
     }
   }
 
   @media (max-width: 480px) {
     .now-playing-chip {
-      bottom: 64px;
-      right: 8px;
+      bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+      right: calc(8px + env(safe-area-inset-right, 0px));
       max-width: 180px;
     }
   }

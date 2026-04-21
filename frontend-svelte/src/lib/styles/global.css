@@ -400,6 +400,7 @@ button:active, .btn:active, [role="button"]:active {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .slider-input::-webkit-slider-thumb {
@@ -407,6 +408,16 @@ button:active, .btn:active, [role="button"]:active {
   width: 16px;
   height: 16px;
   background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.slider-input::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border: none;
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.15s;
@@ -491,7 +502,7 @@ button:active, .btn:active, [role="button"]:active {
   background: var(--danger);
   color: white;
   text-align: center;
-  padding: 8px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 8px;
   font-size: 13px;
   font-weight: 500;
   z-index: 100;
@@ -701,7 +712,7 @@ button:active, .btn:active, [role="button"]:active {
 /* Tablet / kiosk optimizations */
 @media (max-width: 768px) {
   .app {
-    padding: 0 12px 24px;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px));
   }
 
   .app-header {
@@ -725,9 +736,18 @@ button:active, .btn:active, [role="button"]:active {
     height: 56px;
   }
 
+  .slider-input {
+    height: 6px;
+  }
+
   .slider-input::-webkit-slider-thumb {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
+  }
+
+  .slider-input::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
   }
 
   .status-bar {

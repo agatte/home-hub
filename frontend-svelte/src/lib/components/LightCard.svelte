@@ -20,17 +20,56 @@
 
   let presetTab = 'color' // 'color' | 'temp'
 
+  // Leading + trailing throttle: fire the first update immediately, then cap
+  // subsequent updates at one per THROTTLE_MS while the user drags. Flush on
+  // drag end (via Slider's onCommit) so the final value always lands even if
+  // it arrived mid-throttle-window.
+  const THROTTLE_MS = 150
   /** @type {ReturnType<typeof setTimeout> | null} */
-  let debounceTimer = null
+  let throttleTimer = null
+  /** @type {Record<string, unknown> | null} */
+  let pendingState = null
+  let lastSentAt = 0
   let showPresets = false
 
-  function debouncedUpdate(state) {
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => { setLight(light.light_id, state) }, 100)
+  /** @param {Record<string, unknown>} state */
+  function throttledUpdate(state) {
+    const now = Date.now()
+    const elapsed = now - lastSentAt
+    if (elapsed >= THROTTLE_MS) {
+      // Leading edge — send now and clear any trailing schedule.
+      lastSentAt = now
+      pendingState = null
+      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
+      setLight(light.light_id, state)
+    } else {
+      // Inside window — stash the latest state and schedule a trailing fire.
+      pendingState = state
+      if (!throttleTimer) {
+        throttleTimer = setTimeout(() => {
+          throttleTimer = null
+          if (pendingState) {
+            lastSentAt = Date.now()
+            const s = pendingState
+            pendingState = null
+            setLight(light.light_id, s)
+          }
+        }, THROTTLE_MS - elapsed)
+      }
+    }
+  }
+
+  /** Called from Slider on release — flush any pending update so the bulb
+   *  lands on the finger-up value even if it was swallowed by the throttle. */
+  function flushBrightness(bri) {
+    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
+    pendingState = null
+    lastSentAt = Date.now()
+    setLight(light.light_id, { bri })
   }
 
   function togglePower() { setLight(light.light_id, { on: !light.on }) }
-  function setBrightness(bri) { debouncedUpdate({ bri }) }
+  function setBrightness(bri) { throttledUpdate({ bri }) }
   function setColor(hue, sat) {
     setLight(light.light_id, { hue, sat })
     showPresets = false
@@ -57,7 +96,7 @@
 
   {#if light.on}
     <div class="chip-slider">
-      <Slider value={light.bri} min={1} max={254} onChange={setBrightness} label="Brightness" />
+      <Slider value={light.bri} min={1} max={254} onChange={setBrightness} onCommit={flushBrightness} label="Brightness" />
     </div>
   {/if}
 

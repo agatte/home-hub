@@ -72,8 +72,8 @@
 <style>
   .mode-overlay {
     position: fixed;
-    top: 20px;
-    left: 24px;
+    top: calc(20px + env(safe-area-inset-top, 0px));
+    left: calc(24px + env(safe-area-inset-left, 0px));
     z-index: 40;
     pointer-events: none;
     user-select: none;
@@ -143,8 +143,8 @@
 
   @media (max-width: 768px) {
     .mode-overlay {
-      top: 12px;
-      left: 16px;
+      top: calc(12px + env(safe-area-inset-top, 0px));
+      left: calc(16px + env(safe-area-inset-left, 0px));
     }
     .mode-name {
       font-size: 28px;
