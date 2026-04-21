@@ -4,6 +4,7 @@
   import { modeColor, modeLabel } from '$lib/theme.js'
   import ConstellationView from '$lib/components/constellation/ConstellationView.svelte'
   import HistoryDrawer from '$lib/components/constellation/HistoryDrawer.svelte'
+  import AutonomyGateCard from '$lib/components/AutonomyGateCard.svelte'
 
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -106,6 +107,9 @@
 
   <!-- Slim history strip (expands into a drawer) -->
   <HistoryDrawer />
+
+  <!-- Phase 3 autonomy gate: override rate + strategy A/B -->
+  <AutonomyGateCard />
 
   <!-- Collapsible Analytics -->
   <section class="analytics-collapse">
