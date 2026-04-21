@@ -240,6 +240,17 @@ class PresenceService:
         (iOS WiFi flap), or ``"silent"`` if the signal landed during
         startup.
         """
+        # Single consistent prefix per webhook hit so journalctl can show
+        # raw webhook rate independent of what the backend decides below.
+        logger.info(
+            "presence.shortcut.arrived source=%s pre_state=%s pending_departure=%s",
+            source,
+            self._state,
+            bool(
+                self._pending_departure_task
+                and not self._pending_departure_task.done()
+            ),
+        )
         now = datetime.now(tz=TZ)
         self._consecutive_failures = 0
         self._pending_arrival_confirms = 0
@@ -312,6 +323,15 @@ class PresenceService:
         ``"noop"`` if state is already away/departing or a pending task
         already exists.
         """
+        logger.info(
+            "presence.shortcut.departed source=%s pre_state=%s pending_departure=%s",
+            source,
+            self._state,
+            bool(
+                self._pending_departure_task
+                and not self._pending_departure_task.done()
+            ),
+        )
         if self._state in ("away", "departing", "startup_away"):
             logger.info(
                 "Shortcut departure (%s) — already %s, skipping",
@@ -357,7 +377,7 @@ class PresenceService:
                 "Shortcut departure (%s) — committing after %ds debounce",
                 source, DEPARTURE_DEBOUNCE_SECONDS,
             )
-            await self._on_departure(skip_override_guard=True)
+            await self._on_departure(skip_override_guard=True, trigger="shortcut")
         except asyncio.CancelledError:
             logger.debug("Deferred departure cancelled (flap)")
             raise
@@ -596,7 +616,12 @@ class PresenceService:
     # Departure
     # ------------------------------------------------------------------
 
-    async def _on_departure(self, *, skip_override_guard: bool = False) -> None:
+    async def _on_departure(
+        self,
+        *,
+        skip_override_guard: bool = False,
+        trigger: str = "arp_timeout",
+    ) -> None:
         """
         Start the departure sequence as a background task.
 
@@ -604,6 +629,13 @@ class PresenceService:
         manual-override check below — an iPhone "disconnected from
         home WiFi" event is explicit evidence of leaving, stronger than
         any active mode.
+
+        ``trigger`` tags which signal fired the departure so activity
+        events can be grouped after the fact: ``"shortcut"`` for an
+        iPhone WiFi-disconnect webhook, ``"arp_timeout"`` for an ARP
+        probe miss held past ``away_timeout``. ARP is the default
+        because it's the only path that calls this without passing
+        explicit context.
         """
         # Skip departure if a manual override is active. An explicit mode
         # (relax, social, cooking, watching, sleeping, etc.) is strong
@@ -640,12 +672,14 @@ class PresenceService:
         # pre-sets _away_since at Shortcut-receive time; don't overwrite.
         if self._away_since is None:
             self._away_since = self._last_seen or datetime.now(tz=TZ)
-        logger.info("Departure detected — starting fade sequence")
+        logger.info(
+            "Departure detected (trigger=%s) — starting fade sequence", trigger
+        )
         self._departure_task = asyncio.create_task(
-            self._departure_sequence()
+            self._departure_sequence(trigger=trigger)
         )
 
-    async def _departure_sequence(self) -> None:
+    async def _departure_sequence(self, *, trigger: str = "arp_timeout") -> None:
         """Gradual fade → lights off → pause Sonos → report away."""
         try:
             steps = 6
@@ -694,12 +728,16 @@ class PresenceService:
             await self._broadcast_state()
             logger.info("Departure complete — all lights off, mode=away")
 
-            # Log event
+            # Log event. Tag with trigger so the DB can distinguish a
+            # Shortcut-driven departure from an ARP-timeout one — needed
+            # for diagnosing iOS WiFi flap rates. Rule engine falls back
+            # to _DEFAULT_SOURCE_WEIGHT for unknown strings, which equals
+            # the old "presence" weight, so learning behavior is unchanged.
             if self._event_logger:
                 await self._event_logger.log_mode_change(
                     mode="away",
                     previous_mode="idle",
-                    source="presence",
+                    source=f"presence:{trigger}",
                 )
 
         except asyncio.CancelledError:

@@ -605,6 +605,10 @@ async def presence_arrived(request: Request) -> dict:
         )
 
     source = await _read_webhook_source(request)
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(
+        "presence.webhook.arrived client=%s source=%s", client_ip, source
+    )
     result = await presence.on_shortcut_arrival(source=source)
     return {"status": "ok", "action": result, "state": presence.get_status()["state"]}
 
@@ -627,5 +631,9 @@ async def presence_departed(request: Request) -> dict:
         )
 
     source = await _read_webhook_source(request)
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(
+        "presence.webhook.departed client=%s source=%s", client_ip, source
+    )
     result = await presence.on_shortcut_departure(source=source)
     return {"status": "ok", "action": result, "state": presence.get_status()["state"]}
