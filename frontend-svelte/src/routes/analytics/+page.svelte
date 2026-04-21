@@ -281,7 +281,7 @@
 <style>
   .analytics-page {
     padding: 24px 20px 100px;
-    max-width: 900px;
+    max-width: 1000px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;

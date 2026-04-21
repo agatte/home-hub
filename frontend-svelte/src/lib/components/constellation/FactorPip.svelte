@@ -7,9 +7,9 @@
   export let fusedMode = 'idle'
 
   $: color = node?.agrees ? modeColor(fusedMode) : modeColor(node?.laneMode || 'idle')
-  $: radius = 6 + 8 * (node?.impact ?? 0.5)
+  $: radius = 12 + 14 * (node?.impact ?? 0.5)
   $: tooltip = `${node.label}: ${node.display}`
-  $: softFill = modeColorSoft(node?.laneMode || 'idle', 0.25)
+  $: softFill = modeColorSoft(node?.laneMode || 'idle', 0.3)
 </script>
 
 <g
@@ -20,10 +20,10 @@
 >
   <title>{tooltip}</title>
   <circle r={radius} class="disc" fill={softFill} stroke={color} />
-  <!-- Tiny display label below the pip; only show when pip is big enough to not feel crowded -->
-  {#if radius >= 10 && node.display}
+  <!-- Always show the display value under the pip -->
+  {#if node.display}
     <text
-      y={radius + 10}
+      y={radius + 13}
       text-anchor="middle"
       class="pip-label"
     >{node.display}</text>
@@ -36,21 +36,26 @@
     pointer-events: all;
   }
   .pip.stale {
-    opacity: 0.3;
+    opacity: 0.35;
   }
   .disc {
-    stroke-width: 1.2;
-    transition: r 400ms ease, stroke 400ms ease;
-    filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.3));
+    stroke-width: 1.8;
+    transition: r 500ms ease, stroke 400ms ease;
+    filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.45));
   }
   .pip.agrees .disc {
-    stroke-width: 1.6;
+    stroke-width: 2.4;
   }
   .pip-label {
     font-family: 'Source Sans 3', sans-serif;
-    font-size: 9px;
-    fill: rgba(255, 255, 255, 0.45);
+    font-size: 11px;
+    font-weight: 500;
+    fill: rgba(255, 255, 255, 0.78);
     pointer-events: none;
     user-select: none;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 3;
+    stroke-linejoin: round;
   }
 </style>

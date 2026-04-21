@@ -42,10 +42,10 @@
   /** @type {any} */
   let sim = null
 
-  // Radial distance mapping. Lanes sit at 95..220px from center, heavier
-  // weights closer to the nucleus. See plan §3 for the curve.
-  const R_MIN = 95
-  const R_MAX = 220
+  // Radial distance mapping. Lanes sit at 130..290px from center, heavier
+  // weights closer to the nucleus.
+  const R_MIN = 130
+  const R_MAX = 290
   /** @param {number | null | undefined} weight */
   function laneDistance(weight) {
     const w = Math.max(0, Math.min(1, weight || 0))
@@ -54,12 +54,12 @@
   /** Distance adjusted for staleness — stale lanes drift further out. */
   function targetDistanceForLane(n) {
     const base = laneDistance(n.weight)
-    return n.stale ? base + 40 : base
+    return n.stale ? base + 45 : base
   }
-  // Factor pips sit 38..68px from their parent lane, heavier impact closer.
+  // Factor pips sit 55..90px from their parent lane, heavier impact closer.
   function factorDistance(impact) {
     const i = Math.max(0, Math.min(1, impact || 0))
-    return 38 + 30 * (1 - i)
+    return 55 + 35 * (1 - i)
   }
 
   /** Custom force — pull factor nodes toward their parent lane's position. */
@@ -83,10 +83,12 @@
         const dy = p.y - n.y
         const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy))
         const target = factorDistance(n.impact)
+        // Cap the alpha floor used by this force so pips keep orbiting even
+        // after the simulation has otherwise cooled.
+        const a = Math.max(alpha, 0.1)
         const pull = (dist - target) / dist
-        // Softer strength so pips orbit loosely; alpha scales down over time.
-        n.vx += dx * pull * alpha * 0.35
-        n.vy += dy * pull * alpha * 0.35
+        n.vx += dx * pull * a * 0.25
+        n.vy += dy * pull * a * 0.25
       }
     }
     force.initialize = (n) => {
@@ -96,39 +98,86 @@
     return force
   }
 
+  /** Ambient drift — a slow sinusoidal jitter so the whole constellation
+   * keeps breathing even after d3-force has converged. Each node gets its
+   * own phase on creation; we modulate velocity by a tiny amount per tick. */
+  function forceAmbientDrift(nodesRef) {
+    let nodes = nodesRef
+    const t0 = performance.now()
+    function force(alpha) {
+      const t = (performance.now() - t0) / 1000
+      // Run independently of d3's cooling alpha so drift stays visible at
+      // the constant low alpha we keep the sim at. Internal minimum floor
+      // ensures we still move when parent alpha is tiny.
+      const a = Math.max(alpha || 0, 0.6)
+      for (const n of nodes) {
+        if (n.type === 'nucleus') continue
+        const phase = n._phase || 0
+        const freq = n.type === 'factor' ? 0.6 : 0.3
+        const amp = (n.type === 'factor' ? 0.5 : 0.35) * a
+        n.vx += Math.cos(t * freq + phase) * amp
+        n.vy += Math.sin(t * freq * 0.85 + phase * 1.3) * amp
+      }
+    }
+    force.initialize = (n) => { nodes = n }
+    return force
+  }
+
   function center() {
     return { cx: width / 2, cy: height / 2 }
   }
 
+  // Evenly space the 5 lanes around the nucleus so the starting layout
+  // doesn't all clump into one hemisphere. The simulation will refine from
+  // here, but the clock-position is deterministic.
+  const LANE_ANGLE = {
+    process:     -Math.PI / 2,             // 12 o'clock
+    camera:      -Math.PI / 2 + (2 * Math.PI) / 5,       // ~4:30
+    audio_ml:    -Math.PI / 2 + (4 * Math.PI) / 5,       // ~7:00
+    behavioral:  -Math.PI / 2 + (6 * Math.PI) / 5,       // ~9:00
+    rule_engine: -Math.PI / 2 + (8 * Math.PI) / 5,       // ~1:30
+  }
+
   function buildSimNodes(graph) {
     // Preserve existing x/y from the previous graph so nodes don't jump on
-    // every snapshot — only new nodes get a random seed near their target.
+    // every snapshot — only new nodes get a deterministic seed near their target.
     const prev = new Map(simNodes.map((n) => [n.id, n]))
     const { cx, cy } = center()
+    // Per-parent factor index so each lane's pips start at distinct angles.
+    /** @type {Map<string, number>} */
+    const factorIndex = new Map()
     return graph.nodes.map((n) => {
       const old = prev.get(n.id)
       if (old) {
         return Object.assign(old, n)
       }
-      // Seed new nodes at a rough starting position so they don't all spawn
-      // on top of each other and fly outward at t=0.
       let x = cx, y = cy
       if (n.type === 'lane') {
-        const angle = Math.random() * Math.PI * 2
+        const angle = LANE_ANGLE[n.lane] ?? Math.random() * Math.PI * 2
         const r = laneDistance(n.weight)
         x = cx + Math.cos(angle) * r
         y = cy + Math.sin(angle) * r
       } else if (n.type === 'factor') {
-        // Place near parent if we can find it in the previous graph
         const parent = prev.get(n.parentId)
-        const px = parent ? parent.x : cx
-        const py = parent ? parent.y : cy
-        const angle = Math.random() * Math.PI * 2
+        const parentLaneAngle = LANE_ANGLE[n.lane] ?? 0
+        const px = parent ? parent.x : cx + Math.cos(parentLaneAngle) * laneDistance(0.2)
+        const py = parent ? parent.y : cy + Math.sin(parentLaneAngle) * laneDistance(0.2)
+        // Fan the pips outward — they sit on the far side of the parent from
+        // the nucleus, spread in a small arc by index.
+        const i = factorIndex.get(n.parentId) || 0
+        factorIndex.set(n.parentId, i + 1)
+        const baseAngle = parentLaneAngle  // radial direction from center
+        const spread = (i - 1) * 0.55  // ~32° fan per pip, centered
+        const angle = baseAngle + spread
         const r = factorDistance(n.impact)
         x = px + Math.cos(angle) * r
         y = py + Math.sin(angle) * r
       }
-      return Object.assign({}, n, { x, y, vx: 0, vy: 0 })
+      return Object.assign({}, n, {
+        x, y, vx: 0, vy: 0,
+        // Unique phase per node for the ambient drift force.
+        _phase: Math.random() * Math.PI * 2,
+      })
     })
   }
 
@@ -161,22 +210,29 @@
     }
 
     if (!sim) {
+      // Constant low-alpha simulation — alphaDecay(0) means alpha never
+      // decays, so d3-force keeps ticking forever at a gentle energy level.
+      // That lets the ambient drift force produce visible motion without
+      // the "heat up → freeze → heat up" cycle a standard decaying sim has.
       sim = forceSimulation(simNodes)
-        .alphaDecay(0.035)
-        .velocityDecay(0.45)
-        .force('charge', forceManyBody().strength((n) => n.type === 'factor' ? -25 : -70))
+        .alphaDecay(0)
+        .alphaMin(0)
+        .alpha(0.1)
+        .velocityDecay(0.6)
+        .force('charge', forceManyBody().strength((n) => n.type === 'factor' ? -40 : -140))
         .force('collide', forceCollide().radius((n) => (
-          n.type === 'nucleus' ? 80 :
-          n.type === 'lane' ? 38 :
-          20 + n.impact * 8
-        )))
+          n.type === 'nucleus' ? 100 :
+          n.type === 'lane' ? 52 :
+          22 + (n.impact || 0.5) * 12
+        )).strength(0.9))
         .force('link', forceLink(simLinks).id((n) => n.id).distance((l) => (
           laneDistance(l.weight)
-        )).strength((l) => 0.35 + 0.4 * (l.weight || 0)))
+        )).strength((l) => 0.25 + 0.3 * (l.weight || 0)))
         .force('laneRing', forceRadial((n) => (
-          n.type === 'lane' ? laneDistance(n.weight) : 0
-        ), cx, cy).strength((n) => n.type === 'lane' ? 0.5 : 0))
+          n.type === 'lane' ? targetDistanceForLane(n) : 0
+        ), cx, cy).strength((n) => n.type === 'lane' ? 0.6 : 0))
         .force('factorOrbit', forceFactorOrbit(simNodes))
+        .force('ambient', forceAmbientDrift(simNodes))
         // Mild centering so drifting pips don't escape the canvas.
         .force('x', forceX(cx).strength(0.02))
         .force('y', forceY(cy).strength(0.02))
@@ -191,13 +247,19 @@
           tickNodes = [...simNodes]
           tickLinks = [...simLinks]
         })
+
+      // alphaDecay(0) + alphaMin(0) means the sim runs forever at alpha=0.1.
+      // No heartbeat needed — ambient drift alone supplies the ongoing motion.
     } else {
       sim.nodes(simNodes)
       sim.force('link').links(simLinks)
       sim.force('laneRing', forceRadial((n) => (
         n.type === 'lane' ? targetDistanceForLane(n) : 0
-      ), cx, cy).strength((n) => n.type === 'lane' ? 0.5 : 0))
-      sim.alpha(0.5).restart()
+      ), cx, cy).strength((n) => n.type === 'lane' ? 0.6 : 0))
+      // Brief kick to let the ring reshuffle after new data lands, then
+      // settle back to the constant idle alpha.
+      sim.alpha(0.3).restart()
+      setTimeout(() => { if (sim) sim.alpha(0.1) }, 600)
     }
   }
 
@@ -205,7 +267,7 @@
     if (!container) return
     const rect = container.getBoundingClientRect()
     width = Math.max(320, rect.width)
-    height = Math.max(380, Math.min(rect.height || 520, width * 0.8))
+    height = Math.max(440, Math.min(rect.height || 720, width))
     if (sim) {
       const { cx, cy } = center()
       for (const n of simNodes) {
@@ -326,11 +388,11 @@
   .constellation {
     position: relative;
     width: 100%;
-    max-width: 900px;
+    max-width: 960px;
     margin: 0 auto;
-    aspect-ratio: 5 / 4;
-    min-height: 380px;
-    max-height: 640px;
+    aspect-ratio: 1 / 1;
+    min-height: 440px;
+    max-height: 780px;
   }
   .canvas {
     width: 100%;

@@ -20,15 +20,15 @@
   style="--mode-color: {color}; --mode-halo: {haloColor};"
 >
   <!-- Outer breathing ring -->
-  <circle r="74" class="ring ring-outer" />
+  <circle r="104" class="ring ring-outer" />
   <!-- Mid glow -->
-  <circle r="58" class="ring ring-mid" />
+  <circle r="82" class="ring ring-mid" />
   <!-- Core disc -->
-  <circle r="48" class="core" fill={color} />
+  <circle r="68" class="core" fill={color} />
 
   <!-- Label + confidence -->
-  <text class="mode-label" y="-4" text-anchor="middle">{label}</text>
-  <text class="mode-conf" y="16" text-anchor="middle">{confPct}%</text>
+  <text class="mode-label" y="-6" text-anchor="middle">{label}</text>
+  <text class="mode-conf" y="22" text-anchor="middle">{confPct}%</text>
 </g>
 
 <style>
@@ -76,16 +76,16 @@
 
   .mode-label {
     font-family: 'Bebas Neue', sans-serif;
-    font-size: 22px;
-    letter-spacing: 3px;
-    fill: rgba(0, 0, 0, 0.82);
+    font-size: 30px;
+    letter-spacing: 4px;
+    fill: rgba(0, 0, 0, 0.85);
     pointer-events: none;
   }
   .mode-conf {
     font-family: 'Bebas Neue', sans-serif;
-    font-size: 14px;
-    letter-spacing: 1px;
-    fill: rgba(0, 0, 0, 0.6);
+    font-size: 18px;
+    letter-spacing: 1.5px;
+    fill: rgba(0, 0, 0, 0.62);
     pointer-events: none;
   }
 </style>

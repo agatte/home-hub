@@ -9,7 +9,7 @@
   $: laneMode = node?.mode || 'idle'
   $: color = node?.hasData ? modeColor(laneMode) : 'rgba(255,255,255,0.25)'
   $: outline = node?.agrees ? modeColor(fusedMode) : modeColorSoft(laneMode, 0.55)
-  $: radius = node?.stale ? 22 : 30
+  $: radius = node?.stale ? 34 : 46
 </script>
 
 <g
@@ -27,36 +27,38 @@
 
   <!-- Agreement halo -->
   {#if node.agrees && node.hasData}
-    <circle r={radius + 6} class="halo" />
+    <circle r={radius + 8} class="halo" />
   {/if}
 
   <!-- Main disc -->
   <circle r={radius} class="disc" fill={color} />
 
   <!-- Icon glyph — simple line art via SVG inline, matching PipelineInputCard -->
-  <g class="icon" stroke="rgba(0,0,0,0.75)" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" transform="translate(-8, -14)">
+  <g class="icon" stroke="rgba(0,0,0,0.78)" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(-11, -20)">
     {#if node.icon === 'cpu'}
-      <rect width="16" height="16" x="0" y="0" rx="2" />
-      <rect width="6" height="6" x="5" y="5" rx="1" />
+      <rect width="22" height="22" x="0" y="0" rx="3" />
+      <rect width="8" height="8" x="7" y="7" rx="1.5" />
     {:else if node.icon === 'video'}
-      <rect width="12" height="10" x="0" y="3" rx="1.5" />
-      <path d="M12 6l4 -2v8l-4 -2z" />
+      <rect width="16" height="14" x="0" y="4" rx="2" />
+      <path d="M16 8l6 -3v12l-6 -3z" />
     {:else if node.icon === 'mic'}
-      <rect width="6" height="10" x="5" y="0" rx="3" />
-      <path d="M2 8v2a6 6 0 0 0 12 0v-2" />
-      <line x1="8" x2="8" y1="16" y2="18" />
+      <rect width="8" height="14" x="7" y="0" rx="4" />
+      <path d="M3 11v2a8 8 0 0 0 16 0v-2" />
+      <line x1="11" x2="11" y1="22" y2="24" />
     {:else if node.icon === 'brain'}
-      <path d="M8 1a6 6 0 0 1 6 6c0 2.4 -2.3 4 -3.3 5.3l-0.7 1.3h-4l-0.7 -1.3C4.3 11 2 9.4 2 7a6 6 0 0 1 6 -6z" />
+      <path d="M11 1a8 8 0 0 1 8 8c0 3 -3 5 -4 7l-1 2h-6l-1 -2c-1 -2 -4 -4 -4 -7a8 8 0 0 1 8 -8z" />
     {:else if node.icon === 'clock'}
-      <circle cx="8" cy="8" r="7" />
-      <path d="M8 4v4l3 1" />
+      <circle cx="11" cy="11" r="9.5" />
+      <path d="M11 5v6l4 2" />
     {/if}
   </g>
 
   <!-- Label below -->
-  <text y={radius + 14} text-anchor="middle" class="label">{node.label.toUpperCase()}</text>
+  <text y={radius + 18} text-anchor="middle" class="label">{node.label.toUpperCase()}</text>
   {#if node.hasData}
-    <text y={radius + 26} text-anchor="middle" class="sublabel">{node.mode}</text>
+    <text y={radius + 34} text-anchor="middle" class="sublabel">{node.mode}</text>
+  {:else}
+    <text y={radius + 34} text-anchor="middle" class="sublabel muted">no data</text>
   {/if}
 </g>
 
@@ -105,16 +107,27 @@
 
   .label {
     font-family: 'Bebas Neue', sans-serif;
-    font-size: 10px;
-    letter-spacing: 1.5px;
-    fill: rgba(255, 255, 255, 0.65);
+    font-size: 13px;
+    letter-spacing: 2px;
+    fill: rgba(255, 255, 255, 0.8);
     pointer-events: none;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, 0.6);
+    stroke-width: 3;
+    stroke-linejoin: round;
   }
   .sublabel {
     font-family: 'Source Sans 3', sans-serif;
-    font-size: 10px;
-    fill: rgba(255, 255, 255, 0.4);
+    font-size: 12px;
+    fill: rgba(255, 255, 255, 0.55);
     pointer-events: none;
     text-transform: capitalize;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, 0.55);
+    stroke-width: 3;
+    stroke-linejoin: round;
+  }
+  .sublabel.muted {
+    fill: rgba(255, 255, 255, 0.25);
   }
 </style>
