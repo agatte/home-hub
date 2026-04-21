@@ -331,6 +331,10 @@ async def lifespan(app: FastAPI):
     app.state.confidence_fusion = confidence_fusion
     automation._confidence_fusion = confidence_fusion
     rule_engine._fusion = confidence_fusion
+    # Presence was instantiated before fusion existed (ordering legacy) so we
+    # set its fusion ref here. Without this, the presence lane reports stale
+    # forever and never votes.
+    presence._fusion = confidence_fusion
     app_logger.info("Confidence fusion initialized")
 
     # Music bandit — Thompson sampling playlist selection
