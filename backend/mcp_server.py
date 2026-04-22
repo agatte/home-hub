@@ -465,5 +465,151 @@ async def query_db(sql: str) -> list[dict]:
         return r.json()["result"]
 
 
+# ---------------------------------------------------------------------------
+# Live state snapshot — one JSON blob with everything Claude needs
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_live_state() -> dict:
+    """
+    Return a single JSON snapshot of every signal that shapes lighting behavior.
+
+    Consolidates: automation mode + override + time period, per-light state
+    (bri/hue/sat/ct/colormode/reachable), screen-sync status, camera zone /
+    posture / lux, presence, weather, brightness multipliers, health.
+
+    Prefer this over calling several smaller tools when you need to reason
+    about "what is the system doing right now" — one round-trip, full picture.
+    Use the individual tools only when you already know the specific slice
+    you need.
+
+    Returns a flat dict with a ``timestamp`` field (UTC ISO8601) and a
+    nested dict per subsystem. Missing subsystems (e.g. camera disabled)
+    are included as ``null`` so keys are stable across calls.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    async def _safe_get(c: httpx.AsyncClient, path: str) -> Any:
+        """Fetch and return JSON; on any error, return {'error': str}."""
+        try:
+            r = await c.get(path)
+            if r.status_code == 200:
+                return r.json()
+            return {"error": f"HTTP {r.status_code}", "detail": r.text[:200]}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async with _client() as c:
+        # All these endpoints are read-only, independent — fan out.
+        results = await asyncio.gather(
+            _safe_get(c, "/health"),
+            _safe_get(c, "/api/automation/status"),
+            _safe_get(c, "/api/lights"),
+            _safe_get(c, "/api/automation/screen-sync/status"),
+            _safe_get(c, "/api/camera/status"),
+            _safe_get(c, "/api/automation/presence/status"),
+            _safe_get(c, "/api/weather"),
+            _safe_get(c, "/api/automation/mode-brightness"),
+            _safe_get(c, "/api/automation/watching-posture"),
+        )
+    health, automation, lights, screen_sync, camera, presence, weather, bri_mult, posture_cfg = results
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "health": health,
+        "automation": automation,
+        "lights": lights,
+        "screen_sync": screen_sync,
+        "camera": camera,
+        "presence": presence,
+        "weather": weather,
+        "brightness_multipliers": bri_mult,
+        "watching_posture_config": posture_cfg,
+    }
+
+
+# ---------------------------------------------------------------------------
+# State history — consolidated timeline from event tables
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_state_history(minutes: int = 30) -> dict:
+    """
+    Return a timeline of state changes over the last N minutes.
+
+    Pulls from the event tables (activity_events, light_adjustments,
+    scene_activations, sonos_playback_events) and returns one merged view
+    sorted by timestamp descending (most recent first).
+
+    Useful for "what changed recently" debugging: "why did the mode flip
+    at 7pm?", "which light got dimmed?", "did a scene activate during
+    watching?". Pairs with get_live_state() — snapshot + timeline = full
+    debugging context.
+
+    Args:
+        minutes: Lookback window in minutes (default 30, max 1440 = 24h).
+
+    Returns:
+        dict with window_minutes, cutoff_utc, and four event lists:
+        mode_transitions, light_adjustments, scene_activations, sonos_events.
+    """
+    minutes = max(1, min(1440, int(minutes)))
+    # Use datetime('now', '-N minutes') in SQLite — server timestamps are UTC.
+    cutoff_clause = f"timestamp >= datetime('now', '-{minutes} minutes')"
+
+    async def _select(c: httpx.AsyncClient, sql: str) -> list[dict]:
+        try:
+            r = await c.get("/api/debug/query", params={"sql": sql})
+            if r.status_code == 200:
+                return r.json().get("result", [])
+            return [{"error": f"HTTP {r.status_code}", "detail": r.text[:200]}]
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    import asyncio
+
+    async with _client() as c:
+        modes, lights, scenes, sonos_evts = await asyncio.gather(
+            _select(
+                c,
+                f"SELECT timestamp, mode, previous_mode, source, duration_seconds "
+                f"FROM activity_events WHERE {cutoff_clause} "
+                f"ORDER BY timestamp DESC LIMIT 200"
+            ),
+            _select(
+                c,
+                f"SELECT timestamp, light_id, light_name, bri_before, bri_after, "
+                f"hue_before, hue_after, sat_before, sat_after, ct_before, ct_after, "
+                f"mode_at_time, trigger "
+                f"FROM light_adjustments WHERE {cutoff_clause} "
+                f"ORDER BY timestamp DESC LIMIT 500"
+            ),
+            _select(
+                c,
+                f"SELECT timestamp, scene_id, scene_name, source, mode_at_time "
+                f"FROM scene_activations WHERE {cutoff_clause} "
+                f"ORDER BY timestamp DESC LIMIT 100"
+            ),
+            _select(
+                c,
+                f"SELECT timestamp, event_type, favorite_title, mode_at_time, "
+                f"volume, triggered_by "
+                f"FROM sonos_playback_events WHERE {cutoff_clause} "
+                f"ORDER BY timestamp DESC LIMIT 100"
+            ),
+        )
+
+    return {
+        "window_minutes": minutes,
+        "mode_transitions": modes,
+        "light_adjustments": lights,
+        "scene_activations": scenes,
+        "sonos_events": sonos_evts,
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
