@@ -164,10 +164,12 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
-    # Pull zone from the camera service so the sync cap can differ between
-    # watching-at-desk (brighter bias) and watching-in-bed (projector-safe dim).
+    # Pull zone + posture from the camera service so the sync cap can differ
+    # between watching-at-desk (brighter bias), watching-in-bed-reclined
+    # (hard projector-safe dim), and watching-in-bed-upright (middle ground).
     camera = getattr(request.app.state, "camera_service", None)
     zone = getattr(camera, "zone", None) if camera else None
+    posture = getattr(camera, "posture", None) if camera else None
 
     await sync.apply_color(
         report.r,
@@ -176,6 +178,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
         mode=engine.current_mode,
         source=report.source,
         zone=zone,
+        posture=posture,
     )
     return {"status": "ok", "applied": True}
 

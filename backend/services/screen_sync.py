@@ -43,13 +43,20 @@ MODE_MIN_BRIGHTNESS: dict[str, int] = {
                       # so the desk lamp doesn't drop below ~1:3 monitor contrast.
 }
 
-# Zone-aware brightness overrides. When the detected camera zone matches, the
-# per-mode cap is raised — used for "watching at the desk" (YouTube on monitor)
-# where the projector isn't running so dim bias lighting is unnecessarily dark.
-# Falls through to MODE_MAX_BRIGHTNESS when zone is not in this map, or when
-# camera zone is unavailable.
-MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
-    ("watching", "desk"): 180,
+# Zone- and posture-aware brightness overrides. When a detected (mode, zone)
+# or (mode, zone, posture) tuple matches, the per-mode cap is replaced.
+# Used to shape watching-mode screen-sync to the viewing context:
+#   • desk            → YouTube on monitor; projector off → brighter bias.
+#   • bed + reclined  → lying back watching the projector → hard cap dim so
+#                       bright scenes don't blast a reclining viewer.
+#   • bed + upright   → sitting up in bed (football game background, reading
+#                       with projector on) → middle ground.
+# Lookup prefers the more specific 3-tuple key; falls back to the 2-tuple,
+# then to MODE_MAX_BRIGHTNESS when neither matches.
+MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
+    ("watching", "desk"):               180,
+    ("watching", "bed", "reclined"):    25,
+    ("watching", "bed", "upright"):     60,
 }
 
 
@@ -93,6 +100,7 @@ class ScreenSyncService:
         mode: str,
         source: str = "desktop",
         zone: Optional[str] = None,
+        posture: Optional[str] = None,
     ) -> None:
         """
         Apply an RGB color to the bedroom lamp.
@@ -102,12 +110,18 @@ class ScreenSyncService:
             mode: Current automation mode — used to look up the brightness clamp.
             source: "desktop" or "laptop" — recorded for status reporting only.
             zone: Optional camera-detected zone ("desk" | "bed"). When provided,
-                ``MODE_ZONE_MAX_BRIGHTNESS`` is consulted first so the cap can
-                differ between watching-at-desk (brighter bias) and watching-
-                in-bed (dim for projector). Falls back to the mode-only cap.
+                ``MODE_ZONE_MAX_BRIGHTNESS`` is consulted so the cap can differ
+                between watching-at-desk (brighter bias) and watching-in-bed
+                (dim for projector).
+            posture: Optional camera-detected posture ("upright" | "reclined").
+                Combined with zone into a 3-tuple key; the more specific
+                (mode, zone, posture) match wins over (mode, zone). Falls
+                through to the mode-only cap if neither matches.
         """
         max_bri: Optional[int] = None
-        if zone is not None:
+        if zone is not None and posture is not None:
+            max_bri = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture))
+        if max_bri is None and zone is not None:
             max_bri = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone))
         if max_bri is None:
             max_bri = MODE_MAX_BRIGHTNESS.get(mode, DEFAULT_MAX_BRIGHTNESS)

@@ -939,56 +939,96 @@ class AutomationEngine:
             result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
         return result
 
+    # Watching + zone=bed + posture=reclined target brightness per period.
+    # LOWER than the baseline watching state — the assumption is that the
+    # projector is on (bed+reclined is essentially always that in this
+    # apartment) and the viewer is lying back, so bright lamps compete with
+    # the screen and hit eyes more directly than when sitting upright.
+    # Day is unset because napping in daylight doesn't need automation.
+    _BED_RECLINED_WATCHING_BRI = {
+        "evening":    {"1": 45, "2": 18},  # from baseline 65, 40
+        "night":      {"1": 25, "2": 8},   # from baseline 45, 20
+        "late_night": {"1": 15, "2": 5},   # no baseline; extrapolated
+    }
+
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
-        """Zone-aware per-light adjustments applied as the final overlay.
+        """Zone- and posture-aware per-light adjustments as the final overlay.
 
-        Currently the only rule: when the user is at the desk (``zone=desk``)
-        and the mode is watching, lift L2 (bedroom bias lamp) brightness above
-        the projector-safe defaults. Watching-at-desk is YouTube / streaming
-        on the monitor — the projector isn't running so the ultra-dim L2
-        that watching mode sets by default feels unnecessarily dark.
+        Two branches currently:
 
-        Only LIFTS brightness — never lowers. If a higher value was already
-        set (learned overlay, lux multiplier, etc.), it's preserved. Zone
-        must be explicitly ``desk`` to trigger; ``None`` / ``bed`` both fall
-        through unchanged so the projector-from-bed dim stays correct.
+        1. ``zone=desk`` + watching: LIFT L2 above the projector-safe dim —
+           watching at the desk is YouTube / a monitor stream and the
+           projector is off, so the default dim L2 reads as too dark.
+        2. ``zone=bed + posture=reclined`` + watching (evening / night /
+           late_night): LOWER L1 and L2 below the baseline — lying back
+           with the projector on, lamps compete with the screen and drop
+           directly into the line of sight. Day is untouched (napping is
+           fine with natural light).
+
+        Only ever moves brightness in one direction per branch (lift-only
+        for desk, lower-only for reclined) so a learned override stays
+        preserved if it already moved the same way.
         """
+        if mode != "watching":
+            return state
         camera = self._camera_service
         zone = getattr(camera, "zone", None) if camera else None
-        if zone != "desk" or mode != "watching":
-            return state
+        posture = getattr(camera, "posture", None) if camera else None
 
-        # Period-matched targets — still dim enough to read as bias lighting,
-        # not drown the monitor. Tuned to feel like "working-lite" L2, not
-        # full working brightness.
-        zone_bri_by_period = {
-            "day": 160,
-            "evening": 110,
-            "night": 70,
-            "late_night": 50,
-        }
-        target_bri = zone_bri_by_period.get(period)
-        if target_bri is None:
-            return state
-
-        # Only per-light states have an L2 entry to lift.
+        # Only per-light states carry a numeric ``bri``. Scene-override
+        # payloads pass straight through.
         is_per_light = all(isinstance(v, dict) for v in state.values()) and "2" in state
         if not is_per_light:
             return state
 
-        current_bri = int(state["2"].get("bri", 0))
-        if current_bri >= target_bri:
-            return state  # Already at or above target — don't lower.
+        # Branch 1 — watching at desk: lift L2.
+        if zone == "desk":
+            zone_bri_by_period = {
+                "day": 160,
+                "evening": 110,
+                "night": 70,
+                "late_night": 50,
+            }
+            target_bri = zone_bri_by_period.get(period)
+            if target_bri is None:
+                return state
+            current_bri = int(state["2"].get("bri", 0))
+            if current_bri >= target_bri:
+                return state
+            new_state = {lid: dict(ls) for lid, ls in state.items()}
+            new_state["2"]["bri"] = target_bri
+            logger.debug(
+                "Zone overlay: lifting L2 bri %d → %d (watching+desk, period=%s)",
+                current_bri, target_bri, period,
+            )
+            return new_state
 
-        new_state = {lid: dict(ls) for lid, ls in state.items()}
-        new_state["2"]["bri"] = target_bri
-        logger.debug(
-            "Zone overlay: lifting L2 bri %d → %d (watching+desk, period=%s)",
-            current_bri, target_bri, period,
-        )
-        return new_state
+        # Branch 2 — watching reclined in bed: lower L1 and L2 for projector.
+        if zone == "bed" and posture == "reclined":
+            targets = self._BED_RECLINED_WATCHING_BRI.get(period)
+            if targets is None:
+                return state
+            new_state = {lid: dict(ls) for lid, ls in state.items()}
+            changed = False
+            for light_id, target in targets.items():
+                if light_id not in new_state:
+                    continue
+                current = int(new_state[light_id].get("bri", 0))
+                if current <= target:
+                    continue  # Already at or below target — don't raise.
+                new_state[light_id]["bri"] = target
+                changed = True
+            if not changed:
+                return state
+            logger.debug(
+                "Zone overlay: lowering for watching+bed+reclined (period=%s): %s",
+                period, targets,
+            )
+            return new_state
+
+        return state
 
     def register_on_mode_change(self, callback) -> None:
         """

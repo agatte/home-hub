@@ -320,3 +320,95 @@ class TestZonePostureRule:
         await engine._evaluate_zone_posture_rule(self.EVENING)
         assert engine._zone_posture_reclined_since is None
 
+
+# ---------------------------------------------------------------------------
+# Zone + posture overlay — watching-mode per-light brightness shaping
+# ---------------------------------------------------------------------------
+
+class TestZonePostureOverlay:
+    """Per-light overlay tuning for watching+zone+posture combinations."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    def _night_watching_state(self):
+        # Matches the ACTIVITY_LIGHT_STATES["watching"]["night"] baseline.
+        return {
+            "1": {"on": True, "bri": 45, "ct": 454},
+            "2": {"on": True, "bri": 20, "ct": 454},
+            "3": {"on": False, "bri": 1},
+            "4": {"on": False, "bri": 1},
+        }
+
+    def test_bed_reclined_night_lowers_l1_and_l2(self, engine):
+        """Reclined in bed at night → L1 and L2 drop below baseline."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        out = engine._apply_zone_overlay(self._night_watching_state(), "watching", "night")
+        assert out["1"]["bri"] == 25  # below baseline 45
+        assert out["2"]["bri"] == 8   # below baseline 20
+        # Kitchen L3/L4 untouched — still off.
+        assert out["3"]["on"] is False
+        assert out["4"]["on"] is False
+
+    def test_bed_upright_night_unchanged(self, engine):
+        """Upright in bed (sitting up, football game) → baseline preserved."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="upright")
+        baseline = self._night_watching_state()
+        out = engine._apply_zone_overlay(baseline, "watching", "night")
+        assert out["1"]["bri"] == baseline["1"]["bri"]
+        assert out["2"]["bri"] == baseline["2"]["bri"]
+
+    def test_bed_reclined_day_unchanged(self, engine):
+        """Day period has no reclined target — natural light handles it."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        baseline = {
+            "1": {"on": True, "bri": 80, "ct": 320},
+            "2": {"on": True, "bri": 70, "ct": 370},
+        }
+        out = engine._apply_zone_overlay(baseline, "watching", "day")
+        assert out["1"]["bri"] == 80
+        assert out["2"]["bri"] == 70
+
+    def test_posture_none_does_not_lower(self, engine):
+        """Face-only sessions (posture=None) fall through — never assume reclined."""
+        engine._camera_service = _FakeCamera(zone="bed", posture=None)
+        baseline = self._night_watching_state()
+        out = engine._apply_zone_overlay(baseline, "watching", "night")
+        assert out["1"]["bri"] == baseline["1"]["bri"]
+        assert out["2"]["bri"] == baseline["2"]["bri"]
+
+    def test_desk_lift_still_works(self, engine):
+        """Regression — desk branch continues to raise L2 above dim baseline."""
+        engine._camera_service = _FakeCamera(zone="desk", posture="upright")
+        state = {
+            "1": {"on": True, "bri": 45, "ct": 454},
+            "2": {"on": True, "bri": 20, "ct": 454},
+        }
+        out = engine._apply_zone_overlay(state, "watching", "night")
+        assert out["2"]["bri"] == 70  # zone_bri_by_period[night]
+
+    def test_non_watching_mode_untouched(self, engine):
+        """Overlay is watching-only — gaming/working states pass straight through."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        state = {"1": {"on": True, "bri": 100, "ct": 400}}
+        out = engine._apply_zone_overlay(state, "gaming", "night")
+        assert out == state
+
+
+# ---------------------------------------------------------------------------
+# Screen-sync posture-aware brightness cap
+# ---------------------------------------------------------------------------
+
+class TestScreenSyncPostureCap:
+    """The MODE_ZONE_MAX_BRIGHTNESS lookup honors posture when available."""
+
+    def test_exact_posture_match_wins(self):
+        from backend.services.screen_sync import MODE_ZONE_MAX_BRIGHTNESS
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "reclined")] == 25
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "upright")] == 60
+
+    def test_desk_entry_preserved(self):
+        from backend.services.screen_sync import MODE_ZONE_MAX_BRIGHTNESS
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk")] == 180
+
