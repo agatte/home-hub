@@ -5,7 +5,7 @@
     forceRadial, forceX, forceY,
   } from 'd3-force'
   import { constellationWithContext } from '$lib/stores/constellation.js'
-  import { modeColor, modeColorSoft, modeLabel } from '$lib/theme.js'
+  import { modeColorSoft } from '$lib/theme.js'
   import ModeNucleus from './ModeNucleus.svelte'
   import LaneSatellite from './LaneSatellite.svelte'
   import FactorPip from './FactorPip.svelte'
@@ -43,10 +43,15 @@
   /** @type {any} */
   let sim = null
 
-  // Radial distance mapping. Lanes sit at 130..290px from center, heavier
-  // weights closer to the nucleus.
-  const R_MIN = 130
-  const R_MAX = 290
+  // Radii scale with canvas size so bubbles always sit inside a readable
+  // band regardless of viewport. R_MAX is capped well inside CONTEXT_RADIUS
+  // so stale/low-weight lanes (which drift toward R_MAX) never collide
+  // with outer-ring context bubbles.
+  $: minDim = Math.min(width, height)
+  $: R_MIN = Math.round(minDim * 0.22)
+  $: R_MAX = Math.round(minDim * 0.32)
+  $: CONTEXT_RADIUS = Math.round(minDim * 0.48)
+
   /** @param {number | null | undefined} weight */
   function laneDistance(weight) {
     const w = Math.max(0, Math.min(1, weight || 0))
@@ -55,12 +60,13 @@
   /** Distance adjusted for staleness — stale lanes drift further out. */
   function targetDistanceForLane(n) {
     const base = laneDistance(n.weight)
-    return n.stale ? base + 45 : base
+    return n.stale ? base + 35 : base
   }
-  // Factor pips sit 55..90px from their parent lane, heavier impact closer.
+  // Factor pills sit close to their parent lane — not far enough to crowd
+  // neighboring lanes. Heavier impact sits closer to the disc.
   function factorDistance(impact) {
     const i = Math.max(0, Math.min(1, impact || 0))
-    return 55 + 35 * (1 - i)
+    return 48 + 22 * (1 - i)
   }
 
   /** Custom force — pull factor nodes toward their parent lane's position. */
@@ -125,7 +131,11 @@
   }
 
   function center() {
-    return { cx: width / 2, cy: height / 2 }
+    // Nudge the nucleus slightly above geometric center in landscape
+    // frames so the context ring's bottom bubbles don't collide with
+    // the FloatingNav sitting below the SVG.
+    const cy = width > height * 1.15 ? height * 0.48 : height / 2
+    return { cx: width / 2, cy }
   }
 
   // Evenly space the 6 lanes around the nucleus so the starting layout
@@ -140,12 +150,10 @@
     presence:    -Math.PI / 2 + (5 * Math.PI) / 3,     // 10 o'clock
   }
 
-  // Outer context ring — 5 non-voting bubbles at a fixed radius, offset by
-  // 36° (π/5) from the lane angles so context doesn't sit directly over a
-  // voter's line-of-sight to the nucleus. Radius chosen so context sits
-  // outside the furthest-reach factor pip (~lane R_MAX + factor distance,
-  // ≈290+90=380) with breathing room.
-  const CONTEXT_RADIUS = 410
+  // Outer context ring — 5 non-voting bubbles at a radius derived from
+  // canvas size (see CONTEXT_RADIUS above), offset by 36° (π/5) from the
+  // lane angles so context doesn't sit directly over a voter's line of
+  // sight to the nucleus.
   const CONTEXT_KEYS = ['time', 'weather', 'presence', 'override', 'sonos']
   const CONTEXT_ANGLE_OFFSET = Math.PI / 5
   /** @param {string} key */
@@ -246,11 +254,11 @@
           -140
         )))
         .force('collide', forceCollide().radius((n) => (
-          n.type === 'nucleus' ? 100 :
-          n.type === 'lane' ? 52 :
-          n.type === 'context' ? 34 :
-          22 + (n.impact || 0.5) * 12
-        )).strength(0.9))
+          n.type === 'nucleus' ? 108 :
+          n.type === 'lane' ? 62 :
+          n.type === 'context' ? 42 :
+          26 + (n.impact || 0.5) * 10
+        )).strength(0.95))
         .force('link', forceLink(simLinks).id((n) => n.id).distance((l) => (
           laneDistance(l.weight)
         )).strength((l) => 0.25 + 0.3 * (l.weight || 0)))
@@ -262,7 +270,7 @@
         .force('contextRing', forceRadial(
           (n) => (n.type === 'context' ? CONTEXT_RADIUS : 0),
           cx, cy,
-        ).strength((n) => (n.type === 'context' ? 0.65 : 0)))
+        ).strength((n) => (n.type === 'context' ? 0.4 : 0)))
         .force('factorOrbit', forceFactorOrbit(simNodes))
         .force('ambient', forceAmbientDrift(simNodes))
         // Mild centering so drifting pips don't escape the canvas.
@@ -270,11 +278,12 @@
         .force('y', forceY(cy).strength(0.02))
         .on('tick', () => {
           // Clamp to viewport so stale drifters don't vanish off-screen.
-          const margin = 24
+          // Context bubbles carry a larger radius, so give them more room.
           for (const n of simNodes) {
             if (n.type === 'nucleus') continue
-            n.x = Math.max(margin, Math.min(width - margin, n.x))
-            n.y = Math.max(margin, Math.min(height - margin, n.y))
+            const m = n.type === 'context' ? 44 : n.type === 'lane' ? 58 : 20
+            n.x = Math.max(m, Math.min(width - m, n.x))
+            n.y = Math.max(m, Math.min(height - m, n.y))
           }
           tickNodes = [...simNodes]
           tickLinks = [...simLinks]
@@ -291,7 +300,7 @@
       sim.force('contextRing', forceRadial(
         (n) => (n.type === 'context' ? CONTEXT_RADIUS : 0),
         cx, cy,
-      ).strength((n) => (n.type === 'context' ? 0.65 : 0)))
+      ).strength((n) => (n.type === 'context' ? 0.4 : 0)))
       // Brief kick to let the ring reshuffle after new data lands, then
       // settle back to the constant idle alpha.
       sim.alpha(0.3).restart()
@@ -303,7 +312,7 @@
     if (!container) return
     const rect = container.getBoundingClientRect()
     width = Math.max(320, rect.width)
-    height = Math.max(440, Math.min(rect.height || 720, width))
+    height = Math.max(420, Math.min(rect.height || 560, width * 0.78))
     if (sim) {
       const { cx, cy } = center()
       for (const n of simNodes) {
@@ -318,7 +327,7 @@
       sim.force('contextRing', forceRadial(
         (n) => (n.type === 'context' ? CONTEXT_RADIUS : 0),
         cx, cy,
-      ).strength((n) => (n.type === 'context' ? 0.65 : 0)))
+      ).strength((n) => (n.type === 'context' ? 0.4 : 0)))
       sim.force('x', forceX(cx).strength(0.02))
       sim.force('y', forceY(cy).strength(0.02))
       sim.alpha(0.3).restart()
@@ -382,12 +391,26 @@
       </defs>
 
       <circle
-        cx={width / 2}
-        cy={height / 2}
-        r={Math.min(width, height) * 0.38}
+        cx={center().cx}
+        cy={center().cy}
+        r={Math.min(width, height) * 0.36}
         fill="url(#nucleus-glow)"
         class="aura"
       />
+
+      <!-- Context tethers — dim dashed lines anchoring active context
+           bubbles back to the nucleus, so they read as "orbit, not drift". -->
+      <g class="context-tethers">
+        {#each tickNodes.filter((n) => n.type === 'context' && n.active) as node (node.id)}
+          <line
+            x1={center().cx}
+            y1={center().cy}
+            x2={node.x}
+            y2={node.y}
+            class="tether"
+          />
+        {/each}
+      </g>
 
       <!-- Context ring (outermost, beneath the voter edges) -->
       <g class="context-ring">
@@ -423,11 +446,7 @@
       {/each}
     </svg>
 
-    <ConstellationLegend
-      mode={fusedMode}
-      modeLabelText={modeLabel(fusedMode)}
-      confidence={fusedConf}
-    />
+    <ConstellationLegend />
   </section>
 {/if}
 
@@ -435,16 +454,25 @@
   .constellation {
     position: relative;
     width: 100%;
-    max-width: 960px;
+    max-width: 980px;
     margin: 0 auto;
-    aspect-ratio: 1 / 1;
-    min-height: 500px;
-    max-height: 900px;
+    aspect-ratio: 16 / 11;
+    min-height: 440px;
+    /* Must clear the fixed FloatingNav (56px tall, bottom: 20px) +
+       the ModeOverlay header at the top of the page. */
+    max-height: 620px;
   }
   .canvas {
     width: 100%;
     height: 100%;
     display: block;
+  }
+  .tether {
+    stroke: rgba(255, 255, 255, 0.12);
+    stroke-width: 1;
+    stroke-dasharray: 2 6;
+    stroke-linecap: round;
+    pointer-events: none;
   }
   .aura {
     animation: auraPulse 6s ease-in-out infinite;

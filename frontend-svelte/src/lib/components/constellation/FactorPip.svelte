@@ -6,10 +6,19 @@
   /** @type {string} */
   export let fusedMode = 'idle'
 
-  $: color = node?.agrees ? modeColor(fusedMode) : modeColor(node?.laneMode || 'idle')
-  $: radius = 12 + 14 * (node?.impact ?? 0.5)
+  // Agreement drives color; impact drives visual weight (stroke + fill opacity).
+  $: stroke = node?.agrees ? modeColor(fusedMode) : modeColor(node?.laneMode || 'idle')
+  $: impact = Math.max(0, Math.min(1, node?.impact ?? 0.5))
+  $: fillAlpha = 0.18 + 0.22 * impact
+  $: fill = modeColorSoft(node?.laneMode || 'idle', fillAlpha)
+  $: strokeWidth = 1.2 + 1.4 * impact
   $: tooltip = `${node.label}: ${node.display}`
-  $: softFill = modeColorSoft(node?.laneMode || 'idle', 0.3)
+
+  // Estimate pill width from the display string — SVG has no intrinsic text
+  // measurement in templates, so we use a glyph-count heuristic + min clamp.
+  $: charCount = (node.display || '').length
+  $: pillWidth = Math.max(36, Math.min(110, charCount * 6.2 + 14))
+  $: pillHeight = 18
 </script>
 
 <g
@@ -19,14 +28,22 @@
   transform="translate({node.x}, {node.y})"
 >
   <title>{tooltip}</title>
-  <circle r={radius} class="disc" fill={softFill} stroke={color} />
-  <!-- Always show the display value under the pip -->
+  <rect
+    x={-pillWidth / 2}
+    y={-pillHeight / 2}
+    width={pillWidth}
+    height={pillHeight}
+    rx={pillHeight / 2}
+    ry={pillHeight / 2}
+    class="pill"
+    fill={fill}
+    stroke={stroke}
+    stroke-width={strokeWidth}
+  />
   {#if node.display}
-    <text
-      y={radius + 13}
-      text-anchor="middle"
-      class="pip-label"
-    >{node.display}</text>
+    <text text-anchor="middle" dominant-baseline="central" class="pill-label">
+      {node.display}
+    </text>
   {/if}
 </g>
 
@@ -36,26 +53,19 @@
     pointer-events: all;
   }
   .pip.stale {
-    opacity: 0.35;
+    opacity: 0.4;
   }
-  .disc {
-    stroke-width: 1.8;
-    transition: r 500ms ease, stroke 400ms ease;
-    filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.45));
+  .pill {
+    transition: stroke 400ms ease, fill 400ms ease, stroke-width 400ms ease;
+    filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.4));
   }
-  .pip.agrees .disc {
-    stroke-width: 2.4;
-  }
-  .pip-label {
+  .pill-label {
     font-family: 'Source Sans 3', sans-serif;
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 500;
-    fill: rgba(255, 255, 255, 0.78);
+    fill: rgba(255, 255, 255, 0.9);
     pointer-events: none;
     user-select: none;
-    paint-order: stroke;
-    stroke: rgba(0, 0, 0, 0.7);
-    stroke-width: 3;
-    stroke-linejoin: round;
+    letter-spacing: 0.2px;
   }
 </style>
