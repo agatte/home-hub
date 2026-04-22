@@ -93,6 +93,25 @@ DEPARTURE_DEBOUNCE_SECONDS = 45
 FLAP_THRESHOLD_MINUTES_SHORTCUT = 2
 FLAP_THRESHOLD_MINUTES_ARP = 5
 
+# Departure vetoes — extra guards on top of the manual_override check so the
+# fade sequence doesn't fire while the user is visibly home. Each veto reads
+# a different ground-truth signal the phone-on-WiFi lane can't see.
+#
+# Camera veto: a face/pose landed in the last N seconds. Tuned wider than the
+# camera's own 30s absent-threshold so a brief look-away doesn't drop the
+# shield, but still tight enough that a real walk-out clears it before the
+# ARP timeout (180s) lets a fade fire.
+CAMERA_VETO_STALE_SECONDS = 60
+# Activity-mode veto: current_mode is one of these high-signal modes. A
+# process detector, YAMNet audio classifier, or media player is reporting
+# real user activity — phone-off-WiFi against that is almost always iOS
+# power-save. `sleeping` is excluded because the user may actually leave
+# after the bedroom routine finishes (e.g. early-morning departure before
+# the camera unpauses).
+ACTIVITY_VETO_MODES = frozenset(
+    ("working", "gaming", "watching", "cooking", "social")
+)
+
 
 @dataclass
 class PresenceConfig:
@@ -181,8 +200,19 @@ class PresenceService:
         # by a subsequent /arrived firing first (the iOS WiFi flap pattern).
         self._pending_departure_task: Optional[asyncio.Task] = None
 
+        # Camera service is created after PresenceService in the lifespan, so
+        # it's wired in via set_camera_service() once available. Used by the
+        # _on_departure veto — if the webcam sees someone at the desk, a
+        # phone-off-WiFi signal is almost certainly iOS power-save, not a
+        # real departure.
+        self._camera_service = None
+
         self._is_linux = platform.system() == "Linux"
         self._probe_iface: Optional[str] = None   # Detected at first probe
+
+    def set_camera_service(self, camera_service) -> None:
+        """Attach the camera service so _on_departure can consult it."""
+        self._camera_service = camera_service
 
     # ------------------------------------------------------------------
     # Public API
@@ -722,6 +752,48 @@ class PresenceService:
                 self._automation.override_mode,
             )
             self._last_seen = datetime.now(tz=TZ)
+            self._consecutive_failures = 0
+            return
+
+        # Camera veto — the webcam is ground truth. If a face/pose landed
+        # in the last CAMERA_VETO_STALE_SECONDS, the phone-off-WiFi signal
+        # is almost certainly iOS power-save (ARP misses, /departed -1001)
+        # rather than a real walk-out. Applies regardless of skip_override_guard
+        # because a live camera detection is a stronger signal than any
+        # iPhone WiFi state.
+        cam = self._camera_service
+        now = datetime.now(tz=TZ)
+        if cam is not None and getattr(cam, "enabled", False):
+            last_at = cam.last_detection_at
+            if (
+                cam.last_detection == "present"
+                and last_at is not None
+                and (now - last_at).total_seconds() <= CAMERA_VETO_STALE_SECONDS
+            ):
+                age = (now - last_at).total_seconds()
+                logger.info(
+                    "Presence: phone unreachable (trigger=%s) but camera saw "
+                    "someone %.0fs ago (zone=%s) — skipping departure",
+                    trigger, age, cam.zone,
+                )
+                self._last_seen = now
+                self._consecutive_failures = 0
+                return
+
+        # Activity-mode veto — a process/activity-driven high-signal mode is
+        # strong presence evidence even without a manual override. Covers the
+        # "camera off / user out of frame briefly" gap that the camera veto
+        # can't catch.
+        if (
+            self._automation
+            and self._automation.current_mode in ACTIVITY_VETO_MODES
+        ):
+            logger.info(
+                "Presence: phone unreachable (trigger=%s) but mode=%s — "
+                "skipping departure",
+                trigger, self._automation.current_mode,
+            )
+            self._last_seen = now
             self._consecutive_failures = 0
             return
 

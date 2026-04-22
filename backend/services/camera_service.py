@@ -189,6 +189,7 @@ class CameraService:
         # Detection state
         self._consecutive_absent: int = 0
         self._last_detection: str = "unknown"
+        self._last_detection_at: Optional[datetime] = None
         self._last_confidence: float = 0.0
         self._last_detection_source: Optional[str] = None  # "face" | "pose" | None
         self._last_ambient_lux: float = 0.0
@@ -552,6 +553,21 @@ class CameraService:
         """
         return self._last_posture
 
+    @property
+    def last_detection(self) -> str:
+        """Most recent detection status — 'present' | 'absent' | 'unknown'."""
+        return self._last_detection
+
+    @property
+    def last_detection_at(self) -> Optional[datetime]:
+        """UTC timestamp of the most recent detection update (any status).
+
+        Consumers use this to decide whether ``last_detection`` is fresh
+        enough to trust — e.g. presence_service vetoes a departure fade
+        only if a 'present' reading landed within the last ~60s.
+        """
+        return self._last_detection_at
+
     def _build_fusion_factors(
         self,
         status: str,
@@ -651,6 +667,7 @@ class CameraService:
                 frame_posture = result.get("posture")
 
                 self._last_detection = status
+                self._last_detection_at = datetime.now(timezone.utc)
                 self._last_confidence = confidence
                 self._last_detection_source = source
                 self._last_ambient_lux = ambient_lux
