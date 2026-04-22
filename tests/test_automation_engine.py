@@ -412,3 +412,62 @@ class TestScreenSyncPostureCap:
         from backend.services.screen_sync import MODE_ZONE_MAX_BRIGHTNESS
         assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk")] == 180
 
+
+# ---------------------------------------------------------------------------
+# Runtime-tunable watching-posture overrides
+# ---------------------------------------------------------------------------
+
+class TestWatchingPostureRuntimeTuning:
+    """Settings-page sliders update screen-sync caps + engine L1 at runtime."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    def test_screen_sync_cap_override_wins(self, mock_hue):
+        from backend.services.screen_sync import ScreenSyncService
+        sync = ScreenSyncService(mock_hue)
+        # Default from hardcoded dict.
+        assert sync.get_cap("watching", "bed", "reclined") == 25
+        # Override — settings slider dropped it to 10.
+        sync.set_cap_override("watching", "bed", "reclined", 10)
+        assert sync.get_cap("watching", "bed", "reclined") == 10
+        # Sibling entries untouched.
+        assert sync.get_cap("watching", "bed", "upright") == 60
+        assert sync.get_cap("watching", "desk", "upright") == 180
+
+    def test_screen_sync_cap_fallback_order(self, mock_hue):
+        from backend.services.screen_sync import ScreenSyncService
+        sync = ScreenSyncService(mock_hue)
+        # Posture missing — falls back to (mode, zone).
+        assert sync.get_cap("watching", "desk", None) == 180
+        # Mode-only fallback.
+        assert sync.get_cap("working", None, None) > 0
+
+    def test_engine_l1_override_scales_reclined_night(self, engine):
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        state = {
+            "1": {"on": True, "bri": 45, "ct": 454},
+            "2": {"on": True, "bri": 20, "ct": 454},
+        }
+        engine.set_bed_reclined_l1_night(10)
+        out = engine._apply_zone_overlay(state, "watching", "night")
+        assert out["1"]["bri"] == 10  # night ratio = 1.0
+
+    def test_engine_l1_override_scales_evening(self, engine):
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        state = {
+            "1": {"on": True, "bri": 65, "ct": 400},
+            "2": {"on": True, "bri": 40, "ct": 400},
+        }
+        engine.set_bed_reclined_l1_night(20)
+        out = engine._apply_zone_overlay(state, "watching", "evening")
+        # evening ratio = 1.8 → 20 * 1.8 = 36
+        assert out["1"]["bri"] == 36
+
+    def test_engine_l1_override_clamps(self, engine):
+        engine.set_bed_reclined_l1_night(999)
+        assert engine._bed_reclined_l1_night == 100
+        engine.set_bed_reclined_l1_night(-5)
+        assert engine._bed_reclined_l1_night == 1
+

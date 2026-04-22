@@ -945,10 +945,22 @@ class AutomationEngine:
     # apartment) and the viewer is lying back, so bright lamps compete with
     # the screen and hit eyes more directly than when sitting upright.
     # Day is unset because napping in daylight doesn't need automation.
-    _BED_RECLINED_WATCHING_BRI = {
-        "evening":    {"1": 45, "2": 18},  # from baseline 65, 40
-        "night":      {"1": 25, "2": 8},   # from baseline 45, 20
-        "late_night": {"1": 15, "2": 5},   # no baseline; extrapolated
+    #
+    # The L1-night value is the user-facing knob (exposed in the settings
+    # page); evening and late_night L1 scale proportionally to the ratios
+    # in the original tuning (1.8× and 0.6× of night, respectively). L2 is
+    # held at these tuned values — it sits far out of line of sight when
+    # reclined and is already near-off.
+    _BED_RECLINED_L1_NIGHT_DEFAULT = 25
+    _BED_RECLINED_L2_WATCHING_BRI = {
+        "evening":    18,
+        "night":      8,
+        "late_night": 5,
+    }
+    _BED_RECLINED_L1_RATIO = {
+        "evening":    1.8,   # default 45 when night=25
+        "night":      1.0,
+        "late_night": 0.6,   # default 15 when night=25
     }
 
     def _apply_zone_overlay(
@@ -1007,9 +1019,15 @@ class AutomationEngine:
 
         # Branch 2 — watching reclined in bed: lower L1 and L2 for projector.
         if zone == "bed" and posture == "reclined":
-            targets = self._BED_RECLINED_WATCHING_BRI.get(period)
-            if targets is None:
+            ratio = self._BED_RECLINED_L1_RATIO.get(period)
+            l2_target = self._BED_RECLINED_L2_WATCHING_BRI.get(period)
+            if ratio is None or l2_target is None:
                 return state
+            # L1 night is the runtime-tunable knob; other periods scale off it.
+            l1_night = getattr(self, "_bed_reclined_l1_night", None) \
+                or self._BED_RECLINED_L1_NIGHT_DEFAULT
+            l1_target = max(1, min(254, int(l1_night * ratio)))
+            targets = {"1": l1_target, "2": l2_target}
             new_state = {lid: dict(ls) for lid, ls in state.items()}
             changed = False
             for light_id, target in targets.items():
@@ -1029,6 +1047,15 @@ class AutomationEngine:
             return new_state
 
         return state
+
+    def set_bed_reclined_l1_night(self, value: int) -> None:
+        """Runtime override for the L1 night brightness when watching reclined.
+
+        Evening and late_night L1 scale proportionally so a single slider
+        tunes the whole reclined profile coherently. Accepts 1..100 and
+        clamps; the settings page does its own range validation too.
+        """
+        self._bed_reclined_l1_night = max(1, min(100, int(value)))
 
     def register_on_mode_change(self, callback) -> None:
         """

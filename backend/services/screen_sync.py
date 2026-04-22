@@ -84,6 +84,34 @@ class ScreenSyncService:
         self._last_color_at: Optional[datetime] = None
         self._last_source: Optional[str] = None
 
+        # Runtime overrides for specific (mode, zone, posture) caps — settings
+        # page writes through this dict, persisted in app_settings. Empty means
+        # fall back entirely to the MODE_ZONE_MAX_BRIGHTNESS defaults.
+        self._cap_overrides: dict[tuple[str, str, str], int] = {}
+
+    def set_cap_override(self, mode: str, zone: str, posture: str, cap: int) -> None:
+        """Set a runtime override for a (mode, zone, posture) cap."""
+        self._cap_overrides[(mode, zone, posture)] = int(cap)
+
+    def get_cap(self, mode: str, zone: Optional[str], posture: Optional[str]) -> int:
+        """Resolve the screen-sync cap for the given context.
+
+        Lookup order: runtime override → MODE_ZONE_MAX_BRIGHTNESS 3-tuple →
+        MODE_ZONE_MAX_BRIGHTNESS 2-tuple → MODE_MAX_BRIGHTNESS → default.
+        """
+        if zone is not None and posture is not None:
+            override = self._cap_overrides.get((mode, zone, posture))
+            if override is not None:
+                return override
+            cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture))
+            if cap is not None:
+                return cap
+        if zone is not None:
+            cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone))
+            if cap is not None:
+                return cap
+        return MODE_MAX_BRIGHTNESS.get(mode, DEFAULT_MAX_BRIGHTNESS)
+
     @property
     def last_color_at(self) -> Optional[datetime]:
         return self._last_color_at
@@ -118,13 +146,7 @@ class ScreenSyncService:
                 (mode, zone, posture) match wins over (mode, zone). Falls
                 through to the mode-only cap if neither matches.
         """
-        max_bri: Optional[int] = None
-        if zone is not None and posture is not None:
-            max_bri = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture))
-        if max_bri is None and zone is not None:
-            max_bri = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone))
-        if max_bri is None:
-            max_bri = MODE_MAX_BRIGHTNESS.get(mode, DEFAULT_MAX_BRIGHTNESS)
+        max_bri = self.get_cap(mode, zone, posture)
         min_bri = MODE_MIN_BRIGHTNESS.get(mode, MIN_BRIGHTNESS)
         h, s, br = self._rgb_to_hue_hsb((r, g, b), max_bri, min_bri)
         sh, ss, sb = self._smooth(h, s, br)

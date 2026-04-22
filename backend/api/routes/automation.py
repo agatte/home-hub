@@ -34,6 +34,16 @@ from backend.services.automation_engine import (
 SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
 SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
+WATCHING_POSTURE_KEY = "watching_posture_config"
+
+# Settings-page defaults for the watching-posture tuning knobs. The values
+# here mirror the hardcoded fall-back in screen_sync.py and automation_engine
+# so a fresh SQLite row reads back the same numbers the in-code defaults use.
+WATCHING_POSTURE_DEFAULTS = {
+    "reclined_sync_cap": 25,   # screen-sync max_bri when watching+bed+reclined
+    "reclined_l1_night": 25,   # L1 ambient at night; evening/late_night scale
+    "upright_sync_cap":  60,   # screen-sync max_bri when watching+bed+upright
+}
 
 logger = logging.getLogger("home_hub.automation")
 
@@ -383,6 +393,53 @@ async def update_mode_brightness(
 
     logger.info(f"Mode brightness updated: {brightness}")
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Watching posture tuning — runtime knobs for projector-in-bed brightness
+# ---------------------------------------------------------------------------
+
+@router.get("/watching-posture")
+async def get_watching_posture() -> dict:
+    """Return the current watching-posture tuning values.
+
+    Reads from persisted storage if present, otherwise returns the defaults
+    that match the in-code fallback in screen_sync.py and automation_engine.
+    """
+    saved = await load_setting(WATCHING_POSTURE_KEY)
+    return {**WATCHING_POSTURE_DEFAULTS, **(saved or {})}
+
+
+@router.put("/watching-posture")
+async def update_watching_posture(config: dict, request: Request) -> dict:
+    """Update the watching-posture tuning values.
+
+    Accepts any subset of the three keys; each value is clamped to 1..100.
+    Writes through to the live screen_sync + automation engine so the change
+    takes effect on the next reconciliation without a restart.
+    """
+    cleaned: dict[str, int] = {}
+    for key in WATCHING_POSTURE_DEFAULTS:
+        if key in config and config[key] is not None:
+            cleaned[key] = max(1, min(100, int(config[key])))
+
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="No valid keys provided")
+
+    saved = await load_setting(WATCHING_POSTURE_KEY) or {}
+    merged = {**WATCHING_POSTURE_DEFAULTS, **saved, **cleaned}
+    await save_setting(WATCHING_POSTURE_KEY, merged)
+
+    sync = getattr(request.app.state, "screen_sync", None)
+    engine = getattr(request.app.state, "automation", None)
+    if sync is not None:
+        sync.set_cap_override("watching", "bed", "reclined", merged["reclined_sync_cap"])
+        sync.set_cap_override("watching", "bed", "upright",  merged["upright_sync_cap"])
+    if engine is not None:
+        engine.set_bed_reclined_l1_night(merged["reclined_l1_night"])
+
+    logger.info(f"Watching posture tuning updated: {cleaned}")
+    return {"status": "ok", "config": merged}
 
 
 # ---------------------------------------------------------------------------

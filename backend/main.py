@@ -159,6 +159,7 @@ async def lifespan(app: FastAPI):
     from backend.api.routes.routines import load_setting
     from backend.api.routes.automation import (
         SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, SCREEN_SYNC_LAPTOP_KEY,
+        WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS,
         _dict_to_schedule_config,
     )
     from backend.services.automation_engine import ScheduleConfig
@@ -170,6 +171,7 @@ async def lifespan(app: FastAPI):
         else ScheduleConfig()
     )
     saved_brightness = await load_setting(BRIGHTNESS_CONFIG_KEY)
+    saved_watching_posture = await load_setting(WATCHING_POSTURE_KEY)
 
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
@@ -195,6 +197,17 @@ async def lifespan(app: FastAPI):
     automation._screen_sync = screen_sync
     automation._sonos = sonos
     await automation.load_scene_overrides()
+
+    # Apply persisted watching-posture tuning (settings-page sliders for the
+    # projector-safe caps + reclined L1 night ambient).
+    posture_cfg = {**WATCHING_POSTURE_DEFAULTS, **(saved_watching_posture or {})}
+    screen_sync.set_cap_override(
+        "watching", "bed", "reclined", posture_cfg["reclined_sync_cap"]
+    )
+    screen_sync.set_cap_override(
+        "watching", "bed", "upright", posture_cfg["upright_sync_cap"]
+    )
+    automation.set_bed_reclined_l1_night(posture_cfg["reclined_l1_night"])
 
     # Restore laptop loopback state from persisted setting (default off)
     saved_loopback = await load_setting(SCREEN_SYNC_LAPTOP_KEY)

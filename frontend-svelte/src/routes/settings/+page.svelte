@@ -32,6 +32,8 @@
   let scheduleDay = 'weekday'
   /** @type {any} */
   let modeBrightness = null
+  /** @type {{reclined_sync_cap: number, reclined_l1_night: number, upright_sync_cap: number} | null} */
+  let watchingPosture = null
   /** @type {any} */
   let routineConfig = null
   /** @type {any} */
@@ -104,6 +106,7 @@
     try { autoConfig = await apiGet('/api/automation/config') } catch {}
     try { scheduleConfig = await apiGet('/api/automation/schedule') } catch {}
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
+    try { watchingPosture = await apiGet('/api/automation/watching-posture') } catch {}
     // Camera status is loaded globally in init.js and updated via WebSocket
     loadPiholeData()
     loadModeScenes()
@@ -164,6 +167,14 @@
     modeBrightness = { ...modeBrightness, ...updates }
     saving = 'brightness'
     try { await apiPut('/api/automation/mode-brightness', modeBrightness) } catch {}
+    saving = null
+  }
+
+  /** @param {Record<string, number>} updates */
+  async function saveWatchingPosture(updates) {
+    watchingPosture = { ...(watchingPosture || {}), ...updates }
+    saving = 'posture'
+    try { await apiPut('/api/automation/watching-posture', watchingPosture) } catch {}
     saving = null
   }
 
@@ -635,6 +646,65 @@
             </div>
           </div>
         {/each}
+      </div>
+    {/if}
+  </section>
+
+  <!-- Watching Posture — projector/bed tuning -->
+  <section class="widget">
+    <h2 class="widget-title">Watching — Posture Tuning</h2>
+    <p class="widget-hint">
+      Brightness caps for watching in bed. The camera detects whether you're reclined (projector
+      viewing) or upright (sitting up, football game) and the lamp cap follows. Lower values feel
+      darker; higher values let the bedroom lamp get brighter with bright projector scenes.
+    </p>
+    {#if watchingPosture}
+      <div class="settings-card">
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Reclined — projector cap</span>
+            <span class="setting-hint">{watchingPosture.reclined_sync_cap}</span>
+          </div>
+          <div class="setting-slider-wrap">
+            <Slider
+              value={watchingPosture.reclined_sync_cap}
+              min={1}
+              max={100}
+              liveUpdate={false}
+              onChange={(v) => saveWatchingPosture({ reclined_sync_cap: v })}
+            />
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Reclined — ambient L1 at night</span>
+            <span class="setting-hint">{watchingPosture.reclined_l1_night}</span>
+          </div>
+          <div class="setting-slider-wrap">
+            <Slider
+              value={watchingPosture.reclined_l1_night}
+              min={1}
+              max={100}
+              liveUpdate={false}
+              onChange={(v) => saveWatchingPosture({ reclined_l1_night: v })}
+            />
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Upright — projector cap</span>
+            <span class="setting-hint">{watchingPosture.upright_sync_cap}</span>
+          </div>
+          <div class="setting-slider-wrap">
+            <Slider
+              value={watchingPosture.upright_sync_cap}
+              min={1}
+              max={100}
+              liveUpdate={false}
+              onChange={(v) => saveWatchingPosture({ upright_sync_cap: v })}
+            />
+          </div>
+        </div>
       </div>
     {/if}
   </section>
