@@ -4,8 +4,14 @@
 </script>
 
 {#each $errors as error (error.id)}
-  <div class="error-toast" transition:fly={{ y: 30, duration: 250 }}>
-    <svg class="error-toast-icon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+  <div
+    class="error-toast"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+    transition:fly={{ y: 30, duration: 250 }}
+  >
+    <svg class="error-toast-icon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
       <circle cx="10" cy="10" r="8" />
       <line x1="10" y1="6" x2="10" y2="11" />
       <circle cx="10" cy="14" r="0.5" fill="currentColor" />

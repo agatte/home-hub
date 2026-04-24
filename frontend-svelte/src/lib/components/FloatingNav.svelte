@@ -82,8 +82,8 @@
       padding: 4px;
     }
     .floating-nav-item {
-      width: 40px;
-      height: 40px;
+      width: 44px;
+      height: 44px;
     }
   }
 </style>
