@@ -22,12 +22,28 @@ export function initSceneCanvas(canvas) {
 
 /**
  * Create a 15fps animation loop. Returns a stop function.
+ *
+ * Honours prefers-reduced-motion: when set, the loop renders one frame so the
+ * scene isn't a black rectangle, then stops. Pure-CSS gates can't do that for
+ * canvas-based scenes — they just freeze whatever was last drawn.
  * @param {(time: number, dt: number) => void} onFrame
  */
 export function createAnimationLoop(onFrame) {
   let animId = 0
   let lastFrame = 0
   let time = 0
+
+  // matchMedia is unavailable during SSR — guard the access.
+  const reduceMotion =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+  if (reduceMotion) {
+    // One static frame so the scene shows something, then stop.
+    requestAnimationFrame((ts) => onFrame(ts * 0.001, 0))
+    return () => {}
+  }
 
   function tick(ts) {
     animId = requestAnimationFrame(tick)

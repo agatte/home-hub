@@ -23,6 +23,63 @@ Changes since last audit (April 15, 2026):
   - CLAUDE.md source-of-truth block references LIGHTING_EXPANSION.md
   - automation_engine.py grew 1,825 -> 1,944 lines (+119) in one day
 
+================================================================================
+                    STATUS UPDATE -- April 24, 2026
+================================================================================
+
+This block tracks what has shipped since the April 16 audit. The Category
+Details and Action Items below remain the original snapshot; consult this
+section first to know what is no longer accurate.
+
+  Active Bugs resolved (verified in code, April 24):
+  - GenerativeCanvas store-subscription cleanup -- onDestroy now calls all
+    three unsubscribers
+  - api.js error handling -- safeFetch surfaces network/HTTP errors via
+    addError(); 8s timeout + AbortController added (commit 3d7c535).
+    Edge case: post-fetch JSON parse still uses .catch(() => null) -- low
+    priority, deferred
+  - Per-light manual override per-entry 4h timeout (automation_engine.py:2145-2159)
+  - Scene override silent failure -- broadcasts scene_failed WS frame +
+    WARN log when both v2 scene and preset fallback miss
+    (automation_engine.py:1536-1546)
+  - WebSocket unknown-type silent drop -- init.js default case logs warn
+
+  Other action items shipped since April 16:
+  - Music import oversize + XXE hardening (commit 48a029e)
+  - Mobile contrast + touch-target + ErrorToast live-region (commit dbbd63f)
+  - Screen-sync sticky cluster hysteresis (commit dcf3767)
+  - Presence camera-present + activity-mode departure vetoes (commit ea82d65)
+
+  Backend hardening (April 24, commit def9606):
+  - Pydantic schemas for inbound WS messages (backend/schemas/ws.py) --
+    discriminated union, range-validated, error frame returned on invalid input
+  - Resilient lifespan shutdown -- _safe_shutdown helper isolates per-step
+    teardown failures, ordered producers->task-cancel->client-close,
+    bounded gather timeout, AmbientSoundService.stop() now actually called
+  - Event-logger retry queue -- 200-entry bounded deque, 30s drainer, 3
+    attempts per entry, threshold WARN on sustained drops; /health surfaces
+    event_logger_queue_depth + event_logger_overflow alongside drops
+
+  Test suite: 183 -> 305 (+22 added in def9606: 6 ws validation, 7
+  event-logger retry/overflow, 3 lifespan-shutdown isolation; remainder
+  was pre-existing not-yet-counted in audit)
+
+  Still open (high-impact, ranked April 24):
+  1. automation_engine.py bloat -- 1,944 -> 2,707 LOC (+39% in 8 days);
+     architectural debt accelerating
+  2. ML test coverage gaps -- behavioral_predictor, lighting_learner,
+     music_bandit, feature_builder, ml_logger still untested
+  3. Service DI by attribute assignment -- 9 attr-wirings in main.py
+  4. Three.js/Threlte unconditional bundle -- ~600KB shipped on every page
+     (only used in sleeping mode)
+  5. prefers-reduced-motion gate -- CSS vars set, never enforced by the
+     heavy animations (GenerativeCanvas, ParallaxScene, AuroraScene, etc.)
+  6. api.js post-fetch JSON parse silent swallow (edge case)
+  7. No frontend tests (vitest / Playwright)
+  8. No Prometheus /metrics endpoint
+  9. ParallaxScene rAF loop has no FPS cap
+  10. Modal portal duplication risk (Plant/Bar widgets)
+
 Baseline from April 15 (carried forward):
   - ML Phase 1+2 shipped: 8 ML services (2,093 LOC) in backend/services/ml/
   - BehavioralPredictor, AudioClassifier, LightingPreferenceLearner, MusicBandit

@@ -45,6 +45,26 @@ async function safeFetch(method, path, fetcher, { timeout = DEFAULT_TIMEOUT_MS }
 }
 
 /**
+ * Read the response body as JSON. Returns null for an empty body (HTTP 204
+ * style) so write endpoints that don't echo a payload still resolve cleanly.
+ * Surfaces a real parse failure (server bug producing malformed JSON) via
+ * addError + throw — the previous .catch(() => null) swallowed those.
+ * @param {string} method
+ * @param {string} path
+ * @param {Response} res
+ */
+async function parseJsonOrNull(method, path, res) {
+  const text = await res.text()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    addError(`${method} ${path}: malformed JSON response`)
+    throw e
+  }
+}
+
+/**
  * @param {string} path
  * @param {RequestInit} [init]
  * @param {{ timeout?: number }} [options]
@@ -55,7 +75,7 @@ export async function apiGet(path, init, options) {
     (signal) => fetch(path, { ...init, signal }),
     options,
   )
-  return res.json()
+  return parseJsonOrNull('GET', path, res)
 }
 
 /**
@@ -74,7 +94,7 @@ export async function apiPost(path, body, options) {
     }),
     options,
   )
-  return res.json().catch(() => null)
+  return parseJsonOrNull('POST', path, res)
 }
 
 /**
@@ -93,7 +113,7 @@ export async function apiPut(path, body, options) {
     }),
     options,
   )
-  return res.json().catch(() => null)
+  return parseJsonOrNull('PUT', path, res)
 }
 
 /**
@@ -106,5 +126,5 @@ export async function apiDelete(path, options) {
     (signal) => fetch(path, { method: 'DELETE', signal }),
     options,
   )
-  return res.json().catch(() => null)
+  return parseJsonOrNull('DELETE', path, res)
 }

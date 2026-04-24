@@ -1,7 +1,6 @@
 <script>
-  import { Canvas } from '@threlte/core'
+  import { onDestroy } from 'svelte'
   import { automation } from '$lib/stores/automation.js'
-  import MoonScene from '$lib/backgrounds/MoonScene.svelte'
   import GenerativeCanvas from '$lib/backgrounds/GenerativeCanvas.svelte'
   import PixelScene from '$lib/backgrounds/PixelScene.svelte'
   import ParallaxScene from '$lib/backgrounds/ParallaxScene.svelte'
@@ -10,14 +9,39 @@
 
   $: mode = $automation.mode
   $: hasParallaxLayers = !!LAYER_CONFIGS[mode]
+
+  // MoonBackground (Threlte + three.js, ~600KB) is only used in sleeping mode.
+  // Dynamic-import it on demand so the kiosk's first paint isn't paying that
+  // bundle cost on every page load.
+  /** @type {any} */
+  let MoonComponent = null
+  let moonLoading = false
+  let moonError = false
+
+  $: if (mode === 'sleeping' && !MoonComponent && !moonLoading && !moonError) {
+    moonLoading = true
+    import('$lib/backgrounds/MoonBackground.svelte')
+      .then(m => { MoonComponent = m.default })
+      .catch(err => {
+        moonError = true
+        console.error('[ModeBackground] failed to load MoonBackground:', err)
+      })
+      .finally(() => { moonLoading = false })
+  }
+
+  onDestroy(() => {
+    // Help GC release the chunk reference if the layout itself is destroyed.
+    MoonComponent = null
+  })
 </script>
 
 {#if mode === 'sleeping'}
-  <div class="mode-background">
-    <Canvas>
-      <MoonScene />
-    </Canvas>
-  </div>
+  {#if MoonComponent}
+    <svelte:component this={MoonComponent} />
+  {:else if moonError}
+    <!-- Fallback to generative canvas if the chunk fails to load -->
+    <GenerativeCanvas />
+  {/if}
 {:else if hasParallaxLayers}
   <ParallaxScene {mode} />
 {:else if mode === 'gaming'}
@@ -27,17 +51,3 @@
 {:else}
   <GenerativeCanvas />
 {/if}
-
-<style>
-  .mode-background {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-  }
-  .mode-background :global(canvas) {
-    display: block;
-    width: 100%;
-    height: 100%;
-  }
-</style>

@@ -108,7 +108,15 @@
   let windowGroups = [] // Three.Group refs for each building (for flicker)
   let elapsed = 0
 
+  // Honour prefers-reduced-motion — captured once at module-eval time. If
+  // set, useTask still fires (Threlte controls the rAF) but we skip the
+  // per-frame math so the moon and city silhouette stay still.
+  const reduceMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
   useTask((delta) => {
+    if (reduceMotion) return
     elapsed += delta
     // Moon arc: parametric across the sky from east to west.
     // Phase 0 = horizon left, 0.5 = zenith, 1 = horizon right.

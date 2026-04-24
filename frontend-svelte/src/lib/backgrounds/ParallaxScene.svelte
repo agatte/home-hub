@@ -14,6 +14,10 @@
   let weatherTimer = null
   let animId = 0
   let lastTime = 0
+  // 60fps cap — matches CSS-pixel scrolling needs, prevents 144Hz monitors
+  // from doing ~9× the work for no visual improvement.
+  const FRAME_INTERVAL_MS = 1000 / 60
+  let lastFrame = 0
 
   /** @type {HTMLDivElement[]} */
   let layerEls = []
@@ -59,6 +63,10 @@
 
   function animate(ts) {
     animId = requestAnimationFrame(animate)
+    // 60fps throttle — skip frames between intervals.
+    if (ts - lastFrame < FRAME_INTERVAL_MS) return
+    lastFrame = ts
+
     if (!lastTime) { lastTime = ts; return }
     const dt = (ts - lastTime) / 1000
     lastTime = ts
@@ -85,7 +93,16 @@
     updateSkyGradient()
     await fetchWeather()
     weatherTimer = setInterval(fetchWeather, 600_000)
-    animId = requestAnimationFrame(animate)
+
+    // Skip the rAF loop entirely when prefers-reduced-motion is set —
+    // the CSS rule already pins background-position, and there's no point
+    // burning cycles writing to a property the browser will override.
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (!reduceMotion) {
+      animId = requestAnimationFrame(animate)
+    }
   })
 
   onDestroy(() => {
