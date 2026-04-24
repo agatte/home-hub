@@ -60,25 +60,53 @@ section first to know what is no longer accurate.
     attempts per entry, threshold WARN on sustained drops; /health surfaces
     event_logger_queue_depth + event_logger_overflow alongside drops
 
-  Test suite: 183 -> 305 (+22 added in def9606: 6 ws validation, 7
-  event-logger retry/overflow, 3 lifespan-shutdown isolation; remainder
-  was pre-existing not-yet-counted in audit)
+  Frontend perf + a11y bundle (April 24, commit 9b4dbbd):
+  - Threlte + three.js (~689KB chunk) now lazy-loaded via dynamic import
+    when mode=='sleeping'; new MoonBackground.svelte wraps Canvas+MoonScene
+  - prefers-reduced-motion enforced across the canvas scenes:
+    createAnimationLoop in scene-utils.js (Aurora + Pixel) renders one
+    static frame then halts; ParallaxScene's own rAF skips entirely;
+    MoonScene's useTask early-returns
+  - ParallaxScene rAF loop now capped at 60fps (was uncapped on 144Hz)
+  - api.js parseJsonOrNull distinguishes empty body (HTTP 204) from
+    malformed JSON; the latter now surfaces an error toast + throws
+    instead of returning null
+
+  ML test coverage bundle (April 24):
+  - tests/test_feature_builder.py (30 cases) -- temporal/season encoding,
+    build_training_data with seeded ActivityEvent rows, naive-timestamp
+    SQLite normalization, MODE_ENCODING/SEASON_ENCODING stability
+  - tests/test_lighting_learner.py (11) -- EMA math, USER_TRIGGERS filter,
+    MIN_ADJUSTMENTS threshold, persisted-prefs load
+  - tests/test_music_bandit.py (11) -- Thompson select, record_reward
+    α/β math, JSON persist/load, retrain from SonosPlaybackEvent
+  - tests/test_behavioral_predictor.py (9; 2 skipped without lightgbm)
+    -- cold-start, status/promote/demote, lightgbm-unavailable graceful
+    degradation; full retrain+predict path runs on Latitude where
+    lightgbm is installed
+  - tests/test_ml_logger.py (11) -- log_decision write+broadcast,
+    on_mode_change windowed backfill, compute_accuracy_by_source per-signal
+    breakdown, compute_override_rate two-pointer walk
+  - conftest.py: tmp_model_manager + ml_db fixtures isolate tests from
+    real data/models/ and patch async_session for all 5 ML services
+
+  Test suite: 183 -> 375 (+22 in def9606, +70 ML-coverage today; remainder
+  pre-existing not-yet-counted in original audit)
 
   Still open (high-impact, ranked April 24):
   1. automation_engine.py bloat -- 1,944 -> 2,707 LOC (+39% in 8 days);
      architectural debt accelerating
-  2. ML test coverage gaps -- behavioral_predictor, lighting_learner,
-     music_bandit, feature_builder, ml_logger still untested
-  3. Service DI by attribute assignment -- 9 attr-wirings in main.py
-  4. Three.js/Threlte unconditional bundle -- ~600KB shipped on every page
-     (only used in sleeping mode)
-  5. prefers-reduced-motion gate -- CSS vars set, never enforced by the
-     heavy animations (GenerativeCanvas, ParallaxScene, AuroraScene, etc.)
-  6. api.js post-fetch JSON parse silent swallow (edge case)
-  7. No frontend tests (vitest / Playwright)
-  8. No Prometheus /metrics endpoint
-  9. ParallaxScene rAF loop has no FPS cap
-  10. Modal portal duplication risk (Plant/Bar widgets)
+  2. Service DI by attribute assignment -- 9 attr-wirings in main.py
+  3. No frontend tests (vitest / Playwright)
+  4. No Prometheus /metrics endpoint
+  5. Modal portal duplication risk (Plant/Bar widgets)
+  6. LightCard color presets duplicated from theme.js
+  7. LightGrid memoization opportunity (sort on every reactive change)
+  8. Background-task heartbeat in /health (poll loops can hang while
+     /health still returns 200)
+  9. No request tracing / IDs to correlate actions across logs
+  10. ConfidenceFusion end-to-end ensemble logic still untested
+      (only factors-plumbing covered)
 
 Baseline from April 15 (carried forward):
   - ML Phase 1+2 shipped: 8 ML services (2,093 LOC) in backend/services/ml/

@@ -166,3 +166,51 @@ def mock_sonos():
 @pytest.fixture
 def mock_ws():
     return MockWebSocketManager()
+
+
+# ---------------------------------------------------------------------------
+# ML test helpers
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def tmp_model_manager(tmp_path):
+    """A ModelManager rooted at a temp directory.
+
+    Prevents ML tests from writing into real data/models/.
+    """
+    from backend.services.ml.model_manager import ModelManager
+    return ModelManager(data_dir=tmp_path)
+
+
+@pytest.fixture
+async def ml_db(monkeypatch):
+    """In-memory SQLite engine + patches every ML service's async_session.
+
+    Use this fixture for any test that exercises code which calls
+    async_session() directly. Yields the session_factory so the test can
+    seed rows.
+
+    Patched modules: feature_builder, lighting_learner, music_bandit,
+    behavioral_predictor, ml_logger, event_logger. Tests that touch other
+    modules can extend the patch list locally.
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False,
+    )
+
+    for mod in (
+        "backend.services.ml.feature_builder",
+        "backend.services.ml.lighting_learner",
+        "backend.services.ml.music_bandit",
+        "backend.services.ml.behavioral_predictor",
+        "backend.services.ml.ml_logger",
+        "backend.services.event_logger",
+    ):
+        monkeypatch.setattr(f"{mod}.async_session", session_factory)
+
+    yield session_factory
+    await engine.dispose()
