@@ -269,6 +269,17 @@ except ImportError:
     _HAS_KMEANS = False
 
 
+# Sticky-cluster state for the laptop-loopback picker — same rationale as
+# the desktop agent: k-means reshuffles labels each frame, so biasing toward
+# the previous winner keeps the chosen color stable when two clusters are
+# near-tied on score.
+_last_center = None
+_last_picked_at: float = 0.0
+_STICKY_DISTANCE: float = 60.0
+_STICKY_SCORE_MARGIN: float = 0.08
+_STICKY_STALENESS_SEC: float = 30.0
+
+
 def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
     """
     Capture the primary screen and extract the dominant color.
@@ -317,27 +328,57 @@ def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
 
             if _HAS_KMEANS and len(pixels) >= 5:
                 import colorsys
+                import time as _time
+
+                global _last_center, _last_picked_at
 
                 pixel_array = np.array(pixels, dtype=np.float32)
                 kmeans = MiniBatchKMeans(n_clusters=5, batch_size=100, n_init=1)
                 kmeans.fit(pixel_array)
 
-                best_score = -1.0
-                best_center = None
+                now = _time.time()
+                prior = _last_center
+                if prior is not None and now - _last_picked_at > _STICKY_STALENESS_SEC:
+                    prior = None
+
+                scored = []
                 for center in kmeans.cluster_centers_:
                     r, g, b = center / 255.0
                     _h, s, v = colorsys.rgb_to_hsv(r, g, b)
                     if s > 0.2 and 0.15 < v < 0.85:
                         score = s * 0.7 + (1.0 - abs(v - 0.5)) * 0.3
-                        if score > best_score:
-                            best_score = score
-                            best_center = center
+                        scored.append((score, center))
 
-                if best_center is None:
+                chosen = None
+                if scored:
+                    scored.sort(key=lambda t: t[0], reverse=True)
+                    best_score, best_center = scored[0]
+                    if prior is not None:
+                        prior_score, prior_center = min(
+                            scored, key=lambda t: float(np.linalg.norm(t[1] - prior))
+                        )
+                        if (
+                            float(np.linalg.norm(prior_center - prior)) < _STICKY_DISTANCE
+                            and best_score - prior_score < _STICKY_SCORE_MARGIN
+                        ):
+                            chosen = prior_center
+                    if chosen is None:
+                        chosen = best_center
+
+                if chosen is None and prior is not None:
+                    distances = [float(np.linalg.norm(c - prior)) for c in kmeans.cluster_centers_]
+                    nearest_idx = int(np.argmin(distances))
+                    if distances[nearest_idx] < _STICKY_DISTANCE * 2:
+                        chosen = kmeans.cluster_centers_[nearest_idx]
+
+                if chosen is None:
                     largest = int(np.argmax(np.bincount(kmeans.labels_)))
-                    best_center = kmeans.cluster_centers_[largest]
+                    chosen = kmeans.cluster_centers_[largest]
 
-                return (int(best_center[0]), int(best_center[1]), int(best_center[2]))
+                _last_center = chosen
+                _last_picked_at = now
+
+                return (int(chosen[0]), int(chosen[1]), int(chosen[2]))
 
             # Fallback: simple average
             r_total = sum(p[0] for p in pixels)
