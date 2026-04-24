@@ -10,6 +10,20 @@ from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 
 router = APIRouter(prefix="/api/music", tags=["music"])
 
+# Upload guards for /import. The parser is plistlib (expat under the hood),
+# which doesn't resolve external entities but does honor internal <!ENTITY>
+# declarations — so a "billion laughs" payload can still blow up RAM during
+# parse. The size cap + entity scan close that together without a defusedxml
+# dependency, since legitimate Apple/iTunes plists never declare entities.
+MAX_IMPORT_BYTES = 50 * 1024 * 1024  # ~2x a heavy Apple Music library
+_IMPORT_CHUNK_BYTES = 1024 * 1024
+_ALLOWED_IMPORT_CONTENT_TYPES = (
+    "application/xml",
+    "text/xml",
+    "text/plain",
+    "application/octet-stream",
+)
+
 
 @router.get("/mode-playlists")
 async def get_mode_playlists(request: Request) -> dict:
@@ -105,22 +119,62 @@ async def import_library(file: UploadFile, request: Request) -> dict:
     if not file.filename or not file.filename.lower().endswith(".xml"):
         raise HTTPException(status_code=400, detail="File must be a .xml file")
 
+    content_type = (file.content_type or "").lower().split(";", 1)[0].strip()
+    if content_type and not any(
+        content_type == allowed for allowed in _ALLOWED_IMPORT_CONTENT_TYPES
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unexpected content type: {content_type}",
+        )
+
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            if int(declared_length) > MAX_IMPORT_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large (max {MAX_IMPORT_BYTES // (1024 * 1024)}MB)",
+                )
+        except ValueError:
+            pass
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_IMPORT_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_IMPORT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (max {MAX_IMPORT_BYTES // (1024 * 1024)}MB)",
+            )
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
+    if b"<!ENTITY" in content:
+        raise HTTPException(
+            status_code=400,
+            detail="Entity declarations are not allowed in import XML",
+        )
+
     import_service = request.app.state.library_import
 
-    # Save uploaded file temporarily
     imports_dir = DATA_DIR / "imports"
     imports_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = imports_dir / "library_import.xml"
 
     try:
-        content = await file.read()
         tmp_path.write_bytes(content)
         stats = await import_service.import_xml(tmp_path)
         return stats
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Import failed: {e}")
     finally:
-        # Clean up temp file
         if tmp_path.exists():
             tmp_path.unlink()
 

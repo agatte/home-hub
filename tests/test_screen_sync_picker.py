@@ -18,7 +18,23 @@ import pytest
 
 pytest.importorskip("sklearn")
 
+from sklearn.cluster import MiniBatchKMeans as _RealMBK  # noqa: E402
+
 from backend.services.pc_agent import screen_sync_agent as agent  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_kmeans(monkeypatch):
+    """Pin MiniBatchKMeans' random_state so sticky-logic tests don't flake.
+
+    The picker's real-world behavior depends on sklearn's stochastic init;
+    here we isolate the *decision logic* from the clustering noise.
+    """
+    def _seeded(*args, **kwargs):
+        kwargs.setdefault("random_state", 0)
+        return _RealMBK(*args, **kwargs)
+
+    monkeypatch.setattr(agent, "MiniBatchKMeans", _seeded)
 
 
 def _pixels_mixing(rgb_a: tuple[int, int, int], rgb_b: tuple[int, int, int],
