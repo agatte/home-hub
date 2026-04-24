@@ -39,8 +39,13 @@ async def health_check(request: Request) -> dict:
         ws_count = app.state.ws_manager.connection_count
 
     event_logger_drops: dict = {}
+    event_logger_overflow: dict = {}
+    event_logger_queue_depth = 0
     if hasattr(app.state, "event_logger"):
-        event_logger_drops = app.state.event_logger.get_drop_counts()
+        el = app.state.event_logger
+        event_logger_drops = el.get_drop_counts()
+        event_logger_overflow = el.get_overflow_counts()
+        event_logger_queue_depth = el.get_queue_depth()
 
     return {
         "status": "healthy",
@@ -54,4 +59,6 @@ async def health_check(request: Request) -> dict:
         },
         "websocket_clients": ws_count,
         "event_logger_drops": event_logger_drops,
+        "event_logger_overflow": event_logger_overflow,
+        "event_logger_queue_depth": event_logger_queue_depth,
     }

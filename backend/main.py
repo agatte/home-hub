@@ -10,11 +10,13 @@ import logging
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import TypeAdapter, ValidationError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -40,6 +42,13 @@ from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
 FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
 from backend.database import init_db
+from backend.schemas.ws import (
+    LightCommand,
+    LightCommandData,
+    SonosCommand,
+    SonosCommandData,
+    WSCommand,
+)
 from backend.services.automation_engine import AutomationEngine
 from backend.services.screen_sync import LaptopLoopbackCapture, ScreenSyncService
 from backend.services.hue_service import HueService
@@ -58,6 +67,24 @@ from backend.services.websocket_manager import WebSocketManager
 from backend.utils.logger import logger  # noqa: F401 — triggers logging setup
 
 app_logger = logging.getLogger("home_hub.main")
+
+# Pre-built adapter for the discriminated WS-command union — caching the
+# TypeAdapter avoids rebuilding validation machinery on every frame.
+_WS_COMMAND_ADAPTER: TypeAdapter[WSCommand] = TypeAdapter(WSCommand)
+
+
+async def _safe_shutdown(name: str, factory) -> None:
+    """
+    Run a teardown step and log+continue on failure.
+
+    `factory` is a zero-arg callable that returns the awaitable — that way
+    an AttributeError while building the coroutine (e.g. attribute missing
+    on app.state) is caught too, not just exceptions raised during execution.
+    """
+    try:
+        await factory()
+    except Exception as e:
+        app_logger.error("shutdown step %r failed: %s", name, e, exc_info=True)
 
 
 def _compute_build_id() -> str:
@@ -176,6 +203,9 @@ async def lifespan(app: FastAPI):
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
     app.state.event_logger = event_logger
+    # Background retry loop for transient DB errors (SQLite WAL locks).
+    # Registered to tasks below so the existing cancel-and-wait path tears it down.
+    event_logger_retry_task = await event_logger.start()
 
     # Event query service — read-only aggregation over event tables
     from backend.services.event_query_service import EventQueryService
@@ -495,6 +525,9 @@ async def lifespan(app: FastAPI):
     # Background tasks
     tasks: list[asyncio.Task] = []
 
+    # Event logger retry task was started above — register for teardown here.
+    tasks.append(event_logger_retry_task)
+
     if hue.connected:
         tasks.append(asyncio.create_task(hue.poll_state_loop(ws_manager)))
 
@@ -546,22 +579,45 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     app_logger.info("Shutting down Home Hub...")
-    await laptop_loopback.stop()
-    await fauxmo.stop()
+
+    # 1. Stop producers that feed the background loops. If any one raises, the
+    #    others still run because _safe_shutdown swallows per-step errors.
+    await _safe_shutdown("laptop_loopback", laptop_loopback.stop)
+    await _safe_shutdown("fauxmo", fauxmo.stop)
+    ambient_sound = getattr(app.state, "ambient_sound", None)
+    if ambient_sound is not None:
+        await _safe_shutdown("ambient_sound", ambient_sound.stop)
+
+    # 2. Cancel background tasks, then bounded-wait for them to finish. A hung
+    #    task can't block shutdown forever.
     for task in tasks:
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    await hue_v2.close()
-    await rec_service.close()
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        still_running = [
+            getattr(t.get_coro(), "__qualname__", "?")
+            for t in tasks
+            if not t.done()
+        ]
+        app_logger.error(
+            "shutdown: %d tasks still running after 5s timeout: %s",
+            len(still_running), still_running,
+        )
+
+    # 3. Close long-lived HTTP clients last — poll loops that used them are
+    #    already cancelled, so there's no race.
+    await _safe_shutdown("hue_v2", hue_v2.close)
+    await _safe_shutdown("rec_service", rec_service.close)
     camera = getattr(app.state, "camera_service", None)
-    if camera:
-        await camera.close()
+    if camera is not None:
+        await _safe_shutdown("camera", camera.close)
     transit = getattr(app.state, "transit_lighting", None)
-    if transit:
-        await transit.close()
+    if transit is not None:
+        await _safe_shutdown("transit_lighting", transit.close)
 
 
 # Rate limiter — prevents abuse from rogue LAN clients
@@ -697,15 +753,27 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             except (json.JSONDecodeError, ValueError):
                 app_logger.warning("Malformed WebSocket JSON, ignoring")
                 continue
-            msg_type = message.get("type")
-            data = message.get("data", {})
 
-            if msg_type == "light_command":
-                await _handle_light_command(websocket.app, data, ws_manager)
-            elif msg_type == "sonos_command":
-                await _handle_sonos_command(websocket.app, data)
-            else:
-                app_logger.warning(f"Unknown WebSocket message type: {msg_type}")
+            try:
+                command = _WS_COMMAND_ADAPTER.validate_python(message)
+            except ValidationError as e:
+                # include_context=False drops `ctx['error']` which holds a
+                # ValueError that json.dumps can't serialize.
+                details = e.errors(include_url=False, include_context=False)
+                app_logger.warning("WebSocket validation failed: %s", details)
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "data": {"reason": "validation", "details": details},
+                    }))
+                except Exception:
+                    pass
+                continue
+
+            if isinstance(command, LightCommand):
+                await _handle_light_command(websocket.app, command.data, ws_manager)
+            elif isinstance(command, SonosCommand):
+                await _handle_sonos_command(websocket.app, command.data)
 
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
@@ -714,17 +782,20 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         ws_manager.disconnect(websocket)
 
 
-async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -> None:
-    """Process a light control command from a WebSocket client."""
+async def _handle_light_command(
+    app, data: LightCommandData, ws_manager: WebSocketManager,
+) -> None:
+    """Process a validated light control command from a WebSocket client."""
     hue: HueService = app.state.hue
     if not hue.connected:
         return
 
-    light_id = data.get("light_id")
-    if not light_id:
-        return
+    light_id = data.light_id
 
-    state = {k: v for k, v in data.items() if k != "light_id"}
+    # Build the bridge payload from only the fields the client actually set.
+    state = data.model_dump(exclude={"light_id"}, exclude_none=True)
+    if not state:
+        return
 
     # Capture full before-state for event logging (bri, hue, sat, ct)
     before = await hue.get_light(light_id) if any(
@@ -745,7 +816,6 @@ async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -
 
     # Log the manual adjustment (covers bri/hue/sat/ct changes)
     event_logger = getattr(app.state, "event_logger", None)
-    automation = getattr(app.state, "automation", None)
     if event_logger and before is not None:
         mode = automation.current_mode if automation else None
         await event_logger.log_light_adjustment(
@@ -764,15 +834,15 @@ async def _handle_light_command(app, data: dict, ws_manager: WebSocketManager) -
         )
 
 
-async def _handle_sonos_command(app, data: dict) -> None:
-    """Process a Sonos control command from a WebSocket client."""
+async def _handle_sonos_command(app, data: SonosCommandData) -> None:
+    """Process a validated Sonos control command from a WebSocket client."""
     sonos: SonosService = app.state.sonos
     if not sonos.connected:
         return
 
-    action = data.get("action")
+    action = data.action
     success = False
-    volume = None
+    event_type: Optional[str] = None
     if action == "play":
         success = await sonos.play()
         event_type = "play"
@@ -780,21 +850,18 @@ async def _handle_sonos_command(app, data: dict) -> None:
         success = await sonos.pause()
         event_type = "pause"
     elif action == "volume":
-        volume = data.get("volume")
-        if volume is not None:
-            success = await sonos.set_volume(int(volume))
-            event_type = "volume"
+        # Validator guarantees data.volume is set when action == "volume".
+        success = await sonos.set_volume(data.volume)
+        event_type = "volume"
     elif action == "next":
         success = await sonos.next_track()
         event_type = "skip"
     elif action == "previous":
         success = await sonos.previous_track()
         event_type = "skip"
-    else:
-        return
 
     # Log the manual playback event
-    if success:
+    if success and event_type is not None:
         event_logger = getattr(app.state, "event_logger", None)
         automation = getattr(app.state, "automation", None)
         if event_logger:
@@ -803,6 +870,6 @@ async def _handle_sonos_command(app, data: dict) -> None:
                 event_type=event_type,
                 favorite_title=None,
                 mode_at_time=mode,
-                volume=int(volume) if volume is not None else None,
+                volume=data.volume,
                 triggered_by="manual",
             )
