@@ -62,6 +62,11 @@ from backend.services.music_mapper import MusicMapper
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
 from backend.services.presence_service import PresenceService
 from backend.services.sonos_service import SonosService
+from backend.services.tracing import (
+    coerce_inbound_id,
+    new_request_id,
+    request_id_var,
+)
 from backend.services.tts_service import TTSService
 from backend.services.websocket_manager import WebSocketManager
 from backend.utils.logger import logger  # noqa: F401 — triggers logging setup
@@ -685,6 +690,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    """
+    Stamp every HTTP request with a correlation ID.
+
+    Trusts an inbound X-Request-ID if it looks sane (printable, no
+    whitespace, ≤64 chars); otherwise generates a fresh one. The ID
+    rides into a ContextVar that the logging filter reads, and back
+    out as a response header so callers can correlate end-to-end.
+    """
+    rid = coerce_inbound_id(request.headers.get("X-Request-ID"))
+    token = request_id_var.set(rid)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        request_id_var.reset(token)
+
+
 # Mount static files (TTS audio, ambient sounds, frontend build)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 TTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -739,6 +765,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     """
     ws_manager: WebSocketManager = websocket.app.state.ws_manager
 
+    # Connection-scoped correlation ID — frames belong to one ongoing
+    # session, so a single ID per connection is the right granularity.
+    # The client gets it via connection_status so it can echo it on
+    # support tickets; logs across this connection share the tag.
+    rid = new_request_id()
+    rid_token = request_id_var.set(rid)
+
     await ws_manager.connect(websocket)
 
     # Send initial connection status
@@ -751,6 +784,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "hue": hue.connected,
             "sonos": sonos.connected,
             "build_id": websocket.app.state.build_id,
+            "request_id": rid,
         },
     }))
 
@@ -815,6 +849,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     except Exception as e:
         app_logger.error(f"WebSocket error: {e}")
         ws_manager.disconnect(websocket)
+    finally:
+        request_id_var.reset(rid_token)
 
 
 async def _handle_light_command(
