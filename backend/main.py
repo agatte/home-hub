@@ -133,6 +133,14 @@ async def lifespan(app: FastAPI):
     ws_manager = WebSocketManager()
     app.state.ws_manager = ws_manager
 
+    # Heartbeat registry — long-running tasks call .tick(name) once per
+    # iteration; /health flags any whose age > 2x expected interval. Has
+    # to live before service construction so each service can be wired
+    # via set_heartbeat_registry().
+    from backend.services.heartbeat import HeartbeatRegistry
+    heartbeats = HeartbeatRegistry()
+    app.state.heartbeats = heartbeats
+
     # Hue Bridge (v1 — basic light control)
     hue = HueService(
         bridge_ip=settings.HUE_BRIDGE_IP,
@@ -525,6 +533,31 @@ async def lifespan(app: FastAPI):
     # Background tasks
     tasks: list[asyncio.Task] = []
 
+    # Wire heartbeat registry into every service that runs a polling
+    # loop. Each service publishes liveness via .tick(name) once per
+    # iteration; /health reads heartbeats.snapshot() to flag stale tasks.
+    event_logger.set_heartbeat_registry(heartbeats)
+    hue.set_heartbeat_registry(heartbeats)
+    sonos.set_heartbeat_registry(heartbeats)
+    automation.set_heartbeat_registry(heartbeats)
+    scheduler.set_heartbeat_registry(heartbeats)
+    rule_engine.set_heartbeat_registry(heartbeats)
+    presence.set_heartbeat_registry(heartbeats)
+
+    # Register expected polling cadences. Camera self-registers on enable
+    # and deregisters on disable / pause (handled in CameraService) so
+    # legitimate downtime isn't flagged stale.
+    heartbeats.register("event_logger_retry", 30.0)
+    if hue.connected:
+        heartbeats.register("hue", 1.0)
+    if sonos.connected:
+        heartbeats.register("sonos", 2.0)
+    heartbeats.register("automation", 60.0)
+    heartbeats.register("scheduler", 30.0)
+    heartbeats.register("rule_engine", 6 * 3600.0)
+    heartbeats.register("presence", float(presence.config.probe_interval))
+    heartbeats.register("transit_lighting", 2.0)
+
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)
 
@@ -545,6 +578,7 @@ async def lifespan(app: FastAPI):
         try:
             from backend.services.camera_service import CameraService
             camera_service = CameraService(ws_manager, automation, ml_logger)
+            camera_service.set_heartbeat_registry(heartbeats)
             await camera_service.start()
             if camera_service.enabled:
                 app.state.camera_service = camera_service
@@ -569,6 +603,7 @@ async def lifespan(app: FastAPI):
         camera_service=getattr(app.state, "camera_service", None),
         presence_service=presence,
     )
+    transit_lighting.set_heartbeat_registry(heartbeats)
     app.state.transit_lighting = transit_lighting
     tasks.append(asyncio.create_task(transit_lighting.poll_loop()))
     app_logger.info("Transit lighting service started")

@@ -39,6 +39,11 @@ class AsyncScheduler:
 
     def __init__(self) -> None:
         self._tasks: dict[str, ScheduledTask] = {}
+        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     def add_task(self, task: ScheduledTask) -> None:
         """Register a scheduled task."""
@@ -108,6 +113,8 @@ class AsyncScheduler:
 
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("scheduler")
                 now = datetime.now(tz=TZ)
 
                 for task in self._tasks.values():

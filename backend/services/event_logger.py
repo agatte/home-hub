@@ -73,6 +73,11 @@ class EventLogger:
             maxlen=RETRY_QUEUE_MAXLEN
         )
         self._retry_task: Optional[asyncio.Task] = None
+        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     # ------------------------------------------------------------------ public
 
@@ -313,6 +318,8 @@ class EventLogger:
         try:
             while True:
                 await asyncio.sleep(RETRY_DRAIN_INTERVAL_SECONDS)
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("event_logger_retry")
                 await self._drain_once()
         except asyncio.CancelledError:
             raise

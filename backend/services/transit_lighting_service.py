@@ -80,6 +80,11 @@ class TransitLightingService:
         self._camera_absent_since: Optional[datetime] = None
         self._camera_present_since: Optional[datetime] = None
         self._transit_start: Optional[datetime] = None
+        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     @property
     def active(self) -> bool:
@@ -91,6 +96,8 @@ class TransitLightingService:
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("transit_lighting")
                 if self._enabled:
                     await self._check()
             except asyncio.CancelledError:

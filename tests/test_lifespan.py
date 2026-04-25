@@ -58,3 +58,26 @@ def test_event_logger_retry_task_started_and_torn_down():
         assert "event_logger_overflow" in body
         assert "event_logger_queue_depth" in body
         assert body["event_logger_queue_depth"] == 0
+
+
+def test_heartbeat_registry_populated_on_startup():
+    """Every always-on poll loop should register itself before lifespan
+    yields. Camera is opt-in so it's covered separately."""
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+        names = {t["name"] for t in body["tasks"]}
+        # The minimum guaranteed set, regardless of Hue/Sonos connectivity:
+        # automation, scheduler, rule_engine, presence, transit_lighting,
+        # event_logger_retry are always registered.
+        required = {
+            "automation",
+            "scheduler",
+            "rule_engine",
+            "presence",
+            "transit_lighting",
+            "event_logger_retry",
+        }
+        assert required.issubset(names), f"missing: {required - names}"
+        # All freshly-registered tasks should be healthy at boot.
+        assert body["status"] == "healthy"
+        assert body["tasks_stale"] == []

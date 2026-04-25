@@ -210,9 +210,15 @@ class PresenceService:
         self._is_linux = platform.system() == "Linux"
         self._probe_iface: Optional[str] = None   # Detected at first probe
 
+        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+
     def set_camera_service(self, camera_service) -> None:
         """Attach the camera service so _on_departure can consult it."""
         self._camera_service = camera_service
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     # ------------------------------------------------------------------
     # Public API
@@ -495,6 +501,8 @@ class PresenceService:
 
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("presence")
                 if not self._config.enabled:
                     await asyncio.sleep(60)
                     continue

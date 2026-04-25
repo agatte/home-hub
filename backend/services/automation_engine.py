@@ -634,6 +634,14 @@ class AutomationEngine:
         self._pipeline_history: list[dict] = []
         self._last_pipeline_broadcast: Optional[datetime] = None
 
+        # Heartbeat registry — set via set_heartbeat_registry from lifespan
+        # so /health can flag a stalled run_loop.
+        self._heartbeat = None
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -2161,6 +2169,8 @@ class AutomationEngine:
 
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("automation")
                 if not self._enabled:
                     await asyncio.sleep(60)
                     continue

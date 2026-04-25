@@ -32,6 +32,11 @@ class SonosService:
         self._playlists_cache: Optional[list] = None
         self._playlists_cache_time: float = 0
         self._CACHE_TTL: float = 300.0
+        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     @property
     def connected(self) -> bool:
@@ -437,6 +442,8 @@ class SonosService:
 
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("sonos")
                 status = await self.get_status()
 
                 # Only broadcast if something changed

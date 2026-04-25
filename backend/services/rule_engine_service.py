@@ -99,6 +99,11 @@ class RuleEngineService:
         self._cooldowns: dict[int, datetime] = {}  # rule_id → last nudged at
         self._last_suggestion: Optional[dict[str, Any]] = None
         self._fusion = None  # ConfidenceFusion handle, injected by main.py
+        self._heartbeat = None  # HeartbeatRegistry, injected by main.py
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     # ------------------------------------------------------------------
     # Rule generation
@@ -373,6 +378,8 @@ class RuleEngineService:
 
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("rule_engine")
                 await self.regenerate_rules()
             except asyncio.CancelledError:
                 logger.info("Rule engine stopped")

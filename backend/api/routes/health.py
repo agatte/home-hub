@@ -47,8 +47,22 @@ async def health_check(request: Request) -> dict:
         event_logger_overflow = el.get_overflow_counts()
         event_logger_queue_depth = el.get_queue_depth()
 
+    # Background-task heartbeats. Each long-running poll loop publishes
+    # last_tick via HeartbeatRegistry; a task is "stale" if its age
+    # exceeds 2x its expected interval. /health stays HTTP 200 even when
+    # degraded so external probes (Uptime Kuma) keep working — the
+    # status field is the signal to act on.
+    tasks: list[dict] = []
+    tasks_stale: list[str] = []
+    status = "healthy"
+    if hasattr(app.state, "heartbeats"):
+        tasks = app.state.heartbeats.snapshot()
+        tasks_stale = [t["name"] for t in tasks if t["stale"]]
+        if tasks_stale:
+            status = "degraded"
+
     return {
-        "status": "healthy",
+        "status": status,
         "service": "Home Hub",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "devices": {
@@ -61,4 +75,6 @@ async def health_check(request: Request) -> dict:
         "event_logger_drops": event_logger_drops,
         "event_logger_overflow": event_logger_overflow,
         "event_logger_queue_depth": event_logger_queue_depth,
+        "tasks": tasks,
+        "tasks_stale": tasks_stale,
     }

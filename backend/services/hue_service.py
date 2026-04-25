@@ -35,6 +35,11 @@ class HueService:
         # loop skips that light so mid-transition bridge reads don't bounce
         # the UI back to stale values.
         self._inflight_until: dict[str, float] = {}
+        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
 
     @property
     def connected(self) -> bool:
@@ -238,6 +243,8 @@ class HueService:
 
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("hue")
                 lights = await self.get_all_lights()
                 now = time.monotonic()
 

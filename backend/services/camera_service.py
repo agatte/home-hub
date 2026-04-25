@@ -211,6 +211,11 @@ class CameraService:
         self._candidate_posture: Optional[str] = None
         self._candidate_posture_since: Optional[datetime] = None
 
+        # Heartbeat registry — set via set_heartbeat_registry from lifespan.
+        # Camera is opt-in, so we register only on enable and deregister on
+        # disable / pause to avoid false-flagging legitimate downtime.
+        self._heartbeat = None
+
         # Ambient lux calibration + smoothing
         self._calibrated: bool = False
         self._exposure_value: Optional[float] = None
@@ -322,6 +327,8 @@ class CameraService:
                 self._pose_landmarker = None
 
         self._enabled = True
+        if self._heartbeat is not None:
+            self._heartbeat.register("camera", float(POLL_INTERVAL))
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
 
     @staticmethod
@@ -663,6 +670,15 @@ class CameraService:
 
         return factors[:4]
 
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan).
+
+        The registry is used by the poll loop to publish liveness; the
+        camera registers itself only on enable / resume and deregisters
+        on disable / pause so legitimate downtime isn't flagged stale.
+        """
+        self._heartbeat = registry
+
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
         loop = asyncio.get_event_loop()
@@ -673,6 +689,8 @@ class CameraService:
 
                 if not self._enabled or self._paused:
                     continue
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("camera")
 
                 # Run blocking frame capture + inference in thread pool
                 result = await loop.run_in_executor(None, self._process_frame)
@@ -1245,6 +1263,8 @@ class CameraService:
         if new_mode == "sleeping":
             if not self._paused:
                 self._paused = True
+                if self._heartbeat is not None:
+                    self._heartbeat.deregister("camera")
                 # Release camera so LED turns off
                 if self._cap and self._cap.isOpened():
                     self._cap.release()
@@ -1252,6 +1272,8 @@ class CameraService:
         else:
             if self._paused:
                 self._paused = False
+                if self._heartbeat is not None:
+                    self._heartbeat.register("camera", float(POLL_INTERVAL))
                 # The pause spanned at least the sleep cycle — any committed
                 # zone/posture from before sleep is stale and would otherwise
                 # leak into the morning's first overlay decisions.
@@ -1274,6 +1296,8 @@ class CameraService:
     async def close(self) -> None:
         """Release camera and MediaPipe resources."""
         self._enabled = False
+        if self._heartbeat is not None:
+            self._heartbeat.deregister("camera")
         if self._cap and self._cap.isOpened():
             self._cap.release()
             self._cap = None
