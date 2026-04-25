@@ -32,9 +32,10 @@ small a11y nudges) are deliberately omitted -- check git log for those.
                                   weight-learning, shadow-before-promote
   Performance             B       Threlte lazy-loaded, rAF capped, opt-in
                                   camera; Hue 1s polling still aggressive
-  Observability           B-      Event tables + ML decisions + analytics
-                                  dashboard + per-task heartbeat in
-                                  /health; no Prometheus, no tracing
+  Observability           B       Event tables + ML decisions + analytics
+                                  dashboard + heartbeats + circuit
+                                  breakers + request IDs + ML health in
+                                  /health; no Prometheus yet
   Testing                 B+      Backend 405+ tests, frontend 60 tests,
                                   Playwright local-only
   Documentation           A-      PROJECT_SPEC + ML_SPEC + LIGHTING_EXPANSION
@@ -125,6 +126,17 @@ returning to the project after a long break."
     (30s cooldown, 5s per-call timeout). /health surfaces breaker
     state alongside heartbeats — heartbeat says "loop wedged",
     breaker says "calls failing"
+  - Request tracing IDs: 12-hex correlation ID per HTTP request +
+    per WebSocket connection, propagated via ContextVar, stamped on
+    every LogRecord by a logging Filter, echoed back via X-Request-ID
+    header (or connection_status payload for WS)
+  - ML predictor health surface in /health: each predictor (behavioral,
+    lighting, bandit, audio, fusion, rule engine) reports
+    healthy/shadow/idle/unhealthy via a HealthTrackable mixin; status
+    flips to "degraded" only for non-shadow unhealthy predictors so
+    silent inference failures (model load, JSON corruption, swallowed
+    exceptions) become visible without false-positive paging on
+    intentional shadow lanes
   - deploy.sh auto-rollback: failed post-restart health check resets
     to last-deployed SHA, re-runs install/rebuild from prior code,
     re-verifies. Exit 1 on rollback success, exit 2 if rollback
@@ -189,10 +201,8 @@ Ranked by impact within each section.
   OBSERVABILITY
   -----------------------------------------------------------------------
   [ ]  Prometheus /metrics endpoint (error rate, latency, throughput)
-  [ ]  Request tracing / IDs to correlate actions across logs
   [ ]  Uptime Kuma rule that alerts on /health.status == "degraded"
        (the surface exists; the alert config doesn't yet)
-  [ ]  ML model health alerts (silent predictor failure goes unnoticed)
 
   SECURITY
   -----------------------------------------------------------------------
