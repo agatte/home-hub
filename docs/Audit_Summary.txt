@@ -111,29 +111,24 @@ returning to the project after a long break."
 
   BACKEND HARDENING (April 24 - April 25)
   -----------------------------------------------------------------------
-  - Pydantic WS validation: backend/schemas/ws.py, discriminated union,
-    range-validated, error frame returned for invalid input
-  - Resilient lifespan shutdown: _safe_shutdown helper isolates per-
-    step teardown failures, ordered producers->task-cancel->client-
-    close, bounded gather timeout
-  - Event-logger retry queue: 200-entry bounded deque, 30s drainer,
-    3 attempts per entry, threshold WARN on sustained drops; /health
-    exposes event_logger_queue_depth + event_logger_overflow
-  - Background-task heartbeat surface (April 25): every long-running
-    poll loop publishes last_tick via HeartbeatRegistry; /health
-    returns `tasks` (per-task age + interval + stale flag) and flips
-    `status` to `"degraded"` when any task's age exceeds 2x its
-    expected interval. HTTP stays 200 so Uptime Kuma's existing probe
-    keeps working. 9 loops instrumented including the camera service
-    (which deregisters on disable / sleep-pause)
-  - Circuit breakers on Hue + Sonos calls (April 25): every bridge /
-    speaker call goes through a per-service breaker (3 consecutive
-    failures opens, 30s cooldown, 5s per-call timeout via
-    asyncio.wait_for). /health surfaces breaker state alongside
-    heartbeats — heartbeat says "loop wedged", breaker says "calls
-    failing", so operators can tell which. Both surfaces drive
-    `status: "degraded"`. Connect / discovery calls stay raw (one-off
-    at startup)
+  - Pydantic WS validation: discriminated union, range-validated,
+    error frame returned for invalid input
+  - Resilient lifespan shutdown: _safe_shutdown isolates per-step
+    teardown failures, ordered producers -> tasks -> clients
+  - Event-logger retry queue: 200-entry deque, 30s drainer, 3 attempts;
+    /health exposes queue_depth + overflow
+  - Heartbeat surface in /health: every poll loop publishes last_tick
+    via HeartbeatRegistry; `tasks_stale` lists any whose age > 2x
+    interval, `status` flips to "degraded" (HTTP stays 200). 9 loops
+    instrumented; camera deregisters on disable / sleep-pause
+  - Circuit breakers on Hue + Sonos: 3 consecutive failures opens
+    (30s cooldown, 5s per-call timeout). /health surfaces breaker
+    state alongside heartbeats — heartbeat says "loop wedged",
+    breaker says "calls failing"
+  - deploy.sh auto-rollback: failed post-restart health check resets
+    to last-deployed SHA, re-runs install/rebuild from prior code,
+    re-verifies. Exit 1 on rollback success, exit 2 if rollback
+    itself failed
 
   FRONTEND PERFORMANCE + A11Y (April 24)
   -----------------------------------------------------------------------
@@ -158,8 +153,7 @@ returning to the project after a long break."
   - Frontend: 0 -> 60 tests
     * vitest + @testing-library/svelte + jsdom (55 unit / component)
     * Playwright + 5 e2e smoke (home + 3 routes + /health)
-    * GitHub Actions runs vitest on push/PR (Playwright is local-only;
-      see Still Open)
+    * GitHub Actions runs vitest on push/PR; Playwright local-only
 
   INFRASTRUCTURE / OPS (carried baseline)
   -----------------------------------------------------------------------
@@ -196,10 +190,8 @@ Ranked by impact within each section.
   -----------------------------------------------------------------------
   [ ]  Prometheus /metrics endpoint (error rate, latency, throughput)
   [ ]  Request tracing / IDs to correlate actions across logs
-  [ ]  Alerting on Hue / Sonos disconnections (Uptime Kuma only checks
-       HTTP — though /health now reports `status: "degraded"` +
-       `tasks_stale` when poll loops fall behind, so Uptime Kuma can
-       parse status. Heartbeat surface itself shipped April 25.)
+  [ ]  Uptime Kuma rule that alerts on /health.status == "degraded"
+       (the surface exists; the alert config doesn't yet)
   [ ]  ML model health alerts (silent predictor failure goes unnoticed)
 
   SECURITY
@@ -238,86 +230,27 @@ Ranked by impact within each section.
   [ ]  WCAG AA: --text-muted #5c5e6a on #08080c is ~2.5:1
   [ ]  Three.js DPR cap at 2x loses sharpness on 3x displays
 
-================================================================================
-                          CATEGORY DETAILS
-================================================================================
-
-The full per-category writeups have been pruned to issues that remain.
-Strengths and shipped items are summarized in MAJOR WORK SHIPPED above.
-
-  BACKEND ARCHITECTURE -- B-
+  PERFORMANCE / SMALL DEBT
   -----------------------------------------------------------------------
-  - automation_engine.py at 2,750 lines absorbs every new capability
-  - main.py lifespan ~350+ lines initializing 20+ services
-  - Service DI by attribute assignment is invisible coupling
-  - 22+ bare "except Exception" clauses on critical paths
-  - No middleware for request logging / tracing
-  - Light IDs are strings in some places, ints in others
+  [ ]  Hue polling at 1s, Sonos at 2s — could be 3-5s and 5s for the
+       low-event-rate steady state (lower CPU, more RPi-friendly)
+  [ ]  Per-light WS broadcasts on scene activation (N sends, not
+       batched into one)
+  [ ]  GenerativeCanvas particle array resizes during transitions
+       (GC pressure)
+  [ ]  MoonScene shader materials at module scope (VRAM leak risk on
+       unmount/remount)
+  [ ]  Mobile touch targets: FloatingNav 40x40 at 480 breakpoint
+       (WCAG wants 48x48)
+  [ ]  22+ bare "except Exception" clauses on critical backend paths
+  [ ]  Light IDs are strings in some places, ints in others
 
-  FRONTEND / UI -- B+
+  DOCUMENTATION
   -----------------------------------------------------------------------
-  - Modal portal duplication risk (PlantWidget + BarWidget)
-  - LightCard color presets duplicated from theme.js
-  - LightGrid sort runs on every reactive change (memoize)
-  - Three.js DPR cap loses sharpness on 3x displays
-  - Mobile touch targets: FloatingNav 40x40 at 480 breakpoint (WCAG
-    wants 48x48); LightCard color swatches 20x20
-
-  SECURITY -- C
-  -----------------------------------------------------------------------
-  - Zero authentication: 80+ endpoints fully open on LAN
-  - Plant App integration sends credentials over HTTP
-  - Preview URL injection: sonos.play_uri accepts arbitrary URLs
-  - MCP query_db accepts arbitrary SELECT (UNION risk)
-  - HTTP only -- blocks Cloudflare Tunnel until TLS is added
-
-  ML / INTELLIGENCE -- A-
-  -----------------------------------------------------------------------
-  - BehavioralPredictor in cold start (needs 500+ events)
-  - AudioClassifier still in shadow mode (needs accuracy comparison)
-  - LightingPreferenceLearner overlay applied silently -- no
-    ml_decisions row when the learner touches a light
-  - No A/B framework for comparing ML vs rule engine decisions
-  - lightgbm optional -- silent graceful degradation could hide
-    predictor failures without monitoring
-
-  PERFORMANCE -- B
-  -----------------------------------------------------------------------
-  - Hue polling at 1s (could be 3-5s for 6 bulbs)
-  - Sonos polling at 2s (could be 5s)
-  - Per-light WS broadcasts on scene activation (N sends, not batched)
-  - GenerativeCanvas particle count resizes frame-by-frame during
-    transitions (GC pressure)
-  - MoonScene shader materials at module scope (VRAM leak risk on
-    unmount/remount)
-
-  OBSERVABILITY -- B-
-  -----------------------------------------------------------------------
-  - No /metrics endpoint
-  - No request tracing / IDs
-  - No DB health in /health
-  - No ML model health alerts
-  - Log timestamps missing timezone
-
-  TESTING -- B+
-  -----------------------------------------------------------------------
-  - No integration tests (end-to-end mode change -> lights -> music)
-  - Services without backend tests: Hue, Sonos, TTS, screen sync,
-    routines, recommendation_service, library_import_service
-  - Playwright e2e is local-only (needs CI runner with live backend)
-  - No coverage reporting (pytest-cov not configured)
-
-  DEVOPS / DEPLOYMENT -- B-
-  -----------------------------------------------------------------------
-  - No staging environment
-  - No automated frontend build verification in CI (Python only)
-  - Playwright e2e local-only (CI doesn't run them)
-
-  DOCUMENTATION -- A-
-  -----------------------------------------------------------------------
-  - No ops runbook (troubleshooting / log inspection / recovery)
-  - No changelog for breaking changes
-  - No DB migration documentation (migrations inline in database.py)
+  [ ]  Ops runbook (troubleshooting / log inspection / recovery)
+  [ ]  Changelog for breaking changes
+  [ ]  DB migration docs (migrations inline in database.py)
+  [ ]  Log timestamps missing timezone
 
 ================================================================================
                        FUTURE FEATURE IDEAS
