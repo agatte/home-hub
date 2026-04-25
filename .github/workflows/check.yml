@@ -35,3 +35,25 @@ jobs:
         run: python -m pytest tests/ -v
         env:
           APP_ENV: testing
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-svelte
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run vitest unit tests
+        run: npm run test:unit
+
+      # Playwright e2e tests require a live backend + frontend; not run in
+      # CI yet. Run locally with `npm run test:e2e` after starting the dev
+      # server, or against a deployed instance via PLAYWRIGHT_BASE_URL.

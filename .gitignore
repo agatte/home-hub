@@ -47,6 +47,9 @@ desktop.ini
 # Frontend
 frontend/README.md
 frontend-svelte/stats.html
+frontend-svelte/playwright-report/
+frontend-svelte/test-results/
+frontend-svelte/.svelte-kit/
 
 # Personal helpers
 start.txt

@@ -90,23 +90,45 @@ section first to know what is no longer accurate.
   - conftest.py: tmp_model_manager + ml_db fixtures isolate tests from
     real data/models/ and patch async_session for all 5 ML services
 
-  Test suite: 183 -> 375 (+22 in def9606, +70 ML-coverage today; remainder
-  pre-existing not-yet-counted in original audit)
+  Frontend testing infrastructure (April 24):
+  - vitest + @testing-library/svelte + jsdom installed; vitest.config.js
+    with $lib alias + jest-dom matchers in tests/unit/setup.js
+  - 55 unit/component tests across 9 files:
+    * tests/unit/api.test.js (11) -- safeFetch (timeout/network/non-OK),
+      parseJsonOrNull (empty body vs malformed)
+    * tests/unit/stores/{lights,errors,modeSuggestion,activity}.test.js
+      (17) -- store reducers + fake-timer auto-dismiss + idle tracking
+    * tests/unit/theme.test.js, backgrounds/scene-utils.test.js,
+      backgrounds/layer-config.test.js (~13) -- pure-function coverage
+    * tests/unit/components/ErrorToast.test.js (4) -- live-region a11y
+      attributes verified (role=status, aria-live, aria-atomic)
+  - Playwright + playwright.config.js installed; 5 e2e smoke tests in
+    tests/e2e/dashboard.spec.js (home + 3 routes + /health). All pass
+    against the Latitude (verified live)
+  - npm scripts: test, test:unit, test:watch, test:e2e
+  - GitHub Actions CI: new "frontend" job runs vitest on push/PR.
+    Playwright e2e stays local-only (needs live backend) -- documented
+    in the workflow comment
+
+  Test suite: backend 183 -> 375 (+22 def9606, +70 ML-coverage, remainder
+  pre-existing not-yet-counted in original audit). Frontend: 0 -> 55 vitest
+  + 5 Playwright e2e smoke = 60 new frontend tests.
 
   Still open (high-impact, ranked April 24):
   1. automation_engine.py bloat -- 1,944 -> 2,707 LOC (+39% in 8 days);
      architectural debt accelerating
   2. Service DI by attribute assignment -- 9 attr-wirings in main.py
-  3. No frontend tests (vitest / Playwright)
-  4. No Prometheus /metrics endpoint
-  5. Modal portal duplication risk (Plant/Bar widgets)
-  6. LightCard color presets duplicated from theme.js
-  7. LightGrid memoization opportunity (sort on every reactive change)
-  8. Background-task heartbeat in /health (poll loops can hang while
+  3. No Prometheus /metrics endpoint
+  4. Modal portal duplication risk (Plant/Bar widgets)
+  5. LightCard color presets duplicated from theme.js
+  6. LightGrid memoization opportunity (sort on every reactive change)
+  7. Background-task heartbeat in /health (poll loops can hang while
      /health still returns 200)
-  9. No request tracing / IDs to correlate actions across logs
-  10. ConfidenceFusion end-to-end ensemble logic still untested
-      (only factors-plumbing covered)
+  8. No request tracing / IDs to correlate actions across logs
+  9. ConfidenceFusion end-to-end ensemble logic still untested
+     (only factors-plumbing covered)
+  10. Playwright e2e tests run locally only -- not in CI (would require
+      spinning up backend + frontend in the workflow)
 
 Baseline from April 15 (carried forward):
   - ML Phase 1+2 shipped: 8 ML services (2,093 LOC) in backend/services/ml/
