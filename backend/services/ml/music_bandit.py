@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from backend.database import async_session
 from backend.models import SonosPlaybackEvent
+from backend.services.ml.health_mixin import HealthTrackable
 
 logger = logging.getLogger("home_hub.ml.bandit")
 
@@ -37,7 +38,7 @@ PENALTY_SKIP = 1.0             # Skipped within 30s
 PENALTY_DISMISS = 0.5          # Suggestion dismissed
 
 
-class MusicBandit:
+class MusicBandit(HealthTrackable):
     """Thompson sampling bandit for playlist selection."""
 
     def __init__(self, model_manager, data_dir: Optional[Path] = None) -> None:
@@ -47,6 +48,12 @@ class MusicBandit:
         # arms: {"{mode}|{period}|{title}": [alpha, beta]}
         self._arms: dict[str, list[float]] = {}
         self._total_selections = 0
+        # Track whether the on-disk arm state loaded cleanly. A failed
+        # _load() resets _arms to {} and the bandit silently degrades to
+        # uniform random — health() reports model_loaded=False so the
+        # silent fallback is visible.
+        self._load_failed = False
+        self._init_health_tracking()
         self._load()
 
     @property
@@ -74,6 +81,7 @@ class MusicBandit:
             except Exception as e:
                 logger.error("Failed to load music bandit: %s", e)
                 self._arms = {}
+                self._load_failed = True
 
     def _save(self) -> None:
         """Persist arm parameters to disk."""
@@ -118,35 +126,42 @@ class MusicBandit:
 
         preferred_vibes = preferred_vibes or []
 
-        # 10% forced uniform exploration
-        if random.random() < EXPLORATION_RATE:
-            choice = random.choice(candidates)
+        try:
+            # 10% forced uniform exploration
+            if random.random() < EXPLORATION_RATE:
+                choice = random.choice(candidates)
+                self._total_selections += 1
+                logger.debug("Bandit explore: '%s' (uniform)", choice["favorite_title"])
+                self._track_predict(True)
+                return choice
+
+            # Thompson sampling: sample from each arm's Beta distribution
+            best_sample = -1.0
+            best_entry = None
+
+            for entry in candidates:
+                title = entry["favorite_title"]
+                preferred = entry.get("vibe") in preferred_vibes
+                key = self._ensure_arm(mode, period, title, preferred=preferred)
+                alpha, beta = self._arms[key]
+                sample = random.betavariate(alpha, beta)
+
+                if sample > best_sample:
+                    best_sample = sample
+                    best_entry = entry
+
             self._total_selections += 1
-            logger.debug("Bandit explore: '%s' (uniform)", choice["favorite_title"])
-            return choice
-
-        # Thompson sampling: sample from each arm's Beta distribution
-        best_sample = -1.0
-        best_entry = None
-
-        for entry in candidates:
-            title = entry["favorite_title"]
-            preferred = entry.get("vibe") in preferred_vibes
-            key = self._ensure_arm(mode, period, title, preferred=preferred)
-            alpha, beta = self._arms[key]
-            sample = random.betavariate(alpha, beta)
-
-            if sample > best_sample:
-                best_sample = sample
-                best_entry = entry
-
-        self._total_selections += 1
-        if best_entry:
-            logger.debug(
-                "Bandit exploit: '%s' (sample=%.3f)",
-                best_entry["favorite_title"], best_sample,
-            )
-        return best_entry
+            if best_entry:
+                logger.debug(
+                    "Bandit exploit: '%s' (sample=%.3f)",
+                    best_entry["favorite_title"], best_sample,
+                )
+            self._track_predict(True)
+            return best_entry
+        except Exception as exc:
+            self._track_predict(False, exc)
+            logger.warning("Bandit select() failed: %s", exc)
+            return None
 
     def record_reward(self, mode: str, period: str, title: str,
                       reward: float) -> None:
@@ -194,6 +209,24 @@ class MusicBandit:
             "arms_per_mode": {m: len(v) for m, v in top_per_mode.items()},
             "top_arms": {m: v[:5] for m, v in top_per_mode.items()},
         }
+
+    def health(self) -> dict[str, Any]:
+        """Health entry for the /health ml block.
+
+        ``model_loaded`` is False when on-disk state existed but failed
+        to parse; the bandit then runs with empty arms (silent uniform
+        random fallback). Surfacing model_loaded=False makes that
+        silent failure visible.
+        """
+        return HealthTrackable.health(
+            self,
+            is_shadow=False,
+            model_loaded=not self._load_failed,
+            extra={
+                "arm_count": len(self._arms),
+                "total_selections": self._total_selections,
+            },
+        )
 
     async def retrain(self) -> None:
         """Rebuild arm parameters from sonos_playback_events (nightly).

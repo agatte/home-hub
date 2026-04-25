@@ -372,6 +372,26 @@ class RuleEngineService:
     # Background loop
     # ------------------------------------------------------------------
 
+    def health(self) -> dict[str, Any]:
+        """Health entry for the /health ml block.
+
+        The rule engine is intrinsically data-gated — it only exists
+        when enough activity history has accumulated to clear
+        ``min_confidence`` × ``min_samples`` thresholds. So we report
+        ``status="shadow"`` until rules exist; absence of rules is not
+        a failure. Generation-loop wedges are caught separately by the
+        heartbeat surface (``tasks.rule_engine``).
+        """
+        return {
+            "status": "shadow",
+            "model_loaded": True,
+            "last_predict_at": None,
+            "consecutive_failures": 0,
+            "last_failure": None,
+            "active_cooldowns": len(self._cooldowns),
+            "has_pending_suggestion": self._last_suggestion is not None,
+        }
+
     async def run_generation_loop(self) -> None:
         """Background task — regenerates rules every 6 hours."""
         logger.info("Rule engine started (regenerating every %dh)", GENERATION_INTERVAL_HOURS)

@@ -18,6 +18,7 @@ from sqlalchemy import select
 from backend.database import async_session
 from backend.models import LightAdjustment
 from backend.services.ml.feature_builder import get_time_period
+from backend.services.ml.health_mixin import HealthTrackable
 from backend.services.ml.model_manager import ModelManager
 
 logger = logging.getLogger("home_hub.ml")
@@ -36,7 +37,7 @@ LEARNABLE_PROPERTIES = ("bri", "hue", "sat", "ct")
 USER_TRIGGERS = ("ws", "rest", "all_lights")
 
 
-class LightingPreferenceLearner:
+class LightingPreferenceLearner(HealthTrackable):
     """EMA-based per-light preference learning from manual adjustments.
 
     Produces an overlay dict keyed by ``(mode, time_period)`` with
@@ -47,6 +48,7 @@ class LightingPreferenceLearner:
     def __init__(self, model_manager: ModelManager) -> None:
         self._model_manager = model_manager
         self._preferences: dict[str, dict[str, dict[str, Any]]] = {}
+        self._init_health_tracking()
         self._load_existing()
 
     def _load_existing(self) -> None:
@@ -76,8 +78,14 @@ class LightingPreferenceLearner:
 
             {"1": {"bri": 180}, "2": {"bri": 150, "ct": 300}}
         """
-        key = f"{mode}:{time_period}"
-        overlay = self._preferences.get(key)
+        try:
+            key = f"{mode}:{time_period}"
+            overlay = self._preferences.get(key)
+        except Exception as exc:
+            self._track_predict(False, exc)
+            logger.warning("Lighting overlay lookup failed: %s", exc)
+            return None
+        self._track_predict(True)
         if not overlay:
             return None
         return overlay
@@ -96,6 +104,17 @@ class LightingPreferenceLearner:
             "min_adjustments": MIN_ADJUSTMENTS,
             "ema_alpha": EMA_ALPHA,
         }
+
+    def health(self) -> dict:
+        """Health entry for the /health ml block."""
+        # Always considered "active" — no shadow concept; the overlay
+        # is harmless when empty (just falls through to defaults).
+        return HealthTrackable.health(
+            self,
+            is_shadow=False,
+            model_loaded=True,
+            extra={"learned_combos": len(self._preferences)},
+        )
 
     async def retrain(self) -> None:
         """Recalculate preferences from the full adjustment history.

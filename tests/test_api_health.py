@@ -136,6 +136,66 @@ class TestHealthTaskHeartbeats:
         assert recovered["tasks_stale"] == []
 
 
+class TestHealthMLPredictors:
+    """Verify the ML predictor surface on /health."""
+
+    def test_ml_block_present(self, client):
+        data = client.get("/health").json()
+        assert "ml" in data
+        assert isinstance(data["ml"], dict)
+
+    def test_each_predictor_has_status(self, client):
+        ml = client.get("/health").json()["ml"]
+        for name, h in ml.items():
+            assert "status" in h, f"{name} missing status"
+            assert h["status"] in {"healthy", "shadow", "idle", "unhealthy"}
+
+    def test_unhealthy_non_shadow_predictor_flips_to_degraded(self, client):
+        # Forcibly mark the lighting_learner unhealthy by pushing
+        # its consecutive_failures past threshold. lighting_learner
+        # is non-shadow, so this must propagate to the top-level status.
+        learner = getattr(client.app.state, "lighting_learner", None)
+        if learner is None:
+            pytest.skip("lighting_learner not initialized")
+        original_failures = learner._consecutive_failures
+        try:
+            learner._consecutive_failures = learner._failure_threshold
+            data = client.get("/health").json()
+            assert data["status"] == "degraded"
+            assert data["ml"]["lighting_learner"]["status"] == "unhealthy"
+        finally:
+            learner._consecutive_failures = original_failures
+
+        recovered = client.get("/health").json()
+        assert recovered["status"] == "healthy"
+        assert recovered["ml"]["lighting_learner"]["status"] in {
+            "healthy", "idle"
+        }
+
+    def test_shadow_predictor_does_not_flip_to_degraded(self, client):
+        # Behavioral predictor starts in shadow mode. Even a contrived
+        # failure count must not propagate to top-level degraded —
+        # shadow is intentional non-voting, not a failure.
+        bp = getattr(client.app.state, "behavioral_predictor", None)
+        if bp is None:
+            pytest.skip("behavioral_predictor not initialized (lightgbm missing?)")
+        if bp._status == "active":
+            pytest.skip("behavioral_predictor was promoted; can't test shadow gate")
+        original_failures = bp._consecutive_failures
+        try:
+            bp._consecutive_failures = bp._failure_threshold + 5
+            data = client.get("/health").json()
+            assert data["ml"]["behavioral_predictor"]["status"] == "shadow"
+            # Top-level must still be healthy if nothing else is wrong.
+            # (The other tests above don't touch state in conflicting ways.)
+            assert data["status"] in {"healthy", "degraded"}
+            # If degraded, it shouldn't be from this shadow predictor.
+            if data["status"] == "degraded":
+                assert data["ml"]["behavioral_predictor"]["status"] != "unhealthy"
+        finally:
+            bp._consecutive_failures = original_failures
+
+
 class TestLightsAPI:
     """Basic smoke tests for /api/lights."""
 

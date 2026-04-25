@@ -26,6 +26,7 @@ from backend.services.ml.feature_builder import (
     build_current_features,
     build_training_data,
 )
+from backend.services.ml.health_mixin import HealthTrackable
 from backend.services.ml.model_manager import ModelManager
 
 logger = logging.getLogger("home_hub.ml")
@@ -113,7 +114,7 @@ def _format_feature_display(col: str, value: Any) -> str:
     return str(value)
 
 
-class BehavioralPredictor:
+class BehavioralPredictor(HealthTrackable):
     """LightGBM mode predictor with shadow mode support.
 
     Lifecycle:
@@ -133,6 +134,7 @@ class BehavioralPredictor:
         self._last_trained: Optional[datetime] = None
         self._last_accuracy: Optional[float] = None
         self._training_rows: int = 0
+        self._init_health_tracking()
 
         # Try loading existing model
         self._load_existing()
@@ -318,15 +320,25 @@ class BehavioralPredictor:
         except ImportError:
             return None
 
-        features = build_current_features(**context)
+        try:
+            features = build_current_features(**context)
 
-        # Build feature vector in the same column order as training
-        x = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])
+            # Build feature vector in the same column order as training
+            x = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])
 
-        probs = self._model.predict(x)[0]
-        top_idx = int(np.argmax(probs))
-        confidence = float(probs[top_idx])
-        predicted_mode = self._label_encoder.get(top_idx, "unknown")
+            probs = self._model.predict(x)[0]
+            top_idx = int(np.argmax(probs))
+            confidence = float(probs[top_idx])
+            predicted_mode = self._label_encoder.get(top_idx, "unknown")
+        except Exception as exc:
+            self._track_predict(False, exc)
+            logger.warning("Behavioral predict() failed: %s", exc)
+            return None
+
+        # Successful inference — update health counters even if we end
+        # up returning None due to a low-confidence prediction. The
+        # model is working; it just doesn't have a confident answer.
+        self._track_predict(True)
 
         if predicted_mode == "unknown" or confidence < SUGGEST_THRESHOLD:
             return None
@@ -426,6 +438,21 @@ class BehavioralPredictor:
             "auto_apply_threshold": AUTO_APPLY_THRESHOLD,
             "suggest_threshold": SUGGEST_THRESHOLD,
         }
+
+    def health(self) -> dict:
+        """Health entry for the /health ml block.
+
+        ``shadow`` and ``demoted`` are intentional non-voting states; we
+        report them as such so the aggregator doesn't flip the system
+        to degraded for a predictor that's correctly idle by design.
+        """
+        is_shadow = self._status != "active"
+        return HealthTrackable.health(
+            self,
+            is_shadow=is_shadow,
+            model_loaded=self._model is not None,
+            extra={"predictor_status": self._status},
+        )
 
     def promote(self) -> None:
         """Promote from shadow to active — predictions will be acted upon."""

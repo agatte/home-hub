@@ -25,6 +25,8 @@ from typing import Optional
 
 import numpy as np
 
+from backend.services.ml.health_mixin import HealthTrackable
+
 logger = logging.getLogger("home_hub.ml.audio")
 
 # YAMNet expects exactly 0.975s at 16kHz
@@ -170,7 +172,7 @@ class SceneState:
         return None
 
 
-class AudioSceneClassifier:
+class AudioSceneClassifier(HealthTrackable):
     """YAMNet-based audio scene classifier for Home Hub.
 
     Loads the YAMNet TFLite model, maps 521 AudioSet classes to 9 target
@@ -199,6 +201,8 @@ class AudioSceneClassifier:
         self._score_history: deque[dict[str, float]] = deque(
             maxlen=SMOOTHING_WINDOW
         )
+
+        self._init_health_tracking()
 
     @property
     def is_loaded(self) -> bool:
@@ -319,6 +323,7 @@ class AudioSceneClassifier:
                 for i in top5_indices
             ]
 
+            self._track_predict(True)
             return ClassificationResult(
                 top_class=top_class,
                 confidence=top_confidence,
@@ -328,6 +333,7 @@ class AudioSceneClassifier:
             )
 
         except Exception as exc:
+            self._track_predict(False, exc)
             logger.error("Classification failed: %s", exc, exc_info=True)
             return None
 
@@ -340,6 +346,22 @@ class AudioSceneClassifier:
             "smoothing_window": SMOOTHING_WINDOW,
             "history_size": len(self._score_history),
         }
+
+    def health(self) -> dict:
+        """Health entry for the /health ml block.
+
+        The classifier is considered "shadow" until ``load_model()`` has
+        been called successfully — the supervisor decides whether to
+        run audio classification at all (it's gated by the
+        ``--classifier`` flag), so an unloaded classifier on a process
+        that doesn't want it is correct, not unhealthy.
+        """
+        return HealthTrackable.health(
+            self,
+            is_shadow=not self._loaded,
+            model_loaded=self._loaded,
+            extra={"history_size": len(self._score_history)},
+        )
 
     def reset_history(self) -> None:
         """Clear the temporal smoothing buffer."""

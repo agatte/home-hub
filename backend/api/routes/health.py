@@ -7,6 +7,21 @@ from fastapi import APIRouter, Request
 
 router = APIRouter()
 
+# Predictors we surface in the /health ml block. Each tuple is
+# (state_attribute_name, display_name) — the attribute is the name on
+# app.state where the predictor lives. We tolerate missing attributes
+# (some predictors are gated by optional dependencies, e.g.
+# behavioral_predictor needs lightgbm; audio_classifier lives in the
+# ambient_monitor process).
+_ML_PREDICTORS = (
+    ("behavioral_predictor", "behavioral_predictor"),
+    ("lighting_learner", "lighting_learner"),
+    ("music_bandit", "music_bandit"),
+    ("rule_engine", "rule_engine"),
+    ("confidence_fusion", "confidence_fusion"),
+    ("audio_classifier", "audio_classifier"),
+)
+
 
 @router.get("/health")
 async def health_check(request: Request) -> dict:
@@ -73,6 +88,31 @@ async def health_check(request: Request) -> dict:
     if any(b.get("state") == "open" for b in circuit_breakers.values()):
         status = "degraded"
 
+    # ML predictor health. Each predictor exposes its own health() with
+    # status ∈ {"healthy", "shadow", "idle", "unhealthy"}. "shadow" and
+    # "idle" never trigger degraded — shadow is intentional non-voting
+    # (behavioral pre-promotion, rule_engine data-gated), idle is the
+    # boot transient before the first inference. Only "unhealthy"
+    # propagates: model failed to load, or N consecutive failures.
+    ml: dict = {}
+    for attr, display_name in _ML_PREDICTORS:
+        predictor = getattr(app.state, attr, None)
+        if predictor is None or not hasattr(predictor, "health"):
+            continue
+        try:
+            ml[display_name] = predictor.health()
+        except Exception as exc:
+            # A health() that itself throws is itself a failure surface.
+            ml[display_name] = {
+                "status": "unhealthy",
+                "model_loaded": False,
+                "last_predict_at": None,
+                "consecutive_failures": 0,
+                "last_failure": f"health() raised: {exc}"[:200],
+            }
+    if any(p.get("status") == "unhealthy" for p in ml.values()):
+        status = "degraded"
+
     return {
         "status": status,
         "service": "Home Hub",
@@ -90,4 +130,5 @@ async def health_check(request: Request) -> dict:
         "tasks": tasks,
         "tasks_stale": tasks_stale,
         "circuit_breakers": circuit_breakers,
+        "ml": ml,
     }

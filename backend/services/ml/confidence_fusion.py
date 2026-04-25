@@ -319,3 +319,43 @@ class ConfidenceFusion:
                 "stale_seconds": STALE_SIGNAL_SECONDS,
             },
         }
+
+    def health(self) -> dict[str, Any]:
+        """Health entry for the /health ml block.
+
+        Fusion itself is deterministic — the only meaningful failure
+        mode is "every lane stale" (no signals fresh enough to vote).
+        Lane-level staleness is normal: behavioral + rule_engine are
+        data-gated by design, presence updates only on state change,
+        and the audio_ml lane is gated on the supervisor flag.
+        """
+        now = datetime.now(timezone.utc)
+        active_sources: list[str] = []
+        stale_sources: list[str] = []
+        never_reported: list[str] = []
+        for src in SIGNAL_SOURCES:
+            sig = self._signals.get(src)
+            if sig is None:
+                never_reported.append(src)
+                continue
+            age = (now - sig.timestamp).total_seconds()
+            if age <= STALE_SIGNAL_SECONDS:
+                active_sources.append(src)
+            else:
+                stale_sources.append(src)
+
+        if active_sources:
+            status = "healthy"
+        elif self._signals:
+            # Every lane has reported at some point but nothing is fresh.
+            status = "unhealthy"
+        else:
+            # Boot transient — no lane has reported yet.
+            status = "idle"
+
+        return {
+            "status": status,
+            "active_sources": active_sources,
+            "stale_sources": stale_sources,
+            "never_reported": never_reported,
+        }
