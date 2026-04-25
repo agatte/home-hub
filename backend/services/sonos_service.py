@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any, Optional
 
+from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
 logger = logging.getLogger("home_hub.sonos")
 
 
@@ -33,10 +35,27 @@ class SonosService:
         self._playlists_cache_time: float = 0
         self._CACHE_TTL: float = 300.0
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+        # SoCo / UPnP calls go through this breaker so a slow speaker
+        # can't wedge the polling loop or REST handlers indefinitely.
+        # 5s call_timeout — Sonos is normally <200ms locally, but SoCo's
+        # transport-info call has been observed to hang briefly during
+        # speaker firmware updates.
+        self._breaker = CircuitBreaker(
+            name="sonos", failure_threshold=3, cooldown_seconds=30.0, call_timeout=5.0
+        )
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    @property
+    def breaker(self) -> CircuitBreaker:
+        """Expose the breaker so /health can snapshot its state."""
+        return self._breaker
+
+    async def _safe_call(self, fn, *args, **kwargs):
+        """Run a sync SoCo call in a thread under the circuit breaker."""
+        return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
 
     @property
     def connected(self) -> bool:
@@ -97,11 +116,16 @@ class SonosService:
             return {"state": "disconnected"}
 
         try:
+            # Each property/method goes through the breaker independently.
+            # A single slow get_status burst can therefore record up to four
+            # failures, opening the breaker faster than a strict per-call
+            # accounting would — that's a deliberate tradeoff in favor of
+            # bailing out quickly when the speaker is unresponsive.
             transport, track, volume, mute = await asyncio.gather(
-                asyncio.to_thread(self._device.get_current_transport_info),
-                asyncio.to_thread(self._device.get_current_track_info),
-                asyncio.to_thread(lambda: self._device.volume),
-                asyncio.to_thread(lambda: self._device.mute),
+                self._safe_call(self._device.get_current_transport_info),
+                self._safe_call(self._device.get_current_track_info),
+                self._safe_call(lambda: self._device.volume),
+                self._safe_call(lambda: self._device.mute),
             )
 
             return {
@@ -124,7 +148,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await asyncio.to_thread(self._device.play)
+            await self._safe_call(self._device.play)
             return True
         except Exception as e:
             logger.error(f"Sonos play error: {e}")
@@ -135,7 +159,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await asyncio.to_thread(self._device.pause)
+            await self._safe_call(self._device.pause)
             return True
         except Exception as e:
             logger.error(f"Sonos pause error: {e}")
@@ -152,7 +176,7 @@ class SonosService:
             return False
         try:
             vol = max(0, min(100, volume))
-            await asyncio.to_thread(setattr, self._device, "volume", vol)
+            await self._safe_call(setattr, self._device, "volume", vol)
             return True
         except Exception as e:
             logger.error(f"Sonos volume error: {e}")
@@ -163,7 +187,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await asyncio.to_thread(self._device.next)
+            await self._safe_call(self._device.next)
             return True
         except Exception as e:
             logger.error(f"Sonos next error: {e}")
@@ -174,7 +198,7 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            await asyncio.to_thread(self._device.previous)
+            await self._safe_call(self._device.previous)
             return True
         except Exception as e:
             logger.error(f"Sonos previous error: {e}")
@@ -197,7 +221,7 @@ class SonosService:
                     logger.info(f"Sonos volume set to {vol} before play_uri")
                 logger.info(f"Sonos actual volume now: {device.volume}")
                 device.play_uri(uri)
-            await asyncio.to_thread(_play, self._device, uri, volume)
+            await self._safe_call(_play, self._device, uri, volume)
             return True
         except Exception as e:
             logger.error(f"Sonos play_uri error: {e}")
@@ -213,7 +237,7 @@ class SonosService:
         status = await self.get_status()
         if status.get("state") == "PLAYING":
             return {
-                "uri": (await asyncio.to_thread(
+                "uri": (await self._safe_call(
                     self._device.get_current_track_info
                 )).get("uri"),
                 "position": status.get("position"),
@@ -228,7 +252,7 @@ class SonosService:
         try:
             uri = snapshot.get("uri")
             if uri:
-                await asyncio.to_thread(self._device.play_uri, uri)
+                await self._safe_call(self._device.play_uri, uri)
             volume = snapshot.get("volume")
             if volume is not None:
                 await self.set_volume(volume)
@@ -244,7 +268,7 @@ class SonosService:
         results = []
         raw_objects = []
         try:
-            favorites = await asyncio.to_thread(
+            favorites = await self._safe_call(
                 self._device.music_library.get_sonos_favorites
             )
             for fav in favorites:
@@ -275,7 +299,7 @@ class SonosService:
             return self._playlists_cache
 
         try:
-            playlists = await asyncio.to_thread(
+            playlists = await self._safe_call(
                 self._device.get_sonos_playlists
             )
             self._playlists_cache = list(playlists)
@@ -346,25 +370,17 @@ class SonosService:
             for pl in playlists:
                 if pl.title.lower() == target:
                     try:
-                        await asyncio.to_thread(self._device.clear_queue)
-                        await asyncio.to_thread(
-                            self._device.add_to_queue, pl
-                        )
-                        await asyncio.to_thread(
-                            self._device.play_from_queue, 0
-                        )
+                        await self._safe_call(self._device.clear_queue)
+                        await self._safe_call(self._device.add_to_queue, pl)
+                        await self._safe_call(self._device.play_from_queue, 0)
                     except Exception as e:
                         logger.warning(
                             "Queue play failed mid-sequence for '%s': %s — retrying",
                             pl.title, e,
                         )
                         try:
-                            await asyncio.to_thread(
-                                self._device.add_to_queue, pl
-                            )
-                            await asyncio.to_thread(
-                                self._device.play_from_queue, 0
-                            )
+                            await self._safe_call(self._device.add_to_queue, pl)
+                            await self._safe_call(self._device.play_from_queue, 0)
                         except Exception as e2:
                             logger.error(
                                 "Queue recovery also failed for '%s': %s",
@@ -400,9 +416,9 @@ class SonosService:
             if ref_resources:
                 # Path A: queue the SoCo object directly
                 try:
-                    await asyncio.to_thread(self._device.clear_queue)
-                    await asyncio.to_thread(self._device.add_to_queue, ref)
-                    await asyncio.to_thread(self._device.play_from_queue, 0)
+                    await self._safe_call(self._device.clear_queue)
+                    await self._safe_call(self._device.add_to_queue, ref)
+                    await self._safe_call(self._device.play_from_queue, 0)
                     logger.info(f"Playing Sonos favorite via queue: {fav_obj.title}")
                     return True
                 except Exception as e:

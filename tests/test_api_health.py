@@ -38,6 +38,47 @@ class TestHealthEndpoint:
         assert isinstance(data["devices"]["sonos"], bool)
 
 
+class TestHealthCircuitBreakers:
+    """Verify the per-service circuit breaker surface on /health."""
+
+    def test_circuit_breakers_block_present(self, client):
+        data = client.get("/health").json()
+        assert "circuit_breakers" in data
+        assert isinstance(data["circuit_breakers"], dict)
+
+    def test_breakers_start_closed(self, client):
+        data = client.get("/health").json()
+        for name, snap in data["circuit_breakers"].items():
+            assert snap["state"] == "closed", f"{name} not closed at boot"
+            assert snap["consecutive_failures"] == 0
+
+    def test_open_breaker_flips_status_to_degraded(self, client):
+        # Force the hue breaker into open state and confirm /health reflects.
+        from datetime import datetime, timezone
+
+        breaker = app.state.hue.breaker
+        original_state = breaker._state
+        original_opened_at = breaker._opened_at
+        original_failures = breaker._consecutive_failures
+        try:
+            breaker._state = "open"
+            breaker._opened_at = datetime.now(timezone.utc)
+            breaker._consecutive_failures = breaker.failure_threshold
+
+            data = client.get("/health").json()
+            assert data["status"] == "degraded"
+            assert data["circuit_breakers"]["hue"]["state"] == "open"
+        finally:
+            breaker._state = original_state
+            breaker._opened_at = original_opened_at
+            breaker._consecutive_failures = original_failures
+
+        # Cleanup leaves us healthy again.
+        recovered = client.get("/health").json()
+        assert recovered["status"] == "healthy"
+        assert recovered["circuit_breakers"]["hue"]["state"] == "closed"
+
+
 class TestHealthTaskHeartbeats:
     """Verify the background-task heartbeat surface on /health."""
 

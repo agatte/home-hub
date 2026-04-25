@@ -126,6 +126,14 @@ returning to the project after a long break."
     expected interval. HTTP stays 200 so Uptime Kuma's existing probe
     keeps working. 9 loops instrumented including the camera service
     (which deregisters on disable / sleep-pause)
+  - Circuit breakers on Hue + Sonos calls (April 25): every bridge /
+    speaker call goes through a per-service breaker (3 consecutive
+    failures opens, 30s cooldown, 5s per-call timeout via
+    asyncio.wait_for). /health surfaces breaker state alongside
+    heartbeats — heartbeat says "loop wedged", breaker says "calls
+    failing", so operators can tell which. Both surfaces drive
+    `status: "degraded"`. Connect / discovery calls stay raw (one-off
+    at startup)
 
   FRONTEND PERFORMANCE + A11Y (April 24)
   -----------------------------------------------------------------------
@@ -183,8 +191,6 @@ Ranked by impact within each section.
        service registry
   [ ]  Replace service DI by attribute assignment (9 attr-wirings in
        main.py) with constructor args
-  [ ]  Circuit breaker for Hue / Sonos calls (slow bridge can stall
-       polling)
 
   OBSERVABILITY
   -----------------------------------------------------------------------
@@ -246,7 +252,6 @@ Strengths and shipped items are summarized in MAJOR WORK SHIPPED above.
   - Service DI by attribute assignment is invisible coupling
   - 22+ bare "except Exception" clauses on critical paths
   - No middleware for request logging / tracing
-  - No circuit breaker for Hue / Sonos
   - Light IDs are strings in some places, ints in others
 
   FRONTEND / UI -- B+

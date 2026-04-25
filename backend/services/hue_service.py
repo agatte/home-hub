@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any, Optional
 
+from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
 logger = logging.getLogger("home_hub.hue")
 
 # Extra buffer (seconds) added to a transition's own duration before the
@@ -36,10 +38,26 @@ class HueService:
         # the UI back to stale values.
         self._inflight_until: dict[str, float] = {}
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+        # Bridge calls go through this breaker so a slow / unresponsive
+        # bridge can't wedge the polling loop or REST handlers indefinitely.
+        # 3 consecutive failures opens it; 30s cooldown before half-open
+        # probe; 5s per-call timeout (Hue typically responds <100ms locally).
+        self._breaker = CircuitBreaker(
+            name="hue", failure_threshold=3, cooldown_seconds=30.0, call_timeout=5.0
+        )
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    @property
+    def breaker(self) -> CircuitBreaker:
+        """Expose the breaker so /health can snapshot its state."""
+        return self._breaker
+
+    async def _safe_call(self, fn, *args, **kwargs):
+        """Run a sync bridge call in a thread under the circuit breaker."""
+        return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)
 
     @property
     def connected(self) -> bool:
@@ -79,7 +97,7 @@ class HueService:
             return []
 
         try:
-            api_data = await asyncio.to_thread(self._bridge.get_api)
+            api_data = await self._safe_call(self._bridge.get_api)
             lights = []
 
             for light_id, light_data in api_data.get("lights", {}).items():
@@ -159,9 +177,7 @@ class HueService:
             if not command:
                 return False
 
-            await asyncio.to_thread(
-                self._bridge.set_light, lid, command
-            )
+            await self._safe_call(self._bridge.set_light, lid, command)
             logger.info(f"Set light {light_id}: {command}")
 
             # Mark light in-flight so the polling loop doesn't broadcast

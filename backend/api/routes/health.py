@@ -61,6 +61,18 @@ async def health_check(request: Request) -> dict:
         if tasks_stale:
             status = "degraded"
 
+    # Circuit breakers protecting calls into Hue / Sonos. When a breaker
+    # is open, calls fail fast (raising CircuitBreakerOpen) instead of
+    # wedging on a slow bridge — the heartbeat surface above tells you
+    # the loop is still ticking, this surface tells you why it's failing.
+    circuit_breakers: dict = {}
+    if hasattr(app.state, "hue") and hasattr(app.state.hue, "breaker"):
+        circuit_breakers["hue"] = app.state.hue.breaker.snapshot()
+    if hasattr(app.state, "sonos") and hasattr(app.state.sonos, "breaker"):
+        circuit_breakers["sonos"] = app.state.sonos.breaker.snapshot()
+    if any(b.get("state") == "open" for b in circuit_breakers.values()):
+        status = "degraded"
+
     return {
         "status": status,
         "service": "Home Hub",
@@ -77,4 +89,5 @@ async def health_check(request: Request) -> dict:
         "event_logger_queue_depth": event_logger_queue_depth,
         "tasks": tasks,
         "tasks_stale": tasks_stale,
+        "circuit_breakers": circuit_breakers,
     }
