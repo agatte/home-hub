@@ -5,6 +5,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -16,16 +17,51 @@ CACHE_TTL = 600  # 10 minutes
 class PlantAppService:
     """Polls the plant care app API for plant status data."""
 
-    def __init__(self, api_url: str, email: str, password: str) -> None:
+    def __init__(
+        self,
+        api_url: str,
+        email: str,
+        password: str,
+        allow_insecure: bool = False,
+    ) -> None:
+        # Reject plain http:// at construction. The login body carries
+        # email + password as JSON; cleartext over LAN means anyone with
+        # packet capture (a roommate's laptop, a compromised IoT device)
+        # walks away with credentials that are very likely reused on
+        # other services. Auto-upgrading http→https would silently fail
+        # if the API doesn't speak TLS, so we hard-fail and force the
+        # operator to either fix the URL or set the explicit escape
+        # hatch — the choice has to be conscious.
+        parsed = urlparse(api_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"PLANT_APP_API_URL has unsupported scheme {parsed.scheme!r}; "
+                "expected https://"
+            )
+        if parsed.scheme == "http" and not allow_insecure:
+            raise ValueError(
+                "PLANT_APP_API_URL is http:// — credentials would be sent in "
+                "cleartext. Use https:// or set PLANT_APP_ALLOW_INSECURE=1 "
+                "to acknowledge the risk explicitly."
+            )
+
         self._api_url = api_url.rstrip("/")
         self._email = email
         self._password = password
         self._token: Optional[str] = None
         self._cache: Optional[dict[str, Any]] = None
         self._cache_time: float = 0
+        self._insecure = parsed.scheme == "http"
 
     async def _login(self) -> bool:
         """Authenticate with the plant app and store JWT token."""
+        if self._insecure:
+            # Re-emit on every auth attempt so the insecure mode never
+            # quietly drifts into "background normal."
+            logger.warning(
+                "Plant app authenticating over plain HTTP — credentials in "
+                "cleartext (PLANT_APP_ALLOW_INSECURE=1)"
+            )
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
@@ -38,7 +74,12 @@ class PlantAppService:
                 if self._token:
                     logger.info("Plant app authenticated")
                     return True
-                logger.error("Plant app login response missing token: %s", data)
+                # Don't log the response body — it can contain echoed
+                # input fields, internal IDs, or upstream error text.
+                logger.error(
+                    "Plant app login: response had no token (status=%d)",
+                    resp.status_code,
+                )
                 return False
         except Exception as e:
             logger.error("Plant app login failed: %s", e)

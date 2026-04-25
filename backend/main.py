@@ -288,16 +288,23 @@ async def lifespan(app: FastAPI):
     )
     app.state.recommendation_service = rec_service
 
-    # Plant app integration (external app, cached 10 min)
+    # Plant app integration (external app, cached 10 min). The service
+    # refuses to construct against http:// without the explicit
+    # PLANT_APP_ALLOW_INSECURE escape hatch — catch and skip rather
+    # than crashing the lifespan.
     if settings.PLANT_APP_API_URL and settings.PLANT_APP_EMAIL:
         from backend.services.plant_app_service import PlantAppService
-        plant_service = PlantAppService(
-            api_url=settings.PLANT_APP_API_URL,
-            email=settings.PLANT_APP_EMAIL,
-            password=settings.PLANT_APP_PASSWORD or "",
-        )
-        app.state.plant_service = plant_service
-        logger.info("Plant app service initialized")
+        try:
+            plant_service = PlantAppService(
+                api_url=settings.PLANT_APP_API_URL,
+                email=settings.PLANT_APP_EMAIL,
+                password=settings.PLANT_APP_PASSWORD or "",
+                allow_insecure=settings.PLANT_APP_ALLOW_INSECURE,
+            )
+            app.state.plant_service = plant_service
+            logger.info("Plant app service initialized")
+        except ValueError as e:
+            logger.error("Plant app disabled — %s", e)
 
     # Bar app integration (Home Bar on LAN, cached 10 min)
     if settings.BAR_APP_URL:

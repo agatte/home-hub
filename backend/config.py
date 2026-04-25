@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     PLANT_APP_API_URL: Optional[str] = None
     PLANT_APP_EMAIL: Optional[str] = None
     PLANT_APP_PASSWORD: Optional[str] = None
+    # Escape hatch for the rare case the upstream Plant App API doesn't
+    # support TLS. Default False forces https://; setting this to True
+    # allows http:// but the service logs a WARNING on every login so
+    # the insecure state stays visible. Never set in normal operation.
+    PLANT_APP_ALLOW_INSECURE: bool = False
 
     # Home Bar Integration
     BAR_APP_URL: Optional[str] = None
