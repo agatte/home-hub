@@ -15,9 +15,18 @@
 # Usage:
 #   ./scripts/deploy.sh
 #
+# On post-restart health-check failure, the script rolls back to the
+# previously-deployed SHA, re-runs the same install / rebuild steps,
+# and restarts again. Recovery is best-effort — if rollback also fails,
+# the script exits 2 and the system is left in a broken state for
+# manual recovery. Auto-rollback only fires when LAST_DEPLOYED is
+# known; first-time deploys exit 1 like before with no rollback path.
+#
 # Exit codes:
 #   0 — success (or already up-to-date)
-#   1 — deploy failed (health check, git pull conflict, etc.)
+#   1 — deploy failed; system was rolled back to last known good SHA
+#       (or first-time deploy failed and there was nothing to roll back to)
+#   2 — deploy AND rollback failed; system is broken, manual recovery needed
 
 set -euo pipefail
 
@@ -109,24 +118,113 @@ if [[ "$REBUILD_FRONTEND" == "1" ]]; then
     RESTART_BACKEND=1
 fi
 
-if [[ "$RESTART_BACKEND" == "1" ]]; then
-    echo "→ Restarting home-hub.service..."
-    systemctl --user restart home-hub.service
-    # Poll health — FastAPI typically binds in 2-5s but can take longer
-    # on first-deploy (cold import tree). Retry for up to 20s.
-    HEALTHY=0
+# Poll /health for up to 20s. Returns 0 when /health responds with HTTP
+# 2xx, 1 if the timeout elapses without a successful response. Used both
+# for the forward deploy and after a rollback.
+poll_health() {
+    local label="$1"
     for attempt in $(seq 1 20); do
         sleep 1
         if curl -sf http://localhost:8000/health > /dev/null; then
-            HEALTHY=1
-            echo "  ✓ Backend healthy (${attempt}s)"
-            break
+            echo "  ✓ ${label} healthy (${attempt}s)"
+            return 0
         fi
     done
-    if [[ "$HEALTHY" != "1" ]]; then
+    return 1
+}
+
+# Roll back to the last known good SHA, re-run any install / rebuild
+# steps the original deploy ran (so dependencies and frontend bundle
+# match the previous code), restart, and verify health. Returns 0 on
+# successful recovery, 1 if recovery itself failed.
+rollback() {
+    local target="$1"
+    echo
+    echo "↩ Rolling back to ${target:0:7}..."
+
+    # set -e is suppressed inside functions called from `if` contexts,
+    # so we explicitly check each step that can fail. A failed reset or
+    # rebuild leaves the system in worse shape than the failed deploy
+    # did; abort the rollback path immediately and let the caller exit 2.
+    if ! git reset --hard "$target"; then
+        echo "✗ git reset --hard failed during rollback"
+        return 1
+    fi
+
+    # Re-run the same install / rebuild gates. CHANGED is the same diff
+    # we used on the forward path, so the affected files are the same
+    # set being reverted.
+    if echo "$CHANGED" | grep -q "^requirements\.txt$"; then
+        echo "→ Reinstalling Python deps (rollback)..."
+        if ! ./venv/bin/pip install -r requirements.txt; then
+            echo "✗ pip install failed during rollback"
+            return 1
+        fi
+    fi
+    if echo "$CHANGED" | grep -qE "^frontend-svelte/(package\.json|package-lock\.json)$"; then
+        echo "→ Running npm install (rollback)..."
+        if ! (cd frontend-svelte && npm install); then
+            echo "✗ npm install failed during rollback"
+            return 1
+        fi
+    fi
+    if echo "$CHANGED" | grep -qE "^frontend-svelte/(src|static|package\.json|package-lock\.json)$"; then
+        echo "→ Rebuilding frontend (rollback)..."
+        if ! (cd frontend-svelte && npm run build); then
+            echo "✗ npm run build failed during rollback"
+            return 1
+        fi
+    fi
+
+    echo "→ Restarting home-hub.service (rollback)..."
+    if ! systemctl --user restart home-hub.service; then
+        echo "✗ systemctl restart failed during rollback"
+        return 1
+    fi
+
+    if poll_health "Backend (post-rollback)"; then
+        # Restart ambient_monitor too if the original deploy did — its
+        # source has been reverted along with everything else. A failure
+        # here doesn't fail the rollback (no health check on ambient).
+        if [[ "$RESTART_AMBIENT" == "1" ]]; then
+            echo "→ Restarting home-hub-ambient.service (rollback)..."
+            systemctl --user restart home-hub-ambient.service || \
+                echo "  (ambient restart failed; main service is still healthy)"
+        fi
+        return 0
+    fi
+
+    echo "✗ Rollback health check ALSO failed!"
+    systemctl --user status home-hub.service --no-pager | tail -20
+    return 1
+}
+
+if [[ "$RESTART_BACKEND" == "1" ]]; then
+    echo "→ Restarting home-hub.service..."
+    systemctl --user restart home-hub.service
+    # FastAPI typically binds in 2-5s but can take longer on first-deploy
+    # (cold import tree). Retry for up to 20s.
+    if ! poll_health "Backend"; then
         echo "✗ Health check failed after 20s!"
         echo
         systemctl --user status home-hub.service --no-pager | tail -20
+
+        if [[ -n "$LAST_DEPLOYED" ]]; then
+            if rollback "$LAST_DEPLOYED"; then
+                echo
+                echo "↩ Rolled back to ${LAST_DEPLOYED:0:7} (deploy of ${NEW_HEAD:0:7} failed health check)."
+                # Marker is unchanged — still points at LAST_DEPLOYED — so
+                # the next deploy will diff cleanly from the rollback target.
+                exit 1
+            fi
+            echo
+            echo "✗✗ Both deploy AND rollback failed. System is in an inconsistent state."
+            echo "    Inspect logs and run 'git status' to recover manually."
+            exit 2
+        fi
+
+        echo
+        echo "(No prior deploy recorded — nothing to roll back to.)"
         exit 1
     fi
 fi

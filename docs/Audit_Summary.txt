@@ -39,8 +39,8 @@ small a11y nudges) are deliberately omitted -- check git log for those.
                                   Playwright local-only
   Documentation           A-      PROJECT_SPEC + ML_SPEC + LIGHTING_EXPANSION
                                   + CLAUDE.md current
-  DevOps / Deployment     C+      Smart deploy.sh + CI + DB backup; no
-                                  rollback, no staging
+  DevOps / Deployment     B-      Smart deploy.sh with auto-rollback +
+                                  CI + DB backup; no staging
   Tooling / DX            B+      MCP, hooks, skills, GitHub Actions
   Future Readiness        A-      ML Phase 3 in progress, fusion shipped,
                                   weight-learning live
@@ -156,7 +156,9 @@ returning to the project after a long break."
   INFRASTRUCTURE / OPS (carried baseline)
   -----------------------------------------------------------------------
   - Smart deploy.sh: diffs HEAD, only rebuilds what changed, health-
-    checks after restart, kiosk auto-reload via WebSocket build_id
+    checks after restart, auto-rolls back to last-deployed SHA on
+    health-check failure (re-runs install/rebuild from prior code,
+    re-verifies health), kiosk auto-reload via WebSocket build_id
   - Daily SQLite backup cron on Latitude (4 AM, 7-day retention)
   - GitHub Actions CI (ruff lint + pytest + vitest)
   - Pi-hole v6 in Docker (host networking) on Latitude
@@ -205,8 +207,6 @@ Ranked by impact within each section.
 
   DEVOPS
   -----------------------------------------------------------------------
-  [ ]  deploy.sh rollback capability (failed health check leaves system
-       broken)
   [ ]  Wire Playwright e2e into CI (currently local-only -- would
        require spinning up backend + frontend in the workflow)
   [ ]  Staging environment between dev and prod
@@ -302,12 +302,11 @@ Strengths and shipped items are summarized in MAJOR WORK SHIPPED above.
   - Playwright e2e is local-only (needs CI runner with live backend)
   - No coverage reporting (pytest-cov not configured)
 
-  DEVOPS / DEPLOYMENT -- C+
+  DEVOPS / DEPLOYMENT -- B-
   -----------------------------------------------------------------------
-  - No rollback path
   - No staging environment
-  - Health-check 3s sleep may not be enough with ML model loading
   - No automated frontend build verification in CI (Python only)
+  - Playwright e2e local-only (CI doesn't run them)
 
   DOCUMENTATION -- A-
   -----------------------------------------------------------------------
