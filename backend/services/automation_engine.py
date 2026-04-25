@@ -738,6 +738,11 @@ class AutomationEngine:
         late_night slot runs from schedule.late_night_start_hour until the
         next day's wake_hour — modes without a late_night state fall back
         to their night state via _resolve_activity_state.
+
+        The morning ramp window (ramp_start_hour..ramp_start_hour+duration)
+        counts as "day" — the ramp's brightness curve comes from
+        _build_time_rules' morning_ramp handling, not this bucket; the user
+        is awake and active, so day-mode states are the right baseline.
         """
         now = datetime.now(tz=TZ)
         hour = now.hour
@@ -746,11 +751,8 @@ class AutomationEngine:
             if now.weekday() < 5
             else self._schedule_config.weekend
         )
-        day_start = schedule.ramp_start_hour + max(
-            1, schedule.ramp_duration_minutes // 60
-        )
 
-        if day_start <= hour < schedule.evening_start_hour:
+        if schedule.ramp_start_hour <= hour < schedule.evening_start_hour:
             return "day"
         if schedule.evening_start_hour <= hour < schedule.winddown_start_hour:
             return "evening"
@@ -962,6 +964,38 @@ class AutomationEngine:
         "night":      1.0,
         "late_night": 0.6,   # default 15 when night=25
     }
+    # Maximum age (in seconds) for a committed zone/posture to be honored by
+    # the overlay. Older than this and the value is treated as missing —
+    # mirrors ConfidenceFusion's SOURCE_STALE_SECONDS so stale camera state
+    # can't drive the lights when the user has been gone for a while.
+    _ZONE_POSTURE_FRESHNESS_SECONDS = 300
+
+    def _fresh_camera_attr(
+        self, camera: Any, value_attr: str, ts_attr: str,
+    ) -> Optional[str]:
+        """Read ``camera.{value_attr}`` only if its commit timestamp is fresh.
+
+        Returns ``None`` if camera is missing, the value is missing, or the
+        commit timestamp is older than ``_ZONE_POSTURE_FRESHNESS_SECONDS``.
+        Cameras that don't expose the timestamp attribute (older fakes /
+        stubs) bypass the freshness gate so existing tests continue to work.
+        """
+        if camera is None:
+            return None
+        value = getattr(camera, value_attr, None)
+        if value is None:
+            return None
+        # Tests use plain stubs without the *_committed_at attribute — only
+        # apply the freshness gate when the timestamp surface exists.
+        if not hasattr(camera, ts_attr):
+            return value
+        committed_at = getattr(camera, ts_attr, None)
+        if committed_at is None:
+            return None
+        age = (datetime.now(timezone.utc) - committed_at).total_seconds()
+        if age > self._ZONE_POSTURE_FRESHNESS_SECONDS:
+            return None
+        return value
 
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
@@ -984,10 +1018,18 @@ class AutomationEngine:
         Only ever moves brightness in one direction per branch (lift-only
         for desk, lower-only for reclined) so a learned override stays
         preserved if it already moved the same way.
+
+        Treats zone/posture as missing if the camera service exposes a
+        commit timestamp older than ``_ZONE_POSTURE_FRESHNESS_SECONDS``.
+        Mirrors the staleness threshold used by ConfidenceFusion so a
+        commit from before the last sleep cycle (or any other long gap)
+        can't leak into the lighting decision.
         """
         camera = self._camera_service
-        zone = getattr(camera, "zone", None) if camera else None
-        posture = getattr(camera, "posture", None) if camera else None
+        zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
+        posture = self._fresh_camera_attr(
+            camera, "posture", "posture_committed_at"
+        )
 
         # Only per-light states carry a numeric ``bri``. Scene-override
         # payloads pass straight through.

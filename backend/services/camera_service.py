@@ -196,12 +196,18 @@ class CameraService:
         self._was_absent: bool = False
 
         # Zone mapping — committed zone + pending-candidate state (hysteresis).
+        # ``_last_zone_at`` records when the current commit was made so
+        # consumers (e.g. _apply_zone_overlay) can ignore stale values that
+        # outlived a long absence — the overlay reads ``camera.zone`` directly
+        # and would otherwise honor a commit from hours ago.
         self._last_zone: Optional[str] = None            # "desk" | "bed" | None
+        self._last_zone_at: Optional[datetime] = None
         self._candidate_zone: Optional[str] = None       # pending zone awaiting commit
         self._candidate_zone_since: Optional[datetime] = None
 
         # Posture classification — same hysteresis pattern as zone.
         self._last_posture: Optional[str] = None         # "upright" | "reclined" | None
+        self._last_posture_at: Optional[datetime] = None
         self._candidate_posture: Optional[str] = None
         self._candidate_posture_since: Optional[datetime] = None
 
@@ -539,9 +545,19 @@ class CameraService:
         """Currently committed zone after hysteresis — 'desk' | 'bed' | None.
 
         None when no zone has yet committed (camera just started, or the user
-        hasn't been detected yet). Brief absences preserve the committed zone.
+        hasn't been detected yet). Brief absences preserve the committed zone;
+        a sustained absence past ``ABSENT_THRESHOLD`` clears the commit.
         """
         return self._last_zone
+
+    @property
+    def zone_committed_at(self) -> Optional[datetime]:
+        """UTC timestamp of the most recent zone commit (None if not yet committed).
+
+        Consumers should treat older commits as missing — see
+        ``AutomationEngine._apply_zone_overlay`` for the freshness gate.
+        """
+        return self._last_zone_at
 
     @property
     def posture(self) -> Optional[str]:
@@ -549,9 +565,14 @@ class CameraService:
 
         None when no posture has yet committed (pose has never fired with
         visible hips). Face-only sessions and brief pose misses preserve the
-        committed value.
+        committed value; sustained absence past ``ABSENT_THRESHOLD`` clears it.
         """
         return self._last_posture
+
+    @property
+    def posture_committed_at(self) -> Optional[datetime]:
+        """UTC timestamp of the most recent posture commit (None if not yet committed)."""
+        return self._last_posture_at
 
     @property
     def last_detection(self) -> str:
@@ -731,6 +752,12 @@ class CameraService:
 
                     if self._consecutive_absent == ABSENT_THRESHOLD:
                         self._was_absent = True
+                        # User has been gone long enough to call it "away" —
+                        # any committed zone/posture is now stale by definition,
+                        # since we have no idea where they'll re-enter from.
+                        # Clearing here prevents the bed+reclined overlay from
+                        # firing on values committed hours (or a sleep cycle) ago.
+                        self._clear_committed_zone_posture("absent threshold")
                         await self._automation.report_activity(
                             mode="away", source="camera", factors=camera_factors,
                         )
@@ -789,6 +816,33 @@ class CameraService:
                 logger.error("Camera poll error: %s", exc, exc_info=True)
                 await asyncio.sleep(POLL_INTERVAL)
 
+    def _clear_committed_zone_posture(self, reason: str) -> None:
+        """Reset committed zone/posture (and any pending candidacy).
+
+        Called on sustained absence and on resume from a sleeping pause —
+        in both cases the prior commits are stale enough that consumers
+        should treat zone/posture as unknown until a new commit lands.
+        """
+        if (
+            self._last_zone is None
+            and self._last_posture is None
+            and self._candidate_zone is None
+            and self._candidate_posture is None
+        ):
+            return
+        logger.info(
+            "Clearing committed zone/posture (reason=%s, was zone=%s posture=%s)",
+            reason, self._last_zone, self._last_posture,
+        )
+        self._last_zone = None
+        self._last_zone_at = None
+        self._candidate_zone = None
+        self._candidate_zone_since = None
+        self._last_posture = None
+        self._last_posture_at = None
+        self._candidate_posture = None
+        self._candidate_posture_since = None
+
     def _apply_zone_hysteresis(self, candidate: Optional[str]) -> None:
         """Update ``self._last_zone`` via a sustained-candidate rule.
 
@@ -830,6 +884,7 @@ class CameraService:
                 previous, candidate, elapsed,
             )
             self._last_zone = candidate
+            self._last_zone_at = now
             self._candidate_zone = None
             self._candidate_zone_since = None
 
@@ -874,6 +929,7 @@ class CameraService:
                 previous, candidate, elapsed,
             )
             self._last_posture = candidate
+            self._last_posture_at = now
             self._candidate_posture = None
             self._candidate_posture_since = None
 
@@ -1196,6 +1252,10 @@ class CameraService:
         else:
             if self._paused:
                 self._paused = False
+                # The pause spanned at least the sleep cycle — any committed
+                # zone/posture from before sleep is stale and would otherwise
+                # leak into the morning's first overlay decisions.
+                self._clear_committed_zone_posture("resume from sleeping")
                 # Reopen camera
                 try:
                     import cv2

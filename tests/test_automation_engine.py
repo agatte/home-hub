@@ -4,7 +4,7 @@ Tests for the automation engine — mode priority, overrides, time periods.
 These test the pure logic of the AutomationEngine without touching any real
 hardware. Hue, Sonos, and WebSocket are all mocked.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -82,6 +82,53 @@ class TestTimePeriod:
         mock_dt.now.return_value = datetime(2026, 4, 12, 3, 0, tzinfo=TZ)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         assert _get_time_period_static() == "night"
+
+
+class TestEngineTimePeriodRampWindow:
+    """Schedule-aware ``AutomationEngine._get_time_period``.
+
+    Regression coverage for the ramp window falling through to "night":
+    - Weekday Mon 06:30 (ramp 06:00 + 60min) → "day"
+    - Weekend Sat 09:00 (ramp 08:00 + 120min) → "day"
+    The morning ramp window is morning daylight, not nighttime.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    @patch("backend.services.automation_engine.datetime")
+    def test_weekday_mid_ramp_is_day(self, mock_dt, engine):
+        # Monday 06:30 — inside the weekday ramp window (06:00–07:00)
+        mock_dt.now.return_value = datetime(2026, 4, 13, 6, 30, tzinfo=TZ)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        assert engine._get_time_period() == "day"
+
+    @patch("backend.services.automation_engine.datetime")
+    def test_weekend_mid_ramp_is_day(self, mock_dt, engine):
+        # Saturday 09:00 — inside the weekend ramp window (08:00–10:00)
+        mock_dt.now.return_value = datetime(2026, 4, 25, 9, 0, tzinfo=TZ)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        assert engine._get_time_period() == "day"
+
+    @patch("backend.services.automation_engine.datetime")
+    def test_weekday_pre_ramp_is_night(self, mock_dt, engine):
+        # 05:30 — after wake, before ramp_start. Pre-dawn, "night" is fine.
+        mock_dt.now.return_value = datetime(2026, 4, 13, 5, 30, tzinfo=TZ)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        assert engine._get_time_period() == "night"
+
+    @patch("backend.services.automation_engine.datetime")
+    def test_evening_unchanged(self, mock_dt, engine):
+        mock_dt.now.return_value = datetime(2026, 4, 13, 19, 0, tzinfo=TZ)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        assert engine._get_time_period() == "evening"
+
+    @patch("backend.services.automation_engine.datetime")
+    def test_late_night_unchanged(self, mock_dt, engine):
+        mock_dt.now.return_value = datetime(2026, 4, 13, 23, 30, tzinfo=TZ)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        assert engine._get_time_period() == "late_night"
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +245,29 @@ class _FakeCamera:
     def __init__(self, zone=None, posture=None):
         self.zone = zone
         self.posture = posture
+
+
+class _FakeCameraWithFreshness:
+    """Camera stub that exposes the *_committed_at freshness timestamps.
+
+    Mirrors the real CameraService surface that ``_apply_zone_overlay``
+    uses for its freshness gate. Tests that exercise the gate should use
+    this stub; tests that don't care about freshness can stick with the
+    bare ``_FakeCamera`` (the gate falls through when the timestamp
+    attribute is absent).
+    """
+
+    def __init__(
+        self,
+        zone=None,
+        posture=None,
+        zone_committed_at=None,
+        posture_committed_at=None,
+    ):
+        self.zone = zone
+        self.posture = posture
+        self.zone_committed_at = zone_committed_at
+        self.posture_committed_at = posture_committed_at
 
 
 class _FakeMLLogger:
@@ -387,6 +457,40 @@ class TestZonePostureOverlay:
         }
         out = engine._apply_zone_overlay(state, "watching", "night")
         assert out["2"]["bri"] == 70  # zone_bri_by_period[night]
+
+    def test_stale_commit_ignored(self, engine):
+        """Commit older than the freshness window is treated as missing.
+
+        Regression for the morning-after-sleep case: bed/reclined committed
+        before sleeping must not drive the next day's lighting decisions.
+        """
+        stale = datetime.now(timezone.utc) - timedelta(hours=2)
+        engine._camera_service = _FakeCameraWithFreshness(
+            zone="bed",
+            posture="reclined",
+            zone_committed_at=stale,
+            posture_committed_at=stale,
+        )
+        baseline = self._night_watching_state()
+        out = engine._apply_zone_overlay(baseline, "watching", "night")
+        # Stale → treated as no data → bed+reclined branch must NOT fire.
+        assert out["1"]["bri"] == baseline["1"]["bri"]
+        assert out["2"]["bri"] == baseline["2"]["bri"]
+
+    def test_fresh_commit_still_lowers(self, engine):
+        """A recent commit (well under the freshness window) still applies."""
+        recent = datetime.now(timezone.utc) - timedelta(seconds=30)
+        engine._camera_service = _FakeCameraWithFreshness(
+            zone="bed",
+            posture="reclined",
+            zone_committed_at=recent,
+            posture_committed_at=recent,
+        )
+        out = engine._apply_zone_overlay(
+            self._night_watching_state(), "watching", "night",
+        )
+        assert out["1"]["bri"] == 25
+        assert out["2"]["bri"] == 8
 
     def test_bed_reclined_lowers_in_working_mode(self, engine):
         """Bed+reclined is a physical fact — lower L1/L2 even when mode=working.

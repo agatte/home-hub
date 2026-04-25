@@ -206,6 +206,31 @@ class TestAbsentCountdown:
             mode="idle", source="camera"
         )
 
+    def test_clear_committed_zone_posture(self):
+        """Clearing helper drops both zone and posture commits (and candidates)."""
+        from datetime import datetime, timezone
+
+        service = _make_service()
+        service._last_zone = "bed"
+        service._last_zone_at = datetime.now(timezone.utc)
+        service._candidate_zone = "desk"
+        service._candidate_zone_since = datetime.now(timezone.utc)
+        service._last_posture = "reclined"
+        service._last_posture_at = datetime.now(timezone.utc)
+        service._candidate_posture = "upright"
+        service._candidate_posture_since = datetime.now(timezone.utc)
+
+        service._clear_committed_zone_posture("test")
+
+        assert service._last_zone is None
+        assert service._last_zone_at is None
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+        assert service._last_posture is None
+        assert service._last_posture_at is None
+        assert service._candidate_posture is None
+        assert service._candidate_posture_since is None
+
 
 # ---------------------------------------------------------------------------
 # Ambient lux
@@ -294,6 +319,38 @@ class TestModeChangeCallback:
             await service.on_mode_change("idle")
 
         assert service._paused is False
+
+    @pytest.mark.asyncio
+    async def test_resume_clears_committed_zone_posture(self):
+        """Stale bed/reclined from the night before must not survive sleep.
+
+        Regression: the overlay reads ``camera.zone`` / ``camera.posture``
+        directly. Without clearing on resume, the morning's first ticks
+        consume bed/reclined values that were last committed before bed —
+        dimming the room for "watching reclined" all morning.
+        """
+        from datetime import datetime, timezone
+
+        service = _make_service()
+        service._enabled = True
+        service._paused = True
+        service._last_zone = "bed"
+        service._last_zone_at = datetime.now(timezone.utc)
+        service._last_posture = "reclined"
+        service._last_posture_at = datetime.now(timezone.utc)
+
+        mock_cv2 = MagicMock()
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cv2.VideoCapture.return_value = mock_cap
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2}):
+            await service.on_mode_change("idle")
+
+        assert service._last_zone is None
+        assert service._last_zone_at is None
+        assert service._last_posture is None
+        assert service._last_posture_at is None
 
 
 # ---------------------------------------------------------------------------
