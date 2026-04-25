@@ -32,8 +32,9 @@ small a11y nudges) are deliberately omitted -- check git log for those.
                                   weight-learning, shadow-before-promote
   Performance             B       Threlte lazy-loaded, rAF capped, opt-in
                                   camera; Hue 1s polling still aggressive
-  Observability           C+      Event tables + ML decisions + analytics
-                                  dashboard; no Prometheus, no tracing
+  Observability           B-      Event tables + ML decisions + analytics
+                                  dashboard + per-task heartbeat in
+                                  /health; no Prometheus, no tracing
   Testing                 B+      Backend 405+ tests, frontend 60 tests,
                                   Playwright local-only
   Documentation           A-      PROJECT_SPEC + ML_SPEC + LIGHTING_EXPANSION
@@ -108,7 +109,7 @@ returning to the project after a long break."
     camera-present-recently, current activity mode
   - Presence is also a fusion voter (weight 0.18, low-conf idle)
 
-  BACKEND HARDENING (April 24)
+  BACKEND HARDENING (April 24 - April 25)
   -----------------------------------------------------------------------
   - Pydantic WS validation: backend/schemas/ws.py, discriminated union,
     range-validated, error frame returned for invalid input
@@ -118,6 +119,13 @@ returning to the project after a long break."
   - Event-logger retry queue: 200-entry bounded deque, 30s drainer,
     3 attempts per entry, threshold WARN on sustained drops; /health
     exposes event_logger_queue_depth + event_logger_overflow
+  - Background-task heartbeat surface (April 25): every long-running
+    poll loop publishes last_tick via HeartbeatRegistry; /health
+    returns `tasks` (per-task age + interval + stale flag) and flips
+    `status` to `"degraded"` when any task's age exceeds 2x its
+    expected interval. HTTP stays 200 so Uptime Kuma's existing probe
+    keeps working. 9 loops instrumented including the camera service
+    (which deregisters on disable / sleep-pause)
 
   FRONTEND PERFORMANCE + A11Y (April 24)
   -----------------------------------------------------------------------
@@ -179,11 +187,11 @@ Ranked by impact within each section.
   OBSERVABILITY
   -----------------------------------------------------------------------
   [ ]  Prometheus /metrics endpoint (error rate, latency, throughput)
-  [ ]  Background-task heartbeat in /health (poll loops can hang while
-       /health still returns 200)
   [ ]  Request tracing / IDs to correlate actions across logs
   [ ]  Alerting on Hue / Sonos disconnections (Uptime Kuma only checks
-       HTTP)
+       HTTP — though /health now reports `status: "degraded"` +
+       `tasks_stale` when poll loops fall behind, so Uptime Kuma can
+       parse status. Heartbeat surface itself shipped April 25.)
   [ ]  ML model health alerts (silent predictor failure goes unnoticed)
 
   SECURITY
@@ -278,12 +286,11 @@ Strengths and shipped items are summarized in MAJOR WORK SHIPPED above.
   - MoonScene shader materials at module scope (VRAM leak risk on
     unmount/remount)
 
-  OBSERVABILITY -- C+
+  OBSERVABILITY -- B-
   -----------------------------------------------------------------------
   - No /metrics endpoint
   - No request tracing / IDs
   - No DB health in /health
-  - No background-task heartbeat in /health
   - No ML model health alerts
   - Log timestamps missing timezone
 
