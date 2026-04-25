@@ -968,23 +968,23 @@ class AutomationEngine:
     ) -> dict[str, Any]:
         """Zone- and posture-aware per-light adjustments as the final overlay.
 
-        Two branches currently:
+        Two branches:
 
         1. ``zone=desk`` + watching: LIFT L2 above the projector-safe dim —
            watching at the desk is YouTube / a monitor stream and the
            projector is off, so the default dim L2 reads as too dark.
-        2. ``zone=bed + posture=reclined`` + watching (evening / night /
-           late_night): LOWER L1 and L2 below the baseline — lying back
-           with the projector on, lamps compete with the screen and drop
-           directly into the line of sight. Day is untouched (napping is
-           fine with natural light).
+        2. ``zone=bed + posture=reclined`` (any mode except sleeping):
+           LOWER L1 and L2 below the baseline. ``bed + reclined`` is a
+           physical fact about the user's body, not a mode label — when
+           you're lying down with the projector on, bright bedside lamps
+           compete with the screen and hit eyes directly regardless of
+           what the activity detector thinks you're doing. Sleeping
+           already has an ember-dim baseline lower than these targets.
 
         Only ever moves brightness in one direction per branch (lift-only
         for desk, lower-only for reclined) so a learned override stays
         preserved if it already moved the same way.
         """
-        if mode != "watching":
-            return state
         camera = self._camera_service
         zone = getattr(camera, "zone", None) if camera else None
         posture = getattr(camera, "posture", None) if camera else None
@@ -996,7 +996,7 @@ class AutomationEngine:
             return state
 
         # Branch 1 — watching at desk: lift L2.
-        if zone == "desk":
+        if zone == "desk" and mode == "watching":
             zone_bri_by_period = {
                 "day": 160,
                 "evening": 110,
@@ -1017,8 +1017,9 @@ class AutomationEngine:
             )
             return new_state
 
-        # Branch 2 — watching reclined in bed: lower L1 and L2 for projector.
-        if zone == "bed" and posture == "reclined":
+        # Branch 2 — reclined in bed: lower L1 and L2. Mode-agnostic
+        # except for sleeping (already at ember-dim, no-op anyway).
+        if zone == "bed" and posture == "reclined" and mode != "sleeping":
             ratio = self._BED_RECLINED_L1_RATIO.get(period)
             l2_target = self._BED_RECLINED_L2_WATCHING_BRI.get(period)
             if ratio is None or l2_target is None:
@@ -1041,8 +1042,8 @@ class AutomationEngine:
             if not changed:
                 return state
             logger.debug(
-                "Zone overlay: lowering for watching+bed+reclined (period=%s): %s",
-                period, targets,
+                "Zone overlay: lowering for bed+reclined (mode=%s, period=%s): %s",
+                mode, period, targets,
             )
             return new_state
 

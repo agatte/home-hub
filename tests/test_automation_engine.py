@@ -388,11 +388,52 @@ class TestZonePostureOverlay:
         out = engine._apply_zone_overlay(state, "watching", "night")
         assert out["2"]["bri"] == 70  # zone_bri_by_period[night]
 
-    def test_non_watching_mode_untouched(self, engine):
-        """Overlay is watching-only — gaming/working states pass straight through."""
+    def test_bed_reclined_lowers_in_working_mode(self, engine):
+        """Bed+reclined is a physical fact — lower L1/L2 even when mode=working.
+
+        Regression: previously _apply_zone_overlay was watching-only, so
+        a watching→working flip while reclined snapped L2 to working's
+        bright ambient (~bri 173).
+        """
         engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
-        state = {"1": {"on": True, "bri": 100, "ct": 400}}
-        out = engine._apply_zone_overlay(state, "gaming", "night")
+        state = {
+            "1": {"on": True, "bri": 60, "ct": 2270},
+            "2": {"on": True, "bri": 130, "ct": 2700},
+        }
+        out = engine._apply_zone_overlay(state, "working", "night")
+        assert out["1"]["bri"] == 25
+        assert out["2"]["bri"] == 8
+
+    def test_bed_reclined_lowers_in_relax_and_idle(self, engine):
+        """Reclined-lower applies across non-task modes."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        state = {
+            "1": {"on": True, "bri": 80, "ct": 454},
+            "2": {"on": True, "bri": 60, "ct": 454},
+        }
+        for mode in ("relax", "idle", "social"):
+            out = engine._apply_zone_overlay(state, mode, "night")
+            assert out["1"]["bri"] == 25
+            assert out["2"]["bri"] == 8
+
+    def test_bed_reclined_sleeping_passes_through(self, engine):
+        """Sleeping baseline is already below the reclined targets — no-op."""
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        state = {
+            "1": {"on": True, "bri": 20, "ct": 454},
+            "2": {"on": True, "bri": 5, "ct": 454},
+        }
+        out = engine._apply_zone_overlay(state, "sleeping", "night")
+        assert out == state
+
+    def test_desk_lift_only_for_watching(self, engine):
+        """Desk lift stays watching-only — working at desk uses its own ambient."""
+        engine._camera_service = _FakeCamera(zone="desk", posture="upright")
+        state = {
+            "1": {"on": True, "bri": 60, "ct": 2270},
+            "2": {"on": True, "bri": 130, "ct": 2700},
+        }
+        out = engine._apply_zone_overlay(state, "working", "night")
         assert out == state
 
 
