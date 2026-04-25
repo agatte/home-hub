@@ -1,880 +1,341 @@
 ================================================================================
-                        HOME HUB - FULL APPLICATION AUDIT
-                    Date: April 16, 2026 (independent re-audit)
+                        HOME HUB - APPLICATION AUDIT
+                    Last updated: April 25, 2026
 ================================================================================
-
-Comprehensive audit covering backend, frontend, machine learning, security,
-performance, observability, documentation, DevOps, tooling, and future roadmap.
 
 System: Single-user, always-on home automation dashboard with ML intelligence
 Stack:  FastAPI + SvelteKit + SQLite + WebSocket + LightGBM + YAMNet +
         MediaPipe + Pi-hole (Docker)
-Prod:   Dell Latitude 7420 (Ubuntu 24.04) kiosk mode at 192.168.1.210
+Prod:   Dell Latitude 7420 (Ubuntu 24.04) kiosk at 192.168.1.210
 Dev:    Windows desktop at 192.168.1.30
-Repo:   github.com/agatte/home-hub (200+ tracked files, no credential leaks)
+Repo:   github.com/agatte/home-hub
 
-Changes since last audit (April 15, 2026):
-  - Lighting redesign landed: per-light spatial variation, kitchen pair rule
-    in functional modes, post-sunset ct>=333 cutoff, colorspace exclusivity
-    (sat=0 before ct), _reconcile_effect fix for mode-switch brightness pop
-  - Watching mode tuned for projector (L2 from-across-room bias, no D65)
-  - Gaming watching-mode L1/L2 evening/night retuned (50->65, 25->45)
-  - docs/LIGHTING_EXPANSION.md added (Hue/Zigbee hardware wishlist)
-  - CLAUDE.md source-of-truth block references LIGHTING_EXPANSION.md
-  - automation_engine.py grew 1,825 -> 1,944 lines (+119) in one day
+This doc tracks the substantial work that has shipped and the substantial
+work that has not. Trivial fixes (one-line bug patches, dependency pins,
+small a11y nudges) are deliberately omitted -- check git log for those.
 
 ================================================================================
-                    STATUS UPDATE -- April 24, 2026
+                         GRADING SUMMARY
 ================================================================================
 
-This block tracks what has shipped since the April 16 audit. The Category
-Details and Action Items below remain the original snapshot; consult this
-section first to know what is no longer accurate.
+  Category                Grade   Summary
+  ---------------------   -----   ------------------------------------------
+  Backend Architecture    B-      ML wiring is solid; automation_engine.py
+                                  at 2,750 lines is the standing debt
+  Frontend / UI           B+      Living-Ink redesign + animated mode
+                                  scenes; vitest + Playwright in place
+  Design / UX             A-      Per-light spatial variation, kitchen pair
+                                  rule, post-sunset ct>=333, projector tune
+  Security                C       LAN-only, zero auth, file-upload
+                                  hardening shipped on music import
+  Machine Learning        A-      8 services, 5-signal fusion with nightly
+                                  weight-learning, shadow-before-promote
+  Performance             B       Threlte lazy-loaded, rAF capped, opt-in
+                                  camera; Hue 1s polling still aggressive
+  Observability           C+      Event tables + ML decisions + analytics
+                                  dashboard; no Prometheus, no tracing
+  Testing                 B+      Backend 405+ tests, frontend 60 tests,
+                                  Playwright local-only
+  Documentation           A-      PROJECT_SPEC + ML_SPEC + LIGHTING_EXPANSION
+                                  + CLAUDE.md current
+  DevOps / Deployment     C+      Smart deploy.sh + CI + DB backup; no
+                                  rollback, no staging
+  Tooling / DX            B+      MCP, hooks, skills, GitHub Actions
+  Future Readiness        A-      ML Phase 3 in progress, fusion shipped,
+                                  weight-learning live
 
-  Active Bugs resolved (verified in code, April 24):
-  - GenerativeCanvas store-subscription cleanup -- onDestroy now calls all
-    three unsubscribers
-  - api.js error handling -- safeFetch surfaces network/HTTP errors via
-    addError(); 8s timeout + AbortController added (commit 3d7c535).
-    Edge case: post-fetch JSON parse still uses .catch(() => null) -- low
-    priority, deferred
-  - Per-light manual override per-entry 4h timeout (automation_engine.py:2145-2159)
-  - Scene override silent failure -- broadcasts scene_failed WS frame +
-    WARN log when both v2 scene and preset fallback miss
-    (automation_engine.py:1536-1546)
-  - WebSocket unknown-type silent drop -- init.js default case logs warn
+================================================================================
+                       MAJOR WORK SHIPPED
+================================================================================
 
-  Other action items shipped since April 16:
-  - Music import oversize + XXE hardening (commit 48a029e)
-  - Mobile contrast + touch-target + ErrorToast live-region (commit dbbd63f)
-  - Screen-sync sticky cluster hysteresis (commit dcf3767)
-  - Presence camera-present + activity-mode departure vetoes (commit ea82d65)
+The full timeline lives in git. This list is "what would I tell someone
+returning to the project after a long break."
 
-  Backend hardening (April 24, commit def9606):
-  - Pydantic schemas for inbound WS messages (backend/schemas/ws.py) --
-    discriminated union, range-validated, error frame returned on invalid input
-  - Resilient lifespan shutdown -- _safe_shutdown helper isolates per-step
-    teardown failures, ordered producers->task-cancel->client-close,
-    bounded gather timeout, AmbientSoundService.stop() now actually called
-  - Event-logger retry queue -- 200-entry bounded deque, 30s drainer, 3
-    attempts per entry, threshold WARN on sustained drops; /health surfaces
-    event_logger_queue_depth + event_logger_overflow alongside drops
+  ML FOUNDATION (Phases 1-3)
+  -----------------------------------------------------------------------
+  - 8 ML services in backend/services/ml/ (~2,100 LOC), all using the
+    shadow-before-promote pattern with non-ML fallbacks
+  - ConfidenceFusion: 5-signal weighted ensemble (process, camera,
+    audio, behavioral, rule_engine) + presence voter, auto-apply at 95%
+    when idle/away, override stale processes at 98% with 80% agreement
+  - Accuracy-driven weight learning runs nightly at 3:30 AM via
+    fusion.update_weights_from_accuracy(), driven by ml_logger
+    .compute_accuracy_by_source(days=14) (main.py:502-521)
+  - BehavioralPredictor (LightGBM, 10 features), AudioClassifier
+    (YAMNet 521->9 classes), LightingPreferenceLearner (EMA per-light),
+    MusicBandit (Thompson sampling), FeatureBuilder, MLDecisionLogger,
+    ModelManager
+  - Camera service: MediaPipe face + pose, zone (desk/bed) + posture
+    (upright/reclined) with 15s hysteresis, opt-in via app_settings,
+    frames never persisted
+  - Smart screen sync: K-means dominant color (replaces naive averaging)
+  - Rule engine with learned time-based mode patterns from event data
+  - Event logging across 6 tables, 90-day rolling retention, fire-and-
+    forget pattern with bounded retry queue
+  - Live analytics dashboard: SVG confidence ring, animated signal
+    cards, per-source accuracy, decision history
 
-  Frontend perf + a11y bundle (April 24, commit 9b4dbbd):
-  - Threlte + three.js (~689KB chunk) now lazy-loaded via dynamic import
-    when mode=='sleeping'; new MoonBackground.svelte wraps Canvas+MoonScene
-  - prefers-reduced-motion enforced across the canvas scenes:
-    createAnimationLoop in scene-utils.js (Aurora + Pixel) renders one
-    static frame then halts; ParallaxScene's own rAF skips entirely;
-    MoonScene's useTask early-returns
+  LIGHTING REDESIGN (April 16 - April 25)
+  -----------------------------------------------------------------------
+  - Per-light spatial variation across every mode (no _uniform fallback)
+  - Kitchen pair rule (L3+L4 paired in functional modes, free to
+    diverge in relax / social)
+  - Post-sunset ct>=333 (~3000K) warmth cutoff in evening / night
+  - Colorspace exclusivity in hue_service: forces sat=0, drops hue when
+    ct is set, emits sat before ct (greenish-bedroom bug killed)
+  - _reconcile_effect orders state-apply before effect-stop (fixes the
+    100% brightness pop on mode switch); 0.5s guard between stop/start
+  - Watching tuned for projector (no D65, L2 cross-room bias, kitchen
+    OFF post-evening)
+  - Late-night autopilot cascade: 22:00 winddown override + LATE_NIGHT
+    process-weight decay 0.6 + 23:00 mode-flip safety net
+  - Zone+posture overlay: bed+reclined lowers L1/L2 across modes (not
+    just watching) at evening / night / late_night; desk+watching lifts
+    L2 above the projector-safe dim
+  - _get_time_period() now resolves the morning ramp window to "day"
+    (was falling through to "night" weekend 8-10am, weekday 6-7am)
+  - Camera commits (zone, posture) cleared on sustained absence and on
+    resume-from-sleeping; _apply_zone_overlay enforces a 5-min
+    freshness gate so stale commits can't dim the room
+
+  PRESENCE SYSTEM (April 19 - April 22)
+  -----------------------------------------------------------------------
+  - WiFi presence with two-signal detection: iPhone Shortcut webhooks
+    (primary, X-Presence-Token authed) + active ARP probing (backup);
+    ICMP retired (iOS WiFi power-save was producing phantom away events)
+  - Arrival ceremony (light wave, weather-aware effect, music auto-play)
+  - Departure fade gated by three vetoes: manual_override,
+    camera-present-recently, current activity mode
+  - Presence is also a fusion voter (weight 0.18, low-conf idle)
+
+  BACKEND HARDENING (April 24)
+  -----------------------------------------------------------------------
+  - Pydantic WS validation: backend/schemas/ws.py, discriminated union,
+    range-validated, error frame returned for invalid input
+  - Resilient lifespan shutdown: _safe_shutdown helper isolates per-
+    step teardown failures, ordered producers->task-cancel->client-
+    close, bounded gather timeout
+  - Event-logger retry queue: 200-entry bounded deque, 30s drainer,
+    3 attempts per entry, threshold WARN on sustained drops; /health
+    exposes event_logger_queue_depth + event_logger_overflow
+
+  FRONTEND PERFORMANCE + A11Y (April 24)
+  -----------------------------------------------------------------------
+  - Threlte + three.js (~689 KB) lazy-loaded via dynamic import when
+    mode==sleeping; new MoonBackground.svelte wraps Canvas + MoonScene
+  - prefers-reduced-motion honored across all canvas scenes (Aurora,
+    Pixel, Parallax, Moon)
   - ParallaxScene rAF loop now capped at 60fps (was uncapped on 144Hz)
-  - api.js parseJsonOrNull distinguishes empty body (HTTP 204) from
-    malformed JSON; the latter now surfaces an error toast + throws
-    instead of returning null
+  - api.js: AbortController + 8s timeout on apiGet/apiPost; HTTP
+    errors surfaced via addError() instead of swallowed; parseJsonOrNull
+    distinguishes empty body (HTTP 204) from malformed JSON
 
-  ML test coverage bundle (April 24):
-  - tests/test_feature_builder.py (30 cases) -- temporal/season encoding,
-    build_training_data with seeded ActivityEvent rows, naive-timestamp
-    SQLite normalization, MODE_ENCODING/SEASON_ENCODING stability
-  - tests/test_lighting_learner.py (11) -- EMA math, USER_TRIGGERS filter,
-    MIN_ADJUSTMENTS threshold, persisted-prefs load
-  - tests/test_music_bandit.py (11) -- Thompson select, record_reward
-    α/β math, JSON persist/load, retrain from SonosPlaybackEvent
-  - tests/test_behavioral_predictor.py (9; 2 skipped without lightgbm)
-    -- cold-start, status/promote/demote, lightgbm-unavailable graceful
-    degradation; full retrain+predict path runs on Latitude where
-    lightgbm is installed
-  - tests/test_ml_logger.py (11) -- log_decision write+broadcast,
-    on_mode_change windowed backfill, compute_accuracy_by_source per-signal
-    breakdown, compute_override_rate two-pointer walk
-  - conftest.py: tmp_model_manager + ml_db fixtures isolate tests from
-    real data/models/ and patch async_session for all 5 ML services
+  TEST COVERAGE (April 24)
+  -----------------------------------------------------------------------
+  - Backend: 183 -> 405+ tests
+    * ML services: behavioral_predictor, lighting_learner, music_bandit,
+      feature_builder, ml_logger (~70 new tests)
+    * ConfidenceFusion ensemble: 30 cases (staleness boundary, weight
+      normalization, late-night decay, agreement-denominator stale
+      exclusion, threshold edges, weight-learning math)
+    * Backend hardening (Pydantic WS / lifespan / event-logger retry)
+  - Frontend: 0 -> 60 tests
+    * vitest + @testing-library/svelte + jsdom (55 unit / component)
+    * Playwright + 5 e2e smoke (home + 3 routes + /health)
+    * GitHub Actions runs vitest on push/PR (Playwright is local-only;
+      see Still Open)
 
-  Frontend testing infrastructure (April 24):
-  - vitest + @testing-library/svelte + jsdom installed; vitest.config.js
-    with $lib alias + jest-dom matchers in tests/unit/setup.js
-  - 55 unit/component tests across 9 files:
-    * tests/unit/api.test.js (11) -- safeFetch (timeout/network/non-OK),
-      parseJsonOrNull (empty body vs malformed)
-    * tests/unit/stores/{lights,errors,modeSuggestion,activity}.test.js
-      (17) -- store reducers + fake-timer auto-dismiss + idle tracking
-    * tests/unit/theme.test.js, backgrounds/scene-utils.test.js,
-      backgrounds/layer-config.test.js (~13) -- pure-function coverage
-    * tests/unit/components/ErrorToast.test.js (4) -- live-region a11y
-      attributes verified (role=status, aria-live, aria-atomic)
-  - Playwright + playwright.config.js installed; 5 e2e smoke tests in
-    tests/e2e/dashboard.spec.js (home + 3 routes + /health). All pass
-    against the Latitude (verified live)
-  - npm scripts: test, test:unit, test:watch, test:e2e
-  - GitHub Actions CI: new "frontend" job runs vitest on push/PR.
-    Playwright e2e stays local-only (needs live backend) -- documented
-    in the workflow comment
-
-  Test suite: backend 183 -> 375 (+22 def9606, +70 ML-coverage, remainder
-  pre-existing not-yet-counted in original audit). Frontend: 0 -> 55 vitest
-  + 5 Playwright e2e smoke = 60 new frontend tests.
-
-  Still open (high-impact, ranked April 24):
-  1. automation_engine.py bloat -- 1,944 -> 2,707 LOC (+39% in 8 days);
-     architectural debt accelerating
-  2. Service DI by attribute assignment -- 9 attr-wirings in main.py
-  3. No Prometheus /metrics endpoint
-  4. Modal portal duplication risk (Plant/Bar widgets)
-  5. LightCard color presets duplicated from theme.js
-  6. LightGrid memoization opportunity (sort on every reactive change)
-  7. Background-task heartbeat in /health (poll loops can hang while
-     /health still returns 200)
-  8. No request tracing / IDs to correlate actions across logs
-  9. ConfidenceFusion end-to-end ensemble logic still untested
-     (only factors-plumbing covered)
-  10. Playwright e2e tests run locally only -- not in CI (would require
-      spinning up backend + frontend in the workflow)
-
-Baseline from April 15 (carried forward):
-  - ML Phase 1+2 shipped: 8 ML services (2,093 LOC) in backend/services/ml/
-  - BehavioralPredictor, AudioClassifier, LightingPreferenceLearner, MusicBandit
-  - ConfidenceFusion: 5-signal weighted ensemble (Phase 3 start, wired into
-    automation_engine.py at lines 805, 1603, 1659-1661)
-  - Behavioral predictor queried at automation_engine.py:1595-1599
-  - MediaPipe camera presence detection (15s away, opt-in)
-  - Smart screen sync (K-means color clustering replaces naive averaging)
-  - Live pipeline dashboard with fusion ring + per-signal gauge cards
-  - Rule engine with learned time-based mode patterns
-  - Ambient sound service (browser-based, weather-reactive)
-  - NWS weather migration (replaces OpenWeatherMap, no API key needed)
-  - WiFi presence detection with arrival/departure choreography and ARP
-    fallback (presence_service.py:283) after 3 ping failures
-  - Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
-  - Test suite: 183 tests across 12 files
-  - Event logging: 6 tables (activity, lights, sonos, scenes, ml_decisions,
-    ml_metrics)
-
-================================================================================
-                              GRADING SUMMARY
-================================================================================
-
-  Category                Grade   Prev    Summary
-  ---------------------   -----   -----   ----------------------------------------
-  Backend Architecture    B-      B       Solid ML design, but automation_engine.py
-                                          hit 1,944 lines (+119 in one day) and
-                                          main.py still injects deps via attrs
-  Frontend / UI           B       B       36 components, 12 stores, 4 routes.
-                                          Analytics page = live fusion dashboard
-  Design / UX             A-      B+      Full lighting redesign: per-light spatial
-                                          variation, kitchen pair rule, ct>=333
-                                          cutoff, colorspace exclusivity
-  Security                C       D       CORS fixed, rate limiting, WS validation.
-                                          Still no auth, no file upload limits
-  Machine Learning        B+      N/A     NEW: 8 services, confidence fusion,
-                                          shadow-before-promote, local-only
-  Performance             B-      B-      K-means screen sync heavier but better.
-                                          Camera adds load (opt-in mitigates)
-  Observability           C       D+      ML decision logging, 6 event tables,
-                                          analytics page. No Prometheus yet
-  Testing                 B-      C+      183 tests / 12 files (was 101 / 8).
-                                          Still no frontend or integration tests
-  Documentation           A-      B+      ML_SPEC.md (1,397 lines) is exceptional.
-                                          PROJECT_SPEC.md comprehensive
-  DevOps / Deployment     C+      C+      Unified supervisor. DB backup + CI
-                                          active. Still no rollback
-  Tooling / DX            B+      B+      MCP, hooks, skills, CI all solid
-  Future Readiness        A-      B+      ML Phase 1-3 in progress, confidence
-                                          fusion shipped, analytics, WiFi presence
-  ---------------------   -----   -----   ----------------------------------------
-  OVERALL GRADE           B+      B       ML layer is a genuine differentiator.
-                                          Testing improved. Security D → C.
-                                          System evolved from reactive control
-                                          panel to anticipatory intelligence
-
-================================================================================
-                            CATEGORY DETAILS
-================================================================================
-
---------------------------------------------------------------------------------
-1. BACKEND ARCHITECTURE -- Grade: B
---------------------------------------------------------------------------------
-
-  Strengths:
-  - Clean service layer pattern with 37 services across core, ML, and PC agent
-  - Async/await used correctly throughout; blocking calls wrapped in
-    asyncio.to_thread()
-  - WebSocket + polling hybrid catches external changes (Alexa, Hue app)
-  - Mode-change callback system is elegant and extensible
-  - SQLAlchemy 2.0 async ORM with proper parameterized queries
-  - ML services follow clean embedded pattern with graceful degradation --
-    every ML feature has a non-ML fallback
-  - Rule engine adds learned time-based patterns from event data
-  - Event logging system is comprehensive (6 tables, fire-and-forget pattern)
-  - NWS weather migration removed paid API dependency
-  - WiFi presence detection replacing Alexa geofence
-  - Rate limiting via slowapi (120 req/min default, 10/min on TTS)
-
-  Issues:
-  - automation_engine.py is 1,944 lines (grew from 1,825 in one day) --
-    urgently needs splitting into mode logic, light state calculator, and
-    effect manager. The file keeps absorbing every new capability
-  - main.py lifespan function is ~350 lines initializing 20+ services --
-    extract to a bootstrap.py or service registry
-  - Service dependency injection via direct attribute assignment at
-    main.py:314-328 (automation._confidence_fusion = ..., _behavioral_predictor
-    = ..., rule_engine._fusion = ...). Invisible coupling; not discoverable
-    from __init__ signatures. Refactor to constructor args
-  - Incomplete shutdown in lifespan finally block: only hue_v2, rec_service,
-    and camera get close() called. Sonos, TTS, music_mapper, automation,
-    scheduler, rule_engine, presence, ambient_sound, pihole, bar, and plant
-    services leak open sockets/sessions on shutdown
-  - Event logger silent-drop pattern: event_logger.py:83-84, :146, :174,
-    :205 catch bare Exception and log-only. ML training data gaps accumulate
-    invisibly -- no retry queue, no alert on repeated failures
-  - Per-light manual override expiration not enforced in code. Mode-level
-    4h timeout works (automation_engine.py:1552), but _manual_light_overrides
-    dict only clears via clear_override() -- no per-entry timeout
-  - Scene override silent fallback hole at automation_engine.py:1034-1045:
-    if both v2 scene and preset fallback fail, lights stay in prior state
-    with no ERROR-level log
-  - scenes.py route file is 768 lines with 20 preset definitions inline --
-    extract presets to a separate module
-  - Light IDs are strings in some places, ints in others -- inconsistent typing
-  - 22+ bare "except Exception" clauses across the backend -- should catch
-    specific exceptions on critical paths
-  - No middleware for request logging/tracing
-  - No circuit breaker for Hue/Sonos API calls (if bridge hangs, polling blocks)
-
---------------------------------------------------------------------------------
-2. FRONTEND / UI -- Grade: B
---------------------------------------------------------------------------------
-
-  Strengths:
-  - Clean Svelte store pattern with WebSocket dispatch (12 stores)
-  - 36 components with clear single-responsibility
-  - 4 routes: Home, Music, Analytics, Settings
-  - Analytics page is now a live decision pipeline dashboard -- SVG
-    confidence ring, 5 animated signal cards, collapsible historical
-    analytics. Real-time fusion scores update on every pipeline broadcast
-  - Generative canvas is visually distinctive -- not generic AI dashboard
-  - Good idle detection (60s timeout, auto-hide UI elements)
-  - WebSocket reconnection with build_id auto-reload is clever
-  - Playing-card deck for mode selection is unique
-  - ModeSuggestionToast surfaces rule engine predictions to user
-
-  Issues:
-  - Memory leaks: GenerativeCanvas.svelte -- three store subscriptions
-    cleanup may not catch all paths
-  - Silent API failures: api.js -- .catch(() => ({})) swallows all errors,
-    UI never shows failure state
-  - api.js has no AbortController/timeout on apiGet/apiPost -- slow
-    backend hangs fetches indefinitely
-  - WebSocket unknown-type messages silently dropped (init.js:68-114 has
-    no `default` case in the type switch)
-  - ws.js build_id reload calls window.location.reload() unconditionally --
-    no error path if the reload itself fails during a deploy race
-  - ParallaxScene.svelte rAF loop has no FPS cap (unlike GenerativeCanvas
-    which caps at 15fps); paints ~9x as much work on a 144Hz display
-  - Modal portal duplication risk: PlantWidget and BarWidget each append
-    modals to document.body via a local portal action with no singleton
-    guard. Two-mount = duplicated listeners
-  - ErrorToast.svelte lacks role="alert" / aria-live -- screen readers
-    silently miss the toast
-  - LightCard.svelte:11-19 redefines color presets already in
-    theme.js:147-156. Deduplicate to prevent drift
-  - Accessibility gaps:
-    * Empty alt text on album art images
-    * Slider missing aria-labelledby
-    * --text-muted color (#5c5e6a on #08080c) fails WCAG AA (~2.5:1)
-    * No <html lang="en">
-  - No component tests or E2E tests
-  - Three.js (~500KB) + Threlte (~100KB) loaded unconditionally, even when
-    MoonScene (sleeping mode) isn't active
-  - No prefers-reduced-motion gate on heavy animations
-
---------------------------------------------------------------------------------
-3. DESIGN / UX -- Grade: B+
---------------------------------------------------------------------------------
-
-  Strengths:
-  - Generative Perlin noise canvas reacting to mode/lights/music is impressive
-  - Glass-card aesthetic with Bebas Neue display font is cohesive
-  - 5 distinct mode backgrounds (pixel art, parallax city, aurora, 3D moon,
-    generative canvas fallback)
-  - Mode card deck with flip animation is memorable
-  - NowPlayingChip and NowPlayingIdle are clean and unobtrusive
-  - April 16 lighting redesign shipped: per-light spatial variation (no
-    more _uniform), kitchen pair rule in functional modes, post-sunset
-    ct>=333 cutoff, colorspace exclusivity (sat=0 before ct), watching
-    tuned for projector (L2 from-across-room bias, no D65), gaming uses
-    dim accents so screen sync dominates
-  - _reconcile_effect applies state FIRST then effect, with 0.5s guard --
-    fixes the mode-switch brightness pop bug; greenish-bedroom fix stable
-    via hue_service.py:144 (sat=0 before ct, drop hue when ct present)
-
-  Issues:
-  - No prefers-reduced-motion gate on heavy animations
-  - Canvas DPR capped at 2x -- loses sharpness on 3x displays
-  - rotateY(540deg) on card flip is 3x more rotation than needed
-  - No loading/skeleton states for async data (weather, Sonos status)
-  - Mobile responsive breakpoints exist but untested on actual devices
-  - Mobile touch targets: FloatingNav.svelte shrinks to 40x40px at 480
-    breakpoint (WCAG wants 48x48); LightCard color swatches are 20x20
-
---------------------------------------------------------------------------------
-4. SECURITY -- Grade: C (was D)
---------------------------------------------------------------------------------
-
-  FIXED since last audit:
-  - CORS locked to specific LAN origins (was allow_origins=["*"])
-  - Rate limiting via slowapi on all endpoints
-  - WebSocket JSON parsing wrapped in try-catch with validation
-
-  REMAINING CRITICAL:
-  - Zero authentication: Every API endpoint is fully open. Anyone on WiFi
-    can control lights, play audio, upload files, read all data. All 80+
-    endpoints, including ML model promotion/demotion, camera enable/disable,
-    and rule engine management are unprotected.
-  - File upload: music.py -- No file size limit, no content-type validation,
-    no XXE protection on XML parsing (Apple Music import).
-
-  HIGH:
-  - Preview URL injection: music.py -- preview_url passed directly to
-    sonos.play_uri() with no URL validation (SSRF risk).
-  - Plant App sends email + password in JSON body over HTTP (not HTTPS).
-
-  MEDIUM:
-  - MCP query_db accepts arbitrary SELECT including UNION attacks.
-  - CORS origins list exposes LAN topology (192.168.1.x addresses).
-  - Camera service has no auth -- anyone on LAN can enable/disable face
-    detection via POST /api/camera/enable.
-  - HTTP only: No TLS. Acceptable for LAN-only but blocks Cloudflare Tunnel.
-
-  Verified safe:
-  - .env IS in .gitignore -- secrets not committed (verified across all
-    171+ commits in git history, zero matches)
-  - .env.example uses only placeholder values -- safe on GitHub
-  - No hardcoded secrets in any Python or JavaScript source files
-  - subprocess.run() uses list args (no shell injection)
-  - SQL in route files uses parameterized :placeholder syntax
-  - data/ directory (SQLite DB, ML models) fully gitignored
-  - *.png gitignored (except frontend background assets)
-  - .mcp.json contains only command definition, no secrets
-  - ML model files contain only learned weights, no PII
-
---------------------------------------------------------------------------------
-5. MACHINE LEARNING / INTELLIGENCE -- Grade: B+ (NEW)
---------------------------------------------------------------------------------
-
-  Architecture:
-  - 8 ML services in backend/services/ml/ (2,093 LOC total)
-  - All services follow shadow-before-promote pattern
-  - Local-only processing -- no cloud APIs for inference
-  - Every ML feature has a non-ML fallback (graceful degradation)
-  - Confidence fusion: 5-signal weighted ensemble for mode decisions
-  - Nightly retraining at 4 AM via AsyncScheduler
-  - Auto-demotion: accuracy < baseline for 3 consecutive nights
-
-  Services:
-  - ConfidenceFusion (228 LOC) -- weighted ensemble of process, camera,
-    audio, predictor, and rule engine signals. Auto-apply at 95%+ when
-    idle/away, override stale processes at 98%+ with 80%+ agreement.
-    Default weights with nightly accuracy-driven updates
-  - ModelManager (193 LOC) -- model persistence, versioning, metadata
-  - BehavioralPredictor (327 LOC) -- LightGBM mode prediction from 10
-    temporal + behavioral features. Shadow mode, needs 500+ events to train
-  - LightingPreferenceLearner (208 LOC) -- EMA (alpha=0.3) per-light
-    preferences from manual adjustments. Needs 5+ adjustments per combo
-  - AudioClassifier (504 LOC) -- YAMNet (TFLite) 521 AudioSet classes
-    mapped to 9 Home Hub classes. Shadow mode, 2-3s inference cycle
-  - MusicBandit (260 LOC) -- Thompson sampling playlist selection with
-    Beta(alpha, beta) distributions per arm. Active, exploring
-  - FeatureBuilder (202 LOC) -- temporal + behavioral feature engineering
-  - MLDecisionLogger (170 LOC) -- decision logging with reasoning chains,
-    backfills actual_mode on next transition
-
-  Additional ML-adjacent:
-  - CameraService (371 LOC) -- MediaPipe face detection, 15s away detection,
-    opt-in via camera_enabled setting, frames never persisted
-  - Smart screen sync -- K-means (n=5) dominant color extraction, replaces
-    naive pixel averaging
-  - RuleEngineService (295 LOC) -- frequency-based time patterns from events
-
-  Privacy:
-  - Camera frames: numpy arrays in memory only, overwritten each 5s cycle.
-    Never serialized, persisted, networked, or logged
-  - Audio: raw PCM overwritten each 1s read cycle. Mel-spectrograms are
-    one-way (cannot invert to intelligible audio). Only labels persist
-  - Models: aggregate statistical patterns only. No PII reconstructable
-  - Full ML data wipe available from Settings (models + decisions + metrics)
-  - 90-day rolling retention on event tables
-
-  Model files (all in data/models/, gitignored):
-  - yamnet.tflite (16 MB) -- auto-downloaded from Google GCS
-  - yamnet_class_map.csv (14 KB) -- auto-downloaded
-  - blaze_face_short_range.tflite (225 KB) -- auto-downloaded
-  - mode_predictor.lgb -- created after 500+ events (pending)
-  - lighting_prefs.json -- created after 5+ adjustments per combo (pending)
-  - music_bandit.json -- created on first playlist selection
-  - model_meta.json -- tracks version, accuracy, status per model
-
-  Issues:
-  - ML test coverage still patchy: audio_classifier (26) + camera_service
-    (16) have tests. behavioral_predictor, lighting_learner, music_bandit,
-    feature_builder, ml_logger, confidence_fusion, rule_engine do NOT
-  - BehavioralPredictor in cold start period -- needs 500+ activity events
-    (~1 week of data) before first training
-  - AudioClassifier still in shadow mode -- needs accuracy comparison with
-    existing RMS detector before promotion
-  - ConfidenceFusion wired into automation_engine.py:1659-1661 but fusion
-    *weights* still hardcoded -- no nightly accuracy-driven update. The
-    promised weight-learning step from ml_metrics is not shipped
-  - Lighting-learner overlay applied silently: automation_engine.py:1077-1083
-    applies the LightingPreferenceLearner delta to the target state but no
-    ml_decisions row is written for the overlay. Hard to tell from logs
-    whether the learner is actually touching a light on any given cycle
-  - No A/B testing framework for comparing ML vs rule engine decisions
-  - lightgbm is optional dependency -- silent graceful degradation means
-    predictor failures could go unnoticed without monitoring
-
---------------------------------------------------------------------------------
-6. PERFORMANCE -- Grade: B-
---------------------------------------------------------------------------------
-
-  Issues:
-  - Hue polling at 1s intervals -- aggressive for 6 bulbs. 3-5s would work
-  - Sonos polling at 2s intervals -- could be 5s
-  - Individual WebSocket broadcasts per light on scene activation (N sends
-    instead of batched)
-  - K-means screen sync is heavier than naive averaging (~10ms per frame)
-    but produces significantly better color selection
-  - MediaPipe face detection adds CPU load (~2%, mitigated by opt-in toggle
-    and 5s capture interval)
-  - LightGrid.svelte runs Object.values($lights).sort() on every reactive
-    change -- should memoize
-  - GenerativeCanvas particle count resizes array frame-by-frame during
-    transitions (GC pressure)
-  - MoonScene shader materials at module scope -- VRAM leak risk on
-    unmount/remount
-  - Three.js + Threlte loaded unconditionally (~600KB) even when sleeping
-    mode isn't active
-
-  ML performance budget (sustained):
-  - Audio classifier: 5% CPU, 50-200MB RAM, every 2-3s
-  - Camera service: 2% CPU, 50-100MB RAM, every 5s
-  - Behavioral predictor: <1% CPU, <10MB RAM, every 60s
-  - Music bandit: <1% CPU, <1KB RAM, on mode change
-  - Lighting learner: <1% CPU, <1MB RAM, on mode change
-  - Total ML overhead: <10% CPU, 200-400MB RAM
-
-  OK:
-  - 15fps cap on GenerativeCanvas is appropriate
-  - asyncio.to_thread() correctly used for blocking Hue bridge calls
-  - SQLite is fine for current data volume (~184KB DB)
-  - Music bandit is O(1) per decision -- negligible overhead
-
---------------------------------------------------------------------------------
-7. OBSERVABILITY -- Grade: C (was D+)
---------------------------------------------------------------------------------
-
-  What exists:
-  - /health endpoint with Hue/Sonos connectivity status
-  - Log rotation: RotatingFileHandler (5MB, 3 backups, 20MB max)
-  - Structured logging: python-json-logger (JSON to file, text to console)
-  - Uptime Kuma monitoring on :3002 (HTTP health check)
-  - MCP get_health() and get_event_summary() tools
-  - ML decision logging with full reasoning chains (ml_decisions table)
-  - Event logging across 6 tables with fire-and-forget pattern
-  - Analytics page with decision pipeline visualization
-  - ML accuracy metrics tracked in ml_metrics table (nightly)
-
-  What's still missing:
-  - No Prometheus /metrics endpoint -- no error rate, latency, or throughput
-  - No alerting on Hue/Sonos disconnections (Uptime Kuma only checks HTTP)
-  - No request tracing -- no request IDs, can't correlate actions to logs
-  - No database health in /health -- only checks Hue/Sonos, not SQLite
-  - No background-task heartbeat in /health. Polling loops (hue, sonos),
-    automation loop, scheduler, rule_engine, camera service, presence
-    service can hang while /health still returns 200. Should expose a
-    last_heartbeat timestamp per task and flag stale ones
-  - No ML model health alerts (if predictor silently fails, no notification)
-  - Timestamp format missing timezone in log output
-
---------------------------------------------------------------------------------
-8. TESTING -- Grade: B- (was C+)
---------------------------------------------------------------------------------
-
-  What exists:
-  - pytest suite: 183 tests across 12 files
-  - Test breakdown:
-    * test_automation_engine.py (23 tests)
-    * test_audio_classifier.py (26 tests) -- NEW since last audit
-    * test_music_mapper.py (22 tests)
-    * test_event_query.py (21 tests) -- NEW since last audit
-    * test_camera_service.py (16 tests) -- NEW since last audit
-    * test_api_routes.py (15 tests)
-    * test_rule_engine.py (15 tests) -- NEW since last audit
-    * test_scheduler.py (13 tests)
-    * test_pihole_service.py (12 tests)
-    * test_api_health.py (7 tests)
-    * test_weather_service.py (7 tests)
-    * test_websocket.py (6 tests)
-  - Mock infrastructure in conftest.py (Hue, Sonos, WebSocket, DB)
-  - GitHub Actions CI runs full suite on push + pull_request
-  - pyproject.toml: asyncio_mode = "auto", testpaths = ["tests"]
-
-  What's missing:
-  - No frontend tests (vitest, Playwright, or similar)
-  - No integration tests (end-to-end mode change → lights → music)
-  - Services without tests: Hue, Sonos, TTS, screen sync, routines,
-    event_logger, recommendation_service, library_import_service
-  - ML services partially tested: audio_classifier and camera have tests,
-    but behavioral_predictor, lighting_learner, music_bandit,
-    feature_builder, and ml_logger do not
-  - No coverage reporting (pytest-cov not configured)
-  - No load/stress testing
-
---------------------------------------------------------------------------------
-9. DOCUMENTATION -- Grade: A- (was B+)
---------------------------------------------------------------------------------
-
-  Strengths:
-  - PROJECT_SPEC.md is exceptional -- covers vision, architecture, API
-    schema, database schema, roadmap, target state
-  - ML_SPEC.md is outstanding -- 1,397 lines covering vision, phased
-    rollout, architecture, features, data pipelines, model selection,
-    testing strategy, deployment plan, performance budgets, privacy design
-  - LIGHTING_EXPANSION.md is the hardware wishlist by category and price
-    tier, with per-apartment placement and integration notes. Referenced
-    from CLAUDE.md source-of-truth block
-  - CLAUDE.md is thorough -- patterns, commands, network devices, file
-    structure, developer patterns with code examples
-  - Future_Development.md holds 15 well-described feature ideas (to which
-    this audit appends 4 more: Override Reason Classifier, Transition-Curve
-    Preference Learning, Focus Envelope, Apartment Logbook)
-  - Commit messages follow conventional format (fix:, feat:, docs:)
-  - API routes fully documented with method, path, purpose tables
-
-  Issues:
-  - No ops runbook -- how to troubleshoot, check logs, recover from failures
-  - No changelog for breaking changes
-  - No database migration documentation (migrations are inline in database.py)
-  - .env.example could document which keys are optional vs required more
-    clearly
-
---------------------------------------------------------------------------------
-10. DEVOPS / DEPLOYMENT -- Grade: C+
---------------------------------------------------------------------------------
-
-  What works:
-  - deploy.sh is smart -- diffs HEAD, only rebuilds what changed, health-
-    checks after restart
-  - set -euo pipefail for safety
-  - git pull --ff-only prevents accidental merge commits
-  - Kiosk auto-reload via WebSocket build_id handshake
-  - Systemd service files version-controlled in deployment/
+  INFRASTRUCTURE / OPS (carried baseline)
+  -----------------------------------------------------------------------
+  - Smart deploy.sh: diffs HEAD, only rebuilds what changed, health-
+    checks after restart, kiosk auto-reload via WebSocket build_id
   - Daily SQLite backup cron on Latitude (4 AM, 7-day retention)
-  - GitHub Actions CI (lint + test on push/PR)
-  - Unified PC agent supervisor replaces 3 Task Scheduler tasks
-  - Pre-push git hook catches lint errors
-
-  What's missing:
-  - No rollback: If health check fails after deploy, system is left broken
-  - No staging environment: Changes go straight from dev to production
-  - Health check timing: 3s sleep may not be enough for full startup with
-    ML model loading
-  - No WebSocket health check (only HTTP /health is verified)
-  - No automated frontend build verification in CI (only Python lint + test)
-
---------------------------------------------------------------------------------
-11. TOOLING / DX -- Grade: B+
---------------------------------------------------------------------------------
-
-  Strengths:
-  - MCP server with 20+ tools -- verify changes without leaving Claude Code
-  - Claude Code hooks auto-run ruff + ESLint on save
-  - /api-audit and /ui-audit skills for systematic checking
-  - /deploy-home skill for one-command production deploys
-  - Frontend hot reload via Vite dev server with API proxy
-  - Pre-push git hook catches lint errors
-  - GitHub Actions CI (ruff lint + pytest on push/PR)
-  - Bundle analyzer via npm run analyze (vite-plugin-visualizer)
-  - py-spy + httpie available on Latitude for production debugging
-
-  Missing:
-  - pytest-cov for coverage reporting
-  - Playwright or vitest for frontend testing
-  - DB Browser for SQLite (visual data exploration, optional desktop GUI)
-
---------------------------------------------------------------------------------
-12. FUTURE READINESS -- Grade: A- (was B+)
---------------------------------------------------------------------------------
-
-  Strengths:
-  - ML Phase 1+2 fully shipped, Phase 3 started with confidence fusion
-  - ConfidenceFusion: 5-signal weighted ensemble with auto-apply + stale
-    override capabilities -- the core of autonomous operation
-  - Live pipeline dashboard shows all signals competing in real-time
-  - Rule engine active -- generating learned time-based mode patterns
-  - Event logging capturing data across 6 tables for future learning
-  - WiFi presence detection with arrival/departure choreography
-  - Shadow-before-promote pattern ensures safe ML rollouts
-  - All ML features designed with graceful degradation for cold start
-
-  Path to full autonomy (remaining):
-  - Accuracy-driven weight learning from ml_metrics (nightly)
-  - Override rate tracking to validate fusion quality
-  - Behavioral predictor needs 500+ events (~1 week) for first training
-  - Audio classifier promotion from shadow to active
-  - Lower auto-apply threshold once false positive rate < 1/day
+  - GitHub Actions CI (ruff lint + pytest + vitest)
+  - Pi-hole v6 in Docker (host networking) on Latitude
+  - Unified PC agent supervisor (single pythonw.exe under Task
+    Scheduler manages activity_detector + ambient_monitor + screen sync)
+  - Custom MCP server with 25+ tools (.mcp.json)
+  - Skills: /home-hub-dev, /api-audit, /ui-audit, /deploy-home,
+    /project-spec
+  - py-spy + httpie on Latitude for production debugging
 
 ================================================================================
-                            ACTIVE BUGS
+                            STILL OPEN
 ================================================================================
 
-  Bug                                           Location              Status
-  -------------------------------------------   -------------------   --------
-  Memory leak in GenerativeCanvas store         GenerativeCanvas      OPEN
-  subscriptions -- cleanup may miss paths       .svelte:40-61
+Ranked by impact within each section.
 
-  Silent API error swallowing -- .catch(()      api.js                OPEN
-  => ({})) hides all failures from UI
-
-  Per-light manual override has no per-entry    automation_engine     OPEN
-  expiration -- _manual_light_overrides dict    .py:933, :942
-  only clears via clear_override(), not a 4h
-  timeout like the mode-level override
-
-  Scene override silent failure if both v2      automation_engine     OPEN
-  scene activation AND preset fallback fail --  .py:1034-1045
-  lights stay in prior state, no ERROR log
-
-  WebSocket unknown-type messages silently      init.js:68-114        OPEN
-  dropped; no `default` case in type switch
-
-================================================================================
-                        TOP PRIORITY ACTION ITEMS
-================================================================================
-
-  COMPLETED (April 12, 2026):
+  BACKEND ARCHITECTURE
   -----------------------------------------------------------------------
-  [x]  Fix CORS to specific origins
-  [x]  Fix event_logger datetime timezone bug
-  [x]  Fix fauxmo make_udp_sock error
-  [x]  Add RotatingFileHandler to logger.py
-  [x]  Add try-catch around WebSocket json.loads()
-  [x]  Add daily SQLite backup cron on Latitude
-  [x]  Add pytest suite (36 → 101 tests)
-  [x]  Add GitHub Actions CI workflow
-  [x]  Version-control systemd service files in deployment/
-  [x]  Delete dead code (Sidebar.svelte, Header.svelte, deprecated modeIcon)
-  [x]  Add rate limiting via slowapi
-  [x]  Add pre-push git hook
-  [x]  Add ruff config in pyproject.toml
-  [x]  Fix weather widget high/low display
-  [x]  Now Playing Ambient Typography (NowPlayingIdle.svelte)
-  [x]  Sunrise Alarm Light Ramp (30-min warm-up before routine)
-  [x]  Weather-Reactive Lighting (condition-based ambient adjustments)
-  [x]  Uptime Kuma monitoring on Latitude
-  [x]  python-json-logger (structured JSON file logs)
-  [x]  vite-plugin-visualizer (bundle size analysis)
-  [x]  py-spy + httpie ops tools on Latitude
+  [ ]  Split automation_engine.py (2,750 lines) into mode logic, light-
+       state calculator, effect manager
+  [ ]  Extract main.py lifespan (~880 lines) to a bootstrap.py /
+       service registry
+  [ ]  Replace service DI by attribute assignment (9 attr-wirings in
+       main.py) with constructor args
+  [ ]  Circuit breaker for Hue / Sonos calls (slow bridge can stall
+       polling)
 
-  COMPLETED (April 12-15, 2026):
+  OBSERVABILITY
   -----------------------------------------------------------------------
-  [x]  ML Phase 1: BehavioralPredictor, LightingLearner, MLDecisionLogger,
-       FeatureBuilder, ModelManager
-  [x]  ML Phase 2: AudioClassifier (YAMNet), MusicBandit (Thompson sampling),
-       CameraService (MediaPipe), Smart ScreenSync (K-means)
-  [x]  Analytics page with decision pipeline visualization
-  [x]  Learning API routes (/api/learning/*)
-  [x]  Camera API routes (/api/camera/*)
-  [x]  Event logging system (6 tables, fire-and-forget)
-  [x]  Rule engine with learned time-based patterns
-  [x]  Ambient sound service (browser-based, weather-reactive)
-  [x]  NWS weather migration (replaces OpenWeatherMap)
-  [x]  WiFi presence detection (replaces Alexa geofence)
-  [x]  Unified PC agent supervisor (replaces 3 Task Scheduler tasks)
-  [x]  Gaming lights revamp (dim accents so screen sync dominates)
-  [x]  Test suite expansion (101 → 183 tests, 8 → 12 files)
-  [x]  Confidence fusion: 5-signal weighted ensemble (Phase 3 start)
-  [x]  Live pipeline dashboard with fusion ring + signal gauge cards
-  [x]  Collapsible analytics on pipeline page
+  [ ]  Prometheus /metrics endpoint (error rate, latency, throughput)
+  [ ]  Background-task heartbeat in /health (poll loops can hang while
+       /health still returns 200)
+  [ ]  Request tracing / IDs to correlate actions across logs
+  [ ]  Alerting on Hue / Sonos disconnections (Uptime Kuma only checks
+       HTTP)
+  [ ]  ML model health alerts (silent predictor failure goes unnoticed)
 
-  REMAINING -- THIS MONTH:
+  SECURITY
   -----------------------------------------------------------------------
-  [ ]  Add Pydantic schemas for WebSocket messages
-  [ ]  Add file upload size limit + content-type validation (music import)
-  [ ]  Add ML test suite for untested services (behavioral_predictor,
-       lighting_learner, music_bandit, feature_builder, ml_logger)
+  [ ]  API key auth for write endpoints (every endpoint is open on LAN)
+  [ ]  Migrate Plant App integration to HTTPS (currently sends email +
+       password over HTTP)
+  [ ]  URL allowlist on sonos.play_uri (preview_url SSRF risk)
+  [ ]  MCP query_db: tighten beyond "SELECT only" (UNION attacks
+       possible against the live DB)
 
-  REMAINING -- NEXT QUARTER:
+  DEVOPS
   -----------------------------------------------------------------------
-  [ ]  Add simple API key auth for write endpoints
-  [ ]  Add Prometheus /metrics endpoint
-  [ ]  Split automation_engine.py into smaller modules (1,944 lines)
-  [ ]  Extract main.py lifespan to bootstrap.py
-  [ ]  Add deploy.sh rollback capability
-  [ ]  Migrate Plant App integration to HTTPS
-  [ ]  Promote audio classifier from shadow to active (needs data)
-  [ ]  Implement accuracy-driven fusion weight learning (nightly update)
-  [ ]  Add pytest-cov for coverage reporting
-  [ ]  Add frontend testing (Playwright or vitest)
+  [ ]  deploy.sh rollback capability (failed health check leaves system
+       broken)
+  [ ]  Wire Playwright e2e into CI (currently local-only -- would
+       require spinning up backend + frontend in the workflow)
+  [ ]  Staging environment between dev and prod
+  [ ]  pytest-cov for coverage reporting
 
-================================================================================
-                          CREATIVE FEATURE IDEAS
-================================================================================
-
-  The standing backlog lives in docs/Future_Development.md (15 ideas across
-  ML + general). Ideas moved from this doc into that backlog since the last
-  audit: Mood Drift Detection, Contextual Music Memory, Anomaly-Triggered
-  Automation Pause, Sleep Quality Inference, Adaptive Transition Choreo-
-  graphy, Guest Wi-Fi Landing Page, Power Outage Recovery, Seasonal Lighting
-  Profiles, Dashboard Vital Signs Strip. Shipped since last audit: Multi-
-  Signal Confidence Fusion (April 15, first Phase 3 deliverable).
-
-  The four ideas below are new this audit -- none overlap Future_Development
-  .md's existing 15 entries or the parking lot at the bottom of this section.
-
-
-  MACHINE LEARNING IDEAS (new, April 16)
+  ML PROMOTION (data-gated)
   -----------------------------------------------------------------------
+  [ ]  BehavioralPredictor: needs 500+ activity events (~1 week of
+       data) before first training
+  [ ]  AudioClassifier: shadow -> active after accuracy comparison
+       with the existing RMS detector
+  [ ]  Lower fusion auto-apply threshold once false-positive rate is
+       < 1/day
 
-  Override Reason Classifier with Soft Counterfactuals        [Medium]
-    Train a lightweight sequence classifier on the 90s of sensor state
-    leading up to every manual override (time-of-day, prior 3 modes,
-    weather, last playback, camera presence, ambient audio). Model output
-    is a cluster label for the *reason* the user overrode: "too bright
-    for evening screen time", "relax-mode picked wrong music for my mood",
-    "winddown too early while guests present". On the NEXT occurrence of
-    a matching context, do NOT auto-apply -- surface a soft counterfactual
-    toast: "Last Tuesday at 9pm raining, you switched working -> relax.
-    Try that now, or stay working?" Distinct from Mood Drift Detection
-    (which tracks multi-day *derivative* of preferences); this tracks the
-    *reason* for single overrides and drives surgical interventions.
-    Touches: new override_reason_classifier.py, ml_logger.py,
-    ModeSuggestionToast.svelte, confidence_fusion.py (new signal lane)
-
-  Per-User Transition-Curve Preference Learning               [Medium]
-    Learn not just WHICH mode, but HOW each mode should transition. Do
-    you prefer bri-first-then-color, crossfade, or snap? At what speed?
-    Data source: mid-transition manual light adjustments already captured
-    in light_adjustments. If the user consistently nudges brightness up
-    during a 4s crossfade (they keep wanting it brighter sooner), the
-    model learns to lead with brightness next time. Autonomously updates
-    MODE_TRANSITION_TIME and transition *order* per (mode, time-of-day)
-    bucket. Graceful degradation: falls back to hardcoded defaults when
-    N < 20 transitions observed for that bucket. All existing ML features
-    personalize the destination *state*; this personalizes the *trajectory*.
-    Touches: new transition_curve_learner.py, automation_engine.py
-    (_apply_state pre-hook), new transition_preferences column
-
-
-  GENERAL HOME HUB IDEAS (new, April 16)
+  FRONTEND HYGIENE
   -----------------------------------------------------------------------
+  [ ]  Modal portal duplication risk (Plant and Bar widgets each
+       append modals to document.body with no singleton guard)
+  [ ]  LightCard color presets duplicated from theme.js -- deduplicate
+       to prevent drift
+  [ ]  LightGrid: memoize Object.values($lights).sort() on reactive
+       change
+  [ ]  WCAG AA: --text-muted #5c5e6a on #08080c is ~2.5:1
+  [ ]  Three.js DPR cap at 2x loses sharpness on 3x displays
 
-  Focus Envelope                                              [Medium]
-    A pomodoro-by-lights mode. During focus sessions, the ambient lights
-    smoothly constrict toward desk-dominant (kitchen fades, L1 dims, L2
-    desk stays solid); during breaks, they diffuse back outward. The
-    brightness envelope itself IS the pomodoro timer -- no distracting
-    clock, no sound, no overlay. Auto-triggers when Cursor / VSCode /
-    `claude` is focused for >25 min with no alt-tab >18 min. Break
-    envelope: 5 min diffuse + ambient noise shift. User sets session:break
-    ratio. Distinct from existing `working` mode (which is static) and
-    from Adaptive Transition Choreography in Future_Development.md (which
-    is a staggered wave on mode *change*): Focus Envelope is a continuous
-    low-amplitude modulation *during* a mode, with semantic meaning.
-    Touches: new focus_envelope.py, Settings toggle, FocusChip.svelte
+================================================================================
+                          CATEGORY DETAILS
+================================================================================
 
-  Apartment Logbook -- Nightly Auto-Journal                   [Easy]
-    A silent nightly (2am) job writes a single-file Markdown journal entry
-    summarizing the day in narrative prose: "Worked 4h12m (9:14am-2:05pm,
-    paused at 11:30 for kitchen). Gaming 1h48m. Rain rolled in at 2:14pm,
-    which triggered candle effect twice and shifted winddown 12 min
-    early. Overrode the winddown routine once (stayed on watching until
-    11:52pm)." Pure read over existing event_logger tables -- no new
-    data sources. Writes to data/journal/YYYY-MM-DD.md. Surfaced behind
-    a /journal route (hidden from main nav). Also primes any future
-    LLM-backed features: the journal file is ready-made grounding context.
-    Distinct from Dashboard Replay (visual scrubbing) and Sleep Analytics
-    (sleep-focused) -- this is a compact narrative summary of the whole
-    day, with search-friendly prose.
-    Touches: new journal_service.py (scheduled at 2am), /journal route
+The full per-category writeups have been pruned to issues that remain.
+Strengths and shipped items are summarized in MAJOR WORK SHIPPED above.
 
-
-  PREVIOUSLY LISTED (unshipped, still valid)
+  BACKEND ARCHITECTURE -- B-
   -----------------------------------------------------------------------
+  - automation_engine.py at 2,750 lines absorbs every new capability
+  - main.py lifespan ~350+ lines initializing 20+ services
+  - Service DI by attribute assignment is invisible coupling
+  - 22+ bare "except Exception" clauses on critical paths
+  - No middleware for request logging / tracing
+  - No circuit breaker for Hue / Sonos
+  - Light IDs are strings in some places, ints in others
 
-  Color of the Day                                            [Easy]
-  QR Code Party Mode                                          [Easy]
-  Activity Heatmap Widget                                     [Medium]
-  NFC Tap-to-Scene                                            [Easy/HW]
-  Beat-Reactive Lighting                                      [Medium]
-  Smart Sleep-Debt Alarm                                      [Easy]
-  Time Machine Replay                                         [Medium]
-  Audio Fingerprinting                                        [Medium]
-  Colts Game Day Engine                                       [Hard]
-  WLED LED Strip Integration                                  [Medium/HW]
-  Apartment Digital Twin                                      [Hard]
-  Full Room Audio Analysis Dashboard                          [Hard]
+  FRONTEND / UI -- B+
+  -----------------------------------------------------------------------
+  - Modal portal duplication risk (PlantWidget + BarWidget)
+  - LightCard color presets duplicated from theme.js
+  - LightGrid sort runs on every reactive change (memoize)
+  - Three.js DPR cap loses sharpness on 3x displays
+  - Mobile touch targets: FloatingNav 40x40 at 480 breakpoint (WCAG
+    wants 48x48); LightCard color swatches 20x20
+
+  SECURITY -- C
+  -----------------------------------------------------------------------
+  - Zero authentication: 80+ endpoints fully open on LAN
+  - Plant App integration sends credentials over HTTP
+  - Preview URL injection: sonos.play_uri accepts arbitrary URLs
+  - MCP query_db accepts arbitrary SELECT (UNION risk)
+  - HTTP only -- blocks Cloudflare Tunnel until TLS is added
+
+  ML / INTELLIGENCE -- A-
+  -----------------------------------------------------------------------
+  - BehavioralPredictor in cold start (needs 500+ events)
+  - AudioClassifier still in shadow mode (needs accuracy comparison)
+  - LightingPreferenceLearner overlay applied silently -- no
+    ml_decisions row when the learner touches a light
+  - No A/B framework for comparing ML vs rule engine decisions
+  - lightgbm optional -- silent graceful degradation could hide
+    predictor failures without monitoring
+
+  PERFORMANCE -- B
+  -----------------------------------------------------------------------
+  - Hue polling at 1s (could be 3-5s for 6 bulbs)
+  - Sonos polling at 2s (could be 5s)
+  - Per-light WS broadcasts on scene activation (N sends, not batched)
+  - GenerativeCanvas particle count resizes frame-by-frame during
+    transitions (GC pressure)
+  - MoonScene shader materials at module scope (VRAM leak risk on
+    unmount/remount)
+
+  OBSERVABILITY -- C+
+  -----------------------------------------------------------------------
+  - No /metrics endpoint
+  - No request tracing / IDs
+  - No DB health in /health
+  - No background-task heartbeat in /health
+  - No ML model health alerts
+  - Log timestamps missing timezone
+
+  TESTING -- B+
+  -----------------------------------------------------------------------
+  - No integration tests (end-to-end mode change -> lights -> music)
+  - Services without backend tests: Hue, Sonos, TTS, screen sync,
+    routines, recommendation_service, library_import_service
+  - Playwright e2e is local-only (needs CI runner with live backend)
+  - No coverage reporting (pytest-cov not configured)
+
+  DEVOPS / DEPLOYMENT -- C+
+  -----------------------------------------------------------------------
+  - No rollback path
+  - No staging environment
+  - Health-check 3s sleep may not be enough with ML model loading
+  - No automated frontend build verification in CI (Python only)
+
+  DOCUMENTATION -- A-
+  -----------------------------------------------------------------------
+  - No ops runbook (troubleshooting / log inspection / recovery)
+  - No changelog for breaking changes
+  - No DB migration documentation (migrations inline in database.py)
 
 ================================================================================
-                        RECOMMENDED TOOLS
+                       FUTURE FEATURE IDEAS
 ================================================================================
 
-  Tool                      Purpose                           Status
-  ------------------------  --------------------------------  --------
-  pytest + pytest-asyncio   Backend test suite                ADDED
-  RotatingFileHandler       Log rotation (stdlib)             ADDED
-  slowapi                   Rate limiting for FastAPI         ADDED
-  GitHub Actions            Lint + test on push               ADDED
-  pre-push git hook         Catch lint errors before push     ADDED
-  python-json-logger        Structured JSON logs (file)       ADDED
-  Uptime Kuma               Self-hosted monitoring on 3002    ADDED
-  vite-plugin-visualizer    Bundle size analysis              ADDED
-  py-spy                    Production profiling              ADDED
-  httpie                    Readable HTTP testing via SSH     ADDED
-  lightgbm                  Behavioral mode prediction        ADDED
-  scikit-learn              K-means screen sync clustering    ADDED
-  ai-edge-litert            TFLite runtime for YAMNet         ADDED
-  mediapipe                 Face detection (camera presence)  ADDED
-  opencv-python-headless    Camera capture (no GUI)           ADDED
-  pytest-cov                Coverage reporting                TODO
-  Playwright / vitest       Frontend testing                  TODO
+The standing backlog lives in docs/Future_Development.md. Notable
+unbuilt entries: Override Reason Classifier, Per-User Transition-Curve
+Preference Learning, Focus Envelope, Apartment Logbook.
+
+Phase-aligned headline features still on the roadmap:
+  - Phase 3: Fauxmo Alexa integration, override pattern analysis,
+    nudge system
+  - Phase 4: Game Day (ESPN polling, celebration orchestration,
+    pixel-art field, pre-game mode)
+  - Phase 5: Custom Alexa Skill, Apple Music API, full autopilot,
+    bar app widget
 
 ================================================================================
-                           DEV SETUP NOTES
+                          PRIVACY POSTURE
 ================================================================================
 
-  Current workflow:
-  - Windows desktop: code editing, git push, local testing
-  - PC agents: unified supervisor (pythonw.exe) manages activity_detector,
-    ambient_monitor, and screen_sync_agent via Task Scheduler
-  - Latitude (192.168.1.210): Ubuntu 24.04, runs FastAPI backend + ambient
-    monitor + camera service (opt-in) as systemd user services, Firefox
-    kiosk via GNOME autostart
-  - Deploy: ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
-  - MCP server uses HOME_HUB_URL Windows env var to point at Latitude
-
-  Version-controlled in deployment/:
-  - systemd service files (home-hub.service, home-hub-ambient.service)
-  - Firefox kiosk desktop entry (home-hub-kiosk.desktop)
-  - Database backup script (scripts/backup-db.sh, cron active on Latitude)
-
-  Weather: NWS API (api.weather.gov) -- free, no API key needed
-  Camera: opt-in via camera_enabled app_setting, default disabled
-
-================================================================================
-                          VERIFICATION PLAN
-================================================================================
-
-  After implementing changes:
-  1. Run /api-audit to verify all endpoints still work
-  2. Run /ui-audit to screenshot all pages at desktop + mobile widths
-  3. Check mcp get_health for Hue/Sonos connectivity
-  4. Verify log rotation: check logs/ for rotated files
-  5. Verify backup: check data/backups/ on Latitude
-  6. Run pytest (183 tests expected)
-  7. Check GitHub Actions for CI pass
-  8. Verify ML services: GET /api/learning/status
-  9. Verify camera opt-in: GET /api/camera/status
-  10. Verify WiFi presence: check presence_service logs
-  11. Check analytics page renders decision pipeline
+  - Camera frames: numpy arrays in memory only, overwritten each cycle.
+    Never serialized, persisted, networked, or logged
+  - Audio: raw PCM overwritten each 1s read. Mel-spectrograms one-way.
+    Only labels persist
+  - Models: aggregate statistical patterns only, no PII reconstructable
+  - 90-day rolling retention on event tables
+  - Full ML data wipe available from Settings (models + decisions +
+    metrics)
+  - All inference is local-only -- no cloud APIs
 
 ================================================================================
