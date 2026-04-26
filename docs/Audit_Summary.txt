@@ -20,10 +20,10 @@ small a11y nudges) are deliberately omitted -- check git log for those.
 
   Category                Grade   Summary
   ---------------------   -----   ------------------------------------------
-  Backend Architecture    B       Lifespan now constructs in dependency
-                                  order with constructor injection;
+  Backend Architecture    B+      Lifespan extracted to bootstrap.py,
+                                  constructor injection throughout;
                                   automation_engine.py at 2,750 lines
-                                  is the standing debt
+                                  is the remaining debt
   Frontend / UI           B+      Living-Ink redesign + animated mode
                                   scenes; vitest + Playwright in place
   Design / UX             A-      Per-light spatial variation, kitchen pair
@@ -158,6 +158,11 @@ returning to the project after a long break."
     because fusion didn't exist yet at presence-construction time).
     Mode-change callback registrations remain post-construction —
     those are runtime event subscriptions, not DI
+  - Extracted lifespan to backend/bootstrap.py: main.py shrank from
+    970 → 350 lines. Pure relocation, zero behavior change. main.py
+    no longer drags in 30+ service imports — just the four needed by
+    the WebSocket handler. Sets up the next refactor (splitting
+    automation_engine.py)
 
   SECURITY HARDENING (April 25 - April 26)
   -----------------------------------------------------------------------
@@ -231,10 +236,8 @@ Ranked by impact within each section.
   BACKEND ARCHITECTURE
   -----------------------------------------------------------------------
   [ ]  Split automation_engine.py (2,750 lines) into mode logic, light-
-       state calculator, effect manager
-  [ ]  Extract main.py lifespan (~870 lines) to a bootstrap.py /
-       service registry — natural next step now that construction
-       order is dep-respecting and deps flow through constructors
+       state calculator, effect manager — easier now that the engine's
+       collaborators are visible at the constructor
 
   OBSERVABILITY
   -----------------------------------------------------------------------
