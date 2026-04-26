@@ -22,10 +22,10 @@ small a11y nudges) are deliberately omitted -- check git log for those.
   ---------------------   -----   ------------------------------------------
   Backend Architecture    A-      Lifespan extracted to bootstrap.py,
                                   constructor injection throughout, per-
-                                  light state calculator extracted from
-                                  automation_engine.py (2,779 -> 2,184
-                                  lines); engine still hosts effects +
-                                  fusion orchestration
+                                  light state calculator + Hue v2 effect
+                                  manager extracted from automation_engine
+                                  .py (2,779 -> 2,083 lines); engine still
+                                  hosts mode resolution + fusion ticks
   Frontend / UI           B+      Living-Ink redesign + animated mode
                                   scenes; vitest + Playwright in place
   Design / UX             A-      Per-light spatial variation, kitchen pair
@@ -181,6 +181,21 @@ returning to the project after a long break."
     2,779 → 2,184 lines (-595); calculator adds 740 lines. 45 new
     unit tests in test_light_state_calculator.py exercise the pure
     functions in isolation
+  - Extracted Hue v2 effect lifecycle from automation_engine.py to
+    backend/services/effect_manager.py: EffectManager class owns
+    _active_name + _active_lights tracking and the stop/start dance
+    (0.5s guard, same-effect skip, out-of-band stop semantics);
+    get_desired_effect + get_weather_effect handle mode/period
+    lookup + weather fallback. WEATHER_EFFECT_MAP and
+    WEATHER_SKIP_MODES relocate too. Engine methods (_reconcile_effect,
+    _get_desired_effect, _get_weather_effect) become 1-line shims;
+    _active_effect_name / _active_effect_lights become delegating
+    properties so the sleep-mode branch and pipeline broadcast keep
+    reading state unchanged. Sleep mode now calls
+    effect_manager.stop_all() — bypasses the same-effect-skip while
+    preserving the dim → 1.2s sleep → stop → fade ordering. Engine
+    drops 2,184 → 2,083 lines (-101); effect manager adds 181. 28
+    new unit tests in test_effect_manager.py
 
   SECURITY HARDENING (April 25 - April 26)
   -----------------------------------------------------------------------
@@ -253,11 +268,13 @@ Ranked by impact within each section.
 
   BACKEND ARCHITECTURE
   -----------------------------------------------------------------------
-  [ ]  Continue splitting automation_engine.py (now 2,184 lines after
-       light-state calculator extract): effect manager
-       (_reconcile_effect + EFFECT_AUTO_MAP lifecycle) is the next
-       cleanest slice; mode resolution + fusion orchestration is the
-       last and most subtle
+  [ ]  Final automation_engine.py slice (now 2,083 lines after light-
+       state calculator + effect manager extracts): mode resolution +
+       fusion ticks (report_activity, set_manual_override,
+       _evaluate_zone_posture_rule, run_loop fusion blocks, late-night
+       rescue). Stateful — owns 9 mutable attributes. Plan
+       (~/.claude/plans/why-is-l2-currently-iterative-papert.md)
+       calls for soak time after Slice 1 before this lands
 
   OBSERVABILITY
   -----------------------------------------------------------------------
