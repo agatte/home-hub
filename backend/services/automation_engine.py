@@ -589,6 +589,20 @@ class AutomationEngine:
             return None
         return value
 
+    def is_at_desk_fresh(self) -> bool:
+        """True iff the camera is enabled with a fresh ``zone == 'desk'`` reading.
+
+        Used by autonomous mode-setters (late-night rescue, behavioral
+        predictor, fusion override, winddown routine) to defer to active
+        desk presence. If the camera sees Anthony at the desk, the system
+        should not push him into ``relax`` against his apparent activity.
+        """
+        camera = self._camera_service
+        if camera is None or not getattr(camera, "enabled", False):
+            return False
+        zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
+        return zone == "desk"
+
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
@@ -1543,10 +1557,13 @@ class AutomationEngine:
                 # over "still working" or idle when no Sonos media is playing.
                 # Complements winddown (which expires at 4h) and handles the
                 # 02:00+ edge when someone's still at the desk. Guarded so real
-                # gaming/watching/social/sleeping are respected, and music
-                # playback counts as intentional activity.
+                # gaming/watching/social/sleeping are respected, music playback
+                # counts as intentional activity, and a fresh camera 'at desk'
+                # reading means the user is actively present and shouldn't be
+                # pushed into relax.
                 if (
                     not self._manual_override
+                    and not self.is_at_desk_fresh()
                     and self._get_time_period() == "late_night"
                     and self._current_mode in ("working", "idle")
                     and not await self._sonos_is_playing()
@@ -1612,16 +1629,35 @@ class AutomationEngine:
                     if not prediction.get("shadow"):
                         confidence = prediction["confidence"]
                         if confidence >= 0.95:
-                            # Auto-apply at high confidence
-                            await self.set_manual_override(prediction["predicted_mode"])
-                            if ml_logger:
-                                await ml_logger.log_decision(
-                                    predicted_mode=prediction["predicted_mode"],
-                                    confidence=confidence,
-                                    decision_source="ml",
-                                    factors=prediction.get("factors"),
-                                    applied=True,
+                            # Auto-apply at high confidence — unless camera
+                            # sees Anthony at the desk, in which case defer
+                            # to active presence and log the veto for audit.
+                            if self.is_at_desk_fresh():
+                                logger.debug(
+                                    "Predictor suppressed (camera at desk): "
+                                    "%s @ %.2f",
+                                    prediction["predicted_mode"], confidence,
                                 )
+                                if ml_logger:
+                                    factors = dict(prediction.get("factors") or {})
+                                    factors["vetoed_by"] = "camera_at_desk"
+                                    await ml_logger.log_decision(
+                                        predicted_mode=prediction["predicted_mode"],
+                                        confidence=confidence,
+                                        decision_source="ml",
+                                        factors=factors,
+                                        applied=False,
+                                    )
+                            else:
+                                await self.set_manual_override(prediction["predicted_mode"])
+                                if ml_logger:
+                                    await ml_logger.log_decision(
+                                        predicted_mode=prediction["predicted_mode"],
+                                        confidence=confidence,
+                                        decision_source="ml",
+                                        factors=prediction.get("factors"),
+                                        applied=True,
+                                    )
                         elif confidence >= 0.70:
                             # Suggest via WebSocket toast
                             await self._ws_manager.broadcast(
@@ -1663,38 +1699,62 @@ class AutomationEngine:
                         acted = False
 
                         # Can override stale process detection at 92%+
-                        # with 80%+ agreement
+                        # with 80%+ agreement — unless camera sees Anthony
+                        # at the desk, in which case fusion's vote loses
+                        # to direct physical presence and the decision is
+                        # logged as vetoed instead of actuated.
                         if (
                             fusion_result.get("can_override")
                             and not self._manual_override
                             and self._current_mode not in ("idle", "away")
                             and fm != self._current_mode
                         ):
-                            logger.info(
-                                "Fusion override: %s -> %s "
-                                "(%.0f%% confidence, %.0f%% agreement)",
-                                self._current_mode, fm, fc * 100,
-                                fusion_result["agreement"] * 100,
-                            )
-                            await self.set_manual_override(fm)
-                            acted = True
-                            if ml_logger:
-                                await ml_logger.log_decision(
-                                    predicted_mode=fm,
-                                    confidence=fc,
-                                    decision_source="fusion",
-                                    factors={
-                                        "agreement": fusion_result["agreement"],
-                                        "active_signals": len([
-                                            s for s in
-                                            fusion_result["signals"].values()
-                                            if not s["stale"]
-                                        ]),
-                                        "signal_details": fusion_result["signals"],
-                                        "action": "override",
-                                    },
-                                    applied=True,
+                            if self.is_at_desk_fresh():
+                                logger.debug(
+                                    "Fusion override suppressed (camera at "
+                                    "desk): %s -> %s @ %.2f",
+                                    self._current_mode, fm, fc,
                                 )
+                                if ml_logger:
+                                    await ml_logger.log_decision(
+                                        predicted_mode=fm,
+                                        confidence=fc,
+                                        decision_source="fusion",
+                                        factors={
+                                            "agreement": fusion_result["agreement"],
+                                            "signal_details": fusion_result["signals"],
+                                            "action": "override",
+                                            "vetoed_by": "camera_at_desk",
+                                        },
+                                        applied=False,
+                                    )
+                                acted = True  # don't double-log as shadow below
+                            else:
+                                logger.info(
+                                    "Fusion override: %s -> %s "
+                                    "(%.0f%% confidence, %.0f%% agreement)",
+                                    self._current_mode, fm, fc * 100,
+                                    fusion_result["agreement"] * 100,
+                                )
+                                await self.set_manual_override(fm)
+                                acted = True
+                                if ml_logger:
+                                    await ml_logger.log_decision(
+                                        predicted_mode=fm,
+                                        confidence=fc,
+                                        decision_source="fusion",
+                                        factors={
+                                            "agreement": fusion_result["agreement"],
+                                            "active_signals": len([
+                                                s for s in
+                                                fusion_result["signals"].values()
+                                                if not s["stale"]
+                                            ]),
+                                            "signal_details": fusion_result["signals"],
+                                            "action": "override",
+                                        },
+                                        applied=True,
+                                    )
                         elif (
                             fc >= 0.95
                             and not self._manual_override

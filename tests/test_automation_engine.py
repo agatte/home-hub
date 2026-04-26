@@ -621,3 +621,69 @@ class TestWatchingPostureRuntimeTuning:
         engine.set_bed_reclined_l1_night(-5)
         assert engine._bed_reclined_l1_night == 1
 
+
+# ---------------------------------------------------------------------------
+# is_at_desk_fresh — camera-aware veto helper
+# ---------------------------------------------------------------------------
+
+
+class _FakeEnabledCamera:
+    """Camera stub with the ``enabled`` flag the helper checks."""
+
+    def __init__(self, zone=None, enabled=True, zone_committed_at=None):
+        self.zone = zone
+        self.enabled = enabled
+        self.zone_committed_at = zone_committed_at
+
+
+class TestIsAtDeskFresh:
+    """``is_at_desk_fresh`` is the camera-veto used by autonomous mode-setters."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    def test_no_camera_returns_false(self, engine):
+        engine._camera_service = None
+        assert engine.is_at_desk_fresh() is False
+
+    def test_disabled_camera_returns_false(self, engine):
+        engine._camera_service = _FakeEnabledCamera(zone="desk", enabled=False)
+        assert engine.is_at_desk_fresh() is False
+
+    def test_zone_bed_returns_false(self, engine):
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="bed", enabled=True, zone_committed_at=recent,
+        )
+        assert engine.is_at_desk_fresh() is False
+
+    def test_zone_none_returns_false(self, engine):
+        engine._camera_service = _FakeEnabledCamera(zone=None, enabled=True)
+        assert engine.is_at_desk_fresh() is False
+
+    def test_zone_desk_fresh_returns_true(self, engine):
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=recent,
+        )
+        assert engine.is_at_desk_fresh() is True
+
+    def test_zone_desk_stale_returns_false(self, engine):
+        # Past the freshness window (>60s default) → treated as no data.
+        stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=stale,
+        )
+        assert engine.is_at_desk_fresh() is False
+
+    def test_camera_without_timestamp_falls_through(self, engine):
+        """Plain stubs without commit timestamps bypass the freshness gate.
+
+        Mirrors the same back-compat behavior as ``_fresh_camera_attr`` so
+        legacy fakes don't have to grow timestamp surfaces.
+        """
+        engine._camera_service = _FakeCamera(zone="desk")
+        engine._camera_service.enabled = True  # add enabled flag
+        assert engine.is_at_desk_fresh() is True
+

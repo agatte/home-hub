@@ -187,6 +187,15 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
         },
+        # Distinct from night: warmer and slightly brighter so 1am+ desk
+        # work stays readable without falling back to relax-dim. Kitchen
+        # stays off; this is desk-only late-night functional lighting.
+        "late_night": {
+            "1": {"on": True, "bri": 90,  "ct": 454},
+            "2": {"on": True, "bri": 160, "ct": 400},
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+        },
     },
     # ── Watching ──────────────────────────────────────────────────────
     "watching": {

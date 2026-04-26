@@ -85,15 +85,30 @@ class TestResolveActivityState:
         assert state == ACTIVITY_LIGHT_STATES["working"]["day"]
 
     def test_late_night_falls_back_to_night(self):
-        # Working has no late_night entry; should return its night state.
-        state = resolve_activity_state("working", "late_night")
-        assert state == ACTIVITY_LIGHT_STATES["working"]["night"]
+        # Cooking has no late_night entry; should return its night state.
+        state = resolve_activity_state("cooking", "late_night")
+        assert state == ACTIVITY_LIGHT_STATES["cooking"]["night"]
 
     def test_late_night_uses_explicit_when_defined(self):
         # Relax has its own late_night entry — should NOT fall back.
         state = resolve_activity_state("relax", "late_night")
         assert state == ACTIVITY_LIGHT_STATES["relax"]["late_night"]
         assert state != ACTIVITY_LIGHT_STATES["relax"]["night"]
+
+    def test_working_late_night_is_distinct(self):
+        """Working has a true late_night state — warm + functional, kitchen off."""
+        state = resolve_activity_state("working", "late_night")
+        night = resolve_activity_state("working", "night")
+        assert state != night
+        # L1: brighter than night (90 vs 60), warmer (ct 454)
+        assert state["1"]["bri"] == 90
+        assert state["1"]["ct"] == 454
+        # L2: brighter than night (160 vs 130)
+        assert state["2"]["bri"] == 160
+        assert state["2"]["ct"] == 400
+        # Kitchen stays off — desk-only late-night functional lighting.
+        assert state["3"]["on"] is False
+        assert state["4"]["on"] is False
 
     def test_flat_mode_ignores_period(self):
         # Social is flat — no period dimension. Returns the same dict.

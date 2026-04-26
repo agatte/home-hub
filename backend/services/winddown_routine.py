@@ -27,6 +27,7 @@ class WinddownRoutineService:
         automation_engine,
         sonos_service,
         tts_service,
+        camera_service=None,
         volume: int = 20,
         activate_candlelight: bool = True,
         weekdays_only: bool = False,
@@ -35,10 +36,22 @@ class WinddownRoutineService:
         self._automation = automation_engine
         self._sonos = sonos_service
         self._tts = tts_service
+        self._camera = camera_service
         self._volume = volume
         self._activate_candlelight = activate_candlelight
         self._weekdays_only = weekdays_only
         self._skip_if_active = skip_if_active
+
+    def set_camera_service(self, camera) -> None:
+        """Wire the camera service in after construction.
+
+        The winddown service is built before the camera service in the
+        app lifespan, so this hook lets bootstrap attach the camera once
+        it's available. The camera is consulted indirectly via
+        ``automation.is_at_desk_fresh()``; this attribute is currently
+        kept for symmetry with other services and future direct use.
+        """
+        self._camera = camera
 
     async def execute(self, force: bool = False) -> bool:
         """
@@ -80,14 +93,29 @@ class WinddownRoutineService:
 
         logger.info("Executing evening wind-down routine")
 
-        try:
-            # Switch to relax mode — dims lights + activates candlelight effect
-            if self._automation:
-                await self._automation.set_manual_override("relax")
-                logger.info("Switched to relax mode for wind-down")
-        except Exception as e:
-            logger.error(f"Wind-down mode switch failed: {e}")
-            return False
+        # Camera-at-desk veto: if Anthony is visibly at the desk, skip the
+        # lighting override but still play the audible nudge (TTS + volume
+        # drop) so the routine isn't silent. The veto is best-effort —
+        # missing helper or no camera fall through to the legacy behavior.
+        camera_at_desk = bool(
+            self._automation is not None
+            and getattr(self._automation, "is_at_desk_fresh", lambda: False)()
+        )
+
+        if camera_at_desk:
+            logger.info(
+                "Wind-down: camera sees desk — skipping lights override, "
+                "TTS + volume nudge still plays"
+            )
+        else:
+            try:
+                # Switch to relax mode — dims lights + activates candlelight effect
+                if self._automation:
+                    await self._automation.set_manual_override("relax")
+                    logger.info("Switched to relax mode for wind-down")
+            except Exception as e:
+                logger.error(f"Wind-down mode switch failed: {e}")
+                return False
 
         # Lower Sonos volume
         try:
