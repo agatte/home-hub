@@ -3,8 +3,10 @@ Rule engine endpoints — view, manage, and interact with learned rules.
 """
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from backend.api.auth import require_api_key
 
 logger = logging.getLogger("home_hub.rules")
 
@@ -41,7 +43,7 @@ async def get_status(request: Request) -> dict:
     }
 
 
-@router.post("/regenerate")
+@router.post("/regenerate", dependencies=[Depends(require_api_key)])
 async def regenerate_rules(request: Request) -> dict:
     """Force rule regeneration from event data."""
     service = _get_service(request)
@@ -49,7 +51,7 @@ async def regenerate_rules(request: Request) -> dict:
     return {"status": "ok", **stats}
 
 
-@router.patch("/{rule_id}")
+@router.patch("/{rule_id}", dependencies=[Depends(require_api_key)])
 async def update_rule(rule_id: int, body: RuleUpdate, request: Request) -> dict:
     """Enable or disable a learned rule."""
     service = _get_service(request)
@@ -59,7 +61,7 @@ async def update_rule(rule_id: int, body: RuleUpdate, request: Request) -> dict:
     return result
 
 
-@router.delete("/{rule_id}")
+@router.delete("/{rule_id}", dependencies=[Depends(require_api_key)])
 async def delete_rule(rule_id: int, request: Request) -> dict:
     """Delete a learned rule."""
     service = _get_service(request)
@@ -69,7 +71,7 @@ async def delete_rule(rule_id: int, request: Request) -> dict:
     return {"status": "ok"}
 
 
-@router.post("/suggestion/accept")
+@router.post("/suggestion/accept", dependencies=[Depends(require_api_key)])
 async def accept_suggestion(request: Request) -> dict:
     """Accept the current mode suggestion and apply it."""
     service = _get_service(request)
@@ -82,7 +84,7 @@ async def accept_suggestion(request: Request) -> dict:
     return {"status": "ok", "applied_mode": suggestion["predicted_mode"]}
 
 
-@router.post("/suggestion/dismiss")
+@router.post("/suggestion/dismiss", dependencies=[Depends(require_api_key)])
 async def dismiss_suggestion(request: Request) -> dict:
     """Dismiss the current mode suggestion."""
     service = _get_service(request)

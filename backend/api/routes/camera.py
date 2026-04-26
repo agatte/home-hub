@@ -2,8 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
+
+from backend.api.auth import require_api_key
 
 logger = logging.getLogger("home_hub.camera")
 
@@ -73,7 +75,7 @@ async def get_snapshot(request: Request, annotate: bool = False) -> Response:
     )
 
 
-@router.post("/calibrate")
+@router.post("/calibrate", dependencies=[Depends(require_api_key)])
 async def calibrate_exposure(request: Request) -> dict:
     """Calibrate fixed exposure so gray.mean() ≈ 100 under current room light.
 
@@ -91,7 +93,7 @@ async def calibrate_exposure(request: Request) -> dict:
     return result
 
 
-@router.post("/enable")
+@router.post("/enable", dependencies=[Depends(require_api_key)])
 async def toggle_camera(body: CameraToggle, request: Request) -> dict:
     """Enable or disable camera presence detection.
 

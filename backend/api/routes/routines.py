@@ -5,10 +5,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from backend.api.auth import require_api_key
 from backend.database import async_session
 from backend.models import AppSetting
 
@@ -105,7 +106,7 @@ async def list_routines(request: Request) -> dict:
     return {"routines": tasks}
 
 
-@router.post("/morning/test")
+@router.post("/morning/test", dependencies=[Depends(require_api_key)])
 async def test_morning_routine(request: Request) -> dict:
     """Trigger the morning routine immediately for testing."""
     morning = getattr(request.app.state, "morning_routine", None)
@@ -122,7 +123,7 @@ async def test_morning_routine(request: Request) -> dict:
     }
 
 
-@router.put("/morning/config")
+@router.put("/morning/config", dependencies=[Depends(require_api_key)])
 async def update_morning_config(config: RoutineConfig, request: Request) -> dict:
     """Update morning routine schedule and settings."""
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -161,7 +162,7 @@ async def update_morning_config(config: RoutineConfig, request: Request) -> dict
     return {"status": "ok", "config": config.model_dump()}
 
 
-@router.post("/morning/toggle")
+@router.post("/morning/toggle", dependencies=[Depends(require_api_key)])
 async def toggle_morning_routine(request: Request) -> dict:
     """Toggle the morning routine on/off."""
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -188,7 +189,7 @@ async def toggle_morning_routine(request: Request) -> dict:
 # Evening Wind-Down
 # ---------------------------------------------------------------------------
 
-@router.post("/winddown/test")
+@router.post("/winddown/test", dependencies=[Depends(require_api_key)])
 async def test_winddown(request: Request) -> dict:
     """Trigger the evening wind-down routine immediately for testing."""
     winddown = getattr(request.app.state, "winddown_routine", None)
@@ -205,7 +206,7 @@ async def test_winddown(request: Request) -> dict:
     }
 
 
-@router.put("/winddown/config")
+@router.put("/winddown/config", dependencies=[Depends(require_api_key)])
 async def update_winddown_config(config: WinddownConfig, request: Request) -> dict:
     """Update evening wind-down schedule and settings."""
     scheduler = getattr(request.app.state, "scheduler", None)

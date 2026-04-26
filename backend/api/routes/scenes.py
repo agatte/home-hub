@@ -13,8 +13,9 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.api.auth import require_api_key
 from backend.api.schemas.lights import CustomSceneCreate
 from backend.database import async_session
 
@@ -379,7 +380,7 @@ async def _log_scene_activation(
         )
 
 
-@router.post("/{scene_id}/activate")
+@router.post("/{scene_id}/activate", dependencies=[Depends(require_api_key)])
 async def activate_scene(scene_id: str, request: Request) -> dict:
     """
     Activate a scene by ID.
@@ -479,7 +480,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 # ------------------------------------------------------------------
 
 
-@router.post("/custom")
+@router.post("/custom", dependencies=[Depends(require_api_key)])
 async def create_custom_scene(body: CustomSceneCreate, request: Request) -> dict:
     """Create a new custom scene."""
     from sqlalchemy import text
@@ -526,7 +527,7 @@ async def list_custom_scenes(request: Request) -> dict:
     return {"scenes": scenes}
 
 
-@router.put("/custom/{scene_id}")
+@router.put("/custom/{scene_id}", dependencies=[Depends(require_api_key)])
 async def update_custom_scene(
     scene_id: int, body: CustomSceneCreate, request: Request
 ) -> dict:
@@ -554,7 +555,7 @@ async def update_custom_scene(
     return {"status": "ok", "id": scene_id}
 
 
-@router.delete("/custom/{scene_id}")
+@router.delete("/custom/{scene_id}", dependencies=[Depends(require_api_key)])
 async def delete_custom_scene(scene_id: int, request: Request) -> dict:
     """Delete a custom scene."""
     from sqlalchemy import text
@@ -586,7 +587,7 @@ async def list_effects(request: Request) -> dict:
     return {"effects": effects, "available": True}
 
 
-@router.post("/effects/{effect_name}")
+@router.post("/effects/{effect_name}", dependencies=[Depends(require_api_key)])
 async def activate_effect(effect_name: str, request: Request) -> dict:
     """
     Activate a dynamic effect on all lights.
@@ -617,7 +618,7 @@ async def activate_effect(effect_name: str, request: Request) -> dict:
     return {"status": "ok" if success else "partial_failure", "effect": effect_name}
 
 
-@router.post("/effects/{effect_name}/light/{light_id}")
+@router.post("/effects/{effect_name}/light/{light_id}", dependencies=[Depends(require_api_key)])
 async def activate_effect_on_light(
     effect_name: str, light_id: str, request: Request
 ) -> dict:
@@ -688,7 +689,7 @@ async def _revert_after_delay(
         _try_it_state["snapshot_id"] = None
 
 
-@router.post("/try/cancel")
+@router.post("/try/cancel", dependencies=[Depends(require_api_key)])
 async def cancel_try(request: Request) -> dict:
     """
     Cancel an active scene trial and immediately revert to the snapshot.
@@ -730,7 +731,7 @@ async def cancel_try(request: Request) -> dict:
     return {"status": "reverted"}
 
 
-@router.post("/{scene_id}/try")
+@router.post("/{scene_id}/try", dependencies=[Depends(require_api_key)])
 async def try_scene(scene_id: str, request: Request) -> dict:
     """
     Activate a scene temporarily for 30 seconds, then auto-revert.

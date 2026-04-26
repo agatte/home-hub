@@ -1,8 +1,9 @@
 """
 Hue light control endpoints.
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.api.auth import require_api_key
 from backend.api.schemas.lights import LightResponse, LightState
 
 router = APIRouter(prefix="/api/lights", tags=["lights"])
@@ -60,7 +61,7 @@ async def _log_light_change(
     )
 
 
-@router.put("/{light_id}")
+@router.put("/{light_id}", dependencies=[Depends(require_api_key)])
 async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     """
     Set the state of a single light.
@@ -97,7 +98,7 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     return {"status": "ok", "light_id": light_id}
 
 
-@router.post("/all")
+@router.post("/all", dependencies=[Depends(require_api_key)])
 async def set_all_lights(state: LightState, request: Request) -> dict:
     """Set the same state on all lights (used for scenes)."""
     hue = request.app.state.hue

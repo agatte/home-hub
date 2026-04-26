@@ -4,8 +4,10 @@ Pi-hole endpoints — DNS ad blocking stats, local DNS, and blocklist management
 import logging
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from backend.api.auth import require_api_key
 
 logger = logging.getLogger("home_hub.pihole")
 
@@ -67,7 +69,7 @@ async def get_dns_hosts(request: Request) -> dict:
     return {"status": "ok", "dns_hosts": data}
 
 
-@router.post("/dns")
+@router.post("/dns", dependencies=[Depends(require_api_key)])
 async def add_dns_host(body: DnsHostBody, request: Request) -> dict:
     """Add a local DNS record."""
     service = _get_service(request)
@@ -77,7 +79,7 @@ async def add_dns_host(body: DnsHostBody, request: Request) -> dict:
     return {"status": "ok"}
 
 
-@router.delete("/dns/{ip}/{hostname}")
+@router.delete("/dns/{ip}/{hostname}", dependencies=[Depends(require_api_key)])
 async def delete_dns_host(ip: str, hostname: str, request: Request) -> dict:
     """Remove a local DNS record."""
     service = _get_service(request)
@@ -106,7 +108,7 @@ async def get_blocklists(request: Request) -> dict:
     return {"status": "ok", "lists": data}
 
 
-@router.post("/lists")
+@router.post("/lists", dependencies=[Depends(require_api_key)])
 async def add_blocklist(body: BlocklistBody, request: Request) -> dict:
     """Add a blocklist URL."""
     service = _get_service(request)
@@ -116,7 +118,7 @@ async def add_blocklist(body: BlocklistBody, request: Request) -> dict:
     return {"status": "ok"}
 
 
-@router.delete("/lists/{address:path}")
+@router.delete("/lists/{address:path}", dependencies=[Depends(require_api_key)])
 async def delete_blocklist(address: str, request: Request) -> dict:
     """Remove a blocklist by URL."""
     service = _get_service(request)

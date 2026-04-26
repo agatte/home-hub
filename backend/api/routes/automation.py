@@ -7,8 +7,9 @@ and manual override controls.
 """
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.api.auth import require_api_key
 from backend.config import settings
 from backend.rate_limit import limiter
 
@@ -50,7 +51,7 @@ logger = logging.getLogger("home_hub.automation")
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 
 
-@router.post("/activity")
+@router.post("/activity", dependencies=[Depends(require_api_key)])
 async def report_activity(report: ActivityReport, request: Request) -> dict:
     """
     Receive an activity report from the PC agent or ambient monitor.
@@ -85,7 +86,7 @@ async def get_activity(request: Request) -> dict:
     }
 
 
-@router.post("/agent-health")
+@router.post("/agent-health", dependencies=[Depends(require_api_key)])
 async def report_agent_health(request: Request) -> dict:
     """Receive health heartbeat from the PC agent supervisor."""
     body = await request.json()
@@ -136,7 +137,7 @@ async def get_pipeline(request: Request) -> dict:
     }
 
 
-@router.post("/override")
+@router.post("/override", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
 async def set_override(override: ManualOverride, request: Request) -> dict:
     """
@@ -156,7 +157,7 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
     return {"status": "ok", "mode": override.mode, "source": "manual"}
 
 
-@router.post("/screen-color")
+@router.post("/screen-color", dependencies=[Depends(require_api_key)])
 async def receive_screen_color(report: ScreenColorReport, request: Request) -> dict:
     """
     Receive a screen color sample from the desktop pc_agent or laptop loopback.
@@ -223,7 +224,7 @@ async def get_screen_sync_status(request: Request) -> dict:
     }
 
 
-@router.put("/screen-sync/laptop-enabled")
+@router.put("/screen-sync/laptop-enabled", dependencies=[Depends(require_api_key)])
 async def set_laptop_loopback(
     toggle: LaptopLoopbackToggle, request: Request
 ) -> dict:
@@ -250,7 +251,7 @@ async def set_laptop_loopback(
     return {"status": "ok", "enabled": toggle.enabled}
 
 
-@router.post("/mic/calibrate")
+@router.post("/mic/calibrate", dependencies=[Depends(require_api_key)])
 async def calibrate_mic(request: Request) -> MicCalibrationResult:
     """
     Calibrate the ambient noise baseline.
@@ -277,7 +278,7 @@ async def get_config(request: Request) -> AutomationConfig:
     )
 
 
-@router.put("/config")
+@router.put("/config", dependencies=[Depends(require_api_key)])
 async def update_config(config: AutomationConfig, request: Request) -> dict:
     """Update automation configuration."""
     engine = getattr(request.app.state, "automation", None)
@@ -341,7 +342,7 @@ async def get_schedule(request: Request) -> dict:
     }
 
 
-@router.put("/schedule")
+@router.put("/schedule", dependencies=[Depends(require_api_key)])
 async def update_schedule(config: TimeScheduleConfig, request: Request) -> dict:
     """Update the time-based lighting schedule."""
     engine = getattr(request.app.state, "automation", None)
@@ -376,7 +377,7 @@ async def get_mode_brightness(request: Request) -> dict:
     return engine.mode_brightness
 
 
-@router.put("/mode-brightness")
+@router.put("/mode-brightness", dependencies=[Depends(require_api_key)])
 async def update_mode_brightness(
     config: ModeBrightnessConfig, request: Request
 ) -> dict:
@@ -410,7 +411,7 @@ async def get_watching_posture() -> dict:
     return {**WATCHING_POSTURE_DEFAULTS, **(saved or {})}
 
 
-@router.put("/watching-posture")
+@router.put("/watching-posture", dependencies=[Depends(require_api_key)])
 async def update_watching_posture(config: dict, request: Request) -> dict:
     """Update the watching-posture tuning values.
 
@@ -475,7 +476,7 @@ async def get_mode_scene_overrides(request: Request) -> dict:
     }
 
 
-@router.put("/mode-scenes/{mode}/{time_period}")
+@router.put("/mode-scenes/{mode}/{time_period}", dependencies=[Depends(require_api_key)])
 async def set_mode_scene_override(
     mode: str, time_period: str, request: Request
 ) -> dict:
@@ -529,7 +530,7 @@ async def set_mode_scene_override(
     return {"status": "ok"}
 
 
-@router.delete("/mode-scenes/{mode}/{time_period}")
+@router.delete("/mode-scenes/{mode}/{time_period}", dependencies=[Depends(require_api_key)])
 async def delete_mode_scene_override(
     mode: str, time_period: str, request: Request
 ) -> dict:
@@ -584,7 +585,7 @@ async def get_presence_config(request: Request) -> dict:
     return presence.config_dict()
 
 
-@router.put("/presence/config")
+@router.put("/presence/config", dependencies=[Depends(require_api_key)])
 async def update_presence_config(
     config: PresenceConfigSchema, request: Request,
 ) -> dict:
@@ -600,7 +601,7 @@ async def update_presence_config(
     return {"status": "ok"}
 
 
-@router.post("/presence/test-arrival")
+@router.post("/presence/test-arrival", dependencies=[Depends(require_api_key)])
 @limiter.limit("2/minute")
 async def test_arrival(request: Request) -> dict:
     """Trigger a test arrival sequence (for development/debugging)."""

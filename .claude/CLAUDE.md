@@ -396,6 +396,8 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 PRESENCE_WEBHOOK_TOKEN=<urlsafe random>  # Shared secret for iPhone Shortcut presence webhooks; unset disables the /api/automation/presence/{arrived,departed} endpoints
 ZONE_POSTURE_RULE_APPLY=false  # Zone+posture→relax actuation. Default false: logs shadow ml_decisions only. Flip to true after reviewing shadow data.
 PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot. Setting true emits a WARNING on every login. Never enable in normal operation.
+HOME_HUB_API_KEY=<urlsafe random>  # Required for write endpoints. Unset → all writes return 503. Localhost (kiosk) and TRUSTED_LAN_IPS bypass the X-API-Key header check.
+TRUSTED_LAN_IPS=192.168.1.30   # Comma-separated LAN IPs that bypass X-API-Key (e.g. dev desktop). Empty = "kiosk only".
 ```
 
 ### SQLite Persisted Settings (`app_settings` table)

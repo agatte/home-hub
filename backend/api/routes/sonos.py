@@ -3,9 +3,10 @@ Sonos speaker control endpoints — playback, volume, TTS, favorites, music mapp
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from backend.api.auth import require_api_key
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 from backend.rate_limit import limiter
 
@@ -41,7 +42,7 @@ async def get_sonos_status(request: Request) -> dict:
     return await sonos.get_status()
 
 
-@router.post("/play")
+@router.post("/play", dependencies=[Depends(require_api_key)])
 async def sonos_play(request: Request) -> dict:
     """Resume Sonos playback."""
     sonos = request.app.state.sonos
@@ -53,7 +54,7 @@ async def sonos_play(request: Request) -> dict:
     return {"status": "ok" if success else "error"}
 
 
-@router.post("/smart-play")
+@router.post("/smart-play", dependencies=[Depends(require_api_key)])
 async def sonos_smart_play(request: Request) -> dict:
     """Resume playback, or start a favorite if nothing is queued.
 
@@ -85,7 +86,7 @@ async def sonos_smart_play(request: Request) -> dict:
     return {"status": "error", "detail": "No track queued and no playable favorites"}
 
 
-@router.post("/pause")
+@router.post("/pause", dependencies=[Depends(require_api_key)])
 async def sonos_pause(request: Request) -> dict:
     """Pause Sonos playback."""
     sonos = request.app.state.sonos
@@ -97,7 +98,7 @@ async def sonos_pause(request: Request) -> dict:
     return {"status": "ok" if success else "error"}
 
 
-@router.post("/next")
+@router.post("/next", dependencies=[Depends(require_api_key)])
 async def sonos_next(request: Request) -> dict:
     """Skip to next track."""
     sonos = request.app.state.sonos
@@ -109,7 +110,7 @@ async def sonos_next(request: Request) -> dict:
     return {"status": "ok" if success else "error"}
 
 
-@router.post("/previous")
+@router.post("/previous", dependencies=[Depends(require_api_key)])
 async def sonos_previous(request: Request) -> dict:
     """Go to previous track."""
     sonos = request.app.state.sonos
@@ -121,7 +122,7 @@ async def sonos_previous(request: Request) -> dict:
     return {"status": "ok" if success else "error"}
 
 
-@router.post("/volume")
+@router.post("/volume", dependencies=[Depends(require_api_key)])
 async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
     """Set Sonos volume (0-100)."""
     sonos = request.app.state.sonos
@@ -133,7 +134,7 @@ async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
     return {"status": "ok" if success else "error", "volume": body.volume}
 
 
-@router.post("/tts")
+@router.post("/tts", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
 async def speak_text(body: TTSRequest, request: Request) -> dict:
     """
@@ -177,7 +178,7 @@ async def get_favorites(request: Request) -> dict:
     return {"favorites": favorites}
 
 
-@router.post("/favorites/refresh")
+@router.post("/favorites/refresh", dependencies=[Depends(require_api_key)])
 async def refresh_favorites(request: Request) -> dict:
     """Clear the favorites cache so the next fetch picks up new additions."""
     sonos = request.app.state.sonos
@@ -189,7 +190,7 @@ async def refresh_favorites(request: Request) -> dict:
     return {"status": "ok", "favorites": favorites}
 
 
-@router.post("/favorites/{title}/play")
+@router.post("/favorites/{title}/play", dependencies=[Depends(require_api_key)])
 async def play_favorite(title: str, request: Request) -> dict:
     """Play a Sonos favorite by title."""
     sonos = request.app.state.sonos
@@ -215,7 +216,7 @@ async def get_music_map(request: Request) -> dict:
     return {"mapping": mapper.mapping}
 
 
-@router.put("/music-map")
+@router.put("/music-map", dependencies=[Depends(require_api_key)])
 async def update_music_map(entry: MusicMappingEntry, request: Request) -> dict:
     """Update a single mode-to-playlist mapping."""
     mapper = getattr(request.app.state, "music_mapper", None)

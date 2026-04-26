@@ -20,11 +20,18 @@ from fastmcp import FastMCP
 logger = logging.getLogger(__name__)
 
 BASE_URL = os.environ.get("HOME_HUB_URL", "http://localhost:8000")
+# Optional. When the backend has API-key auth enabled (HOME_HUB_API_KEY
+# set in its .env), every write goes through `require_api_key`. The MCP
+# usually runs from the dev desktop, which is on the trusted-LAN list,
+# so this isn't strictly needed there — but injecting it costs nothing
+# and makes the MCP work from any machine the dev sets HOME_HUB_API_KEY on.
+API_KEY = os.environ.get("HOME_HUB_API_KEY", "")
 mcp = FastMCP("home-hub", instructions=f"Tools for inspecting and controlling the live Home Hub system. The main server must be running at {BASE_URL}.")
 
 
 def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=BASE_URL, timeout=10.0)
+    headers = {"X-API-Key": API_KEY} if API_KEY else {}
+    return httpx.AsyncClient(base_url=BASE_URL, timeout=10.0, headers=headers)
 
 
 # ---------------------------------------------------------------------------

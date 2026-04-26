@@ -1,8 +1,9 @@
 """
 Music discovery and mode-playlist mapping endpoints.
 """
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
+from backend.api.auth import require_api_key
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
@@ -62,7 +63,7 @@ async def get_mode_playlists(request: Request) -> dict:
     return {"mappings": mappings, "favorites": favorites}
 
 
-@router.post("/mode-playlists")
+@router.post("/mode-playlists", dependencies=[Depends(require_api_key)])
 async def add_mode_playlist(body: ModePlaylistAdd, request: Request) -> dict:
     """Add a new mode-to-playlist mapping with an optional vibe tag."""
     if body.mode not in SUPPORTED_MODES:
@@ -93,7 +94,7 @@ async def add_mode_playlist(body: ModePlaylistAdd, request: Request) -> dict:
     }
 
 
-@router.delete("/mode-playlists/{mapping_id}")
+@router.delete("/mode-playlists/{mapping_id}", dependencies=[Depends(require_api_key)])
 async def remove_mode_playlist(mapping_id: int, request: Request) -> dict:
     """Remove a specific playlist mapping by ID."""
     mapper = request.app.state.music_mapper
@@ -107,7 +108,7 @@ async def remove_mode_playlist(mapping_id: int, request: Request) -> dict:
 # Library import & taste profile
 # ------------------------------------------------------------------
 
-@router.post("/import")
+@router.post("/import", dependencies=[Depends(require_api_key)])
 @limiter.limit("5/minute")
 async def import_library(file: UploadFile, request: Request) -> dict:
     """
@@ -206,7 +207,7 @@ async def get_recommendations(mode: str, request: Request) -> dict:
     return {"recommendations": recs}
 
 
-@router.post("/recommendations/generate")
+@router.post("/recommendations/generate", dependencies=[Depends(require_api_key)])
 async def generate_recommendations(
     request: Request, mode: str = "gaming"
 ) -> dict:
@@ -222,7 +223,7 @@ async def generate_recommendations(
     return {"recommendations": recs, "count": len(recs)}
 
 
-@router.post("/recommendations/{rec_id}/feedback")
+@router.post("/recommendations/{rec_id}/feedback", dependencies=[Depends(require_api_key)])
 async def submit_feedback(rec_id: int, request: Request) -> dict:
     """Submit feedback on a recommendation (like or dismiss)."""
     body = await request.json()
@@ -239,7 +240,7 @@ async def submit_feedback(rec_id: int, request: Request) -> dict:
     return {"status": "ok", "action": action}
 
 
-@router.post("/preview")
+@router.post("/preview", dependencies=[Depends(require_api_key)])
 async def play_preview(request: Request) -> dict:
     """Play a 30-second iTunes preview on Sonos."""
     body = await request.json()

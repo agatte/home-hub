@@ -3,8 +3,10 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from backend.api.auth import require_api_key
 
 logger = logging.getLogger("home_hub.ml")
 
@@ -135,7 +137,7 @@ async def get_override_rate(
 # ------------------------------------------------------------------
 
 
-@router.post("/audio-decision")
+@router.post("/audio-decision", dependencies=[Depends(require_api_key)])
 async def log_audio_decision(body: AudioDecisionReport, request: Request) -> dict:
     """Log a YAMNet audio classification decision from the ambient monitor.
 
@@ -170,7 +172,7 @@ async def get_lighting_preferences(request: Request) -> dict:
     }
 
 
-@router.post("/lighting/recalculate")
+@router.post("/lighting/recalculate", dependencies=[Depends(require_api_key)])
 async def recalculate_lighting(request: Request) -> dict:
     """Trigger immediate recalculation of lighting preferences."""
     learner = _get_lighting_learner(request)
@@ -191,7 +193,7 @@ def _get_predictor(request: Request):
     return predictor
 
 
-@router.post("/predictor/promote")
+@router.post("/predictor/promote", dependencies=[Depends(require_api_key)])
 async def promote_predictor(request: Request) -> dict:
     """Promote behavioral predictor from shadow to active."""
     predictor = _get_predictor(request)
@@ -201,7 +203,7 @@ async def promote_predictor(request: Request) -> dict:
     return {"status": "ok", "detail": "Promoted to active", **predictor.get_status()}
 
 
-@router.post("/predictor/demote")
+@router.post("/predictor/demote", dependencies=[Depends(require_api_key)])
 async def demote_predictor(request: Request) -> dict:
     """Demote behavioral predictor from active back to shadow."""
     predictor = _get_predictor(request)
@@ -238,7 +240,7 @@ async def get_bandit_status(request: Request) -> dict:
     return {"status": "ok", **bandit.get_status()}
 
 
-@router.delete("/bandit/reset")
+@router.delete("/bandit/reset", dependencies=[Depends(require_api_key)])
 async def reset_bandit(request: Request) -> dict:
     """Wipe bandit arm data and restart from cold priors."""
     bandit = _get_bandit(request)
@@ -253,7 +255,7 @@ async def reset_bandit(request: Request) -> dict:
 # ------------------------------------------------------------------
 
 
-@router.post("/retrain")
+@router.post("/retrain", dependencies=[Depends(require_api_key)])
 async def retrain_all(request: Request) -> dict:
     """Trigger immediate retrain of all ML models."""
     mgr = _get_model_manager(request)
@@ -261,7 +263,7 @@ async def retrain_all(request: Request) -> dict:
     return {"status": "ok", "models": mgr.get_health()}
 
 
-@router.post("/retune-weights")
+@router.post("/retune-weights", dependencies=[Depends(require_api_key)])
 async def retune_weights(request: Request) -> dict:
     """Manually trigger the fusion weight-tuning job.
 
@@ -292,7 +294,7 @@ async def retune_weights(request: Request) -> dict:
     }
 
 
-@router.delete("/reset")
+@router.delete("/reset", dependencies=[Depends(require_api_key)])
 async def reset_ml(request: Request) -> dict:
     """Wipe all ML models and decision/metric tables.
 
