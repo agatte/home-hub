@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB - APPLICATION AUDIT
-                    Last updated: April 26, 2026 (evening)
+                    Last updated: April 26, 2026 (late evening)
 ================================================================================
 
 System: Single-user, always-on home automation dashboard with ML intelligence
@@ -20,10 +20,12 @@ small a11y nudges) are deliberately omitted -- check git log for those.
 
   Category                Grade   Summary
   ---------------------   -----   ------------------------------------------
-  Backend Architecture    B+      Lifespan extracted to bootstrap.py,
-                                  constructor injection throughout;
-                                  automation_engine.py at 2,750 lines
-                                  is the remaining debt
+  Backend Architecture    A-      Lifespan extracted to bootstrap.py,
+                                  constructor injection throughout, per-
+                                  light state calculator extracted from
+                                  automation_engine.py (2,779 -> 2,184
+                                  lines); engine still hosts effects +
+                                  fusion orchestration
   Frontend / UI           B+      Living-Ink redesign + animated mode
                                   scenes; vitest + Playwright in place
   Design / UX             A-      Per-light spatial variation, kitchen pair
@@ -163,6 +165,22 @@ returning to the project after a long break."
     no longer drags in 30+ service imports — just the four needed by
     the WebSocket handler. Sets up the next refactor (splitting
     automation_engine.py)
+  - Extracted per-light state calculator from automation_engine.py to
+    backend/services/light_state_calculator.py: ACTIVITY_LIGHT_STATES,
+    EFFECT_AUTO_MAP, LUX_CURVE, WINDDOWN_RAMP_MINUTES, BED_RECLINED_*
+    constants and the pure functions that consume them
+    (get_time_period, resolve_activity_state, apply_brightness_
+    multiplier, apply_lux_multiplier, apply_zone_overlay, apply_
+    weather_adjust, classify_weather, adjust_single_light, lerp_
+    light_state, morning_ramp). Engine methods are now thin shims
+    that thread engine state (schedule_config, _mode_brightness,
+    camera reads, _last_lux_multiplier) through pure functions; same
+    names + signatures so engine callers and 95 existing engine tests
+    keep working unchanged. Hysteresis state stays on the engine,
+    routed through the calculator's tuple return. Engine drops
+    2,779 → 2,184 lines (-595); calculator adds 740 lines. 45 new
+    unit tests in test_light_state_calculator.py exercise the pure
+    functions in isolation
 
   SECURITY HARDENING (April 25 - April 26)
   -----------------------------------------------------------------------
@@ -235,9 +253,11 @@ Ranked by impact within each section.
 
   BACKEND ARCHITECTURE
   -----------------------------------------------------------------------
-  [ ]  Split automation_engine.py (2,750 lines) into mode logic, light-
-       state calculator, effect manager — easier now that the engine's
-       collaborators are visible at the constructor
+  [ ]  Continue splitting automation_engine.py (now 2,184 lines after
+       light-state calculator extract): effect manager
+       (_reconcile_effect + EFFECT_AUTO_MAP lifecycle) is the next
+       cleanest slice; mode resolution + fusion orchestration is the
+       last and most subtle
 
   OBSERVABILITY
   -----------------------------------------------------------------------
