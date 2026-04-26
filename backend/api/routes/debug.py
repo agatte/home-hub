@@ -3,10 +3,18 @@
 Powers the MCP `query_db` and `get_event_summary` tools. Lives behind
 ``/api/debug/`` so it's grouped with other operational utilities.
 
-LAN-only by deployment (no auth on this server in general). The
-SELECT-only validator below provides defense in depth so a typo in the
-MCP layer can't accidentally mutate state.
+LAN-only by deployment. Two independent layers gate writes:
+
+1. **Engine-level read-only**: the connection is opened with the
+   SQLite URI ``file:...?mode=ro``. Every mutation attempt fails at
+   the engine with ``SQLITE_READONLY`` regardless of what the SQL
+   string contains. This is the load-bearing guarantee.
+2. **Statement validator**: rejects anything whose first non-comment
+   token isn't ``SELECT`` or ``WITH`` (CTE reads are legitimate). The
+   validator is best-effort defense in depth — even if a future change
+   widens it, the engine will still refuse to write.
 """
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,28 +27,71 @@ router = APIRouter(prefix="/api/debug", tags=["debug"])
 
 DB_PATH = DATA_DIR / "home_hub.db"
 
+# SQLite supports a read-only open via URI mode. Forward slashes work
+# on both POSIX and Windows; ``Path.as_posix()`` produces the right
+# shape on both.
+_RO_URI = f"file:{DB_PATH.as_posix()}?mode=ro"
+
+# Cap how many rows a single /query call returns. Most diagnostic
+# queries return a handful; this protects against accidentally
+# `SELECT *` on a 100k-row event table from blowing memory.
+MAX_QUERY_ROWS = 1000
+
+_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_ALLOWED_LEADING_TOKENS = {"SELECT", "WITH"}
+
+
+def _is_read_only_query(sql: str) -> bool:
+    """True if the first non-comment token is SELECT or WITH (CTE).
+
+    Strips line (``--``) and block (``/* */``) comments before
+    inspecting the leading token so a query starting with a comment
+    isn't rejected. Defense in depth only — the engine connection is
+    read-only regardless.
+    """
+    if not sql or not sql.strip():
+        return False
+    stripped = _BLOCK_COMMENT_RE.sub(" ", sql)
+    stripped = _LINE_COMMENT_RE.sub(" ", stripped).strip()
+    if not stripped:
+        return False
+    first_token = stripped.split(maxsplit=1)[0].upper()
+    return first_token in _ALLOWED_LEADING_TOKENS
+
 
 @router.get("/query")
-async def query(sql: str) -> dict[str, list[dict[str, Any]]]:
+async def query(sql: str) -> dict[str, Any]:
     """Run a SELECT-only SQL query against the live SQLite DB.
 
     Args:
-        sql: A SELECT statement.
+        sql: A SELECT statement (CTEs starting with WITH are also
+            accepted — they're read queries too).
 
     Returns:
-        ``{"result": [row, row, ...]}`` where each row is a column-name → value dict.
+        ``{"result": [row, ...], "truncated": bool}`` where each row
+        is a column-name → value dict. Up to ``MAX_QUERY_ROWS`` are
+        returned; larger result sets set ``truncated=True``.
 
     Raises:
-        HTTPException 400 if the query isn't a SELECT.
+        HTTPException 400 if the query isn't a read query.
     """
-    if not sql.strip().upper().startswith("SELECT"):
-        raise HTTPException(status_code=400, detail="Only SELECT queries are permitted")
+    if not _is_read_only_query(sql):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SELECT (or WITH ... SELECT) queries are permitted",
+        )
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_RO_URI, uri=True) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql) as cursor:
-            rows = await cursor.fetchall()
-            return {"result": [dict(row) for row in rows]}
+            # Pull MAX+1 to detect overflow without loading the whole table.
+            rows = await cursor.fetchmany(MAX_QUERY_ROWS + 1)
+            truncated = len(rows) > MAX_QUERY_ROWS
+            return {
+                "result": [dict(r) for r in rows[:MAX_QUERY_ROWS]],
+                "truncated": truncated,
+            }
 
 
 @router.get("/event-summary")
@@ -59,7 +110,7 @@ async def event_summary(days: int = 7) -> dict[str, Any]:
         "sonos_events": [],
     }
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_RO_URI, uri=True) as db:
         db.row_factory = aiosqlite.Row
 
         async with db.execute(

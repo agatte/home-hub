@@ -12,6 +12,7 @@ Registered in .claude/mcp.json as the "home-hub" MCP server.
 """
 import logging
 import os
+import re
 from typing import Any, Optional
 
 import httpx
@@ -444,14 +445,38 @@ async def get_routines() -> dict:
 # ---------------------------------------------------------------------------
 
 
+_QUERY_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
+_QUERY_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _is_read_only_sql(sql: str) -> bool:
+    """Match the backend's debug.py validator: SELECT or WITH only.
+
+    Strips line + block comments so a query that legitimately starts
+    with a comment isn't rejected. The backend has its own copy of
+    this check plus a read-only DB connection — this is just so we
+    fail with a clear ValueError before the network round-trip.
+    """
+    if not sql or not sql.strip():
+        return False
+    stripped = _QUERY_BLOCK_COMMENT_RE.sub(" ", sql)
+    stripped = _QUERY_LINE_COMMENT_RE.sub(" ", stripped).strip()
+    if not stripped:
+        return False
+    return stripped.split(maxsplit=1)[0].upper() in {"SELECT", "WITH"}
+
+
 @mcp.tool()
 async def query_db(sql: str) -> list[dict]:
     """
     Run a read-only SQL query against the Home Hub SQLite database.
-    Only SELECT statements are permitted.
+    Only SELECT (or WITH ... SELECT) statements are permitted.
 
     Hits the live backend at HOME_HUB_URL — i.e. queries production data,
-    not a stale local dev DB.
+    not a stale local dev DB. The backend opens the DB read-only, so even
+    if a write somehow slipped past the validator the engine would refuse
+    it. Results are capped at 1000 rows; the caller can re-query with a
+    tighter WHERE / LIMIT if needed.
 
     Args:
         sql: A SELECT query, e.g. "SELECT * FROM mode_playlists"
@@ -460,11 +485,12 @@ async def query_db(sql: str) -> list[dict]:
         List of rows as dicts.
 
     Raises:
-        ValueError: If the query is not a SELECT statement.
+        ValueError: If the query is not a read query.
     """
-    stripped = sql.strip().upper()
-    if not stripped.startswith("SELECT"):
-        raise ValueError("Only SELECT queries are permitted via this tool.")
+    if not _is_read_only_sql(sql):
+        raise ValueError(
+            "Only SELECT (or WITH ... SELECT) queries are permitted via this tool."
+        )
 
     async with _client() as c:
         r = await c.get("/api/debug/query", params={"sql": sql})
