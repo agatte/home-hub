@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB - APPLICATION AUDIT
-                    Last updated: April 25, 2026
+                    Last updated: April 26, 2026
 ================================================================================
 
 System: Single-user, always-on home automation dashboard with ML intelligence
@@ -26,8 +26,9 @@ small a11y nudges) are deliberately omitted -- check git log for those.
                                   scenes; vitest + Playwright in place
   Design / UX             A-      Per-light spatial variation, kitchen pair
                                   rule, post-sunset ct>=333, projector tune
-  Security                C       LAN-only, zero auth, file-upload
-                                  hardening shipped on music import
+  Security                B+      X-API-Key on every write, Plant App
+                                  HTTPS-only, Sonos SSRF allowlist, RO
+                                  DB for /api/debug/query
   Machine Learning        A-      8 services, 5-signal fusion with nightly
                                   weight-learning, shadow-before-promote
   Performance             B       Threlte lazy-loaded, rAF capped, opt-in
@@ -142,6 +143,28 @@ returning to the project after a long break."
     re-verifies. Exit 1 on rollback success, exit 2 if rollback
     itself failed
 
+  SECURITY HARDENING (April 25 - April 26)
+  -----------------------------------------------------------------------
+  - X-API-Key on every write endpoint (POST/PUT/PATCH/DELETE) via a
+    single FastAPI dependency. Localhost (kiosk colocation) and
+    configured TRUSTED_LAN_IPS bypass the header check; everything
+    else fails 401, missing-key deploys fail closed at 503. Presence
+    webhooks keep their separate X-Presence-Token path. 69 protected
+    writes across 11 routers
+  - Plant App credentials no longer travel cleartext: urlparse-based
+    scheme validation in PlantAppService rejects http:// at boot
+    unless PLANT_APP_ALLOW_INSECURE=true is set explicitly (escape
+    hatch for migration only, emits a WARNING on every login)
+  - Sonos SSRF allowlist on play_uri: regex tuple gates iTunes /
+    mzstatic / our own LOCAL_IP and rejects everything else.
+    Validated at the route handler (400 telemetry) and inside the
+    service method (defense in depth). TTS path verified compatible
+  - /api/debug/query opened read-only at the engine layer (SQLite
+    file:...?mode=ro), not just at the validator. Validator
+    upgraded to a comment-stripping tokenizer that allows SELECT
+    and WITH (CTE reads were previously rejected). Results capped
+    at 1000 rows with a truncated flag
+
   FRONTEND PERFORMANCE + A11Y (April 24)
   -----------------------------------------------------------------------
   - Threlte + three.js (~689 KB) lazy-loaded via dynamic import when
@@ -203,15 +226,6 @@ Ranked by impact within each section.
   [ ]  Prometheus /metrics endpoint (error rate, latency, throughput)
   [ ]  Uptime Kuma rule that alerts on /health.status == "degraded"
        (the surface exists; the alert config doesn't yet)
-
-  SECURITY
-  -----------------------------------------------------------------------
-  [ ]  API key auth for write endpoints (every endpoint is open on LAN)
-  [ ]  Migrate Plant App integration to HTTPS (currently sends email +
-       password over HTTP)
-  [ ]  URL allowlist on sonos.play_uri (preview_url SSRF risk)
-  [ ]  MCP query_db: tighten beyond "SELECT only" (UNION attacks
-       possible against the live DB)
 
   DEVOPS
   -----------------------------------------------------------------------
