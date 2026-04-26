@@ -224,22 +224,121 @@ async def lifespan(app: FastAPI):
     from backend.services.event_query_service import EventQueryService
     app.state.event_query_service = EventQueryService()
 
-    # Rule engine — learns time-based mode patterns, nudges user
+    # Weather service (NWS API — no key required, free alerts). Constructed
+    # before AutomationEngine so it flows in via the constructor; previously
+    # this lived after automation and was back-filled, which is the
+    # late-binding pattern this section now avoids.
+    from backend.services.weather_service import WeatherService
+    weather_service = WeatherService()
+    app.state.weather_service = weather_service
+    logger.info("Weather service initialized (NWS API)")
+
+    # ML services — model manager + learners + fusion. All built before
+    # AutomationEngine so engine takes them via constructor kwargs (no
+    # post-construction `automation._x = y` back-fills).
+    from backend.services.ml.model_manager import ModelManager
+    from backend.services.ml.lighting_learner import LightingPreferenceLearner
+    from backend.services.ml.ml_logger import MLDecisionLogger
+    from backend.services.ml.confidence_fusion import ConfidenceFusion
+
+    model_manager = ModelManager()
+    await model_manager.load_all()
+    app.state.model_manager = model_manager
+
+    lighting_learner = LightingPreferenceLearner(model_manager)
+    model_manager.register_learner(lighting_learner)
+    app.state.lighting_learner = lighting_learner
+
+    ml_logger = MLDecisionLogger(ws_manager=ws_manager)
+    app.state.ml_logger = ml_logger
+
+    # Behavioral predictor — graceful degradation if lightgbm missing.
+    behavioral_predictor = None
+    try:
+        from backend.services.ml.behavioral_predictor import BehavioralPredictor
+        behavioral_predictor = BehavioralPredictor(model_manager)
+        model_manager.register_learner(behavioral_predictor)
+        app_logger.info(
+            "Behavioral predictor initialized (status=%s)",
+            behavioral_predictor._status,
+        )
+    except ImportError:
+        app_logger.warning(
+            "lightgbm not installed — behavioral predictor disabled"
+        )
+    app.state.behavioral_predictor = behavioral_predictor
+
+    confidence_fusion = ConfidenceFusion()
+    app.state.confidence_fusion = confidence_fusion
+    app_logger.info("Confidence fusion initialized")
+
+    # Music bandit — Thompson sampling playlist selection. Built before
+    # MusicMapper so it can be passed via constructor.
+    from backend.services.ml.music_bandit import MusicBandit
+    music_bandit = MusicBandit(model_manager)
+    model_manager.register_learner(music_bandit)
+    app.state.music_bandit = music_bandit
+    app_logger.info("Music bandit initialized (%d arms)", len(music_bandit._arms))
+
+    app_logger.info("ML services initialized")
+
+    # Rule engine — learns time-based mode patterns, nudges user.
+    # Takes confidence_fusion via constructor (was previously back-filled).
     from backend.services.rule_engine_service import RuleEngineService
-    rule_engine = RuleEngineService(ws_manager=ws_manager)
+    rule_engine = RuleEngineService(
+        ws_manager=ws_manager,
+        confidence_fusion=confidence_fusion,
+    )
     app.state.rule_engine = rule_engine
 
+    # Music mapper — takes music_bandit via constructor (was back-filled).
+    music_mapper = MusicMapper(
+        sonos_service=sonos,
+        ws_manager=ws_manager,
+        event_logger=event_logger,
+        music_bandit=music_bandit,
+    )
+    await music_mapper.load_from_db()
+    app.state.music_mapper = music_mapper
+
+    # Ambient sound service — takes weather_service via constructor for real
+    # this time (was previously passed as a getattr that returned None, then
+    # back-filled).
+    from backend.services.ambient_sound_service import AmbientSoundService
+    ambient_sound = AmbientSoundService(
+        ws_manager=ws_manager,
+        weather_service=weather_service,
+    )
+    await ambient_sound.load_from_db()
+    ambient_sound.scan_sounds()
+    app.state.ambient_sound = ambient_sound
+
+    # Automation engine — every collaborator now flows in via the
+    # constructor. Replaces the previous shape that took 4 args and
+    # back-filled 8 more attributes after construction.
     automation = AutomationEngine(
         hue=hue, hue_v2=hue_v2, ws_manager=ws_manager,
         schedule_config=schedule_config,
         mode_brightness=saved_brightness or None,
         event_logger=event_logger,
-        # weather_service injected below after WeatherService init
+        weather_service=weather_service,
+        sonos=sonos,
+        screen_sync=screen_sync,
+        music_mapper=music_mapper,
+        rule_engine=rule_engine,
+        lighting_learner=lighting_learner,
+        ml_logger=ml_logger,
+        behavioral_predictor=behavioral_predictor,
+        confidence_fusion=confidence_fusion,
     )
     app.state.automation = automation
-    automation._screen_sync = screen_sync
-    automation._sonos = sonos
     await automation.load_scene_overrides()
+
+    # Mode-change callbacks — runtime event subscriptions, separate from
+    # dependency injection. Registered after automation exists.
+    automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
+    automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
+    automation.register_on_mode_change(ml_logger.on_mode_change)
 
     # Apply persisted watching-posture tuning (settings-page sliders for the
     # projector-safe caps + reclined L1 night ambient).
@@ -257,26 +356,6 @@ async def lifespan(app: FastAPI):
     if saved_loopback.get("enabled", False):
         await laptop_loopback.start()
         app_logger.info("Laptop screen sync loopback resumed from saved state")
-
-    # Music mapper (DB-backed mode-to-playlist mapping with smart auto-play)
-    music_mapper = MusicMapper(
-        sonos_service=sonos, ws_manager=ws_manager, event_logger=event_logger
-    )
-    await music_mapper.load_from_db()
-    automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
-    automation._music_mapper = music_mapper
-    app.state.music_mapper = music_mapper
-
-    # Ambient sound service (browser-based ambient audio)
-    from backend.services.ambient_sound_service import AmbientSoundService
-    ambient_sound = AmbientSoundService(
-        ws_manager=ws_manager,
-        weather_service=getattr(app.state, "weather_service", None),
-    )
-    await ambient_sound.load_from_db()
-    ambient_sound.scan_sounds()
-    automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
-    app.state.ambient_sound = ambient_sound
 
     # Library import service (Apple Music XML → taste profile)
     library_import = LibraryImportService()
@@ -323,16 +402,9 @@ async def lifespan(app: FastAPI):
         automation.register_on_mode_change(_bar_mode_callback)
         logger.info("Bar app service initialized (%s)", settings.BAR_APP_URL)
 
-    # Weather service (NWS API — no key required, free alerts)
-    from backend.services.weather_service import WeatherService
-    weather_service = WeatherService()
-    app.state.weather_service = weather_service
-    automation._weather_service = weather_service
-    ambient_sound._weather_service = weather_service
-    logger.info("Weather service initialized (NWS API, linked to automation engine)")
-    automation._rule_engine = rule_engine
-
-    # Presence detection — replaces Alexa geofence
+    # Presence detection — replaces Alexa geofence. Now receives the real
+    # confidence_fusion via constructor (previously was back-filled because
+    # fusion didn't exist yet at presence-construction time).
     presence_config = await load_setting("presence_config")
     presence = PresenceService(
         hue=hue,
@@ -345,70 +417,14 @@ async def lifespan(app: FastAPI):
         ws_manager=ws_manager,
         event_logger=event_logger,
         config=presence_config or {},
-        # Presence is a voter in ConfidenceFusion as of v2 — "phone on home
-        # WiFi" is the most reliable "user is (not) home" signal the system
-        # has. Fusion lives on the automation engine.
-        fusion=getattr(automation, "_confidence_fusion", None),
+        # Presence is a voter in ConfidenceFusion — "phone on home WiFi"
+        # is the most reliable "user is (not) home" signal the system has.
+        fusion=confidence_fusion,
     )
     app.state.presence = presence
     logger.info(
         "Presence detection initialized (phone=%s)", presence.config.phone_ip
     )
-
-    # ML services (Phase 1) — model manager, lighting learner, decision logger
-    from backend.services.ml.model_manager import ModelManager
-    from backend.services.ml.lighting_learner import LightingPreferenceLearner
-    from backend.services.ml.ml_logger import MLDecisionLogger
-
-    model_manager = ModelManager()
-    await model_manager.load_all()
-
-    lighting_learner = LightingPreferenceLearner(model_manager)
-    model_manager.register_learner(lighting_learner)
-
-    ml_logger = MLDecisionLogger(ws_manager=ws_manager)
-
-    app.state.model_manager = model_manager
-    app.state.lighting_learner = lighting_learner
-    app.state.ml_logger = ml_logger
-
-    automation._lighting_learner = lighting_learner
-    automation.register_on_mode_change(ml_logger.on_mode_change)
-
-    # Behavioral predictor (requires lightgbm — graceful degradation if missing)
-    try:
-        from backend.services.ml.behavioral_predictor import BehavioralPredictor
-        behavioral_predictor = BehavioralPredictor(model_manager)
-        model_manager.register_learner(behavioral_predictor)
-        app.state.behavioral_predictor = behavioral_predictor
-        automation._behavioral_predictor = behavioral_predictor
-        automation._ml_logger = ml_logger
-        app_logger.info("Behavioral predictor initialized (status=%s)", behavioral_predictor._status)
-    except ImportError:
-        app_logger.warning("lightgbm not installed — behavioral predictor disabled")
-        app.state.behavioral_predictor = None
-
-    # Confidence fusion — multi-signal ensemble
-    from backend.services.ml.confidence_fusion import ConfidenceFusion
-    confidence_fusion = ConfidenceFusion()
-    app.state.confidence_fusion = confidence_fusion
-    automation._confidence_fusion = confidence_fusion
-    rule_engine._fusion = confidence_fusion
-    # Presence was instantiated before fusion existed (ordering legacy) so we
-    # set its fusion ref here. Without this, the presence lane reports stale
-    # forever and never votes.
-    presence._fusion = confidence_fusion
-    app_logger.info("Confidence fusion initialized")
-
-    # Music bandit — Thompson sampling playlist selection
-    from backend.services.ml.music_bandit import MusicBandit
-    music_bandit = MusicBandit(model_manager)
-    model_manager.register_learner(music_bandit)
-    app.state.music_bandit = music_bandit
-    music_mapper._music_bandit = music_bandit
-    app_logger.info("Music bandit initialized (%d arms)", len(music_bandit._arms))
-
-    app_logger.info("ML services initialized")
 
     # Pi-hole DNS stats (optional)
     if settings.PIHOLE_API_URL and settings.PIHOLE_API_KEY:

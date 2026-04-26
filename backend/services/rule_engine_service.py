@@ -92,13 +92,14 @@ class RuleEngineService:
         ws_manager,
         min_confidence: float = 0.70,
         min_samples: int = 3,
+        confidence_fusion=None,
     ) -> None:
         self._ws_manager = ws_manager
         self._min_confidence = min_confidence
         self._min_samples = min_samples
         self._cooldowns: dict[int, datetime] = {}  # rule_id → last nudged at
         self._last_suggestion: Optional[dict[str, Any]] = None
-        self._fusion = None  # ConfidenceFusion handle, injected by main.py
+        self._fusion = confidence_fusion
         self._heartbeat = None  # HeartbeatRegistry, injected by main.py
 
     def set_heartbeat_registry(self, registry) -> None:

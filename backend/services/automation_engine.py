@@ -539,14 +539,29 @@ class AutomationEngine:
         mode_brightness: Optional[dict[str, float]] = None,
         event_logger=None,
         weather_service=None,
+        # Cross-service collaborators — main.py constructs these in
+        # dependency order and passes them in. All default None so
+        # tests can build an engine with just the hardware deps.
+        sonos=None,
+        screen_sync=None,
+        music_mapper=None,
+        rule_engine=None,
+        lighting_learner=None,
+        ml_logger=None,
+        behavioral_predictor=None,
+        confidence_fusion=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
         self._ws_manager = ws_manager
         self._event_logger = event_logger
         self._weather_service = weather_service
-        self._music_mapper = None  # Set by main.py after construction
-        self._sonos = None  # Set by main.py after construction — used by late-night rescue
+        self._sonos = sonos
+        self._music_mapper = music_mapper
+        self._rule_engine = rule_engine
+        self._lighting_learner = lighting_learner
+        self._ml_logger = ml_logger
+        self._behavioral_predictor = behavioral_predictor
 
         # Weather condition tracking for music suggestions
         self._last_weather_condition: Optional[str] = None
@@ -608,8 +623,9 @@ class AutomationEngine:
         self._scene_overrides: dict[str, dict[str, str]] = {}  # {mode: {period: scene_id}}
         self._scene_override_sources: dict[str, dict[str, str]] = {}  # {mode: {period: source}}
 
-        # Confidence fusion (set by main.py after construction)
-        self._confidence_fusion = None
+        # Confidence fusion — passed via constructor; ensemble of process
+        # / camera / audio / behavioral / rule_engine + presence voter.
+        self._confidence_fusion = confidence_fusion
         self._last_fusion_result: Optional[dict] = None
 
         # Camera service (set when camera is enabled via /api/camera/enable
@@ -629,8 +645,11 @@ class AutomationEngine:
         # naturally skips the bridge write.
         self._last_lux_multiplier: float = 1.0
 
+        # Screen sync — passed via constructor; reconciliation skips lights
+        # that screen sync owns so we don't fight it on watching/gaming.
+        self._screen_sync = screen_sync
+
         # Decision pipeline — real-time snapshot of all inputs → output
-        self._screen_sync = None  # Set by main.py after construction
         self._pipeline_history: list[dict] = []
         self._last_pipeline_broadcast: Optional[datetime] = None
 

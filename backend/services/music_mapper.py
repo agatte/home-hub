@@ -63,11 +63,17 @@ class MusicMapper:
     to the mode_playlists SQLite table.
     """
 
-    def __init__(self, sonos_service, ws_manager, event_logger=None) -> None:
+    def __init__(
+        self,
+        sonos_service,
+        ws_manager,
+        event_logger=None,
+        music_bandit=None,
+    ) -> None:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
         self._event_logger = event_logger
-        self._music_bandit = None  # Set by main.py if ML is available
+        self._music_bandit = music_bandit
         # Cache: mode -> list[{id, favorite_title, vibe, auto_play, priority}]
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
         # Tracks the most recent mode requested — used to skip stale auto-plays
