@@ -282,6 +282,15 @@ async def lifespan(app: FastAPI):
     ambient_sound.scan_sounds()
     app.state.ambient_sound = ambient_sound
 
+    # Effect manager — owns Hue v2 dynamic-effect lifecycle (stop/start
+    # ordering, same-effect skip, weather-effect fallback). Constructed
+    # before AutomationEngine so it can be passed in via DI.
+    from backend.services.effect_manager import EffectManager
+    effect_manager = EffectManager(
+        hue_v2=hue_v2, weather_service=weather_service,
+    )
+    app.state.effect_manager = effect_manager
+
     # Automation engine — every collaborator now flows in via the
     # constructor. Replaces the previous shape that took 4 args and
     # back-filled 8 more attributes after construction.
@@ -299,6 +308,7 @@ async def lifespan(app: FastAPI):
         ml_logger=ml_logger,
         behavioral_predictor=behavioral_predictor,
         confidence_fusion=confidence_fusion,
+        effect_manager=effect_manager,
     )
     app.state.automation = automation
     await automation.load_scene_overrides()

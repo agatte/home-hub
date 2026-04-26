@@ -30,21 +30,10 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 # the current mode isn't in this set.
 SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
 
-# Modes that skip weather-reactive lighting adjustments entirely.
-# Social has its own party lighting; sleeping is a gradual fade sequence.
-# Working/cooking/gaming opt out because they're task- or screen-focused —
-# weather-dim-for-cozy is backwards there: overcast days need lamps to
-# compensate for dim natural light, not further dim with it.
-WEATHER_SKIP_MODES = frozenset(("social", "sleeping", "working", "cooking", "gaming"))
-
-# Weather condition → effect override. When a weather condition matches and
-# the mode has no auto-effect already, this effect is applied on top.
-# Thunderstorm (sparkle) fires any time of day; others evening/night only.
-WEATHER_EFFECT_MAP: dict[str, str | None] = {
-    "thunderstorm": "sparkle",
-    "rain": "candle",
-    "snow": "opal",
-}
+# Effect lifecycle (Hue v2 dynamic effects + weather-effect mapping +
+# WEATHER_SKIP_MODES) lives in effect_manager.py. Re-exported below at
+# module scope for back-compat with callers that import them from this
+# module.
 
 # Zone+posture → relax rule — first mode-changing sensor actuation. Auto-
 # applies the "relax" manual override when the camera sees bed+reclined for
@@ -128,6 +117,11 @@ from backend.services.light_state_calculator import (  # noqa: E402
     lux_to_multiplier,
     morning_ramp as _morning_ramp,
     resolve_activity_state as _resolve_activity_state,
+)
+from backend.services.effect_manager import (  # noqa: E402
+    EffectManager,
+    WEATHER_EFFECT_MAP,
+    WEATHER_SKIP_MODES,
 )
 
 
@@ -213,6 +207,7 @@ class AutomationEngine:
         ml_logger=None,
         behavioral_predictor=None,
         confidence_fusion=None,
+        effect_manager=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
@@ -225,6 +220,9 @@ class AutomationEngine:
         self._lighting_learner = lighting_learner
         self._ml_logger = ml_logger
         self._behavioral_predictor = behavioral_predictor
+        self._effect_manager = effect_manager or EffectManager(
+            hue_v2=hue_v2, weather_service=weather_service,
+        )
 
         # Weather condition tracking for music suggestions
         self._last_weather_condition: Optional[str] = None
@@ -267,11 +265,9 @@ class AutomationEngine:
         self._enabled: bool = True
         self._override_timeout_hours: int = 4
         self._gaming_effect: Optional[str] = None
-        self._active_effect_name: Optional[str] = None  # Name of active Hue dynamic effect
-        # Light IDs targeted by the active effect, or None when the effect runs
-        # on all lights. Used by _reconcile_effect to detect target-set changes
-        # (e.g., candle → fire on {"1","2"} vs opal on None) and reset cleanly.
-        self._active_effect_lights: Optional[list[str]] = None
+        # Active-effect tracking lives on self._effect_manager; expose it via
+        # delegating properties so legacy reads (sleep-mode branch, pipeline
+        # broadcast, etc.) keep working unchanged.
 
         # Configurable schedule and mode brightness
         self._schedule_config = schedule_config or ScheduleConfig()
@@ -936,74 +932,8 @@ class AutomationEngine:
     async def _reconcile_effect(
         self, desired: Optional[str | dict[str, Any]],
     ) -> None:
-        """
-        Transition from the currently-active v2 effect to the desired one.
-
-        MUST be called AFTER the new light state / scene is on the bridge,
-        so stopping the old effect doesn't pop brightness to 100%. The
-        bridge will hold the last-set brightness target and return to it
-        once the effect releases.
-
-        `desired` accepts three shapes:
-          - None:                 no effect should be active
-          - str (e.g., "candle"): apply effect to all lights (legacy shape,
-                                  used by weather-effect fallback and callers
-                                  that don't need per-light targeting)
-          - dict {"effect": name, "lights": list[str] | None}:
-              explicit — `lights=None` means all mapped lights; a list scopes
-              the effect to specific v1 light IDs (e.g., candle on living-room
-              lamps while kitchen pendants stay static in relax mode).
-
-        The same-effect short-circuit kicks in only when BOTH the effect name
-        and the target light set match — repeated candle/glisten cycles with
-        the same scope preserve the brightness base on the bridge. When
-        `desired` is None we always call stop_effect_all (even if our tracker
-        agrees none is running) to handle effects activated out-of-band by
-        the scenes API, presence/winddown services, or left across a restart.
-
-        A 0.5s guard separates stop and start so the two commands don't race.
-        """
-        if not self._hue_v2 or not self._hue_v2.connected:
-            return
-
-        # Normalize desired to (effect_name, target_lights)
-        if desired is None:
-            desired_effect: Optional[str] = None
-            desired_lights: Optional[list[str]] = None
-        elif isinstance(desired, str):
-            desired_effect = desired
-            desired_lights = None
-        else:
-            desired_effect = desired.get("effect")
-            desired_lights = desired.get("lights")
-
-        # Same-effect + same-target short-circuit
-        if (
-            desired_effect
-            and desired_effect == self._active_effect_name
-            and desired_lights == self._active_effect_lights
-        ):
-            return
-
-        # Clear current effect — always call stop_effect_all to handle
-        # out-of-band activations cleanly
-        await self._hue_v2.stop_effect_all()
-        self._active_effect_name = None
-        self._active_effect_lights = None
-
-        if not desired_effect:
-            return
-
-        await asyncio.sleep(0.5)
-        if desired_lights is None:
-            await self._hue_v2.set_effect_all(desired_effect)
-        else:
-            await asyncio.gather(*(
-                self._hue_v2.set_effect(lid, desired_effect)
-                for lid in desired_lights
-            ))
-        self._active_effect_name = desired_effect
-        self._active_effect_lights = desired_lights
+        """Transition active Hue v2 effect (shim → effect_manager)."""
+        await self._effect_manager.reconcile(desired)
 
     async def _apply_mode(self, mode: str) -> None:
         """Apply light state for a given mode."""
@@ -1046,10 +976,7 @@ class AutomationEngine:
             await asyncio.sleep(1.2)  # Let the bridge settle the target
 
             # Now stop the effect — bridge holds bri=20 instead of popping to 100%
-            if self._active_effect_name and self._hue_v2 and self._hue_v2.connected:
-                await self._hue_v2.stop_effect_all()
-                self._active_effect_name = None
-                self._active_effect_lights = None
+            await self._effect_manager.stop_all()
 
             self._sleep_fade_task = asyncio.create_task(self._sleep_fade())
             return
@@ -1473,50 +1400,22 @@ class AutomationEngine:
     def _get_desired_effect(
         self, mode: str,
     ) -> Optional[str | dict[str, Any]]:
-        """Determine what dynamic effect should be active for a mode.
-
-        Returns either:
-          - None                                   (no effect)
-          - str                                    (weather fallback, all lights)
-          - {"effect": name, "lights": list|None}  (mode-specific, per-light scope)
-
-        Sleeping and social manage their own effects (sleeping = none,
-        social = none per Velvet Speakeasy static palette).
-        """
-        if mode in ("sleeping", "social"):
-            return None
-        period = self._get_time_period()
-        effect_map = EFFECT_AUTO_MAP.get(mode, {})
-        auto_effect = effect_map.get(period)
-        # late_night falls back to night for modes that don't define it
-        if auto_effect is None and period == "late_night":
-            auto_effect = effect_map.get("night")
-        if auto_effect:
-            return auto_effect
-        # Weather-driven fallback: bare string → applied to all lights
-        weather_effect = self._get_weather_effect()
-        if weather_effect and (
-            period in ("evening", "night", "late_night")
-            or weather_effect == "sparkle"
-        ):
-            return weather_effect
-        return None
+        """Determine the dynamic effect target for a mode (shim → effect_manager)."""
+        return self._effect_manager.get_desired_effect(mode, self._get_time_period())
 
     def _get_weather_effect(self) -> str | None:
-        """Return an effect override based on current weather, or None."""
-        if not self._weather_service:
-            return None
-        try:
-            weather = self._weather_service.get_cached()
-            if not weather:
-                return None
-        except Exception:
-            return None
-        desc = weather.get("description", "").lower()
-        for keyword, effect in WEATHER_EFFECT_MAP.items():
-            if keyword in desc:
-                return effect
-        return None
+        """Weather-condition effect override (shim → effect_manager)."""
+        return self._effect_manager.get_weather_effect()
+
+    @property
+    def _active_effect_name(self) -> Optional[str]:
+        """Currently-active effect name (delegates to effect_manager)."""
+        return self._effect_manager.active_name
+
+    @property
+    def _active_effect_lights(self) -> Optional[list[str]]:
+        """Light scope of the currently-active effect (delegates to effect_manager)."""
+        return self._effect_manager.active_lights
 
     def _get_current_weather_condition(self) -> str | None:
         """Return the classified weather condition string, or None."""
