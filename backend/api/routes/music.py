@@ -8,6 +8,7 @@ from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
+from backend.services.sonos_service import is_allowed_play_uri
 
 router = APIRouter(prefix="/api/music", tags=["music"])
 
@@ -247,6 +248,16 @@ async def play_preview(request: Request) -> dict:
     preview_url = body.get("preview_url")
     if not preview_url:
         raise HTTPException(status_code=400, detail="preview_url is required")
+
+    # SSRF guard: anyone authorized to hit write endpoints could otherwise
+    # aim the speaker at internal addresses. The allowlist matches iTunes
+    # preview clips + our own LAN-served TTS/static URLs and rejects
+    # everything else with a 400 (distinguishes "bad input" from a 503
+    # "Sonos broken" so we get useful telemetry).
+    if not is_allowed_play_uri(preview_url):
+        raise HTTPException(
+            status_code=400, detail="preview_url not on the allowlist"
+        )
 
     sonos = request.app.state.sonos
     if not sonos.connected:

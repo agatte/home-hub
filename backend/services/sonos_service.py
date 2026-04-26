@@ -3,12 +3,43 @@ Sonos speaker service — wraps SoCo for local UPnP control.
 """
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Optional
 
+from backend.config import settings
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 
 logger = logging.getLogger("home_hub.sonos")
+
+
+# play_uri() makes the speaker fetch arbitrary URLs. Without an
+# allowlist any caller authorized to hit /api/music/preview can use
+# the speaker as an SSRF probe (it can GET internal admin pages,
+# metadata services, etc.). The legitimate sources are narrow:
+# iTunes preview clips for the recommendation feed and our own
+# locally-served TTS / static audio.
+_ALLOWED_PLAY_URI_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"^https://[a-z0-9-]+\.itunes\.apple\.com/", re.IGNORECASE),
+    re.compile(r"^https://[a-z0-9-]+\.mzstatic\.com/", re.IGNORECASE),
+    re.compile(
+        rf"^http://{re.escape(settings.LOCAL_IP)}(:\d+)?/",
+        re.IGNORECASE,
+    ),
+)
+
+
+def is_allowed_play_uri(uri: str) -> bool:
+    """True if a URI is on the allowlist for sonos.play_uri().
+
+    Used both at the route-handler level (so /api/music/preview can
+    reject with a clear 400) and inside play_uri itself as
+    defense-in-depth — any future caller that forgets to validate
+    still gets gated.
+    """
+    if not uri:
+        return False
+    return any(p.match(uri) for p in _ALLOWED_PLAY_URI_PATTERNS)
 
 
 class SonosService:
@@ -211,7 +242,18 @@ class SonosService:
         Args:
             uri: HTTP URL of the audio file to play.
             volume: If set, volume is applied atomically before playback starts.
+
+        URIs are validated against ``_ALLOWED_PLAY_URI_PATTERNS`` —
+        the route handler at /api/music/preview should also gate via
+        ``is_allowed_play_uri`` so the user gets a 400 instead of a
+        silent False, but this layer is the last-line defense-in-depth
+        against SSRF.
         """
+        if not is_allowed_play_uri(uri):
+            logger.warning(
+                "Refusing play_uri for non-allowlisted URI: %s", uri[:200]
+            )
+            return False
         if not self._connected or not self._device:
             return False
         try:
