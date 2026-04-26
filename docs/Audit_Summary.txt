@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB - APPLICATION AUDIT
-                    Last updated: April 26, 2026
+                    Last updated: April 26, 2026 (evening)
 ================================================================================
 
 System: Single-user, always-on home automation dashboard with ML intelligence
@@ -20,8 +20,10 @@ small a11y nudges) are deliberately omitted -- check git log for those.
 
   Category                Grade   Summary
   ---------------------   -----   ------------------------------------------
-  Backend Architecture    B-      ML wiring is solid; automation_engine.py
-                                  at 2,750 lines is the standing debt
+  Backend Architecture    B       Lifespan now constructs in dependency
+                                  order with constructor injection;
+                                  automation_engine.py at 2,750 lines
+                                  is the standing debt
   Frontend / UI           B+      Living-Ink redesign + animated mode
                                   scenes; vitest + Playwright in place
   Design / UX             A-      Per-light spatial variation, kitchen pair
@@ -143,6 +145,20 @@ returning to the project after a long break."
     re-verifies. Exit 1 on rollback success, exit 2 if rollback
     itself failed
 
+  BACKEND DI CLEANUP (April 26)
+  -----------------------------------------------------------------------
+  - Replaced 12 lifespan late-binds (`service._attr = dep` after
+    construction) with constructor injection across AutomationEngine,
+    RuleEngineService, MusicMapper, AmbientSoundService. main.py
+    lifespan now constructs services in dependency order — weather,
+    ML services, confidence fusion, music bandit, rule engine, music
+    mapper, ambient sound all built before AutomationEngine and passed
+    in via kwargs. PresenceService now receives a real
+    confidence_fusion at construction (was previously back-filled
+    because fusion didn't exist yet at presence-construction time).
+    Mode-change callback registrations remain post-construction —
+    those are runtime event subscriptions, not DI
+
   SECURITY HARDENING (April 25 - April 26)
   -----------------------------------------------------------------------
   - X-API-Key on every write endpoint (POST/PUT/PATCH/DELETE) via a
@@ -216,10 +232,9 @@ Ranked by impact within each section.
   -----------------------------------------------------------------------
   [ ]  Split automation_engine.py (2,750 lines) into mode logic, light-
        state calculator, effect manager
-  [ ]  Extract main.py lifespan (~880 lines) to a bootstrap.py /
-       service registry
-  [ ]  Replace service DI by attribute assignment (9 attr-wirings in
-       main.py) with constructor args
+  [ ]  Extract main.py lifespan (~870 lines) to a bootstrap.py /
+       service registry — natural next step now that construction
+       order is dep-respecting and deps flow through constructors
 
   OBSERVABILITY
   -----------------------------------------------------------------------
