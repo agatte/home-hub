@@ -99,49 +99,36 @@ class ScheduleConfig:
     ))
 
 
-# Default mode brightness multipliers (1.0 = unchanged)
-DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
-    "gaming": 1.0,
-    "working": 1.0,
-    "watching": 1.0,
-    "relax": 1.0,
-    "cooking": 1.0,
-    "social": 1.0,
-}
-
-# Ambient lux adaptive brightness — piecewise-linear curve mapping
-# camera-derived room brightness (gray.mean, 0–255) to a brightness multiplier.
-# Only applied in modes where ambient adaptation is desirable; functional
-# modes (gaming, watching, cooking) and scene-override-driven activation
-# bypass this stage so spatial design stays predictable.
-LUX_MODES = frozenset(("working", "relax"))
-LUX_CURVE: list[tuple[float, float]] = [(40.0, 1.15), (90.0, 1.00), (180.0, 0.85)]
-LUX_MULT_EPSILON = 0.03      # Skip re-apply if multiplier change < 3%
-LUX_STALE_SECONDS = 30       # Ignore readings older than this
-
-
-def lux_to_multiplier(lux: float, baseline: float = 90.0) -> float:
-    """Piecewise-linear interpolation across LUX_CURVE anchors.
-
-    The ``baseline`` argument shifts the curve so the user's calibrated
-    "normal room" reading lands at the middle anchor (multiplier = 1.00).
-    Default baseline of 90 matches the raw LUX_CURVE anchors — used when
-    no calibration baseline is available yet.
-
-    Clamps to the first/last anchor's multiplier when lux is outside the
-    anchor range. Dark rooms (low lux) lift brightness; bright rooms dim.
-    """
-    # Shift lux so that the calibrated baseline maps to the curve's midpoint.
-    effective = lux - baseline + LUX_CURVE[1][0]
-    if effective <= LUX_CURVE[0][0]:
-        return LUX_CURVE[0][1]
-    if effective >= LUX_CURVE[-1][0]:
-        return LUX_CURVE[-1][1]
-    for (x0, y0), (x1, y1) in zip(LUX_CURVE, LUX_CURVE[1:]):
-        if x0 <= effective <= x1:
-            frac = (effective - x0) / (x1 - x0) if x1 != x0 else 0.0
-            return y0 + frac * (y1 - y0)
-    return 1.0  # Unreachable
+# Lighting tunables + the per-light state lookup table live in
+# light_state_calculator.py. Re-exported below at module scope for
+# back-compat with callers that imported them from this module.
+from backend.services.light_state_calculator import (  # noqa: E402
+    ACTIVITY_LIGHT_STATES,
+    BED_RECLINED_L1_NIGHT_DEFAULT,
+    BED_RECLINED_L1_RATIO,
+    BED_RECLINED_L2_WATCHING_BRI,
+    DEFAULT_MODE_BRIGHTNESS,
+    EFFECT_AUTO_MAP,
+    LUX_CURVE,
+    LUX_MODES,
+    LUX_MULT_EPSILON,
+    LUX_STALE_SECONDS,
+    MODE_TRANSITION_TIME,
+    WINDDOWN_RAMP_MINUTES,
+    ZONE_POSTURE_FRESHNESS_SECONDS,
+    adjust_single_light as _adjust_single_light_pure,
+    apply_brightness_multiplier as _calc_apply_brightness_multiplier,
+    apply_lux_multiplier as _calc_apply_lux_multiplier,
+    apply_weather_adjust as _calc_apply_weather_adjust,
+    apply_zone_overlay as _calc_apply_zone_overlay,
+    classify_weather as _classify_weather_pure,
+    get_time_period as _calc_get_time_period,
+    get_time_period_static as _get_time_period_static,
+    lerp_light_state as _lerp_light_state,
+    lux_to_multiplier,
+    morning_ramp as _morning_ramp,
+    resolve_activity_state as _resolve_activity_state,
+)
 
 
 # Light ID → room mapping for readability
@@ -172,228 +159,6 @@ MODE_PRIORITY = {
 # lower-priority reports. 300s matches the confidence-fusion stale window.
 SOURCE_STALE_SECONDS = 300
 
-# ---------------------------------------------------------------------------
-# Activity light states — time-aware per-light states
-# ---------------------------------------------------------------------------
-# Structure: mode → time_period → per-light state dict
-# Time periods: "day" (8-18), "evening" (18-21), "night" (21-8)
-# Social mode is flat (no time keys) — routed through party sub-modes.
-
-_LIGHT_OFF = {"on": False}
-
-WINDDOWN_RAMP_MINUTES = 30  # Duration of evening → night fade (minutes)
-
-# Auto-activate effects based on mode + time period.
-# Each cell is either:
-#   None           — no effect
-#   {"effect": name, "lights": None}          — apply to all mapped lights
-#   {"effect": name, "lights": ["1", "2"]}    — apply to specific v1 light IDs only
-# Relax uses per-light targeting so the moss-shadow kitchen pendants
-# (L3/L4) don't get masked by flame-colored candle/fire flicker.
-# Social is static (no cycling) so it has no entry and _get_desired_effect
-# returns None for it.
-EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
-    "relax": {
-        "day":        {"effect": "opal",   "lights": None},         # All lights
-        "evening":    {"effect": "candle", "lights": ["1", "2"]},   # Living only
-        "night":      {"effect": "fire",   "lights": ["1", "2"]},   # Living only
-        "late_night": {"effect": "fire",   "lights": ["1", "2"]},   # Living only
-    },
-    "working":  {"day": None, "evening": None, "night": None},
-    "gaming":   {"day": None, "evening": None, "night": None},
-    "cooking":  {"day": None, "evening": None, "night": None},
-    "watching": {
-        "day":     None,
-        "evening": {"effect": "glisten", "lights": None},
-        "night":   {"effect": "glisten", "lights": None},
-    },
-}
-
-# Mode-specific transition speeds (deciseconds: 10 = 1 second).
-# Each mode gets a physically different feel when transitioning.
-MODE_TRANSITION_TIME: dict[str, int] = {
-    "working":  20,   # 2s smooth
-    "gaming":    5,   # 0.5s snappy
-    "watching": 30,   # 3s cinematic fade
-    "relax":    50,   # 5s gentle (slower for moodier vibe)
-    "social":   10,   # 1s
-    "sleeping": 50,   # 5s gradual
-    "cooking":  10,   # 1s — kitchen lights up the moment you tap the tile
-    "idle":     20,   # 2s
-    "away":     30,   # 3s
-}
-
-
-ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
-    # ── Gaming ────────────────────────────────────────────────────────
-    # Dim blue-violet ambient — screen sync on L2 is the star. Accents
-    # stay very low so the screen color dominates the room. HSB only,
-    # no auto-effects (per user feedback — glisten was removed). Kitchen
-    # L3/L4 are PAIRED as violet accents. Brightness steps down progressively
-    # after sunset so the screen still dominates at night.
-    "gaming": {
-        "day": {
-            "1": {"on": True, "bri": 130, "hue": 47000, "sat": 220},   # Living room: blue-violet wash, bright enough for overcast
-            "2": {"on": True, "bri": 240, "hue": 46920, "sat": 220},   # Desk fallback (screen-sync overrides, cap raised to 240)
-            "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},   # Kitchen front: violet accent
-            "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},   # Kitchen back: PAIRED with L3
-        },
-        "evening": {
-            "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 230},
-            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 230},   # Fallback (screen-sync caps to 150)
-            "3": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},
-            "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},   # PAIRED
-        },
-        "night": {
-            "1": {"on": True, "bri": 40,  "hue": 47000, "sat": 240},
-            "2": {"on": True, "bri": 140, "hue": 46920, "sat": 240},   # Fallback (screen-sync active during gaming)
-            "3": {"on": True, "bri": 18,  "hue": 50000, "sat": 240},
-            "4": {"on": True, "bri": 18,  "hue": 50000, "sat": 240},   # PAIRED
-        },
-    },
-    # ── Working ───────────────────────────────────────────────────────
-    # Clean ct-mode whites only. Per-light brightness gradient creates
-    # depth, L2 (bedroom desk lamp) dominates. Evening shifts to 3000K
-    # (ct≥333) to respect the strict post-sunset warmth cutoff. Night:
-    # IES 1:3 monitor-ambient contrast — bright warm desk, minimal L1
-    # ember, kitchen pair fully off so it doesn't distract from focus.
-    # Kitchen L3/L4 are PAIRED in this functional mode.
-    "working": {
-        "day": {
-            "1": {"on": True, "bri": 180, "ct": 233},    # Living room: bright neutral fill (4300K)
-            "2": {"on": True, "bri": 254, "ct": 210},    # Desk lamp: max bright, cool (4800K)
-            "3": {"on": True, "bri": 140, "ct": 250},    # Kitchen front: modest fill (4000K)
-            "4": {"on": True, "bri": 140, "ct": 250},    # Kitchen back: PAIRED with L3
-        },
-        "evening": {
-            "1": {"on": True, "bri": 100, "ct": 370},    # Living room: warm fill (2700K)
-            "2": {"on": True, "bri": 180, "ct": 333},    # Desk: still functional, 3000K (cutoff)
-            "3": {"on": True, "bri": 60,  "ct": 400},    # Kitchen front: low warm (2500K)
-            "4": {"on": True, "bri": 60,  "ct": 400},    # Kitchen back: PAIRED with L3
-        },
-        "night": {
-            "1": {"on": True, "bri": 60,  "ct": 440},    # Living room: warm ambient (2270K)
-            "2": {"on": True, "bri": 130, "ct": 370},    # Desk: readable + 2700K (cutoff)
-            "3": _LIGHT_OFF,                              # Kitchen front: off (behind user)
-            "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
-        },
-    },
-    # ── Watching ──────────────────────────────────────────────────────
-    # Projector-friendly: warm throughout (no D65), dim. The projector is
-    # on HDMI from the dev PC so L2 is a screen-sync target during watching
-    # — the values below are the FALLBACK when sync isn't actively pushing
-    # (idle desktop, just-entered mode, etc). Sync caps L2 at bri=80 so it
-    # stays subtle. L2 sits on the wall opposite the projection surface,
-    # so its light doesn't fall directly on the projected image. Kitchen
-    # L3/L4 PAIRED (subtle in day, OFF evening+ to minimize wall bounce).
-    "watching": {
-        "day": {
-            "1": {"on": True, "bri": 80,  "ct": 320},    # Living room: warm ambient (3100K)
-            "2": {"on": True, "bri": 70,  "ct": 370},    # Bedroom: warm soft bias (2700K)
-            "3": {"on": True, "bri": 30,  "ct": 333},    # Kitchen front: subtle (3000K)
-            "4": {"on": True, "bri": 30,  "ct": 333},    # Kitchen back: PAIRED with L3
-        },
-        "evening": {
-            "1": {"on": True, "bri": 65,  "ct": 400},    # Living room: warm, visible through hallway spill (2500K)
-            "2": {"on": True, "bri": 40,  "ct": 400},    # Bedroom: warm bias dimmer
-            "3": _LIGHT_OFF,                              # Kitchen off — minimize projection wash
-            "4": _LIGHT_OFF,                              # Kitchen back: PAIRED off
-        },
-        "night": {
-            "1": {"on": True, "bri": 45,  "ct": 454},    # Living room: candle-like amber, visible from bedroom (2200K)
-            "2": {"on": True, "bri": 20,  "ct": 454},    # Bedroom: very warm, very dim
-            "3": _LIGHT_OFF,
-            "4": _LIGHT_OFF,                              # PAIRED off
-        },
-    },
-    # ── Social ────────────────────────────────────────────────────────
-    # "Velvet Speakeasy" — single static palette for small hangouts (drinks,
-    # 2–4 guests, chill entertaining). Dusty rose statement on L1 is the
-    # industry skin-flatter key; matched burnt-orange pendants provide room
-    # glow. No time awareness, no sub-styles, no cycling effect — static
-    # saturation does the work.
-    "social": {
-        "1": {"on": True, "bri": 140, "hue": 58500, "sat": 160},   # Dusty rose (statement)
-        "2": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},   # Cognac amber
-        # L3/L4 tuned 2026-04-18 — bri dropped from 110 → 70 to respect the
-        # clear-glass pendant rule (≤50 outside cooking, slight exception for
-        # social to keep kitchen visible). Max saturation makes the deep
-        # burnt-ember read as "lounge" instead of "hotel lobby."
-        "3": {"on": True, "bri": 70, "hue": 4000, "sat": 254},   # Deep burnt ember (matched pair)
-        "4": {"on": True, "bri": 70, "hue": 4000, "sat": 254},   # Deep burnt ember (matched pair)
-    },
-    # ── Relax ─────────────────────────────────────────────────────────
-    # "Moss & Candlelight" biophilic forest-floor palette. Living-room
-    # fabric-shaded lamps (L1/L2) run warm ember; kitchen pendants (L3/L4)
-    # hold muted moss/sage so they read as foliage-shadow canopy — echoing
-    # the plants and the apartment's olive/sage/teal accent palette rather
-    # than drowning the room in uniform amber. Kitchen L3/L4 are FREE to
-    # diverge (depth via per-light variance).
-    # Candle/fire effects are scoped to L1/L2 in EFFECT_AUTO_MAP so the
-    # pendants stay static.
-    # Hue anchors: 4500=warm red, 6000–8000=amber/honey, 20000=olive/yellow-green.
-    # Kitchen L3/L4 tuned 2026-04-19: shifted from pure green (hue 24000–25500,
-    # sat 140–240 — read as bright mint through the clear-glass pendants despite
-    # spec intent) to desaturated olive (hue 20000, sat 100) for a dusty-sage
-    # read. Hue bulbs' native green LED peak lands at mint regardless of sat
-    # or brightness; shifting warm (toward yellow-green) + low sat produces
-    # the closest feasible "muted sage" on these fixtures.
-    "relax": {
-        "day": {
-            "1": {"on": True, "bri": 95, "hue": 7500,  "sat": 200},   # Honey amber
-            "2": {"on": True, "bri": 85, "hue": 8000,  "sat": 190},   # Warm honey
-            "3": {"on": True, "bri": 30, "hue": 20000, "sat": 100},   # Dusty sage wash
-            "4": {"on": True, "bri": 30, "hue": 20000, "sat": 100},   # Dusty sage wash
-        },
-        "evening": {
-            "1": {"on": True, "bri": 70, "hue": 6000,  "sat": 230},   # Ember
-            "2": {"on": True, "bri": 55, "hue": 6500,  "sat": 220},   # Warm ember
-            "3": {"on": True, "bri": 15, "hue": 20000, "sat": 100},   # Muted olive
-            "4": {"on": True, "bri": 15, "hue": 20000, "sat": 100},   # Muted olive
-        },
-        "night": {
-            "1": {"on": True, "bri": 38, "hue": 5000,  "sat": 254},   # Deep ember
-            "2": {"on": True, "bri": 28, "hue": 4500,  "sat": 254},   # Deeper ember
-            "3": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},   # Sage shadow
-            "4": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},   # Sage shadow
-        },
-        # "Moss & Ember" — post-11pm cave/den variant. Deeper ember on lamps,
-        # barely-there sage in the kitchen. Only relax defines late_night;
-        # other modes fall back to their night state.
-        "late_night": {
-            "1": {"on": True, "bri": 28, "hue": 3000,  "sat": 254},   # Deep ember red-orange
-            "2": {"on": True, "bri": 22, "hue": 2500,  "sat": 254},   # Deeper ember
-            "3": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},   # Sage trace
-            "4": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},   # Sage trace
-        },
-    },
-    # ── Cooking ───────────────────────────────────────────────────────
-    # Kitchen pair at peak brightness with 3500K (ct=286) for accurate food
-    # colors during the day. L1 provides warm ambient, L2 dim so it doesn't
-    # compete. Evening shifts kitchen to 3000K (ct=333, strict cutoff). Night
-    # at 2700K/bri=180 — still ~500 lux on the counter for safe prep without
-    # blasting eyes at 11pm. Kitchen L3/L4 are PAIRED always.
-    "cooking": {
-        "day": {
-            "1": {"on": True, "bri": 150, "ct": 320},   # Living room: warm ambient (3100K)
-            "2": {"on": True, "bri": 80,  "ct": 333},   # Bedroom: dim warm (3000K)
-            "3": {"on": True, "bri": 254, "ct": 286},   # Kitchen front: max, 3500K (food color)
-            "4": {"on": True, "bri": 254, "ct": 286},   # Kitchen back: PAIRED with L3
-        },
-        "evening": {
-            "1": {"on": True, "bri": 100, "ct": 370},   # (2700K)
-            "2": {"on": True, "bri": 50,  "ct": 400},   # (2500K)
-            "3": {"on": True, "bri": 230, "ct": 333},   # 3000K (strict cutoff)
-            "4": {"on": True, "bri": 230, "ct": 333},   # PAIRED
-        },
-        "night": {
-            "1": {"on": True, "bri": 60,  "ct": 420},   # (2380K)
-            "2": {"on": True, "bri": 25,  "ct": 454},   # (2200K)
-            "3": {"on": True, "bri": 180, "ct": 370},   # 2700K — warm but still usable
-            "4": {"on": True, "bri": 180, "ct": 370},   # PAIRED
-        },
-    },
-}
 
 # ---------------------------------------------------------------------------
 # Time-based rules — weekday vs weekend
@@ -416,108 +181,6 @@ WEEKEND_TIME_RULES = [
     (18, 21, {"on": True, "bri": 180, "hue": 8000, "sat": 160}),  # Warm evening
     (21, 24, {"on": True, "bri": 60, "hue": 5500, "sat": 220}),   # Dim wind-down
 ]
-
-
-def _morning_ramp(
-    minute_in_window: int,
-    window_minutes: int = 120,
-) -> dict[str, Any]:
-    """
-    Calculate gradual morning light ramp from warm/dim to daylight/bright.
-
-    Args:
-        minute_in_window: Minutes elapsed since the ramp start.
-        window_minutes: Total ramp duration in minutes.
-
-    Returns:
-        Light state dict interpolated between warm/dim and daylight/bright.
-    """
-    progress = min(1.0, max(0.0, minute_in_window / window_minutes))
-
-    bri = int(80 + (254 - 80) * progress)
-    hue = int(8000 + (34000 - 8000) * progress)
-    sat = int(180 + (50 - 180) * progress)
-
-    return {"on": True, "bri": bri, "hue": hue, "sat": sat}
-
-
-def _lerp_light_state(
-    state_a: dict[str, Any],
-    state_b: dict[str, Any],
-    progress: float,
-) -> dict[str, Any]:
-    """
-    Interpolate between two light states.
-
-    Handles both uniform {bri, hue, sat} and per-light {"1": {...}, ...} formats.
-    progress=0.0 returns state_a, progress=1.0 returns state_b.
-    """
-    progress = min(1.0, max(0.0, progress))
-
-    def _lerp_val(a: int, b: int) -> int:
-        return int(a + (b - a) * progress)
-
-    def _lerp_single(sa: dict, sb: dict) -> dict:
-        result: dict[str, Any] = {"on": sa.get("on", True) or sb.get("on", True)}
-        for key in ("bri", "hue", "sat", "ct"):
-            if key in sa and key in sb:
-                result[key] = _lerp_val(sa[key], sb[key])
-            elif key in sa:
-                result[key] = sa[key]
-            elif key in sb:
-                result[key] = sb[key]
-        return result
-
-    is_per_light_a = any(k in ("1", "2", "3", "4") for k in state_a)
-    is_per_light_b = any(k in ("1", "2", "3", "4") for k in state_b)
-
-    if is_per_light_a and is_per_light_b:
-        return {
-            lid: _lerp_single(state_a[lid], state_b[lid])
-            for lid in state_a
-            if lid in state_b
-        }
-
-    return _lerp_single(state_a, state_b)
-
-
-def _get_time_period_static() -> str:
-    """Determine the current time period (static fallback, uses defaults)."""
-    hour = datetime.now(tz=TZ).hour
-    if 8 <= hour < 18:
-        return "day"
-    elif 18 <= hour < 21:
-        return "evening"
-    else:
-        return "night"
-
-
-def _resolve_activity_state(
-    mode: str,
-    time_period: Optional[str] = None,
-) -> dict[str, Any]:
-    """
-    Look up the time-appropriate light state for an activity mode.
-
-    Time-aware entries have "day"/"evening"/"night" keys. Flat entries
-    (like social) are returned as-is.
-
-    Args:
-        mode: Activity mode name.
-        time_period: Override time period. Uses static default if None.
-    """
-    entry = ACTIVITY_LIGHT_STATES.get(mode)
-    if entry is None:
-        return {}
-    # Time-aware entries have period keys
-    if "day" in entry:
-        period = time_period or _get_time_period_static()
-        # late_night falls back to night for modes that don't define it
-        if period == "late_night" and "late_night" not in entry:
-            period = "night"
-        return entry.get(period, entry.get("night", {}))
-    # Flat per-light dict (social — no time awareness)
-    return entry
 
 
 class AutomationEngine:
@@ -759,34 +422,8 @@ class AutomationEngine:
         logger.info(f"Mode brightness updated: {brightness}")
 
     def _get_time_period(self) -> str:
-        """Determine the current time period using the schedule config.
-
-        Returns one of: "day", "evening", "night", "late_night". The
-        late_night slot runs from schedule.late_night_start_hour until the
-        next day's wake_hour — modes without a late_night state fall back
-        to their night state via _resolve_activity_state.
-
-        The morning ramp window (ramp_start_hour..ramp_start_hour+duration)
-        counts as "day" — the ramp's brightness curve comes from
-        _build_time_rules' morning_ramp handling, not this bucket; the user
-        is awake and active, so day-mode states are the right baseline.
-        """
-        now = datetime.now(tz=TZ)
-        hour = now.hour
-        schedule = (
-            self._schedule_config.weekday
-            if now.weekday() < 5
-            else self._schedule_config.weekend
-        )
-
-        if schedule.ramp_start_hour <= hour < schedule.evening_start_hour:
-            return "day"
-        if schedule.evening_start_hour <= hour < schedule.winddown_start_hour:
-            return "evening"
-        # late_night wraps across midnight: [late_night_start_hour, 24) ∪ [0, wake_hour)
-        if hour >= schedule.late_night_start_hour or hour < schedule.wake_hour:
-            return "late_night"
-        return "night"
+        """Resolve the current time period via the calculator (shim)."""
+        return _calc_get_time_period(self._schedule_config, datetime.now(tz=TZ))
 
     async def _sonos_is_playing(self) -> bool:
         """Check if Sonos is actively playing. Used by the late-night rescue
@@ -863,29 +500,10 @@ class AutomationEngine:
     def _apply_brightness_multiplier(
         self, state: dict[str, Any], mode: str
     ) -> dict[str, Any]:
-        """Apply per-mode brightness multiplier to a light state."""
-        multiplier = self._mode_brightness.get(mode, 1.0)
-        if multiplier == 1.0:
-            return state
-
-        # Per-light dict: keys are light IDs with dict values
-        is_per_light = all(
-            isinstance(v, dict) for v in state.values()
-        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
-
-        if is_per_light:
-            result = {}
-            for lid, ls in state.items():
-                ls_copy = ls.copy()
-                if ls_copy.get("on", True) and "bri" in ls_copy:
-                    ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * multiplier)))
-                result[lid] = ls_copy
-            return result
-        else:
-            result = state.copy()
-            if result.get("on", True) and "bri" in result:
-                result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
-            return result
+        """Apply per-mode brightness multiplier (shim → calculator)."""
+        return _calc_apply_brightness_multiplier(
+            state, mode, self._mode_brightness
+        )
 
     def set_camera_service(self, camera) -> None:
         """Wire the camera service so ambient lux can modulate brightness.
@@ -898,104 +516,55 @@ class AutomationEngine:
     # Backwards-compat for tests / callers referencing the classmethod form
     _lux_to_multiplier = staticmethod(lux_to_multiplier)
 
+    def _read_fresh_camera_lux(self) -> tuple[Optional[float], Optional[float]]:
+        """Return ``(ema_lux, baseline_lux)`` if the camera reading is fresh.
+
+        Both values are ``None`` when the camera isn't wired up, is
+        disabled or paused, hasn't been calibrated, or the last reading
+        is older than ``LUX_STALE_SECONDS``. Engine state stays here
+        rather than in the calculator so the calculator can remain
+        agnostic of the camera service object.
+        """
+        camera = self._camera_service
+        if camera is None or not getattr(camera, "enabled", False):
+            return None, None
+        if getattr(camera, "_paused", False):
+            return None, None
+        ema = getattr(camera, "ema_lux", None)
+        if ema is None:
+            return None, None
+        last_update = getattr(camera, "last_lux_update", None)
+        if last_update is None:
+            return None, None
+        age = (datetime.now(timezone.utc) - last_update).total_seconds()
+        if age > LUX_STALE_SECONDS:
+            return None, None
+        return float(ema), getattr(camera, "baseline_lux", None)
+
     def _apply_lux_multiplier(
         self, state: dict[str, Any], mode: str
     ) -> dict[str, Any]:
-        """Adjust per-light brightness by camera-derived ambient lux.
+        """Adjust per-light brightness by ambient lux (shim → calculator).
 
-        Early-returns the state unchanged when:
-          - mode is not in LUX_MODES (only working / relax adapt)
-          - no camera service wired up, or it's disabled / paused
-          - the camera has not been calibrated (auto-exposure defeats the signal)
-          - the last lux reading is older than LUX_STALE_SECONDS
-          - the computed multiplier change vs last is below LUX_MULT_EPSILON
-            (in that case we reuse the last multiplier, so the result is the
-            same state dict the per-light dedupe already skips)
+        Reads the fresh camera lux off ``self`` (gated on staleness +
+        camera enabled/paused/calibrated). Hysteresis state lives here:
+        the calculator returns the new last-multiplier value, which we
+        store back on ``self._last_lux_multiplier``.
         """
-        if mode not in LUX_MODES:
-            return state
+        ema, baseline = self._read_fresh_camera_lux()
+        new_state, new_mult = _calc_apply_lux_multiplier(
+            state, mode, ema, self._last_lux_multiplier, baseline,
+        )
+        self._last_lux_multiplier = new_mult
+        return new_state
 
-        camera = self._camera_service
-        if camera is None or not getattr(camera, "enabled", False):
-            return state
-        if getattr(camera, "_paused", False):
-            return state
-
-        ema = getattr(camera, "ema_lux", None)
-        if ema is None:
-            return state  # Not calibrated or no readings yet
-
-        last_update = getattr(camera, "last_lux_update", None)
-        if last_update is None:
-            return state
-        age = (datetime.now(timezone.utc) - last_update).total_seconds()
-        if age > LUX_STALE_SECONDS:
-            return state
-
-        # Baseline shifts the curve so the user's calibrated "normal" room
-        # sits at multiplier = 1.00. Legacy configs (no baseline_lux) fall
-        # back to the raw LUX_CURVE anchor (90) for backwards compatibility.
-        baseline = getattr(camera, "baseline_lux", None)
-        raw_mult = lux_to_multiplier(float(ema), float(baseline) if baseline else 90.0)
-        # Hysteresis: if we're within the epsilon of the last multiplier,
-        # keep the old value so the state dict stays bit-identical and the
-        # downstream per-light dedupe skips writes.
-        if abs(raw_mult - self._last_lux_multiplier) < LUX_MULT_EPSILON:
-            multiplier = self._last_lux_multiplier
-        else:
-            multiplier = raw_mult
-            self._last_lux_multiplier = raw_mult
-
-        if multiplier == 1.0:
-            return state
-
-        # Per-light dict vs flat state (mirrors _apply_brightness_multiplier)
-        is_per_light = all(
-            isinstance(v, dict) for v in state.values()
-        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
-
-        if is_per_light:
-            result: dict[str, Any] = {}
-            for lid, ls in state.items():
-                ls_copy = ls.copy()
-                if ls_copy.get("on", True) and "bri" in ls_copy:
-                    ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * multiplier)))
-                result[lid] = ls_copy
-            return result
-
-        result = state.copy()
-        if result.get("on", True) and "bri" in result:
-            result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
-        return result
-
-    # Watching + zone=bed + posture=reclined target brightness per period.
-    # LOWER than the baseline watching state — the assumption is that the
-    # projector is on (bed+reclined is essentially always that in this
-    # apartment) and the viewer is lying back, so bright lamps compete with
-    # the screen and hit eyes more directly than when sitting upright.
-    # Day is unset because napping in daylight doesn't need automation.
-    #
-    # The L1-night value is the user-facing knob (exposed in the settings
-    # page); evening and late_night L1 scale proportionally to the ratios
-    # in the original tuning (1.8× and 0.6× of night, respectively). L2 is
-    # held at these tuned values — it sits far out of line of sight when
-    # reclined and is already near-off.
-    _BED_RECLINED_L1_NIGHT_DEFAULT = 25
-    _BED_RECLINED_L2_WATCHING_BRI = {
-        "evening":    18,
-        "night":      8,
-        "late_night": 5,
-    }
-    _BED_RECLINED_L1_RATIO = {
-        "evening":    1.8,   # default 45 when night=25
-        "night":      1.0,
-        "late_night": 0.6,   # default 15 when night=25
-    }
-    # Maximum age (in seconds) for a committed zone/posture to be honored by
-    # the overlay. Older than this and the value is treated as missing —
-    # mirrors ConfidenceFusion's SOURCE_STALE_SECONDS so stale camera state
-    # can't drive the lights when the user has been gone for a while.
-    _ZONE_POSTURE_FRESHNESS_SECONDS = 300
+    # Class-level aliases kept for back-compat with tests that read these
+    # off the engine class. The canonical home for these constants is
+    # backend.services.light_state_calculator.
+    _BED_RECLINED_L1_NIGHT_DEFAULT = BED_RECLINED_L1_NIGHT_DEFAULT
+    _BED_RECLINED_L2_WATCHING_BRI = BED_RECLINED_L2_WATCHING_BRI
+    _BED_RECLINED_L1_RATIO = BED_RECLINED_L1_RATIO
+    _ZONE_POSTURE_FRESHNESS_SECONDS = ZONE_POSTURE_FRESHNESS_SECONDS
 
     def _fresh_camera_attr(
         self, camera: Any, value_attr: str, ts_attr: str,
@@ -1003,7 +572,7 @@ class AutomationEngine:
         """Read ``camera.{value_attr}`` only if its commit timestamp is fresh.
 
         Returns ``None`` if camera is missing, the value is missing, or the
-        commit timestamp is older than ``_ZONE_POSTURE_FRESHNESS_SECONDS``.
+        commit timestamp is older than ``ZONE_POSTURE_FRESHNESS_SECONDS``.
         Cameras that don't expose the timestamp attribute (older fakes /
         stubs) bypass the freshness gate so existing tests continue to work.
         """
@@ -1020,103 +589,31 @@ class AutomationEngine:
         if committed_at is None:
             return None
         age = (datetime.now(timezone.utc) - committed_at).total_seconds()
-        if age > self._ZONE_POSTURE_FRESHNESS_SECONDS:
+        if age > ZONE_POSTURE_FRESHNESS_SECONDS:
             return None
         return value
 
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
-        """Zone- and posture-aware per-light adjustments as the final overlay.
+        """Zone/posture overlay (shim → calculator).
 
-        Two branches:
-
-        1. ``zone=desk`` + watching: LIFT L2 above the projector-safe dim —
-           watching at the desk is YouTube / a monitor stream and the
-           projector is off, so the default dim L2 reads as too dark.
-        2. ``zone=bed + posture=reclined`` (any mode except sleeping):
-           LOWER L1 and L2 below the baseline. ``bed + reclined`` is a
-           physical fact about the user's body, not a mode label — when
-           you're lying down with the projector on, bright bedside lamps
-           compete with the screen and hit eyes directly regardless of
-           what the activity detector thinks you're doing. Sleeping
-           already has an ember-dim baseline lower than these targets.
-
-        Only ever moves brightness in one direction per branch (lift-only
-        for desk, lower-only for reclined) so a learned override stays
-        preserved if it already moved the same way.
-
-        Treats zone/posture as missing if the camera service exposes a
-        commit timestamp older than ``_ZONE_POSTURE_FRESHNESS_SECONDS``.
-        Mirrors the staleness threshold used by ConfidenceFusion so a
-        commit from before the last sleep cycle (or any other long gap)
-        can't leak into the lighting decision.
+        Resolves fresh zone + posture off the camera service (with the
+        freshness gate handled by ``_fresh_camera_attr``), then hands
+        primitives to the pure calculator function.
         """
         camera = self._camera_service
         zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
         posture = self._fresh_camera_attr(
             camera, "posture", "posture_committed_at"
         )
-
-        # Only per-light states carry a numeric ``bri``. Scene-override
-        # payloads pass straight through.
-        is_per_light = all(isinstance(v, dict) for v in state.values()) and "2" in state
-        if not is_per_light:
-            return state
-
-        # Branch 1 — watching at desk: lift L2.
-        if zone == "desk" and mode == "watching":
-            zone_bri_by_period = {
-                "day": 160,
-                "evening": 110,
-                "night": 70,
-                "late_night": 50,
-            }
-            target_bri = zone_bri_by_period.get(period)
-            if target_bri is None:
-                return state
-            current_bri = int(state["2"].get("bri", 0))
-            if current_bri >= target_bri:
-                return state
-            new_state = {lid: dict(ls) for lid, ls in state.items()}
-            new_state["2"]["bri"] = target_bri
-            logger.debug(
-                "Zone overlay: lifting L2 bri %d → %d (watching+desk, period=%s)",
-                current_bri, target_bri, period,
-            )
-            return new_state
-
-        # Branch 2 — reclined in bed: lower L1 and L2. Mode-agnostic
-        # except for sleeping (already at ember-dim, no-op anyway).
-        if zone == "bed" and posture == "reclined" and mode != "sleeping":
-            ratio = self._BED_RECLINED_L1_RATIO.get(period)
-            l2_target = self._BED_RECLINED_L2_WATCHING_BRI.get(period)
-            if ratio is None or l2_target is None:
-                return state
-            # L1 night is the runtime-tunable knob; other periods scale off it.
-            l1_night = getattr(self, "_bed_reclined_l1_night", None) \
-                or self._BED_RECLINED_L1_NIGHT_DEFAULT
-            l1_target = max(1, min(254, int(l1_night * ratio)))
-            targets = {"1": l1_target, "2": l2_target}
-            new_state = {lid: dict(ls) for lid, ls in state.items()}
-            changed = False
-            for light_id, target in targets.items():
-                if light_id not in new_state:
-                    continue
-                current = int(new_state[light_id].get("bri", 0))
-                if current <= target:
-                    continue  # Already at or below target — don't raise.
-                new_state[light_id]["bri"] = target
-                changed = True
-            if not changed:
-                return state
-            logger.debug(
-                "Zone overlay: lowering for bed+reclined (mode=%s, period=%s): %s",
-                mode, period, targets,
-            )
-            return new_state
-
-        return state
+        l1_night = (
+            getattr(self, "_bed_reclined_l1_night", None)
+            or BED_RECLINED_L1_NIGHT_DEFAULT
+        )
+        return _calc_apply_zone_overlay(
+            state, mode, period, zone, posture, l1_night,
+        )
 
     def set_bed_reclined_l1_night(self, value: int) -> None:
         """Runtime override for the L1 night brightness when watching reclined.
@@ -1956,66 +1453,22 @@ class AutomationEngine:
         logger.info("Scene drift applied for mode '%s'", mode)
 
     def _weather_adjust(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Apply subtle weather-based adjustments to light states.
+        """Apply subtle weather-based adjustments (shim → calculator).
 
-        Works with both uniform (flat) and per-light (keyed by ID) formats.
-        Respects each light's color mode: adjusts CT for CT-based lights and
-        hue/sat for HSB-based lights. Adjustments are small deltas — the
-        apartment should feel subtly connected to the outside, not dramatic.
+        Reads weather off the wired service, classifies it, and hands
+        off to the pure calculator function. ``None`` condition (no
+        match or no weather data) is a no-op.
         """
-        if not self._weather_service:
-            return state
-
-        try:
-            weather = self._weather_service.get_cached()
-            if not weather:
-                return state
-        except Exception:
-            return state
-
-        desc = weather.get("description", "").lower()
-        condition = self._classify_weather(desc, weather)
-        if not condition:
-            return state
-
-        logger.debug("Weather adjustment: %s (%s)", condition, desc)
-
-        # Detect format: per-light dicts have light ID keys with dict values
-        is_per_light = all(
-            isinstance(v, dict) for v in state.values()
-        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
-
-        if is_per_light:
-            return {
-                lid: self._adjust_single_light(ls, condition)
-                if ls.get("on", True) else ls
-                for lid, ls in state.items()
-            }
-        return self._adjust_single_light(state, condition)
+        condition = self._get_current_weather_condition()
+        if condition is not None:
+            logger.debug("Weather adjustment: %s", condition)
+        return _calc_apply_weather_adjust(state, condition)
 
     def _classify_weather(
         self, desc: str, weather: dict[str, Any],
     ) -> str | None:
-        """Map weather description to a condition category."""
-        if "thunderstorm" in desc:
-            return "thunderstorm"
-        if "rain" in desc or "drizzle" in desc:
-            return "rain"
-        if "snow" in desc:
-            return "snow"
-        if "overcast" in desc or "clouds" in desc:
-            return "clouds"
-        if "clear" in desc:
-            now = datetime.now(tz=TZ)
-            sunset_ts = weather.get("sunset")
-            if sunset_ts:
-                from datetime import timezone as _tz
-                sunset_utc = datetime.fromtimestamp(sunset_ts, tz=_tz.utc)
-                sunset_local = sunset_utc.astimezone(TZ)
-                minutes_to_sunset = (sunset_local - now).total_seconds() / 60
-                if -30 <= minutes_to_sunset <= 30:
-                    return "golden_hour"
-        return None
+        """Map weather description to a condition category (shim → calculator)."""
+        return _classify_weather_pure(desc, weather)
 
     def _get_desired_effect(
         self, mode: str,
@@ -2078,58 +1531,10 @@ class AutomationEngine:
         desc = weather.get("description", "").lower()
         return self._classify_weather(desc, weather)
 
-    @staticmethod
-    def _adjust_single_light(
-        light: dict[str, Any], condition: str,
-    ) -> dict[str, Any]:
-        """Apply weather adjustment to a single light's state dict.
-
-        Respects CT vs HSB: if the light uses ``ct``, adjustments shift
-        color temperature. If it uses ``hue``/``sat``, adjustments shift
-        those values instead. Never mixes the two color spaces.
-        """
-        adj = {**light}
-        uses_ct = "ct" in adj
-
-        if condition == "thunderstorm":
-            # Cooler / purple tint, noticeable dim
-            adj["bri"] = max(1, adj.get("bri", 200) - 30)
-            if uses_ct:
-                adj["ct"] = max(153, adj["ct"] - 80)
-            else:
-                adj["hue"] = min(65535, adj.get("hue", 8000) + 12000)
-                adj["sat"] = min(254, adj.get("sat", 100) + 60)
-
-        elif condition == "rain":
-            # Cooler, slightly dimmer — cozy indoor contrast
-            adj["bri"] = max(1, adj.get("bri", 200) - 15)
-            if uses_ct:
-                adj["ct"] = max(153, adj["ct"] - 50)
-            else:
-                adj["hue"] = max(0, adj.get("hue", 8000) + 4000)
-                adj["sat"] = min(254, adj.get("sat", 100) + 30)
-
-        elif condition == "snow":
-            # Brighter, crisp cool white
-            adj["bri"] = min(254, adj.get("bri", 200) + 25)
-            if uses_ct:
-                adj["ct"] = max(153, adj["ct"] - 60)
-
-        elif condition == "clouds":
-            # Warmer, noticeably dimmer — overcast feel
-            adj["bri"] = max(1, int(adj.get("bri", 200) * 0.85))
-            if uses_ct:
-                adj["ct"] = min(500, adj["ct"] + 25)
-
-        elif condition == "golden_hour":
-            # Rich warm golden shift
-            if uses_ct:
-                adj["ct"] = min(500, adj["ct"] + 50)
-            else:
-                adj["hue"] = min(65535, adj.get("hue", 8000) + 3000)
-                adj["sat"] = min(254, adj.get("sat", 100) + 40)
-
-        return adj
+    # _adjust_single_light is kept as a static-method shim so any
+    # external caller / test that grabs `engine._adjust_single_light`
+    # keeps working. Implementation lives in light_state_calculator.
+    _adjust_single_light = staticmethod(_adjust_single_light_pure)
 
     async def _apply_time_based(self) -> None:
         """Apply the time-appropriate light state (weekday/weekend aware)."""

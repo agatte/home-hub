@@ -51,33 +51,38 @@ class TestModePriority:
 # ---------------------------------------------------------------------------
 
 class TestTimePeriod:
-    """Test the static time period helper."""
+    """Test the static time period helper.
 
-    @patch("backend.services.automation_engine.datetime")
+    The function lives in ``light_state_calculator`` since the
+    extraction; patches target that module's ``datetime`` (the
+    engine module re-exports the helper for back-compat).
+    """
+
+    @patch("backend.services.light_state_calculator.datetime")
     def test_morning_is_day(self, mock_dt):
         mock_dt.now.return_value = datetime(2026, 4, 12, 10, 0, tzinfo=TZ)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         assert _get_time_period_static() == "day"
 
-    @patch("backend.services.automation_engine.datetime")
+    @patch("backend.services.light_state_calculator.datetime")
     def test_afternoon_is_day(self, mock_dt):
         mock_dt.now.return_value = datetime(2026, 4, 12, 15, 0, tzinfo=TZ)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         assert _get_time_period_static() == "day"
 
-    @patch("backend.services.automation_engine.datetime")
+    @patch("backend.services.light_state_calculator.datetime")
     def test_evening(self, mock_dt):
         mock_dt.now.return_value = datetime(2026, 4, 12, 19, 0, tzinfo=TZ)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         assert _get_time_period_static() == "evening"
 
-    @patch("backend.services.automation_engine.datetime")
+    @patch("backend.services.light_state_calculator.datetime")
     def test_night(self, mock_dt):
         mock_dt.now.return_value = datetime(2026, 4, 12, 22, 0, tzinfo=TZ)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         assert _get_time_period_static() == "night"
 
-    @patch("backend.services.automation_engine.datetime")
+    @patch("backend.services.light_state_calculator.datetime")
     def test_early_morning_is_night(self, mock_dt):
         mock_dt.now.return_value = datetime(2026, 4, 12, 3, 0, tzinfo=TZ)
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
