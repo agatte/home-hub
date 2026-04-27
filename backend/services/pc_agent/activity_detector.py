@@ -82,11 +82,23 @@ SLEEP_IDLE_THRESHOLD = 900  # 15 minutes
 # Hysteresis — how long a candidate mode must persist before the detector
 # commits to it. Prevents quick alt-tabs (e.g. peeking at Slack mid-video,
 # running a one-line command mid-YouTube) from churning the lights/music.
-DWELL_DEFAULT = 30.0           # All transitions default to 30s of sustained focus
+DWELL_DEFAULT = 60.0           # All transitions default to 60s of sustained focus
 DWELL_LEAVE_WATCHING_DAY = 10.0    # Returning to work from a video — be responsive
 DWELL_LEAVE_WATCHING_NIGHT = 300.0  # Sticky watching at night (5 min) — no lights flip when running a quick command in bed
+DWELL_LEAVE_WORKING_NIGHT = 300.0   # Symmetric counterpart: once committed working at night, don't flip to watching for 5 min either. Kills the watching↔working alt-tab cycle when Stremio + code are both running.
 NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
+
+# Gaming gate — a game process being merely *running* is not enough.
+# leagueclient.exe and similar launchers persist long after the actual game
+# closes; without this gate, mode would lock to "gaming" until Anthony quit
+# the launcher. Either of two conditions promotes a running game process to
+# committed gaming: (a) the game is the foreground window (you're playing
+# right now), or (b) input has been active in the last GAMING_IDLE_THRESHOLD
+# seconds (you're at the PC with the game running — covers alt-tab-to-wiki
+# scrolling). Walking away from the PC = idle climbs past the threshold and
+# the gaming hold releases, allowing late-night rescue / fusion to take over.
+GAMING_IDLE_THRESHOLD = 180  # seconds
 
 
 # ---------------------------------------------------------------------------
@@ -325,9 +337,20 @@ class ActivityDetector:
             self._media_paused = False
             logger.info("User active again — media pause flag reset")
 
-        # Gaming takes highest priority
+        # Gaming takes highest priority — but only when the player is
+        # actually playing. A merely-running game process (e.g. leagueclient.exe
+        # launcher persisting after match close) must NOT lock mode to gaming.
+        # Promote to gaming only when the game is foregrounded OR input has
+        # been active recently with a game running. See GAMING_IDLE_THRESHOLD
+        # docstring above.
         if processes & GAME_PROCESSES:
-            return "gaming"
+            fg_proc, _ = self._get_foreground_window()
+            if fg_proc in GAME_PROCESSES:
+                return "gaming"
+            if idle_seconds < GAMING_IDLE_THRESHOLD:
+                return "gaming"
+            # Game process exists but is unfocused AND user is idle —
+            # likely an abandoned launcher. Fall through to normal detection.
 
         # Media / work / browser disambiguation via foreground window.
         # Media apps (especially Stremio) leave background services running
@@ -374,15 +397,23 @@ class ActivityDetector:
         """
         How long the candidate mode must persist before we commit to reporting it.
 
-        Most transitions use DWELL_DEFAULT. Leaving ``watching`` is special:
-        responsive by day so going back to terminal feels snappy, but very
-        sticky at night so a quick command run while watching in bed doesn't
-        flip the lights to working.
+        Most transitions use DWELL_DEFAULT. Two night-only stickiness rules
+        kill the watching↔working flap when both apps are open:
+
+        - Leaving watching at night: 5 min (a brief command run while a video
+          plays shouldn't flip lights to working).
+        - Leaving working *to watching* at night: also 5 min (symmetric — a
+          brief peek at a video while coding shouldn't flip the other way).
+
+        Day stays responsive in both directions.
         """
+        hour = datetime.now().hour
+        is_night = hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
+
         if from_mode == "watching" and to_mode != "watching":
-            hour = datetime.now().hour
-            is_night = hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
             return DWELL_LEAVE_WATCHING_NIGHT if is_night else DWELL_LEAVE_WATCHING_DAY
+        if is_night and from_mode == "working" and to_mode == "watching":
+            return DWELL_LEAVE_WORKING_NIGHT
         return DWELL_DEFAULT
 
     def detect(self) -> str:
