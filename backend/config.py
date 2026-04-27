@@ -95,13 +95,14 @@ class Settings(BaseSettings):
     TRUSTED_LAN_IPS: str = ""
 
     # Zone+posture → relax rule — when enabled, the automation engine
-    # auto-applies the "relax" manual override after 5 min of sustained
-    # zone=bed + posture=reclined (evening or weekend afternoons only,
-    # no active override, eligible current mode). Defaults to False —
-    # the rule logs shadow decisions to ml_decisions (applied=False) so
-    # the firing pattern can be observed before actuation. Flip to True
-    # after ~2–3 days of clean shadow data.
-    ZONE_POSTURE_RULE_APPLY: bool = False
+    # auto-applies the "relax" manual override after a sustained
+    # zone=bed + posture=reclined window (evening or weekend afternoons
+    # only, no active override, eligible current mode). Default flipped
+    # to True after the in-bed-watching-TV scenario surfaced: PC stays
+    # "working" while Anthony's actually reclined, so without the rule
+    # he was manually pressing relax 5+ times per night and fighting
+    # transit-revert. Override lives 4h, refractory matches.
+    ZONE_POSTURE_RULE_APPLY: bool = True
 
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None

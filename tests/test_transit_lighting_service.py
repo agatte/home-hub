@@ -18,6 +18,7 @@ from backend.services.transit_lighting_service import (
     ABSENT_TRIGGER_SECONDS,
     HARD_TIMEOUT_SECONDS,
     PRESENT_CLEAR_SECONDS,
+    STATIONARY_ZONES,
     TRIGGER_MODES,
     TransitLightingService,
 )
@@ -54,12 +55,22 @@ class _FakeAutomation:
 
 
 class _FakeCamera:
-    def __init__(self, enabled: bool = True, last_detection: str = "absent") -> None:
+    def __init__(
+        self,
+        enabled: bool = True,
+        last_detection: str = "absent",
+        zone: Optional[str] = None,
+    ) -> None:
         self.enabled = enabled
         self.last_detection = last_detection
+        self.zone = zone
 
     def get_status(self) -> dict:
-        return {"enabled": self.enabled, "last_detection": self.last_detection}
+        return {
+            "enabled": self.enabled,
+            "last_detection": self.last_detection,
+            "zone": self.zone,
+        }
 
 
 class _FakePresence:
@@ -71,9 +82,10 @@ class _FakePresence:
 
 
 def _make_service(mode="working", override=False, override_mode=None,
-                  cam_detection="absent", cam_enabled=True, presence_state="home"):
+                  cam_detection="absent", cam_enabled=True, presence_state="home",
+                  cam_zone=None):
     auto = _FakeAutomation(mode=mode, manual_override=override, override_mode=override_mode)
-    cam = _FakeCamera(enabled=cam_enabled, last_detection=cam_detection)
+    cam = _FakeCamera(enabled=cam_enabled, last_detection=cam_detection, zone=cam_zone)
     pres = _FakePresence(state=presence_state)
     return TransitLightingService(auto, cam, pres), auto, cam, pres
 
@@ -147,6 +159,73 @@ class TestActivateGuards:
         svc, auto, _, _ = _make_service(mode="working", presence_state="away")
         await _drive_absent_window(svc)
         assert svc.active is False
+
+
+class TestStationaryZoneGate:
+    """Camera-committed zone=bed must not let transit fire — Anthony is
+    reclined under blankets, where face / pose detection flickers wildly
+    at 2 Hz. Each flicker would otherwise raise L1+L3+L4 every few seconds.
+    """
+
+    async def test_blocks_when_zone_is_bed(self):
+        # In bed, manual relax override (the actual user-facing scenario).
+        svc, auto, cam, _ = _make_service(
+            mode="working", override=True, override_mode="relax",
+            cam_zone="bed",
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.transit_calls == []
+
+    async def test_activates_when_zone_is_desk(self):
+        # Walked away from the desk; zone is still "desk" (last commit).
+        # This is the canonical transit-firing case and must still work.
+        svc, auto, cam, _ = _make_service(
+            mode="working", cam_zone="desk",
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
+
+    async def test_activates_when_zone_is_unknown(self):
+        # Stub cameras (older tests) and pre-commit windows return None for
+        # zone — fall through to the existing absent-dwell logic.
+        svc, auto, cam, _ = _make_service(mode="working", cam_zone=None)
+        await _drive_absent_window(svc)
+        assert svc.active is True
+
+    async def test_deactivates_when_zone_flips_to_bed_mid_transit(self):
+        # Transit fired while he was at his desk; he then sat down on the
+        # bed (zone commits to "bed"). Service should revert immediately —
+        # not wait for camera to report "present" or for the hard timeout.
+        svc, auto, cam, _ = _make_service(mode="working", cam_zone="desk")
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.clear_calls) == 0
+
+        cam.zone = "bed"
+        await svc._check()
+        assert svc.active is False
+        assert len(auto.clear_calls) == 1
+
+    async def test_zone_block_clears_pending_absent_timer(self):
+        # Build up an absent timer with no committed zone, then zone
+        # commits to "bed" — block should clear the pending timer so it
+        # doesn't fire the moment zone moves back to desk.
+        svc, _, cam, _ = _make_service(mode="working", cam_zone=None)
+        await svc._check()
+        assert svc._camera_absent_since is not None
+
+        cam.zone = "bed"
+        await svc._check()
+        assert svc._camera_absent_since is None
+
+    def test_stationary_zones_membership(self):
+        # Locked-in invariant: only "bed" is stationary today.
+        # If/when "couch" or another stationary zone gets committed
+        # by the camera, it should be added here too.
+        assert "bed" in STATIONARY_ZONES
+        assert "desk" not in STATIONARY_ZONES
 
 
 class TestFlapSuppression:

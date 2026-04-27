@@ -80,7 +80,10 @@ async def accept_suggestion(request: Request) -> dict:
         raise HTTPException(status_code=404, detail="No active suggestion")
 
     automation = request.app.state.automation
-    await automation.set_manual_override(suggestion["predicted_mode"])
+    remote = getattr(request.client, "host", None) or "unknown"
+    await automation.set_manual_override(
+        suggestion["predicted_mode"], source=f"rule_suggestion_accept:{remote}",
+    )
     return {"status": "ok", "applied_mode": suggestion["predicted_mode"]}
 
 

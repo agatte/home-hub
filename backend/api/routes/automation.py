@@ -149,11 +149,16 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
     if not engine:
         raise HTTPException(status_code=503, detail="Automation engine not initialized")
 
+    # Caller-context label for telemetry — answers "who flipped the override"
+    # in journalctl after the fact. Includes the route's own client IP so we
+    # can distinguish kiosk dashboard from dev desktop from external scripts.
+    remote = getattr(request.client, "host", None) or "unknown"
+    caller = f"api:{remote}"
     if override.mode == "auto":
-        await engine.clear_override()
+        await engine.clear_override(source=caller)
         return {"status": "ok", "message": "Override cleared — returning to auto"}
 
-    await engine.set_manual_override(override.mode)
+    await engine.set_manual_override(override.mode, source=caller)
     return {"status": "ok", "mode": override.mode, "source": "manual"}
 
 

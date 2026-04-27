@@ -111,7 +111,9 @@ class WinddownRoutineService:
             try:
                 # Switch to relax mode — dims lights + activates candlelight effect
                 if self._automation:
-                    await self._automation.set_manual_override("relax")
+                    await self._automation.set_manual_override(
+                        "relax", source="winddown_routine",
+                    )
                     logger.info("Switched to relax mode for wind-down")
             except Exception as e:
                 logger.error(f"Wind-down mode switch failed: {e}")

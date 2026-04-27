@@ -17,8 +17,10 @@ class _FakeAutomation:
     def is_at_desk_fresh(self) -> bool:
         return self._at_desk
 
-    async def set_manual_override(self, mode: str) -> None:
+    async def set_manual_override(self, mode: str, source: str = "internal") -> None:
         self.override_calls.append(mode)
+        self.override_sources: list[str] = getattr(self, "override_sources", [])
+        self.override_sources.append(source)
 
 
 class _FakeSonos:

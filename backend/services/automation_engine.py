@@ -51,7 +51,7 @@ SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
 #   stomp explicit modes like gaming / watching / social / cooking /
 #   sleeping / relax.
 # - Time gate: evening always; weekend afternoons (≥13:00) also eligible.
-ZONE_POSTURE_RULE_DWELL_SECONDS = 300
+ZONE_POSTURE_RULE_DWELL_SECONDS = 120
 ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
 ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "away", "working"))
 
@@ -770,19 +770,33 @@ class AutomationEngine:
         # Broadcast mode change
         await self._broadcast_mode()
 
-    async def set_manual_override(self, mode: str) -> None:
-        """Set a manual mode override from the dashboard."""
+    async def set_manual_override(self, mode: str, source: str = "internal") -> None:
+        """Set a manual mode override from the dashboard.
+
+        Args:
+            mode: Target activity mode.
+            source: Caller identifier for telemetry. API route passes
+                ``api:<remote_ip>``; internal triggers (winddown,
+                late_night_rescue, fusion, zone_posture_rule, etc.) pass
+                their own short label so journalctl shows who flipped the
+                override and from where.
+        """
         # Capture the effective mode (override if active, else detected) so that
         # event logging and callback gating see the real "previous" mode, not
         # the stale private _current_mode which only reflects PC agent state.
         old_mode = self.current_mode
+        was_overridden = self._manual_override
+        prior_override = self._override_mode
         self._manual_override = True
         self._override_mode = mode
         self._override_time = datetime.now(tz=TZ)
         self._last_activity_change = self._override_time
 
         self._clear_per_light_overrides()
-        logger.info(f"Manual override set: {mode}")
+        logger.info(
+            "Manual override set: %s (source=%s, prior=%s, was_overridden=%s)",
+            mode, source, prior_override, was_overridden,
+        )
         # Broadcast first so the UI updates immediately, then apply lights.
         # force_resend=True so any lights that were behind a per-light override
         # (now released) get a fresh write to the new mode's state.
@@ -798,7 +812,7 @@ class AutomationEngine:
                 source="manual",
             )
 
-    async def clear_override(self) -> None:
+    async def clear_override(self, source: str = "internal") -> None:
         """Clear the manual override and return to automatic mode.
 
         Special case: if we were sleeping, don't re-apply anything. The fade
@@ -806,14 +820,24 @@ class AutomationEngine:
         mode (working/idle with its time-based night rule, etc.) would blast
         bright lights on while the user is still asleep — exactly the
         "lights turn back on" bug.
+
+        Args:
+            source: Caller identifier for telemetry — see set_manual_override.
+                Useful for diagnosing surprise clear events (e.g. an API
+                client posting ``mode=auto`` mid-evening).
         """
         old_effective = self._override_mode
+        was_overridden = self._manual_override
         self._manual_override = False
         self._override_mode = None
         self._override_time = None
 
         self._clear_per_light_overrides()
-        logger.info("Manual override cleared — returning to auto")
+        logger.info(
+            "Manual override cleared — returning to auto "
+            "(source=%s, prior_override=%s, was_overridden=%s)",
+            source, old_effective, was_overridden,
+        )
 
         if old_effective == "sleeping":
             # User is (probably) still asleep or just waking — they'll pick a
@@ -937,14 +961,20 @@ class AutomationEngine:
         # re-send the mode's state to them.
         for lid in cleared:
             self._last_applied_per_light.pop(lid, None)
+        # Reapply against the EFFECTIVE (override-aware) mode. Using the raw
+        # `_current_mode` field here discards an active manual override and
+        # snaps lights to whatever the PC activity detector last reported —
+        # the bug where a brief camera flicker in a dim bedroom rendered
+        # working late_night brightness right over a relax override.
+        effective_mode = self.current_mode
         logger.info(
             "Transit override cleared for lights %s — reverting to mode %s",
-            cleared, self._current_mode,
+            cleared, effective_mode,
         )
         # Re-apply the current mode's full light state. Dedup cache will no-op
         # on any lights that weren't in the transit set, so only the cleared
         # lights receive new Hue commands.
-        await self._apply_mode(self._current_mode)
+        await self._apply_mode(effective_mode)
 
     # ------------------------------------------------------------------
     # Light state application
@@ -1552,7 +1582,7 @@ class AutomationEngine:
                             f"Manual override timed out after "
                             f"{self._override_timeout_hours}h"
                         )
-                        await self.clear_override()
+                        await self.clear_override(source="timeout_4h")
 
                 # Expire stale per-light overrides (same 4h window as the
                 # mode-level override, tracked per-entry via the datetime
@@ -1594,7 +1624,7 @@ class AutomationEngine:
                         "Late-night rescue: switching to relax from %s",
                         self._current_mode,
                     )
-                    await self.set_manual_override("relax")
+                    await self.set_manual_override("relax", source="late_night_rescue")
 
                 # If no activity override and no manual override, apply time-based
                 if (
@@ -1672,7 +1702,10 @@ class AutomationEngine:
                                         applied=False,
                                     )
                             else:
-                                await self.set_manual_override(prediction["predicted_mode"])
+                                await self.set_manual_override(
+                                    prediction["predicted_mode"],
+                                    source="behavioral_predictor",
+                                )
                                 if ml_logger:
                                     await ml_logger.log_decision(
                                         predicted_mode=prediction["predicted_mode"],
@@ -1759,7 +1792,7 @@ class AutomationEngine:
                                     self._current_mode, fm, fc * 100,
                                     fusion_result["agreement"] * 100,
                                 )
-                                await self.set_manual_override(fm)
+                                await self.set_manual_override(fm, source="fusion_can_override")
                                 acted = True
                                 if ml_logger:
                                     await ml_logger.log_decision(
@@ -1787,7 +1820,7 @@ class AutomationEngine:
                                 "Fusion auto-apply: %s (%.0f%% confidence)",
                                 fm, fc * 100,
                             )
-                            await self.set_manual_override(fm)
+                            await self.set_manual_override(fm, source="fusion_auto_apply")
                             acted = True
                             if ml_logger:
                                 await ml_logger.log_decision(
@@ -1933,7 +1966,7 @@ class AutomationEngine:
                 "Zone+posture rule firing: %s + %s held %.0fs → relax",
                 zone, posture, elapsed,
             )
-            await self.set_manual_override("relax")
+            await self.set_manual_override("relax", source="zone_posture_rule")
         else:
             logger.info(
                 "Zone+posture rule would fire (shadow): %s + %s held %.0fs",

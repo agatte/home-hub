@@ -60,6 +60,14 @@ HARD_TIMEOUT_SECONDS = 600
 # elsewhere.
 TRIGGER_MODES = frozenset({"working", "gaming", "watching", "relax"})
 
+# Zones where transit lighting must NOT fire — Anthony is stationary, not
+# transiting. The bed zone is the painful one: face / pose detection flickers
+# wildly under blankets in low light (consecutive frames swing 0.0 → 0.99 →
+# 0.0 confidence), and absent each glitch would otherwise raise L1 + L3 + L4
+# every few seconds. Gate is on the *committed* zone reading (15s hysteresis
+# inside camera_service), so brief absences don't drop the gate either.
+STATIONARY_ZONES = frozenset({"bed"})
+
 # Late-night adjustment — don't blind him if it's past 23:00 or before 06:00.
 LATE_NIGHT_START_HOUR = 23
 LATE_NIGHT_END_HOUR = 6
@@ -150,6 +158,7 @@ class TransitLightingService:
             return
 
         detection = cam_status.get("last_detection", "unknown")
+        zone = cam_status.get("zone")
 
         pres_status = self._presence.get_status() if self._presence else {}
         home = pres_status.get("state") == "home"
@@ -160,6 +169,13 @@ class TransitLightingService:
             # idle, away) → revert. Manual overrides to a trigger mode are fine.
             if mode not in TRIGGER_MODES:
                 await self._deactivate(f"mode exited trigger set (mode={mode})")
+                return
+
+            # Camera now sees him in a stationary zone (bed) — he didn't walk
+            # to the kitchen, he sat back down. Revert immediately so the
+            # transit lift doesn't linger after he's clearly settled.
+            if zone in STATIONARY_ZONES:
+                await self._deactivate(f"zone={zone} (user stationary)")
                 return
 
             # Phone left the network → user actually departed; presence handles it
@@ -186,6 +202,13 @@ class TransitLightingService:
         # ── Not active: look for conditions to activate ──
         if mode not in TRIGGER_MODES:
             self._record_block(f"mode={mode} (not in trigger set)")
+            return
+        # Last committed zone is "bed" → he's reclined in the bedroom. Camera
+        # absences in this state are detection flicker (face/pose tossing
+        # under blankets in low light), not navigation. Block before the
+        # absent-dwell timer accumulates so a flap-storm can't fire transit.
+        if zone in STATIONARY_ZONES:
+            self._record_block(f"zone={zone} (user stationary)")
             return
         if not home:
             # Phone already says he's gone / arriving / departing — presence

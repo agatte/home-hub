@@ -215,6 +215,19 @@ class TestAutomationEngine:
         await engine.clear_override()
         assert engine.manual_override is False
 
+    async def test_set_override_logs_source(self, engine, caplog):
+        with caplog.at_level("INFO", logger="home_hub.automation"):
+            await engine.set_manual_override("relax", source="api:192.168.1.30")
+        msgs = [r.message for r in caplog.records if "Manual override set" in r.message]
+        assert any("source=api:192.168.1.30" in m for m in msgs), msgs
+
+    async def test_clear_override_logs_source(self, engine, caplog):
+        await engine.set_manual_override("relax")
+        with caplog.at_level("INFO", logger="home_hub.automation"):
+            await engine.clear_override(source="api:127.0.0.1")
+        msgs = [r.message for r in caplog.records if "Manual override cleared" in r.message]
+        assert any("source=api:127.0.0.1" in m for m in msgs), msgs
+
     async def test_override_broadcasts(self, engine, mock_ws):
         await engine.set_manual_override("movie")
         # Should have broadcast at least one mode_update
@@ -314,26 +327,31 @@ class TestZonePostureRule:
             )
         await engine._evaluate_zone_posture_rule(now)
 
-    async def test_fires_in_shadow_mode_after_dwell(self, engine):
-        """All gates pass, dwell met — logs applied=False by default."""
+    async def test_actuates_by_default_after_dwell(self, engine):
+        """All gates pass, dwell met — rule actuates (default flipped True
+        after the in-bed-watching-TV scenario surfaced)."""
         await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
         calls = engine._ml_logger.calls
         assert len(calls) == 1
         assert calls[0]["decision_source"] == "zone_posture_rule"
         assert calls[0]["predicted_mode"] == "relax"
-        assert calls[0]["applied"] is False  # shadow-mode default
-        assert engine.manual_override is False  # did not actuate
-
-    async def test_actuates_when_apply_flag_true(self, engine):
-        """settings.ZONE_POSTURE_RULE_APPLY=True → override fires."""
-        with patch(
-            "backend.services.automation_engine.settings.ZONE_POSTURE_RULE_APPLY",
-            True,
-        ):
-            await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert calls[0]["applied"] is True
         assert engine.manual_override is True
         assert engine.override_mode == "relax"
-        assert engine._ml_logger.calls[0]["applied"] is True
+
+    async def test_shadow_mode_when_apply_flag_false(self, engine):
+        """settings.ZONE_POSTURE_RULE_APPLY=False → log only, no actuation.
+
+        Regression guard for the shadow-mode escape hatch — ops can still
+        flip the flag off in .env if the rule misfires in production.
+        """
+        with patch(
+            "backend.services.automation_engine.settings.ZONE_POSTURE_RULE_APPLY",
+            False,
+        ):
+            await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine.manual_override is False
+        assert engine._ml_logger.calls[0]["applied"] is False
 
     async def test_projector_from_bed_does_not_trigger(self, engine):
         """Sitting up in bed to watch the projector: zone=bed but upright."""
@@ -742,4 +760,78 @@ class TestApplyModeDedup:
         calls = self._wrap_set_light(mock_hue)
         await engine._apply_mode("working")  # no kwarg → default False
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Transit override revert respects manual override
+# ---------------------------------------------------------------------------
+
+
+class TestClearTransitOverrideRespectsManualOverride:
+    """Regression for the in-bed-watching-TV bug: when transit lighting reverts
+    after a brief camera flicker, it must reapply the EFFECTIVE (override-aware)
+    mode — not the raw `_current_mode` which the PC activity detector keeps
+    flooding with "working" while Anthony is reclined.
+
+    Pre-fix path: relax override → camera flickers → transit fires (L1+L3+L4)
+    → camera sees him → clear_transit_override → `_apply_mode(_current_mode)`
+    snapped lights to working late_night × lux. Visible bug: bright lights
+    over a relax override.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    async def test_revert_uses_override_mode_when_override_active(self, engine):
+        # Process detector says working; user override says relax.
+        await engine.report_activity("working", source="pc_agent")
+        await engine.set_manual_override("relax")
+        assert engine.current_mode == "relax"
+        assert engine._current_mode == "working"  # internal field stays "working"
+
+        # Simulate transit lighting having raised L1+L3+L4.
+        from datetime import datetime, timedelta
+        deadline = datetime.now(tz=TZ) + timedelta(minutes=10)
+        engine._transit_light_overrides = {
+            "1": deadline, "3": deadline, "4": deadline,
+        }
+
+        # Capture which mode `_apply_mode` is called with on revert.
+        applied_modes: list[str] = []
+        original = engine._apply_mode
+
+        async def spy(mode, *, force_resend=False):
+            applied_modes.append(mode)
+            return await original(mode, force_resend=force_resend)
+
+        engine._apply_mode = spy
+
+        await engine.clear_transit_override()
+        assert applied_modes == ["relax"], (
+            f"expected revert to apply override mode 'relax', got {applied_modes}"
+        )
+
+    async def test_revert_uses_detected_mode_when_no_override(self, engine):
+        # No override → revert reapplies whatever the detector reports.
+        await engine.report_activity("working", source="pc_agent")
+        assert engine.manual_override is False
+
+        from datetime import datetime, timedelta
+        deadline = datetime.now(tz=TZ) + timedelta(minutes=10)
+        engine._transit_light_overrides = {"1": deadline}
+
+        applied_modes: list[str] = []
+        original = engine._apply_mode
+
+        async def spy(mode, *, force_resend=False):
+            applied_modes.append(mode)
+            return await original(mode, force_resend=force_resend)
+
+        engine._apply_mode = spy
+
+        await engine.clear_transit_override()
+        assert applied_modes == ["working"]
 
