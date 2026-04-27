@@ -39,9 +39,12 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 POLL_INTERVAL_SECONDS = 2
 
 # How long camera must report "absent" before we consider Anthony in transit.
-# Shorter than the camera's own 7-frame (~14s) "away" threshold so transit
-# lights fire slightly before the presence lane flips.
-ABSENT_TRIGGER_SECONDS = 10
+# Tightened from 10s → 4s (2026-04-26) after the bedroom→kitchen walk felt
+# slow in practice. 4s still debounces a brief head-turn or 2s of typing
+# out-of-frame, but lets transit fire ~6-8s sooner. Camera's own 15-frame
+# "away" threshold (~30s) is much longer, so transit still leads the
+# presence lane comfortably.
+ABSENT_TRIGGER_SECONDS = 4
 
 # How long camera must report "present" before we revert — protects against
 # a one-frame false positive flipping the lights back too eagerly.
@@ -205,10 +208,12 @@ class TransitLightingService:
 
     async def _activate(self, mode: str) -> None:
         states = self._navigation_states()
+        # Fast 0.5s "snap on" rather than a 2s ramp — when stepping into a
+        # dark room you want lights *now*, not a slow fade-in.
         await self._automation.apply_transit_override(
             states,
             duration_seconds=HARD_TIMEOUT_SECONDS,
-            transition_time=20,
+            transition_time=5,
         )
         self._active = True
         self._transit_start = datetime.now(tz=TZ)
