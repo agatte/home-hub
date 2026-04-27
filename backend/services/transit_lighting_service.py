@@ -179,11 +179,18 @@ class TransitLightingService:
             return
 
         if detection != "absent":
+            if self._camera_absent_since is not None:
+                logger.info(
+                    "Transit: absent timer reset (detection=%s)", detection,
+                )
             self._camera_absent_since = None
             return
 
         if self._camera_absent_since is None:
             self._camera_absent_since = now
+            logger.info(
+                "Transit: absent timer started (mode=%s, presence=home)", mode,
+            )
             return
 
         if (now - self._camera_absent_since).total_seconds() >= ABSENT_TRIGGER_SECONDS:

@@ -705,6 +705,11 @@ class CameraService:
                 frame_zone = result.get("zone")
                 frame_posture = result.get("posture")
 
+                if status != self._last_detection:
+                    logger.info(
+                        "Camera detection flip: %s → %s (source=%s, conf=%.2f)",
+                        self._last_detection, status, source, confidence,
+                    )
                 self._last_detection = status
                 self._last_detection_at = datetime.now(timezone.utc)
                 self._last_confidence = confidence
