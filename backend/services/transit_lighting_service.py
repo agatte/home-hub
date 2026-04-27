@@ -95,6 +95,11 @@ class TransitLightingService:
         self._presence_during_absent_since: Optional[datetime] = None
         self._camera_present_since: Optional[datetime] = None
         self._transit_start: Optional[datetime] = None
+        # Last reason the activate path bailed early. Only the *first* tick
+        # of a new block reason emits an INFO log; subsequent ticks with the
+        # same reason stay quiet to avoid spamming. None means "currently
+        # eligible to fire (or already firing)."
+        self._last_block_reason: Optional[str] = None
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
 
     def set_heartbeat_registry(self, registry) -> None:
@@ -138,8 +143,10 @@ class TransitLightingService:
             # Reset any trigger timer so we don't fire the moment the camera
             # comes back online.
             self._camera_absent_since = None
+            self._presence_during_absent_since = None
             if self._active:
                 await self._deactivate("camera disabled")
+            self._record_block("camera disabled")
             return
 
         detection = cam_status.get("last_detection", "unknown")
@@ -178,11 +185,17 @@ class TransitLightingService:
 
         # ── Not active: look for conditions to activate ──
         if mode not in TRIGGER_MODES:
+            self._record_block(f"mode={mode} (not in trigger set)")
             return
         if not home:
             # Phone already says he's gone / arriving / departing — presence
             # service's own choreography is the right handler.
+            self._record_block(f"presence={pres_status.get('state', 'unknown')}")
             return
+
+        # All gates clear — log the unblock so journalctl shows when the
+        # service became eligible again.
+        self._record_unblock()
 
         if detection != "absent":
             if self._camera_absent_since is None:
@@ -216,6 +229,27 @@ class TransitLightingService:
 
         if (now - self._camera_absent_since).total_seconds() >= ABSENT_TRIGGER_SECONDS:
             await self._activate(mode)
+
+    def _record_block(self, reason: str) -> None:
+        """Note that the activate path bailed; log only on reason transitions.
+
+        Also clears any pending absent dwell so a stale timer doesn't fire
+        the instant the block lifts (e.g. mode flips away → working after
+        the user has been gone for minutes).
+        """
+        if reason != self._last_block_reason:
+            logger.info("Transit: blocked (%s)", reason)
+            self._last_block_reason = reason
+            self._camera_absent_since = None
+            self._presence_during_absent_since = None
+
+    def _record_unblock(self) -> None:
+        """Log when the activate path's gates clear after having been blocked."""
+        if self._last_block_reason is not None:
+            logger.info(
+                "Transit: unblocked (was %s)", self._last_block_reason,
+            )
+            self._last_block_reason = None
 
     def _navigation_states(self) -> dict[str, dict]:
         """Per-light targets for transit. Lower at late-night to avoid glare."""

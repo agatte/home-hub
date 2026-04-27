@@ -261,6 +261,47 @@ class TestDeactivateGuards:
         assert svc.active is False
 
 
+class TestBlockReasonLogging:
+    """Activate-path block reasons should log on transitions only and
+    clear any pending absent dwell so a stale timer doesn't fire after
+    the block lifts."""
+
+    async def test_mode_block_clears_absent_timer(self):
+        # Build up the absent timer in working mode...
+        svc, auto, cam, _ = _make_service(mode="working")
+        await svc._check()
+        assert svc._camera_absent_since is not None
+
+        # ...then user manually overrides to away. Timer must clear.
+        auto._manual_override = True
+        auto._override_mode = "away"
+        await svc._check()
+        assert svc._camera_absent_since is None
+        assert svc._last_block_reason is not None
+
+    async def test_block_logged_only_on_reason_change(self, caplog):
+        svc, auto, _, _ = _make_service(mode="away")  # blocked from the start
+        with caplog.at_level("INFO", logger="home_hub.transit_lighting"):
+            await svc._check()
+            await svc._check()
+            await svc._check()
+        # Three ticks at the same block reason → exactly one log line.
+        block_logs = [r for r in caplog.records if "blocked" in r.message]
+        assert len(block_logs) == 1
+        assert "mode=away" in block_logs[0].message
+
+    async def test_unblock_logged_when_gate_clears(self, caplog):
+        svc, auto, cam, _ = _make_service(mode="away", cam_detection="present")
+        with caplog.at_level("INFO", logger="home_hub.transit_lighting"):
+            await svc._check()  # logs blocked
+            auto._detected = "working"
+            auto._manual_override = False
+            await svc._check()  # logs unblocked
+        unblock_logs = [r for r in caplog.records if "unblocked" in r.message]
+        assert len(unblock_logs) == 1
+        assert "was mode=away" in unblock_logs[0].message
+
+
 class TestNavigationStates:
     """Per-light targets — late-night uses dimmer values."""
 
