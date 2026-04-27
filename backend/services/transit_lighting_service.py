@@ -13,8 +13,14 @@ State machine:
   idle ─[camera absent ≥10s + phone home + eligible mode]─> active
   active ─[camera present ≥2s]─> idle  (revert lights)
   active ─[phone departed]─> idle  (user actually left — hand off to presence)
-  active ─[mode became sleeping/cooking/manual]─> idle  (explicit user action)
+  active ─[mode left trigger set: sleeping/cooking/social/idle/away]─> idle
   active ─[10-minute hard timeout]─> idle  (failsafe)
+
+Eligible mode means the *effective* mode (override-aware) is in
+TRIGGER_MODES — so a manual relax/working/gaming/watching override
+still lets transit fire. sleeping/cooking/social overrides naturally
+fall outside TRIGGER_MODES and block, preserving "I want it dark /
+specifically lit" intent.
 
 Runs inside the FastAPI process; poll loop wakes every 2s to align with camera.
 """
@@ -110,8 +116,12 @@ class TransitLightingService:
         """One tick of the state machine — may activate or deactivate."""
         now = datetime.now(tz=TZ)
 
-        mode = getattr(self._automation, "_current_mode", "idle")
-        manual_override = getattr(self._automation, "_manual_override", False)
+        # Use the override-aware mode so a manual relax / working / gaming /
+        # watching override still lets transit fire when Anthony leaves the
+        # bedroom (e.g. winddown sets relax at 22:00 — kitchen still needs
+        # transit lighting). sleeping / cooking / social overrides naturally
+        # fall outside TRIGGER_MODES and continue to block.
+        mode = getattr(self._automation, "current_mode", "idle")
 
         # Camera may be disabled (opt-in); bail if no camera signal available.
         cam_status = self._camera.get_status() if self._camera else {}
@@ -130,9 +140,10 @@ class TransitLightingService:
 
         # ── If already active: look for conditions to clear ──
         if self._active:
-            # Mode change out of the trigger set (sleeping, cooking, manual) → revert
-            if manual_override or mode not in TRIGGER_MODES:
-                await self._deactivate(f"mode exited trigger set (mode={mode}, override={manual_override})")
+            # Effective mode out of the trigger set (sleeping, cooking, social,
+            # idle, away) → revert. Manual overrides to a trigger mode are fine.
+            if mode not in TRIGGER_MODES:
+                await self._deactivate(f"mode exited trigger set (mode={mode})")
                 return
 
             # Phone left the network → user actually departed; presence handles it
@@ -157,8 +168,6 @@ class TransitLightingService:
             return
 
         # ── Not active: look for conditions to activate ──
-        if manual_override:
-            return
         if mode not in TRIGGER_MODES:
             return
         if not home:
