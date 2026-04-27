@@ -171,20 +171,29 @@ class TestApplyLuxMultiplierGuards:
         return _make_engine(mock_hue, mock_hue_v2, mock_ws)
 
     def test_mode_not_in_lux_modes_returns_unchanged(self, engine):
-        engine.set_camera_service(_fake_camera(40.0))
-        state = {"1": {"on": True, "bri": 200}}
-        assert engine._apply_lux_multiplier(state, "gaming") is state
-
-    def test_watching_not_modulated(self, engine):
-        # Deliberate: watching stays static even though presence is similar
-        engine.set_camera_service(_fake_camera(40.0))
-        state = {"1": {"on": True, "bri": 200}}
-        assert engine._apply_lux_multiplier(state, "watching") is state
-
-    def test_cooking_not_modulated(self, engine):
+        # cooking and social are out of LUX_MODES; their explicit palettes
+        # (bright kitchen, mid-conversational social) shouldn't drift with
+        # ambient light.
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 200}}
         assert engine._apply_lux_multiplier(state, "cooking") is state
+        assert engine._apply_lux_multiplier(state, "social") is state
+
+    def test_gaming_now_modulates(self, engine):
+        # Gaming was added to LUX_MODES so dim rooms get a brightness lift.
+        # Spatial design stays — the ±15% range doesn't reshape it.
+        engine.set_camera_service(_fake_camera(40.0))
+        state = {"1": {"on": True, "bri": 200}}
+        result = engine._apply_lux_multiplier(state, "gaming")
+        assert result is not state
+        assert result["1"]["bri"] > 200
+
+    def test_watching_now_modulates(self, engine):
+        engine.set_camera_service(_fake_camera(40.0))
+        state = {"1": {"on": True, "bri": 200}}
+        result = engine._apply_lux_multiplier(state, "watching")
+        assert result is not state
+        assert result["1"]["bri"] > 200
 
     def test_no_camera_service_returns_unchanged(self, engine):
         state = {"1": {"on": True, "bri": 200}}
@@ -293,8 +302,12 @@ class TestApplyLuxMultiplierArithmetic:
         result = engine._apply_lux_multiplier(state, "working")
         assert result["1"]["bri"] == 200  # unchanged (multiplier effectively 1.0)
 
-    def test_modes_scope_covers_working_and_relax_only(self):
-        assert LUX_MODES == frozenset({"working", "relax"})
+    def test_modes_scope_includes_adaptive_modes(self):
+        # working / relax / gaming / watching adapt; cooking / social keep
+        # their explicit palettes regardless of ambient light.
+        assert LUX_MODES == frozenset({"working", "relax", "gaming", "watching"})
+        assert "cooking" not in LUX_MODES
+        assert "social" not in LUX_MODES
 
     def test_baseline_makes_calibrated_room_neutral(self, engine):
         # User's room calibrates at lux=141. At lux=141 the multiplier must

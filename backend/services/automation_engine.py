@@ -751,8 +751,11 @@ class AutomationEngine:
         if mode not in ("idle", "away"):
             self._external_off_detected = False
 
-        # Apply the appropriate light state
-        await self._apply_mode(mode)
+        # Apply the appropriate light state. force_resend=True because this
+        # branch only runs when the resolved mode actually changed — bridge
+        # state may have drifted (effects, external writes, prior overrides)
+        # and the cache should be invalidated.
+        await self._apply_mode(mode, force_resend=True)
 
         # Fire mode change callbacks (e.g., music auto-play)
         if old_mode != mode:
@@ -780,9 +783,11 @@ class AutomationEngine:
 
         self._clear_per_light_overrides()
         logger.info(f"Manual override set: {mode}")
-        # Broadcast first so the UI updates immediately, then apply lights
+        # Broadcast first so the UI updates immediately, then apply lights.
+        # force_resend=True so any lights that were behind a per-light override
+        # (now released) get a fresh write to the new mode's state.
         await self._broadcast_mode()
-        await self._apply_mode(mode)
+        await self._apply_mode(mode, force_resend=True)
         # Fire mode change callbacks only if the mode actually changed
         if old_mode != mode:
             await self._fire_mode_change_callbacks(mode)
@@ -816,11 +821,13 @@ class AutomationEngine:
             await self._broadcast_mode()
             return
 
-        # Re-apply current detected mode or time-based
+        # Re-apply current detected mode or time-based. force_resend=True
+        # because we've just released the override and per-light overrides;
+        # the cache may not reflect what's actually on the bridge.
         if self._current_mode in ("idle", "away"):
             await self._apply_time_based()
         else:
-            await self._apply_mode(self._current_mode)
+            await self._apply_mode(self._current_mode, force_resend=True)
 
         await self._broadcast_mode()
         # Only fire callbacks if the effective mode actually changed
@@ -949,8 +956,19 @@ class AutomationEngine:
         """Transition active Hue v2 effect (shim → effect_manager)."""
         await self._effect_manager.reconcile(desired)
 
-    async def _apply_mode(self, mode: str) -> None:
-        """Apply light state for a given mode."""
+    async def _apply_mode(self, mode: str, *, force_resend: bool = False) -> None:
+        """Apply light state for a given mode.
+
+        Args:
+            mode: The mode whose lighting to apply.
+            force_resend: When True, clear the per-light dedup cache so every
+                light gets re-written to the bridge. Set this on actual mode
+                transitions (the previous mode may have used HSB while the new
+                one uses CT, an effect was running, manual overrides were
+                released, etc. — any of which can leave the bridge state out
+                of sync with the cache). Leave False on periodic reapply
+                ticks so dedup can no-op when nothing changed.
+        """
         # Cancel any in-progress sleep fade if switching to an active mode
         if mode != "sleeping" and self._sleep_fade_task and not self._sleep_fade_task.done():
             self._sleep_fade_task.cancel()
@@ -969,9 +987,13 @@ class AutomationEngine:
         # _apply_state (or scene activation) has established the new target.
         desired_effect = self._get_desired_effect(mode)
 
-        # Clear dedup cache so the new state is always applied — effects and
-        # external apps change bridge state independently, making the cache stale.
-        self._last_applied_per_light = {}
+        # On a true mode transition, the previous mode may have used HSB
+        # while this one uses CT, an effect may have been running and changed
+        # bridge state, or manual overrides may have just been released —
+        # any of which can leave the cache stale. Periodic reapply ticks
+        # don't have those concerns and rely on dedup to no-op cleanly.
+        if force_resend:
+            self._last_applied_per_light = {}
 
         # Sleep mode: dim the bridge FIRST, then stop the effect, then fade to off.
         # Stopping an active effect before setting a brightness target pops the
@@ -1584,8 +1606,9 @@ class AutomationEngine:
                     not self._manual_override
                     and self._current_mode not in ("idle", "away", "social")
                 ):
-                    # Re-apply activity mode to pick up day→evening→night transitions
-                    # Dedup in _last_applied_per_light makes this a no-op most cycles
+                    # Re-apply activity mode to pick up day→evening→night transitions.
+                    # force_resend=False so dedup in _last_applied_per_light makes
+                    # this a true no-op when nothing changed (the common case).
                     await self._apply_mode(self._current_mode)
 
                 # Scene drift — subtle variety during long sessions

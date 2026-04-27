@@ -67,9 +67,12 @@ MODE_TRANSITION_TIME: dict[str, int] = {
 # Ambient lux adaptive brightness
 # ---------------------------------------------------------------------------
 
-# Modes where ambient adaptation is desirable. Functional modes
-# (gaming, watching, cooking) bypass so spatial design stays predictable.
-LUX_MODES = frozenset(("working", "relax"))
+# Modes where ambient adaptation is desirable. ±15% is small enough that
+# gaming/watching's intentional spatial palettes stay recognizable while
+# still compensating when the room is significantly darker (or brighter)
+# than the calibrated baseline. Cooking + social keep their intentional
+# bright/medium palettes — explicit user-mode choices that shouldn't drift.
+LUX_MODES = frozenset(("working", "relax", "gaming", "watching"))
 
 # Piecewise-linear curve mapping camera-derived ambient brightness
 # (gray.mean, 0–255) to a brightness multiplier. Dark rooms (low lux)

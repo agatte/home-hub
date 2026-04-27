@@ -166,11 +166,29 @@ class TestApplyBrightnessMultiplier:
 class TestApplyLuxMultiplier:
 
     def test_non_lux_mode_noop(self):
-        # Only working / relax adapt; gaming bypasses.
+        # working / relax / gaming / watching adapt; cooking + social bypass
+        # so their explicit bright/medium palettes don't drift.
         state = {"1": {"on": True, "bri": 200}}
-        out_state, out_mult = apply_lux_multiplier(state, "gaming", 50.0, 1.0)
+        out_state, out_mult = apply_lux_multiplier(state, "cooking", 50.0, 1.0)
         assert out_state is state
         assert out_mult == 1.0
+
+    def test_gaming_now_adapts(self):
+        # Gaming was added to LUX_MODES so dim rooms get a brightness lift.
+        state = {"1": {"on": True, "bri": 100}}
+        out_state, out_mult = apply_lux_multiplier(
+            state, "gaming", lux_reading=40.0, last_multiplier=1.0,
+        )
+        assert out_mult > 1.0
+        assert out_state["1"]["bri"] > 100
+
+    def test_watching_now_adapts(self):
+        state = {"1": {"on": True, "bri": 100}}
+        out_state, out_mult = apply_lux_multiplier(
+            state, "watching", lux_reading=40.0, last_multiplier=1.0,
+        )
+        assert out_mult > 1.0
+        assert out_state["1"]["bri"] > 100
 
     def test_no_reading_noop(self):
         state = {"1": {"on": True, "bri": 200}}

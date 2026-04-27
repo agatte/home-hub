@@ -687,3 +687,59 @@ class TestIsAtDeskFresh:
         engine._camera_service.enabled = True  # add enabled flag
         assert engine.is_at_desk_fresh() is True
 
+
+# ---------------------------------------------------------------------------
+# _apply_mode dedup — force_resend gates the cache-clear so periodic reapplies
+# can no-op via dedup. Regression guard against the "every 60s, all lights
+# rewritten" churn that filled light_adjustments at ~4 rows/min/light.
+# ---------------------------------------------------------------------------
+
+
+class TestApplyModeDedup:
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    @staticmethod
+    def _wrap_set_light(mock_hue) -> list[str]:
+        """Wrap mock_hue.set_light to append every called light_id to a list."""
+        calls: list[str] = []
+        original = mock_hue.set_light
+
+        async def counting(lid, state):
+            calls.append(str(lid))
+            return await original(lid, state)
+
+        mock_hue.set_light = counting
+        return calls
+
+    async def test_reapply_with_force_resend_false_is_noop(self, engine, mock_hue):
+        # First apply must force resend so the dedup cache populates and
+        # the bridge actually receives the initial state.
+        await engine._apply_mode("working", force_resend=True)
+
+        # Now wrap and count subsequent writes only.
+        calls = self._wrap_set_light(mock_hue)
+        await engine._apply_mode("working", force_resend=False)
+        assert calls == [], (
+            f"reapply with force_resend=False wrote to {calls}; dedup is broken"
+        )
+
+    async def test_force_resend_true_writes_after_no_state_change(self, engine, mock_hue):
+        await engine._apply_mode("working", force_resend=True)
+        calls = self._wrap_set_light(mock_hue)
+        # force_resend=True bypasses dedup even when state hasn't changed.
+        await engine._apply_mode("working", force_resend=True)
+        assert len(calls) > 0
+
+    async def test_default_force_resend_is_false(self, engine, mock_hue):
+        # Ensure the default behavior is the dedup-friendly one. A periodic
+        # reapply tick that omits the kwarg should not thrash the bridge.
+        await engine._apply_mode("working", force_resend=True)
+        calls = self._wrap_set_light(mock_hue)
+        await engine._apply_mode("working")  # no kwarg → default False
+        assert calls == []
+
