@@ -164,10 +164,10 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},
         },
         "night": {
-            "1": {"on": True, "bri": 40,  "hue": 47000, "sat": 240},
+            "1": {"on": True, "bri": 55,  "hue": 47000, "sat": 240},
             "2": {"on": True, "bri": 140, "hue": 46920, "sat": 240},
-            "3": {"on": True, "bri": 18,  "hue": 50000, "sat": 240},
-            "4": {"on": True, "bri": 18,  "hue": 50000, "sat": 240},
+            "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 240},
+            "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 240},
         },
     },
     # ── Working ───────────────────────────────────────────────────────
@@ -215,8 +215,8 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": _LIGHT_OFF,
         },
         "night": {
-            "1": {"on": True, "bri": 45,  "ct": 454},
-            "2": {"on": True, "bri": 20,  "ct": 454},
+            "1": {"on": True, "bri": 60,  "ct": 454},
+            "2": {"on": True, "bri": 30,  "ct": 454},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
         },
