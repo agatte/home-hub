@@ -87,6 +87,12 @@ class TransitLightingService:
         self._enabled: bool = True
         self._active: bool = False
         self._camera_absent_since: Optional[datetime] = None
+        # Flap-suppression for the activate path: once the absent timer is
+        # running, single-frame "present" detections (often pose extrapolating
+        # a partial body as Anthony exits frame) shouldn't reset it. We
+        # require PRESENT_CLEAR_SECONDS of sustained presence to confirm a
+        # real return before clearing the absent timer.
+        self._presence_during_absent_since: Optional[datetime] = None
         self._camera_present_since: Optional[datetime] = None
         self._transit_start: Optional[datetime] = None
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
@@ -179,13 +185,28 @@ class TransitLightingService:
             return
 
         if detection != "absent":
-            if self._camera_absent_since is not None:
+            if self._camera_absent_since is None:
+                # Not currently waiting on the absent dwell — nothing to debounce.
+                self._presence_during_absent_since = None
+                return
+            # Already mid-dwell: a single "present" frame might be MediaPipe pose
+            # extrapolating a partial body. Require PRESENT_CLEAR_SECONDS of
+            # sustained presence before treating it as a true return.
+            if self._presence_during_absent_since is None:
+                self._presence_during_absent_since = now
+                return
+            if (now - self._presence_during_absent_since).total_seconds() >= PRESENT_CLEAR_SECONDS:
                 logger.info(
-                    "Transit: absent timer reset (detection=%s)", detection,
+                    "Transit: absent timer reset (sustained present for %ss)",
+                    PRESENT_CLEAR_SECONDS,
                 )
-            self._camera_absent_since = None
+                self._camera_absent_since = None
+                self._presence_during_absent_since = None
+            # Else: still inside flap window — keep the absent timer running.
             return
 
+        # Detection is absent — clear flap tracking and advance the dwell.
+        self._presence_during_absent_since = None
         if self._camera_absent_since is None:
             self._camera_absent_since = now
             logger.info(
@@ -225,6 +246,7 @@ class TransitLightingService:
         self._active = True
         self._transit_start = datetime.now(tz=TZ)
         self._camera_present_since = None
+        self._presence_during_absent_since = None
         logger.info(
             "Transit lighting activated (mode=%s, lights=%s)",
             mode, list(states.keys()),
@@ -237,6 +259,7 @@ class TransitLightingService:
         self._active = False
         self._camera_absent_since = None
         self._camera_present_since = None
+        self._presence_during_absent_since = None
         self._transit_start = None
         logger.info("Transit lighting deactivated (%s)", reason)
 

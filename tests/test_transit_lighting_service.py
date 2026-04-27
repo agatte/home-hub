@@ -149,6 +149,76 @@ class TestActivateGuards:
         assert svc.active is False
 
 
+class TestFlapSuppression:
+    """Pose fallback can extrapolate landmarks for partial-body frames as
+    Anthony exits the camera view, producing a single-frame "present"
+    detection that should NOT reset the absent dwell timer.
+    """
+
+    async def test_single_frame_present_does_not_reset_absent_timer(self):
+        from datetime import timedelta
+        svc, auto, cam, _ = _make_service(
+            mode="working", cam_detection="absent",
+        )
+        # Tick 1: absent → timer starts.
+        await svc._check()
+        assert svc._camera_absent_since is not None
+        timer_started_at = svc._camera_absent_since
+
+        # Tick 2: pose hallucinates "present" for one frame.
+        cam.last_detection = "present"
+        await svc._check()
+        # Timer must survive the flap.
+        assert svc._camera_absent_since == timer_started_at
+        assert svc._presence_during_absent_since is not None
+
+        # Tick 3: absent again — flap tracker clears, timer continues.
+        cam.last_detection = "absent"
+        await svc._check()
+        assert svc._camera_absent_since == timer_started_at
+        assert svc._presence_during_absent_since is None
+
+        # Backdate the timer past ABSENT_TRIGGER_SECONDS and tick again — fires.
+        svc._camera_absent_since -= timedelta(seconds=ABSENT_TRIGGER_SECONDS + 1)
+        await svc._check()
+        assert svc.active is True
+
+    async def test_sustained_present_does_reset_absent_timer(self):
+        from datetime import timedelta
+        svc, auto, cam, _ = _make_service(
+            mode="working", cam_detection="absent",
+        )
+        # Tick 1: absent → timer starts.
+        await svc._check()
+        assert svc._camera_absent_since is not None
+
+        # Tick 2: present (1st frame).
+        cam.last_detection = "present"
+        await svc._check()
+        assert svc._camera_absent_since is not None  # still waiting
+        assert svc._presence_during_absent_since is not None
+
+        # Backdate the presence start past PRESENT_CLEAR_SECONDS — confirmed return.
+        svc._presence_during_absent_since -= timedelta(seconds=PRESENT_CLEAR_SECONDS + 1)
+        await svc._check()
+        # Timer should now be fully reset.
+        assert svc._camera_absent_since is None
+        assert svc._presence_during_absent_since is None
+
+    async def test_presence_tracker_clears_on_each_absent_frame(self):
+        svc, _, cam, _ = _make_service(mode="working", cam_detection="absent")
+        await svc._check()  # timer starts
+
+        # Flap to present, then back. The tracker should reset cleanly.
+        cam.last_detection = "present"
+        await svc._check()
+        assert svc._presence_during_absent_since is not None
+
+        cam.last_detection = "absent"
+        await svc._check()
+        assert svc._presence_during_absent_since is None  # cleared
+
+
 class TestDeactivateGuards:
     """The deactivate path: once active, what tears it down?"""
 
