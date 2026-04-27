@@ -121,7 +121,7 @@ class TestFusionReportsFactors:
         fusion.report_signal("process", "working", 1.0, factors=self._factors_for("fg"))
         result = fusion.compute_fusion()
         # Lanes that never reported still appear with empty factors
-        for src in ("camera", "audio_ml", "behavioral", "rule_engine", "presence"):
+        for src in ("camera", "audio_ml", "rule_engine", "presence"):
             assert result["signals"][src]["factors"] == []
 
     def test_presence_lane_is_a_voter(self):

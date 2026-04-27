@@ -4,9 +4,9 @@
 //
 // Node types:
 //   nucleus — center, fusion-winning mode
-//   lane    — a fusion voter (process/camera/audio_ml/behavioral/
-//             rule_engine/presence), linked to the nucleus with edge
-//             thickness proportional to weight
+//   lane    — a fusion voter (process/camera/audio_ml/rule_engine/
+//             presence), linked to the nucleus with edge thickness
+//             proportional to weight
 //   factor  — a sub-signal the lane is considering, orbits its parent
 //             lane, no edges
 //   context — a non-voting input (time/weather/override/sonos), orbits
@@ -19,18 +19,18 @@ import { sonos } from './sonos.js'
 import { presence } from './presence.js'
 import { weather } from './weather.js'
 
-// Inner-ring lane order — matches backend SIGNAL_SOURCES. Presence joined
-// in v2 and lives at the end to minimize visual disruption relative to
-// the pre-existing 5-lane constellation.
+// Inner-ring lane order — matches backend SIGNAL_SOURCES. The behavioral
+// lane was removed 2026-04-27 after the LightGBM predictor collapsed to a
+// single output class; the predictor still runs in shadow but no longer
+// contributes to fusion.
 const LANE_ORDER = [
-  'process', 'camera', 'audio_ml', 'behavioral', 'rule_engine', 'presence',
+  'process', 'camera', 'audio_ml', 'rule_engine', 'presence',
 ]
 
 const LANE_META = {
   process:     { label: 'Process', icon: 'cpu' },
   camera:      { label: 'Camera',  icon: 'video' },
   audio_ml:    { label: 'Audio',   icon: 'mic' },
-  behavioral:  { label: 'Predict', icon: 'brain' },
   rule_engine: { label: 'Rules',   icon: 'clock' },
   presence:    { label: 'Presence', icon: 'wifi' },
 }

@@ -116,7 +116,7 @@ class TestWeightNormalization:
         result = fusion.compute_fusion()
         assert result is not None
         assert result["fused_confidence"] == pytest.approx(0.6, abs=1e-4)
-        for src in ("camera", "audio_ml", "behavioral", "rule_engine", "presence"):
+        for src in ("camera", "audio_ml", "rule_engine", "presence"):
             assert result["signals"][src]["mode"] is None
 
 
@@ -135,9 +135,9 @@ class TestLateNightDecay:
         assert result["fused_confidence"] == pytest.approx(0.8, abs=1e-4)
 
     def test_night_decay_flips_winner(self, monkeypatch):
-        """process (0.287) alone vs camera (0.164) + rule_engine (0.082):
-        - day:   process=0.287 > combined=0.246  → working wins
-        - night: process*0.6=0.172 < combined=0.246 → relax wins
+        """process (0.344) alone vs camera (0.196) + rule_engine (0.098):
+        - day:   process=0.344 > combined=0.294  → working wins
+        - night: process*0.6=0.206 < combined=0.294 → relax wins
         """
         fusion = ConfidenceFusion()
         fusion.report_signal("process", "working", 1.0)
@@ -155,7 +155,7 @@ class TestLateNightDecay:
         assert fusion.compute_fusion()["fused_mode"] == "relax"
 
     def test_decay_only_touches_process_lane(self, monkeypatch):
-        """Night flag on, but process never reports. Camera+behavioral
+        """Night flag on, but process never reports. Camera+audio_ml
         both vote relax at conf 0.5 — their weights must NOT be decayed,
         so the fused confidence stays 0.5."""
         monkeypatch.setattr(
@@ -163,7 +163,7 @@ class TestLateNightDecay:
         )
         fusion = ConfidenceFusion()
         fusion.report_signal("camera", "relax", 0.5)
-        fusion.report_signal("behavioral", "relax", 0.5)
+        fusion.report_signal("audio_ml", "relax", 0.5)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "relax"
         assert result["fused_confidence"] == pytest.approx(0.5, abs=1e-4)
@@ -210,7 +210,7 @@ class TestAgreement:
         fusion = ConfidenceFusion()
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
-        fusion.report_signal("behavioral", "working", 1.0)
+        fusion.report_signal("audio_ml", "working", 1.0)
         result = fusion.compute_fusion()
         assert result["agreement"] == 1.0
 
@@ -218,7 +218,7 @@ class TestAgreement:
         fusion = ConfidenceFusion()
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
-        fusion.report_signal("behavioral", "working", 1.0)
+        fusion.report_signal("presence", "working", 1.0)
         fusion.report_signal("audio_ml", "idle", 1.0)
         fusion.report_signal("rule_engine", "idle", 1.0)
         result = fusion.compute_fusion()
@@ -262,14 +262,13 @@ class TestThresholdGates:
             "process":     0.23,
             "camera":      0.23,
             "audio_ml":    0.23,
-            "behavioral":  0.23,
+            "presence":    0.23,
             "rule_engine": 0.08,
-            "presence":    0.0,
         }
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
         fusion.report_signal("audio_ml", "working", 1.0)
-        fusion.report_signal("behavioral", "working", 1.0)
+        fusion.report_signal("presence", "working", 1.0)
         fusion.report_signal("rule_engine", "gaming", 1.0)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"
@@ -286,14 +285,13 @@ class TestThresholdGates:
             "process":     0.50,
             "camera":      0.25,
             "audio_ml":    0.17,
-            "behavioral":  0.04,
+            "presence":    0.04,
             "rule_engine": 0.04,
-            "presence":    0.0,
         }
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
         fusion.report_signal("audio_ml", "working", 1.0)
-        fusion.report_signal("behavioral", "gaming", 1.0)
+        fusion.report_signal("presence", "gaming", 1.0)
         fusion.report_signal("rule_engine", "gaming", 1.0)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"

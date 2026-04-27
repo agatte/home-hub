@@ -1,10 +1,10 @@
 """Multi-signal confidence fusion for mode prediction.
 
 Combines confidence scores from multiple detection signals (process
-detection, camera presence, audio classification, behavioral predictor,
-rule engine) into a single weighted ensemble.  The fused result can
-auto-apply mode changes at high confidence or suggest them via the
-dashboard at lower thresholds.
+detection, camera presence, audio classification, rule engine,
+phone presence) into a single weighted ensemble.  The fused result
+can auto-apply mode changes at high confidence or suggest them via
+the dashboard at lower thresholds.
 
 Pure Python — no external dependencies beyond the standard library.
 """
@@ -38,20 +38,22 @@ VALID_MODES = frozenset({
 })
 
 SIGNAL_SOURCES = (
-    "process", "camera", "audio_ml", "behavioral", "rule_engine", "presence",
+    "process", "camera", "audio_ml", "rule_engine", "presence",
 )
 
-# Presence (phone on home WiFi) joined the ensemble after the low-light
-# camera flap scenario showed that the most reliable "user is not home"
-# signal was sitting outside fusion entirely. It weighs 0.18; prior voter
-# weights were scaled by 0.82 so everything still sums to 1.0.
+# The behavioral lane (LightGBM mode predictor) was removed after a
+# 2026-04-27 audit found the model collapsed to a single output class
+# (`away` 898/898 over 9 days, 0.64% real accuracy vs the 28.3% no-skill
+# floor). The predictor service still runs in shadow for diagnostics —
+# its decisions are logged to ml_decisions but no longer reach fusion.
+# Pre-removal weights summed to 1.0 with behavioral=0.164; the remaining
+# five lanes are renormalized below preserving their relative ratios.
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "process":     0.287,
-    "camera":      0.164,
-    "audio_ml":    0.123,
-    "behavioral":  0.164,
-    "rule_engine": 0.082,
-    "presence":    0.180,
+    "process":     0.344,
+    "camera":      0.196,
+    "audio_ml":    0.147,
+    "rule_engine": 0.098,
+    "presence":    0.215,
 }
 
 AUTO_APPLY_THRESHOLD = 0.95
@@ -325,9 +327,9 @@ class ConfidenceFusion:
 
         Fusion itself is deterministic — the only meaningful failure
         mode is "every lane stale" (no signals fresh enough to vote).
-        Lane-level staleness is normal: behavioral + rule_engine are
-        data-gated by design, presence updates only on state change,
-        and the audio_ml lane is gated on the supervisor flag.
+        Lane-level staleness is normal: rule_engine is data-gated by
+        design, presence updates only on state change, and the
+        audio_ml lane is gated on the supervisor flag.
         """
         now = datetime.now(timezone.utc)
         active_sources: list[str] = []

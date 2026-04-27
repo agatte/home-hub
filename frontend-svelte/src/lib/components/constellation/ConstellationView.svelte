@@ -138,16 +138,15 @@
     return { cx: width / 2, cy }
   }
 
-  // Evenly space the 6 lanes around the nucleus so the starting layout
+  // Evenly space the 5 lanes around the nucleus so the starting layout
   // doesn't all clump into one hemisphere. The simulation will refine from
   // here, but the clock-position is deterministic.
   const LANE_ANGLE = {
     process:     -Math.PI / 2,                         // 12 o'clock
-    camera:      -Math.PI / 2 + (1 * Math.PI) / 3,     // 2 o'clock
-    audio_ml:    -Math.PI / 2 + (2 * Math.PI) / 3,     // 4 o'clock
-    behavioral:  -Math.PI / 2 + (3 * Math.PI) / 3,     // 6 o'clock
-    rule_engine: -Math.PI / 2 + (4 * Math.PI) / 3,     // 8 o'clock
-    presence:    -Math.PI / 2 + (5 * Math.PI) / 3,     // 10 o'clock
+    camera:      -Math.PI / 2 + (2 * Math.PI) / 5,     // ~1:30
+    audio_ml:    -Math.PI / 2 + (4 * Math.PI) / 5,     // ~4:50
+    rule_engine: -Math.PI / 2 + (6 * Math.PI) / 5,     // ~7:10
+    presence:    -Math.PI / 2 + (8 * Math.PI) / 5,     // ~10:30
   }
 
   // Outer context ring — 5 non-voting bubbles at a radius derived from

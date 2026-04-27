@@ -12,8 +12,8 @@
     process:     { label: 'Process',    icon: 'cpu' },
     camera:      { label: 'Camera',     icon: 'video' },
     audio_ml:    { label: 'Audio ML',   icon: 'mic' },
-    behavioral:  { label: 'Behavioral', icon: 'brain' },
     rule_engine: { label: 'Rules',      icon: 'clock' },
+    presence:    { label: 'Presence',   icon: 'wifi' },
   }
 
   $: meta = SOURCE_META[source] || { label: source, icon: 'cpu' }
@@ -38,10 +38,10 @@
         <path d="M15 7h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-1"/><path d="M23 7l-5 5 5 5V7z"/><path d="M1 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5z"/>
       {:else if meta.icon === 'mic'}
         <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/><path d="M8 23h8"/>
-      {:else if meta.icon === 'brain'}
-        <path d="M12 2a9 9 0 0 1 9 9c0 3.6-3.4 6-5 8l-1 2h-6l-1-2c-1.6-2-5-4.4-5-8a9 9 0 0 1 9-9z"/><path d="M9 21h6"/>
       {:else if meta.icon === 'clock'}
         <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+      {:else if meta.icon === 'wifi'}
+        <path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" x2="12.01" y1="20" y2="20"/>
       {/if}
     </svg>
     <span class="agree-dot" style="background: {hasData ? (agrees ? '#30c060' : '#f0a030') : 'rgba(255,255,255,0.1)'}"></span>

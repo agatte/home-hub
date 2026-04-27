@@ -1654,10 +1654,12 @@ class AutomationEngine:
                             weather_condition, self._current_mode,
                         )
 
-                # ML behavioral predictor — runs every cycle so it stays a fresh
-                # voter in fusion. Acting on its prediction is still gated to
-                # idle/away below (the predictor is most useful when there's no
-                # confident signal driving the current mode).
+                # ML behavioral predictor — runs every cycle for shadow-mode
+                # telemetry only. The fusion lane was removed 2026-04-27 after
+                # the model collapsed to a single output class (see
+                # `project_path_a_checkbacks.md`); shadow logging continues so
+                # we can verify a future retrain breaks the degeneracy before
+                # rewiring it back into fusion.
                 predictor = getattr(self, "_behavioral_predictor", None)
                 ml_logger = getattr(self, "_ml_logger", None)
                 prediction = None
@@ -1665,15 +1667,6 @@ class AutomationEngine:
                     prediction = await predictor.predict(
                         current_mode=self._current_mode,
                     )
-                    if prediction:
-                        fusion = getattr(self, "_confidence_fusion", None)
-                        if fusion:
-                            fusion.report_signal(
-                                "behavioral",
-                                prediction["predicted_mode"],
-                                prediction["confidence"],
-                                factors=prediction.get("fusion_factors"),
-                            )
                 if (
                     prediction
                     and not self._manual_override
