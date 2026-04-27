@@ -226,3 +226,144 @@ async def test_shortcut_bypasses_manual_override_but_not_vetoes():
     )
 
     service._departure_sequence.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Sleeping-mode veto (overnight power-save filter)
+#
+# Scenario: 2026-04-27 morning showed 8 presence:shortcut away events
+# between 04:38 and 09:06 while Anthony was in sleeping mode. The shortcut
+# path passes skip_override_guard=True (bypassing manual_override veto), the
+# camera is paused during sleeping (camera veto can't fire), and sleeping
+# isn't in ACTIVITY_VETO_MODES — so every iOS power-save WiFi blip became
+# a fade sequence + arrival ceremony. Sleeping veto closes the gap.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sleeping_mode_vetoes_shortcut_departure():
+    """Shortcut /departed during sleeping mode → no fade. The actual symptom."""
+    service = _make_service(
+        current_mode="sleeping", manual_override=True, override_mode="sleeping",
+    )
+
+    await _run_and_drain(
+        service, skip_override_guard=True, trigger="shortcut",
+    )
+
+    service._departure_sequence.assert_not_called()
+    # Liveness reset so the next real miss is evaluated freshly.
+    assert service._consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_sleeping_mode_vetoes_arp_departure():
+    """ARP timeout during sleeping mode also vetoes — phone power-save during sleep."""
+    service = _make_service(
+        current_mode="sleeping", manual_override=True, override_mode="sleeping",
+    )
+
+    await _run_and_drain(service, trigger="arp_timeout")
+
+    service._departure_sequence.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sleeping_veto_runs_when_camera_paused():
+    """Camera service exists but produces no fresh detection (paused in sleeping).
+    Sleeping veto must fire as a backstop — the camera veto can't help."""
+    service = _make_service(current_mode="sleeping")
+    cam = MagicMock()
+    cam.enabled = True
+    cam.last_detection = "absent"
+    cam.last_detection_at = None  # paused → no recent commit
+    cam.zone = None
+    service.set_camera_service(cam)
+
+    await _run_and_drain(
+        service, skip_override_guard=True, trigger="shortcut",
+    )
+
+    service._departure_sequence.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_sleeping_modes_unaffected_by_sleeping_veto():
+    """idle without override still proceeds to fade — sleeping veto is mode-specific."""
+    service = _make_service(current_mode="idle")
+
+    await _run_and_drain(
+        service, skip_override_guard=True, trigger="shortcut",
+    )
+
+    service._departure_sequence.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Sleeping-mode arrival-ceremony veto
+#
+# When an arrival fires while the user is still in sleeping override, the
+# ceremony (light wave to bri=200 + TTS greeting) should NOT run. After 5am
+# `_classify_time` returns "morning" → ARRIVAL_LIGHT_STATES["morning"] =
+# bri=200, so any arrival after 5am while sleeping was bright + loud.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_arrival_during_sleeping_skips_ceremony(monkeypatch):
+    """Arrival while mode=sleeping → no light wave, no TTS, state goes home."""
+    service = _make_service(
+        current_mode="sleeping", manual_override=True, override_mode="sleeping",
+    )
+    # Long absence to make sure the flap-threshold gate would not preempt.
+    duration = timedelta(minutes=40)
+
+    # Spy: capture whether the ceremony's light writes / TTS were invoked.
+    service._broadcast_state = AsyncMock()
+
+    await service._arrival_sequence(duration, force_ceremony=True)
+
+    # No light wave (would have called set_light per ARRIVAL_WAVE_ORDER)
+    assert service._hue.set_light.await_count == 0
+    # No TTS
+    assert service._tts.speak.await_count == 0
+    # Presence state still updated to home
+    assert service._state == "home"
+    service._broadcast_state.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_arrival_outside_sleeping_runs_ceremony():
+    """Arrival when mode is idle (post-sleeping) — sleeping veto must NOT block.
+    Anthony's morning routine: he flips out of sleeping, walks downstairs, the
+    next arrival should still get the welcome ceremony."""
+    service = _make_service(current_mode="idle")
+    service._broadcast_state = AsyncMock()
+    duration = timedelta(minutes=40)  # long enough to clear flap gate
+
+    await service._arrival_sequence(duration, force_ceremony=True)
+
+    # Light wave fired (4 lights in ARRIVAL_WAVE_ORDER)
+    assert service._hue.set_light.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_sleeping_arrival_veto_runs_before_flap_gate(monkeypatch):
+    """A 1-min arrival in sleeping mode short-circuits BEFORE the
+    flap-threshold gate so we don't re-apply mode lights either —
+    sleeping wants its own dim/off state preserved."""
+    service = _make_service(current_mode="sleeping")
+    service._broadcast_state = AsyncMock()
+    duration = timedelta(seconds=30)  # under FLAP_THRESHOLD_MINUTES_SHORTCUT
+
+    # Spy on _apply_mode/_apply_time_based — the flap gate would normally
+    # call one of these to "restore lights", but sleeping wants no
+    # disturbance.
+    service._automation._apply_mode = AsyncMock()
+    service._automation._apply_time_based = AsyncMock()
+
+    await service._arrival_sequence(duration, force_ceremony=True)
+
+    service._automation._apply_mode.assert_not_called()
+    service._automation._apply_time_based.assert_not_called()
+    assert service._state == "home"

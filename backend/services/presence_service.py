@@ -763,6 +763,27 @@ class PresenceService:
             self._consecutive_failures = 0
             return
 
+        # Sleeping-mode veto — applies even when skip_override_guard=True.
+        # Sleeping is an explicit "I'm in bed" signal; iOS Shortcut
+        # WiFi-disconnect events during this window are almost always
+        # power-save flap, not actual walk-outs. The camera can't help
+        # here (paused with LED off in sleeping mode), so this is the
+        # only protection during the overnight window. Real early-morning
+        # departures should clear sleeping manually first; the next
+        # shortcut/ARP cycle will catch the actual walk-out.
+        if (
+            self._automation
+            and self._automation.current_mode == "sleeping"
+        ):
+            logger.info(
+                "Presence: phone unreachable (trigger=%s) but mode=sleeping "
+                "— skipping departure (overnight power-save filter)",
+                trigger,
+            )
+            self._last_seen = datetime.now(tz=TZ)
+            self._consecutive_failures = 0
+            return
+
         # Camera veto — the webcam is ground truth. If a face/pose landed
         # in the last CAMERA_VETO_STALE_SECONDS, the phone-off-WiFi signal
         # is almost certainly iOS power-save (ARP misses, /departed -1001)
@@ -951,6 +972,28 @@ class PresenceService:
             now = datetime.now(tz=TZ)
             time_of_day = self._classify_time(now.hour)
             away_minutes = duration_away.total_seconds() / 60
+
+            # Sleeping-mode veto — symmetric to the sleeping veto in
+            # _on_departure. If the user is still in sleeping override
+            # when an arrival fires, the ceremony would dump a bri=200
+            # light wave + TTS greeting into a quiet bedroom (morning
+            # arrival state is bri=200 from 5am onward). Restore presence
+            # state silently and let sleeping's existing dim/off light
+            # state stand. The user clears sleeping manually when they're
+            # actually getting up; subsequent shortcut/ARP cycles after
+            # that point go through the normal ceremony path.
+            if (
+                self._automation
+                and self._automation.current_mode == "sleeping"
+            ):
+                logger.info(
+                    "Arrival during sleeping mode (away %d min) — "
+                    "skipping ceremony",
+                    int(away_minutes),
+                )
+                self._state = "home"
+                await self._broadcast_state()
+                return
 
             # iOS WiFi-flap gate. Threshold differs by arrival source:
             # Shortcut-fired arrivals (force_ceremony=True) get a tight
