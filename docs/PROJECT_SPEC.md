@@ -63,8 +63,8 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 - PC activity detection (psutil process monitoring for games/media)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
-- WiFi presence detection: two signals — iPhone Shortcut webhooks (primary, fire on WiFi connect/disconnect) and active ARP probing every 20s as backup. ICMP retired April 2026 (was generating phantom away events under iOS power-save). 3-min away timeout triggers departure (gradual fade, pause Sonos); arrival triggers choreographed welcome-home sequence (light wave, adaptive TTS greeting, weather-aware effects, music auto-play)
-- Mode priority system: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0)
+- Camera-based presence (MediaPipe face + pose) is the sole "is the user here" signal in-app. Home/away as a concept was retired 2026-04-28; arrivals/departures are now handled by Hue's native geofencing outside Home Hub.
+- Mode priority system: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
@@ -76,14 +76,14 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 **Active** (running, affecting behavior today):
 - `LightingPreferenceLearner` — EMA-based (α=0.3) per-light preference overlay on `ACTIVITY_LIGHT_STATES`. Overlay applications are logged as `ml_decisions` rows with `decision_source="lighting_learner"` so the Analytics dashboard can audit when the learner is actually changing a value
 - `MusicBandit` — Thompson sampling for mode → Sonos favorite selection
-- `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15s away detection vs the 10-min idle timer. Also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) feeding an adaptive brightness multiplier in working + relax modes so lights subtly adapt to real room conditions (clouds, sunset, lamps)
+- `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15-frame (~30s) idle detection vs the 10-min PC-idle timer. Also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) feeding an adaptive brightness multiplier in working + relax modes so lights subtly adapt to real room conditions (clouds, sunset, lamps)
 - `ScreenSyncService` K-means — 5-cluster dominant color extraction (saturation-weighted 0.7 + luminance balance 0.3)
 - `MLDecisionLogger` — every mode decision logged to `ml_decisions` with source (fusion/ml/rule/time/manual/lighting_learner) + factors
-- `ConfidenceFusion` — 5-signal weighted ensemble (process, camera, audio, behavioral, rule) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence, and can override an active detected mode at `OVERRIDE_THRESHOLD = 0.92` + 80% agreement (lowered from 0.98 on April 19 — 0.98 was mathematically impossible to trip in practice). During 22:00–06:00 local, the process-detection lane is decayed by `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` so stale dev tools left open don't dominate the ensemble
+- `ConfidenceFusion` — **4-signal** weighted ensemble (process / camera / audio_ml / rule_engine) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence, and can override an active detected mode at `OVERRIDE_THRESHOLD = 0.92` + 80% agreement. The behavioral lane was removed 2026-04-27 after the LightGBM predictor collapsed to a single output class (898/898 over 9 days, 0.64% real accuracy); the presence lane was removed 2026-04-28 alongside the home/away retirement. Default weights renormalized to preserve relative ratios: process 0.438, camera 0.250, audio_ml 0.187, rule_engine 0.125. During 22:00–06:00 local, the process-detection lane is decayed by `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` so stale dev tools left open don't dominate the ensemble
 - **Nightly fusion weight tuning** — `fusion_weight_tuning` ScheduledTask runs daily at 3:30 AM (30 min before `ml_nightly_training` at 4:00 AM). `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion decisions where `factors.signal_details` is present and computes per-source accuracy; `ConfidenceFusion.update_weights_from_accuracy()` normalizes those values into new weights. Sources without usable samples fall back to `DEFAULT_WEIGHTS`. Manual trigger via `POST /api/learning/retune-weights` returns before/after weights for validation
 
 **Shadow** (running, logging predictions, not yet authoritative):
-- `BehavioralPredictor` (LightGBM) — **BLOCKED**: `lightgbm` not installed on the Latitude, so the predictor is disabled entirely (`main.py:320` logs "lightgbm not installed — behavioral predictor disabled") and writes zero rows to `ml_decisions`. Fix: `pip install lightgbm` on the Latitude, then wait ~7 days for shadow-mode data before promotion is meaningful
+- `BehavioralPredictor` (LightGBM, 7-class: gaming / working / watching / relax / social / cooking / idle) — runs in shadow on the Latitude, writes to `ml_decisions` with `decision_source="ml"`. Promotion is gated on `compute_prediction_diversity()` — the saved model must produce diverse outputs (≥2 modes, top-mode share ≤95% over the last 7 days) before `POST /api/learning/predictor/promote` returns 200. Calibration shipped 2026-04-28 (commit `82c72ed`): closed a train/serve feature-parity bug (`predict()` had been called with 4 of 10 features defaulted to 0 — the new async `build_runtime_features` queries `activity_events` to derive minutes-since-wake / transitions-today / manual-overrides-7d / current-mode dwell), lowered `SUGGEST_THRESHOLD` 0.70→0.30 to surface diverse predictions previously suppressed by an N-class softmax ceiling, plumbed full per-class probability distribution into shadow-log `factors.distribution`, and added a stale-label-encoder gate that refuses to load a model whose encoder targets retired modes (e.g. `away` after the 2026-04-28 home/away removal — model rebuilt by next 4 AM retrain). Auto-demote logic for a promoted-then-degenerate predictor is on the roadmap (target 2026-05-04)
 - `AudioClassifier` (YAMNet, 521 AudioSet classes → 9 Home Hub scenes) — 17,922 shadow-mode predictions logged to date, but only 2/81 (2.5%) are correct when `actual_mode` is backfilled. Classifier predicts "idle" for "silence" most of the time, so it never matches transitions into user modes. Promotion blocked until the audio-scene → mode mapping is reworked. Target remains ML > RMS + 10pp before flip
 
 ### Dashboard — Themed Backgrounds
@@ -124,8 +124,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social. "working" was later removed from the skip set (April 19) — late-night dev sessions are exactly when winddown should fire, not when it should defer
 - ~~Clearing override at 12:45 AM left lights in gaming/night's deep-blue ambient glow because gaming has no `late_night` state — forced manual relax every night~~ — fixed: three-layer autopilot cascade. (1) `javaw.exe` removed from `GAME_PROCESSES` (it had been silently forcing "gaming" on any JVM process). (2) Winddown enabled at 22:00 weekdays so the transition is proactive. (3) Late-night rescue in `run_loop` auto-applies relax after 23:00 when no override is set, detected mode is working/idle, and Sonos isn't playing — covers the edge after winddown's 4h override expires. Plan at `.claude/plans/let-s-look-at-the-serene-leaf.md`
 - ~~Mode detection has noticeable lag between activity start and mode switch~~ — fixed: dropped PC agent POLL_INTERVAL from 15s to 5s (worst-case 5s, average ~2.5s). The backend processes activity reports synchronously on POST, so the polling interval was the entire lag budget.
-- ~~Welcome-home sequence fires at random times / is ~5 min late on real arrivals~~ — fixed April 19 (commit 9d9bc57): ICMP ping was the sole signal and iOS gates ICMP under WiFi power-save, producing ten phantom `away` events in a single stay-home day. Replaced with a two-signal stack: iPhone Shortcut webhooks (primary) fire on WiFi connect/disconnect, authed via `X-Presence-Token`; active ARP probing (`arping -c 1`) every 20s as backup — ARP queries the L2 binding which survives power-save. Away timeout 600s → 180s. Arrival via ARP requires 2 consecutive probes (debounce) to kill phantom arrivals from transient stutters; Shortcut path bypasses the debounce for instant response.
-- ~~Welcome-home ceremony fires multiple times per evening while home (iOS WiFi flaps)~~ — fixed April 19 (commits 6355025, 527bf8d, 8e543a3): Shortcut-driven arrivals combined with `force_ceremony=True` (88615b7) bypassed every absence-duration filter, so brief iOS WiFi dances (sometimes 14s of disconnect+reconnect) each triggered a full ceremony. Observed 6 presence-driven `away` transitions in 2h 10min on a stay-home evening. Two-layer fix plus a duration-math fix: **(1)** `/departed` webhook is debounced `DEPARTURE_DEBOUNCE_SECONDS=45` — the fade sequence only starts if no `/arrived` lands within the window, so flaps leave state at `home` with no user-visible twitch. **(2)** `_arrival_sequence` has a flap gate applied BEFORE the `force_ceremony` / `short_absence_threshold` logic, with the threshold split by arrival source: `FLAP_THRESHOLD_MINUTES_SHORTCUT=2` when `/arrived` fired (iOS already confirmed a connect event, only filter rapid flaps), `FLAP_THRESHOLD_MINUTES_ARP=5` when arrival came via ARP 2-probe debounce only (conservative against iOS power-save gaps that can stretch 3–5 min while the phone is physically home). **(3)** `_away_since` is back-dated — to `_last_seen` when ARP triggers `_on_departure`, or pre-set at Shortcut-receive time in `on_shortcut_departure` (cleared if Layer 1 cancels a flap) — so `duration_away` on the arrival side reflects when the phone actually became unreachable, not when the system decided to commit. Known residual iOS caveats handled gracefully by the two-layer stack: (a) `/departed` often fails with `kCFErrorDomainCFNetwork -1001` (WiFi dies before the POST completes) — ARP backup detects the absence ~180s later; (b) during a walk-out, iOS sometimes fires `/departed` then `/arrived` in the same second due to a brief re-associate — Layer 1 correctly cancels that as a flap, and ARP catches the real departure ~3 min later.
+- ~~Welcome-home sequence reliability (multiple rounds: ICMP retired April 19; Shortcut webhooks + ARP debounce April 19; sleeping-mode veto April 27)~~ — **superseded by retirement**: the entire home/away concept was removed 2026-04-28 (commit `b8fdbfe`). Three rounds of mitigation against iOS Shortcut + ARP flap couldn't fully suppress overnight phantom `away` events; iOS power-save makes phone-presence fundamentally unreliable. `presence_service.py` deleted, `away` mode removed from priority/encoding/UI, presence lane removed from ConfidenceFusion. Hue's native geofencing now handles arrivals/departures outside Home Hub.
 
 **Lighting mode-switch quality (April 2026):**
 - ~~"Greenish bedroom" in working mode~~ — fixed: Hue bridge stored residual HSB on CT-mode lights (either cached from a prior HSB mode or injected by the LightingPreferenceLearner overlay). `hue_service.set_light` now always emits `sat=0` before `ct` in the JSON body and drops any stray `hue`/`sat` when `ct` is present — the bridge is key-order-sensitive and rejects `sat=0` that follows `ct`.
@@ -202,9 +201,13 @@ Browser / Phone (PWA)
    │   └── mode-change callbacks ──> MusicMapper, RuleEngine, MLLogger, LightingLearner
    ├── ML Services ────────────────> see docs/ML_SPEC.md
    │   ├── MLDecisionLogger ───────> logs every mode decision with reasoning
-   │   ├── BehavioralPredictor ────> LightGBM mode prediction (shadow mode)
+   │   ├── ConfidenceFusion ───────> 4-lane weighted ensemble (process/camera/audio_ml/rule_engine)
+   │   ├── BehavioralPredictor ────> LightGBM mode prediction (shadow mode, 7-class)
+   │   ├── AudioClassifier ────────> YAMNet audio scene classification (shadow mode)
+   │   ├── CameraService ──────────> MediaPipe face + pose + zone + posture + lux
    │   ├── LightingPreferenceLearner > EMA-based adaptive per-light prefs
-   │   ├── FeatureBuilder ─────────> temporal + behavioral feature extraction
+   │   ├── MusicBandit ────────────> Thompson-sampling playlist selection
+   │   ├── FeatureBuilder ─────────> temporal + behavioral feature extraction (training + runtime)
    │   └── ModelManager ───────────> model persistence + nightly retraining (4 AM)
    ├── FauxmoService ──────────────> Alexa voice control (7 WeMo virtual devices)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
@@ -351,7 +354,7 @@ External APIs (cloud):
 | value | JSON | Serialized config object |
 | updated_at | DateTime | UTC, auto-updated |
 
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `presence_config`, `camera_enabled`, `lux_calibration_config`.
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
 
 **scenes** — User-created light presets
 | Column | Type | Notes |
@@ -491,7 +494,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | created_at | DateTime | UTC |
 | updated_at | DateTime | UTC |
 
-UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30 days of activity_events. Minimum thresholds: 70% confidence, 3 samples. Idle/away modes excluded as predictions.
+UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30 days of activity_events. Minimum thresholds: 70% confidence, 3 samples. Idle is excluded as a prediction target ("you're usually idle" isn't a useful nudge).
 
 **ml_decisions** — ML decision log (every mode decision with reasoning)
 | Column | Type | Notes |
@@ -636,12 +639,6 @@ All messages are JSON with `type` + `data` fields.
 | PUT | `/api/automation/mode-brightness` | Update multipliers |
 | POST | `/api/automation/activity` | Report activity (`{mode, source}`) |
 | POST | `/api/automation/override` | Manual mode override |
-| GET | `/api/automation/presence/status` | Current presence state (home/away/arriving) |
-| GET | `/api/automation/presence/config` | Presence detection config |
-| PUT | `/api/automation/presence/config` | Update presence config |
-| POST | `/api/automation/presence/test-arrival` | Trigger test arrival sequence |
-| POST | `/api/automation/presence/arrived` | iPhone Shortcut webhook (WiFi connect) — requires `X-Presence-Token` header |
-| POST | `/api/automation/presence/departed` | iPhone Shortcut webhook (WiFi disconnect) — requires `X-Presence-Token` header |
 
 #### Sonos — `/api/sonos/`
 
@@ -911,7 +908,7 @@ async def on_mode_change(mode: str) -> None:
     """Called by AutomationEngine whenever the active mode changes.
 
     Args:
-        mode: One of gaming, watching, working, social, idle, away, relax, cooking, sleeping
+        mode: One of gaming, watching, working, social, idle, relax, cooking, sleeping
     """
     if mode == "gaming":
         await do_something()
@@ -1104,7 +1101,7 @@ if __name__ == "__main__":
     main()
 ```
 
-**Mode priority (engine enforces automatically):** gaming (5) > social (4) > watching (3) > working (2) > idle (1) > away (0)
+**Mode priority (engine enforces automatically):** gaming (5) > social (4) > watching (3) > working (2) > idle (1) > sleeping (0)
 
 ### Pattern 6: Adding a Scheduled Routine
 
@@ -1244,7 +1241,7 @@ frontend-svelte/src/lib/backgrounds/
 **How routing works:**
 - `ModeBackground.svelte` checks `$automation.mode` and renders the matching scene
 - Sleeping → MoonScene (Three.js), Gaming → PixelScene, Working → ParallaxScene, Relax → AuroraScene
-- All other modes (idle, social, watching, cooking, away) → GenerativeCanvas
+- All other modes (idle, social, watching, cooking) → GenerativeCanvas
 - All scenes subscribe to `sonos` store for music reactivity (speed boost, brightness pulse)
 - Scene components are destroyed on mode change (Svelte lifecycle), so only one runs at a time
 
@@ -1531,7 +1528,7 @@ cleanup landed:
 - ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons, 20s auto-dismiss
 - ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route. Originally mode distribution donut, quick stats, hourly patterns, learned rules, recent activity, top Sonos/scenes. Redesigned April 15 as a live decision pipeline dashboard: SVG confidence ring at top showing fused confidence (0-100%), 5 signal cards (process, camera, audio ML, behavioral predictor, rule engine) with animated confidence bars and agreement indicators, output card showing effective mode + lights, decision history. Historical analytics moved to a collapsible section below.
 - ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (cooking mode, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
-- ✓ **WiFi Presence Detection** (Phase 3e) — `PresenceService` runs two independent signals. **(1) iPhone Shortcut webhooks (primary, shipped April 19):** iOS Personal Automations POST `/api/automation/presence/arrived` and `/departed` on home-WiFi connect/disconnect, authed via `X-Presence-Token` header against `PRESENCE_WEBHOOK_TOKEN` in `.env`. Near-instant (<5s), bypasses both the ARP debounce and the `short_absence_threshold` — a Shortcut arrival always fires the ceremony regardless of how brief the trip was, since a WiFi disconnect+reconnect is explicit "left and returned" evidence (ARP-detected arrivals still honor the threshold). **(2) Active ARP probing (backup):** `arping -c 1 -w 2 -I <iface>` every 20s; outbound interface detected via `ip -o route get` and cached. ARP queries the L2 binding directly, which survives iOS WiFi power-save — unlike ICMP, which was retired on April 19 after producing ten phantom `away` events in a single stay-home day. Away timeout lowered 600s → 180s to match the more reliable signal. ARP arrivals require 2 consecutive probes (debounce); mid-departure recoveries bypass the gate. 3-min timeout triggers gradual departure (30s light fade, Sonos pause). Arrival triggers choreographed welcome-home: sequential light wave (kitchen door → kitchen back → living room → bedroom), adaptive TTS greeting (time/weather/duration-aware), dynamic Hue effect, music auto-play. Linux-only (Latitude) for ARP; falls back to ICMP on non-Linux or if `iputils-arping` isn't installed. MAC→IP re-lookup via `ip neigh` covers DHCP IP changes. Config persisted to `presence_config` in `app_settings`. Phase 2 planned: BLE proximity for "at the door" precision
+- ~~**WiFi Presence Detection**~~ (Phase 3e) — **Retired 2026-04-28** (`b8fdbfe`). iOS Shortcut webhooks flapped despite three rounds of mitigation; ARP probing alone wasn't worth the plumbing. Home/away as a concept is gone — Hue native geofencing handles arrivals/departures outside Home Hub. See git history for the original implementation.
 - Override pattern analysis tracked via `override_rate` in patterns API. v1 was nudge-only; auto-apply shipped April 15 via confidence fusion (Phase 4.5 ML Phase 3)
 
 ### Phase 4: Game Day (July-August 2026)
@@ -1550,9 +1547,9 @@ ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
 - ✓ **ML Phase 1 (Code complete):** Behavioral mode prediction (LightGBM, **shadow mode — not yet promoted, pending ~500 activity events**), adaptive lighting preferences (EMA — **active**), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables. Original Phase 1 exit criteria ("audio classifier active, behavioral outperforming rules") are not yet met — both predictors sit in shadow mode
-- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**, 15s away) with pose fallback, zone mapping (desk/bed, expose-only), and posture classification (upright/reclined, expose-only — shipped April 19) all on the same 2s poll cadence, adaptive lux brightness for working + relax modes (**active** — shipped April 18: calibrated fixed exposure, baseline-anchored piecewise-linear curve, EMA α=0.3 at 2s poll, ±15% bri swing, kitchen-pair-preserving)
-- ✓ **Zone+posture → relax actuation rule** (**shadow mode** — shipped April 19): first sensor signal that drives a mode *transition*. Fires `set_manual_override("relax")` when the camera sustains `zone=bed + posture=reclined` for ≥5 min, gated on (a) no active manual override, (b) `current_mode ∈ {idle, away, working}` only, (c) evening-hour or weekend-afternoon (≥13:00 Sat/Sun), (d) 4h refractory since last fire. Ships with `ZONE_POSTURE_RULE_APPLY=false` so the rule shadow-logs to `ml_decisions` (`decision_source="zone_posture_rule"`, `applied=False`) for ~2–3 days of observation before flipping to live actuation. Projector-from-bed carves itself out because the sit-up-against-headboard posture stays `upright`.
-- **ML Phase 3 (In Progress):** ✓ Confidence fusion — 5-signal weighted ensemble (`ConfidenceFusion` service, 228 LOC) combining process detection, camera, audio classifier, behavioral predictor, and rule engine. Auto-apply at 95%+ when idle/away, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. **Remaining:** override rate tracking, A/B comparison of fusion vs rule-engine-only vs priority-only decisions
+- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**, 15-frame ~30s idle) with pose fallback, zone mapping (desk/bed, expose-only), and posture classification (upright/reclined, expose-only — shipped April 19) all on the same 2s poll cadence, adaptive lux brightness for working + relax modes (**active** — shipped April 18: calibrated fixed exposure, baseline-anchored piecewise-linear curve, EMA α=0.3 at 2s poll, ±15% bri swing, kitchen-pair-preserving)
+- ✓ **Zone+posture → relax actuation rule** (**live** — shipped April 19, promoted April 27): first sensor signal that drives a mode *transition*. Fires `set_manual_override("relax")` when the camera sustains `zone=bed + posture=reclined` for ≥2 min (dwell tightened from 5 min after the in-bed-watching-TV scenario), gated on (a) no active manual override, (b) `current_mode ∈ {idle, working}`, (c) evening-hour or weekend-afternoon (≥13:00 Sat/Sun), (d) 4h refractory since last fire. `ZONE_POSTURE_RULE_APPLY=true` by default. Projector-from-bed carves itself out because the sit-up-against-headboard posture stays `upright`.
+- **ML Phase 3 (In Progress):** ✓ Confidence fusion — **4-signal** weighted ensemble (`ConfidenceFusion`) combining process detection, camera, audio classifier, and rule engine. Behavioral predictor lane stripped 2026-04-27 after a single-class collapse audit; presence lane removed 2026-04-28 with the home/away retirement. Weights renormalized to `process 0.438 / camera 0.250 / audio_ml 0.187 / rule_engine 0.125`. Auto-apply at 95%+ when idle, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. ✓ **Predictor calibration shipped 2026-04-28** (`82c72ed`) — train/serve feature parity (4 features no longer default to 0 at inference), `SUGGEST_THRESHOLD` 0.70→0.30, full-class softmax distribution logged into `MLDecision.factors.distribution`, stale-encoder gate refuses to load models whose `label_encoder` references retired modes. Auto-demote logic deferred to 2026-05-04. **Remaining:** override rate tracking, A/B comparison of fusion vs rule-engine-only vs priority-only decisions
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
 ### Phase 5: Polish & Expand (September 2026+)
