@@ -452,7 +452,7 @@
         <div class="setting-row">
           <div class="setting-info">
             <span class="setting-label">Camera Detection</span>
-            <span class="setting-hint">Latitude webcam for fast away detection (15s)</span>
+            <span class="setting-hint">Latitude webcam for fast idle detection (15s)</span>
           </div>
           <button
             class="toggle-btn"

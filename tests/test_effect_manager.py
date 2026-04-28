@@ -101,7 +101,7 @@ class TestReconcile:
 
     @pytest.mark.asyncio
     async def test_desired_none_stops_even_when_tracker_inactive(self):
-        # Out-of-band activations (scenes API, presence service) leave
+        # Out-of-band activations (scenes API, hardware buttons) leave
         # effects running with our tracker showing None — reconcile(None)
         # should still issue stop_effect_all.
         hue = _make_hue_v2()

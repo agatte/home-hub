@@ -4,9 +4,9 @@
 //
 // Node types:
 //   nucleus — center, fusion-winning mode
-//   lane    — a fusion voter (process/camera/audio_ml/rule_engine/
-//             presence), linked to the nucleus with edge thickness
-//             proportional to weight
+//   lane    — a fusion voter (process/camera/audio_ml/rule_engine),
+//             linked to the nucleus with edge thickness proportional to
+//             weight
 //   factor  — a sub-signal the lane is considering, orbits its parent
 //             lane, no edges
 //   context — a non-voting input (time/weather/override/sonos), orbits
@@ -16,15 +16,14 @@ import { derived } from 'svelte/store'
 import { pipeline } from './pipeline.js'
 import { automation } from './automation.js'
 import { sonos } from './sonos.js'
-import { presence } from './presence.js'
 import { weather } from './weather.js'
 
 // Inner-ring lane order — matches backend SIGNAL_SOURCES. The behavioral
 // lane was removed 2026-04-27 after the LightGBM predictor collapsed to a
-// single output class; the predictor still runs in shadow but no longer
-// contributes to fusion.
+// single output class. The presence lane was removed when the home/away
+// concept was retired in favor of Hue's native geofencing.
 const LANE_ORDER = [
-  'process', 'camera', 'audio_ml', 'rule_engine', 'presence',
+  'process', 'camera', 'audio_ml', 'rule_engine',
 ]
 
 const LANE_META = {
@@ -32,12 +31,11 @@ const LANE_META = {
   camera:      { label: 'Camera',  icon: 'video' },
   audio_ml:    { label: 'Audio',   icon: 'mic' },
   rule_engine: { label: 'Rules',   icon: 'clock' },
-  presence:    { label: 'Presence', icon: 'wifi' },
 }
 
 // Ordered outer-ring slots for context bubbles. Kept stable so position
 // doesn't shuffle between renders.
-const CONTEXT_ORDER = ['time', 'weather', 'presence', 'override', 'sonos']
+const CONTEXT_ORDER = ['time', 'weather', 'override', 'sonos']
 
 function titleCase(str) {
   if (!str) return ''
@@ -58,7 +56,7 @@ function formatAgo(iso) {
  * `active` controls whether the bubble reads as live / noteworthy
  * (brighter fill) vs ambient-status (dim fill).
  */
-function contextNodes({ pipelineCur, automation, sonos, presence, weather }) {
+function contextNodes({ pipelineCur, automation, sonos, weather }) {
   const out = []
   const output = pipelineCur?.output || {}
 
@@ -93,22 +91,6 @@ function contextNodes({ pipelineCur, automation, sonos, presence, weather }) {
       active: false,
     })
   }
-
-  const presenceState = presence?.state || 'unknown'
-  let presenceDisplay = titleCase(presenceState)
-  if (presenceState === 'away' && presence?.away_duration_minutes != null) {
-    presenceDisplay = `Away ${presence.away_duration_minutes}m`
-  } else if (presenceState === 'home' && presence?.last_seen) {
-    presenceDisplay = `Home · ${formatAgo(presence.last_seen)}`
-  }
-  out.push({
-    id: 'context:presence',
-    type: 'context',
-    key: 'presence',
-    label: 'Phone',
-    display: presenceDisplay,
-    active: presenceState !== 'unknown',
-  })
 
   const overrideActive = !!automation?.manual_override
   const overrideMode = automation?.override_mode || automation?.mode || ''
@@ -253,17 +235,16 @@ export const constellation = derived(pipeline, ($p) => {
 /**
  * Full graph including the outer-ring context bubbles. Rebuilds whenever
  * any of the upstream stores change — context updates frequently (sonos,
- * override, presence) so we don't memoize by timestamp here.
+ * override) so we don't memoize by timestamp here.
  */
 export const constellationWithContext = derived(
-  [pipeline, automation, sonos, presence, weather],
-  ([$pipeline, $automation, $sonos, $presence, $weather]) => snapshotToGraph(
+  [pipeline, automation, sonos, weather],
+  ([$pipeline, $automation, $sonos, $weather]) => snapshotToGraph(
     $pipeline.current,
     {
       pipelineCur: $pipeline.current,
       automation: $automation,
       sonos: $sonos,
-      presence: $presence,
       weather: $weather,
     },
   ),

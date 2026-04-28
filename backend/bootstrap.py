@@ -31,7 +31,6 @@ from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
 from backend.services.morning_routine import MorningRoutineService
 from backend.services.music_mapper import MusicMapper
-from backend.services.presence_service import PresenceService
 from backend.services.recommendation_service import RecommendationService
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
 from backend.services.screen_sync import LaptopLoopbackCapture, ScreenSyncService
@@ -381,30 +380,6 @@ async def lifespan(app: FastAPI):
         automation.register_on_mode_change(_bar_mode_callback)
         logger.info("Bar app service initialized (%s)", settings.BAR_APP_URL)
 
-    # Presence detection — replaces Alexa geofence. Now receives the real
-    # confidence_fusion via constructor (previously was back-filled because
-    # fusion didn't exist yet at presence-construction time).
-    presence_config = await load_setting("presence_config")
-    presence = PresenceService(
-        hue=hue,
-        hue_v2=hue_v2,
-        sonos=sonos,
-        tts=tts,
-        weather_service=weather_service,
-        automation_engine=automation,
-        music_mapper=music_mapper,
-        ws_manager=ws_manager,
-        event_logger=event_logger,
-        config=presence_config or {},
-        # Presence is a voter in ConfidenceFusion — "phone on home WiFi"
-        # is the most reliable "user is (not) home" signal the system has.
-        fusion=confidence_fusion,
-    )
-    app.state.presence = presence
-    logger.info(
-        "Presence detection initialized (phone=%s)", presence.config.phone_ip
-    )
-
     # Pi-hole DNS stats (optional)
     if settings.PIHOLE_API_URL and settings.PIHOLE_API_KEY:
         from backend.services.pihole_service import PiholeService
@@ -549,7 +524,6 @@ async def lifespan(app: FastAPI):
     automation.set_heartbeat_registry(heartbeats)
     scheduler.set_heartbeat_registry(heartbeats)
     rule_engine.set_heartbeat_registry(heartbeats)
-    presence.set_heartbeat_registry(heartbeats)
 
     # Register expected polling cadences. Camera self-registers on enable
     # and deregisters on disable / pause (handled in CameraService) so
@@ -562,7 +536,6 @@ async def lifespan(app: FastAPI):
     heartbeats.register("automation", 60.0)
     heartbeats.register("scheduler", 30.0)
     heartbeats.register("rule_engine", 6 * 3600.0)
-    heartbeats.register("presence", float(presence.config.probe_interval))
     heartbeats.register("transit_lighting", 2.0)
 
     # Event logger retry task was started above — register for teardown here.
@@ -577,7 +550,6 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(automation.run_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
-    tasks.append(asyncio.create_task(presence.run_loop()))
 
     # Camera presence detection (opt-in, runs on Latitude webcam)
     camera_enabled_setting = await load_setting("camera_enabled")
@@ -591,7 +563,6 @@ async def lifespan(app: FastAPI):
                 app.state.camera_service = camera_service
                 automation.register_on_mode_change(camera_service.on_mode_change)
                 automation.set_camera_service(camera_service)
-                presence.set_camera_service(camera_service)
                 winddown.set_camera_service(camera_service)
                 tasks.append(asyncio.create_task(camera_service.poll_loop()))
                 app_logger.info("Camera presence detection started")
@@ -603,13 +574,12 @@ async def lifespan(app: FastAPI):
         app_logger.info("Camera service disabled (camera_enabled=false)")
 
     # Transit lighting — brighten kitchen/living-room when Anthony steps out
-    # of the bedroom with his phone still on Wi-Fi. Depends on camera presence
-    # + WiFi presence, so only makes sense once those are both running.
+    # of the bedroom (camera detects absence). 10-min hard timeout protects
+    # against runaway if the camera mis-fires.
     from backend.services.transit_lighting_service import TransitLightingService
     transit_lighting = TransitLightingService(
         automation_engine=automation,
         camera_service=getattr(app.state, "camera_service", None),
-        presence_service=presence,
     )
     transit_lighting.set_heartbeat_registry(heartbeats)
     app.state.transit_lighting = transit_lighting

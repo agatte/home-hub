@@ -73,21 +73,12 @@ class _FakeCamera:
         }
 
 
-class _FakePresence:
-    def __init__(self, state: str = "home") -> None:
-        self.state = state
-
-    def get_status(self) -> dict:
-        return {"state": self.state}
-
-
 def _make_service(mode="working", override=False, override_mode=None,
-                  cam_detection="absent", cam_enabled=True, presence_state="home",
+                  cam_detection="absent", cam_enabled=True,
                   cam_zone=None):
     auto = _FakeAutomation(mode=mode, manual_override=override, override_mode=override_mode)
     cam = _FakeCamera(enabled=cam_enabled, last_detection=cam_detection, zone=cam_zone)
-    pres = _FakePresence(state=presence_state)
-    return TransitLightingService(auto, cam, pres), auto, cam, pres
+    return TransitLightingService(auto, cam), auto, cam
 
 
 async def _drive_absent_window(svc):
@@ -105,8 +96,8 @@ async def _drive_absent_window(svc):
 class TestActivateGuards:
     """The activate path: when (and only when) should transit fire?"""
 
-    async def test_activates_when_camera_absent_and_phone_home_and_eligible_mode(self):
-        svc, auto, _, _ = _make_service(mode="working")
+    async def test_activates_when_camera_absent_and_eligible_mode(self):
+        svc, auto, _ = _make_service(mode="working")
         await _drive_absent_window(svc)
         assert svc.active is True
         assert len(auto.transit_calls) == 1
@@ -116,7 +107,7 @@ class TestActivateGuards:
     async def test_activates_when_override_mode_is_relax(self):
         # The regression scenario: winddown set relax override; user walks to
         # kitchen. Pre-fix this never fired. Post-fix it does.
-        svc, auto, _, _ = _make_service(
+        svc, auto, _ = _make_service(
             mode="working", override=True, override_mode="relax",
         )
         await _drive_absent_window(svc)
@@ -125,7 +116,7 @@ class TestActivateGuards:
 
     async def test_activates_when_override_mode_is_working(self):
         # Manual override to working mid-day; walks to kitchen. Should fire.
-        svc, auto, _, _ = _make_service(
+        svc, auto, _ = _make_service(
             mode="idle", override=True, override_mode="working",
         )
         await _drive_absent_window(svc)
@@ -133,7 +124,7 @@ class TestActivateGuards:
 
     async def test_blocks_when_override_mode_is_sleeping(self):
         # User explicitly chose dark. Don't fight it.
-        svc, auto, _, _ = _make_service(
+        svc, auto, _ = _make_service(
             mode="working", override=True, override_mode="sleeping",
         )
         await _drive_absent_window(svc)
@@ -142,7 +133,7 @@ class TestActivateGuards:
 
     async def test_blocks_when_override_mode_is_cooking(self):
         # Cooking already lights kitchen brightly — transit not needed.
-        svc, auto, _, _ = _make_service(
+        svc, auto, _ = _make_service(
             mode="working", override=True, override_mode="cooking",
         )
         await _drive_absent_window(svc)
@@ -151,15 +142,9 @@ class TestActivateGuards:
 
     async def test_blocks_when_detected_mode_is_idle(self):
         # No override; auto-detected mode outside trigger set.
-        svc, auto, _, _ = _make_service(mode="idle")
+        svc, auto, _ = _make_service(mode="idle")
         await _drive_absent_window(svc)
         assert svc.active is False
-
-    async def test_blocks_when_phone_away(self):
-        svc, auto, _, _ = _make_service(mode="working", presence_state="away")
-        await _drive_absent_window(svc)
-        assert svc.active is False
-
 
 class TestStationaryZoneGate:
     """Camera-committed zone=bed must not let transit fire — Anthony is
@@ -169,7 +154,7 @@ class TestStationaryZoneGate:
 
     async def test_blocks_when_zone_is_bed(self):
         # In bed, manual relax override (the actual user-facing scenario).
-        svc, auto, cam, _ = _make_service(
+        svc, auto, cam = _make_service(
             mode="working", override=True, override_mode="relax",
             cam_zone="bed",
         )
@@ -180,7 +165,7 @@ class TestStationaryZoneGate:
     async def test_activates_when_zone_is_desk(self):
         # Walked away from the desk; zone is still "desk" (last commit).
         # This is the canonical transit-firing case and must still work.
-        svc, auto, cam, _ = _make_service(
+        svc, auto, cam = _make_service(
             mode="working", cam_zone="desk",
         )
         await _drive_absent_window(svc)
@@ -190,7 +175,7 @@ class TestStationaryZoneGate:
     async def test_activates_when_zone_is_unknown(self):
         # Stub cameras (older tests) and pre-commit windows return None for
         # zone — fall through to the existing absent-dwell logic.
-        svc, auto, cam, _ = _make_service(mode="working", cam_zone=None)
+        svc, auto, cam = _make_service(mode="working", cam_zone=None)
         await _drive_absent_window(svc)
         assert svc.active is True
 
@@ -198,7 +183,7 @@ class TestStationaryZoneGate:
         # Transit fired while he was at his desk; he then sat down on the
         # bed (zone commits to "bed"). Service should revert immediately —
         # not wait for camera to report "present" or for the hard timeout.
-        svc, auto, cam, _ = _make_service(mode="working", cam_zone="desk")
+        svc, auto, cam = _make_service(mode="working", cam_zone="desk")
         await _drive_absent_window(svc)
         assert svc.active is True
         assert len(auto.clear_calls) == 0
@@ -212,7 +197,7 @@ class TestStationaryZoneGate:
         # Build up an absent timer with no committed zone, then zone
         # commits to "bed" — block should clear the pending timer so it
         # doesn't fire the moment zone moves back to desk.
-        svc, _, cam, _ = _make_service(mode="working", cam_zone=None)
+        svc, _, cam = _make_service(mode="working", cam_zone=None)
         await svc._check()
         assert svc._camera_absent_since is not None
 
@@ -236,7 +221,7 @@ class TestFlapSuppression:
 
     async def test_single_frame_present_does_not_reset_absent_timer(self):
         from datetime import timedelta
-        svc, auto, cam, _ = _make_service(
+        svc, auto, cam = _make_service(
             mode="working", cam_detection="absent",
         )
         # Tick 1: absent → timer starts.
@@ -264,7 +249,7 @@ class TestFlapSuppression:
 
     async def test_sustained_present_does_reset_absent_timer(self):
         from datetime import timedelta
-        svc, auto, cam, _ = _make_service(
+        svc, auto, cam = _make_service(
             mode="working", cam_detection="absent",
         )
         # Tick 1: absent → timer starts.
@@ -285,7 +270,7 @@ class TestFlapSuppression:
         assert svc._presence_during_absent_since is None
 
     async def test_presence_tracker_clears_on_each_absent_frame(self):
-        svc, _, cam, _ = _make_service(mode="working", cam_detection="absent")
+        svc, _, cam = _make_service(mode="working", cam_detection="absent")
         await svc._check()  # timer starts
 
         # Flap to present, then back. The tracker should reset cleanly.
@@ -302,7 +287,7 @@ class TestDeactivateGuards:
     """The deactivate path: once active, what tears it down?"""
 
     async def test_deactivates_when_override_flips_to_sleeping(self):
-        svc, auto, cam, _ = _make_service(mode="working")
+        svc, auto, cam = _make_service(mode="working")
         await _drive_absent_window(svc)
         assert svc.active is True
 
@@ -315,7 +300,7 @@ class TestDeactivateGuards:
 
     async def test_deactivates_when_camera_returns_for_2s(self):
         from datetime import timedelta
-        svc, auto, cam, _ = _make_service(mode="working")
+        svc, auto, cam = _make_service(mode="working")
         await _drive_absent_window(svc)
         assert svc.active is True
 
@@ -330,7 +315,7 @@ class TestDeactivateGuards:
 
     async def test_deactivates_on_hard_timeout(self):
         from datetime import timedelta
-        svc, auto, _, _ = _make_service(mode="working")
+        svc, auto, _ = _make_service(mode="working")
         await _drive_absent_window(svc)
         assert svc.active is True
 
@@ -347,19 +332,19 @@ class TestBlockReasonLogging:
 
     async def test_mode_block_clears_absent_timer(self):
         # Build up the absent timer in working mode...
-        svc, auto, cam, _ = _make_service(mode="working")
+        svc, auto, cam = _make_service(mode="working")
         await svc._check()
         assert svc._camera_absent_since is not None
 
-        # ...then user manually overrides to away. Timer must clear.
+        # ...then user manually overrides to cooking (non-trigger). Timer must clear.
         auto._manual_override = True
-        auto._override_mode = "away"
+        auto._override_mode = "cooking"
         await svc._check()
         assert svc._camera_absent_since is None
         assert svc._last_block_reason is not None
 
     async def test_block_logged_only_on_reason_change(self, caplog):
-        svc, auto, _, _ = _make_service(mode="away")  # blocked from the start
+        svc, auto, _ = _make_service(mode="cooking")  # blocked from the start
         with caplog.at_level("INFO", logger="home_hub.transit_lighting"):
             await svc._check()
             await svc._check()
@@ -367,10 +352,10 @@ class TestBlockReasonLogging:
         # Three ticks at the same block reason → exactly one log line.
         block_logs = [r for r in caplog.records if "blocked" in r.message]
         assert len(block_logs) == 1
-        assert "mode=away" in block_logs[0].message
+        assert "mode=cooking" in block_logs[0].message
 
     async def test_unblock_logged_when_gate_clears(self, caplog):
-        svc, auto, cam, _ = _make_service(mode="away", cam_detection="present")
+        svc, auto, cam = _make_service(mode="cooking", cam_detection="present")
         with caplog.at_level("INFO", logger="home_hub.transit_lighting"):
             await svc._check()  # logs blocked
             auto._detected = "working"
@@ -378,14 +363,14 @@ class TestBlockReasonLogging:
             await svc._check()  # logs unblocked
         unblock_logs = [r for r in caplog.records if "unblocked" in r.message]
         assert len(unblock_logs) == 1
-        assert "was mode=away" in unblock_logs[0].message
+        assert "was mode=cooking" in unblock_logs[0].message
 
 
 class TestNavigationStates:
     """Per-light targets — late-night uses dimmer values."""
 
     def test_late_night_uses_dimmer_brightness(self, monkeypatch):
-        svc, _, _, _ = _make_service()
+        svc, _, _ = _make_service()
         # 23:30 → late night
         monkeypatch.setattr(
             "backend.services.transit_lighting_service.datetime",
@@ -397,7 +382,7 @@ class TestNavigationStates:
         assert states["4"]["bri"] == 40
 
     def test_daytime_uses_brighter_navigation(self, monkeypatch):
-        svc, _, _, _ = _make_service()
+        svc, _, _ = _make_service()
         # 19:00 → before late-night cutoff
         monkeypatch.setattr(
             "backend.services.transit_lighting_service.datetime",

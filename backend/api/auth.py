@@ -19,8 +19,7 @@ The dependency has three exits:
 
 Fail-closed: if `HOME_HUB_API_KEY` is unset, every protected write
 returns 503 — a deploy that forgot to provision the key shouldn't
-silently leave the LAN exposed. Mirrors the `PRESENCE_WEBHOOK_TOKEN`
-pattern in `_authorize_presence_webhook`.
+silently leave the LAN exposed.
 """
 from __future__ import annotations
 

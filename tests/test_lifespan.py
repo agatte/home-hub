@@ -67,13 +67,12 @@ def test_heartbeat_registry_populated_on_startup():
         body = client.get("/health").json()
         names = {t["name"] for t in body["tasks"]}
         # The minimum guaranteed set, regardless of Hue/Sonos connectivity:
-        # automation, scheduler, rule_engine, presence, transit_lighting,
+        # automation, scheduler, rule_engine, transit_lighting,
         # event_logger_retry are always registered.
         required = {
             "automation",
             "scheduler",
             "rule_engine",
-            "presence",
             "transit_lighting",
             "event_logger_retry",
         }

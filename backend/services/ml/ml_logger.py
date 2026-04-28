@@ -299,10 +299,11 @@ class MLDecisionLogger:
     ) -> dict[str, Any]:
         """Distribution of recent behavioral-predictor outputs.
 
-        Gates `/predictor/promote` against the 2026-04-27 single-class
-        collapse: 898/898 shadow predictions returned ``away``, real
-        accuracy 0.64% vs 28.3% no-skill floor. Promotion would have
-        flipped the apartment to ``away`` every 60s.
+        Gates `/predictor/promote` against single-class collapse. Origin
+        incident (2026-04-27): 898/898 shadow predictions collapsed to one
+        class with 0.64% real accuracy vs the 28.3% no-skill floor. Without
+        a diversity gate, promotion would have driven autopilot from a
+        broken model.
 
         Returns a dict with ``diverse`` (bool) plus diagnostics. A retrain
         that produces diverse outputs flips ``diverse`` to True automatically

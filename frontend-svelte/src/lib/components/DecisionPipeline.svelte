@@ -17,7 +17,7 @@
   $: activeSignals = fusion?.active_signals ?? 0
   $: totalSignals = fusion?.total_signals ?? 0
   $: signals = fusion?.signals || {}
-  $: signalKeys = ['process', 'camera', 'audio_ml', 'rule_engine', 'presence']
+  $: signalKeys = ['process', 'camera', 'audio_ml', 'rule_engine']
 
   // SVG arc math
   const RING_SIZE = 160

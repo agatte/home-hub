@@ -1,19 +1,16 @@
 """Transit lighting — briefly brighten the navigation path when Anthony steps
-out of the bedroom while his phone is still on Wi-Fi.
+out of the bedroom.
 
 When the camera loses him (working / gaming / watching / relax modes where the
-kitchen and living room are dim or off), we can't tell whether he left the
-apartment or just walked to the kitchen or bathroom. The phone staying on the
-apartment Wi-Fi disambiguates: he's still home. In that case we briefly raise
-L1 / L3 / L4 to a gentle "I can see where I'm going" level so he doesn't have
-to manually switch modes or turn lights on. L2 is untouched — the bedroom bias
-lamp stays on the current mode's state for when he sits back down.
+kitchen and living room are dim or off), briefly raise L1 / L3 / L4 to a gentle
+"I can see where I'm going" level so he doesn't have to manually switch modes
+or turn lights on. L2 is untouched — the bedroom bias lamp stays on the
+current mode's state for when he sits back down.
 
 State machine:
-  idle ─[camera absent ≥10s + phone home + eligible mode]─> active
+  idle ─[camera absent ≥4s + eligible mode + non-stationary zone]─> active
   active ─[camera present ≥2s]─> idle  (revert lights)
-  active ─[phone departed]─> idle  (user actually left — hand off to presence)
-  active ─[mode left trigger set: sleeping/cooking/social/idle/away]─> idle
+  active ─[mode left trigger set: sleeping/cooking/social/idle]─> idle
   active ─[10-minute hard timeout]─> idle  (failsafe)
 
 Eligible mode means the *effective* mode (override-aware) is in
@@ -21,6 +18,10 @@ TRIGGER_MODES — so a manual relax/working/gaming/watching override
 still lets transit fire. sleeping/cooking/social overrides naturally
 fall outside TRIGGER_MODES and block, preserving "I want it dark /
 specifically lit" intent.
+
+The 10-min hard timeout is the only protection against runaway if the
+camera mis-fires (e.g. wedged "absent" forever). Phone-presence used to
+be a secondary safety net but was removed when home/away was retired.
 
 Runs inside the FastAPI process; poll loop wakes every 2s to align with camera.
 """
@@ -42,8 +43,8 @@ POLL_INTERVAL_SECONDS = 2
 # Tightened from 10s → 4s (2026-04-26) after the bedroom→kitchen walk felt
 # slow in practice. 4s still debounces a brief head-turn or 2s of typing
 # out-of-frame, but lets transit fire ~6-8s sooner. Camera's own 15-frame
-# "away" threshold (~30s) is much longer, so transit still leads the
-# presence lane comfortably.
+# absent threshold (~30s) is much longer, so transit lights up well before
+# the camera lane decides Anthony has gone idle.
 ABSENT_TRIGGER_SECONDS = 4
 
 # How long camera must report "present" before we revert — protects against
@@ -56,7 +57,7 @@ HARD_TIMEOUT_SECONDS = 600
 
 # Modes where kitchen / living room are dim or off and transit lighting is
 # worth firing. Intentionally conservative — cooking is already bright, social
-# has a medium palette, sleeping wants to stay dark, away/gameday are handled
+# has a medium palette, sleeping wants to stay dark, gameday is handled
 # elsewhere.
 TRIGGER_MODES = frozenset({"working", "gaming", "watching", "relax"})
 
@@ -74,23 +75,20 @@ LATE_NIGHT_END_HOUR = 6
 
 
 class TransitLightingService:
-    """Watches camera + presence + mode state; activates transit lighting.
+    """Watches camera + mode state; activates transit lighting.
 
     Depends on:
       - ``AutomationEngine.apply_transit_override`` / ``clear_transit_override``
       - ``CameraService.get_status`` (reads ``last_detection``, ``enabled``)
-      - ``PresenceService.get_status`` (reads ``state``)
     """
 
     def __init__(
         self,
         automation_engine: Any,
         camera_service: Any,
-        presence_service: Any,
     ) -> None:
         self._automation = automation_engine
         self._camera = camera_service
-        self._presence = presence_service
 
         self._enabled: bool = True
         self._active: bool = False
@@ -160,13 +158,10 @@ class TransitLightingService:
         detection = cam_status.get("last_detection", "unknown")
         zone = cam_status.get("zone")
 
-        pres_status = self._presence.get_status() if self._presence else {}
-        home = pres_status.get("state") == "home"
-
         # ── If already active: look for conditions to clear ──
         if self._active:
             # Effective mode out of the trigger set (sleeping, cooking, social,
-            # idle, away) → revert. Manual overrides to a trigger mode are fine.
+            # idle) → revert. Manual overrides to a trigger mode are fine.
             if mode not in TRIGGER_MODES:
                 await self._deactivate(f"mode exited trigger set (mode={mode})")
                 return
@@ -176,11 +171,6 @@ class TransitLightingService:
             # transit lift doesn't linger after he's clearly settled.
             if zone in STATIONARY_ZONES:
                 await self._deactivate(f"zone={zone} (user stationary)")
-                return
-
-            # Phone left the network → user actually departed; presence handles it
-            if not home:
-                await self._deactivate("phone departed")
                 return
 
             # Hard timeout — belt-and-suspenders against stuck state
@@ -209,11 +199,6 @@ class TransitLightingService:
         # absent-dwell timer accumulates so a flap-storm can't fire transit.
         if zone in STATIONARY_ZONES:
             self._record_block(f"zone={zone} (user stationary)")
-            return
-        if not home:
-            # Phone already says he's gone / arriving / departing — presence
-            # service's own choreography is the right handler.
-            self._record_block(f"presence={pres_status.get('state', 'unknown')}")
             return
 
         # All gates clear — log the unblock so journalctl shows when the
@@ -246,7 +231,7 @@ class TransitLightingService:
         if self._camera_absent_since is None:
             self._camera_absent_since = now
             logger.info(
-                "Transit: absent timer started (mode=%s, presence=home)", mode,
+                "Transit: absent timer started (mode=%s)", mode,
             )
             return
 

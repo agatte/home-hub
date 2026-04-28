@@ -2,7 +2,7 @@
 PC Activity Detector — standalone agent that monitors running processes.
 
 Runs independently of the FastAPI server. Detects the user's current activity
-(gaming, working, watching, idle, away) based on running processes and PC idle
+(gaming, working, watching, idle) based on running processes and PC idle
 time, then reports changes to the Home Hub backend.
 
 Usage:
@@ -68,7 +68,7 @@ logger.addHandler(_file_handler)
 # music). 5s gives ~2.5s average lag at negligible CPU cost on the desktop.
 POLL_INTERVAL = 5
 
-# PC idle threshold for "away" mode (seconds)
+# PC idle threshold for "idle" mode (seconds) — input idle past this fires idle.
 IDLE_THRESHOLD = 600  # 10 minutes
 
 # Late-night threshold for "working" detection (hour, 24h format)
@@ -208,8 +208,7 @@ class ActivityDetector:
         gaming  — A game process is running (no Discord dependency)
         watching — A media player is running
         working — Browser running late at night, no game or media
-        idle    — PC in use but nothing notable running
-        away    — PC has been idle for >10 minutes
+        idle    — PC in use but nothing notable running, or input idle >10 min
     """
 
     def __init__(self) -> None:
@@ -328,9 +327,9 @@ class ActivityDetector:
             self._pause_media()
             return "sleeping"
 
-        # Standard away detection (idle >10 min, no special context)
+        # Standard idle detection (input idle >10 min, no special context)
         if idle_seconds > IDLE_THRESHOLD:
-            return "away"
+            return "idle"
 
         # Reset media pause flag when user is active again
         if self._media_paused:

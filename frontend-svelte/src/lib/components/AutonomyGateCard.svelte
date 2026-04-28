@@ -164,7 +164,7 @@
       <div class="threshold-cell">
         <span class="threshold-label">Auto-apply</span>
         <span class="threshold-value">95%</span>
-        <span class="threshold-note">when idle/away</span>
+        <span class="threshold-note">when idle</span>
       </div>
       <div class="threshold-cell">
         <span class="threshold-label">Stale override</span>

@@ -24,7 +24,7 @@ logger = logging.getLogger("home_hub.rules")
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 # Modes that aren't worth predicting — "you're usually idle" isn't helpful
-_SKIP_MODES = frozenset(("idle", "away"))
+_SKIP_MODES = frozenset(("idle",))
 
 # Per-source vote weights. Ambient/audio_ml post per-second, so without
 # weighting they flood buckets (a podcast in the background produces
@@ -34,7 +34,6 @@ _SKIP_MODES = frozenset(("idle", "away"))
 _SOURCE_WEIGHTS: dict[str, float] = {
     "manual": 1.0,
     "process": 1.0,
-    "presence": 1.0,
     "camera": 0.8,
     "ambient": 0.5,
     "audio_ml": 0.5,
@@ -147,7 +146,7 @@ class RuleEngineService:
             slot_raw[key][row.mode] += 1
             slot_weighted[key][row.mode] += weight
 
-        # Determine which slots qualify as rules. Skip-modes (idle/away) are
+        # Determine which slots qualify as rules. Skip-modes (idle) are
         # excluded from both dominant-mode selection and the denominator —
         # they aren't worth predicting and shouldn't dilute confidence of
         # genuine activity modes.
@@ -228,7 +227,7 @@ class RuleEngineService:
 
         Always reports the matched rule to confidence fusion (rule_engine
         is a fusion voter — weight 0.10). Only nudges the user via
-        WebSocket when current_mode is idle/away. Respects a 1-hour
+        WebSocket when current_mode is idle. Respects a 1-hour
         cooldown per rule to avoid repeated nudges.
 
         Returns:
@@ -263,7 +262,7 @@ class RuleEngineService:
 
         # Nudges are only useful when we don't already know what the user
         # is doing — skip the suggestion path otherwise.
-        if current_mode not in ("idle", "away"):
+        if current_mode != "idle":
             return None
 
         # Cooldown — don't nudge more than once per hour per rule

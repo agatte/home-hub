@@ -138,23 +138,22 @@
     return { cx: width / 2, cy }
   }
 
-  // Evenly space the 5 lanes around the nucleus so the starting layout
+  // Evenly space the 4 lanes around the nucleus so the starting layout
   // doesn't all clump into one hemisphere. The simulation will refine from
   // here, but the clock-position is deterministic.
   const LANE_ANGLE = {
     process:     -Math.PI / 2,                         // 12 o'clock
-    camera:      -Math.PI / 2 + (2 * Math.PI) / 5,     // ~1:30
-    audio_ml:    -Math.PI / 2 + (4 * Math.PI) / 5,     // ~4:50
-    rule_engine: -Math.PI / 2 + (6 * Math.PI) / 5,     // ~7:10
-    presence:    -Math.PI / 2 + (8 * Math.PI) / 5,     // ~10:30
+    camera:      -Math.PI / 2 + (2 * Math.PI) / 4,     // 3 o'clock
+    audio_ml:    -Math.PI / 2 + (4 * Math.PI) / 4,     // 6 o'clock
+    rule_engine: -Math.PI / 2 + (6 * Math.PI) / 4,     // 9 o'clock
   }
 
-  // Outer context ring — 5 non-voting bubbles at a radius derived from
-  // canvas size (see CONTEXT_RADIUS above), offset by 36° (π/5) from the
+  // Outer context ring — 4 non-voting bubbles at a radius derived from
+  // canvas size (see CONTEXT_RADIUS above), offset by 45° from the
   // lane angles so context doesn't sit directly over a voter's line of
   // sight to the nucleus.
-  const CONTEXT_KEYS = ['time', 'weather', 'presence', 'override', 'sonos']
-  const CONTEXT_ANGLE_OFFSET = Math.PI / 5
+  const CONTEXT_KEYS = ['time', 'weather', 'override', 'sonos']
+  const CONTEXT_ANGLE_OFFSET = Math.PI / 4
   /** @param {string} key */
   function contextAngle(key) {
     const i = CONTEXT_KEYS.indexOf(key)

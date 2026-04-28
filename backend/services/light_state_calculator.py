@@ -59,7 +59,6 @@ MODE_TRANSITION_TIME: dict[str, int] = {
     "sleeping": 50,   # 5s gradual
     "cooking":  10,   # 1s — kitchen lights up the moment you tap the tile
     "idle":     20,   # 2s
-    "away":     30,   # 3s
 }
 
 

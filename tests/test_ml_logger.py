@@ -234,8 +234,8 @@ class TestComputePredictionDiversity:
         assert result["unique_modes"] == 2
 
     async def test_single_class_blocks(self, logger, ml_db):
-        # Reproduces the 4/27 failure: every prediction is `away`.
-        await self._seed(ml_db, {"away": 60})
+        # Reproduces the 4/27 single-class collapse pattern.
+        await self._seed(ml_db, {"working": 60})
         result = await logger.compute_prediction_diversity()
         assert result["diverse"] is False
         assert result["reason"] == "single_class"
@@ -244,7 +244,7 @@ class TestComputePredictionDiversity:
 
     async def test_near_single_class_blocks(self, logger, ml_db):
         # 96% one mode, 4% another → still degenerate.
-        await self._seed(ml_db, {"away": 96, "idle": 4})
+        await self._seed(ml_db, {"working": 96, "idle": 4})
         result = await logger.compute_prediction_diversity()
         assert result["diverse"] is False
         assert result["reason"] == "near_single_class"
@@ -262,7 +262,7 @@ class TestComputePredictionDiversity:
 
     async def test_window_excludes_stale_rows(self, logger, ml_db):
         # 40 rows from 30 days ago — outside the 7d default window.
-        await self._seed(ml_db, {"away": 40}, days_old=30)
+        await self._seed(ml_db, {"working": 40}, days_old=30)
         result = await logger.compute_prediction_diversity(days=7)
         assert result["diverse"] is False
         assert result["reason"] == "no_predictions"

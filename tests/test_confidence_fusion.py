@@ -116,7 +116,7 @@ class TestWeightNormalization:
         result = fusion.compute_fusion()
         assert result is not None
         assert result["fused_confidence"] == pytest.approx(0.6, abs=1e-4)
-        for src in ("camera", "audio_ml", "rule_engine", "presence"):
+        for src in ("camera", "audio_ml", "rule_engine"):
             assert result["signals"][src]["mode"] is None
 
 
@@ -135,9 +135,9 @@ class TestLateNightDecay:
         assert result["fused_confidence"] == pytest.approx(0.8, abs=1e-4)
 
     def test_night_decay_flips_winner(self, monkeypatch):
-        """process (0.344) alone vs camera (0.196) + rule_engine (0.098):
-        - day:   process=0.344 > combined=0.294  → working wins
-        - night: process*0.6=0.206 < combined=0.294 → relax wins
+        """process (0.438) alone vs camera (0.250) + rule_engine (0.125):
+        - day:   process=0.438 > combined=0.375 → working wins
+        - night: process*0.6=0.263 < combined=0.375 → relax wins
         """
         fusion = ConfidenceFusion()
         fusion.report_signal("process", "working", 1.0)
@@ -214,16 +214,16 @@ class TestAgreement:
         result = fusion.compute_fusion()
         assert result["agreement"] == 1.0
 
-    def test_three_of_five_agreement(self):
+    def test_three_of_four_agreement(self):
+        """With 4 voting lanes, 3-of-4 = 0.75 (below the 0.80 override gate)."""
         fusion = ConfidenceFusion()
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
-        fusion.report_signal("presence", "working", 1.0)
-        fusion.report_signal("audio_ml", "idle", 1.0)
+        fusion.report_signal("audio_ml", "working", 1.0)
         fusion.report_signal("rule_engine", "idle", 1.0)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"
-        assert result["agreement"] == pytest.approx(0.6, abs=1e-4)
+        assert result["agreement"] == pytest.approx(0.75, abs=1e-4)
 
     def test_stale_signals_excluded_from_agreement_denominator(self):
         fusion = ConfidenceFusion()
@@ -255,48 +255,38 @@ class TestThresholdGates:
         assert result["can_override"] is True
 
     def test_can_override_requires_both_confidence_and_agreement(self):
-        """Custom weights craft fused_confidence=0.92, agreement=0.80 —
-        the exact edge where can_override is expected to trigger."""
+        """All 4 lanes agree at conf 0.92 → fused=0.92, agreement=1.0 —
+        clears the override gate but not the auto-apply gate."""
         fusion = ConfidenceFusion()
-        fusion._weights = {
-            "process":     0.23,
-            "camera":      0.23,
-            "audio_ml":    0.23,
-            "presence":    0.23,
-            "rule_engine": 0.08,
-        }
-        fusion.report_signal("process", "working", 1.0)
-        fusion.report_signal("camera", "working", 1.0)
-        fusion.report_signal("audio_ml", "working", 1.0)
-        fusion.report_signal("presence", "working", 1.0)
-        fusion.report_signal("rule_engine", "gaming", 1.0)
+        fusion.report_signal("process", "working", 0.92)
+        fusion.report_signal("camera", "working", 0.92)
+        fusion.report_signal("audio_ml", "working", 0.92)
+        fusion.report_signal("rule_engine", "working", 0.92)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"
         assert result["fused_confidence"] == pytest.approx(0.92, abs=1e-4)
-        assert result["agreement"] == pytest.approx(0.80, abs=1e-4)
+        assert result["agreement"] == 1.0
         assert result["can_override"] is True
         assert result["auto_apply"] is False  # 0.92 < 0.95
 
     def test_can_override_blocked_when_agreement_too_low(self):
-        """Custom weights: fused_confidence=0.92 but only 3 of 5 signals
-        vote for the winner → agreement=0.6 < 0.80 → can_override=False."""
+        """Custom weights: fused_confidence=0.92 but only 3 of 4 signals
+        vote for the winner → agreement=0.75 < 0.80 → can_override=False."""
         fusion = ConfidenceFusion()
         fusion._weights = {
             "process":     0.50,
             "camera":      0.25,
             "audio_ml":    0.17,
-            "presence":    0.04,
-            "rule_engine": 0.04,
+            "rule_engine": 0.08,
         }
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
         fusion.report_signal("audio_ml", "working", 1.0)
-        fusion.report_signal("presence", "gaming", 1.0)
         fusion.report_signal("rule_engine", "gaming", 1.0)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"
         assert result["fused_confidence"] == pytest.approx(0.92, abs=1e-4)
-        assert result["agreement"] == pytest.approx(0.6, abs=1e-4)
+        assert result["agreement"] == pytest.approx(0.75, abs=1e-4)
         assert result["can_override"] is False
 
 

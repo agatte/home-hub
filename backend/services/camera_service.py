@@ -43,11 +43,11 @@ POLL_INTERVAL = 2       # Seconds between frame captures
 # value the stored baseline was recorded at.
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-# Fifteen consecutive misses (~30s) before flipping to away. Extended past
+# Fifteen consecutive misses (~30s) before flipping to idle. Extended past
 # the original seven (~14s) after a live low-light scenario (reading in bed
 # at ema_lux ~30, 20% of baseline) showed face/pose detection flapping 25-40%
-# and the mode flipping to away on brief misses. Brief dropouts in dim light
-# are the common case, not the exception, so we want more dampening.
+# and the mode flipping on brief misses. Brief dropouts in dim light are the
+# common case, not the exception, so we want more dampening.
 ABSENT_THRESHOLD = 15
 # Full-range BlazeFace returns noticeably lower scores than short-range at our
 # corner-view working distance (~2–3m, three-quarter profile toward the
@@ -591,8 +591,8 @@ class CameraService:
         """UTC timestamp of the most recent detection update (any status).
 
         Consumers use this to decide whether ``last_detection`` is fresh
-        enough to trust — e.g. presence_service vetoes a departure fade
-        only if a 'present' reading landed within the last ~60s.
+        enough to trust — e.g. transit lighting waits ~4s of sustained
+        absence before reacting to avoid blink-flickering.
         """
         return self._last_detection_at
 
@@ -747,16 +747,15 @@ class CameraService:
                 # sits steadily and no transition fires.
                 fusion = getattr(self._automation, "_confidence_fusion", None)
                 if fusion and status in ("present", "absent"):
-                    inferred = "idle" if status == "present" else "away"
                     fusion.report_signal(
-                        "camera", inferred, confidence, factors=camera_factors,
+                        "camera", "idle", confidence, factors=camera_factors,
                     )
 
                 if status == "present":
                     was_absent = self._consecutive_absent >= ABSENT_THRESHOLD
                     self._consecutive_absent = 0
 
-                    # If we were in away state, report present (idle)
+                    # If we were absent for long enough, report idle (return).
                     if was_absent or self._was_absent:
                         self._was_absent = False
                         await self._automation.report_activity(
@@ -775,23 +774,23 @@ class CameraService:
 
                     if self._consecutive_absent == ABSENT_THRESHOLD:
                         self._was_absent = True
-                        # User has been gone long enough to call it "away" —
-                        # any committed zone/posture is now stale by definition,
-                        # since we have no idea where they'll re-enter from.
-                        # Clearing here prevents the bed+reclined overlay from
-                        # firing on values committed hours (or a sleep cycle) ago.
+                        # User has been gone long enough that any committed
+                        # zone/posture is now stale by definition, since we
+                        # have no idea where they'll re-enter from. Clearing
+                        # here prevents the bed+reclined overlay from firing
+                        # on values committed hours (or a sleep cycle) ago.
                         self._clear_committed_zone_posture("absent threshold")
                         await self._automation.report_activity(
-                            mode="away", source="camera", factors=camera_factors,
+                            mode="idle", source="camera", factors=camera_factors,
                         )
                         logger.info(
-                            "No person detected for %ds — reported away",
+                            "No person detected for %ds — reported idle",
                             ABSENT_THRESHOLD * POLL_INTERVAL,
                         )
 
                 # Log ML decision
                 if self._ml_logger and status in ("present", "absent"):
-                    mode = "away" if status == "absent" and self._consecutive_absent >= ABSENT_THRESHOLD else "idle"
+                    mode = "idle"
                     await self._ml_logger.log_decision(
                         predicted_mode=mode,
                         confidence=confidence,

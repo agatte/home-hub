@@ -184,18 +184,3 @@ class TestSmokeWiring:
         finally:
             app.dependency_overrides.pop(require_api_key, None)
 
-    def test_presence_webhook_uses_separate_token(self, client):
-        # The presence webhooks must NOT route through require_api_key —
-        # they have their own X-Presence-Token. Forcing the API-key dep
-        # to reject must not affect them.
-        app.dependency_overrides[require_api_key] = self._stub_reject()
-        try:
-            # Without a configured PRESENCE_WEBHOOK_TOKEN, the webhook
-            # returns 503 ("disabled"). Any code other than 401 from the
-            # API-key dep proves the two paths are separate.
-            resp = client.post("/api/automation/presence/arrived", json={})
-            assert resp.status_code != 401, (
-                "presence webhook accidentally went through require_api_key"
-            )
-        finally:
-            app.dependency_overrides.pop(require_api_key, None)

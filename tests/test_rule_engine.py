@@ -63,7 +63,7 @@ async def db_and_service(monkeypatch):
         for i in range(4):
             session.add(ActivityEvent(
                 timestamp=idle_hour - timedelta(weeks=i),
-                mode="idle", previous_mode="away",
+                mode="idle", previous_mode="working",
                 source="process", duration_seconds=600,
             ))
 
@@ -100,13 +100,12 @@ class TestRuleGeneration:
         confidences = [r["confidence"] for r in rules]
         assert all(c >= 70 for c in confidences)
 
-    async def test_excludes_idle_away_predictions(self, db_and_service):
+    async def test_excludes_idle_predictions(self, db_and_service):
         _, service, _, _ = db_and_service
         await service.regenerate_rules()
         rules = await service.get_rules()
         modes = [r["predicted_mode"] for r in rules]
         assert "idle" not in modes
-        assert "away" not in modes
 
     async def test_upsert_on_regenerate(self, db_and_service):
         _, service, _, _ = db_and_service

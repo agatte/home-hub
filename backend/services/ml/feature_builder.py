@@ -15,7 +15,7 @@ from backend.models import ActivityEvent, LightAdjustment
 
 logger = logging.getLogger("home_hub.ml")
 
-# Modes the behavioral predictor targets (excluding idle/away which are
+# Modes the behavioral predictor targets (excluding idle which is
 # the "no detection" states the predictor tries to fill).
 PREDICTABLE_MODES = ("gaming", "working", "watching", "relax", "social", "cooking")
 
@@ -109,7 +109,7 @@ def get_temporal_features(timestamp: datetime) -> dict:
 
 # Label-encoding maps for categorical features (LightGBM needs integers).
 MODE_ENCODING = {m: i for i, m in enumerate(PREDICTABLE_MODES)}
-MODE_ENCODING.update({"idle": len(PREDICTABLE_MODES), "away": len(PREDICTABLE_MODES) + 1})
+MODE_ENCODING.update({"idle": len(PREDICTABLE_MODES)})
 
 SEASON_ENCODING = {"winter": 0, "spring": 1, "summer": 2, "fall": 3}
 
@@ -143,11 +143,11 @@ async def build_training_data(days: int = 60) -> list[dict]:
     for ev in events:
         ev.timestamp = _to_utc(ev.timestamp)
 
-    # Pre-compute per-day "wake time" (first non-away event each day)
+    # Pre-compute per-day "wake time" (first non-idle event each day)
     wake_times: dict[str, datetime] = {}
     for ev in events:
         day_key = ev.timestamp.strftime("%Y-%m-%d")
-        if day_key not in wake_times and ev.mode != "away":
+        if day_key not in wake_times and ev.mode != "idle":
             wake_times[day_key] = ev.timestamp
 
     # Count manual overrides in last 7 days (rolling, computed once)

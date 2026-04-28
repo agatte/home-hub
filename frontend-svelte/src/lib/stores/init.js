@@ -14,7 +14,6 @@ import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
 import { pipeline } from './pipeline.js'
-import { presence } from './presence.js'
 import { startWeatherPolling, stopWeatherPolling } from './weather.js'
 
 /** @type {HubSocket | null} */
@@ -60,10 +59,6 @@ export function initStores() {
       const d = /** @type {any} */ (data)
       pipeline.set({ current: d.current, history: d.history || [] })
     })
-    .catch(() => {})
-
-  apiGet('/api/automation/presence/status')
-    .then((data) => presence.set(/** @type {any} */ (data)))
     .catch(() => {})
 
   // Weather polls every 5 min — matches the backend NWS cache.
@@ -116,9 +111,6 @@ export function initStores() {
             current: data,
             history: [...prev.history.slice(-29), data],
           }))
-          break
-        case 'presence_update':
-          presence.set(data)
           break
         default:
           console.warn('[ws] Unknown message type:', type, data)

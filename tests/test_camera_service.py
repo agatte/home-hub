@@ -163,11 +163,11 @@ class TestPresenceLogic:
 
 
 class TestAbsentCountdown:
-    """Verify the 3-frame absent countdown triggers away mode."""
+    """Verify the 3-frame absent countdown triggers idle mode."""
 
     @pytest.mark.asyncio
     async def test_absent_triggers_after_threshold(self):
-        """ABSENT_THRESHOLD consecutive absent frames → reports away."""
+        """ABSENT_THRESHOLD consecutive absent frames → reports idle."""
         automation = AsyncMock()
         service = _make_service(automation=automation)
         service._enabled = True
@@ -190,15 +190,15 @@ class TestAbsentCountdown:
         assert service._consecutive_absent == 0
 
     @pytest.mark.asyncio
-    async def test_present_after_away_reports_idle(self):
-        """Present detection after being away → reports idle to automation."""
+    async def test_present_after_absent_reports_idle(self):
+        """Present detection after being absent → reports idle to automation."""
         automation = AsyncMock()
         service = _make_service(automation=automation)
         service._enabled = True
         service._was_absent = True
         service._consecutive_absent = 0
 
-        # Simulate what poll_loop does when present after away
+        # Simulate what poll_loop does when present after a long absence
         service._was_absent = False
         await automation.report_activity(mode="idle", source="camera")
 
@@ -384,15 +384,13 @@ class TestCameraSourcePriority:
     """Verify camera source priority rules in automation engine."""
 
     @pytest.mark.asyncio
-    async def test_camera_away_does_not_override_gaming(self):
-        """Camera 'away' should not override process-detected 'gaming'."""
+    async def test_camera_idle_does_not_override_gaming(self):
+        """Camera 'idle' should not override process-detected 'gaming'."""
         from backend.services.automation_engine import MODE_PRIORITY
 
-        # Camera reports away, but process says gaming
-        # The priority check: source=camera, mode=away,
-        # _mode_source=process, _current_mode=gaming
-        # Should return early (not override)
-        assert MODE_PRIORITY["gaming"] > MODE_PRIORITY["away"]
+        # Camera reports idle, but process says gaming.
+        # Same priority check still applies: idle (1) < gaming (5).
+        assert MODE_PRIORITY["gaming"] > MODE_PRIORITY["idle"]
 
     @pytest.mark.asyncio
     async def test_camera_idle_does_not_downgrade_watching(self):

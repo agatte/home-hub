@@ -119,17 +119,6 @@ export const MODE_CONFIG = {
       secondaryColor: '#4b5563', accentColor: '#374151',
     },
   },
-  away: {
-    label: 'Away', icon: '🚪', lucide: 'door-open', color: '#475569',
-    generative: {
-      blobCount: 1, blobOpacity: 0.05, blobSpeed: 0.02,
-      particleCount: 40, particleSize: 2, particleSpeed: 0.02,
-      particleTrail: 0.06, particleIntensity: 0.1, particleStyle: 'dots',
-      geoPattern: 'none', geoOpacity: 0,
-      musicBlobPulse: 0, musicSpeedBoost: 1.0, noiseFrequency: 0.1,
-      secondaryColor: '#334155',
-    },
-  },
   auto: {
     label: 'Auto', icon: '🤖', lucide: 'bot', color: '#4a6cf7',
     generative: {

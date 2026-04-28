@@ -79,11 +79,6 @@ class Settings(BaseSettings):
     # Fauxmo Alexa integration (Phase 3 voice control)
     FAUXMO_ENABLED: bool = False
 
-    # Presence webhook — shared secret for iPhone Shortcut POSTs to
-    # /api/automation/presence/{arrived,departed}. When unset, the
-    # webhook endpoints reject all requests (disabled).
-    PRESENCE_WEBHOOK_TOKEN: Optional[str] = None
-
     # API-key auth on write endpoints. When set, every write
     # (POST / PUT / DELETE) requires X-API-Key matching this value
     # except from localhost (the kiosk) and any TRUSTED_LAN_IPS.

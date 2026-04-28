@@ -144,9 +144,9 @@ class TestEncodings:
     def test_mode_encoding_covers_predictable_modes(self):
         for mode in fb.PREDICTABLE_MODES:
             assert mode in fb.MODE_ENCODING
-        # idle/away appended after PREDICTABLE_MODES.
+        # idle appended after PREDICTABLE_MODES.
         assert fb.MODE_ENCODING["idle"] == len(fb.PREDICTABLE_MODES)
-        assert fb.MODE_ENCODING["away"] == len(fb.PREDICTABLE_MODES) + 1
+        assert "away" not in fb.MODE_ENCODING
 
     def test_season_encoding_complete(self):
         for season in ("winter", "spring", "summer", "fall"):

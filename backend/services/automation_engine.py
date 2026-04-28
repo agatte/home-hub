@@ -47,13 +47,13 @@ SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
 #   keeps posture=upright, so the (bed, reclined) gate never trips.
 # - Re-fire suppression reuses `_override_timeout_hours` so shadow and live
 #   cadence match: once the rule logs/fires, it won't re-fire for 4h.
-# - Eligible modes exclude everything except idle/away/working — we never
+# - Eligible modes exclude everything except idle/working — we never
 #   stomp explicit modes like gaming / watching / social / cooking /
 #   sleeping / relax.
 # - Time gate: evening always; weekend afternoons (≥13:00) also eligible.
 ZONE_POSTURE_RULE_DWELL_SECONDS = 120
 ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
-ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "away", "working"))
+ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working"))
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +137,6 @@ LIGHT_IDS = {
 # Enforced universally by the priority guard in report_activity().
 MODE_PRIORITY = {
     "sleeping": 0,
-    "away": 0,
     "idle": 1,
     "working": 2,
     "watching": 3,
@@ -440,9 +439,9 @@ class AutomationEngine:
         Returns the same format as the old WEEKDAY_TIME_RULES / WEEKEND_TIME_RULES
         constants: list of (start_hour, end_hour, state_or_ramp).
 
-        Away detection is handled by the PC activity detector, not the
+        Idle detection is handled by the PC activity detector, not the
         schedule — so time-based rules always provide sensible lighting
-        for when the user is home (ramp → daytime → evening → wind-down).
+        across the day (ramp → daytime → evening → wind-down).
         """
         rules = []
 
@@ -671,7 +670,7 @@ class AutomationEngine:
         Process an activity report from the PC agent, ambient monitor, or camera.
 
         Args:
-            mode: Detected mode (gaming, watching, working, social, idle, away).
+            mode: Detected mode (gaming, watching, working, social, idle).
             source: Detection source ("process", "ambient", "audio_ml", or "camera").
             factors: Optional sub-factor list surfaced to the analytics
                 constellation (foreground app / idle bucket / YAMNet classes /
@@ -748,7 +747,7 @@ class AutomationEngine:
             return
 
         # Clear external off detection on any activity
-        if mode not in ("idle", "away"):
+        if mode not in ("idle",):
             self._external_off_detected = False
 
         # Apply the appropriate light state. force_resend=True because this
@@ -848,7 +847,7 @@ class AutomationEngine:
         # Re-apply current detected mode or time-based. force_resend=True
         # because we've just released the override and per-light overrides;
         # the cache may not reflect what's actually on the bridge.
-        if self._current_mode in ("idle", "away"):
+        if self._current_mode in ("idle",):
             await self._apply_time_based()
         else:
             await self._apply_mode(self._current_mode, force_resend=True)
@@ -1393,8 +1392,8 @@ class AutomationEngine:
         # Drift is aesthetic variation — it only belongs in relax. Functional
         # modes (working/gaming/watching/cooking) need stable, predictable light
         # values; independent per-light deltas there make paired lights look
-        # randomly unequal. Social has its own sub-style cycling; sleeping/idle/
-        # away are handled by other paths.
+        # randomly unequal. Social has its own sub-style cycling; sleeping/idle
+        # are handled by other paths.
         mode = self.current_mode
         if mode != "relax":
             return
@@ -1629,12 +1628,12 @@ class AutomationEngine:
                 # If no activity override and no manual override, apply time-based
                 if (
                     not self._manual_override
-                    and self._current_mode in ("idle", "away")
+                    and self._current_mode in ("idle",)
                 ):
                     await self._apply_time_based()
                 elif (
                     not self._manual_override
-                    and self._current_mode not in ("idle", "away", "social")
+                    and self._current_mode not in ("idle", "social")
                 ):
                     # Re-apply activity mode to pick up day→evening→night transitions.
                     # force_resend=False so dedup in _last_applied_per_light makes
@@ -1670,7 +1669,7 @@ class AutomationEngine:
                 if (
                     prediction
                     and not self._manual_override
-                    and self._current_mode in ("idle", "away")
+                    and self._current_mode in ("idle",)
                 ):
                     if not prediction.get("shadow"):
                         confidence = prediction["confidence"]
@@ -1732,7 +1731,7 @@ class AutomationEngine:
 
                 # Rule engine — runs every cycle to keep its fusion vote
                 # fresh; check_rules() internally only nudges the user when
-                # current_mode is idle/away.
+                # current_mode is idle.
                 rule_engine = getattr(self, "_rule_engine", None)
                 if rule_engine and not self._manual_override:
                     await rule_engine.check_rules(self._current_mode)
@@ -1755,7 +1754,7 @@ class AutomationEngine:
                         if (
                             fusion_result.get("can_override")
                             and not self._manual_override
-                            and self._current_mode not in ("idle", "away")
+                            and self._current_mode not in ("idle",)
                             and fm != self._current_mode
                         ):
                             if self.is_at_desk_fresh():
@@ -1807,7 +1806,7 @@ class AutomationEngine:
                         elif (
                             fc >= 0.95
                             and not self._manual_override
-                            and self._current_mode in ("idle", "away")
+                            and self._current_mode in ("idle",)
                         ):
                             logger.info(
                                 "Fusion auto-apply: %s (%.0f%% confidence)",
@@ -2027,7 +2026,7 @@ class AutomationEngine:
 
         activity_priority = MODE_PRIORITY.get(self._current_mode, 0)
         activity_input = {
-            "active": self._current_mode not in ("idle", "away")
+            "active": self._current_mode not in ("idle",)
             or self._mode_source == "process",
             "mode": self._current_mode,
             "source": self._mode_source,
@@ -2067,7 +2066,7 @@ class AutomationEngine:
         time_input = {
             "period": period,
             "schedule_type": "weekday" if now.weekday() < 5 else "weekend",
-            "applies": mode in ("idle", "away")
+            "applies": mode in ("idle",)
             and not self._manual_override,
         }
 
@@ -2114,7 +2113,7 @@ class AutomationEngine:
                 f"Manual override to {self._override_mode}"
                 f" (set {self._format_ago(self._override_time)})"
             )
-        elif self._current_mode not in ("idle", "away"):
+        elif self._current_mode not in ("idle",):
             winning = "activity"
             reason = (
                 f"{self._current_mode.title()} detected via "

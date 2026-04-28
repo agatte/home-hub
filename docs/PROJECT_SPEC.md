@@ -211,9 +211,8 @@ Browser / Phone (PWA)
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
    ├── WeatherService ─────────────> NWS API (5-min cache) + severe weather alerts (2-min cache)
-   ├── PresenceService (ping) ─────> iPhone WiFi ping → arrival/departure sequences
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
-   ├── TransitLightingService ─────> camera absent + phone home → brief L1/L3/L4 navigation brightness
+   ├── TransitLightingService ─────> camera absent → brief L1/L3/L4 navigation brightness
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed

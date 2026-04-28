@@ -13,7 +13,6 @@
     camera:      { label: 'Camera',     icon: 'video' },
     audio_ml:    { label: 'Audio ML',   icon: 'mic' },
     rule_engine: { label: 'Rules',      icon: 'clock' },
-    presence:    { label: 'Presence',   icon: 'wifi' },
   }
 
   $: meta = SOURCE_META[source] || { label: source, icon: 'cpu' }
