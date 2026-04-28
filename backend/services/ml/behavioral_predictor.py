@@ -22,8 +22,9 @@ from sqlalchemy import func, select
 from backend.database import async_session
 from backend.models import ActivityEvent
 from backend.services.ml.feature_builder import (
+    MODE_ENCODING,
     PREDICTABLE_MODES,
-    build_current_features,
+    build_runtime_features,
     build_training_data,
 )
 from backend.services.ml.health_mixin import HealthTrackable
@@ -49,8 +50,17 @@ FEATURE_COLUMNS = [
 ]
 
 # Confidence thresholds for gated actions.
+#
+# AUTO_APPLY_THRESHOLD is the gate the engine uses to decide whether to
+# actually act on a prediction. SUGGEST_THRESHOLD only filters which
+# predictions are surfaced at all (returned + logged in shadow). The
+# 2026-04-27 audit found the original 0.70 cutoff was too tight for an
+# 8-way softmax — predictions sat at 0.20–0.65 and never made it into
+# `ml_decisions`, masking what the model actually believed. Dropping
+# the gate to 0.30 lets diverse predictions appear in shadow logs;
+# AUTO_APPLY_THRESHOLD still protects production behavior.
 AUTO_APPLY_THRESHOLD = 0.95
-SUGGEST_THRESHOLD = 0.70
+SUGGEST_THRESHOLD = 0.30
 
 # Human-readable labels and display formatters for the analytics constellation.
 _FEATURE_LABELS: dict[str, str] = {
@@ -160,8 +170,28 @@ class BehavioralPredictor(HealthTrackable):
 
                 # Reconstruct label encoder from metadata
                 encoder_data = meta.get("label_encoder", {})
-                self._label_encoder = {int(k): v for k, v in encoder_data.items()}
+                label_encoder = {int(k): v for k, v in encoder_data.items()}
 
+                # Refuse stale models. If the saved encoder targets a mode
+                # that's no longer valid (e.g. `away` after the home/away
+                # retirement), argmax could land on a class that doesn't
+                # exist in the current mode set. Drop the model; the
+                # nightly retrain at 4 AM rebuilds against MODE_ENCODING.
+                stale_modes = [
+                    m for m in label_encoder.values()
+                    if m not in MODE_ENCODING and m not in PREDICTABLE_MODES
+                ]
+                if stale_modes:
+                    logger.warning(
+                        "Behavioral predictor model has stale label encoder "
+                        "(modes=%s no longer valid) — refusing to load; will "
+                        "rebuild on next retrain.",
+                        sorted(stale_modes),
+                    )
+                    self._model = None
+                    return
+
+                self._label_encoder = label_encoder
                 logger.info(
                     "Loaded behavioral predictor (status=%s, accuracy=%.1f%%, rows=%d)",
                     self._status,
@@ -301,16 +331,26 @@ class BehavioralPredictor(HealthTrackable):
     # Prediction
     # ------------------------------------------------------------------
 
-    async def predict(self, **context: Any) -> Optional[dict]:
+    async def predict(self, current_mode: str) -> Optional[dict]:
         """Predict the most likely mode given current context.
 
+        Queries activity_events to build the live feature vector — same
+        shape as training rows, including dwell / transitions-today /
+        manual-overrides-7d / minutes-since-wake. The pre-2026-04-28
+        version called this with only ``current_mode`` and left the
+        other four features at 0, which silently broke train/serve
+        parity.
+
         Args:
-            **context: Keyword args passed to ``build_current_features``.
+            current_mode: The mode the engine currently believes is
+                active. Used as ``previous_mode`` in the feature vector.
 
         Returns:
-            Dict with ``predicted_mode``, ``confidence``, ``factors``
-            if a model is loaded and status is ``active``.  Returns None
-            if in shadow mode, no model, or confidence below threshold.
+            Dict with ``predicted_mode``, ``confidence``, ``factors``,
+            ``distribution`` (per-class probabilities) when a model is
+            loaded. ``shadow`` flag set when the predictor isn't
+            promoted to active. Returns None on no model, model error,
+            or confidence below ``SUGGEST_THRESHOLD``.
         """
         if self._model is None:
             return None
@@ -321,7 +361,7 @@ class BehavioralPredictor(HealthTrackable):
             return None
 
         try:
-            features = build_current_features(**context)
+            features = await build_runtime_features(current_mode)
 
             # Build feature vector in the same column order as training
             x = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])
@@ -330,6 +370,16 @@ class BehavioralPredictor(HealthTrackable):
             top_idx = int(np.argmax(probs))
             confidence = float(probs[top_idx])
             predicted_mode = self._label_encoder.get(top_idx, "unknown")
+
+            # Full distribution: {mode_name: probability} for every
+            # class the model knows about. Surfaced into shadow logs so
+            # we can see what the model thinks across ALL classes, not
+            # just the argmax — necessary for diagnosing single-class
+            # collapse and threshold tuning.
+            distribution = {
+                self._label_encoder.get(i, f"class_{i}"): float(p)
+                for i, p in enumerate(probs)
+            }
         except Exception as exc:
             self._track_predict(False, exc)
             logger.warning("Behavioral predict() failed: %s", exc)
@@ -343,20 +393,25 @@ class BehavioralPredictor(HealthTrackable):
         if predicted_mode == "unknown" or confidence < SUGGEST_THRESHOLD:
             return None
 
-        # Build top contributing factors for explainability
-        factors = []
-        for i, col in enumerate(FEATURE_COLUMNS):
-            if features.get(col) is not None:
-                factors.append({
-                    "feature": col,
-                    "value": features[col],
-                })
+        # Build top contributing features for explainability
+        feature_rows = [
+            {"feature": col, "value": features[col]}
+            for col in FEATURE_COLUMNS
+            if features.get(col) is not None
+        ]
 
         result = {
             "predicted_mode": predicted_mode,
             "confidence": confidence,
             "source": "behavioral_predictor",
-            "factors": factors[:5],  # top 5 features
+            "factors": {
+                # ``features`` is a feature-vector echo for explainability;
+                # ``distribution`` is the full per-class softmax so we can
+                # diagnose single-class collapse and threshold tuning
+                # without re-running inference.
+                "features": feature_rows[:5],
+                "distribution": distribution,
+            },
             "fusion_factors": self._build_fusion_factors(features),
         }
 

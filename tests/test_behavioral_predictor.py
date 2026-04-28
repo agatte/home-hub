@@ -35,6 +35,36 @@ class TestInit:
         assert result is None
 
 
+class TestStaleEncoder:
+    """A saved label_encoder that targets retired modes (e.g. ``away``
+    after 2026-04-27) must NOT be loaded — argmax could land on a class
+    that no longer exists, and predictions would silently produce
+    invalid mode strings.
+    """
+
+    def test_load_refuses_stale_encoder(self, tmp_model_manager, monkeypatch):
+        # Pretend a prior training run saved a model with `away` in the
+        # label encoder (a mode that's since been retired). Without the
+        # gate, _load_existing would happily restore it.
+        meta_path = tmp_model_manager.data_dir / "model_meta.json"
+        model_path = tmp_model_manager.data_dir / "mode_predictor.lgb"
+        # Need both an artifact on disk AND meta pointing to it. The
+        # artifact contents don't matter — the staleness check fires
+        # before we try to read the .lgb file.
+        model_path.write_bytes(b"")
+        tmp_model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb",
+            "status": "shadow",
+            "label_encoder": {"0": "working", "1": "away"},
+        }
+        meta_path.write_text("{}")
+
+        # Construct a fresh predictor — _load_existing runs in __init__.
+        predictor = BehavioralPredictor(tmp_model_manager)
+        assert predictor._model is None
+        assert predictor._label_encoder == {}
+
+
 class TestStatus:
     def test_get_status_shape(self, predictor):
         status = predictor.get_status()
@@ -175,10 +205,7 @@ class TestRetrainWithLightGBM:
         await predictor.retrain()
         # Promote so predict returns a result instead of None on shadow.
         predictor._status = "active"
-        result = await predictor.predict(
-            current_mode="working",
-            current_mode_duration_s=600,
-        )
+        result = await predictor.predict(current_mode="working")
         # Confidence might land below SUGGEST_THRESHOLD with synthetic data;
         # accept None or a properly-shaped dict.
         if result is not None:
@@ -186,3 +213,12 @@ class TestRetrainWithLightGBM:
             assert "confidence" in result
             assert "source" in result
             assert result["source"] == "behavioral_predictor"
+            # factors carries both the feature echo and the full-class
+            # softmax distribution after the 2026-04-28 plumbing change.
+            factors = result["factors"]
+            assert isinstance(factors, dict)
+            assert "features" in factors
+            assert "distribution" in factors
+            assert isinstance(factors["distribution"], dict)
+            # distribution should sum to ~1.0 across all classes.
+            assert abs(sum(factors["distribution"].values()) - 1.0) < 1e-3

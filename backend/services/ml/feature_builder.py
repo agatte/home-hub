@@ -208,8 +208,11 @@ def build_current_features(
 ) -> dict:
     """Build a feature vector for real-time prediction.
 
-    Uses the current timestamp and provided context to produce the
-    same feature set as ``build_training_data`` (minus the target).
+    Pure function — given the runtime context values, produces the same
+    feature set as ``build_training_data`` (minus the target). Use
+    ``build_runtime_features`` instead when calling from the live
+    automation loop; it queries activity_events to fill in the values
+    the trained model expects.
     """
     now = datetime.now(timezone.utc)
     features = get_temporal_features(now)
@@ -222,3 +225,73 @@ def build_current_features(
         "season_enc": SEASON_ENCODING.get(features["season"], 0),
     })
     return features
+
+
+async def build_runtime_features(current_mode: str) -> dict:
+    """Build a feature vector for live prediction by querying recent events.
+
+    The behavioral predictor was previously trained with four
+    history-derived features (``minutes_since_wake``, mode transitions
+    today, manual overrides last 7d, current-mode dwell) but called
+    with all four defaulted to 0 — so inference saw a feature shape the
+    model had never trained on. This async wrapper closes that gap by
+    deriving each value from ``activity_events`` the same way
+    ``build_training_data`` does, then delegates to
+    ``build_current_features`` for assembly.
+
+    All four queries are tiny aggregates against an indexed timestamp
+    column; cost at the 60s automation cadence is negligible.
+    """
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_ago = now - timedelta(days=7)
+
+    async with async_session() as session:
+        wake_result = await session.execute(
+            select(ActivityEvent.timestamp)
+            .where(ActivityEvent.timestamp >= today_start)
+            .where(ActivityEvent.mode != "idle")
+            .order_by(ActivityEvent.timestamp.asc())
+            .limit(1)
+        )
+        wake = wake_result.scalar_one_or_none()
+
+        transitions_result = await session.execute(
+            select(func.count())
+            .select_from(ActivityEvent)
+            .where(ActivityEvent.timestamp >= today_start)
+        )
+        transitions_today = int(transitions_result.scalar() or 0)
+
+        overrides_result = await session.execute(
+            select(func.count())
+            .select_from(ActivityEvent)
+            .where(ActivityEvent.timestamp >= week_ago)
+            .where(ActivityEvent.source == "manual")
+        )
+        manual_overrides_7d = int(overrides_result.scalar() or 0)
+
+        last_result = await session.execute(
+            select(ActivityEvent.timestamp)
+            .order_by(ActivityEvent.timestamp.desc())
+            .limit(1)
+        )
+        last_ts = last_result.scalar_one_or_none()
+
+    wake = _to_utc(wake) if wake else None
+    last_ts = _to_utc(last_ts) if last_ts else None
+
+    minutes_since_wake = (
+        (now - wake).total_seconds() / 60 if wake and now > wake else 0
+    )
+    current_mode_duration_s = (
+        (now - last_ts).total_seconds() if last_ts else 0
+    )
+
+    return build_current_features(
+        current_mode=current_mode,
+        current_mode_duration_s=current_mode_duration_s,
+        transitions_today=transitions_today,
+        manual_override_count_7d=manual_overrides_7d,
+        minutes_since_wake=minutes_since_wake,
+    )

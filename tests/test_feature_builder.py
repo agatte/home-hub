@@ -140,6 +140,60 @@ class TestBuildTrainingData:
         assert len(rows) == 1
 
 
+@pytest.mark.asyncio
+class TestBuildRuntimeFeatures:
+    """The async wrapper that closes the train/serve feature-parity gap.
+
+    Pre-2026-04-28 the predictor was called with only ``current_mode``,
+    leaving four history-derived features at 0. These tests pin the
+    DB-driven values so a regression of that bug shows up as a test
+    failure, not a silent accuracy hit.
+    """
+
+    async def test_empty_db_yields_zero_history(self, ml_db):
+        features = await fb.build_runtime_features(current_mode="working")
+        assert features["minutes_since_wake"] == 0
+        assert features["mode_transitions_today"] == 0
+        assert features["manual_override_count_7d"] == 0
+        assert features["previous_mode_duration_min"] == 0
+        # Temporal features still populated even without rows.
+        assert "hour" in features
+        assert features["previous_mode"] == fb.MODE_ENCODING["working"]
+
+    async def test_history_populates_features(self, ml_db):
+        # Use offsets from `now` so the test isn't sensitive to the wall
+        # clock — putting events at a fixed today_start+8h breaks if the
+        # suite runs before 08:00 (events live in the future).
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        async with ml_db() as session:
+            # First non-idle event of "today" — wake.
+            session.add(ActivityEvent(
+                timestamp=today_start + timedelta(minutes=1),
+                mode="working", source="process", duration_seconds=600,
+            ))
+            # Two more transitions today.
+            session.add(ActivityEvent(
+                timestamp=now - timedelta(minutes=20),
+                mode="watching", source="process", duration_seconds=600,
+            ))
+            session.add(ActivityEvent(
+                timestamp=now - timedelta(minutes=10),
+                mode="working", source="process", duration_seconds=600,
+            ))
+            # A manual override 2 days ago — still inside the 7d window.
+            session.add(ActivityEvent(
+                timestamp=now - timedelta(days=2),
+                mode="relax", source="manual", duration_seconds=600,
+            ))
+            await session.commit()
+
+        features = await fb.build_runtime_features(current_mode="working")
+        assert features["mode_transitions_today"] == 3
+        assert features["manual_override_count_7d"] == 1
+        assert features["minutes_since_wake"] > 0
+
+
 class TestEncodings:
     def test_mode_encoding_covers_predictable_modes(self):
         for mode in fb.PREDICTABLE_MODES:
