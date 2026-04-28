@@ -175,3 +175,64 @@ class TestRoutinesAPI:
             assert isinstance(data["routines"], list)
         else:
             assert isinstance(data, list)
+
+
+# ---------------------------------------------------------------------------
+# Learning — predictor promote gate
+# ---------------------------------------------------------------------------
+
+class TestPredictorPromoteGate:
+    """Verify /api/learning/predictor/promote refuses degenerate models.
+
+    Background: 2026-04-27 the LightGBM predictor collapsed to a single
+    output class (`away` 898/898). The gate inspects recent shadow
+    predictions before allowing promotion; a retrain that produces
+    diverse outputs unblocks it automatically.
+
+    Localhost requests bypass `require_api_key` so no header is sent.
+    The TestClient hits the real on-disk DB, which holds production
+    `decision_source='ml'` rows. Whatever the row distribution looks
+    like at test time, it should be either degenerate (gate fires 409)
+    or diverse (gate passes, would attempt promote — see below).
+    """
+
+    def test_returns_409_or_short_circuits(self, client):
+        bp = getattr(client.app.state, "behavioral_predictor", None)
+        if bp is None:
+            pytest.skip("behavioral_predictor not initialized (lightgbm missing?)")
+
+        # If the predictor is already active, the route short-circuits before
+        # the gate. Demote to ensure we exercise the gate path.
+        original_status = bp._status
+        if original_status == "active":
+            try:
+                bp.demote()
+            except Exception:
+                pytest.skip("could not force-demote predictor for gate test")
+
+        try:
+            resp = client.post("/api/learning/predictor/promote")
+            # Two healthy outcomes: gate fires (409) on degenerate data, or
+            # gate passes (200) on diverse data and the promote runs.
+            # Anything else (5xx, 400) means the gate is broken.
+            assert resp.status_code in (200, 409), resp.text
+            if resp.status_code == 409:
+                detail = resp.json()["detail"]
+                assert detail["error"] == "predictor_degenerate"
+                assert "diagnostics" in detail
+                diag = detail["diagnostics"]
+                # Diagnostics carry the sample-distribution breakdown.
+                for key in ("total", "unique_modes", "top_mode_share", "reason"):
+                    assert key in diag
+        finally:
+            # Restore the predictor state we found, regardless of outcome.
+            if original_status == "active" and bp._status != "active":
+                try:
+                    bp.promote()
+                except Exception:
+                    pass
+            elif original_status == "shadow" and bp._status != "shadow":
+                try:
+                    bp.demote()
+                except Exception:
+                    pass

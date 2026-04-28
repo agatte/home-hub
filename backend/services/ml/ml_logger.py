@@ -293,6 +293,67 @@ class MLDecisionLogger:
             )
             return {}
 
+    async def compute_prediction_diversity(
+        self, days: int = 7, min_samples: int = 50,
+        max_top_share: float = 0.95,
+    ) -> dict[str, Any]:
+        """Distribution of recent behavioral-predictor outputs.
+
+        Gates `/predictor/promote` against the 2026-04-27 single-class
+        collapse: 898/898 shadow predictions returned ``away``, real
+        accuracy 0.64% vs 28.3% no-skill floor. Promotion would have
+        flipped the apartment to ``away`` every 60s.
+
+        Returns a dict with ``diverse`` (bool) plus diagnostics. A retrain
+        that produces diverse outputs flips ``diverse`` to True automatically
+        once ``min_samples`` rows have accumulated.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(MLDecision.predicted_mode, func.count().label("n"))
+                    .where(
+                        MLDecision.decision_source == "ml",
+                        MLDecision.timestamp >= cutoff,
+                    )
+                    .group_by(MLDecision.predicted_mode)
+                )
+                rows = result.all()
+        except Exception as exc:
+            logger.error(
+                "Failed to compute prediction diversity: %s", exc, exc_info=True,
+            )
+            return {
+                "diverse": False, "reason": "query_failed", "total": 0,
+                "unique_modes": 0, "window_days": days,
+            }
+
+        total = sum(int(r.n) for r in rows)
+        unique_modes = len(rows)
+        mode_counts = {r.predicted_mode: int(r.n) for r in rows}
+        top_share = max(mode_counts.values()) / total if total else 0.0
+
+        base = {
+            "total": total,
+            "unique_modes": unique_modes,
+            "mode_counts": mode_counts,
+            "top_mode_share": round(top_share, 4),
+            "window_days": days,
+            "min_samples": min_samples,
+            "max_top_share": max_top_share,
+        }
+
+        if total == 0:
+            return {**base, "diverse": False, "reason": "no_predictions"}
+        if total < min_samples:
+            return {**base, "diverse": False, "reason": "insufficient_samples"}
+        if unique_modes < 2:
+            return {**base, "diverse": False, "reason": "single_class"}
+        if top_share >= max_top_share:
+            return {**base, "diverse": False, "reason": "near_single_class"}
+        return {**base, "diverse": True, "reason": "ok"}
+
     async def compare_strategies(self, days: int = 14) -> dict:
         """A/B comparison of fusion vs rule-engine-only vs process-priority.
 

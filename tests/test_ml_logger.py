@@ -203,6 +203,90 @@ class TestComputeAccuracyBySource:
 
 
 @pytest.mark.asyncio
+class TestComputePredictionDiversity:
+    async def _seed(self, ml_db, mode_counts: dict, days_old: float = 0.5):
+        """Seed `decision_source='ml'` rows with the given mode distribution."""
+        ts = datetime.now(timezone.utc) - timedelta(days=days_old)
+        async with ml_db() as session:
+            for mode, n in mode_counts.items():
+                for _ in range(n):
+                    session.add(MLDecision(
+                        timestamp=ts,
+                        predicted_mode=mode,
+                        confidence=0.9,
+                        decision_source="ml",
+                        applied=False,
+                    ))
+            await session.commit()
+
+    async def test_no_predictions_blocks(self, logger, ml_db):
+        result = await logger.compute_prediction_diversity()
+        assert result["diverse"] is False
+        assert result["reason"] == "no_predictions"
+        assert result["total"] == 0
+
+    async def test_insufficient_samples_blocks(self, logger, ml_db):
+        await self._seed(ml_db, {"working": 10, "gaming": 5})
+        result = await logger.compute_prediction_diversity(min_samples=50)
+        assert result["diverse"] is False
+        assert result["reason"] == "insufficient_samples"
+        assert result["total"] == 15
+        assert result["unique_modes"] == 2
+
+    async def test_single_class_blocks(self, logger, ml_db):
+        # Reproduces the 4/27 failure: every prediction is `away`.
+        await self._seed(ml_db, {"away": 60})
+        result = await logger.compute_prediction_diversity()
+        assert result["diverse"] is False
+        assert result["reason"] == "single_class"
+        assert result["unique_modes"] == 1
+        assert result["top_mode_share"] == 1.0
+
+    async def test_near_single_class_blocks(self, logger, ml_db):
+        # 96% one mode, 4% another → still degenerate.
+        await self._seed(ml_db, {"away": 96, "idle": 4})
+        result = await logger.compute_prediction_diversity()
+        assert result["diverse"] is False
+        assert result["reason"] == "near_single_class"
+        assert result["top_mode_share"] == pytest.approx(0.96)
+
+    async def test_diverse_passes(self, logger, ml_db):
+        await self._seed(ml_db, {
+            "working": 40, "gaming": 20, "watching": 25, "idle": 15,
+        })
+        result = await logger.compute_prediction_diversity()
+        assert result["diverse"] is True
+        assert result["reason"] == "ok"
+        assert result["unique_modes"] == 4
+        assert result["total"] == 100
+
+    async def test_window_excludes_stale_rows(self, logger, ml_db):
+        # 40 rows from 30 days ago — outside the 7d default window.
+        await self._seed(ml_db, {"away": 40}, days_old=30)
+        result = await logger.compute_prediction_diversity(days=7)
+        assert result["diverse"] is False
+        assert result["reason"] == "no_predictions"
+
+    async def test_other_decision_sources_ignored(self, logger, ml_db):
+        # Fusion rows with diverse predictions don't unblock the predictor gate.
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        async with ml_db() as session:
+            for mode in ("working", "gaming", "watching", "relax", "idle"):
+                for _ in range(20):
+                    session.add(MLDecision(
+                        timestamp=ts,
+                        predicted_mode=mode,
+                        confidence=0.9,
+                        decision_source="fusion",
+                        applied=True,
+                    ))
+            await session.commit()
+        result = await logger.compute_prediction_diversity()
+        assert result["diverse"] is False
+        assert result["reason"] == "no_predictions"
+
+
+@pytest.mark.asyncio
 class TestComputeOverrideRate:
     async def test_shape_with_seeded_events(self, logger, ml_db):
         now = datetime.now(timezone.utc)

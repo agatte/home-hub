@@ -193,12 +193,44 @@ def _get_predictor(request: Request):
     return predictor
 
 
+_DEGENERACY_REASON_HINTS = {
+    "no_predictions": "no shadow predictions in the window",
+    "insufficient_samples": "not enough shadow predictions to assess diversity",
+    "single_class": "all predictions collapsed to one mode",
+    "near_single_class": "one mode dominates predictions",
+    "query_failed": "diagnostic query failed; check logs",
+}
+
+
 @router.post("/predictor/promote", dependencies=[Depends(require_api_key)])
 async def promote_predictor(request: Request) -> dict:
-    """Promote behavioral predictor from shadow to active."""
+    """Promote behavioral predictor from shadow to active.
+
+    Gated on output diversity to prevent re-shipping the 2026-04-27
+    failure (898/898 predictions = ``away`` → apartment would flip to
+    away mode every 60s). A retrain that produces diverse shadow
+    outputs unblocks promotion automatically.
+    """
     predictor = _get_predictor(request)
     if predictor._status == "active":
         return {"status": "ok", "detail": "Already active", **predictor.get_status()}
+
+    ml_log = _get_ml_logger(request)
+    diversity = await ml_log.compute_prediction_diversity()
+    if not diversity["diverse"]:
+        hint = _DEGENERACY_REASON_HINTS.get(diversity["reason"], diversity["reason"])
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "predictor_degenerate",
+                "message": (
+                    f"Predictor cannot be promoted: {hint}. "
+                    "Retrain and verify diverse shadow outputs before promoting."
+                ),
+                "diagnostics": diversity,
+            },
+        )
+
     predictor.promote()
     return {"status": "ok", "detail": "Promoted to active", **predictor.get_status()}
 
