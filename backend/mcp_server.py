@@ -154,15 +154,6 @@ async def get_automation_status() -> dict:
 
 
 @mcp.tool()
-async def get_presence_status() -> dict:
-    """Get current presence detection state (home/away/arriving/departing)."""
-    async with _client() as c:
-        r = await c.get("/api/automation/presence/status")
-        r.raise_for_status()
-        return r.json()
-
-
-@mcp.tool()
 async def get_camera_snapshot(annotate: bool = True) -> Any:
     """Capture one JPEG frame from the Latitude's webcam and return it to the agent.
 
@@ -510,7 +501,7 @@ async def get_live_state() -> dict:
 
     Consolidates: automation mode + override + time period, per-light state
     (bri/hue/sat/ct/colormode/reachable), screen-sync status, camera zone /
-    posture / lux, presence, weather, brightness multipliers, health.
+    posture / lux, weather, brightness multipliers, health.
 
     Prefer this over calling several smaller tools when you need to reason
     about "what is the system doing right now" — one round-trip, full picture.
@@ -542,12 +533,11 @@ async def get_live_state() -> dict:
             _safe_get(c, "/api/lights"),
             _safe_get(c, "/api/automation/screen-sync/status"),
             _safe_get(c, "/api/camera/status"),
-            _safe_get(c, "/api/automation/presence/status"),
             _safe_get(c, "/api/weather"),
             _safe_get(c, "/api/automation/mode-brightness"),
             _safe_get(c, "/api/automation/watching-posture"),
         )
-    health, automation, lights, screen_sync, camera, presence, weather, bri_mult, posture_cfg = results
+    health, automation, lights, screen_sync, camera, weather, bri_mult, posture_cfg = results
 
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -556,7 +546,6 @@ async def get_live_state() -> dict:
         "lights": lights,
         "screen_sync": screen_sync,
         "camera": camera,
-        "presence": presence,
         "weather": weather,
         "brightness_multipliers": bri_mult,
         "watching_posture_config": posture_cfg,
