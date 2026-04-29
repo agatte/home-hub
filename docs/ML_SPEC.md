@@ -57,7 +57,7 @@ rare.
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
 | **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection). Remaining for Phase 2b: posture classification (BlazePose upgrade) | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
-| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (6-signal weighted ensemble in v2 with presence; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
+| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
 
 ### Design Principles
 
@@ -148,12 +148,16 @@ confident prediction:
 6. Time-based rules         → Hardcoded schedule defaults
 ```
 
-**Confidence fusion** (Phase 3, `confidence_fusion.py`) combines 6 signal sources
-into a weighted ensemble: process detection (wt 0.287), presence/phone-WiFi
-(0.180), camera presence (0.164), behavioral predictor (0.164), audio classifier
-(0.123), rule engine (0.082). Weights start at these defaults and update nightly
-from measured per-signal accuracy.
-Stale signals (>5 min) are excluded and their weight redistributed.
+**Confidence fusion** (Phase 3, `confidence_fusion.py`) combines 4 signal sources
+into a weighted ensemble: process detection (wt 0.438), camera presence (0.250),
+audio classifier (0.187), rule engine (0.125). Weights start at these defaults
+(see `DEFAULT_WEIGHTS` in `confidence_fusion.py`) and update nightly from
+measured per-signal accuracy.
+Stale signals (>5 min) are excluded and their weight redistributed. The
+phone-WiFi presence lane was retired and the LightGBM behavioral lane was
+stripped from the ensemble on 2026-04-27 — see the v3 entry under §15 below
+for context. The behavioral predictor still runs as a standalone service
+(`/api/learning/predictor`); it just no longer votes in fusion.
 
 ### Data Flow Diagram
 
@@ -1315,7 +1319,7 @@ Audio classifier promotion from shadow to active
 ### Phase 3: Autonomous Operation (In Progress — April 2026+)
 
 **Shipped (April 15, 2026):**
-- ✓ `ConfidenceFusion` service — weighted ensemble (228 LOC; v1 was 5-signal, v2 is 6-signal after presence joined 2026-04-21)
+- ✓ `ConfidenceFusion` service — weighted ensemble. Lane-count evolution: **v1** 5-signal (April 15). **v2** 6-signal after phone-WiFi presence joined as the 6th voter (April 21). **v3** 4-signal after presence + behavioral lanes were both removed (April 27) — current shape is process / camera / audio_ml / rule_engine.
 - ✓ Fusion integrated into automation loop — computes every 60s cycle
 - ✓ Auto-apply at 95%+ confidence when idle/away
 - ✓ Stale process override at 98%+ confidence with 80%+ signal agreement
@@ -1323,9 +1327,14 @@ Audio classifier promotion from shadow to active
 - ✓ Decision logging with `decision_source="fusion"`
 
 **Shipped (April 21, 2026) — v2:**
-- ✓ **Presence joined as 6th voter** (weight 0.18). Prior voter weights scaled by 0.82. Votes `away` at conf 0.95 when phone is off home WiFi; abstaining-ish `idle` at 0.30 when home. Closes the gap where camera false-negatived in low light and no signal in fusion knew the user had left.
+- ⊘ **Presence joined as 6th voter** (weight 0.18). Prior voter weights scaled by 0.82. Votes `away` at conf 0.95 when phone is off home WiFi; abstaining-ish `idle` at 0.30 when home. *Retired 2026-04-27 (v3)* — phone-WiFi was too noisy on its own; the camera tuning below is the part that stayed.
 - ✓ **Per-lane sub-factors** — every fusion signal now carries a `factors: [{key, label, value, display, impact, stale}, ...]` list so the analytics constellation can expose the concrete data each lane is considering (foreground app, YAMNet scores, zone/posture/lux, top behavioral features, matching rule slot, presence state/last-seen).
 - ✓ **Camera low-light tuning** — `MIN_FACE_CONFIDENCE` 0.2→0.15 and `ABSENT_THRESHOLD` 7→15 frames (~14s→~30s). Dampens the reading-in-bed scenario where detection flapped and fusion flipped to away.
+
+**Shipped (April 27, 2026) — v3:**
+- ✓ **`presence_service` retired (`b8fdbfe`)** — fusion drops the phone-WiFi lane; `/api/automation/presence/*` routes removed; weights renormalized so the four remaining lanes sum to 1.0 (process 0.438, camera 0.250, audio_ml 0.187, rule_engine 0.125). The home/away concept is now fully Hue-native; iOS Shortcut + ARP probing was too unreliable on its own.
+- ✓ **Behavioral predictor lane stripped from fusion (`c0b50ad`)** — single-class collapse audit found 898/898 → one class at 0.64% real accuracy, so the LightGBM lane no longer feeds the ensemble. The predictor still trains nightly and is exposed standalone at `/api/learning/predictor`, gated behind a diversity check before promotion (`abe6343`).
+- ✓ **Train/serve feature parity (`82c72ed`)** — predictor inference now builds features through the same code path as training, closing a divergence that was masking real prediction quality and forcing the diversity gate to do extra work.
 
 **Shipped (April 18, 2026):**
 - ✓ **Accuracy-driven weight learning** — `fusion_weight_tuning` ScheduledTask at 3:30 AM daily. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion rows with `factors.signal_details`, derives per-source accuracy, hands it to `ConfidenceFusion.update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. Full `signals` dict now persisted in `MLDecision.factors` so historical decisions carry the per-source vote context.
@@ -1366,7 +1375,7 @@ Camera Posture ────── depends on ──────── Camera Pre
 Smart Screen Sync ─────────────────────── ✓ SHIPPED (K-means, April 2026)
 Music Bandit ──────────────────────────── ✓ SHIPPED (Thompson sampling, April 2026)
 Decision Explainability ── depends on ─── Any ML prediction source
-Autonomous Operation ──── depends on ──── Behavioral Predictor validated
+Autonomous Operation ──── depends on ──── Fusion confidence + override-rate budget
 ```
 
 ---
