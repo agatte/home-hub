@@ -851,7 +851,9 @@ Middleware service that intercepts all state changes and writes to event tables.
 **Implementation note:** Events are buffered in memory and flushed every 5 seconds or when buffer exceeds 50 items. This avoids write contention on SQLite and reduces Postgres round-trips.
 
 #### RuleEngineService (live) + LearningEngine (future separate process)
-`RuleEngineService` is live in-process: regenerates `LearnedRule` rows every 6 hours from 30 days of `activity_events` (70%+ confidence, 3+ samples), drives the nudge WebSocket messages, exposes 7 endpoints under `/api/rules/`. The table below is the **target separate-process design** — still aspirational; kept as a north star for when event volume justifies splitting out of the main process.
+`RuleEngineService` is live in-process: regenerates `LearnedRule` rows every 6 hours from 30 days of `activity_events` (70%+ confidence, 3+ samples), drives the nudge WebSocket messages, exposes 7 endpoints under `/api/rules/`. As of 2026-04-28 (`7b64644`) it also feeds the confidence fusion ensemble: each `check_rules` match calls `fusion.report_signal("rule_engine", ...)` and writes a per-vote `ml_decisions` row with `decision_source="rule_engine"` (`applied=False, broadcast=False`). Two safety layers: row-level filter on `mode in VALID_MODES` so retired modes can't seed rules; an `_BLACKOUT_SLOTS` constant covering M-F 8am-4:59pm (Anthony's TQL office hours) suppresses both rule generation and voting in those slots. Defensive `VALID_MODES` guard in `check_rules` for future bridge-mode retirements.
+
+The table below is the **target separate-process design** — still aspirational; kept as a north star for when event volume justifies splitting out of the main process.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|

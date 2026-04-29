@@ -6,29 +6,37 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-04-21 (v2)
+> **Last updated:** 2026-04-28 (v3)
+
+## v3 Changelog (2026-04-27)
+
+Two lanes retired in the same evening, dropping the ensemble from 6 voters back to 4.
+
+- **Phone-WiFi presence retired (`b8fdbfe`).** iOS Shortcut + ARP probing was too unreliable on its own — the home/away concept was retired in favor of Hue's native geofencing. `presence_service` deleted, `/api/automation/presence/*` routes removed, `mode='away'` no longer in `VALID_MODES`.
+- **Behavioral predictor lane stripped from fusion (`c0b50ad`).** A single-class collapse audit found 898/898 shadow predictions resolved to one class at 0.64% real accuracy. The LightGBM model still trains nightly and is reachable at `/api/learning/predictor`, but it no longer votes in the ensemble. A diversity gate (`abe6343`) refuses to promote degenerate models in the future.
+
+Weights re-normalized so the four remaining lanes sum to 1.0:
+
+| Signal | v1 (Apr 15) | v2 (Apr 21) | **v3 (Apr 27)** |
+|--------|-------------|-------------|-----------------|
+| Process detection | 0.35 | 0.287 | **0.438** |
+| Camera presence | 0.20 | 0.164 | **0.250** |
+| Audio classifier | 0.15 | 0.123 | **0.187** |
+| Rule engine | 0.10 | 0.082 | **0.125** |
+| Behavioral predictor | 0.20 | 0.164 | *retired* |
+| Phone-WiFi presence | — | 0.180 | *retired* |
+
+Source of truth: `DEFAULT_WEIGHTS` in `backend/services/ml/confidence_fusion.py`. Stale signals still get redistributed proportionally — same math, fewer voters.
+
+The worked examples below were authored against v1/v2 lane shapes (they include behavioral as an active voter) and are kept as illustrations of the math. Substitute the v3 weights when reading them; the algorithm is unchanged.
+
+---
 
 ## v2 Changelog (2026-04-21)
 
-Presence (phone on home WiFi) joined the ensemble as a 6th voter. Prior
-voter weights were scaled by 0.82 so everything still sums to 1.0.
+Presence (phone on home WiFi) joined the ensemble as a 6th voter. Prior voter weights were scaled by 0.82. *Retired 2026-04-27 — see v3 above.*
 
-| Signal | v1 weight | v2 weight |
-|--------|-----------|-----------|
-| Process detection | 0.35 | 0.287 |
-| Camera presence | 0.20 | 0.164 |
-| Behavioral predictor | 0.20 | 0.164 |
-| Audio classifier | 0.15 | 0.123 |
-| Rule engine | 0.10 | 0.082 |
-| **Presence (new)** | — | **0.180** |
-
-Presence votes `away` at confidence 0.95 when the phone is off home WiFi
-(the single most reliable "not home" signal the system collects) and a
-low-conf `idle` (0.30) when home — home doesn't predict a specific
-activity, so the lane stays visible without drowning out process/camera.
-
-The worked examples below still use the v1 weights for illustration; the
-math is identical, just re-normalize through the v2 values when adapting.
+Presence voted `away` at confidence 0.95 when the phone was off home WiFi (the single most reliable "not home" signal the system collected) and a low-conf `idle` (0.30) when home — home doesn't predict a specific activity, so the lane stayed visible without drowning out process/camera. The reliability problem turned out to be the iOS Shortcut webhook + ARP probing combination on its own; the camera tuning that shipped alongside this lane (`MIN_FACE_CONFIDENCE` 0.2→0.15, `ABSENT_THRESHOLD` 7→15) is the part that survived.
 
 ---
 
@@ -98,7 +106,7 @@ Fusion takes the independent signals and makes them **vote together**:
 
 **Before:** 5 separate specialists, each running in their own lane (presence sat outside fusion entirely). Decisions cascaded — behavioral predictor first, then rules, then time. Only the first one to produce a high-confidence result mattered.
 
-**After:** All 6 signals report their current best guess + confidence into a shared pool. The fusion service weights them, groups votes by mode, computes an ensemble confidence score, and asks "do enough signals agree?"
+**After (v3):** Four signals — process / camera / audio_ml / rule_engine — report their current best guess + confidence into a shared pool. The fusion service weights them, groups votes by mode, computes an ensemble confidence score, and asks "do enough signals agree?" (Earlier ensemble shapes — v1 5-signal, v2 6-signal — are documented in the changelog above.)
 
 **New capability:** Fusion can **override stale process detection**. If you close a game but the client is still running, pre-fusion the system would keep saying "gaming" forever. Now, if camera says absent + audio says silence + WiFi says phone gone, fusion can hit 98%+ confidence and override the stale process state.
 
@@ -113,18 +121,16 @@ Fusion takes the independent signals and makes them **vote together**:
 
 ### Starting Weights (Static Defaults)
 
-Every signal has a weight representing "how much I trust this signal's opinion":
+Every signal has a weight representing "how much I trust this signal's opinion". Current v3 defaults:
 
-| Signal | Weight (v2) | Why |
+| Signal | Weight (v3) | Why |
 |--------|-------------|-----|
-| Process detection | **0.287** | Most reliable — if `LeagueofLegends.exe` is running, you're gaming |
-| Presence (phone WiFi) | 0.180 | Rock-solid "not home" signal; low-conf `idle` vote when home |
-| Camera presence | 0.164 | Good but can be fooled by sitting still outside frame |
-| Behavioral predictor | 0.164 | Useful but new, needs training data |
-| Audio classifier | 0.123 | Still in shadow mode, less trusted |
-| Rule engine | 0.082 | Simple frequency patterns, lowest trust |
+| Process detection | **0.438** | Most reliable — if `LeagueofLegends.exe` is running, you're gaming |
+| Camera presence | 0.250 | Good but can be fooled by sitting still outside frame |
+| Audio classifier | 0.187 | YAMNet shadow mode; conservative weight |
+| Rule engine | 0.125 | Simple frequency patterns; data-gated, intermittent voter |
 
-These sum to exactly 1.0. That matters for the math later.
+These sum to exactly 1.0. That matters for the math later. Source of truth: `DEFAULT_WEIGHTS` in `confidence_fusion.py`.
 
 ### Step 1: Filter Stale Signals
 
@@ -203,7 +209,7 @@ The difference matters:
 
 ## Why Process Detection Matters Most
 
-Notice process detection has weight 0.35 — almost twice any other signal. That's because process detection is **binary and reliable**. If your PC agent sees `LeagueofLegends.exe`, you are objectively gaming. There's no interpretation.
+Notice process detection has the largest weight by far — `0.438` in v3, almost twice the camera lane's `0.250`. That's because process detection is **binary and reliable**. If your PC agent sees `LeagueofLegends.exe`, you are objectively gaming. There's no interpretation.
 
 Everything else is probabilistic:
 
@@ -319,10 +325,11 @@ The static weights above are the starting point. Accuracy-driven tuning runs nig
 
 **How it works:**
 
-1. Every fusion auto-apply or override writes an `ml_decisions` row with `decision_source="fusion"`. The automation engine stamps `factors.signal_details` with a per-source dict (each source's voted mode + confidence + stale flag) at log time.
-2. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks those rows where `actual_mode` has been backfilled, and for each non-stale signal source, computes `correct / total` (correct = the source's vote matched the eventual `actual_mode`).
+1. Every fusion auto-apply or override (and every silent 60s tick — see "Fusion shadow logging") writes an `ml_decisions` row with `decision_source="fusion"`. The automation engine stamps `factors.signal_details` with a per-source dict (each source's voted mode + confidence + stale flag) at log time.
+2. `MLDecisionLogger.compute_per_source_metrics(days=14)` walks those rows where `actual_mode` has been backfilled, and for each non-stale signal source, returns `{accuracy, samples, correct}` per source. The legacy `compute_accuracy_by_source` is now a thin wrapper that flattens this to `{src: accuracy}` for callers that only need the ratios.
 3. `ConfidenceFusion.update_weights_from_accuracy()` normalizes those accuracies so the active weights sum to 1.0. Sources with zero usable samples in the window fall back to `DEFAULT_WEIGHTS`.
-4. The `fusion_weight_tuning` ScheduledTask wires steps 2–3 into the 30-second scheduler loop. `POST /api/learning/retune-weights` is the manual-trigger equivalent — returns `weights_before` + `weights_after` + the derived `accuracy_by_source` so you can validate without waiting for the cron.
+4. **New (2026-04-28):** `MLDecisionLogger.persist_accuracy_metrics()` writes one `MLMetric` row per source per UTC day (`metric_name="accuracy_<source>"`, value in `[0, 1]`, `extra={samples, correct, window_days}`). Idempotent for a given date via delete-then-insert, so re-runs leave one final row per source. Before this, the `ml_metrics` table existed but was never written to — the analytics dashboard had no historical accuracy to query.
+5. The `fusion_weight_tuning` ScheduledTask wires steps 2–4 into the 3:30 AM cron. `POST /api/learning/retune-weights` is the manual-trigger equivalent — returns `weights_before` + `weights_after` + the derived `accuracy_by_source` so you can validate without waiting for the cron. Manual triggers don't persist to `ml_metrics` (only the nightly cron does), keeping the historical timeline regular.
 
 Example after 14 days of observation:
 
@@ -354,7 +361,7 @@ Notice process detection's weight drops from 0.35 → 0.25 because accuracy-weig
 Every pipeline state broadcast includes the full fusion result. The frontend renders:
 
 - **SVG confidence ring** at the top — arc length = fused confidence, color transitions from gray (<70%) → amber (70-90%) → green (90-95%) → bright green with pulse (95%+)
-- **6 signal cards** (constellation satellites in v2) showing each source's mode, confidence, weight, and agreement indicator
+- **4 voter satellites** in the analytics constellation (v3 — process / camera / audio_ml / rule_engine), plus a non-voting context outer ring (time / weather / override / sonos). Each voter shows its mode, confidence, weight, and agreement indicator.
 - Cards dim to 30% opacity and show "STALE" when a signal expires
 - Cards show "No data" when a signal has never reported
 - Winner highlight on the highest-weighted agreeing signal

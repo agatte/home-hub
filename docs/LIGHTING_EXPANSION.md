@@ -40,7 +40,7 @@ Fills out rooms. Replaces or complements existing fabric lamps.
 | **Hue Go Gen 2 Portable** | Battery accent lamp, 24h battery, moveable | Floats — bathroom shelf, hallway floor, bed, living room coffee table | $160 |
 | **IKEA Varmblixt Smart Donut** | Sculptural frosted-donut lamp, Matter-certified, pairs via Zigbee 3.0 (power-cycle reset). 12,000-color range. | Living room side table *or* kitchen island corner (its sculptural shape suits the loft aesthetic) | $90 |
 
-**Integration notes:** Varmblixt has a narrower color gamut (12,000 colors vs Hue's ~16M) — test before relying on for fine HSB states. Go can be presence-triggered — great for the "arrival wave" sequence if you add a hallway/bathroom position.
+**Integration notes:** Varmblixt has a narrower color gamut (12,000 colors vs Hue's ~16M) — test before relying on for fine HSB states. Go could be motion-triggered via a Hue motion sensor (the in-app arrival-wave choreography was retired with home/away on 2026-04-27, but bridge-side motion rules still work).
 
 ### C. Architectural & Wall-Wash (transform surfaces)
 Turn white walls into scenes. Highest drama-per-dollar.
@@ -137,7 +137,7 @@ Everything the apartment can reasonably hold without over-lighting.
 - **L12 — Skydrag/Omlopp** under-cabinet task light. Strict `ct ≥ 333` in evening+. Auto-on during `cooking` at 4000K (food color accuracy within your post-sunset rule allows up to 333 mired = 3000K; 4000K only during daytime cooking). Complements L3/L4 which are island-focused.
 
 **Hallway** — no fixture, easy wins
-- **L13 — Hue Go Gen 2** on a small shelf or the floor. Motion/presence-activated welcome light (your presence service already does the choreographed wave — Go joins L3→L4→L1→L2). Also gives bathroom a battery-powered warm light that doesn't require permanent install.
+- **L13 — Hue Go Gen 2** on a small shelf or the floor. Battery-powered warm light that doesn't require permanent install — works as a bathroom or hallway accent. Could be motion-triggered via a Hue motion sensor (the in-app arrival-wave choreography was retired with home/away on 2026-04-27, but bridge-side motion rules still work for hardware-driven welcome lighting).
 - Or **L13 — Hue Dymera** if there's a bare sconce box you can wire. Up+down beams add vertical drama to the narrow hallway.
 
 ---

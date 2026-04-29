@@ -1336,8 +1336,13 @@ Audio classifier promotion from shadow to active
 - ✓ **Behavioral predictor lane stripped from fusion (`c0b50ad`)** — single-class collapse audit found 898/898 → one class at 0.64% real accuracy, so the LightGBM lane no longer feeds the ensemble. The predictor still trains nightly and is exposed standalone at `/api/learning/predictor`, gated behind a diversity check before promotion (`abe6343`).
 - ✓ **Train/serve feature parity (`82c72ed`)** — predictor inference now builds features through the same code path as training, closing a divergence that was masking real prediction quality and forcing the diversity gate to do extra work.
 
+**Shipped (April 28, 2026) — fusion lane wiring + ml_metrics persistence:**
+- ✓ **rule_engine fusion lane wired (`7b64644`).** Closes the audit `[H]` "rule_engine never fires" finding. Four layers in `backend/services/rule_engine_service.py`: (a) `regenerate_rules` drops rows whose `mode not in VALID_MODES` so retired modes (e.g. `away`) can't seed rules whose votes fusion would silently reject; (b) new `ml_logger=None` kwarg on `RuleEngineService.__init__`, with a `log_decision(decision_source="rule_engine", ...)` call (`applied=False, broadcast=False`) on every `check_rules` match so the lane writes per-vote `ml_decisions` rows; (c) defensive `VALID_MODES` guard at vote time; (d) `_BLACKOUT_SLOTS` constant covering M-F 8am-4:59pm — Anthony is at the office, his home PC isn't producing meaningful at-home activity, and any rules formed in those slots from sparse WFH data would mislead fusion. Skipped in both `regenerate_rules` qualification and `check_rules` early-return.
+- ✓ **Per-source accuracy persisted to `ml_metrics` (`561d4f1`).** Closes the audit `[H]` "ml_metrics never written" finding. New `MLDecisionLogger.compute_per_source_metrics(days=14)` returns `{src: {accuracy, samples, correct}}` (richer shape needed for the analytics dashboard); `compute_accuracy_by_source` is now a thin wrapper preserving the flat-dict contract for `update_weights_from_accuracy` and `/retune-weights`. New `persist_accuracy_metrics(metrics, window_days)` writes one `MLMetric` row per source per UTC day (`metric_name="accuracy_<source>"`, `extra={samples, correct, window_days}`), idempotent via delete-then-insert. Wired into the 3:30 AM `fusion_weight_tuning` cron in `bootstrap.py`.
+- ✓ **MCP server presence cleanup (`dcb3e30`).** Dead-code deletion of the standalone `get_presence_status` MCP tool and the 404'ing presence call in `get_live_state`'s aggregator. Was leftover from `b8fdbfe`.
+
 **Shipped (April 18, 2026):**
-- ✓ **Accuracy-driven weight learning** — `fusion_weight_tuning` ScheduledTask at 3:30 AM daily. `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion rows with `factors.signal_details`, derives per-source accuracy, hands it to `ConfidenceFusion.update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. Full `signals` dict now persisted in `MLDecision.factors` so historical decisions carry the per-source vote context.
+- ✓ **Accuracy-driven weight learning** — `fusion_weight_tuning` ScheduledTask at 3:30 AM daily. `MLDecisionLogger.compute_accuracy_by_source(days=14)` (now a thin wrapper over `compute_per_source_metrics`, see 2026-04-28 entry below) walks fusion rows with `factors.signal_details`, derives per-source accuracy, hands it to `ConfidenceFusion.update_weights_from_accuracy()`. Manual trigger at `POST /api/learning/retune-weights`. Full `signals` dict now persisted in `MLDecision.factors` so historical decisions carry the per-source vote context.
 
 **Shipped (April 19, 2026):**
 - ✓ **Fusion shadow logging** — every 60s tick writes an `applied=False, broadcast=False` row to `ml_decisions` with full `signal_details`. Previously only acting decisions were logged (1 row ever), so weight tuning had nothing to learn from. Shadow rows persist to SQLite but don't broadcast — keeps the pipeline WebSocket quiet.
@@ -1499,13 +1504,14 @@ which ML feature addresses it.
 
 ### Rule Engine (`backend/services/rule_engine_service.py`)
 
-| Threshold | Current Value | Line | ML Feature |
-|-----------|--------------|------|------------|
-| Minimum confidence | 70% | 53 | Behavioral predictor (replaces entire engine) |
-| Minimum samples | 3 | 54 | Behavioral predictor (uses richer features) |
-| Generation interval | 6 hours | 44 | Behavioral predictor (retrains nightly) |
-| Data window | 30 days | 78 | Behavioral predictor (60-day window) |
-| Source weights (ambient/audio_ml=0.5, camera=0.8, rest=1.0) | `_SOURCE_WEIGHTS` | 34 | Behavioral predictor (learns per-source reliability directly) |
+| Threshold | Current Value | Source | ML Feature |
+|-----------|--------------|--------|------------|
+| Minimum confidence | 70% | `_min_confidence` ctor arg | Behavioral predictor (replaces entire engine) |
+| Minimum samples | 3 | `_min_samples` ctor arg | Behavioral predictor (uses richer features) |
+| Generation interval | 6 hours | `GENERATION_INTERVAL_HOURS` | Behavioral predictor (retrains nightly) |
+| Data window | 30 days | `regenerate_rules` since-cutoff | Behavioral predictor (60-day window) |
+| Source weights (ambient/audio_ml=0.5, camera=0.8, rest=1.0) | `_SOURCE_WEIGHTS` | module constant | Behavioral predictor (learns per-source reliability directly) |
+| Office-hours blackout (M-F 8am-4:59pm, 45 slots) | `_BLACKOUT_SLOTS` | module constant | Hardcoded for Anthony's TQL schedule; skipped in both `regenerate_rules` qualification and `check_rules` voting. Adjust the constant if the schedule changes. |
 
 ---
 

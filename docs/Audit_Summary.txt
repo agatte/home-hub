@@ -1,6 +1,6 @@
 ================================================================================
                         HOME HUB - APPLICATION AUDIT
-                    Last updated: April 26, 2026 (late evening)
+                    Last updated: April 28, 2026 (closure pass)
 ================================================================================
 
 System: Single-user, always-on home automation dashboard with ML intelligence
@@ -14,42 +14,66 @@ This doc tracks the substantial work that has shipped and the substantial
 work that has not. Trivial fixes (one-line bug patches, dependency pins,
 small a11y nudges) are deliberately omitted -- check git log for those.
 
+This refresh is backed by both static review and a live MCP runtime sample
+of the Latitude (April 27, ~11:40pm). Where a finding cites production
+data, it's labeled [LIVE].
+
 ================================================================================
                          GRADING SUMMARY
 ================================================================================
 
   Category                Grade   Summary
   ---------------------   -----   ------------------------------------------
-  Backend Architecture    A-      Lifespan extracted to bootstrap.py,
-                                  constructor injection throughout, per-
-                                  light state calculator + Hue v2 effect
-                                  manager extracted from automation_engine
-                                  .py (2,779 -> 2,083 lines); engine still
-                                  hosts mode resolution + fusion ticks
+  Backend Architecture    A-      Lifespan in bootstrap.py, constructor DI,
+                                  per-light state calculator + effect
+                                  manager extracted; engine still hosts
+                                  mode resolution + fusion ticks (~2,083 LOC)
   Frontend / UI           B+      Living-Ink redesign + animated mode
-                                  scenes; vitest + Playwright in place
+                                  scenes; analytics dashboard already
+                                  updated to 4-lane fusion; vitest +
+                                  Playwright in place
   Design / UX             A-      Per-light spatial variation, kitchen pair
-                                  rule, post-sunset ct>=333, projector tune
+                                  rule, post-sunset ct>=333, projector tune,
+                                  zone+posture overlay, working late_night
   Security                B+      X-API-Key on every write, Plant App
                                   HTTPS-only, Sonos SSRF allowlist, RO
-                                  DB for /api/debug/query
-  Machine Learning        A-      8 services, 5-signal fusion with nightly
-                                  weight-learning, shadow-before-promote
-  Performance             B       Threlte lazy-loaded, rAF capped, opt-in
-                                  camera; Hue 1s polling still aggressive
-  Observability           B       Event tables + ML decisions + analytics
-                                  dashboard + heartbeats + circuit
-                                  breakers + request IDs + ML health in
-                                  /health; no Prometheus yet
-  Testing                 B+      Backend 405+ tests, frontend 60 tests,
-                                  Playwright local-only
-  Documentation           A-      PROJECT_SPEC + ML_SPEC + LIGHTING_EXPANSION
-                                  + CLAUDE.md current
+                                  DB for /api/debug/query (column quirk)
+  Machine Learning        B       Pipeline solid, fusion runs 4-lane in
+                                  code -- but in prod rule_engine never
+                                  reports, ml_metrics never persisted,
+                                  recommendation_feedback orphaned, several
+                                  signals captured-but-unread (see Still
+                                  Open). Behavioral predictor correctly
+                                  shadow-only after diversity gate
+  Performance             B       Threlte lazy-loaded, rAF capped where it
+                                  matters, opt-in camera, MediaPipe in
+                                  thread executor; Hue 1s polling still
+                                  aggressive; per-light WS broadcast fanout
+                                  on scene activation
+  Observability           B-      Heartbeats / breakers / request IDs /
+                                  ML health all wired -- but live /health
+                                  shows only 7 of the registered loops;
+                                  camera heartbeat re-register on resume
+                                  unreliable; ml_metrics empty in prod
+  Testing                 A-      Backend 672 test functions across 37
+                                  files (was 405+); frontend 51 test cases
+                                  across 9 unit files + 1 e2e; Playwright
+                                  local-only
+  Documentation           B+      PROJECT_SPEC fresh today (4-lane,
+                                  presence retired, predictor calibrated);
+                                  CLAUDE.md 36k/40k; ML_SPEC stale on
+                                  fusion shape; Future_Development not
+                                  updated since 4/19
   DevOps / Deployment     B-      Smart deploy.sh with auto-rollback +
-                                  CI + DB backup; no staging
-  Tooling / DX            B+      MCP, hooks, skills, GitHub Actions
+                                  CI + DB backup; CI on actions v4 / Node 20;
+                                  no staging
+  Tooling / DX            B       MCP, hooks, skills, GitHub Actions;
+                                  mcp_server.py still calls retired
+                                  /api/automation/presence/status (two
+                                  sites) -- get_live_state surfaces 404
   Future Readiness        A-      ML Phase 3 in progress, fusion shipped,
-                                  weight-learning live
+                                  predictor diversity gate live, weight-
+                                  learning math in place (persistence gap)
 
 ================================================================================
                        MAJOR WORK SHIPPED
@@ -62,12 +86,15 @@ returning to the project after a long break."
   -----------------------------------------------------------------------
   - 8 ML services in backend/services/ml/ (~2,100 LOC), all using the
     shadow-before-promote pattern with non-ML fallbacks
-  - ConfidenceFusion: 5-signal weighted ensemble (process, camera,
-    audio, behavioral, rule_engine) + presence voter, auto-apply at 95%
-    when idle/away, override stale processes at 98% with 80% agreement
+  - ConfidenceFusion: 4-lane weighted ensemble (process, camera, audio_ml,
+    rule_engine) -- behavioral lane stripped 4/27 after single-class
+    collapse, presence lane removed with home/away retirement; auto-apply
+    at 0.95 when idle, override stale processes at 0.92 with 80% agreement
   - Accuracy-driven weight learning runs nightly at 3:30 AM via
-    fusion.update_weights_from_accuracy(), driven by ml_logger
-    .compute_accuracy_by_source(days=14) (main.py:502-521)
+    fusion.update_weights_from_accuracy(), driven by ml_logger.compute_
+    accuracy_by_source(days=14). Wired in bootstrap.py:492-495.
+    Persistence gap: nightly compute returns values but ml_metrics table
+    stays empty -- see Still Open.
   - BehavioralPredictor (LightGBM, 10 features), AudioClassifier
     (YAMNet 521->9 classes), LightingPreferenceLearner (EMA per-light),
     MusicBandit (Thompson sampling), FeatureBuilder, MLDecisionLogger,
@@ -76,11 +103,14 @@ returning to the project after a long break."
     (upright/reclined) with 15s hysteresis, opt-in via app_settings,
     frames never persisted
   - Smart screen sync: K-means dominant color (replaces naive averaging)
-  - Rule engine with learned time-based mode patterns from event data
+  - Rule engine writes learned_rules table from event data (15 rules
+    live, latest 2026-04-28); does NOT yet report into fusion lane --
+    see Still Open
   - Event logging across 6 tables, 90-day rolling retention, fire-and-
     forget pattern with bounded retry queue
   - Live analytics dashboard: SVG confidence ring, animated signal
-    cards, per-source accuracy, decision history
+    cards, per-source accuracy, decision history -- already 4-lane
+    in DecisionPipeline.svelte:20
 
   LIGHTING REDESIGN (April 16 - April 25)
   -----------------------------------------------------------------------
@@ -100,20 +130,59 @@ returning to the project after a long break."
     just watching) at evening / night / late_night; desk+watching lifts
     L2 above the projector-safe dim
   - _get_time_period() now resolves the morning ramp window to "day"
-    (was falling through to "night" weekend 8-10am, weekday 6-7am)
   - Camera commits (zone, posture) cleared on sustained absence and on
     resume-from-sleeping; _apply_zone_overlay enforces a 5-min
     freshness gate so stale commits can't dim the room
 
-  PRESENCE SYSTEM (April 19 - April 22)
+  LIGHTING / AUTOMATION (April 26 - April 27)
   -----------------------------------------------------------------------
-  - WiFi presence with two-signal detection: iPhone Shortcut webhooks
-    (primary, X-Presence-Token authed) + active ARP probing (backup);
-    ICMP retired (iOS WiFi power-save was producing phantom away events)
-  - Arrival ceremony (light wave, weather-aware effect, music auto-play)
-  - Departure fade gated by three vetoes: manual_override,
-    camera-present-recently, current activity mode
-  - Presence is also a fusion voter (weight 0.18, low-conf idle)
+  - Camera-at-desk veto (b85fad9): is_at_desk_fresh() gates four
+    push-toward-relax pathways -- winddown lights, late-night rescue,
+    behavioral predictor consumer, fusion can_override. Working has
+    its own late_night state (L1 90/454, L2 160/400, kitchen OFF) so
+    past-23:00 dev stays readable
+  - Transit lighting tuned (20d4a84, 4709c2c, 1c67b6f, 6122cd2): 4s
+    dwell, 0.5s fade, single-frame pose-flap suppression, visible
+    block reasons logged, bed-watching-TV chaos at root
+  - Gaming/watching night brightness bumps (1dbfbfc) -- apartment no
+    longer reads as cave-dim
+  - PC agent flap suppression (935c6e6): stacked foreground+idle gate
+    for night watching <-> working, gaming-launcher lock, javaw.exe
+    intentionally excluded from GAME_PROCESSES
+  - Lux compensation now applies in gaming + watching (72a26fc); same
+    commit fixed dedup thrash on reapply
+
+  PRESENCE RETIREMENT (April 27)
+  -----------------------------------------------------------------------
+  - Home/away concept entirely retired (b8fdbfe). PresenceService
+    deleted. Departure fade + arrival ceremony deleted. WiFi/ARP +
+    iPhone Shortcut webhook + ICMP signals all gone. Presence fusion
+    voter (weight 0.18) removed -- fusion went from 5-lane to 4-lane
+  - Camera-only presence is now the sole "is the user here" signal
+  - PROJECT_SPEC.md, CLAUDE.md, MEMORY entries updated
+  - Historical artifacts persist (this is expected): activity_events
+    has ~118 entries with mode='away' from before 4/27; ml_decisions
+    has predictor rows that predicted 'away'. These are read-only
+    history, not live behavior
+
+  PREDICTOR CALIBRATION (April 27)
+  -----------------------------------------------------------------------
+  - Behavioral predictor lane stripped from fusion (c0b50ad) after
+    confirmed single-class collapse: in 7d of prod data, 100% of
+    behavioral-source predictions were 'away'. Lane stripped, but
+    predictor itself kept in tree
+  - /promote diversity gate (abe6343): refuses to promote a model
+    whose top class > 95% of recent predictions or whose distinct-class
+    count is below threshold; returns HTTP 409 with diagnostics
+  - Train/serve feature parity fix (82c72ed): build_runtime_features
+    is now async + queries activity_events to fill the 4 history
+    features (wake time, transitions today, 7d manual overrides,
+    previous mode duration) instead of defaulting to 0. FEATURE_COLUMNS
+    now identical between training and serving paths.
+  - [LIVE] Predictor model_loaded=false in prod -- consistent with the
+    diversity gate refusing to load the degenerate 'away'-only model.
+    Re-train at 4 AM nightly should produce a diverse model once
+    enough non-away data accumulates
 
   BACKEND HARDENING (April 24 - April 25)
   -----------------------------------------------------------------------
@@ -122,26 +191,23 @@ returning to the project after a long break."
   - Resilient lifespan shutdown: _safe_shutdown isolates per-step
     teardown failures, ordered producers -> tasks -> clients
   - Event-logger retry queue: 200-entry deque, 30s drainer, 3 attempts;
-    /health exposes queue_depth + overflow
+    /health exposes queue_depth + overflow. [LIVE] queue_depth=0,
+    drops=0, overflow=0
   - Heartbeat surface in /health: every poll loop publishes last_tick
-    via HeartbeatRegistry; `tasks_stale` lists any whose age > 2x
-    interval, `status` flips to "degraded" (HTTP stays 200). 9 loops
-    instrumented; camera deregisters on disable / sleep-pause
+    via HeartbeatRegistry. 8 services register heartbeats (automation,
+    event_logger_retry, hue, sonos, scheduler, rule_engine,
+    transit_lighting, camera). [LIVE] /health shows 7 -- camera not
+    listed even though enabled+ticking. See Still Open.
   - Circuit breakers on Hue + Sonos: 3 consecutive failures opens
-    (30s cooldown, 5s per-call timeout). /health surfaces breaker
-    state alongside heartbeats — heartbeat says "loop wedged",
-    breaker says "calls failing"
+    (30s cooldown, 5s per-call timeout). [LIVE] both closed, last_
+    success within seconds
   - Request tracing IDs: 12-hex correlation ID per HTTP request +
     per WebSocket connection, propagated via ContextVar, stamped on
     every LogRecord by a logging Filter, echoed back via X-Request-ID
-    header (or connection_status payload for WS)
-  - ML predictor health surface in /health: each predictor (behavioral,
-    lighting, bandit, audio, fusion, rule engine) reports
-    healthy/shadow/idle/unhealthy via a HealthTrackable mixin; status
-    flips to "degraded" only for non-shadow unhealthy predictors so
-    silent inference failures (model load, JSON corruption, swallowed
-    exceptions) become visible without false-positive paging on
-    intentional shadow lanes
+  - ML predictor health surface in /health -- per-predictor status
+    flips overall to "degraded" only for non-shadow unhealthy.
+    [LIVE] all six entries report cleanly; behavioral_predictor =
+    shadow + model_loaded=false (expected post-diversity-gate)
   - deploy.sh auto-rollback: failed post-restart health check resets
     to last-deployed SHA, re-runs install/rebuild from prior code,
     re-verifies. Exit 1 on rollback success, exit 2 if rollback
@@ -149,193 +215,388 @@ returning to the project after a long break."
 
   BACKEND DI CLEANUP (April 26)
   -----------------------------------------------------------------------
-  - Replaced 12 lifespan late-binds (`service._attr = dep` after
-    construction) with constructor injection across AutomationEngine,
-    RuleEngineService, MusicMapper, AmbientSoundService. main.py
-    lifespan now constructs services in dependency order — weather,
-    ML services, confidence fusion, music bandit, rule engine, music
-    mapper, ambient sound all built before AutomationEngine and passed
-    in via kwargs. PresenceService now receives a real
-    confidence_fusion at construction (was previously back-filled
-    because fusion didn't exist yet at presence-construction time).
-    Mode-change callback registrations remain post-construction —
+  - Replaced 12 lifespan late-binds with constructor injection across
+    AutomationEngine, RuleEngineService, MusicMapper, AmbientSoundService.
+    Mode-change callback registrations remain post-construction --
     those are runtime event subscriptions, not DI
   - Extracted lifespan to backend/bootstrap.py: main.py shrank from
-    970 → 350 lines. Pure relocation, zero behavior change. main.py
-    no longer drags in 30+ service imports — just the four needed by
-    the WebSocket handler. Sets up the next refactor (splitting
-    automation_engine.py)
+    970 -> 350 lines. Pure relocation, zero behavior change
   - Extracted per-light state calculator from automation_engine.py to
     backend/services/light_state_calculator.py: ACTIVITY_LIGHT_STATES,
     EFFECT_AUTO_MAP, LUX_CURVE, WINDDOWN_RAMP_MINUTES, BED_RECLINED_*
-    constants and the pure functions that consume them
-    (get_time_period, resolve_activity_state, apply_brightness_
-    multiplier, apply_lux_multiplier, apply_zone_overlay, apply_
-    weather_adjust, classify_weather, adjust_single_light, lerp_
-    light_state, morning_ramp). Engine methods are now thin shims
-    that thread engine state (schedule_config, _mode_brightness,
-    camera reads, _last_lux_multiplier) through pure functions; same
-    names + signatures so engine callers and 95 existing engine tests
-    keep working unchanged. Hysteresis state stays on the engine,
-    routed through the calculator's tuple return. Engine drops
-    2,779 → 2,184 lines (-595); calculator adds 740 lines. 45 new
-    unit tests in test_light_state_calculator.py exercise the pure
-    functions in isolation
+    constants and the pure functions. Engine drops 2,779 -> 2,184 lines
   - Extracted Hue v2 effect lifecycle from automation_engine.py to
-    backend/services/effect_manager.py: EffectManager class owns
-    _active_name + _active_lights tracking and the stop/start dance
-    (0.5s guard, same-effect skip, out-of-band stop semantics);
-    get_desired_effect + get_weather_effect handle mode/period
-    lookup + weather fallback. WEATHER_EFFECT_MAP and
-    WEATHER_SKIP_MODES relocate too. Engine methods (_reconcile_effect,
-    _get_desired_effect, _get_weather_effect) become 1-line shims;
-    _active_effect_name / _active_effect_lights become delegating
-    properties so the sleep-mode branch and pipeline broadcast keep
-    reading state unchanged. Sleep mode now calls
-    effect_manager.stop_all() — bypasses the same-effect-skip while
-    preserving the dim → 1.2s sleep → stop → fade ordering. Engine
-    drops 2,184 → 2,083 lines (-101); effect manager adds 181. 28
-    new unit tests in test_effect_manager.py
+    backend/services/effect_manager.py. Engine drops 2,184 -> 2,083 lines
+  - Override telemetry: set_manual_override / clear_override now take a
+    source kwarg + log it. All 7 callers verified passing source
+    (api route, winddown, late_night_rescue, zone_posture_rule,
+    fusion_can_override, fusion_auto_apply, timeout_4h)
 
   SECURITY HARDENING (April 25 - April 26)
   -----------------------------------------------------------------------
   - X-API-Key on every write endpoint (POST/PUT/PATCH/DELETE) via a
     single FastAPI dependency. Localhost (kiosk colocation) and
     configured TRUSTED_LAN_IPS bypass the header check; everything
-    else fails 401, missing-key deploys fail closed at 503. Presence
-    webhooks keep their separate X-Presence-Token path. 69 protected
-    writes across 11 routers
+    else fails 401, missing-key deploys fail closed at 503. 11 router
+    files protected. Verified clean post-DI cleanup
   - Plant App credentials no longer travel cleartext: urlparse-based
     scheme validation in PlantAppService rejects http:// at boot
-    unless PLANT_APP_ALLOW_INSECURE=true is set explicitly (escape
-    hatch for migration only, emits a WARNING on every login)
+    unless PLANT_APP_ALLOW_INSECURE=true is set explicitly
   - Sonos SSRF allowlist on play_uri: regex tuple gates iTunes /
     mzstatic / our own LOCAL_IP and rejects everything else.
     Validated at the route handler (400 telemetry) and inside the
-    service method (defense in depth). TTS path verified compatible
+    service method (defense in depth)
   - /api/debug/query opened read-only at the engine layer (SQLite
-    file:...?mode=ro), not just at the validator. Validator
-    upgraded to a comment-stripping tokenizer that allows SELECT
-    and WITH (CTE reads were previously rejected). Results capped
-    at 1000 rows with a truncated flag
+    file:...?mode=ro). Validator upgraded to a comment-stripping
+    tokenizer that allows SELECT and WITH. Results capped at 1000 rows
 
   FRONTEND PERFORMANCE + A11Y (April 24)
   -----------------------------------------------------------------------
   - Threlte + three.js (~689 KB) lazy-loaded via dynamic import when
     mode==sleeping; new MoonBackground.svelte wraps Canvas + MoonScene
-  - prefers-reduced-motion honored across all canvas scenes (Aurora,
-    Pixel, Parallax, Moon)
+  - prefers-reduced-motion honored on Aurora + GenerativeCanvas; gates
+    missing on PixelScene + ParallaxScene + MoonScene -- see Still Open
   - ParallaxScene rAF loop now capped at 60fps (was uncapped on 144Hz)
   - api.js: AbortController + 8s timeout on apiGet/apiPost; HTTP
     errors surfaced via addError() instead of swallowed; parseJsonOrNull
     distinguishes empty body (HTTP 204) from malformed JSON
 
-  TEST COVERAGE (April 24)
+  TEST COVERAGE (April 24 - April 27)
   -----------------------------------------------------------------------
-  - Backend: 183 -> 405+ tests
-    * ML services: behavioral_predictor, lighting_learner, music_bandit,
-      feature_builder, ml_logger (~70 new tests)
-    * ConfidenceFusion ensemble: 30 cases (staleness boundary, weight
-      normalization, late-night decay, agreement-denominator stale
-      exclusion, threshold edges, weight-learning math)
-    * Backend hardening (Pydantic WS / lifespan / event-logger retry)
-  - Frontend: 0 -> 60 tests
-    * vitest + @testing-library/svelte + jsdom (55 unit / component)
-    * Playwright + 5 e2e smoke (home + 3 routes + /health)
-    * GitHub Actions runs vitest on push/PR; Playwright local-only
+  - Backend: 405 -> 672 test functions across 37 test files. New
+    coverage: test_automation_engine (camera-at-desk veto), test_
+    transit_lighting_service, test_behavioral_predictor (diversity
+    gate), test_confidence_fusion (4-lane ensemble math), test_
+    feature_builder (train/serve parity), test_effect_manager,
+    test_light_state_calculator, test_lifespan, test_lux_multiplier
+  - Frontend: 51 test cases across 9 unit files (api, theme, 4 stores,
+    2 backgrounds, 1 component) + 1 Playwright e2e (dashboard.spec.js).
+    Audit baseline of "55 + 5" was test-case count; today's 51 is flat
+    within rounding, not a regression
+  - vitest + @testing-library/svelte + jsdom for unit; Playwright +
+    GitHub Actions runs vitest on push/PR; Playwright local-only
 
   INFRASTRUCTURE / OPS (carried baseline)
   -----------------------------------------------------------------------
-  - Smart deploy.sh: diffs HEAD, only rebuilds what changed, health-
-    checks after restart, auto-rolls back to last-deployed SHA on
-    health-check failure (re-runs install/rebuild from prior code,
-    re-verifies health), kiosk auto-reload via WebSocket build_id
-  - Daily SQLite backup cron on Latitude (4 AM, 7-day retention)
-  - GitHub Actions CI (ruff lint + pytest + vitest)
+  - Smart deploy.sh with auto-rollback (kiosk auto-reload via
+    WebSocket build_id)
+  - Daily SQLite backup cron on Latitude (4 AM, 7-day retention) --
+    crontab-managed on the box, not repo-managed
+  - GitHub Actions CI (ruff lint + pytest + vitest) on
+    actions/checkout@v4 + setup-python@v5 + setup-node@v4
   - Pi-hole v6 in Docker (host networking) on Latitude
   - Unified PC agent supervisor (single pythonw.exe under Task
     Scheduler manages activity_detector + ambient_monitor + screen sync)
-  - Custom MCP server with 25+ tools (.mcp.json)
-  - Skills: /home-hub-dev, /api-audit, /ui-audit, /deploy-home,
-    /project-spec
+  - Custom MCP server with 25+ tools (.mcp.json) -- two stale
+    presence calls remaining, see Still Open
   - py-spy + httpie on Latitude for production debugging
 
 ================================================================================
                             STILL OPEN
 ================================================================================
 
-Ranked by impact within each section.
+Each entry: [Priority] file:line -- finding -- proposed fix sketch.
+Ranked H/M/L within each section.
 
-  BACKEND ARCHITECTURE
+  MACHINE LEARNING / DATA FLOW
   -----------------------------------------------------------------------
-  [ ]  Final automation_engine.py slice (now 2,083 lines after light-
-       state calculator + effect manager extracts): mode resolution +
-       fusion ticks (report_activity, set_manual_override,
-       _evaluate_zone_posture_rule, run_loop fusion blocks, late-night
-       rescue). Stateful — owns 9 mutable attributes. Plan
-       (~/.claude/plans/why-is-l2-currently-iterative-papert.md)
-       calls for soak time after Slice 1 before this lands
+  [CLOSED 2026-04-28 / 7b64644] rule_engine fusion lane never fires.
+       Original audit framing was wrong about the fusion.report_signal
+       call being missing — it was already there. Real bugs were three
+       compounding issues: 10/14 rules predicted retired `away` mode
+       (silently rejected by VALID_MODES); 4 surviving rules covered Tue
+       10/11/14/16 which fall during Anthony's TQL office hours; and
+       ml_logger.log_decision was never called. Fix bundled four
+       layers: drop retired-mode rows in regenerate_rules; wire
+       ml_logger=None kwarg + log_decision call on every match
+       (applied=False, broadcast=False); defensive VALID_MODES guard
+       at vote time; M-F 8am-4:59pm office-hours blackout
+       (_BLACKOUT_SLOTS) skipped in both regenerate_rules and
+       check_rules. Post-deploy regen produced 6 clean rules from 14.
+       First natural fire: Wed 06:00 watching rule (memory
+       project_rule_engine_lane_first_fire.md).
+
+  [H]  recommendation_feedback orphan.
+       Table populated by recommendation_service.py:225 but no consumer.
+       Music bandit retrains only from SonosPlaybackEvent. [LIVE] table
+       is currently empty (no production feedback yet either).
+       Fix: in the route that writes RecommendationFeedback, pass the
+       action through to music_bandit.record_reward() with reward=+1
+       on accept, -0.5 on dismiss.
+
+  [H]  Camera zone/posture commits never logged as events.
+       camera_service.py emits zone/posture via WS + /api/camera/status,
+       but never writes to event tables. No "user was reclined in bed
+       at hour H" training signal reaches the predictor.
+       Fix: in camera_service.py around _commit_zone / _commit_posture,
+       call event_logger.log_camera_state_change(zone, posture,
+       detection_source). New CameraState event table or a JSON-blob
+       column on activity_events.
+
+  [CLOSED 2026-04-28 / 561d4f1] ml_metrics table never written.
+       New compute_per_source_metrics returns {src: {accuracy, samples,
+       correct}} (richer than the legacy flat dict, which is now a thin
+       wrapper). New persist_accuracy_metrics writes one MLMetric row
+       per source per UTC day with metric_name='accuracy_<source>',
+       extra={samples, correct, window_days}. Idempotent via
+       delete-then-insert. Wired into the 3:30 AM fusion_weight_tuning
+       cron in bootstrap.py. First production rows arrive 2026-04-29
+       03:30 ET (memory project_ml_metrics_first_persist.md).
+
+  [M]  Manual override duration unmeasured.
+       set_manual_override / clear_override log mode changes but not
+       elapsed time. No "user kept override for N minutes" feedback
+       to predictor or fusion.
+       Fix: in clear_override, compute elapsed = now() - _override_
+       mode_since and emit event_logger.log_override_clear(mode,
+       elapsed_seconds, source).
+
+  [M]  MLDecision.factors lacks weather context.
+       ml_logger.log_decision serializes per-source factors but no
+       ambient context. Weather alerts that already drive automation
+       (rain->candle, storm->sparkle) leave no fingerprint in the
+       decision history.
+       Fix: feature_builder builds runtime features; pass current
+       weather (description, temp_bucket) as an extra dict to
+       log_decision; serialize into factors JSON.
+
+  [REVISED 2026-04-28] process lane and behavioral lane don't write
+       standalone ml_decisions.
+       Scope shrunk after tonight's commits. rule_engine now writes
+       (7b64644 Layer B); camera + audio_ml + behavioral predictor all
+       wrote already (behavioral is shadow-quiet by diversity-gate
+       design). Process is the only genuine remaining gap. Original
+       fix sketch ("write inside fusion.report_signal") would create
+       duplicate rows for the lanes that already write from their own
+       service code — the right pattern is "service that owns the
+       signal owns its standalone log row." Implementation deferred to
+       a fresh session; design call captured in memory
+       project_audit_finding_5_revised.md (where the write goes,
+       cadence, factors shape).
+
+  [L]  SonosPlaybackEvent.volume captured but unread.
+       music_bandit retrains on event_type + favorite_title only,
+       never .volume. Either consume (volume tracking per playlist)
+       or stop logging.
+
+  [L]  LightAdjustment.trigger source logged but unused for learning.
+       lighting_learner filters on USER_TRIGGERS but the trigger value
+       itself doesn't shape EMA updates. Either incorporate or trim
+       the column.
 
   OBSERVABILITY
   -----------------------------------------------------------------------
-  [ ]  Prometheus /metrics endpoint (error rate, latency, throughput)
-  [ ]  Uptime Kuma rule that alerts on /health.status == "degraded"
-       (the surface exists; the alert config doesn't yet)
+  [SYMPTOMATICALLY RESOLVED 2026-04-28] Camera heartbeat re-register on resume unreliable.
+       [LIVE post-deploy] /health.tasks now lists camera (interval 2s,
+       age 0.057s) after the deploy restart healed whatever stale
+       state was hiding it. We did NOT touch camera_service.py — the
+       restart cleared the surface symptom but the underlying register-
+       on-resume code path at line 1280 is still unmodified. Reopen if
+       the heartbeat goes missing again on a real pause/resume cycle
+       (sleeping mode entry → exit). Original fix sketch still valid:
+       move register("camera") into the polling-loop preamble so it
+       self-heals on every transition into enabled+running.
 
-  DEVOPS
-  -----------------------------------------------------------------------
-  [ ]  Wire Playwright e2e into CI (currently local-only -- would
-       require spinning up backend + frontend in the workflow)
-  [ ]  Staging environment between dev and prod
-  [ ]  pytest-cov for coverage reporting
+  [M]  Prometheus /metrics endpoint -- still not built.
+  [M]  Uptime Kuma rule on /health.status == "degraded" -- not
+       configured.
 
-  ML PROMOTION (data-gated)
+  TOOLING / DX
   -----------------------------------------------------------------------
-  [ ]  BehavioralPredictor: needs 500+ activity events (~1 week of
-       data) before first training
-  [ ]  AudioClassifier: shadow -> active after accuracy comparison
-       with the existing RMS detector
-  [ ]  Lower fusion auto-apply threshold once false-positive rate is
-       < 1/day
-
-  FRONTEND HYGIENE
-  -----------------------------------------------------------------------
-  [ ]  Modal portal duplication risk (Plant and Bar widgets each
-       append modals to document.body with no singleton guard)
-  [ ]  LightCard color presets duplicated from theme.js -- deduplicate
-       to prevent drift
-  [ ]  LightGrid: memoize Object.values($lights).sort() on reactive
-       change
-  [ ]  WCAG AA: --text-muted #5c5e6a on #08080c is ~2.5:1
-  [ ]  Three.js DPR cap at 2x loses sharpness on 3x displays
-
-  PERFORMANCE / SMALL DEBT
-  -----------------------------------------------------------------------
-  [ ]  Hue polling at 1s, Sonos at 2s — could be 3-5s and 5s for the
-       low-event-rate steady state (lower CPU, more RPi-friendly)
-  [ ]  Per-light WS broadcasts on scene activation (N sends, not
-       batched into one)
-  [ ]  GenerativeCanvas particle array resizes during transitions
-       (GC pressure)
-  [ ]  MoonScene shader materials at module scope (VRAM leak risk on
-       unmount/remount)
-  [ ]  Mobile touch targets: FloatingNav 40x40 at 480 breakpoint
-       (WCAG wants 48x48)
-  [ ]  22+ bare "except Exception" clauses on critical backend paths
-  [ ]  Light IDs are strings in some places, ints in others
+  [CLOSED 2026-04-28 / dcb3e30] mcp_server.py still calls retired /api/automation/presence/status.
+       Deleted the standalone get_presence_status MCP tool. Removed
+       the _safe_get(c, "/api/automation/presence/status") line from
+       get_live_state's asyncio.gather, dropped `presence` from the
+       result dict + tuple unpack + docstring. -13/+2 lines, no
+       behavior change to the running backend.
 
   DOCUMENTATION
   -----------------------------------------------------------------------
-  [ ]  Ops runbook (troubleshooting / log inspection / recovery)
-  [ ]  Changelog for breaking changes
-  [ ]  DB migration docs (migrations inline in database.py)
-  [ ]  Log timestamps missing timezone
+  [CLOSED 2026-04-28 / 23a9f03] docs/ML_SPEC.md fusion shape stale.
+       Updated §3 Fallback Chain paragraph, §15 Phase 3 history line,
+       v2 "Presence joined as 6th voter" bullet (now annotated
+       retired), added a new "Shipped (2026-04-27) — v3" block with
+       presence_service retirement + behavioral lane strip + train/
+       serve parity, and updated §15.5 dependency diagram. Added a
+       "Shipped (2026-04-28)" block in a follow-up doc-alignment pass
+       capturing rule_engine wiring + ml_metrics persistence.
+
+  [CLOSED 2026-04-28 / 91c67d5] docs/Future_Development.md last touched 4/19.
+       Added a Completed (April 2026) section near the top, organized
+       by ML/automation, architecture, and documentation. Updated
+       item #20 (Zone-Driven Mode Transitions) inline status from
+       "shadow mode 2026-04-19" to "promoted to live 2026-04-27" with
+       new dwell (120s) and apply flag default (true). Bumped Last
+       updated to 2026-04-28.
+
+  [L]  Ops runbook (troubleshooting / log inspection / recovery) --
+       still not written.
+  [L]  Changelog for breaking changes -- not started.
+  [L]  DB migration docs (migrations inline in database.py).
+  [L]  Log timestamps missing timezone on output.
+
+  BACKEND ARCHITECTURE
+  -----------------------------------------------------------------------
+  [M]  Final automation_engine.py slice (now 2,083 lines after light-
+       state calculator + effect manager extracts): mode resolution +
+       fusion ticks. Stateful -- owns 9 mutable attributes. Soak time
+       was the gating factor; lighting changes have settled, so this
+       is unblocked when ready.
+
+  FRONTEND HYGIENE
+  -----------------------------------------------------------------------
+  [M]  WCAG AA contrast: --text-muted in global.css:10 is now #7c7e8a
+       (audit had #5c5e6a -- updated). Against #08080c that's ~3.1:1,
+       still fails AA 4.5:1.
+       Fix: bump to #9a9dab or higher.
+
+  [M]  LightCard color presets duplicated from theme.js LIGHT_COLOR_
+       PRESETS (LightCard.svelte:11-19 vs theme.js:136-145, 7 vs 8
+       colors).
+       Fix: import from theme.js, delete local COLOR_PRESETS.
+
+  [M]  Modal portal duplication risk (PlantWidget.svelte:12-18 +
+       BarWidget.svelte:9-16): both append to document.body without
+       singleton guard.
+       Fix: shared <ModalRoot> portal context or singleton store.
+
+  [L]  LightGrid.svelte:5-7 -- $: lightList = Object.values($lights)
+       .sort() runs on every $lights change without memoization.
+       Already optimal for 4 lights, but cache via derived() if more
+       are added.
+
+  [L]  PixelScene + ParallaxScene + MoonScene have no prefers-reduced-
+       motion gate (Aurora + GenerativeCanvas do).
+
+  [L]  MoonScene.svelte:33-38 creates skyMaterial / starMaterial /
+       starGeometry at module scope -- intentional per the audit, but
+       remount cycle is theoretical not tested.
+
+  [L]  Three.js DPR cap at 2x (GenerativeCanvas.svelte:111) loses
+       sharpness on 3x displays.
+
+  [L]  Mobile touch targets: FloatingNav.svelte:86 is 44x44 at
+       <=480px (audit had 40x40). WCAG enhancement wants 48x48.
+
+  PERFORMANCE / SMALL DEBT
+  -----------------------------------------------------------------------
+  [M]  Hue polling at 1s, Sonos at 2s -- could be 3-5s and 5s for the
+       low-event-rate steady state (lower CPU, more RPi-friendly).
+
+  [M]  Per-light WS broadcasts on scene activation
+       (backend/api/routes/scenes.py:410-413, 445, 472, 681, 725) --
+       N sends, not batched.
+       Fix: aggregate into one "lights_bulk_update" frame.
+
+  [L]  GenerativeCanvas particle array resizes during transitions
+       (GC pressure) -- bounded at target+20.
+
+  [L]  22+ bare "except Exception" clauses on critical backend paths
+       (e.g. automation_engine.py:1493 silently returns None during
+       mode resolution -- masks bugs).
+
+  [L]  Light IDs are strings in some places, ints in others
+       (works under Python's duck typing; hygiene debt only).
+
+  ML PROMOTION (data-gated)
+  -----------------------------------------------------------------------
+  [ ]  BehavioralPredictor: needs training data with non-away modes
+       to clear the diversity gate. After post-retirement re-train,
+       audit /api/predictor/promote response.
+  [ ]  AudioClassifier: shadow -> active after accuracy comparison
+       with the existing RMS detector. [LIVE] audio_ml has 334k
+       decisions in 7d at avg conf 0.908.
+  [ ]  Lower fusion auto-apply threshold (0.95) once false-positive
+       rate is < 1/day.
+
+  DEVOPS
+  -----------------------------------------------------------------------
+  [ ]  Wire Playwright e2e into CI.
+  [ ]  Staging environment between dev and prod.
+  [ ]  pytest-cov for coverage reporting.
+
+================================================================================
+                       CROSS-CUTTING INTEGRITY
+================================================================================
+
+What static + live confirms (or doesn't) about the systems shipped this
+month:
+
+  ConfidenceFusion 4-lane
+  -----------------------------------------------------------------------
+  Static: confidence_fusion.py:40 -- SIGNAL_SOURCES = ("process",
+  "camera", "audio_ml", "rule_engine"). No presence, no behavioral.
+  Staleness gate at 300s (line 64). Weight learning wired to
+  ml_logger.compute_accuracy_by_source via bootstrap.py:492-495.
+  Auto-apply 0.95, override 0.92 with 80% agreement.
+  [LIVE] active_sources = ["process", "camera", "audio_ml"]; rule_engine
+  is registered but never_reported. 3 lanes effective in production.
+
+  Camera-at-desk veto
+  -----------------------------------------------------------------------
+  Static: is_at_desk_fresh() in automation_engine.py:591-603. Called from
+  winddown_routine.py:100, automation_engine.py:1617 (late-night),
+  automation_engine.py:1680 (behavioral consumer), automation_engine.py:
+  1760 (fusion can_override). All four pathways verified.
+  [LIVE] Mode currently watching (manual override); zone=bed,
+  posture=reclined, multiplier=1.15, baseline_lux=148, ema_lux=61. The
+  bed+reclined branch of zone overlay is exercising correctly.
+
+  Transit lighting
+  -----------------------------------------------------------------------
+  Static: transit_lighting_service.py timings -- ABSENT_TRIGGER=4s,
+  PRESENT_CLEAR=2s, HARD_TIMEOUT=600s, fade=0.5s. TRIGGER_MODES =
+  {working, gaming, watching, relax}. Block-reason logging at line 249.
+  [LIVE] heartbeat ticking every 2s, currently inactive (mode=watching
+  is a trigger but user is present at bed).
+
+  Predictor /promote diversity gate
+  -----------------------------------------------------------------------
+  Static: /api/predictor/promote in api/routes/learning.py:205-235 --
+  calls ml_log.compute_prediction_diversity(), returns HTTP 409 with
+  diagnostics if not diverse.
+  [LIVE] Predictor model_loaded=false; last 7d decision_source='ml'
+  rows = 827, 100% predicted_mode='away'. Single-class collapse
+  validated; gate working as intended (refusing to load degenerate
+  model). Re-train at 4 AM nightly should produce diversity once
+  enough non-away events accumulate post-retirement.
+
+  Train/serve parity (post-82c72ed)
+  -----------------------------------------------------------------------
+  Static: feature_builder.build_runtime_features (lines 230-297) is
+  async + queries activity_events for the 4 history features. Same
+  FEATURE_COLUMNS used in build_training_data. Verified.
+
+  Engine extracts wiring
+  -----------------------------------------------------------------------
+  Static: automation_engine.py shims (_get_time_period, _apply_brightness_
+  multiplier, _apply_lux_multiplier, _apply_zone_overlay, _reconcile_
+  effect) all delegate to light_state_calculator / effect_manager.
+  Working late_night state confirmed in light_state_calculator.py:195-200
+  (L1 90/454, L2 160/400, kitchen OFF). Sleep choreography (dim ->
+  1.2s sleep -> effect_manager.stop_all() -> fade) intact.
+
+  Override telemetry
+  -----------------------------------------------------------------------
+  Static: 7 callers verified passing source kwarg to set_manual_
+  override / clear_override (api route, winddown, late_night_rescue,
+  zone_posture_rule, fusion_can_override, fusion_auto_apply,
+  timeout_4h).
+
+  Heartbeats / breakers / request IDs / ML health
+  -----------------------------------------------------------------------
+  Static: 8 services register heartbeats. CircuitBreaker on Hue +
+  Sonos. ContextVar request_id stamped on every LogRecord.
+  [LIVE] /health shows 7 of 8 task heartbeats (camera missing despite
+  active). Both breakers closed. ML predictor surface clean -- 6
+  predictors all reporting cleanly.
 
 ================================================================================
                        FUTURE FEATURE IDEAS
 ================================================================================
 
-The standing backlog lives in docs/Future_Development.md. Notable
+The standing backlog lives in docs/Future_Development.md (note: that
+doc is overdue for a "Completed" pass -- see Still Open). Notable
 unbuilt entries: Override Reason Classifier, Per-User Transition-Curve
 Preference Learning, Focus Envelope, Apartment Logbook.
 
