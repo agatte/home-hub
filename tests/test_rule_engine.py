@@ -37,6 +37,14 @@ async def db_and_service(monkeypatch):
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr("backend.services.rule_engine_service.async_session", session_factory)
 
+    # Tests run at unpredictable wall-clock times — clear the office-hours
+    # blackout so existing time-sensitive tests don't depend on what hour
+    # of what day pytest happens to fire. Blackout behavior gets its own
+    # tests below.
+    monkeypatch.setattr(
+        "backend.services.rule_engine_service._BLACKOUT_SLOTS", frozenset()
+    )
+
     now = datetime.now(timezone.utc)
     local_now = now.astimezone(TZ)
 
@@ -350,3 +358,174 @@ class TestSuggestions:
         assert service.last_suggestion is None
         dismissed = [b for b in ws.broadcasts if b[0] == "mode_suggestion_dismissed"]
         assert len(dismissed) == 1
+
+
+# ---------------------------------------------------------------------------
+# Blackout slots (M-F 8am-4:59pm = at the office)
+# ---------------------------------------------------------------------------
+
+class TestBlackoutSlots:
+    """Office-hour blackout: don't predict during M-F 8am-5pm."""
+
+    async def test_check_rules_returns_none_in_blackout(
+        self, db_and_service, monkeypatch
+    ):
+        _, service, _, session_factory = db_and_service
+        # Re-enable the blackout (cleared by the global fixture). Pin "now"
+        # to a known blackout slot: Wednesday 10am local.
+        monkeypatch.setattr(
+            "backend.services.rule_engine_service._BLACKOUT_SLOTS",
+            frozenset({(2, 10)}),
+        )
+
+        class FakeNow:
+            @staticmethod
+            def now(tz=None):
+                # Wednesday 10:00 local
+                return datetime(2026, 4, 29, 10, 0, tzinfo=TZ)
+
+        monkeypatch.setattr(
+            "backend.services.rule_engine_service.datetime", FakeNow
+        )
+
+        async with session_factory() as session:
+            session.add(LearnedRule(
+                day_of_week=2, hour=10, predicted_mode="working",
+                confidence=0.95, sample_count=20,
+            ))
+            await session.commit()
+
+        result = await service.check_rules("idle")
+        assert result is None
+
+    async def test_regenerate_skips_blackout_slots(
+        self, db_and_service, monkeypatch, session_factory_capture=None
+    ):
+        _, service, _, session_factory = db_and_service
+        monkeypatch.setattr(
+            "backend.services.rule_engine_service._BLACKOUT_SLOTS",
+            frozenset({(1, 10)}),  # Tuesday 10am
+        )
+
+        # Seed a strong working pattern at Tuesday 10am local.
+        async with session_factory() as session:
+            for i in range(5):
+                # Tuesday 2026-04-21 + N weeks earlier, 10am local
+                base = datetime(2026, 4, 21, 10, 30, tzinfo=TZ)
+                ts = (base - timedelta(weeks=i)).astimezone(timezone.utc)
+                session.add(ActivityEvent(
+                    timestamp=ts, mode="working", previous_mode="idle",
+                    source="process", duration_seconds=3600,
+                ))
+            await session.commit()
+
+        await service.regenerate_rules()
+        rules = await service.get_rules()
+        # No rule should exist for Tue 10am (blackout)
+        blackout_rules = [
+            r for r in rules if r["day_of_week"] == 1 and r["hour"] == 10
+        ]
+        assert blackout_rules == []
+
+
+# ---------------------------------------------------------------------------
+# ml_logger integration + VALID_MODES guard
+# ---------------------------------------------------------------------------
+
+class TestMLLoggerIntegration:
+    """rule_engine writes a per-lane row to ml_decisions on each match."""
+
+    async def test_log_decision_called_on_match(self, db_and_service):
+        _, _, ws, session_factory = db_and_service
+
+        class MockMLLogger:
+            def __init__(self):
+                self.calls = []
+
+            async def log_decision(self, **kwargs):
+                self.calls.append(kwargs)
+                return 1
+
+        mock_logger = MockMLLogger()
+        service = RuleEngineService(
+            ws_manager=ws,
+            min_confidence=0.70,
+            min_samples=3,
+            ml_logger=mock_logger,
+        )
+
+        now = datetime.now(TZ)
+        async with session_factory() as session:
+            session.add(LearnedRule(
+                day_of_week=now.weekday(), hour=now.hour,
+                predicted_mode="watching", confidence=0.85, sample_count=8,
+            ))
+            await session.commit()
+
+        await service.check_rules("idle")
+        assert len(mock_logger.calls) == 1
+        call = mock_logger.calls[0]
+        assert call["decision_source"] == "rule_engine"
+        assert call["predicted_mode"] == "watching"
+        assert call["applied"] is False
+        assert call["broadcast"] is False
+
+    async def test_skips_rule_with_retired_mode(self, db_and_service):
+        """Rule predicting a mode no longer in VALID_MODES (e.g. legacy
+        `away`) must not vote — fusion would silently reject it anyway."""
+        _, _, ws, session_factory = db_and_service
+
+        class MockFusion:
+            def __init__(self):
+                self.signals = []
+
+            def report_signal(self, *args, **kwargs):
+                self.signals.append((args, kwargs))
+
+        class MockMLLogger:
+            def __init__(self):
+                self.calls = []
+
+            async def log_decision(self, **kwargs):
+                self.calls.append(kwargs)
+                return 1
+
+        mock_fusion = MockFusion()
+        mock_logger = MockMLLogger()
+        service = RuleEngineService(
+            ws_manager=ws,
+            confidence_fusion=mock_fusion,
+            ml_logger=mock_logger,
+        )
+
+        now = datetime.now(TZ)
+        async with session_factory() as session:
+            session.add(LearnedRule(
+                day_of_week=now.weekday(), hour=now.hour,
+                predicted_mode="away", confidence=0.95, sample_count=12,
+            ))
+            await session.commit()
+
+        result = await service.check_rules("idle")
+        assert result is None
+        assert mock_fusion.signals == []
+        assert mock_logger.calls == []
+
+    async def test_regenerate_drops_retired_mode_rows(self, db_and_service):
+        """Activity events with retired modes (away) must not seed rules."""
+        _, service, _, session_factory = db_and_service
+        now = datetime.now(timezone.utc)
+        target = now.replace(minute=30, second=0, microsecond=0) + timedelta(hours=7)
+        async with session_factory() as session:
+            for i in range(8):
+                session.add(ActivityEvent(
+                    timestamp=target - timedelta(weeks=i),
+                    mode="away", previous_mode="idle",
+                    source="process", duration_seconds=3600,
+                ))
+            await session.commit()
+
+        await service.regenerate_rules()
+        rules = await service.get_rules()
+        modes = [r["predicted_mode"] for r in rules]
+        assert "away" not in modes

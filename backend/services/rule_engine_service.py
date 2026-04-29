@@ -18,6 +18,7 @@ from sqlalchemy import delete, select
 
 from backend.database import async_session
 from backend.models import ActivityEvent, LearnedRule
+from backend.services.ml.confidence_fusion import VALID_MODES
 
 logger = logging.getLogger("home_hub.rules")
 
@@ -25,6 +26,13 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 # Modes that aren't worth predicting — "you're usually idle" isn't helpful
 _SKIP_MODES = frozenset(("idle",))
+
+# Slots where the user is at the office — no meaningful at-home PC activity,
+# so don't try to predict modes here. Hours are local (TZ above). Default:
+# 8am–4:59pm Mon–Fri (the 17:00 commute slot stays open).
+_BLACKOUT_SLOTS: frozenset = frozenset(
+    (day, hour) for day in range(0, 5) for hour in range(8, 17)
+)
 
 # Per-source vote weights. Ambient/audio_ml post per-second, so without
 # weighting they flood buckets (a podcast in the background produces
@@ -92,6 +100,7 @@ class RuleEngineService:
         min_confidence: float = 0.70,
         min_samples: int = 3,
         confidence_fusion=None,
+        ml_logger=None,
     ) -> None:
         self._ws_manager = ws_manager
         self._min_confidence = min_confidence
@@ -99,6 +108,7 @@ class RuleEngineService:
         self._cooldowns: dict[int, datetime] = {}  # rule_id → last nudged at
         self._last_suggestion: Optional[dict[str, Any]] = None
         self._fusion = confidence_fusion
+        self._ml_logger = ml_logger
         self._heartbeat = None  # HeartbeatRegistry, injected by main.py
 
     def set_heartbeat_registry(self, registry) -> None:
@@ -136,6 +146,12 @@ class RuleEngineService:
             ts = row.timestamp
             if ts is None:
                 continue
+            # Drop rows for retired modes (e.g. pre-2026-04-27 `away` data)
+            # before they can seed rules whose votes fusion would silently
+            # reject. VALID_MODES is the source of truth for what fusion
+            # accepts.
+            if row.mode not in VALID_MODES:
+                continue
             if not isinstance(ts, datetime):
                 ts = datetime.fromisoformat(str(ts))
             if ts.tzinfo is None:
@@ -152,6 +168,8 @@ class RuleEngineService:
         # genuine activity modes.
         qualified: dict[tuple[int, int], dict[str, Any]] = {}
         for key, raw_counts in slot_raw.items():
+            if key in _BLACKOUT_SLOTS:
+                continue
             weighted_counts = slot_weighted[key]
             candidate_weights = {
                 m: w for m, w in weighted_counts.items() if m not in _SKIP_MODES
@@ -237,6 +255,11 @@ class RuleEngineService:
         day = now.weekday()
         hour = now.hour
 
+        # Blackout: don't predict during the user's at-the-office hours
+        # even if a stale rule somehow exists for one of those slots.
+        if (day, hour) in _BLACKOUT_SLOTS:
+            return None
+
         async with async_session() as session:
             result = await session.execute(
                 select(LearnedRule).where(
@@ -250,6 +273,11 @@ class RuleEngineService:
         if not rule:
             return None
 
+        # Defensive: a rule predicting a retired mode would be silently
+        # rejected by fusion's report_signal — bail before that happens.
+        if rule.predicted_mode not in VALID_MODES:
+            return None
+
         # Vote in confidence fusion regardless of current mode — fusion
         # weighs this against the active signals.
         if self._fusion:
@@ -258,6 +286,24 @@ class RuleEngineService:
                 rule.predicted_mode,
                 rule.confidence,
                 factors=_build_rule_factors(rule),
+            )
+
+        # Persist a per-lane row in ml_decisions so per-source accuracy
+        # and the analytics dashboard have something to show. Shadow row
+        # (applied=False) — rule_engine is a voter, not an actuator.
+        if self._ml_logger:
+            await self._ml_logger.log_decision(
+                predicted_mode=rule.predicted_mode,
+                confidence=rule.confidence,
+                decision_source="rule_engine",
+                factors={
+                    "slot": f"{day}:{hour}",
+                    "rule_id": rule.id,
+                    "sample_count": rule.sample_count,
+                    "rule_confidence": rule.confidence,
+                },
+                applied=False,
+                broadcast=False,
             )
 
         # Nudges are only useful when we don't already know what the user

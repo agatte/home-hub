@@ -256,6 +256,7 @@ async def lifespan(app: FastAPI):
     rule_engine = RuleEngineService(
         ws_manager=ws_manager,
         confidence_fusion=confidence_fusion,
+        ml_logger=ml_logger,
     )
     app.state.rule_engine = rule_engine
 
