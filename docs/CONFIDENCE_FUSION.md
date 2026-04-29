@@ -6,7 +6,11 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-04-28 (v3)
+> **Last updated:** 2026-04-29 (v3)
+
+## v3 Changelog (2026-04-29)
+
+`b8c285a` — **Rule-engine fusion vote stays fresh during manual overrides.** The call-site guard `not self._manual_override` had been silencing the rule_engine voter through every override (sleeping, winddown's relax, late-night rescue, zone+posture rule), permanently parking it in fusion's `never_reported` list. `check_rules()` already gates the user-nudge path on `current_mode==idle` internally, so the outer guard was redundant for nudges and wrong for the fusion-voter contract.
 
 ## v3 Changelog (2026-04-27)
 
@@ -28,7 +32,7 @@ Weights re-normalized so the four remaining lanes sum to 1.0:
 
 Source of truth: `DEFAULT_WEIGHTS` in `backend/services/ml/confidence_fusion.py`. Stale signals still get redistributed proportionally — same math, fewer voters.
 
-The worked examples below were authored against v1/v2 lane shapes (they include behavioral as an active voter) and are kept as illustrations of the math. Substitute the v3 weights when reading them; the algorithm is unchanged.
+The worked examples and step-by-step math below have been refreshed to use the v3 weights and 4-lane shape. Earlier ensemble shapes are documented in the changelog table for context.
 
 ---
 
@@ -81,8 +85,8 @@ When the automation engine asked "what mode should I be in right now?":
 2. Is an activity detected via report_activity()?
    (process detection, ambient monitor, camera, audio_ml)
    → YES: That's the mode. Use MODE_PRIORITY to resolve conflicts.
-           gaming=5 > social=4 > watching=3 > working=2 > idle=1 > away=0
-   → NO (idle/away): continue...
+           gaming=5 > social=4 > watching=3 > working=2 > idle=1
+   → NO (idle): continue...
 
 3. Behavioral predictor has a confident prediction?
    → YES at 95%+: auto-apply as manual override
@@ -136,57 +140,55 @@ These sum to exactly 1.0. That matters for the math later. Source of truth: `DEF
 
 Each signal has a timestamp from when it last reported. If a signal hasn't reported in 5 minutes (`STALE_SIGNAL_SECONDS = 300`), it gets marked stale and is excluded from the vote entirely.
 
-**Example:** You're at your desk. Process reports "working" (just now), camera reports "present" (2s ago), behavioral predicted "working" (1min ago), audio reports "silence" (30s ago). Rule engine hasn't run in 6 hours — **stale, excluded.**
+**Example:** You're at your desk. Process reports "working" (just now), camera reports "present" (2s ago), audio reports "silence" (30s ago). Rule engine hasn't matched a slot in 6 hours — **stale, excluded.**
 
-- Active signals: 4 (process, camera, audio, behavioral)
+- Active signals: 3 (process, camera, audio_ml)
 - Stale: 1 (rule_engine)
 
 ### Step 2: Redistribute Stale Weights
 
-Rule engine contributed 0.10 to the total weight. When it goes stale, you can't just ignore it — then the remaining weights only sum to 0.90, and your fused confidence would cap at 90%.
+Rule engine contributed 0.125 to the total weight. When it goes stale, you can't just ignore it — then the remaining weights only sum to 0.875, and your fused confidence would cap at 87.5%.
 
 So we normalize. Each active signal's weight becomes `weight / sum_of_active_weights`:
 
 ```
-Active sum = 0.35 + 0.20 + 0.20 + 0.15 = 0.90
+Active sum = 0.438 + 0.250 + 0.187 = 0.875
 
-process:    0.35 / 0.90 = 0.389   (bumped up from 0.35)
-camera:     0.20 / 0.90 = 0.222   (bumped up from 0.20)
-behavioral: 0.20 / 0.90 = 0.222   (bumped up from 0.20)
-audio:      0.15 / 0.90 = 0.167   (bumped up from 0.15)
+process:    0.438 / 0.875 = 0.500   (bumped up from 0.438)
+camera:     0.250 / 0.875 = 0.286   (bumped up from 0.250)
+audio_ml:   0.187 / 0.875 = 0.214   (bumped up from 0.187)
 ────────────────────────────────
-Total:                    1.000
+Total:                       1.000
 ```
 
-The stale signal's weight (0.10) gets spread across the active ones proportionally. Normalized weights sum to 1.0 again.
+The stale signal's weight (0.125) gets spread across the active ones proportionally. Normalized weights sum to 1.0 again.
 
 ### Step 3: Score Each Mode
 
 For every active signal, multiply its normalized weight × its confidence. Group by what mode it's voting for.
 
-**Example:** Process says "working" at 100% confidence. Camera says "idle" at 92%. Behavioral says "working" at 82%. Audio says "working" at 78%.
+**Example:** Process says "working" at 100% confidence. Camera says "idle" at 92% (present but no detected activity). Audio says "working" at 78%.
 
 ```
 working votes:
-  process:    0.389 × 1.00 = 0.389
-  behavioral: 0.222 × 0.82 = 0.182
-  audio:      0.167 × 0.78 = 0.130
+  process:    0.500 × 1.00 = 0.500
+  audio_ml:   0.214 × 0.78 = 0.167
   ─────────────────────────
-  working total:              0.701
+  working total:              0.667
 
 idle votes:
-  camera:     0.222 × 0.92 = 0.204
+  camera:     0.286 × 0.92 = 0.263
   ─────────────────────────
-  idle total:                 0.204
+  idle total:                 0.263
 ```
 
 ### Step 4: Pick Winner + Compute Final Score
 
-- **Fused mode** = whichever mode has the highest total. In this case: **working** at 0.701
-- **Fused confidence** = the winner's total. In this case: **70.1%**
-- **Agreement** = (signals voting for winner) / (total active signals). In this case: 3/4 = **75%**
+- **Fused mode** = whichever mode has the highest total. In this case: **working** at 0.667
+- **Fused confidence** = the winner's total. In this case: **66.7%**
+- **Agreement** = (signals voting for winner) / (total active signals). In this case: 2/3 = **67%**
 
-The 70.1% confidence is below the 95% auto-apply threshold, so fusion won't act. The UI would show "working 70% · 3/5 agree" and the existing priority system continues handling the decision.
+The 66.7% confidence is below the 95% auto-apply threshold, so fusion won't act. The UI would show "working 67% · 2/3 agree" and the existing priority system continues handling the decision.
 
 ---
 
@@ -226,96 +228,86 @@ So process detection's high weight is saying "trust the hard evidence first."
 
 ### Example 1: All Signals Strongly Agree (Ideal Case)
 
-You're working at your desk on a Tuesday afternoon:
+You're working at your desk on a Tuesday afternoon. All 4 lanes active:
 
 - Process: "working" at 100%
-- Camera: "idle" (present) at 92% — but this reports as "idle" not "working" so **disagrees**
-- Audio: "keyboard/typing" mapped to "working" at 78%
-- Behavioral: "working" at 82%
-- Rules: "working" at 71%
+- Camera: "idle" (present, no inferred activity) at 92% — reports `idle`, **disagrees**
+- Audio: keyboard/typing classified as "working" at 78%
+- Rules: "working" at 71% (Tuesday afternoon slot matches)
 
 ```
 working votes:
-  process:    0.35 × 1.00 = 0.350
-  behavioral: 0.20 × 0.82 = 0.164
-  audio:      0.15 × 0.78 = 0.117
-  rules:      0.10 × 0.71 = 0.071
-  working total:              0.702  (70.2%)
+  process:    0.438 × 1.00 = 0.438
+  audio_ml:   0.187 × 0.78 = 0.146
+  rules:      0.125 × 0.71 = 0.089
+  working total:              0.673  (67.3%)
 
 idle votes:
-  camera:     0.20 × 0.92 = 0.184
-  idle total:                 0.184  (18.4%)
+  camera:     0.250 × 0.92 = 0.230
+  idle total:                 0.230  (23.0%)
 ```
 
-**Result:** working at 70% · 4 of 5 signals agree. **Below auto-apply threshold** — fusion doesn't act. Process detection's priority-based decision stands.
+**Result:** working at 67% · 3 of 4 signals agree. **Below auto-apply threshold** (95%) — fusion doesn't act. Process detection's priority-based decision stands.
 
 ### Example 2: Stale Process Override (The Dramatic Case)
 
-You finish a gaming session, close the game but leave the launcher open, and go to bed:
+You finish a gaming session, close the game but leave the launcher open, and walk away to go to bed. The PC agent's last report was 10 minutes ago, so the process lane is stale and excluded.
 
-- Process: "gaming" at 100% **(but stale — PC agent reported 10 minutes ago before the game closed)**
-- Camera: "away" (no face) at 95%
-- Audio: "silence" at 90%
-- Behavioral: "sleeping" at 88%
-- Rules: "sleeping" at 82%
+- Process: "gaming" at 100% **(stale — excluded)**
+- Camera: "idle" (no face for 30s+) at 95%
+- Audio: "silence" at 90% — silence with no other signals maps to `idle`
+- Rules: "sleeping" at 82% (late-evening slot)
 
-With process stale and excluded:
+With process stale, redistribute among 3 active lanes:
 
 ```
-Active weight sum = 0.20 + 0.15 + 0.20 + 0.10 = 0.65
+Active weight sum = 0.250 + 0.187 + 0.125 = 0.562
 
 Normalized:
-  camera:     0.20 / 0.65 = 0.308
-  audio:      0.15 / 0.65 = 0.231
-  behavioral: 0.20 / 0.65 = 0.308
-  rules:      0.10 / 0.65 = 0.154
+  camera:    0.250 / 0.562 = 0.445
+  audio_ml:  0.187 / 0.562 = 0.333
+  rules:     0.125 / 0.562 = 0.222
 
 Votes:
-  away:     0.308 × 0.95 = 0.293   (camera only)
-  silence:  0.231 × 0.90 = 0.208   (audio only)
-  sleeping: 0.308 × 0.88 + 0.154 × 0.82 = 0.271 + 0.126 = 0.397
+  idle:     0.445 × 0.95 + 0.333 × 0.90 = 0.423 + 0.300 = 0.723
+  sleeping: 0.222 × 0.82                          = 0.182
 ```
 
-Wait — 3 different modes from 4 signals. No consensus. Let's say camera actually maps to "away" and audio "silence" also suggests "away" or "sleeping" depending on thresholds. The point is **without process detection dominating**, the remaining signals get to speak.
+- **Fused mode:** idle (0.723)
+- **Agreement:** 2/3 = 67%
+- **Fused confidence:** 72.3%
 
-### Example 3: Can_override Triggering
+Below 95% auto-apply and below the 80% agreement bar for `can_override`, so fusion does not displace gaming on its own. But the stale process lane is no longer dominating — **without it, the remaining 3 voters can speak**, and the next refresh of process (or scheduler tick that flips into sleeping mode) will close the loop. This is the design intent of stale-redistribution: the system stops being held hostage by the dead process lane without flipping modes erratically.
 
-You're gaming, PC agent reports "gaming" (active, not stale), but you've walked away:
+### Example 3: Can_override Triggering (or Not)
 
-- Process: "gaming" at 100% (still active)
-- Camera: "away" at 95%
-- Audio: "silence" at 92%
-- Behavioral: "away" at 90%
-- Rules: "away" at 80%
+You're gaming, PC agent reports "gaming" (active, not stale), but you've stepped away from the desk:
+
+- Process: "gaming" at 100% (active)
+- Camera: "idle" at 95%
+- Audio: "silence" at 92% → idle
+- Rules: "idle" at 80% (no slot match this hour)
 
 ```
 gaming votes:
-  process: 0.35 × 1.00 = 0.350
+  process:  0.438 × 1.00 = 0.438
 
-away votes:
-  camera:     0.20 × 0.95 = 0.190
-  audio:      0.15 × 0.92 = 0.138
-  behavioral: 0.20 × 0.90 = 0.180
-  rules:      0.10 × 0.80 = 0.080
-  away total:                0.588
+idle votes:
+  camera:    0.250 × 0.95 = 0.238
+  audio_ml:  0.187 × 0.92 = 0.172
+  rules:     0.125 × 0.80 = 0.100
+  idle total:               0.510
 ```
 
-Wait — "gaming" wins at 0.350 vs "away" at 0.588? No, **away wins at 0.588**. Process's single vote isn't enough.
+- **Fused mode:** idle (0.510)
+- **Agreement:** 3/4 = 75%
+- **Fused confidence:** 51.0%
 
-- **Fused mode:** away (0.588)
-- **Agreement:** 4/5 = 80% ← meets override threshold
-- **Fused confidence:** 0.588 = 58.8%
+Below the 98% `can_override` threshold (and below 80% agreement). Fusion does **not** override the active process lane. Gaming stays.
 
-That's below 98% `can_override` threshold, so fusion doesn't override. The system continues saying "gaming" because of the MODE_PRIORITY hierarchy. This shows why `can_override` requires near-unanimous high-confidence agreement — you don't want single noisy signal to override the hard evidence.
+For `can_override` to actually fire — pulling the live process lane down — every non-process voter needs to be screaming in agreement at near-1.0 confidence. With process at 0.438 of the weight, the other 3 lanes sum to 0.562 of the weight, and even at perfect 1.0 confidence each, idle tops out at 0.562. **That's by design.** `can_override` is the conservative path — it's meant to fire only when the camera/audio/rule consensus is so loud that the dead process detection becomes obvious noise.
 
-For `can_override` to actually trigger, you'd need something like:
-
-- Camera: "away" at 99%
-- Audio: "silence" at 98%
-- Behavioral: "away" at 98%
-- Rules: "away" at 95%
-
-Now away total ≈ 0.19 × 4 ≈ ~0.76 which is still not 98%. **The 98% override threshold is extremely conservative by design** — it's meant for cases where basically every other signal is screaming in unison.
+In practice, `can_override` fires more naturally **once process goes stale** (Example 2's mechanic) than from a 4-vs-1 disagreement against a live process lane. The 5-min stale window is short enough that this almost always happens within a few minutes of you leaving the apartment.
 
 ---
 
@@ -331,26 +323,24 @@ The static weights above are the starting point. Accuracy-driven tuning runs nig
 4. **New (2026-04-28):** `MLDecisionLogger.persist_accuracy_metrics()` writes one `MLMetric` row per source per UTC day (`metric_name="accuracy_<source>"`, value in `[0, 1]`, `extra={samples, correct, window_days}`). Idempotent for a given date via delete-then-insert, so re-runs leave one final row per source. Before this, the `ml_metrics` table existed but was never written to — the analytics dashboard had no historical accuracy to query.
 5. The `fusion_weight_tuning` ScheduledTask wires steps 2–4 into the 3:30 AM cron. `POST /api/learning/retune-weights` is the manual-trigger equivalent — returns `weights_before` + `weights_after` + the derived `accuracy_by_source` so you can validate without waiting for the cron. Manual triggers don't persist to `ml_metrics` (only the nightly cron does), keeping the historical timeline regular.
 
-Example after 14 days of observation:
+Example after 14 days of observation (4-lane v3 shape):
 
 ```
-process:     95% accurate  →  raw weight 0.95
-camera:      80% accurate  →  raw weight 0.80
-behavioral:  70% accurate  →  raw weight 0.70   (lower — it's new)
-audio:       60% accurate  →  raw weight 0.60   (often wrong about ambient)
-rules:       75% accurate  →  raw weight 0.75
+process:    95% accurate  →  raw weight 0.95
+camera:     80% accurate  →  raw weight 0.80
+audio_ml:   60% accurate  →  raw weight 0.60   (often wrong about ambient)
+rules:      75% accurate  →  raw weight 0.75
 
-sum = 3.80
+sum = 3.10
 
 New normalized weights:
-  process:    0.95 / 3.80 = 0.250
-  camera:     0.80 / 3.80 = 0.211
-  behavioral: 0.70 / 3.80 = 0.184
-  audio:      0.60 / 3.80 = 0.158
-  rules:      0.75 / 3.80 = 0.197
+  process:    0.95 / 3.10 = 0.306
+  camera:     0.80 / 3.10 = 0.258
+  audio_ml:   0.60 / 3.10 = 0.194
+  rules:      0.75 / 3.10 = 0.242
 ```
 
-Notice process detection's weight drops from 0.35 → 0.25 because accuracy-weighted math treats all signals more equally. Signals that consistently predict the right mode earn more trust. Signals that fire on stale or bad data lose trust.
+Notice process detection's weight drops from 0.438 → 0.306 because accuracy-weighted math treats all signals more equally. Signals that consistently predict the right mode earn more trust. Signals that fire on stale or bad data lose trust.
 
 **Rollout note:** Meaningful weight updates only begin once enough fusion decisions with the expanded `signal_details` factor have accumulated *and* enough of them have `actual_mode` backfilled (which happens on the next mode transition). Expect weights to keep falling back to defaults for the first few days after the factor-payload change ships, then start drifting as data builds.
 

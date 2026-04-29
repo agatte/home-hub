@@ -7,7 +7,7 @@
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
 > **Status:** Phase 1 complete, Phase 2 complete, Phase 3 started (confidence fusion shipped)
-> **Last updated:** April 15, 2026
+> **Last updated:** April 29, 2026
 
 ---
 
@@ -137,15 +137,18 @@ confident prediction:
 
 ```
 1. Manual override          → Always wins (4h timeout)
-2. Confidence fusion        → Weighted ensemble of all signals below (Phase 3)
-   - Can auto-apply at 95%+ when idle/away
+2. Confidence fusion        → Weighted ensemble of 4 signals: process, camera,
+                              audio_ml, rule_engine (Phase 3)
+   - Can auto-apply at 95%+ when idle
    - Can override stale process detection at 98%+ with 80%+ agreement
 3. Activity detection       → Process-based (gaming, working, watching)
    + Camera presence        → Absent/present (Phase 2)
    + Audio classification   → Speech, music, silence (Phase 2)
-4. ML behavioral prediction → LightGBM mode prediction (Phase 1)
-5. Rule engine              → Frequency-based day+hour rules
-6. Time-based rules         → Hardcoded schedule defaults
+4. Rule engine              → Frequency-based day+hour rules
+5. Time-based rules         → Hardcoded schedule defaults
+
+(Behavioral prediction runs alongside as a shadow service — see §3.2 — and
+logs to ml_decisions but does not vote in fusion or the live fallback chain.)
 ```
 
 **Confidence fusion** (Phase 3, `confidence_fusion.py`) combines 4 signal sources
@@ -254,6 +257,18 @@ that identifies what kind of sound is occurring.
 ### 3.2 Behavioral Prediction
 
 **Phase:** 1 (Priority 2)
+
+> **Live status (2026-04-29):** Predictor remains in **shadow mode**. The
+> design described below — "called from `run_loop`, replaces rule engine"
+> — was the original Phase 1 intent. Current reality: the predictor lane
+> was stripped from `ConfidenceFusion` on 2026-04-27 after a single-class
+> collapse audit (898/898 → one class at 0.64% real accuracy). It still
+> trains nightly and exposes shadow predictions at
+> `/api/learning/predictor`, but it does **not** vote in fusion or the
+> live fallback chain. Promotion is gated on a diversity check
+> (`abe6343`). Auto-demote (counterpart for promoted-then-degenerate
+> models) is planned 2026-05-04. The output class set is 7 (gaming,
+> working, watching, relax, social, cooking, idle).
 
 **Problem:** The existing `RuleEngineService` uses frequency counting on
 (day_of_week, hour) slots over 30 days of `activity_events`. It produces rules
@@ -738,12 +753,18 @@ fusion.report_signal("process", mode, confidence=1.0)
 fusion.report_signal("camera", mode, confidence=0.9)
 fusion.report_signal("audio_ml", mode, confidence=0.8)
 
-# In AutomationEngine.run_loop() — behavioral predictor:
-fusion.report_signal("behavioral", prediction["mode"], prediction["confidence"])
-
 # Rule engine reports matched rules:
 fusion.report_signal("rule_engine", rule.predicted_mode, rule.confidence)
 ```
+
+The 4 fusion sources are defined in `confidence_fusion.SIGNAL_SOURCES`. The
+behavioral predictor was stripped from fusion on 2026-04-27 (see v3 changelog
+in §15) — it still runs in shadow mode and logs to `ml_decisions`, but does
+not vote.
+
+During 22:00–06:00 local, `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` decays the
+process lane so stale dev tools don't lock the fused mode to "working" against
+clear camera/audio evidence (`confidence_fusion.py:23-29, 206-214`).
 
 Each cycle, `fusion.compute_fusion()` returns a `FusionResult` with fused mode,
 fused confidence, per-signal breakdown, and action flags (`auto_apply`,
@@ -760,7 +781,7 @@ New event types for ML status and predictions:
 | `ml_prediction` | On prediction (auto-applied or suggested) | `{predicted_mode, confidence, source, factors, applied}` |
 | `ml_status` | On model health change | `{model_name, status, last_trained, accuracy}` |
 | `ml_decision` | On any mode switch | `{mode, decision_chain, factors}` (see Explainability) |
-| `pipeline_state` | On state change (throttled to 1s) | Now includes a `fusion` field with `{fused_mode, fused_confidence, agreement, auto_apply, can_override, signals: {process, camera, audio_ml, behavioral, rule_engine}}` for each active signal |
+| `pipeline_state` | On state change (throttled to 1s) | Now includes a `fusion` field with `{fused_mode, fused_confidence, agreement, auto_apply, can_override, signals: {process, camera, audio_ml, rule_engine}}` for each active signal |
 
 ### Confidence-Gated Actions
 
@@ -1030,6 +1051,35 @@ scheduler.add_task(training_task)
 
 Training uses `asyncio.to_thread()` to run synchronous ML library calls
 (LightGBM, pandas) without blocking the event loop.
+
+### Nightly Fusion Weight Tuning
+
+Separate from model retraining, fusion runs its own nightly weight-tuning
+job at 3:30 AM (30 min before `ml_nightly_training`):
+
+```python
+fusion_weight_tuning = ScheduledTask(
+    name="fusion_weight_tuning",
+    schedule_at="03:30",
+    callback=fusion_weight_tuning,
+    ...
+)
+```
+
+The job (`backend/bootstrap.py:493-515`) calls
+`MLDecisionLogger.compute_accuracy_by_source(days=14)` — a thin wrapper over
+`compute_per_source_metrics(days=14)` — which walks 14 days of fusion rows
+where `factors.signal_details` is present and computes per-source accuracy
+against backfilled `actual_mode`. The result feeds
+`ConfidenceFusion.update_weights_from_accuracy()`, which renormalizes the
+4 lane weights so `sum(weights) == 1.0`.
+
+Per-source metrics are then persisted to the `ml_metrics` table via
+`MLDecisionLogger.persist_accuracy_metrics()` — one row per source per UTC
+day with `metric_name="accuracy_<source>"`, `value=accuracy`, and an `extra`
+JSON payload of `{samples, correct, window_days}`. Idempotent via
+delete-then-insert on the (date, metric_name) key. Manual trigger:
+`POST /api/learning/retune-weights`.
 
 ---
 
@@ -1305,16 +1355,21 @@ down 30% from baseline.
 
 **Remaining (Phase 2b, deferred):**
 ```
-Camera posture classification (BlazePose upgrade)
-  - Posture feeds mode disambiguation (upright vs reclined)
-  - Calibration flow in Settings (30s sit/recline)
-
 Audio classifier promotion from shadow to active
   - After 7+ days of shadow data, compare ML vs RMS accuracy
   - If ML > RMS + 10pp, switch ambient_monitor to --active
+  - Deferred pending more label balance — silence/working dominate the
+    current shadow stream
+
+Posture as a separate fusion lane
+  - BlazePose detection itself shipped; posture is consumed today by
+    AutomationEngine._evaluate_zone_posture_rule (since 2026-04-27)
+    and by ScreenSyncService MODE_ZONE_MAX_BRIGHTNESS keying
+  - Promoting posture into ConfidenceFusion as its own voter is the
+    deferred work — needs more override data to justify a weight
 ```
 
-**Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ Away detection under 30 seconds (achieved 15s). Posture and audio promotion deferred to Phase 2b.
+**Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ Away detection under 30 seconds (achieved 15s). ✓ Posture detection shipped and consumed by the zone+posture rule. Audio promotion + posture-as-fusion-lane deferred to Phase 2b.
 
 ### Phase 3: Autonomous Operation (In Progress — April 2026+)
 
@@ -1351,6 +1406,7 @@ Audio classifier promotion from shadow to active
 - ✓ **A/B comparison endpoint** — `GET /api/learning/compare` computes fusion vs rule-engine-only vs process-priority accuracy on the same fusion-decision row set (where `actual_mode` is backfilled). All three strategies read from the same `factors.signal_details` rows, so the comparison is apples-to-apples.
 
 **Remaining:**
+- **Auto-demote trigger (planned 2026-05-04)** — counterpart to the diversity gate shipped 2026-04-27. When the predictor's live accuracy or override rate degrades past a threshold, automatically revert to the last good model (or to no-model state) without requiring a manual `/api/learning/predictor/demote` call. Closes the autonomy-gate loop alongside the diversity gate.
 - Analytics-page dashboard UI (frontend Svelte card) surfacing `/override-rate` and `/compare`
 - Threshold tuning based on observed false positive rate once ≥30 days of shadow+backfill data accrues
 
@@ -1440,11 +1496,12 @@ New card on the Analytics page:
 ```
 ML Health
 ─────────
-Audio Classifier:      Active   (pretrained)
-Behavioral Predictor:  Active   (82% accuracy, trained 4h ago)
+Audio Classifier:      Shadow   (YAMNet, gating on label balance)
+Behavioral Predictor:  Shadow   (LightGBM, gated by diversity check)
 Lighting Learner:      Active   (3 lights learned)
-Camera:                Disabled (opt-in in Settings)
+Camera:                Active   (face + pose, MediaPipe)
 Music Bandit:          Active   (exploring 10%)
+Confidence Fusion:     Active   (4-lane: process / camera / audio_ml / rule_engine)
 
 Overrides this week: 8  (baseline: 14, ↓43%)
 ```
@@ -1520,7 +1577,14 @@ which ML feature addresses it.
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
 | `ml_decisions` | Decision log with reasoning | timestamp, predicted_mode, actual_mode, applied, confidence, decision_source, factors (JSON) |
-| `ml_metrics` | Daily aggregate performance | date, metric_name, value, metadata (JSON) |
+| `ml_metrics` | Daily aggregate performance | date, metric_name, value, extra (JSON) |
+
+`ml_metrics` is written by `MLDecisionLogger.persist_accuracy_metrics()` from
+the 3:30 AM `fusion_weight_tuning` cron. One row per source per UTC day with
+`metric_name="accuracy_<source>"` (e.g. `accuracy_process`,
+`accuracy_camera`, `accuracy_audio_ml`, `accuracy_rule_engine`); the `extra`
+payload carries `{samples, correct, window_days}`. Idempotent on
+(date, metric_name).
 
 These tables follow the existing pattern in `backend/models.py` and use the same
 `async_session` factory for database access.

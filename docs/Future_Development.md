@@ -33,6 +33,49 @@ Major work that landed during April 2026, roughly chronological. Tracked here so
 ### Documentation
 - **2026-04-28 — `docs/PROJECT_SPEC.md` updated for home/away retirement + predictor calibration (`683f483`).**
 - **2026-04-28 — `docs/ML_SPEC.md` updated to v3 4-lane fusion shape (`23a9f03`).** Removed 5/6-lane descriptions; added v3 retirement block; updated Phase 3 dependency diagram.
+- **2026-04-29 — fusion vote stays fresh during manual overrides (`b8c285a`).** Removed redundant `not self._manual_override` guard at the rule_engine call site so the lane keeps voting through sleeping/winddown/late-night-rescue overrides; `check_rules()` already gates the user-nudge path on `current_mode==idle` internally.
+- **2026-04-29 — full doc audit & refresh.** Closed remaining 4/28 partial-update drift in `ML_SPEC.md` (header date, fallback chain, fusion code example, WS signals shape, `ml_metrics` table, `compute_accuracy_by_source`, late-night decay). Refreshed `CONFIDENCE_FUSION.md` worked examples to v3 4-lane shape. Added `auto-demote 2026-05-04` callout to PROJECT_SPEC + ML_SPEC. Archived `Audit_Summary.txt` to `docs/archive/`.
+
+---
+
+## Priority Bands (April 2026)
+
+Phase 3 (autonomous operation) is finishing — auto-demote on 2026-05-04 closes the predictor lifecycle loop, then the 30-day override-rate window starts ticking. Phase 4 (Game Day) targets July–August. The backlog below is grouped into three bands by **what's worth picking up next** given that sequencing.
+
+### Near-term (next 4–6 weeks, before Phase 4 prep)
+
+Small, high-leverage, low-risk items that consume only shipped infrastructure. Good "fill" work between Phase 3 closure and Phase 4 kickoff.
+
+- **#4 DND Mode** — trivial flag + gate in `automation_engine`
+- **#15 Vital Signs Strip** — aggregates already-shipped health endpoints into a 20px kiosk strip
+- **#19 Apartment Logbook** — reads existing event tables; ScheduledTask pattern is copy/paste
+- **#6 Screensaver Mode** — pure frontend, reads existing WS broadcasts
+- **#14 Seasonal Lighting** — slow-burn polish, no dependencies
+
+### Mid-term (after Phase 3 exit, parallel to Phase 4 Game Day)
+
+Real ML work; depends on enough live data to justify the model, or pairs naturally with Game Day's cadence.
+
+- **#7 Mood Drift Detection** — pairs with #16 override-reason classifier
+- **#16 Override Reason Classifier (shadow first)** — needs more override data to cluster meaningfully; ship as shadow before any fusion-lane promotion
+- **#9 Anomaly-Triggered Pause** — YAMNet ready; needs one gate in `automation_engine`
+- **#13 Power Outage Recovery** — startup hook + event log restore; safe because it only fires on cold boot
+- **#3 Sleep Analytics** + **#10 Sleep Quality** — pair these for the `/sleep` page
+
+### Slow-burn (genuine R&D, defer until earlier items shake out)
+
+Worth doing eventually but don't have a clear forcing function yet. Each has a "needs more data" or "needs more design" gate.
+
+- **#2 Macro Engine** — overlaps with future Game Day quick-actions; let that shape the macro API first
+- **#5 Sonos Volume Curves** — Sonos doesn't model state the way Hue does, so the abstraction is lossy; think harder before building
+- **#8 Contextual Music Memory** — needs more bandit data to justify expanding arm key
+- **#11 Adaptive Transition Choreography** — small but tempting to over-engineer; wait until #17 transition-curve learning has data
+- **#12 Guest Wi-Fi Page** — only worth it if guests start being a recurring use case
+- **#17 Transition Curve Learner** — needs more nudge-during-transition data
+- **#18 Focus Envelope** — heaviest UX cost in the list; design before building
+- **#21 (slimmed) Pose Landmarks Visualization** — debugging widget, nice-to-have
+
+Phase 4 (Game Day, July–August) and Phase 5 (custom Alexa, Apple Music, full autopilot, bar app) timelines stand.
 
 ---
 
@@ -40,9 +83,11 @@ Major work that landed during April 2026, roughly chronological. Tracked here so
 
 ### 1. Dashboard "Replay" / Time Machine
 
-Scrub through any day to see what the apartment looked like at any point — mode, light states, music playing. Horizontal timeline with color-coded mode blocks, expandable per-light detail, weekly/monthly heatmaps. All event data already logged — pure frontend visualization.
+**Status:** API ready, UI deferred. The 6 endpoints under `/api/events/` (aggregation, filtering, pagination, mode timeline) ship today via `event_query_service.py`. What remains is the frontend: horizontal timeline with color-coded mode blocks, time-scrubber, expandable per-light detail, weekly/monthly heatmaps.
 
-**Touches:** New route (`/timeline`), `event_query_service.py`, new Svelte components
+Scrub through any day to see what the apartment looked like at any point — mode, light states, music playing. All event data already logged — pure frontend visualization on top of the existing API.
+
+**Touches:** New route (`/timeline`), new Svelte components (heatmap, time-scrubber, per-light row).
 
 ---
 
@@ -214,24 +259,25 @@ Pure read over existing `event_logger` tables — no new data sources. Writes to
 
 ---
 
-### 20. Zone-Driven Mode Transitions
+### 20. Zone-Driven Mode Transitions — remaining carve-outs
 
-**Status: zone+posture → relax rule promoted to live 2026-04-27 (commit `6122cd2`).** Fires `set_manual_override("relax", source="zone_posture_rule")` when the camera sustains `zone=bed + posture=reclined` ≥120s (lowered from 300s on promotion), gated on eligible current_mode + no active override + evening/weekend-afternoon + 4h refractory. Projector-from-bed carves itself out because the sit-up-against-headboard pose keeps `posture=upright`. `ZONE_POSTURE_RULE_APPLY=true` by default; escape hatch via `.env` for shadow-only. Implementation lives in `backend/services/automation_engine.py::_evaluate_zone_posture_rule`.
+**Base rule shipped 2026-04-27** (see Completed section above). The zone+posture → relax actuation rule lives at `backend/services/automation_engine.py::_evaluate_zone_posture_rule` and is the first sensor signal that drives a mode *transition* (not just an overlay).
 
-**Remaining under this banner:**
-- Second rule set candidate: `zone=desk + process=working + late-night` bypasses the 22:00 late-night-rescue (keep Anthony in working when he's actively at the keyboard past 22:00).
-- Fusion integration — current rule calls `set_manual_override` directly. Future option: publish as a new signal lane in `confidence_fusion.py` so zone+posture can vote alongside process/camera/audio/behavioral/rule_engine instead of acting unilaterally. Worth considering once shadow data shows the rule is reliable — fusion gives finer-grained tuning.
-- Morning-specific carve-outs: the current time gate blocks mornings globally. If Anthony lies back down for a post-wake rest, we may eventually want a specific "morning lounge" nudge rather than nothing.
+This idea now tracks the open carve-outs:
 
-**Touches (for the remaining items):** `automation_engine.py` (new gate in `_evaluate_zone_posture_rule` for the late-night-working carve), `confidence_fusion.py` (new signal lane if we go that route).
+- **Late-night-working carve-out.** `zone=desk + process=working + after 22:00` should bypass the late-night-rescue path (keep Anthony in working when he's actively at the keyboard past 22:00). The current rule only handles `zone=bed`.
+- **Fusion integration.** Today the rule calls `set_manual_override` directly. Future option: publish zone+posture as a new signal lane in `confidence_fusion.py` so it votes alongside process/camera/audio/rule_engine instead of acting unilaterally. Worth considering once shadow data confirms the rule fires correctly — fusion gives finer-grained tuning. (Rule rather than fusion is the right primitive for now because the rule is high-confidence and binary; fusion adds value once the signal is probabilistic.)
+- **Morning lounge nudge.** The current time gate blocks mornings globally. If Anthony lies back down for a post-wake rest, we may eventually want a specific "morning lounge" nudge rather than nothing.
+
+**Touches:** `automation_engine.py` (new gate in `_evaluate_zone_posture_rule` for the late-night-working carve), `confidence_fusion.py` (new signal lane if we go that route).
 
 ---
 
-### 21. Pose Landmarks Over WebSocket (Kiosk Debug Widget)
+### 21. Pose Landmark Visualization (Frontend follow-up)
 
-Currently the camera service computes per-frame pose landmarks but only derived labels cross the wire (presence/absence, detection source, zone). A kiosk dashboard widget could visualize the pose landmarks live — a mini stick-figure rendered in a corner of the screen showing what the Latitude sees — useful for debugging camera angle and verifying detection quality without curl'ing snapshots.
+**Status:** Pose detection itself is shipped — `camera_service.py` runs MediaPipe BlazePose and the derived labels (`zone`, `posture`, `detection_source`) flow over `camera_update` WebSocket events today. What remains is the **kiosk debug widget**: a mini stick-figure rendered in a corner showing what the Latitude sees, useful for verifying camera angle and detection quality without curl'ing annotated snapshots.
 
-Gated behind a config flag for privacy (pose coordinates are more informative than presence). Default off. When enabled, extends `camera_update` WebSocket event with a `pose_landmarks` payload (normalized 0–1 coordinates + visibility) and a new `<PoseWidget.svelte>` consumer draws the skeleton.
+Gated behind a config flag for privacy (pose coordinates are more informative than presence). Default off. When enabled, extends `camera_update` with a `pose_landmarks` payload (normalized 0–1 coordinates + visibility) and a new `<PoseWidget.svelte>` consumer draws the skeleton.
 
 **Distinct from annotated snapshots:** Snapshot is a one-shot image, includes full frame. Pose widget is continuous, landmarks-only, no image data.
 
