@@ -491,15 +491,20 @@ async def lifespan(app: FastAPI):
     # details in `factors`) feed into the weight update before the newly
     # trained models start producing tomorrow's decisions.
     async def fusion_weight_tuning() -> None:
-        acc = await ml_logger.compute_accuracy_by_source(days=14)
-        if acc:
+        metrics = await ml_logger.compute_per_source_metrics(days=14)
+        if metrics:
+            acc = {src: r["accuracy"] for src, r in metrics.items()}
             confidence_fusion.update_weights_from_accuracy(acc)
+            persisted = await ml_logger.persist_accuracy_metrics(
+                metrics, window_days=14,
+            )
             app_logger.info(
-                "fusion_weight_tuning: updated weights from %d sources", len(acc),
+                "fusion_weight_tuning: updated %d weights, persisted %d ml_metrics rows",
+                len(acc), persisted,
             )
         else:
             app_logger.info(
-                "fusion_weight_tuning: no usable per-source accuracy data yet — weights unchanged",
+                "fusion_weight_tuning: no usable per-source accuracy data yet — weights unchanged, no rows persisted",
             )
 
     scheduler.add_task(ScheduledTask(

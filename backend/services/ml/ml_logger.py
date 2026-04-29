@@ -13,10 +13,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import Integer, func, select, update
+from sqlalchemy import Integer, delete, func, select, update
 
 from backend.database import async_session
-from backend.models import ActivityEvent, MLDecision
+from backend.models import ActivityEvent, MLDecision, MLMetric
 
 logger = logging.getLogger("home_hub.ml")
 
@@ -233,22 +233,23 @@ class MLDecisionLogger:
             logger.error("Failed to compute accuracy: %s", exc, exc_info=True)
             return {"total": 0, "correct": 0, "accuracy": None, "window_days": days}
 
-    async def compute_accuracy_by_source(
+    async def compute_per_source_metrics(
         self, days: int = 14,
-    ) -> dict[str, float]:
-        """Per-signal accuracy for fusion weight learning.
+    ) -> dict[str, dict[str, Any]]:
+        """Per-signal accuracy + sample counts for fusion weight learning
+        and the analytics dashboard.
 
         Walks ``ml_decisions`` rows where ``decision_source='fusion'`` and
         ``factors`` contains a ``signal_details`` dict (added by the
         automation engine at each fusion log site). For each signal source
-        (process / camera / audio_ml / behavioral / rule_engine), computes
-        how often that source's per-decision mode vote matched the eventual
-        ``actual_mode``. Stale signals are excluded.
+        (process / camera / audio_ml / rule_engine), computes how often that
+        source's per-decision mode vote matched the eventual ``actual_mode``.
+        Stale signals are excluded.
 
-        The returned dict is consumable directly by
-        ``ConfidenceFusion.update_weights_from_accuracy``. Sources that
-        have no usable samples in the window are omitted — the fusion
-        method falls back to DEFAULT_WEIGHTS for anything missing.
+        Returns ``{src: {"accuracy": float, "samples": int, "correct": int}}``
+        — the richer shape needed for the ml_metrics dashboard. Sources with
+        zero usable samples are omitted; the fusion weight method falls back
+        to DEFAULT_WEIGHTS for anything missing.
         """
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -282,16 +283,86 @@ class MLDecisionLogger:
                         correct[src] = correct.get(src, 0) + 1
 
             return {
-                src: correct.get(src, 0) / totals[src]
+                src: {
+                    "accuracy": correct.get(src, 0) / totals[src],
+                    "samples": totals[src],
+                    "correct": correct.get(src, 0),
+                }
                 for src in totals
                 if totals[src] > 0
             }
         except Exception as exc:
             logger.error(
-                "Failed to compute per-source accuracy: %s", exc,
+                "Failed to compute per-source metrics: %s", exc,
                 exc_info=True,
             )
             return {}
+
+    async def compute_accuracy_by_source(
+        self, days: int = 14,
+    ) -> dict[str, float]:
+        """Flat ``{source: accuracy}`` view of per-source metrics.
+
+        Thin wrapper over :meth:`compute_per_source_metrics` for callers
+        that only need the accuracy values — primarily
+        ``ConfidenceFusion.update_weights_from_accuracy``.
+        """
+        rich = await self.compute_per_source_metrics(days=days)
+        return {src: r["accuracy"] for src, r in rich.items()}
+
+    async def persist_accuracy_metrics(
+        self,
+        metrics: dict[str, dict[str, Any]],
+        window_days: int = 14,
+    ) -> int:
+        """Persist per-source accuracy rows to ``ml_metrics``.
+
+        Idempotent for a given UTC date: deletes today's existing rows
+        for the same metric names before inserting, so repeated cron
+        runs (or manual triggers later in the same day) leave one final
+        row per source per day instead of accumulating duplicates.
+
+        Args:
+            metrics: Output of ``compute_per_source_metrics`` —
+                ``{source: {"accuracy": float, "samples": int, "correct": int}}``.
+            window_days: Window the accuracy was computed over; stamped
+                into ``extra`` for downstream context.
+
+        Returns:
+            Number of rows written. ``0`` if the input is empty or on
+            DB error.
+        """
+        if not metrics:
+            return 0
+        today = datetime.now(timezone.utc).date()
+        metric_names = [f"accuracy_{src}" for src in metrics]
+        try:
+            async with async_session() as session:
+                await session.execute(
+                    delete(MLMetric).where(
+                        MLMetric.date == today,
+                        MLMetric.metric_name.in_(metric_names),
+                    )
+                )
+                for src, r in metrics.items():
+                    session.add(MLMetric(
+                        date=today,
+                        metric_name=f"accuracy_{src}",
+                        value=float(r["accuracy"]),
+                        extra={
+                            "samples": int(r["samples"]),
+                            "correct": int(r["correct"]),
+                            "window_days": int(window_days),
+                        },
+                    ))
+                await session.commit()
+            return len(metrics)
+        except Exception as exc:
+            logger.error(
+                "Failed to persist accuracy metrics: %s", exc,
+                exc_info=True,
+            )
+            return 0
 
     async def compute_prediction_diversity(
         self, days: int = 7, min_samples: int = 50,

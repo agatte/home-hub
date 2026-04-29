@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from backend.models import ActivityEvent, MLDecision
+from backend.models import ActivityEvent, MLDecision, MLMetric
 from backend.services.ml.ml_logger import MLDecisionLogger
 
 
@@ -200,6 +200,125 @@ class TestComputeAccuracyBySource:
         result = await logger.compute_accuracy_by_source(days=14)
         assert result["process"] == pytest.approx(1.0)
         assert result["camera"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+class TestComputePerSourceMetrics:
+    """Richer view of per-source accuracy with sample + correct counts."""
+
+    async def test_returns_accuracy_samples_correct(self, logger, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            # 2 fusion rows. process: 2/2 correct. camera: 1/2 correct.
+            session.add(MLDecision(
+                timestamp=now - timedelta(hours=1),
+                predicted_mode="working", actual_mode="working",
+                confidence=0.9, decision_source="fusion", applied=True,
+                factors={"signal_details": {
+                    "process": {"mode": "working", "stale": False},
+                    "camera": {"mode": "working", "stale": False},
+                }},
+            ))
+            session.add(MLDecision(
+                timestamp=now - timedelta(hours=1),
+                predicted_mode="gaming", actual_mode="gaming",
+                confidence=0.8, decision_source="fusion", applied=True,
+                factors={"signal_details": {
+                    "process": {"mode": "gaming", "stale": False},
+                    "camera": {"mode": "relax", "stale": False},
+                }},
+            ))
+            await session.commit()
+
+        rich = await logger.compute_per_source_metrics(days=14)
+        assert rich["process"] == {
+            "accuracy": pytest.approx(1.0),
+            "samples": 2,
+            "correct": 2,
+        }
+        assert rich["camera"] == {
+            "accuracy": pytest.approx(0.5),
+            "samples": 2,
+            "correct": 1,
+        }
+
+    async def test_legacy_wrapper_still_returns_flat_dict(self, logger, ml_db):
+        """compute_accuracy_by_source must remain a flat {src: float} dict
+        so update_weights_from_accuracy and /retune-weights keep working."""
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            session.add(MLDecision(
+                timestamp=now - timedelta(hours=1),
+                predicted_mode="working", actual_mode="working",
+                confidence=0.9, decision_source="fusion", applied=True,
+                factors={"signal_details": {
+                    "process": {"mode": "working", "stale": False},
+                }},
+            ))
+            await session.commit()
+
+        flat = await logger.compute_accuracy_by_source(days=14)
+        assert flat == {"process": pytest.approx(1.0)}
+
+
+@pytest.mark.asyncio
+class TestPersistAccuracyMetrics:
+    """Nightly persistence of per-source accuracy into ml_metrics."""
+
+    async def test_writes_one_row_per_source(self, logger, ml_db):
+        metrics = {
+            "process": {"accuracy": 0.91, "samples": 200, "correct": 182},
+            "camera": {"accuracy": 0.42, "samples": 195, "correct": 82},
+            "audio_ml": {"accuracy": 0.55, "samples": 180, "correct": 99},
+        }
+        n = await logger.persist_accuracy_metrics(metrics, window_days=14)
+        assert n == 3
+
+        async with ml_db() as session:
+            rows = (await session.execute(
+                select(MLMetric).order_by(MLMetric.metric_name)
+            )).scalars().all()
+
+        assert len(rows) == 3
+        names = [r.metric_name for r in rows]
+        assert names == ["accuracy_audio_ml", "accuracy_camera", "accuracy_process"]
+        camera = next(r for r in rows if r.metric_name == "accuracy_camera")
+        assert camera.value == pytest.approx(0.42)
+        assert camera.extra == {
+            "samples": 195, "correct": 82, "window_days": 14,
+        }
+        assert camera.date == datetime.now(timezone.utc).date()
+
+    async def test_idempotent_on_repeat_call(self, logger, ml_db):
+        """Running twice in the same UTC day must leave one row per source,
+        not two — delete-then-insert handles re-runs cleanly."""
+        first = {
+            "process": {"accuracy": 0.80, "samples": 100, "correct": 80},
+            "camera": {"accuracy": 0.50, "samples": 100, "correct": 50},
+        }
+        second = {
+            "process": {"accuracy": 0.85, "samples": 110, "correct": 93},
+            "camera": {"accuracy": 0.55, "samples": 110, "correct": 60},
+        }
+
+        await logger.persist_accuracy_metrics(first, window_days=14)
+        await logger.persist_accuracy_metrics(second, window_days=14)
+
+        async with ml_db() as session:
+            rows = (await session.execute(select(MLMetric))).scalars().all()
+
+        assert len(rows) == 2
+        process = next(r for r in rows if r.metric_name == "accuracy_process")
+        # Second call's value should win.
+        assert process.value == pytest.approx(0.85)
+        assert process.extra["samples"] == 110
+
+    async def test_empty_metrics_writes_nothing(self, logger, ml_db):
+        n = await logger.persist_accuracy_metrics({})
+        assert n == 0
+        async with ml_db() as session:
+            rows = (await session.execute(select(MLMetric))).scalars().all()
+        assert rows == []
 
 
 @pytest.mark.asyncio
