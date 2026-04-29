@@ -2,7 +2,37 @@
 
 > Feature ideas beyond the current roadmap — large and small.
 >
-> **Last updated:** 2026-04-16
+> **Last updated:** 2026-04-28
+
+---
+
+## Completed (April 2026)
+
+Major work that landed during April 2026, roughly chronological. Tracked here so this doc reflects what's shipped vs. what's still planned. Cross-references to numbered ideas below where applicable.
+
+### ML & automation
+- **2026-04-15 — Phase 3 confidence fusion shipped.** Initial 5-signal weighted ensemble (`confidence_fusion.py`); auto-apply at 95%+ when idle, stale-process override at 98%+ with 80%+ agreement.
+- **2026-04-18 — Accuracy-driven fusion weight learning.** `fusion_weight_tuning` ScheduledTask at 3:30 AM walks 14 days of fusion rows and retunes per-source weights. Manual trigger at `POST /api/learning/retune-weights`.
+- **2026-04-19 — Fusion shadow logging + windowed `actual_mode` backfill.** Every 60s tick writes a shadow `ml_decisions` row; mode transitions bulk-update `actual_mode` across the just-ended session window (2h cap). Override-rate metric and A/B comparison endpoints landed alongside.
+- **2026-04-19 — Watching-posture sliders.** Three live-patchable sliders backed by `watching_posture_config` in `app_settings`; `PUT /api/automation/watching-posture`.
+- **2026-04-21 — Analytics constellation v2 (`0a8c220`, `1089523`).** Force-directed SVG with voter inner ring and context outer ring. Camera tuning (`MIN_FACE_CONFIDENCE` 0.2→0.15, `ABSENT_THRESHOLD` 7→15) shipped in the same change to fix low-light bed flapping.
+- **2026-04-26 — Gaming lock bug fix.** Stacked foreground+idle gate stops stale gaming processes from holding mode. Symmetric night working↔watching stickiness (`DWELL_LEAVE_WORKING_NIGHT=300s`) and `DWELL_DEFAULT` 30s→60s.
+- **2026-04-26 — Transit lighting fix (`6122cd2`).** `clear_transit_override` reverts against `self.current_mode` (not `_current_mode`); `STATIONARY_ZONES` gate prevents transit firing when `zone=bed`. Closed the bed-watching-TV light chaos.
+- **2026-04-27 — Zone+posture rule promoted to live (`6122cd2`).** `ZONE_POSTURE_RULE_APPLY` default flipped True; dwell lowered 300s→120s. Override applied via `set_manual_override("relax", source="zone_posture_rule")`. Item #20 below; the carve-outs listed there remain open.
+- **2026-04-27 — Behavioral predictor diversity gate (`abe6343`).** `/api/learning/predictor/promote` refuses to load a model whose label encoder targets only one class. Retired the degenerate `away`-only model post-presence-retirement.
+- **2026-04-27 — Behavioral predictor lane stripped from fusion (`c0b50ad`).** Single-class collapse audit found 898/898 → one class at 0.64% real accuracy. Predictor still runs as a standalone service (`/api/learning/predictor`); no longer votes.
+- **2026-04-27 — Predictor train/serve feature parity (`82c72ed`).** Inference builds features through the same code path as training, closing a divergence that masked real prediction quality.
+- **2026-04-28 — rule_engine fusion lane wiring (`7b64644`).** Dropped retired-mode rows in `regenerate_rules`; wired `ml_logger.log_decision(decision_source="rule_engine", ...)`; defensive `VALID_MODES` guard at vote time; M-F 8am-4:59pm office-hours blackout to suppress generation/voting outside genuine at-home hours. Closes audit `[H]` "rule_engine fusion lane silent in prod."
+
+### Architecture
+- **2026-04-27 — `presence_service` and home/away retired (`b8fdbfe`).** Phone-WiFi presence (iOS Shortcut + ARP probing) was too unreliable on its own. Fusion drops the phone-WiFi lane; `/api/automation/presence/*` routes removed; `mode='away'` no longer in `VALID_MODES`. Camera presence (face/pose) and Hue's native geofencing carry the home/away signal now.
+- **Camera-at-desk veto pattern.** Four push-toward-relax pathways (winddown, late-night rescue, behavioral predictor consumer, fusion `can_override`) gate on `is_at_desk_fresh()` so the system doesn't force relax while Anthony's actively at the desk.
+- **Override caller telemetry source kwarg.** `set_manual_override` / `clear_override` accept + log a `source` kwarg on all 7 callers — diagnose mysterious override flips via `journalctl`.
+- **2026-04-28 — mcp_server presence cleanup (`dcb3e30`).** Dead-code deletion of the standalone `get_presence_status` MCP tool and the 404'ing presence call in `get_live_state`'s aggregator.
+
+### Documentation
+- **2026-04-28 — `docs/PROJECT_SPEC.md` updated for home/away retirement + predictor calibration (`683f483`).**
+- **2026-04-28 — `docs/ML_SPEC.md` updated to v3 4-lane fusion shape (`23a9f03`).** Removed 5/6-lane descriptions; added v3 retirement block; updated Phase 3 dependency diagram.
 
 ---
 
@@ -186,7 +216,7 @@ Pure read over existing `event_logger` tables — no new data sources. Writes to
 
 ### 20. Zone-Driven Mode Transitions
 
-**Status: zone+posture → relax rule shipped 2026-04-19 in shadow mode (commit `36072e5`).** Fires `set_manual_override("relax")` when the camera sustains `zone=bed + posture=reclined` ≥5 min, gated on eligible current_mode + no active override + evening/weekend-afternoon + 4h refractory. Projector-from-bed carves itself out because the sit-up-against-headboard pose keeps `posture=upright`. Currently logging `ml_decisions` with `applied=False` under `settings.ZONE_POSTURE_RULE_APPLY=false`; flip to true after observation (see memory `project_zone_posture_checkback.md`, review date 2026-04-22). Implementation lives in `backend/services/automation_engine.py::_evaluate_zone_posture_rule`.
+**Status: zone+posture → relax rule promoted to live 2026-04-27 (commit `6122cd2`).** Fires `set_manual_override("relax", source="zone_posture_rule")` when the camera sustains `zone=bed + posture=reclined` ≥120s (lowered from 300s on promotion), gated on eligible current_mode + no active override + evening/weekend-afternoon + 4h refractory. Projector-from-bed carves itself out because the sit-up-against-headboard pose keeps `posture=upright`. `ZONE_POSTURE_RULE_APPLY=true` by default; escape hatch via `.env` for shadow-only. Implementation lives in `backend/services/automation_engine.py::_evaluate_zone_posture_rule`.
 
 **Remaining under this banner:**
 - Second rule set candidate: `zone=desk + process=working + late-night` bypasses the 22:00 late-night-rescue (keep Anthony in working when he's actively at the keyboard past 22:00).
