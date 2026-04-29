@@ -1730,10 +1730,10 @@ class AutomationEngine:
                         )
 
                 # Rule engine — runs every cycle to keep its fusion vote
-                # fresh; check_rules() internally only nudges the user when
-                # current_mode is idle.
+                # fresh, even under a manual override. check_rules()
+                # internally gates the user-nudge path on current_mode == idle.
                 rule_engine = getattr(self, "_rule_engine", None)
-                if rule_engine and not self._manual_override:
+                if rule_engine:
                     await rule_engine.check_rules(self._current_mode)
 
                 # Confidence fusion — compute and optionally act
