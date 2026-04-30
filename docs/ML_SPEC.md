@@ -757,6 +757,13 @@ fusion.report_signal("audio_ml", mode, confidence=0.8)
 fusion.report_signal("rule_engine", rule.predicted_mode, rule.confidence)
 ```
 
+Every fusion voter also writes a per-arrival shadow row to `ml_decisions`
+(`applied=False, broadcast=False`) so per-source accuracy is queryable
+directly without reconstructing it from `factors.signal_details` on fusion
+rows. Rule engine got this on 2026-04-28 (`7b64644`); process lane on
+2026-04-29 (`86aa880`); camera and audio_ml have written from their own
+service code since their respective ship dates.
+
 The 4 fusion sources are defined in `confidence_fusion.SIGNAL_SOURCES`. The
 behavioral predictor was stripped from fusion on 2026-04-27 (see v3 changelog
 in §15) — it still runs in shadow mode and logs to `ml_decisions`, but does
@@ -820,7 +827,7 @@ class MLDecision(Base):
     actual_mode = Column(String(50), nullable=True)  # Filled on next transition
     applied = Column(Boolean, nullable=False)         # Was the prediction acted on?
     confidence = Column(Float, nullable=True)
-    decision_source = Column(String(30), nullable=False)  # "ml", "rule", "time", "manual", "fusion"
+    decision_source = Column(String(30), nullable=False)  # fusion / ml / rule_engine / process / camera / audio_ml / lighting_learner / zone_posture_rule / manual
     factors = Column(JSON, nullable=True)             # Reasoning chain
 ```
 
