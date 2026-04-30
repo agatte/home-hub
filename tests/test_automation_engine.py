@@ -297,6 +297,82 @@ class _FakeMLLogger:
         self.calls.append(kwargs)
 
 
+class TestProcessLaneMLDecisions:
+    """Per-lane ml_decisions row for the process voter.
+
+    Mirrors the rule_engine wiring shipped 2026-04-28. Closes the audit-#5
+    gap where process was the only fusion voter without standalone rows,
+    blinding per-source accuracy and the analytics constellation.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+        eng._ml_logger = _FakeMLLogger()
+        return eng
+
+    async def test_process_source_logs_ml_decision(self, engine):
+        await engine.report_activity("working", source="process")
+        calls = engine._ml_logger.calls
+        assert len(calls) == 1
+        call = calls[0]
+        assert call["decision_source"] == "process"
+        assert call["predicted_mode"] == "working"
+        assert call["confidence"] == 1.0
+        assert call["applied"] is False
+        assert call["broadcast"] is False
+
+    async def test_ambient_source_does_not_log(self, engine):
+        """Ambient/RMS aliases to audio_ml in fusion but is out of scope here."""
+        await engine.report_activity("social", source="ambient")
+        assert engine._ml_logger.calls == []
+
+    async def test_camera_source_does_not_log(self, engine):
+        """Camera has its own decision_source elsewhere; report_activity does
+        not double-log it."""
+        await engine.report_activity("idle", source="camera")
+        assert engine._ml_logger.calls == []
+
+    async def test_factors_carry_priority_and_agent_factors(self, engine):
+        agent_factors = [{"sub": "foreground", "value": "code.exe"}]
+        await engine.report_activity(
+            "working", source="process", factors=agent_factors,
+        )
+        call = engine._ml_logger.calls[0]
+        assert call["factors"]["engine_priority"] == MODE_PRIORITY["working"]
+        assert call["factors"]["agent_factors"] == agent_factors
+
+    async def test_missing_agent_factors_logs_empty_list(self, engine):
+        await engine.report_activity("gaming", source="process")
+        call = engine._ml_logger.calls[0]
+        assert call["factors"]["agent_factors"] == []
+        assert call["factors"]["engine_priority"] == MODE_PRIORITY["gaming"]
+
+    async def test_logs_every_arrival_including_no_mode_change(self, engine):
+        """Heartbeats (same-mode reports) still log — process is a voter,
+        and analytics needs a row per signal arrival."""
+        await engine.report_activity("working", source="process")
+        await engine.report_activity("working", source="process")
+        await engine.report_activity("working", source="process")
+        assert len(engine._ml_logger.calls) == 3
+
+    async def test_no_logger_attached_does_not_raise(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        """If ml_logger isn't injected (test bootstraps that omit it),
+        the engine still accepts process reports without errors."""
+        eng = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+        # _ml_logger defaults to None on construction; do not attach one.
+        await eng.report_activity("working", source="process")
+        assert eng.current_mode == "working"
+
+
 class TestZonePostureRule:
     """Rule gates and dwell for the zone+posture → relax actuation."""
 

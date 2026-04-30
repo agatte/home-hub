@@ -702,6 +702,23 @@ class AutomationEngine:
             else:
                 fusion.report_signal(source, mode, 0.8, factors=factors)
 
+        # Persist a per-lane row in ml_decisions so per-source accuracy and
+        # the analytics dashboard see the process voter directly. Shadow row
+        # (applied=False) — process is a voter, not an actuator. Mirrors the
+        # rule_engine wiring shipped 2026-04-28.
+        if source == "process" and self._ml_logger is not None:
+            await self._ml_logger.log_decision(
+                predicted_mode=mode,
+                confidence=1.0,
+                decision_source="process",
+                factors={
+                    "engine_priority": MODE_PRIORITY.get(mode, 0),
+                    "agent_factors": factors or [],
+                },
+                applied=False,
+                broadcast=False,
+            )
+
         # DND blocks autonomous mode changes after fusion has logged its
         # signal — fusion weights still tune normally so the lane stays
         # warm for when DND clears. report_activity has no user-source
