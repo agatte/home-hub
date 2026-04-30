@@ -102,7 +102,8 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
 - **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
 - **Weather widget** — NWS API current conditions with 5-minute cache + active severe weather alerts
-- Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (live decision pipeline with fusion ring + per-signal gauge cards + collapsible historical analytics), Settings (configuration)
+- **Vital Signs Strip** — always-visible 22px strip at the kiosk bottom. `VitalStrip.svelte` polls `GET /api/vitals` every 30s, which re-projects already-shipped surfaces (Hue / Sonos circuit-breaker state, fusion `_last_fusion_result`, Pi-hole `get_summary`, `psutil` mem/disk/CPU-temp, WS client count) into per-metric `{value, status: ok|warn|error}` chips with a roll-up status. Collapsed → overall dot only; expanded → all chips with mode-aware tinting (orange = warn, red = error). `FloatingNav` shifted up to `bottom: 36px` (mobile `28px`) to clear the strip
+- Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (live decision pipeline with fusion ring + per-signal gauge cards + collapsible historical analytics), Settings (configuration). Plus the hidden `/journal` route (Apartment Logbook — date rail + Markdown render of the nightly summaries; intentionally excluded from `FloatingNav`)
 - Real-time WebSocket sync — changes from Alexa, Hue app, or physical switches reflected instantly
 - PWA-capable for phone/tablet kiosk mode
 - Optimistic updates for responsive feel
