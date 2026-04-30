@@ -29,8 +29,10 @@ from backend.api.routes.sonos import router as sonos_router
 from backend.api.routes.plants import router as plants_router
 from backend.api.routes.bar import router as bar_router
 from backend.api.routes.events import router as events_router
+from backend.api.routes.journal import router as journal_router
 from backend.api.routes.rules import router as rules_router
 from backend.api.routes.pihole import router as pihole_router
+from backend.api.routes.vitals import router as vitals_router
 from backend.api.routes.weather import router as weather_router
 from backend.api.routes.ambient import router as ambient_router
 from backend.api.routes.learning import router as learning_router
@@ -134,10 +136,12 @@ app.include_router(plants_router)
 app.include_router(bar_router)
 app.include_router(routines_router)
 app.include_router(events_router)
+app.include_router(journal_router)
 app.include_router(rules_router)
 app.include_router(ambient_router)
 app.include_router(learning_router)
 app.include_router(camera_router)
+app.include_router(vitals_router)
 app.include_router(debug_router)
 
 # Pi-hole reverse proxy — must come AFTER all API routers so our own

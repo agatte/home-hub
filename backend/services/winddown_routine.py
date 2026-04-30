@@ -72,6 +72,10 @@ class WinddownRoutineService:
         _MAX_RETRIES = 4
         _RETRY_DELAY_SECONDS = 1800  # 30 minutes
 
+        if self._automation is not None and self._automation.is_dnd_active():
+            logger.info("Wind-down skipped — DND active")
+            return False
+
         if not force and self._skip_if_active and self._automation:
             for attempt in range(_MAX_RETRIES + 1):
                 mode = self._automation.current_mode

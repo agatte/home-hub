@@ -303,6 +303,16 @@ class AutomationEngine:
         # naturally skips the bridge write.
         self._last_lux_multiplier: float = 1.0
 
+        # Do Not Disturb — locks autonomous state changes for a finite window.
+        # User-initiated mode picks (source starts with "api:") still pass;
+        # everything else (process/camera/audio reports, late-night rescue,
+        # fusion, behavioral predictor, zone+posture rule, routines, music
+        # auto-play, weather suggestions) gates on `is_dnd_active()`. State
+        # persists to app_settings["dnd_state"] so it survives a restart.
+        self._dnd_enabled: bool = False
+        self._dnd_expiry: Optional[datetime] = None
+        self._dnd_duration_minutes: int = 0
+
         # Screen sync — passed via constructor; reconciliation skips lights
         # that screen sync owns so we don't fight it on watching/gaming.
         self._screen_sync = screen_sync
@@ -692,6 +702,15 @@ class AutomationEngine:
             else:
                 fusion.report_signal(source, mode, 0.8, factors=factors)
 
+        # DND blocks autonomous mode changes after fusion has logged its
+        # signal — fusion weights still tune normally so the lane stays
+        # warm for when DND clears. report_activity has no user-source
+        # path (PC agent / ambient / camera only), so this exits early
+        # without a source check.
+        if self.is_dnd_active():
+            logger.debug("DND active — ignoring %s report (mode=%s)", source, mode)
+            return
+
         # Priority guard — a lower-priority mode can't displace a higher-priority
         # current mode unless the report comes from the source that owns it
         # (sources can always update themselves) or the owning source has gone
@@ -780,6 +799,17 @@ class AutomationEngine:
                 their own short label so journalctl shows who flipped the
                 override and from where.
         """
+        # DND blocks autonomous override pushes (late_night_rescue, fusion,
+        # behavioral_predictor, zone_posture_rule, internal). User-initiated
+        # overrides from the API route ("api:<ip>") still pass — the user
+        # can change mode while DND is on; we just suppress automation noise.
+        if self.is_dnd_active() and not source.startswith("api:"):
+            logger.info(
+                "DND active — blocking autonomous override %s (source=%s)",
+                mode, source,
+            )
+            return
+
         # Capture the effective mode (override if active, else detected) so that
         # event logging and callback gating see the real "previous" mode, not
         # the stale private _current_mode which only reflects PC agent state.
@@ -825,6 +855,16 @@ class AutomationEngine:
                 Useful for diagnosing surprise clear events (e.g. an API
                 client posting ``mode=auto`` mid-evening).
         """
+        # DND blocks autonomous override clears (4h timeout, fusion, etc.) so
+        # the locked state survives the DND window. User-initiated clears via
+        # the API route still pass.
+        if self.is_dnd_active() and not source.startswith("api:"):
+            logger.info(
+                "DND active — blocking autonomous override clear (source=%s)",
+                source,
+            )
+            return
+
         old_effective = self._override_mode
         was_overridden = self._manual_override
         self._manual_override = False
@@ -856,6 +896,141 @@ class AutomationEngine:
         # Only fire callbacks if the effective mode actually changed
         if old_effective != self._current_mode:
             await self._fire_mode_change_callbacks(self._current_mode)
+
+    # ------------------------------------------------------------------
+    # Do Not Disturb
+    # ------------------------------------------------------------------
+
+    def is_dnd_active(self) -> bool:
+        """True iff DND is enabled and the expiry is still in the future.
+
+        Pure check — no side effects. Expiry actuation (broadcast +
+        persist) happens once per tick in ``run_loop`` so callers can
+        invoke this freely from gating paths.
+        """
+        if not self._dnd_enabled:
+            return False
+        if self._dnd_expiry is None:
+            return False
+        return datetime.now(tz=TZ) < self._dnd_expiry
+
+    def dnd_status(self) -> dict:
+        """Return DND state as a JSON-serializable dict for API responses."""
+        active = self.is_dnd_active()
+        if not active or self._dnd_expiry is None:
+            return {
+                "enabled": False,
+                "expiry_utc": None,
+                "minutes_remaining": 0,
+                "duration_minutes": 0,
+            }
+        remaining = (self._dnd_expiry - datetime.now(tz=TZ)).total_seconds()
+        return {
+            "enabled": True,
+            "expiry_utc": self._dnd_expiry.astimezone(timezone.utc).isoformat(),
+            "minutes_remaining": max(0, int(remaining // 60)),
+            "duration_minutes": self._dnd_duration_minutes,
+        }
+
+    async def enable_dnd(
+        self, duration_minutes: int = 120, source: str = "internal",
+    ) -> dict:
+        """Activate DND for ``duration_minutes`` (clamped to [1, 720])."""
+        clamped = max(1, min(720, int(duration_minutes)))
+        now = datetime.now(tz=TZ)
+        self._dnd_enabled = True
+        self._dnd_expiry = now + timedelta(minutes=clamped)
+        self._dnd_duration_minutes = clamped
+        logger.info(
+            "DND enabled: %d minutes (expiry=%s, source=%s)",
+            clamped, self._dnd_expiry.isoformat(), source,
+        )
+        await self._persist_dnd_state()
+        await self._broadcast_dnd()
+        return self.dnd_status()
+
+    async def clear_dnd(self, source: str = "internal") -> dict:
+        """Clear DND immediately."""
+        was_enabled = self._dnd_enabled
+        self._dnd_enabled = False
+        self._dnd_expiry = None
+        self._dnd_duration_minutes = 0
+        if was_enabled:
+            logger.info("DND cleared (source=%s)", source)
+        await self._persist_dnd_state()
+        await self._broadcast_dnd()
+        return self.dnd_status()
+
+    async def _persist_dnd_state(self) -> None:
+        """Write current DND state to app_settings."""
+        from backend.api.routes.automation import DND_STATE_KEY
+        from backend.api.routes.routines import save_setting
+
+        if self._dnd_enabled and self._dnd_expiry is not None:
+            payload = {
+                "enabled": True,
+                "expiry_utc": self._dnd_expiry.astimezone(timezone.utc).isoformat(),
+                "duration_minutes": self._dnd_duration_minutes,
+            }
+        else:
+            payload = {
+                "enabled": False,
+                "expiry_utc": None,
+                "duration_minutes": 0,
+            }
+        try:
+            await save_setting(DND_STATE_KEY, payload)
+        except Exception as e:
+            logger.error("Failed to persist DND state: %s", e, exc_info=True)
+
+    async def _broadcast_dnd(self) -> None:
+        """Broadcast DND state change to all WebSocket clients."""
+        if not self._ws_manager:
+            return
+        try:
+            await self._ws_manager.broadcast("dnd_update", self.dnd_status())
+        except Exception as e:
+            logger.error("Failed to broadcast DND state: %s", e, exc_info=True)
+
+    async def load_dnd_state(self) -> None:
+        """Restore DND state from app_settings on startup.
+
+        If the persisted expiry has passed, treat as cleared and persist
+        the cleared state so the dashboard renders correctly on first load.
+        """
+        from backend.api.routes.automation import DND_STATE_KEY
+        from backend.api.routes.routines import load_setting
+
+        try:
+            saved = await load_setting(DND_STATE_KEY)
+        except Exception as e:
+            logger.error("Failed to load DND state: %s", e, exc_info=True)
+            return
+        if not saved or not saved.get("enabled"):
+            return
+        expiry_str = saved.get("expiry_utc")
+        if not expiry_str:
+            return
+        try:
+            expiry = datetime.fromisoformat(expiry_str).astimezone(TZ)
+        except (TypeError, ValueError):
+            logger.warning("Invalid DND expiry on load: %r", expiry_str)
+            return
+        if expiry <= datetime.now(tz=TZ):
+            logger.info(
+                "DND expiry (%s) had passed on startup — treating as cleared",
+                expiry.isoformat(),
+            )
+            await self.clear_dnd(source="startup_expired")
+            return
+        self._dnd_enabled = True
+        self._dnd_expiry = expiry
+        self._dnd_duration_minutes = int(saved.get("duration_minutes", 0))
+        logger.info(
+            "DND restored from app_settings: expiry=%s (%d min remaining)",
+            expiry.isoformat(),
+            int((expiry - datetime.now(tz=TZ)).total_seconds() // 60),
+        )
 
     def mark_light_manual(self, light_id: str) -> None:
         """Mark a light as manually adjusted — protects it from automation.
@@ -1565,6 +1740,17 @@ class AutomationEngine:
 
                 now = datetime.now(tz=TZ)
 
+                # DND auto-expiry — once-per-tick lazy clear. is_dnd_active()
+                # itself is side-effect free; we run the persist + WS broadcast
+                # here so the dashboard learns about expiry within ~60s.
+                if (
+                    self._dnd_enabled
+                    and self._dnd_expiry is not None
+                    and now >= self._dnd_expiry
+                ):
+                    logger.info("DND auto-expired at %s", now.isoformat())
+                    await self.clear_dnd(source="auto_expiry")
+
                 # Check manual override timeout. Sleeping is persistent:
                 # a 4-hour timeout at ~3am would hand control back to the
                 # detected-mode path, which can turn lights on while the
@@ -1611,9 +1797,12 @@ class AutomationEngine:
                 # gaming/watching/social/sleeping are respected, music playback
                 # counts as intentional activity, and a fresh camera 'at desk'
                 # reading means the user is actively present and shouldn't be
-                # pushed into relax.
+                # pushed into relax. DND suppresses this — set_manual_override
+                # would block the call anyway, but skipping early avoids the
+                # log noise + the Sonos polling round-trip.
                 if (
                     not self._manual_override
+                    and not self.is_dnd_active()
                     and not self.is_at_desk_fresh()
                     and self._get_time_period() == "late_night"
                     and self._current_mode in ("working", "idle")
@@ -1707,10 +1896,13 @@ class AutomationEngine:
                                         applied=True,
                                     )
                         elif confidence >= 0.70:
-                            # Suggest via WebSocket toast
-                            await self._ws_manager.broadcast(
-                                "ml_prediction", prediction
-                            )
+                            # Suggest via WebSocket toast (suppressed during DND
+                            # — prediction toasts feel like automation noise to
+                            # someone who explicitly asked for quiet)
+                            if not self.is_dnd_active():
+                                await self._ws_manager.broadcast(
+                                    "ml_prediction", prediction
+                                )
                             if ml_logger:
                                 await ml_logger.log_decision(
                                     predicted_mode=prediction["predicted_mode"],
@@ -1885,6 +2077,14 @@ class AutomationEngine:
         """
         camera = self._camera_service
         if camera is None:
+            return
+
+        # Gate 0: DND suppresses the dwell timer entirely so we don't
+        # accumulate a "would have fired" stamp during a quiet window.
+        # set_manual_override would block the actuation anyway, but
+        # resetting the dwell here keeps shadow logs honest.
+        if self.is_dnd_active():
+            self._zone_posture_reclined_since = None
             return
 
         # Gate 1: any active manual override (user or rule) takes precedence.

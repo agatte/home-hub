@@ -78,6 +78,14 @@ class MusicMapper:
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
         # Tracks the most recent mode requested — used to skip stale auto-plays
         self._last_requested_mode: Optional[str] = None
+        # Set post-construction by bootstrap once AutomationEngine exists
+        # (chicken-and-egg — engine needs music_mapper, music_mapper needs
+        # engine for is_dnd_active() in on_mode_change / on_weather_change).
+        self._automation = None
+
+    def set_automation(self, automation) -> None:
+        """Inject the automation engine reference (called from bootstrap)."""
+        self._automation = automation
 
     async def load_from_db(self) -> None:
         """Load all mode-playlist mappings from the database into cache."""
@@ -282,6 +290,10 @@ class MusicMapper:
         Returns:
             Dict describing the action taken, or None.
         """
+        if self._automation is not None and self._automation.is_dnd_active():
+            logger.debug("DND active — skipping music mode-change handling for %s", mode)
+            return None
+
         self._last_requested_mode = mode
 
         entry = self.pick_playlist(mode)
@@ -388,6 +400,9 @@ class MusicMapper:
         Returns:
             Dict describing the suggestion, or None.
         """
+        if self._automation is not None and self._automation.is_dnd_active():
+            return None
+
         if mode in _WEATHER_MUSIC_SKIP_MODES:
             return None
 

@@ -4,7 +4,7 @@
 // as its destroy hook.
 
 import { HubSocket } from '$lib/ws.js'
-import { apiGet, apiPost } from '$lib/api.js'
+import { apiGet, apiPost, apiDelete } from '$lib/api.js'
 import { lights, setLightsFromList, applyLightUpdate, optimisticLightPatch } from './lights.js'
 import { sonos } from './sonos.js'
 import { automation } from './automation.js'
@@ -50,6 +50,11 @@ export function initStores() {
         mode: d.current_mode,
         source: d.mode_source,
         manual_override: d.manual_override,
+        dnd: {
+          enabled: !!d.dnd_enabled,
+          expiry_utc: d.dnd_expiry_utc ?? null,
+          minutes_remaining: d.dnd_minutes_remaining ?? 0,
+        },
       })
     })
     .catch(() => {})
@@ -86,7 +91,17 @@ export function initStores() {
             break
           }
           modeUpdateLockUntil = 0
-          automation.set(data)
+          automation.update((prev) => ({ ...prev, ...data }))
+          break
+        case 'dnd_update':
+          automation.update((prev) => ({
+            ...prev,
+            dnd: {
+              enabled: !!data.enabled,
+              expiry_utc: data.expiry_utc ?? null,
+              minutes_remaining: data.minutes_remaining ?? 0,
+            },
+          }))
           break
         case 'music_suggestion':
           showMusicSuggestion(data)
@@ -184,4 +199,13 @@ export async function setManualMode(mode) {
 /** @param {string} title */
 export async function playFavorite(title) {
   await apiPost(`/api/sonos/favorites/${encodeURIComponent(title)}/play`)
+}
+
+/** @param {number} durationMinutes */
+export async function enableDND(durationMinutes = 120) {
+  await apiPost('/api/automation/dnd', { duration_minutes: durationMinutes })
+}
+
+export async function clearDND() {
+  await apiDelete('/api/automation/dnd')
 }

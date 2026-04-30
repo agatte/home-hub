@@ -266,12 +266,14 @@ All messages: JSON with `type` + `data` fields.
 | Lights | `/api/lights` | CRUD per-light state (on, bri, hue, sat, ct), bulk set |
 | Scenes | `/api/scenes` | Curated + custom + bridge scenes, activate, effects (per-light or all) |
 | Weather | `/api/weather` | Current conditions (5-min cache, NWS), alerts |
-| Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides |
+| Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides, DND (POST/DELETE/GET `/dnd`) |
 | Sonos | `/api/sonos` | Transport (play/pause/next/prev), volume, TTS, favorites |
 | Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
 | Routines | `/api/routines` | Morning + winddown config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
+| Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
+| Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)

@@ -68,6 +68,8 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
+- Do Not Disturb (`POST/DELETE /api/automation/dnd`, default 2h) locks autonomous changes for a finite window. `AutomationEngine.is_dnd_active()` gates `report_activity`, `set_manual_override`/`clear_override` (autonomous sources only — user-source `api:<ip>` still passes), late-night rescue, zone+posture rule, behavioral predictor toast, music auto-play / weather suggestion, and morning + sunrise + winddown routines. Persisted to `app_settings["dnd_state"]`, restored on boot, auto-cleared in `run_loop` once expiry passes
+- Apartment Logbook (`backend/services/journal_service.py`, scheduled at 02:00 daily) reads activity / light / sonos / scene events for the previous local calendar day and writes Markdown to `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (date rail + markdown render); intentionally excluded from `FloatingNav`. Pure read; no actuation. Endpoints: `GET /api/journal/entries`, `GET /api/journal/{date}`, `POST /api/journal/generate/{date}`
 
 ### ML Operational Status
 

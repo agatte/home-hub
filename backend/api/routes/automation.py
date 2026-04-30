@@ -18,6 +18,7 @@ from backend.api.schemas.automation import (
     ActivityReport,
     AutomationConfig,
     AutomationStatus,
+    DNDRequest,
     LaptopLoopbackToggle,
     ManualOverride,
     MicCalibrationResult,
@@ -35,6 +36,7 @@ SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
 SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
+DND_STATE_KEY = "dnd_state"
 
 # Settings-page defaults for the watching-posture tuning knobs. The values
 # here mirror the hardcoded fall-back in screen_sync.py and automation_engine
@@ -109,6 +111,7 @@ async def get_status(request: Request) -> AutomationStatus:
     if not engine:
         return AutomationStatus()
 
+    dnd = engine.dnd_status()
     return AutomationStatus(
         current_mode=engine.current_mode,
         mode_source=engine.mode_source,
@@ -121,7 +124,52 @@ async def get_status(request: Request) -> AutomationStatus:
         ),
         automation_enabled=engine.enabled,
         manual_light_overrides=list(engine.manual_light_overrides),
+        dnd_enabled=dnd["enabled"],
+        dnd_expiry_utc=dnd["expiry_utc"],
+        dnd_minutes_remaining=dnd["minutes_remaining"],
     )
+
+
+@router.get("/dnd")
+async def get_dnd_status(request: Request) -> dict:
+    """Get current Do Not Disturb state."""
+    engine = getattr(request.app.state, "automation", None)
+    if not engine:
+        return {
+            "enabled": False,
+            "expiry_utc": None,
+            "minutes_remaining": 0,
+            "duration_minutes": 0,
+        }
+    return engine.dnd_status()
+
+
+@router.post("/dnd", dependencies=[Depends(require_api_key)])
+@limiter.limit("10/minute")
+async def enable_dnd_route(req: DNDRequest, request: Request) -> dict:
+    """Activate Do Not Disturb for the given duration (default 2h)."""
+    engine = getattr(request.app.state, "automation", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail="Automation engine not initialized")
+
+    remote = getattr(request.client, "host", None) or "unknown"
+    caller = f"api:{remote}"
+    state = await engine.enable_dnd(req.duration_minutes, source=caller)
+    return {"status": "ok", **state}
+
+
+@router.delete("/dnd", dependencies=[Depends(require_api_key)])
+@limiter.limit("10/minute")
+async def clear_dnd_route(request: Request) -> dict:
+    """Clear Do Not Disturb immediately."""
+    engine = getattr(request.app.state, "automation", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail="Automation engine not initialized")
+
+    remote = getattr(request.client, "host", None) or "unknown"
+    caller = f"api:{remote}"
+    state = await engine.clear_dnd(source=caller)
+    return {"status": "ok", **state}
 
 
 @router.get("/pipeline")

@@ -54,6 +54,10 @@ class MorningRoutineService:
         Returns:
             True if the routine completed successfully.
         """
+        if self._automation is not None and self._automation.is_dnd_active():
+            logger.info("Morning routine skipped — DND active")
+            return False
+
         logger.info("Executing morning routine")
 
         # Build the greeting
@@ -132,6 +136,10 @@ class MorningRoutineService:
 
         Only controls light "2" (bedroom lamp). Other lights stay off.
         """
+        if self._automation is not None and self._automation.is_dnd_active():
+            logger.info("Sunrise ramp skipped — DND active")
+            return False
+
         if not self._automation or not self._automation._hue:
             logger.warning("Sunrise ramp skipped — no Hue service available")
             return False

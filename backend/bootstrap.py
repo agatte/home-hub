@@ -312,6 +312,12 @@ async def lifespan(app: FastAPI):
     )
     app.state.automation = automation
     await automation.load_scene_overrides()
+    await automation.load_dnd_state()
+
+    # Music mapper consults automation.is_dnd_active() to suppress auto-play
+    # / weather suggestions during a DND window — wired post-construction
+    # because both services need to exist before the link is established.
+    music_mapper.set_automation(automation)
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
@@ -483,6 +489,24 @@ async def lifespan(app: FastAPI):
         minute=0,
         weekdays=[0, 1, 2, 3, 4, 5, 6],
         callback=model_manager.retrain_all,
+        enabled=True,
+    ))
+
+    # Apartment Logbook — nightly narrative journal at 2:00 AM.
+    # Reads yesterday's events from activity_events / light_adjustments /
+    # sonos_playback_events / scene_activations and writes a Markdown file
+    # to data/journal/YYYY-MM-DD.md. Pure read; no actuation.
+    from backend.services.journal_service import JournalService
+    journal_dir = PROJECT_ROOT / "data" / "journal"
+    journal_service = JournalService(journal_dir=journal_dir)
+    app.state.journal_service = journal_service
+
+    scheduler.add_task(ScheduledTask(
+        name="journal_nightly",
+        hour=2,
+        minute=0,
+        weekdays=[0, 1, 2, 3, 4, 5, 6],
+        callback=journal_service.run_nightly,
         enabled=True,
     ))
 

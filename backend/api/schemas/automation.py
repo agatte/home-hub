@@ -63,6 +63,29 @@ class AutomationStatus(BaseModel):
         default_factory=list,
         description="Light IDs with active per-light manual overrides",
     )
+    dnd_enabled: bool = Field(
+        default=False,
+        description="Whether Do Not Disturb is currently active",
+    )
+    dnd_expiry_utc: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp (UTC) when DND auto-expires",
+    )
+    dnd_minutes_remaining: int = Field(
+        default=0,
+        description="Whole minutes left on the DND window",
+    )
+
+
+class DNDRequest(BaseModel):
+    """Activate Do Not Disturb for a finite window."""
+
+    duration_minutes: int = Field(
+        default=120,
+        ge=1,
+        le=720,
+        description="Minutes before DND auto-clears (1-720, default 120 = 2h)",
+    )
 
 
 class ManualOverride(BaseModel):

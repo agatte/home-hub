@@ -34,7 +34,8 @@
 <style>
   .floating-nav {
     position: fixed;
-    bottom: 20px;
+    /* Sits above the always-visible VitalStrip (22px tall at bottom: 0). */
+    bottom: 36px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -78,7 +79,7 @@
 
   @media (max-width: 480px) {
     .floating-nav {
-      bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(28px + env(safe-area-inset-bottom, 0px));
       padding: 4px;
     }
     .floating-nav-item {

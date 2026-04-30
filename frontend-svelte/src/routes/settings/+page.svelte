@@ -2,8 +2,45 @@
   import { onMount } from 'svelte'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { camera as cameraStore } from '$lib/stores/camera.js'
+  import { automation } from '$lib/stores/automation.js'
+  import { enableDND, clearDND } from '$lib/stores/init.js'
   import { apiGet, apiPut, apiPost, apiDelete } from '$lib/api.js'
   import Slider from '$lib/components/Slider.svelte'
+
+  const DND_DURATIONS = [
+    { label: '1h',  minutes: 60  },
+    { label: '2h',  minutes: 120 },
+    { label: '4h',  minutes: 240 },
+    { label: 'All evening', minutes: 360 },
+  ]
+  let dndDurationMinutes = 120
+  /** @type {string | null} */
+  let dndError = null
+
+  async function activateDND() {
+    dndError = null
+    try {
+      await enableDND(dndDurationMinutes)
+    } catch (e) {
+      dndError = e?.message ?? 'Failed to enable DND'
+    }
+  }
+
+  async function deactivateDND() {
+    dndError = null
+    try {
+      await clearDND()
+    } catch (e) {
+      dndError = e?.message ?? 'Failed to clear DND'
+    }
+  }
+
+  $: dndState = $automation.dnd ?? { enabled: false, minutes_remaining: 0, expiry_utc: null }
+  $: dndRemainingLabel = (() => {
+    const m = dndState.minutes_remaining ?? 0
+    if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`
+    return `${m}m`
+  })()
 
   const MODE_LABELS = {
     gaming: 'Gaming',
@@ -539,6 +576,67 @@
         </div>
       </div>
     {/if}
+  </section>
+
+  <!-- Do Not Disturb -->
+  <section class="widget">
+    <h2 class="widget-title">Do Not Disturb</h2>
+    <div class="settings-card">
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">Status</span>
+          <span class="setting-hint">
+            {#if dndState.enabled}
+              Locked. Autonomous mode changes, auto-play, TTS, and routines are paused.
+            {:else}
+              Inactive. The system runs autonomously.
+            {/if}
+          </span>
+        </div>
+        <span class="setting-value">
+          {dndState.enabled ? `${dndRemainingLabel} left` : 'Off'}
+        </span>
+      </div>
+
+      {#if !dndState.enabled}
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Duration</span>
+            <span class="setting-hint">How long to lock the current state</span>
+          </div>
+          <div class="dnd-duration-row">
+            {#each DND_DURATIONS as opt}
+              <button
+                class="duration-btn"
+                class:duration-on={dndDurationMinutes === opt.minutes}
+                on:click={() => (dndDurationMinutes = opt.minutes)}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+        <div class="setting-row">
+          <button class="toggle-btn toggle-on" on:click={activateDND}>
+            Enable DND
+          </button>
+        </div>
+      {:else}
+        <div class="setting-row">
+          <button class="toggle-btn" on:click={deactivateDND}>
+            Clear DND
+          </button>
+        </div>
+      {/if}
+
+      {#if dndError}
+        <div class="setting-row">
+          <span class="setting-hint" style="color: var(--color-danger, #d57)">
+            {dndError}
+          </span>
+        </div>
+      {/if}
+    </div>
   </section>
 
   <!-- Light Schedule -->
@@ -1254,5 +1352,34 @@
     text-transform: uppercase;
     flex-shrink: 0;
     margin-left: 4px;
+  }
+
+  .dnd-duration-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .duration-btn {
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .duration-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .duration-on {
+    background: rgba(140, 100, 200, 0.22);
+    border-color: rgba(140, 100, 200, 0.55);
+    color: var(--text-primary);
   }
 </style>

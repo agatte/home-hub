@@ -2,7 +2,7 @@
 
 > Feature ideas beyond the current roadmap — large and small.
 >
-> **Last updated:** 2026-04-28
+> **Last updated:** 2026-04-29
 
 ---
 
@@ -36,6 +36,11 @@ Major work that landed during April 2026, roughly chronological. Tracked here so
 - **2026-04-29 — fusion vote stays fresh during manual overrides (`b8c285a`).** Removed redundant `not self._manual_override` guard at the rule_engine call site so the lane keeps voting through sleeping/winddown/late-night-rescue overrides; `check_rules()` already gates the user-nudge path on `current_mode==idle` internally.
 - **2026-04-29 — full doc audit & refresh.** Closed remaining 4/28 partial-update drift in `ML_SPEC.md` (header date, fallback chain, fusion code example, WS signals shape, `ml_metrics` table, `compute_accuracy_by_source`, late-night decay). Refreshed `CONFIDENCE_FUSION.md` worked examples to v3 4-lane shape. Added `auto-demote 2026-05-04` callout to PROJECT_SPEC + ML_SPEC. Archived `Audit_Summary.txt` to `docs/archive/`.
 
+### Near-term polish
+- **2026-04-29 — DND Mode shipped (item #4).** `AutomationEngine.is_dnd_active()` gates autonomous mode-setters; user-source overrides (`api:<ip>`) still pass. Persisted to `app_settings["dnd_state"]`, restored on boot, auto-clears once expiry tick fires in `run_loop`. Endpoints `POST/DELETE /api/automation/dnd`, status fields appended to `GET /api/automation/status`. Frontend: subtle `DND • Xh Ym` chip on `ModeIndicator`, full toggle + duration picker on Settings. Gated paths: `report_activity`, `set_manual_override`, `clear_override`, late-night rescue, zone+posture rule, behavioral-predictor toast, music auto-play / weather suggestion, morning routine, sunrise ramp, winddown.
+- **2026-04-29 — Apartment Logbook shipped (item #19).** New `JournalService` (`backend/services/journal_service.py`) reads activity / light / sonos / scene events for the previous local calendar day and writes Markdown to `data/journal/YYYY-MM-DD.md`. ScheduledTask `journal_nightly` at 02:00 daily. Endpoints `GET /api/journal/entries`, `GET /api/journal/{date}`, `POST /api/journal/generate/{date}`. Frontend route `/journal` (date rail + markdown render); intentionally excluded from `FloatingNav`. Pure read; no actuation.
+- **2026-04-29 — Vital Signs Strip shipped (item #15).** Always-visible 22px strip at the kiosk bottom. New `GET /api/vitals` aggregator (`backend/api/routes/vitals.py`) re-projects already-shipped surfaces (Hue / Sonos circuit-breaker state, fusion `_last_fusion_result`, Pi-hole `get_summary`, `psutil` mem/disk/CPU temp, `ws_manager.connection_count`) into per-metric `{value, status: ok|warn|error}` chips with a roll-up status. Frontend `VitalStrip.svelte` polls every 30s, collapsed → just an overall dot, expanded → all chips with mode-aware tinting (orange-warn, red-error). `FloatingNav` shifted up `bottom: 20px → 36px` (mobile `8px → 28px`) to clear the strip.
+
 ---
 
 ## Priority Bands (April 2026)
@@ -44,11 +49,8 @@ Phase 3 (autonomous operation) is finishing — auto-demote on 2026-05-04 closes
 
 ### Near-term (next 4–6 weeks, before Phase 4 prep)
 
-Small, high-leverage, low-risk items that consume only shipped infrastructure. Good "fill" work between Phase 3 closure and Phase 4 kickoff.
+Small, high-leverage, low-risk items that consume only shipped infrastructure. Good "fill" work between Phase 3 closure and Phase 4 kickoff. (#4 DND, #15 Vital Signs Strip, and #19 Logbook all shipped 2026-04-29 — see Completed → Near-term polish.)
 
-- **#4 DND Mode** — trivial flag + gate in `automation_engine`
-- **#15 Vital Signs Strip** — aggregates already-shipped health endpoints into a 20px kiosk strip
-- **#19 Apartment Logbook** — reads existing event tables; ScheduledTask pattern is copy/paste
 - **#6 Screensaver Mode** — pure frontend, reads existing WS broadcasts
 - **#14 Seasonal Lighting** — slow-burn polish, no dependencies
 
