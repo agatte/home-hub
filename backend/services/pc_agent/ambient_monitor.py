@@ -151,6 +151,7 @@ class AmbientMonitor:
         # was removed when YAMNet became the authoritative social gate.
         self._quiet_start: Optional[float] = None
         self._was_quiet: bool = False
+        self._last_avg_rms: Optional[float] = None
         self._stream = None
         self._audio = None
 
@@ -299,6 +300,7 @@ class AmbientMonitor:
 
         # Average over the window
         avg_rms = sum(self._rms_history) / len(self._rms_history)
+        self._last_avg_rms = avg_rms
         now = time.time()
 
         if avg_rms > self._threshold:
@@ -580,6 +582,11 @@ def run_monitor(
                                         "raw_yamnet_top5": ml_result["raw_yamnet_top5"],
                                         "inference_ms": ml_result["inference_ms"],
                                         "rms_would_say": rms_would_say,
+                                        "rms_avg": (
+                                            round(monitor._last_avg_rms, 1)
+                                            if monitor._last_avg_rms is not None
+                                            else None
+                                        ),
                                         "mode_signal": mode_signal,
                                         "shadow_mode": shadow_mode,
                                     },
