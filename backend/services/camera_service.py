@@ -35,6 +35,17 @@ logger = logging.getLogger("home_hub.camera")
 
 # Polling and detection constants
 POLL_INTERVAL = 2       # Seconds between frame captures
+# Watchdog: bound the blocking _process_frame executor call so a hung
+# V4L2 read() can't silently freeze the entire poll loop. Picked at ~2.5x
+# POLL_INTERVAL — long enough for an honest slow MediaPipe frame, short
+# enough that a real hang is detected within a single iteration.
+FRAME_READ_TIMEOUT_S = 5.0
+# V4L2 capture timeouts. Set on the cv2.VideoCapture handle at open time;
+# OpenCV ignores these on backends that don't support them, so they're
+# safe to set unconditionally. CAP_READ_TIMEOUT_MSEC is the primary defense
+# against the post-resume hang we saw on 2026-04-30.
+CAP_OPEN_TIMEOUT_MS = 3000
+CAP_READ_TIMEOUT_MS = 2000
 # 640x480 gives BlazeFace enough pixel detail to score Anthony's profile view
 # at 2-3m (corner position) noticeably higher than 320x240 did. Pose landmarker
 # was already solid at the lower resolution; face scores are the beneficiary.
@@ -248,17 +259,9 @@ class CameraService:
 
         # Open webcam (device 0 = built-in camera on Latitude)
         try:
-            self._cap = cv2.VideoCapture(0)
-            if not self._cap.isOpened():
-                logger.warning(
-                    "Camera service: webcam not available "
-                    "(may be in use by another process)"
-                )
-                self._cap = None
+            self._cap = self._open_capture()
+            if self._cap is None:
                 return
-
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
             await self._load_calibration()
         except Exception as exc:
             logger.error("Failed to open webcam: %s", exc, exc_info=True)
@@ -679,6 +682,66 @@ class CameraService:
         """
         self._heartbeat = registry
 
+    def _open_capture(self):
+        """Open ``cv2.VideoCapture(0)`` with timeouts, resolution, and warm-up.
+
+        Single home for the open dance: previously inlined at boot and on
+        resume-from-sleeping; both sites now route through here. Sets V4L2
+        read/open timeouts so a wedged kernel driver can be detected at the
+        OpenCV layer (defense in depth on top of the asyncio watchdog), then
+        discards one warm-up frame so the next ``_process_frame`` doesn't
+        receive a corrupt first read post-reopen.
+
+        Returns the opened ``cv2.VideoCapture`` or ``None`` on failure.
+        """
+        import cv2
+
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            logger.warning(
+                "Camera service: webcam not available "
+                "(may be in use by another process)"
+            )
+            return None
+
+        # Property setters return False on backends that don't recognise the
+        # property; that's fine — we still benefit on V4L2 where they apply.
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, CAP_OPEN_TIMEOUT_MS)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, CAP_READ_TIMEOUT_MS)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        try:
+            cap.read()  # Warm-up read; first frame post-reopen is often junk.
+        except Exception as exc:
+            logger.warning("Warm-up frame read failed: %s", exc)
+        return cap
+
+    def _recover_capture(self) -> None:
+        """Release and reopen the capture handle from the asyncio thread.
+
+        Called when the watchdog in ``poll_loop`` trips on a hung frame
+        read. The orphaned executor thread is still parked inside
+        ``cap.read()`` and holds ``self._cap_lock``; we deliberately do
+        NOT take that lock here — OpenCV's ``release()`` is thread-safe
+        at the C++ level and releasing under the orphan typically unblocks
+        the V4L2 driver, letting the orphan exit cleanly on its next
+        syscall. If reopen fails, ``self._cap`` stays ``None`` and
+        ``_process_frame`` short-circuits at its top-of-function guard
+        until a future iteration succeeds.
+        """
+        old = self._cap
+        self._cap = None
+        if old is not None:
+            try:
+                old.release()
+            except Exception as exc:
+                logger.warning("Camera release during recovery failed: %s", exc)
+        self._cap = self._open_capture()
+        if self._cap is None:
+            logger.warning("Camera reopen during recovery failed; will retry next poll")
+        else:
+            logger.info("Camera capture recovered after watchdog timeout")
+
     async def poll_loop(self) -> None:
         """Background task — capture and classify one frame every POLL_INTERVAL seconds."""
         loop = asyncio.get_event_loop()
@@ -692,8 +755,25 @@ class CameraService:
                 if self._heartbeat is not None:
                     self._heartbeat.tick("camera")
 
-                # Run blocking frame capture + inference in thread pool
-                result = await loop.run_in_executor(None, self._process_frame)
+                # Run blocking frame capture + inference in thread pool.
+                # Wrap in asyncio.wait_for so a hung V4L2 read can't park the
+                # poll loop indefinitely (heartbeat, lux refresh, fusion lane
+                # all stop ticking when this await never returns). On timeout
+                # we release/reopen the capture handle and resume polling;
+                # the orphan executor thread will exit when its read unblocks.
+                try:
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(None, self._process_frame),
+                        timeout=FRAME_READ_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Camera frame read exceeded %.1fs — releasing and "
+                        "reopening capture",
+                        FRAME_READ_TIMEOUT_S,
+                    )
+                    self._recover_capture()
+                    continue
                 if result is None:
                     continue
 
@@ -1284,15 +1364,11 @@ class CameraService:
                 self._clear_committed_zone_posture("resume from sleeping")
                 # Reopen camera
                 try:
-                    import cv2
-                    self._cap = cv2.VideoCapture(0)
-                    if self._cap.isOpened():
-                        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-                        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+                    self._cap = self._open_capture()
+                    if self._cap is not None:
                         logger.info("Camera resumed after sleeping mode")
                     else:
                         logger.warning("Camera unavailable after sleep — will retry next poll")
-                        self._cap = None
                 except Exception as exc:
                     logger.error("Failed to reopen camera: %s", exc)
                     self._cap = None

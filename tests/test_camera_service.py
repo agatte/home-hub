@@ -398,3 +398,121 @@ class TestCameraSourcePriority:
         from backend.services.automation_engine import MODE_PRIORITY
 
         assert MODE_PRIORITY["watching"] > MODE_PRIORITY["idle"]
+
+
+# ---------------------------------------------------------------------------
+# Capture watchdog (frame-read hang recovery)
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureWatchdog:
+    """Cover the asyncio.wait_for watchdog around _process_frame.
+
+    Regression coverage for the 2026-04-30 V4L2 hang where ``cap.read()``
+    parked the executor thread for ~13.7h after a sleeping-mode reopen
+    and silenced the heartbeat / lux multiplier.
+    """
+
+    def test_open_capture_sets_timeouts_and_warmup(self):
+        """_open_capture sets V4L2 timeouts + resolution, then discards a warm-up frame."""
+        import cv2
+
+        service = _make_service()
+
+        cap = service._open_capture()
+
+        assert cap is not None
+        # The autouse fixture's MagicMock returns truthy from isOpened().
+        cap.isOpened.assert_called_once()
+        # Property setters should fire for both timeouts AND resolution.
+        set_calls = {call.args for call in cap.set.call_args_list}
+        assert (cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000) in set_calls
+        assert (cv2.CAP_PROP_READ_TIMEOUT_MSEC, 2000) in set_calls
+        assert (cv2.CAP_PROP_FRAME_WIDTH, 640) in set_calls
+        assert (cv2.CAP_PROP_FRAME_HEIGHT, 480) in set_calls
+        # Exactly one warm-up read so the next _process_frame doesn't see junk.
+        cap.read.assert_called_once()
+
+    def test_open_capture_returns_none_when_device_unavailable(self):
+        """Failure to open the device → returns None, doesn't raise."""
+        import cv2
+
+        service = _make_service()
+        # The autouse fixture's MagicMock returns a fresh MagicMock from
+        # cv2.VideoCapture(0) on each call. Force this one to look closed.
+        bad_cap = MagicMock()
+        bad_cap.isOpened.return_value = False
+        cv2.VideoCapture.return_value = bad_cap
+
+        try:
+            assert service._open_capture() is None
+        finally:
+            cv2.VideoCapture.reset_mock(return_value=True, side_effect=True)
+
+    def test_recover_capture_releases_old_and_reopens(self):
+        """_recover_capture releases the wedged handle and installs a fresh one."""
+        service = _make_service()
+        old_cap = MagicMock()
+        service._cap = old_cap
+
+        service._recover_capture()
+
+        old_cap.release.assert_called_once()
+        assert service._cap is not None
+        assert service._cap is not old_cap
+
+    def test_recover_capture_swallows_release_exception(self):
+        """A broken release() must not propagate — orphan thread may hold a soft lock."""
+        service = _make_service()
+        old_cap = MagicMock()
+        old_cap.release.side_effect = RuntimeError("driver wedged")
+        service._cap = old_cap
+
+        # Must not raise.
+        service._recover_capture()
+        # Reopen still happened.
+        assert service._cap is not None
+        assert service._cap is not old_cap
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_recovers_from_frame_timeout(self, monkeypatch):
+        """A hung _process_frame trips the watchdog, triggers recovery, loop continues."""
+        from backend.services import camera_service as cam_module
+
+        # Shrink the timeout so the test doesn't sleep 5s.
+        monkeypatch.setattr(cam_module, "FRAME_READ_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(cam_module, "POLL_INTERVAL", 0)
+
+        service = _make_service()
+        service._enabled = True
+        service._cap = MagicMock()  # truthy; _process_frame won't actually run
+
+        # _process_frame blocks until cancelled. Run in the executor so it
+        # exercises the same wait_for path the real code uses.
+        import threading
+        block = threading.Event()
+
+        def hang() -> None:
+            block.wait(timeout=2.0)  # bounded so a failed test still terminates
+
+        monkeypatch.setattr(service, "_process_frame", hang)
+
+        recover_called = False
+
+        def fake_recover() -> None:
+            nonlocal recover_called
+            recover_called = True
+            block.set()  # release the orphan so the executor thread can finish
+
+        monkeypatch.setattr(service, "_recover_capture", fake_recover)
+
+        # Drive a single iteration of poll_loop, then cancel.
+        task = asyncio.create_task(service.poll_loop())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        assert recover_called, "Watchdog should have invoked _recover_capture"
