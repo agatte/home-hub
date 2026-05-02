@@ -303,6 +303,16 @@ BED_RECLINED_L1_RATIO = {
     "late_night": 0.6,   # default 15 when night=25
 }
 
+# Bed-zone-only target brightness per period (posture None or upright).
+# Used by apply_zone_overlay's third branch when zone=bed and posture is
+# not "reclined" — i.e. face-only detection (laptop blocks pose
+# landmarks) or pose committed "upright". Higher than BED_RECLINED_*
+# because the user might be sitting up against the headboard, scrolling
+# a phone, or actively working on a laptop in bed: bedside-reading
+# levels rather than lying-down levels.
+BED_ZONE_ONLY_L1_BRI = {"evening": 60, "night": 40, "late_night": 30}
+BED_ZONE_ONLY_L2_BRI = {"evening": 50, "night": 35, "late_night": 25}
+
 # Maximum age (in seconds) for a committed zone/posture to be honored
 # by the overlay. Older than this and the value is treated as missing —
 # mirrors ConfidenceFusion's SOURCE_STALE_SECONDS so stale camera state
@@ -617,6 +627,38 @@ def apply_zone_overlay(
             current = int(new_state[light_id].get("bri", 0))
             if current <= target:
                 continue  # Already at or below target — don't raise.
+            new_state[light_id]["bri"] = target
+            changed = True
+        if not changed:
+            return state
+        return new_state
+
+    # Branch 3 — bed zone, posture not committed as "reclined". Triggers
+    # when posture is None (face-only detection — laptop blocks hip /
+    # shoulder landmarks) or "upright" (sitting up in bed). Scoped to
+    # working/idle during evening/night/late_night so brief bed visits
+    # in active modes (gaming/watching/social/cooking) keep their
+    # baselines. Targets are bedside-reading levels — between the
+    # working baseline and the full reclined dim.
+    if (
+        zone == "bed"
+        and posture in (None, "upright")
+        and mode in ("working", "idle")
+        and period in ("evening", "night", "late_night")
+    ):
+        l1_target = BED_ZONE_ONLY_L1_BRI.get(period)
+        l2_target = BED_ZONE_ONLY_L2_BRI.get(period)
+        if l1_target is None or l2_target is None:
+            return state
+        targets = {"1": l1_target, "2": l2_target}
+        new_state = {lid: dict(ls) for lid, ls in state.items()}
+        changed = False
+        for light_id, target in targets.items():
+            if light_id not in new_state:
+                continue
+            current = int(new_state[light_id].get("bri", 0))
+            if current <= target:
+                continue
             new_state[light_id]["bri"] = target
             changed = True
         if not changed:

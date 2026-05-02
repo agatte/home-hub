@@ -320,6 +320,76 @@ class TestApplyZoneOverlay:
         out = apply_zone_overlay(flat, "watching", "night", "bed", "reclined")
         assert out is flat
 
+    # ── Branch 3: bed zone, posture None or upright ─────────────────
+    # Fires when the user is in the bed area during working/idle at
+    # evening/night/late_night but pose can't confirm "reclined" (face-
+    # only detection or sitting upright). Dims to bedside-reading
+    # levels — moderate, not full reclined depth.
+
+    def test_bed_only_working_evening_posture_none_dims(self):
+        state = self._state(l1_bri=100, l2_bri=180)
+        out = apply_zone_overlay(state, "working", "evening", "bed", None)
+        assert out["1"]["bri"] == 60
+        assert out["2"]["bri"] == 50
+
+    def test_bed_only_working_late_night_posture_upright_dims(self):
+        state = self._state(l1_bri=90, l2_bri=160)
+        out = apply_zone_overlay(state, "working", "late_night", "bed", "upright")
+        assert out["1"]["bri"] == 30
+        assert out["2"]["bri"] == 25
+
+    def test_bed_only_idle_also_fires(self):
+        # Mode=idle with posture=None → same dimming as working.
+        state = self._state(l1_bri=100, l2_bri=180)
+        out_none = apply_zone_overlay(state, "idle", "night", "bed", None)
+        assert out_none["1"]["bri"] == 40
+        assert out_none["2"]["bri"] == 35
+        # Mode=idle with posture=upright → also fires.
+        out_upright = apply_zone_overlay(state, "idle", "night", "bed", "upright")
+        assert out_upright["1"]["bri"] == 40
+        assert out_upright["2"]["bri"] == 35
+
+    def test_bed_only_branch_2_takes_precedence_when_reclined(self):
+        # When posture commits "reclined", the existing aggressive
+        # branch fires; Branch 3's milder targets are never reached.
+        state = self._state(l1_bri=100, l2_bri=180)
+        out = apply_zone_overlay(state, "working", "night", "bed", "reclined")
+        # Branch 2 night: L1 = 25*1.0 = 25, L2 = 8 (much lower than
+        # Branch 3's night targets of 40 / 35).
+        assert out["1"]["bri"] == 25
+        assert out["2"]["bri"] == 8
+
+    def test_bed_only_skipped_for_active_modes(self):
+        # Brief bed visits during gaming/watching/social/cooking shouldn't
+        # trigger the bedside-reading dim — those modes own their own
+        # zone behavior (or none).
+        state = self._state(l1_bri=100, l2_bri=180)
+        for mode in ("gaming", "watching", "social", "cooking"):
+            out = apply_zone_overlay(state, mode, "night", "bed", None)
+            assert out is state, f"mode={mode} should not trigger Branch 3"
+
+    def test_bed_only_skipped_when_day(self):
+        # No daytime dimming — natural light handles it.
+        state = self._state(l1_bri=100, l2_bri=180)
+        out_none = apply_zone_overlay(state, "working", "day", "bed", None)
+        out_upright = apply_zone_overlay(state, "working", "day", "bed", "upright")
+        assert out_none is state
+        assert out_upright is state
+
+    def test_bed_only_lower_only(self):
+        # Already at or below target → leave alone (preserves a learned
+        # override that already went lower).
+        state = self._state(l1_bri=20, l2_bri=15)
+        out = apply_zone_overlay(state, "working", "night", "bed", None)
+        assert out is state
+
+    def test_bed_only_skipped_when_zone_desk(self):
+        # Desk + posture=None should fall through (Branch 1 only fires
+        # for watching, Branch 3 only fires for zone=bed).
+        state = self._state(l1_bri=100, l2_bri=180)
+        out = apply_zone_overlay(state, "working", "night", "desk", None)
+        assert out is state
+
 
 # ---------------------------------------------------------------------------
 # is_zone_posture_freshness_ok
