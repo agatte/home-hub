@@ -11,10 +11,14 @@
   ]
 
   $: pathname = $page.url.pathname
-  // Exact match for /guest, prefix match for sub-routes.
-  function isActive(href) {
-    if (href === '/guest') return pathname === '/guest' || pathname === '/guest/'
-    return pathname === href || pathname.startsWith(href + '/')
+  // Exact match for /guest, prefix match for sub-routes. The pathname
+  // arg is explicit (not closed over) so Svelte can see the dependency
+  // and re-evaluate the class:active expression on client-side nav.
+  function isActive(href, currentPath) {
+    if (href === '/guest') {
+      return currentPath === '/guest' || currentPath === '/guest/'
+    }
+    return currentPath === href || currentPath.startsWith(href + '/')
   }
 </script>
 
@@ -22,9 +26,9 @@
   {#each TABS as tab}
     <a
       class="guest-nav-tab"
-      class:active={isActive(tab.href)}
+      class:active={isActive(tab.href, pathname)}
       href={tab.href}
-      aria-current={isActive(tab.href) ? 'page' : undefined}
+      aria-current={isActive(tab.href, pathname) ? 'page' : undefined}
     >
       <svelte:component this={tab.icon} size={22} strokeWidth={1.5} />
       <span>{tab.label}</span>

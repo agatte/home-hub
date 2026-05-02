@@ -237,6 +237,11 @@
     flex-direction: column;
     align-items: center;
     gap: 6px;
+    /* Without this, long labels (e.g. "Living room lamp") inflate the
+       grid column past its 1fr share and push the row off-screen on
+       phone widths. min-width:0 lets the column collapse to its track
+       size and the label clip via text-overflow: ellipsis. */
+    min-width: 0;
   }
   .swatch {
     width: 100%;
@@ -330,5 +335,22 @@
   @media (max-width: 480px) {
     .guest-header h1 { font-size: 44px; }
     .mode-name { font-size: 28px; }
+    /* 4-up swatches squeeze labels to ~67px wide on a 390px iPhone —
+       cramped enough that the labels ellipsis to nothing useful. 2x2
+       gives each swatch ~140px to breathe and the labels fit on one
+       line. */
+    .swatches {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+    }
+    .swatch {
+      max-width: 120px;
+      margin: 0 auto;
+    }
+    .swatch-label {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
   }
 </style>
