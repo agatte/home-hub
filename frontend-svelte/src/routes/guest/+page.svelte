@@ -1,45 +1,16 @@
 <script>
-  import { onMount } from 'svelte'
-  import QRCode from 'qrcode'
-  import { Wifi, Music } from 'lucide-svelte'
-  import { apiGet } from '$lib/api.js'
+  import { Music } from 'lucide-svelte'
   import { sonos } from '$lib/stores/sonos.js'
-
-  /** @type {{ configured: boolean, ssid?: string, password?: string, qr_payload?: string } | null} */
-  let info = null
-  let qrDataUrl = ''
-  let loadError = false
 
   // Three to six short lines, edit freely. Anything that helps a guest
   // feel oriented when Anthony's in the kitchen.
   const HOUSE_RULES = [
     'Make yourself at home — fridge and bar are open.',
-    'The cat is friendly but skittish; let her come to you.',
     'Bathroom is past the kitchen on the left.',
     'Lights and music change with the room — that\'s normal.',
   ]
 
-  async function loadInfo() {
-    try {
-      const resp = await apiGet('/api/guest/wifi')
-      info = resp
-      if (resp?.configured && resp.qr_payload) {
-        qrDataUrl = await QRCode.toDataURL(resp.qr_payload, {
-          width: 360,
-          margin: 1,
-          color: { dark: '#000000', light: '#ffffff' },
-        })
-      }
-    } catch {
-      loadError = true
-    }
-  }
-
   $: nowPlaying = $sonos.state === 'PLAYING' && ($sonos.track || $sonos.artist)
-
-  onMount(() => {
-    loadInfo()
-  })
 </script>
 
 <svelte:head>
@@ -51,34 +22,6 @@
     <h1>Welcome</h1>
     <p class="guest-subtitle">Quick info to get you settled in</p>
   </header>
-
-  <section class="guest-card guest-card-wifi">
-    <div class="guest-card-head">
-      <Wifi size={20} strokeWidth={1.5} />
-      <h2>WiFi</h2>
-    </div>
-
-    {#if info?.configured && qrDataUrl}
-      <img class="guest-qr" src={qrDataUrl} alt="QR code to join the WiFi" />
-      <dl class="guest-creds">
-        <div>
-          <dt>Network</dt>
-          <dd>{info.ssid}</dd>
-        </div>
-        <div>
-          <dt>Password</dt>
-          <dd class="guest-creds-pw">{info.password}</dd>
-        </div>
-      </dl>
-      <p class="guest-hint">Point your phone camera at the code to join.</p>
-    {:else if info && !info.configured}
-      <p class="guest-empty">Ask Anthony for the password.</p>
-    {:else if loadError}
-      <p class="guest-empty">WiFi info unavailable right now.</p>
-    {:else}
-      <p class="guest-empty">Loading…</p>
-    {/if}
-  </section>
 
   <section class="guest-card guest-card-music">
     <div class="guest-card-head">
@@ -167,68 +110,6 @@
     color: rgba(245, 243, 238, 0.95);
   }
 
-  .guest-card-wifi {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .guest-qr {
-    width: 280px;
-    height: 280px;
-    background: #fff;
-    border-radius: 12px;
-    padding: 10px;
-    box-sizing: content-box;
-    margin-bottom: 18px;
-  }
-
-  .guest-creds {
-    width: 100%;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .guest-creds > div {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 16px;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-    padding-top: 10px;
-  }
-
-  .guest-creds dt {
-    font-size: 11px;
-    color: rgba(245, 243, 238, 0.6);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin: 0;
-  }
-
-  .guest-creds dd {
-    font-size: 18px;
-    color: #fff;
-    margin: 0;
-    text-align: right;
-    word-break: break-all;
-    font-weight: 500;
-  }
-
-  .guest-creds-pw {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 16px !important;
-  }
-
-  .guest-hint {
-    font-size: 12px;
-    color: rgba(245, 243, 238, 0.55);
-    margin: 14px 0 0;
-    text-align: center;
-  }
-
   .guest-empty {
     font-size: 14px;
     color: rgba(245, 243, 238, 0.55);
@@ -301,10 +182,6 @@
   @media (max-width: 480px) {
     .guest-header h1 {
       font-size: 44px;
-    }
-    .guest-qr {
-      width: 240px;
-      height: 240px;
     }
   }
 </style>

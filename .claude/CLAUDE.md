@@ -426,6 +426,8 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Sonos Era 100 | 192.168.1.157 | "Bedroom" speaker. `SONOS_IP` hardcoded in `.env` on the Latitude to defeat cold-boot SSDP discovery race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page issue deferred) |
 
+**iOS WiFi-rejoin caveat:** Forgetting + rejoining the home network on iPhone (e.g. after scanning the guest WiFi QR for testing) resets per-device settings — manual IP `192.168.1.148`, manual DNS → Pi-hole (`192.168.1.210`), and "Private WiFi Address: Fixed". After any rejoin, restore in Settings → WiFi → (i) → Configure DNS / Configure IP / Private Address. Not Pi-hole's fault — iOS treats every fresh join as a clean profile.
+
 ---
 
 ## Roadmap

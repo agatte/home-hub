@@ -2,7 +2,7 @@
   import '$lib/styles/global.css'
   import { onMount } from 'svelte'
   import { initStores } from '$lib/stores/init.js'
-  import { connected } from '$lib/stores/connection.js'
+  import { connectionLost } from '$lib/stores/connection.js'
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
   import { initAmbientAudio } from '$lib/ambientAudio.js'
   import ModeBackground from '$lib/components/ModeBackground.svelte'
@@ -37,7 +37,7 @@
 <div class="app-shell" class:user-idle={$userIdle}>
   <div class="app">
     <slot />
-    {#if !$connected}
+    {#if $connectionLost}
       <div class="reconnect-banner">Reconnecting to server...</div>
     {/if}
   </div>

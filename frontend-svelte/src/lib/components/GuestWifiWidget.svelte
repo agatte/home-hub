@@ -9,6 +9,7 @@
   let error = false
   let modalOpen = false
   let qrDataUrl = ''
+  let urlQrDataUrl = ''
   /** @type {HTMLButtonElement | undefined} */
   let closeBtn
 
@@ -46,6 +47,15 @@
       })
     } catch {
       qrDataUrl = ''
+    }
+    try {
+      urlQrDataUrl = await QRCode.toDataURL(`${window.location.origin}/guest`, {
+        width: 200,
+        margin: 1,
+        color: { dark: '#000000', light: '#ffffff' },
+      })
+    } catch {
+      urlQrDataUrl = ''
     }
     modalOpen = true
     await tick()
@@ -116,11 +126,13 @@
           <dt>Network</dt>
           <dd>{info.ssid}</dd>
         </div>
-        <div class="wifi-modal-cred">
-          <dt>Password</dt>
-          <dd class="wifi-modal-cred-pw">{info.password}</dd>
-        </div>
       </dl>
+      {#if urlQrDataUrl}
+        <div class="wifi-modal-step2">
+          <div class="wifi-modal-step2-label">Then scan for tonight's info</div>
+          <img class="wifi-modal-image-small" src={urlQrDataUrl} alt="QR code to /guest landing page" />
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -286,9 +298,29 @@
     word-break: break-all;
   }
 
-  .wifi-modal-cred-pw {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 16px !important;
+  .wifi-modal-step2 {
+    margin-top: 8px;
+    padding-top: 14px;
+    border-top: 1px solid #eee;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .wifi-modal-step2-label {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .wifi-modal-image-small {
+    width: 160px;
+    height: 160px;
+    display: block;
   }
 
   .wifi-modal-close {
