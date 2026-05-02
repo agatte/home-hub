@@ -8,6 +8,7 @@
     'Make yourself at home — fridge and bar are open.',
     'Bathroom is past the kitchen on the left.',
     'Lights and music change with the room — that\'s normal.',
+    'Cheers — let\'s get fucked up.',
   ]
 
   $: nowPlaying = $sonos.state === 'PLAYING' && ($sonos.track || $sonos.artist)
