@@ -103,7 +103,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
 - **Weather widget** — NWS API current conditions with 5-minute cache + active severe weather alerts
 - **Vital Signs Strip** — always-visible 22px strip at the kiosk bottom. `VitalStrip.svelte` polls `GET /api/vitals` every 30s, which re-projects already-shipped surfaces (Hue / Sonos circuit-breaker state, fusion `_last_fusion_result`, Pi-hole `get_summary`, `psutil` mem/disk/CPU-temp, WS client count) into per-metric `{value, status: ok|warn|error}` chips with a roll-up status. Collapsed → overall dot only; expanded → all chips with mode-aware tinting (orange = warn, red = error). `FloatingNav` shifted up to `bottom: 36px` (mobile `28px`) to clear the strip
-- Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (live decision pipeline with fusion ring + per-signal gauge cards + collapsible historical analytics), Settings (configuration). Plus the hidden `/journal` route (Apartment Logbook — date rail + Markdown render of the nightly summaries; intentionally excluded from `FloatingNav`)
+- Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (live decision pipeline with fusion ring + per-signal gauge cards + collapsible historical analytics), Settings (configuration). Plus two hidden routes — `/journal` (Apartment Logbook — date rail + Markdown render of the nightly summaries) and `/guest` (visitor landing page — Welcome / Now Playing / House Notes, served behind a SvelteKit layout reset so it skips `FloatingNav`/`VitalStrip`/`ModeBackground`); both intentionally excluded from `FloatingNav`. Guest WiFi credentials surface via the `GuestWifiWidget` tile on Home, which opens a fullscreen modal with the WiFi `WIFI:` URI QR plus a smaller URL QR pointing at `/guest` (two-scan flow — join then info)
 - Real-time WebSocket sync — changes from Alexa, Hue app, or physical switches reflected instantly
 - PWA-capable for phone/tablet kiosk mode
 - Optimistic updates for responsive feel
@@ -753,6 +753,12 @@ All messages are JSON with `type` + `data` fields.
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
+
+#### Guest — `/api/guest/`
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/guest/wifi` | Returns `{configured, ssid, password, security, qr_payload}` or `{configured: false}` when env vars unset. `qr_payload` is the standard `WIFI:T:<security>;S:<ssid>;P:<password>;H:false;;` URI consumed by `qrcode.toDataURL()`. Credentials live in `.env` as `GUEST_WIFI_SSID` / `GUEST_WIFI_PASSWORD` / `GUEST_WIFI_SECURITY` (default `WPA`); the route escapes `\;,":` per the WiFi-URI spec. Read-only; no auth — the LAN already gates this |
 
 #### Game Day — `/api/gameday/` **(future)**
 
@@ -1569,7 +1575,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 - Apple Music API integration ($99/year)
 - Bar app widget integration
 - Seasonal lighting adjustments
-- Guest mode
+- Guest mode polish (basic flow shipped 2026-05-01 — WiFi QR + `/guest` landing; remaining: Pi-hole DNS for `guest.homehub.local`, Party Mode QR, song-request queue)
 
 ## Technical Limitations & Constraints
 

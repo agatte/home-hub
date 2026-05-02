@@ -179,9 +179,16 @@ Stagger light transitions room-to-room on mode change. Morning: bedroom → livi
 
 ### 12. Guest Wi-Fi Landing Page — partial 2026-05-01
 
-**Shipped:** WiFi QR widget on the home dashboard + `/guest` landing page (WiFi QR + now-playing + house rules). Backend `GET /api/guest/wifi` returns the standard `WIFI:` URI. Credentials live in `.env` as `GUEST_WIFI_SSID` / `GUEST_WIFI_PASSWORD` / `GUEST_WIFI_SECURITY`.
+**Shipped:**
+- `GuestWifiWidget` on the home dashboard. Opens a fullscreen modal with the big WiFi QR plus a smaller "then scan for tonight's info" QR that points at `/guest` — two-scan flow (join WiFi, then load page). Modal intentionally hides the password text (kiosk lives in the living room); the QR still encodes it for phones to read.
+- `/guest` landing page — Welcome header + Now Playing + House Notes only. Served behind a SvelteKit layout reset (`+layout@.svelte`) so the kiosk's `FloatingNav` / `VitalStrip` / `ModeBackground` don't leak in. Anyone reaching the page is already on the LAN, so re-displaying WiFi creds there is intentionally omitted.
+- Backend `GET /api/guest/wifi` returns the standard `WIFI:T:<security>;S:<ssid>;P:<password>;H:false;;` URI for `qrcode.toDataURL()`. Credentials live in `.env` as `GUEST_WIFI_SSID` / `GUEST_WIFI_PASSWORD` / `GUEST_WIFI_SECURITY` (default `WPA`); special chars escaped per spec.
+- Mobile reconnect banner debounced via `connectionLost` derived store in `connection.js` (3s grace) — phone screen-lock cycles no longer flash "Reconnecting..." on the dashboard.
 
-**Still open:** `guest.homehub.local` Pi-hole DNS entry (currently reachable as `http://192.168.1.210:8000/guest`), Party Mode QR, "request a song" form / song queue API.
+**Still open:**
+- `guest.homehub.local` Pi-hole DNS entry — currently reachable only as `http://192.168.1.210:8000/guest`.
+- Captive-portal-style auto-redirect — infeasible without router-level DNS control (guest's phone uses router DHCP DNS, not Pi-hole). Documented in CLAUDE.md so future-Anthony doesn't relitigate.
+- Party Mode QR + "request a song" form / song queue API.
 
 ---
 
