@@ -42,11 +42,13 @@ class TestRequireApiKeyDependency:
 
     @pytest.mark.asyncio
     async def test_unset_key_fails_closed(self, monkeypatch):
-        # Empty key means: deploy didn't provision auth → reject every write.
+        # Empty key means: deploy didn't provision auth → reject every write
+        # from non-trusted (public) callers. Use a public IP so the RFC1918
+        # bypass doesn't short-circuit the check.
         monkeypatch.setattr(settings, "HOME_HUB_API_KEY", None)
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
-            await require_api_key(_make_request("192.168.1.99"), x_api_key=None)
+            await require_api_key(_make_request("8.8.8.8"), x_api_key=None)
         assert exc_info.value.status_code == 503
         assert "HOME_HUB_API_KEY" in exc_info.value.detail
 
@@ -66,9 +68,10 @@ class TestRequireApiKeyDependency:
 
     @pytest.mark.asyncio
     async def test_correct_header_passes(self, monkeypatch):
+        # Public IP — only the header check can save it.
         monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
         monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
-        await require_api_key(_make_request("192.168.1.99"), x_api_key="secret")
+        await require_api_key(_make_request("8.8.8.8"), x_api_key="secret")
 
     @pytest.mark.asyncio
     async def test_missing_header_rejected(self, monkeypatch):
@@ -76,7 +79,7 @@ class TestRequireApiKeyDependency:
         monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
-            await require_api_key(_make_request("192.168.1.99"), x_api_key=None)
+            await require_api_key(_make_request("8.8.8.8"), x_api_key=None)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -85,7 +88,49 @@ class TestRequireApiKeyDependency:
         monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
-            await require_api_key(_make_request("192.168.1.99"), x_api_key="not-it")
+            await require_api_key(_make_request("8.8.8.8"), x_api_key="not-it")
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_192_bypass(self, monkeypatch):
+        # Phone on the apartment LAN — not pinned in TRUSTED_LAN_IPS,
+        # but the RFC1918 bypass covers it.
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
+        await require_api_key(_make_request("192.168.1.148"), x_api_key=None)
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_10_bypass(self, monkeypatch):
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
+        await require_api_key(_make_request("10.0.0.5"), x_api_key=None)
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_172_bypass(self, monkeypatch):
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
+        await require_api_key(_make_request("172.16.0.1"), x_api_key=None)
+
+    @pytest.mark.asyncio
+    async def test_public_ip_still_rejected(self, monkeypatch):
+        # Non-private callers must still present the header.
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(_make_request("8.8.8.8"), x_api_key=None)
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_malformed_host_still_rejected(self, monkeypatch):
+        # Empty client.host (request.client is None upstream → "") must
+        # not crash ipaddress.ip_address; it should fall through to the
+        # header check and 401.
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(_make_request(""), x_api_key=None)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -94,8 +139,8 @@ class TestRequireApiKeyDependency:
         monkeypatch.setattr(settings, "TRUSTED_LAN_IPS", "192.168.1.30")
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
-            # 192.168.1.99 is not in TRUSTED_LAN_IPS.
-            await require_api_key(_make_request("192.168.1.99"), x_api_key=None)
+            # 1.2.3.4 is public — neither pinned nor RFC1918.
+            await require_api_key(_make_request("1.2.3.4"), x_api_key=None)
         assert exc_info.value.status_code == 401
 
 

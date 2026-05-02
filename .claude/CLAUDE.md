@@ -395,8 +395,8 @@ LASTFM_API_KEY=...
 SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 ZONE_POSTURE_RULE_APPLY=false  # Zone+posture→relax actuation. Default false = shadow ml_decisions only.
 PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot.
-HOME_HUB_API_KEY=<urlsafe random>  # Required for write endpoints. Unset → all writes 503. Localhost + TRUSTED_LAN_IPS bypass X-API-Key.
-TRUSTED_LAN_IPS=192.168.1.30   # Comma-separated LAN IPs that bypass X-API-Key. Empty = "kiosk only".
+HOME_HUB_API_KEY=<urlsafe random>  # Required for write endpoints. Unset → all writes 503. Localhost + RFC1918 LAN auto-bypass X-API-Key.
+TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs). Private-range callers already bypass.
 GUEST_WIFI_SSID=               # Surfaces a QR on home dashboard + /guest. Empty = "not configured".
 GUEST_WIFI_PASSWORD=
 GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass

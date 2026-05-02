@@ -6,14 +6,20 @@ through `require_api_key` as a FastAPI dependency. Reads stay open;
 gating them would force every monitoring tool, browser tab, and
 internal probe to carry the header for no security gain.
 
-The dependency has three exits:
+The dependency has four exits:
 
 1. **Localhost bypass** — requests from 127.0.0.1 / ::1 are trusted
    unconditionally. The kiosk on the Latitude reaches the backend
    via `localhost:8000` and never sees a key.
-2. **Trusted-LAN bypass** — IPs listed in TRUSTED_LAN_IPS (e.g. the
-   dev desktop) skip the header check.
-3. **Header check** — anything else must present a matching
+2. **Trusted-LAN pin** — IPs explicitly listed in TRUSTED_LAN_IPS
+   skip the header check. Useful for pinning a tunneled public IP
+   or being explicit about a single device.
+3. **Private-range bypass** — any RFC1918 / loopback / link-local /
+   ULA caller (i.e. the apartment LAN) skips the header check.
+   This project is single-user / single-apartment; the auth gate
+   exists to keep the kiosk port from being reachable from the
+   public internet, not to gate Anthony's own devices.
+4. **Header check** — anything else must present a matching
    `X-API-Key` header, compared against `HOME_HUB_API_KEY` via
    `hmac.compare_digest`.
 
@@ -24,6 +30,7 @@ silently leave the LAN exposed.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
 from typing import Optional
 
@@ -58,6 +65,14 @@ async def require_api_key(
         return
     if client_host in settings.trusted_lan_ips_set:
         return
+    # Any RFC1918 / loopback / link-local / ULA caller is on the
+    # apartment LAN; trust them. Malformed hosts (empty string,
+    # hostname) raise ValueError → fall through to the header check.
+    try:
+        if ipaddress.ip_address(client_host).is_private:
+            return
+    except ValueError:
+        pass
 
     expected = settings.HOME_HUB_API_KEY
     if not expected:
