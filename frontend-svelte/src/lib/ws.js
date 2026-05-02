@@ -12,6 +12,18 @@ const INITIAL_RECONNECT_DELAY = 1_000
 /** @type {string | null} */
 let knownBuildId = null
 
+// Tracked so the module-level visibilitychange listener can poke the live
+// socket on tab resume without waiting out the exponential backoff timer.
+/** @type {HubSocket | null} */
+let activeSocket = null
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return
+    activeSocket?.retryNowIfDead()
+  })
+}
+
 /**
  * @typedef {{ type: string, data: unknown }} HubMessage
  */
@@ -34,6 +46,7 @@ export class HubSocket {
 
   connect() {
     this._closed = false
+    activeSocket = this
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${window.location.host}/ws`
 
@@ -81,6 +94,22 @@ export class HubSocket {
     }
   }
 
+  // Cancels any pending backoff timer, resets the delay, and reconnects
+  // immediately. No-op if a healthy socket already exists.
+  retryNowIfDead() {
+    if (this._closed) return
+    const ws = this._ws
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return
+    }
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer)
+      this._reconnectTimer = null
+    }
+    this._reconnectDelay = INITIAL_RECONNECT_DELAY
+    this.connect()
+  }
+
   /**
    * @param {string} type
    * @param {unknown} data
@@ -93,6 +122,7 @@ export class HubSocket {
 
   close() {
     this._closed = true
+    if (activeSocket === this) activeSocket = null
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer)
       this._reconnectTimer = null

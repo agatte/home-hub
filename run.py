@@ -18,6 +18,12 @@ def main() -> None:
         port=8000,
         reload=settings.APP_ENV == "development",
         log_level=settings.LOG_LEVEL.lower(),
+        # Mobile-friendly WS keepalive: uvicorn defaults (20s/20s) close
+        # sockets when a phone screen sleeps briefly, triggering the
+        # "Reconnecting..." banner. 30s pings + 60s timeout survives a
+        # one-minute screen-off without dropping the connection.
+        ws_ping_interval=30,
+        ws_ping_timeout=60,
     )
 
 

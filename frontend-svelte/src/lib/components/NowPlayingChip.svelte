@@ -107,7 +107,7 @@
 
   @media (max-width: 768px) {
     .now-playing-chip {
-      bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(104px + env(safe-area-inset-bottom, 0px));
       right: calc(12px + env(safe-area-inset-right, 0px));
       max-width: 200px;
     }
@@ -115,7 +115,7 @@
 
   @media (max-width: 480px) {
     .now-playing-chip {
-      bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(92px + env(safe-area-inset-bottom, 0px));
       right: calc(8px + env(safe-area-inset-right, 0px));
       max-width: 180px;
     }

@@ -1,6 +1,7 @@
 <script>
   import '$lib/styles/global.css'
   import { onMount } from 'svelte'
+  import { page } from '$app/stores'
   import { initStores } from '$lib/stores/init.js'
   import { connectionLost } from '$lib/stores/connection.js'
   import { userIdle, initActivityTracking } from '$lib/stores/activity.js'
@@ -21,6 +22,9 @@
   export let params = undefined
   // Mark as used so the linter is happy.
   data; params;
+
+  // /guest is a kiosk landing for visitors — no nav, no music chip.
+  $: isGuestRoute = $page.url.pathname.startsWith('/guest')
 
   onMount(() => {
     const cleanupStores = initStores()
@@ -44,7 +48,9 @@
   <div class="idle-hint">Tap anywhere to wake</div>
 </div>
 
-<FloatingNav />
-<NowPlayingChip />
+{#if !isGuestRoute}
+  <FloatingNav />
+  <NowPlayingChip />
+{/if}
 <ErrorToast />
 <VitalStrip />
