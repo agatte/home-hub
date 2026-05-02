@@ -39,7 +39,7 @@ GUEST_SCENE_WHITELIST: dict[str, str] = {
 # Global cooldown shared across all guests. Two visitors fighting over the
 # lights still get rate-limited together; the goal is to prevent rapid
 # strobing, not to track per-IP fairness.
-GUEST_SCENE_COOLDOWN_SECONDS = 60
+GUEST_SCENE_COOLDOWN_SECONDS = 15
 _last_guest_scene_at: float = 0.0
 
 # Music vibe nudge — guests pick a vibe (hype/singalong/throwback), backend
@@ -58,7 +58,7 @@ GUEST_VIBE_DEFAULTS: dict[str, str] = {
     "throwback":  "Replay-all-time",
 }
 GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
-GUEST_VIBE_COOLDOWN_SECONDS = 60
+GUEST_VIBE_COOLDOWN_SECONDS = 15
 _last_guest_vibe_at: float = 0.0
 
 

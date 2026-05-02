@@ -31,7 +31,7 @@
 
   // Lights and music are independent visitor controls — separate cooldowns
   // so a guest can shift the music right after picking a scene without
-  // waiting 60s for the unrelated control to release.
+  // waiting for the unrelated control to release.
   /** @type {string | null} */
   let activatingScene = null
   /** @type {boolean} */
@@ -76,7 +76,7 @@
       const res = await fetch(`/api/guest/scene/${name}`, { method: 'POST' })
       if (res.status === 429) {
         const body = await res.json().catch(() => ({}))
-        const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10) || 60
+        const retryAfter = parseInt(res.headers.get('Retry-After') ?? '15', 10) || 15
         startSceneCooldown(retryAfter)
         showToast(body.detail || `Cooling down — try again in ${retryAfter}s`)
         return
@@ -86,7 +86,7 @@
         return
       }
       const body = await res.json()
-      startSceneCooldown(body.cooldown_seconds ?? 60)
+      startSceneCooldown(body.cooldown_seconds ?? 15)
       const sceneLabel = body.scene || name
       showToast(`Lights set to ${sceneLabel}`)
     } catch {
@@ -103,7 +103,7 @@
       const res = await fetch(`/api/guest/vibe/${name}`, { method: 'POST' })
       if (res.status === 429) {
         const body = await res.json().catch(() => ({}))
-        const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10) || 60
+        const retryAfter = parseInt(res.headers.get('Retry-After') ?? '15', 10) || 15
         startVibeCooldown(retryAfter)
         showToast(body.detail || `Cooling down — try again in ${retryAfter}s`)
         return
@@ -117,7 +117,7 @@
         return
       }
       const body = await res.json()
-      startVibeCooldown(body.cooldown_seconds ?? 60)
+      startVibeCooldown(body.cooldown_seconds ?? 15)
       showToast(`Now playing: ${body.playlist || body.vibe || name}`)
     } catch {
       showToast(`Couldn't reach the server`)
