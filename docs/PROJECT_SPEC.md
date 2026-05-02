@@ -163,12 +163,12 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - ~~No structured logging~~ — fixed: python-json-logger (JSON to file for machine parsing, text to console for humans)
 - ~~No uptime monitoring~~ — fixed: Uptime Kuma on port 3002 monitoring Home Hub backend + Pi-hole health, with alerting
 - ~~No bundle analysis~~ — fixed: vite-plugin-visualizer (`npm run analyze` generates interactive treemap)
-- No authentication on API endpoints (acceptable for LAN-only, revisit if Cloudflare Tunnel added)
+- ~~No authentication on API endpoints~~ — fixed: `X-API-Key` required on every write endpoint via `require_api_key` FastAPI dep (`backend/api/auth.py`), with auto-bypass for localhost + any RFC1918/loopback/link-local/ULA caller (the apartment LAN). `HOME_HUB_API_KEY` env var holds the secret; unset = fail-closed 503
 
 **Structural / tech debt:**
 - `automation_engine.py` is a 1,944-LOC single-file monolith. Mode rules, effect reconciliation, fusion wiring, learner overlay application, and the 60s loop all live in one module. Refactor candidate — split into `mode_resolver`, `light_applicator`, `effect_reconciler`, `engine_loop`
 - Apple Music XML upload (`POST /api/music/import`) has no enforced size limit. A multi-GB library file could OOM the backend before the parser rejects it
-- Zero authentication middleware anywhere. Acceptable while LAN-only, becomes a hard blocker the moment a Cloudflare Tunnel is opened for the custom Alexa Skill (Phase 5)
+- ~~Zero authentication middleware anywhere~~ — fixed: `require_api_key` is a global write-endpoint gate (see "No authentication on API endpoints" above). The LAN auto-bypass keeps friction at zero for the kiosk and Anthony's devices; a future Cloudflare Tunnel for Phase 5 Alexa would route through a non-private IP and naturally hit the header check
 - ~~`EventLogger` swallows exceptions silently~~ — fixed: `_drop_count` dict tracks per-family (mode/light/scene/sonos) drop counts, surfaced in `/health` JSON under `event_logger_drops` so Uptime Kuma can alert on growth
 - ~~Automation-triggered light changes aren't logged to `light_adjustments`~~ — fixed: `_apply_uniform` and `_apply_per_light` in `automation_engine.py` now call `log_light_adjustment(trigger="automation")` with before/after values when state actually changes (dedup check prevents hot-path spam)
 - ~~`LightingPreferenceLearner.get_overlay` merges learned deltas invisibly~~ — fixed: when the overlay actually changes a value, an `ml_decisions` row is written with `decision_source="lighting_learner"` and the per-light deltas in `factors`
@@ -1474,7 +1474,10 @@ and must be nano-edited directly on the Latitude via SSH, followed by
 
 Mobile phone (PWA) or any browser on the LAN can hit
 `http://192.168.1.210:8000` for the full dashboard. Same dashboard as
-the kiosk, no authentication (single-user home network only).
+the kiosk. Writes are gated by `X-API-Key`, but the auth dep
+auto-bypasses any RFC1918 / loopback / link-local caller — so LAN
+devices see no auth friction. External callers (e.g. a future
+Cloudflare Tunnel) would need to present the header.
 
 ### Cloud services used
 
