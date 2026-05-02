@@ -24,11 +24,16 @@ router = APIRouter(prefix="/api/guest", tags=["guest"])
 # Curated scenes safelisted for guest activation. Map short guest-facing
 # names → curated SCENE_PRESETS keys. Anything not in this map is rejected
 # even if it's a valid scene — guests do not get the full scene browser.
+# Curated specifically for "guest at a party" — vibrant, dynamic palettes,
+# nothing workspace-bright or sleep-quiet. Display order in the UI matches
+# insertion order (CPython dict ordering is stable).
 GUEST_SCENE_WHITELIST: dict[str, str] = {
     "party":  "house_party",
     "neon":   "neon_tokyo",
+    "miami":  "miami_vice",
+    "arcade": "arcade",
+    "aurora": "northern_lights",
     "sunset": "sunset_strip",
-    "chill":  "candlelit",
 }
 
 # Global cooldown shared across all guests. Two visitors fighting over the
@@ -82,6 +87,27 @@ async def get_guest_wifi() -> dict:
         "password": password,
         "security": security,
         "qr_payload": _wifi_uri(ssid, password, security),
+    }
+
+
+@router.get("/scenes")
+async def list_guest_scenes() -> dict:
+    """Return the safelisted party scenes with per-light preset states.
+
+    The frontend uses the per-light states to render a 4-dot color preview
+    next to each scene name (via `lightStateToCSS` in
+    `$lib/utils/lightColor.js`). No Python-side color math needed.
+    """
+    return {
+        "scenes": [
+            {
+                "name": guest_name,
+                "display_name": SCENE_PRESETS[preset_id]["display_name"],
+                "lights": SCENE_PRESETS[preset_id]["lights"],
+            }
+            for guest_name, preset_id in GUEST_SCENE_WHITELIST.items()
+            if preset_id in SCENE_PRESETS
+        ]
     }
 
 

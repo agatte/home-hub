@@ -1,48 +1,28 @@
 <script>
-  import { onDestroy } from 'svelte'
-  import { Sparkles, Zap, Sunset, Moon } from 'lucide-svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import {
+    Sparkles, Gamepad2, Monitor, Tv, PartyPopper, Flame, ChefHat, Moon, Bot,
+  } from 'lucide-svelte'
   import { lights } from '$lib/stores/lights.js'
   import { automation } from '$lib/stores/automation.js'
   import { modeLabel, modeColor } from '$lib/theme.js'
+  import { lightStateToCSS } from '$lib/utils/lightColor.js'
 
-  // Hue API hue is 0..65535. Convert to a CSS hsl angle.
-  function hueToHsl(h, s, bri) {
-    const angle = Math.round(((h ?? 0) / 65535) * 360)
-    const sat = Math.round(((s ?? 0) / 254) * 100)
-    // Compress brightness so even bri=20 still reads as a faint glow,
-    // not pitch black. 35% min, 85% max.
-    const light = 35 + Math.round(((bri ?? 0) / 254) * 50)
-    return `hsl(${angle}, ${sat}%, ${light}%)`
+  // Map automation modes to Lucide components. modeLucide() returns icon
+  // names as strings, but lucide-svelte needs the actual component, so we
+  // do the mapping here. Falls back to Sparkles for any unknown mode.
+  const MODE_ICONS = {
+    gaming: Gamepad2, working: Monitor, watching: Tv, social: PartyPopper,
+    relax: Flame, cooking: ChefHat, sleeping: Moon, idle: Sparkles, auto: Bot,
   }
-
-  // Color-mode (ct) lights have no hue/sat. Approximate from mirek
-  // (153=cool 6500K, 500=warm 2000K) via a warm-white gradient.
-  function ctToHsl(ct, bri) {
-    if (!ct) return '#888'
-    const t = Math.min(1, Math.max(0, (ct - 153) / (500 - 153)))
-    const angle = 50 - t * 20  // 50° (cool yellow) → 30° (warm orange)
-    const sat = 60 + t * 30
-    const light = 50 + Math.round(((bri ?? 0) / 254) * 30)
-    return `hsl(${angle}, ${sat}%, ${light}%)`
-  }
-
-  function lightSwatch(light) {
-    if (!light?.on) return 'transparent'
-    if (light.colormode === 'ct' || (light.ct && !light.hue)) {
-      return ctToHsl(light.ct, light.bri)
-    }
-    return hueToHsl(light.hue, light.sat, light.bri)
-  }
+  $: modeIcon = MODE_ICONS[$automation.mode] ?? Sparkles
 
   // Stable order matching the apartment's L1..L4 layout.
   $: orderedLights = ['1', '2', '3', '4'].map((id) => $lights[id]).filter(Boolean)
 
-  const SCENES = [
-    { name: 'party',  label: 'Party',  icon: Sparkles },
-    { name: 'neon',   label: 'Neon',   icon: Zap },
-    { name: 'sunset', label: 'Sunset', icon: Sunset },
-    { name: 'chill',  label: 'Chill',  icon: Moon },
-  ]
+  /** @type {Array<{name: string, display_name: string, lights: Record<string, any>}>} */
+  let scenes = []
+  let scenesLoaded = false
 
   /** @type {string | null} */
   let activatingScene = null
@@ -94,6 +74,20 @@
     }
   }
 
+  onMount(async () => {
+    try {
+      const res = await fetch('/api/guest/scenes')
+      if (res.ok) {
+        const body = await res.json()
+        scenes = body.scenes ?? []
+      }
+    } catch {
+      // Network error — the empty state below covers it.
+    } finally {
+      scenesLoaded = true
+    }
+  })
+
   onDestroy(() => {
     if (toastTimer) clearTimeout(toastTimer)
     if (cooldownTimer) clearTimeout(cooldownTimer)
@@ -112,22 +106,25 @@
 
   <section class="guest-card">
     <div class="card-head">
-      <span class="mode-dot" style="background: {modeColor($automation.mode)}"></span>
+      <svelte:component
+        this={modeIcon}
+        size={20}
+        strokeWidth={1.5}
+        color={modeColor($automation.mode)}
+      />
       <h2>Right now</h2>
     </div>
     <div class="mode-line">
       <span class="mode-name">{modeLabel($automation.mode)}</span>
     </div>
-    <div class="swatches">
+    <div class="swatch-row">
       {#each orderedLights as light}
-        <div class="swatch-wrap">
-          <div
-            class="swatch"
-            class:swatch-off={!light.on}
-            style="background: {lightSwatch(light)}"
-          ></div>
-          <div class="swatch-label">{light.name || `L${light.light_id}`}</div>
-        </div>
+        <div
+          class="swatch-dot"
+          class:swatch-off={!light.on}
+          style="background: {lightStateToCSS(light)}"
+          title={light.name}
+        ></div>
       {/each}
     </div>
   </section>
@@ -137,20 +134,33 @@
       <Sparkles size={20} strokeWidth={1.5} />
       <h2>Set the mood</h2>
     </div>
-    <div class="scene-grid">
-      {#each SCENES as scene}
-        <button
-          type="button"
-          class="scene-btn"
-          class:loading={activatingScene === scene.name}
-          on:click={() => activateScene(scene.name)}
-          disabled={cooldownActive || !!activatingScene}
-        >
-          <svelte:component this={scene.icon} size={22} strokeWidth={1.5} />
-          <span>{scene.label}</span>
-        </button>
-      {/each}
-    </div>
+    {#if !scenesLoaded}
+      <p class="muted">Loading…</p>
+    {:else if scenes.length === 0}
+      <p class="muted">Couldn't load scenes.</p>
+    {:else}
+      <div class="scene-grid">
+        {#each scenes as scene}
+          <button
+            type="button"
+            class="scene-btn"
+            class:loading={activatingScene === scene.name}
+            on:click={() => activateScene(scene.name)}
+            disabled={cooldownActive || !!activatingScene}
+          >
+            <div class="scene-preview">
+              {#each ['1', '2', '3', '4'] as lid}
+                <div
+                  class="scene-preview-dot"
+                  style="background: {lightStateToCSS(scene.lights[lid])}"
+                ></div>
+              {/each}
+            </div>
+            <span class="scene-name">{scene.display_name}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if cooldownActive}
       <p class="cooldown">Cooling down… give the lights a sec.</p>
     {/if}
@@ -209,13 +219,6 @@
     flex: 1;
   }
 
-  .mode-dot {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    box-shadow: 0 0 14px currentColor;
-  }
-
   .mode-line {
     margin-bottom: 18px;
   }
@@ -227,48 +230,26 @@
     text-transform: uppercase;
   }
 
-  .swatches {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-  }
-  .swatch-wrap {
+  /* Horizontal row of 4 colored circles — no labels, purely a status
+     snapshot of the room's current lighting palette. */
+  .swatch-row {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 6px;
-    /* Without this, long labels (e.g. "Living room lamp") inflate the
-       grid column past its 1fr share and push the row off-screen on
-       phone widths. min-width:0 lets the column collapse to its track
-       size and the label clip via text-overflow: ellipsis. */
-    min-width: 0;
+    justify-content: flex-start;
+    gap: 14px;
   }
-  .swatch {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  .swatch-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
   }
   .swatch-off {
-    background: repeating-linear-gradient(
-      45deg,
-      rgba(255, 255, 255, 0.04),
-      rgba(255, 255, 255, 0.04) 4px,
-      transparent 4px,
-      transparent 8px
-    ) !important;
-  }
-  .swatch-label {
-    font-size: 11px;
-    color: rgba(245, 243, 238, 0.55);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-style: dashed;
+    box-shadow: none;
   }
 
   .scene-grid {
@@ -280,22 +261,23 @@
     appearance: none;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-height: 80px;
-    padding: 16px 12px;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 14px 12px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
     color: #fff;
     font-family: var(--font-body);
-    font-size: 15px;
+    font-size: 14px;
     cursor: pointer;
-    transition: background 0.15s, transform 0.05s;
+    transition: background 0.15s, transform 0.05s, border-color 0.15s;
+    text-align: center;
+    min-width: 0;
   }
   .scene-btn:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
   }
   .scene-btn:active:not(:disabled) {
     transform: scale(0.98);
@@ -305,7 +287,29 @@
     cursor: not-allowed;
   }
   .scene-btn.loading {
-    background: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.2);
+  }
+  /* Color preview row — 4 dots showing what the scene actually looks
+     like, so guests can pick by visual rather than by guessing what
+     "Miami Vice" means. */
+  .scene-preview {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .scene-preview-dot {
+    flex: 1;
+    aspect-ratio: 1 / 1;
+    max-width: 28px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+  .scene-name {
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    line-height: 1.2;
   }
 
   .cooldown {
@@ -313,6 +317,12 @@
     font-size: 12px;
     color: rgba(245, 243, 238, 0.55);
     text-align: center;
+  }
+
+  .muted {
+    font-size: 14px;
+    color: rgba(245, 243, 238, 0.55);
+    margin: 0;
   }
 
   .toast {
@@ -335,22 +345,13 @@
   @media (max-width: 480px) {
     .guest-header h1 { font-size: 44px; }
     .mode-name { font-size: 28px; }
-    /* 4-up swatches squeeze labels to ~67px wide on a 390px iPhone —
-       cramped enough that the labels ellipsis to nothing useful. 2x2
-       gives each swatch ~140px to breathe and the labels fit on one
-       line. */
-    .swatches {
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
-    }
-    .swatch {
-      max-width: 120px;
-      margin: 0 auto;
-    }
-    .swatch-label {
-      white-space: normal;
-      overflow: visible;
-      text-overflow: clip;
+  }
+
+  @media (min-width: 640px) {
+    /* Wider screens (desktop preview, tablets) get 3 columns so the
+       6 scenes fit in 2 tidy rows instead of stretching down 3. */
+    .scene-grid {
+      grid-template-columns: repeat(3, 1fr);
     }
   }
 </style>
