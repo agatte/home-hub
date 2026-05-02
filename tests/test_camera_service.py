@@ -332,6 +332,82 @@ class TestFreshnessRefreshOnConfirm:
         assert service._last_zone_at > old
         assert service._candidate_zone is None
 
+    def test_sustained_observation_keeps_freshness_gate_open(self):
+        """End-to-end regression for the 2026-05-01 Branch 3 silently
+        disengaging bug: simulate 6 minutes of continuous frames all
+        observing zone=bed, then confirm the AutomationEngine's
+        ``_fresh_camera_attr`` (production caller) still returns "bed".
+
+        Pre-fix: zone_committed_at would be set once on the initial
+        commit and never refreshed; after 5 minutes, freshness gate
+        returned None and Branch 3 disengaged silently.
+
+        Post-fix: every confirming frame refreshes _last_zone_at, so
+        the freshness gate stays satisfied indefinitely as long as the
+        camera keeps observing the user.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services.automation_engine import AutomationEngine
+        from backend.services.light_state_calculator import (
+            ZONE_POSTURE_FRESHNESS_SECONDS,
+        )
+
+        service = _make_service()
+        engine = AutomationEngine(
+            hue=MagicMock(),
+            hue_v2=MagicMock(),
+            ws_manager=AsyncMock(),
+        )
+
+        # Initial commit was 10 min ago — well past the 300s freshness window.
+        # Mirrors the real-world condition: Anthony went to bed at some earlier
+        # point, hasn't transitioned zones since.
+        very_old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "bed"
+        service._last_zone_at = very_old
+
+        # If we read the freshness gate RIGHT NOW (before any confirming frame),
+        # it would return None — that's the broken pre-fix behavior.
+        assert engine._fresh_camera_attr(
+            service, "zone", "zone_committed_at"
+        ) is None, "pre-confirmation should look stale"
+
+        # Simulate 180 frames of camera saying "bed" (one frame every 2s = 6 min
+        # of poll loop activity). Even one confirming frame should be enough,
+        # but we run 180 to verify steady-state behavior under sustained load.
+        for _ in range(180):
+            service._apply_zone_hysteresis("bed")
+
+        # After confirmation, _last_zone_at must be fresh enough that the
+        # AutomationEngine's freshness gate returns the zone, NOT None.
+        zone = engine._fresh_camera_attr(service, "zone", "zone_committed_at")
+        assert zone == "bed", (
+            f"freshness gate should return 'bed' after sustained observation; "
+            f"got {zone!r}. _last_zone_at age: "
+            f"{(datetime.now(timezone.utc) - service._last_zone_at).total_seconds():.1f}s"
+        )
+
+        # Posture path mirrors zone — same regression coverage.
+        old_posture = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_posture = "reclined"
+        service._last_posture_at = old_posture
+        assert engine._fresh_camera_attr(
+            service, "posture", "posture_committed_at"
+        ) is None
+        for _ in range(180):
+            service._apply_posture_hysteresis("reclined")
+        posture = engine._fresh_camera_attr(
+            service, "posture", "posture_committed_at"
+        )
+        assert posture == "reclined"
+
+        # Belt-and-suspenders: explicit age check matches the freshness window.
+        zone_age = (
+            datetime.now(timezone.utc) - service._last_zone_at
+        ).total_seconds()
+        assert zone_age < ZONE_POSTURE_FRESHNESS_SECONDS
+
 
 # ---------------------------------------------------------------------------
 # Ambient lux
