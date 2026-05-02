@@ -23,7 +23,10 @@
   // Mark as used so the linter is happy.
   data; params;
 
-  // /guest is a kiosk landing for visitors — no nav, no music chip.
+  // /guest is a layout-reset visitor mini-app — strip all kiosk chrome
+  // so the only thing the root layout contributes on those paths is the
+  // ErrorToast. The guest section owns its own background, padding, and
+  // bottom-tab nav via /guest/+layout@.svelte + GuestBottomNav.
   $: isGuestRoute = $page.url.pathname.startsWith('/guest')
 
   onMount(() => {
@@ -34,23 +37,27 @@
   })
 </script>
 
-<ModeBackground />
-<ModeOverlay />
-<NowPlayingIdle />
+{#if !isGuestRoute}
+  <ModeBackground />
+  <ModeOverlay />
+  <NowPlayingIdle />
+{/if}
 
 <div class="app-shell" class:user-idle={$userIdle}>
   <div class="app">
     <slot />
-    {#if $connectionLost}
+    {#if $connectionLost && !isGuestRoute}
       <div class="reconnect-banner">Reconnecting to server...</div>
     {/if}
   </div>
-  <div class="idle-hint">Tap anywhere to wake</div>
+  {#if !isGuestRoute}
+    <div class="idle-hint">Tap anywhere to wake</div>
+  {/if}
 </div>
 
 {#if !isGuestRoute}
   <FloatingNav />
   <NowPlayingChip />
+  <VitalStrip />
 {/if}
 <ErrorToast />
-<VitalStrip />

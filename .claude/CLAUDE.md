@@ -272,7 +272,7 @@ All messages: JSON with `type` + `data` fields.
 | Routines | `/api/routines` | Morning + winddown config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
-| Guest | `/api/guest` | `GET /wifi` returns `{configured, ssid, password, qr_payload}` — payload is the WIFI: URI for `qrcode.toDataURL()`. `{configured: false}` when env vars unset. Surfaced by `GuestWifiWidget` on home + `/guest` landing page (layout-reset, no FloatingNav) |
+| Guest | `/api/guest` | `GET /wifi` returns `{configured, ssid, password, qr_payload}` (WIFI: URI). `POST /scene/{name}` activates a guest-safelisted curated scene (`party→house_party`, `neon→neon_tokyo`, `sunset→sunset_strip`, `chill→candlelit`); 60s global cooldown returns 429+`Retry-After`; sets a `source="guest"` manual override. `/guest/*` is a layout-reset visitor mini-app (Home/WiFi/Bar/Plants/Vibe via `GuestBottomNav`); root layout strips kiosk chrome on `/guest` paths |
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 

@@ -2,6 +2,7 @@
   import '$lib/styles/global.css'
   import { onMount } from 'svelte'
   import { initStores } from '$lib/stores/init.js'
+  import GuestBottomNav from '$lib/components/GuestBottomNav.svelte'
 
   /** @type {any} */
   export let data = undefined
@@ -19,6 +20,8 @@
   <slot />
 </div>
 
+<GuestBottomNav />
+
 <style>
   .guest-shell {
     min-height: 100vh;
@@ -29,7 +32,9 @@
       linear-gradient(180deg, #0d0d12 0%, #1a1620 100%);
     color: #f5f3ee;
     font-family: var(--font-body);
-    padding: 32px 20px 48px;
+    /* Bottom padding leaves room for the fixed GuestBottomNav (~80px including
+       safe-area inset on iOS). Anything less and the last card overlaps. */
+    padding: 32px 20px calc(96px + env(safe-area-inset-bottom));
     box-sizing: border-box;
   }
 
