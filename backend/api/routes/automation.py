@@ -37,6 +37,7 @@ BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
 SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
 DND_STATE_KEY = "dnd_state"
+OVERRIDE_STATE_KEY = "override_state"
 
 # Settings-page defaults for the watching-posture tuning knobs. The values
 # here mirror the hardcoded fall-back in screen_sync.py and automation_engine

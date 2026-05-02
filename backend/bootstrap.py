@@ -313,6 +313,7 @@ async def lifespan(app: FastAPI):
     app.state.automation = automation
     await automation.load_scene_overrides()
     await automation.load_dnd_state()
+    await automation.load_override_state()
 
     # Music mapper consults automation.is_dnd_active() to suppress auto-play
     # / weather suggestions during a DND window — wired post-construction

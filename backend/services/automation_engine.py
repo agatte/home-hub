@@ -843,6 +843,7 @@ class AutomationEngine:
             "Manual override set: %s (source=%s, prior=%s, was_overridden=%s)",
             mode, source, prior_override, was_overridden,
         )
+        await self._persist_override_state()
         # Broadcast first so the UI updates immediately, then apply lights.
         # force_resend=True so any lights that were behind a per-light override
         # (now released) get a fresh write to the new mode's state.
@@ -894,6 +895,7 @@ class AutomationEngine:
             "(source=%s, prior_override=%s, was_overridden=%s)",
             source, old_effective, was_overridden,
         )
+        await self._persist_override_state()
 
         if old_effective == "sleeping":
             # User is (probably) still asleep or just waking — they'll pick a
@@ -1008,6 +1010,110 @@ class AutomationEngine:
             await self._ws_manager.broadcast("dnd_update", self.dnd_status())
         except Exception as e:
             logger.error("Failed to broadcast DND state: %s", e, exc_info=True)
+
+    async def _persist_override_state(self) -> None:
+        """Write current manual-override state to app_settings.
+
+        Persists `_manual_override`, `_override_mode`, `_override_time`, and
+        the zone+posture rule's `_zone_posture_last_fired_at` stamp so a
+        backend restart (deploys, crashes) doesn't drop the user's active
+        mode and re-derive it from raw sensors. Without this, deploying
+        while in `relax` would briefly flip to whatever the PC agent is
+        reporting until the rule re-fires after its 120s dwell.
+        """
+        from backend.api.routes.automation import OVERRIDE_STATE_KEY
+        from backend.api.routes.routines import save_setting
+
+        payload: dict[str, Any] = {
+            "manual_override": self._manual_override,
+            "override_mode": self._override_mode,
+            "override_time_utc": (
+                self._override_time.astimezone(timezone.utc).isoformat()
+                if self._override_time is not None else None
+            ),
+            "zone_posture_last_fired_utc": (
+                self._zone_posture_last_fired_at.astimezone(timezone.utc).isoformat()
+                if self._zone_posture_last_fired_at is not None else None
+            ),
+        }
+        try:
+            await save_setting(OVERRIDE_STATE_KEY, payload)
+        except Exception as e:
+            logger.error("Failed to persist override state: %s", e, exc_info=True)
+
+    async def load_override_state(self) -> None:
+        """Restore manual-override state from app_settings on startup.
+
+        Drops the override if it would have already timed out (older than
+        `_override_timeout_hours`); `sleeping` is exempt because it has no
+        timeout by design. Always restores the zone+posture rule stamp so
+        gate 2's post-expiry refractory survives a restart.
+        """
+        from backend.api.routes.automation import OVERRIDE_STATE_KEY
+        from backend.api.routes.routines import load_setting
+
+        try:
+            saved = await load_setting(OVERRIDE_STATE_KEY)
+        except Exception as e:
+            logger.error("Failed to load override state: %s", e, exc_info=True)
+            return
+        if not saved:
+            return
+
+        # Restore zone+posture stamp first — independent of the override
+        # itself, and needed even when the override has expired so the
+        # gate 2 refractory window is honored across restarts.
+        stamp_str = saved.get("zone_posture_last_fired_utc")
+        if stamp_str:
+            try:
+                self._zone_posture_last_fired_at = (
+                    datetime.fromisoformat(stamp_str).astimezone(TZ)
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid zone_posture stamp on load: %r", stamp_str,
+                )
+
+        if not saved.get("manual_override"):
+            return
+        mode = saved.get("override_mode")
+        if not mode:
+            return
+        time_str = saved.get("override_time_utc")
+        if not time_str:
+            return
+        try:
+            override_time = datetime.fromisoformat(time_str).astimezone(TZ)
+        except (TypeError, ValueError):
+            logger.warning("Invalid override_time on load: %r", time_str)
+            return
+
+        # Sleeping has no timeout by design (CLAUDE.md: "Persistent override").
+        # Every other mode: drop if it would have already expired.
+        if mode != "sleeping":
+            elapsed = datetime.now(tz=TZ) - override_time
+            if elapsed > timedelta(hours=self._override_timeout_hours):
+                logger.info(
+                    "Override (%s) age %.0fmin exceeds %dh timeout — "
+                    "treating as expired",
+                    mode, elapsed.total_seconds() / 60,
+                    self._override_timeout_hours,
+                )
+                # Re-persist the cleared state so the dashboard sees no override.
+                await self._persist_override_state()
+                return
+
+        self._manual_override = True
+        self._override_mode = mode
+        self._override_time = override_time
+        self._last_activity_change = override_time
+        age_min = int(
+            (datetime.now(tz=TZ) - override_time).total_seconds() // 60
+        )
+        logger.info(
+            "Override restored from app_settings: mode=%s set %dmin ago",
+            mode, age_min,
+        )
 
     async def load_dnd_state(self) -> None:
         """Restore DND state from app_settings on startup.
@@ -2196,6 +2302,10 @@ class AutomationEngine:
         # accumulation (not just surviving override expiry instantly).
         self._zone_posture_last_fired_at = now
         self._zone_posture_reclined_since = None
+        # Persist the stamp even on shadow-mode fires so gate 2's refractory
+        # survives restarts (the apply-mode path also persists via
+        # set_manual_override, but shadow fires would otherwise be lost).
+        await self._persist_override_state()
 
     async def _check_external_off(self) -> bool:
         """
