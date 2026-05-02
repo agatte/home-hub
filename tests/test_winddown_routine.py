@@ -9,13 +9,17 @@ from backend.services.winddown_routine import WinddownRoutineService
 class _FakeAutomation:
     """Minimal automation engine stub for winddown."""
 
-    def __init__(self, current_mode="working", at_desk=False):
+    def __init__(self, current_mode="working", at_desk=False, dnd=False):
         self.current_mode = current_mode
         self._at_desk = at_desk
+        self._dnd = dnd
         self.override_calls: list[str] = []
 
     def is_at_desk_fresh(self) -> bool:
         return self._at_desk
+
+    def is_dnd_active(self) -> bool:
+        return self._dnd
 
     async def set_manual_override(self, mode: str, source: str = "internal") -> None:
         self.override_calls.append(mode)
@@ -124,6 +128,20 @@ class TestWinddownCameraVeto:
             _FakeAutomation.is_at_desk_fresh = (
                 lambda self: getattr(self, "_at_desk", False)
             )
+
+
+class TestWinddownDndGate:
+    """DND active → wind-down skipped entirely (no lights, no volume, no TTS)."""
+
+    async def test_dnd_active_skips_routine(self, deps):
+        auto, sonos, tts = deps
+        auto._dnd = True
+        wd = WinddownRoutineService(auto, sonos, tts, volume=12)
+        ok = await wd.execute(force=True)
+        assert ok is False
+        assert auto.override_calls == []
+        assert sonos.volume_calls == []
+        assert tts.spoken == []
 
 
 class TestWinddownCameraServiceWiring:
