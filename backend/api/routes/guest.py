@@ -42,6 +42,38 @@ GUEST_SCENE_WHITELIST: dict[str, str] = {
 GUEST_SCENE_COOLDOWN_SECONDS = 60
 _last_guest_scene_at: float = 0.0
 
+# Music vibe nudge — guests pick a vibe (hype/singalong/throwback), backend
+# resolves to a Sonos favorite title and plays it. Mapping is configurable
+# via app_settings["guest_vibe_playlists"]; if the key is unset we fall back
+# to GUEST_VIBE_DEFAULTS which targets the favorites Anthony actually has.
+# `label` is the visitor-facing tile name (Bebas-display style).
+GUEST_VIBE_LABELS: dict[str, str] = {
+    "hype":       "Hype",
+    "singalong":  "Sing-along",
+    "throwback":  "Throwback",
+}
+GUEST_VIBE_DEFAULTS: dict[str, str] = {
+    "hype":       "Party-Jazz",
+    "singalong":  "AJR",
+    "throwback":  "Replay-all-time",
+}
+GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
+GUEST_VIBE_COOLDOWN_SECONDS = 60
+_last_guest_vibe_at: float = 0.0
+
+
+async def _resolve_vibe_mapping() -> dict[str, str]:
+    """Load the current vibe→favorite-title mapping from app_settings,
+    falling back to GUEST_VIBE_DEFAULTS for any missing key. The settings
+    table value is just a flat dict; future settings UI can edit it.
+    """
+    # Late import: avoids a startup-time circular with the routines module
+    # which itself imports from backend.api.routes (via __init__).
+    from backend.api.routes.routines import load_setting
+    stored = await load_setting(GUEST_VIBE_SETTINGS_KEY)
+    return {name: stored.get(name, default)
+            for name, default in GUEST_VIBE_DEFAULTS.items()}
+
 
 _WIFI_ESCAPE = str.maketrans({
     "\\": "\\\\",
@@ -187,4 +219,93 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
         "status": "ok",
         "scene": preset["display_name"],
         "cooldown_seconds": GUEST_SCENE_COOLDOWN_SECONDS,
+    }
+
+
+@router.get("/vibes")
+async def list_guest_vibes() -> dict:
+    """Return the guest music vibes with their current playlist mapping.
+
+    The frontend renders one tile per vibe with the friendly label and a
+    secondary line showing which Sonos favorite will play. Anthony can
+    re-map any vibe by writing app_settings["guest_vibe_playlists"] —
+    no UI for that yet, hand-edit the table.
+    """
+    mapping = await _resolve_vibe_mapping()
+    return {
+        "vibes": [
+            {
+                "name": name,
+                "label": GUEST_VIBE_LABELS[name],
+                "playlist_title": mapping[name],
+            }
+            for name in GUEST_VIBE_LABELS
+        ]
+    }
+
+
+@router.post("/vibe/{name}", dependencies=[Depends(require_api_key)])
+async def activate_guest_vibe(name: str, request: Request) -> dict:
+    """Switch Sonos to the favorite mapped to this guest vibe.
+
+    Validates `name` against GUEST_VIBE_LABELS, enforces a separate
+    cooldown from the scene picker (lights and music are independent
+    visitor controls), resolves the favorite title via _resolve_vibe_mapping,
+    and calls SonosService.play_favorite. Sets a "social" manual override
+    tagged source="guest" so the engine doesn't immediately roll the mode
+    back to whatever was detected.
+
+    Returns 400 for unknown names, 429 (with Retry-After) when the
+    cooldown is still active, 502 if Sonos can't find the favorite, 503
+    when Sonos isn't connected.
+    """
+    global _last_guest_vibe_at
+
+    if name not in GUEST_VIBE_LABELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown guest vibe '{name}'. Pick one of: "
+                   f"{', '.join(sorted(GUEST_VIBE_LABELS))}",
+        )
+
+    now = time.monotonic()
+    elapsed = now - _last_guest_vibe_at
+    if elapsed < GUEST_VIBE_COOLDOWN_SECONDS:
+        retry_after = int(GUEST_VIBE_COOLDOWN_SECONDS - elapsed) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooling down — try again in {retry_after}s",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    sonos = getattr(request.app.state, "sonos", None)
+    if not sonos or not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    mapping = await _resolve_vibe_mapping()
+    favorite_title = mapping[name]
+
+    started = await sonos.play_favorite(favorite_title)
+    if not started:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Couldn't start '{favorite_title}' — favorite missing or unplayable",
+        )
+
+    automation = getattr(request.app.state, "automation", None)
+    if automation:
+        await automation.set_manual_override("social", source="guest")
+
+    _last_guest_vibe_at = now
+    logger.info(
+        "Guest activated vibe '%s' → favorite '%s' from %s",
+        name, favorite_title,
+        request.client.host if request.client else "unknown",
+    )
+
+    return {
+        "status": "ok",
+        "vibe": GUEST_VIBE_LABELS[name],
+        "playlist": favorite_title,
+        "cooldown_seconds": GUEST_VIBE_COOLDOWN_SECONDS,
     }

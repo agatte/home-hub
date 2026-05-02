@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import {
     Sparkles, Gamepad2, Monitor, Tv, PartyPopper, Flame, ChefHat, Moon, Bot,
+    Music2,
   } from 'lucide-svelte'
   import { lights } from '$lib/stores/lights.js'
   import { automation } from '$lib/stores/automation.js'
@@ -24,16 +25,31 @@
   let scenes = []
   let scenesLoaded = false
 
+  /** @type {Array<{name: string, label: string, playlist_title: string}>} */
+  let vibes = []
+  let vibesLoaded = false
+
+  // Lights and music are independent visitor controls — separate cooldowns
+  // so a guest can shift the music right after picking a scene without
+  // waiting 60s for the unrelated control to release.
   /** @type {string | null} */
   let activatingScene = null
   /** @type {boolean} */
-  let cooldownActive = false
+  let sceneCooldownActive = false
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let sceneCooldownTimer = null
+
+  /** @type {string | null} */
+  let activatingVibe = null
+  /** @type {boolean} */
+  let vibeCooldownActive = false
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let vibeCooldownTimer = null
+
   /** @type {string | null} */
   let toastMessage = null
   /** @type {ReturnType<typeof setTimeout> | null} */
   let toastTimer = null
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let cooldownTimer = null
 
   function showToast(msg) {
     toastMessage = msg
@@ -41,21 +57,27 @@
     toastTimer = setTimeout(() => { toastMessage = null }, 3000)
   }
 
-  function startCooldown(seconds) {
-    cooldownActive = true
-    if (cooldownTimer) clearTimeout(cooldownTimer)
-    cooldownTimer = setTimeout(() => { cooldownActive = false }, seconds * 1000)
+  function startSceneCooldown(seconds) {
+    sceneCooldownActive = true
+    if (sceneCooldownTimer) clearTimeout(sceneCooldownTimer)
+    sceneCooldownTimer = setTimeout(() => { sceneCooldownActive = false }, seconds * 1000)
+  }
+
+  function startVibeCooldown(seconds) {
+    vibeCooldownActive = true
+    if (vibeCooldownTimer) clearTimeout(vibeCooldownTimer)
+    vibeCooldownTimer = setTimeout(() => { vibeCooldownActive = false }, seconds * 1000)
   }
 
   async function activateScene(name) {
-    if (cooldownActive || activatingScene) return
+    if (sceneCooldownActive || activatingScene) return
     activatingScene = name
     try {
       const res = await fetch(`/api/guest/scene/${name}`, { method: 'POST' })
       if (res.status === 429) {
         const body = await res.json().catch(() => ({}))
         const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10) || 60
-        startCooldown(retryAfter)
+        startSceneCooldown(retryAfter)
         showToast(body.detail || `Cooling down — try again in ${retryAfter}s`)
         return
       }
@@ -64,7 +86,7 @@
         return
       }
       const body = await res.json()
-      startCooldown(body.cooldown_seconds ?? 60)
+      startSceneCooldown(body.cooldown_seconds ?? 60)
       const sceneLabel = body.scene || name
       showToast(`Lights set to ${sceneLabel}`)
     } catch {
@@ -74,23 +96,57 @@
     }
   }
 
-  onMount(async () => {
+  async function activateVibe(name) {
+    if (vibeCooldownActive || activatingVibe) return
+    activatingVibe = name
     try {
-      const res = await fetch('/api/guest/scenes')
-      if (res.ok) {
-        const body = await res.json()
-        scenes = body.scenes ?? []
+      const res = await fetch(`/api/guest/vibe/${name}`, { method: 'POST' })
+      if (res.status === 429) {
+        const body = await res.json().catch(() => ({}))
+        const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10) || 60
+        startVibeCooldown(retryAfter)
+        showToast(body.detail || `Cooling down — try again in ${retryAfter}s`)
+        return
       }
+      if (res.status === 502) {
+        showToast(`That playlist isn't on the speaker right now`)
+        return
+      }
+      if (!res.ok) {
+        showToast(`Couldn't switch the music (${res.status})`)
+        return
+      }
+      const body = await res.json()
+      startVibeCooldown(body.cooldown_seconds ?? 60)
+      showToast(`Now playing: ${body.playlist || body.vibe || name}`)
     } catch {
-      // Network error — the empty state below covers it.
+      showToast(`Couldn't reach the server`)
     } finally {
-      scenesLoaded = true
+      activatingVibe = null
     }
+  }
+
+  onMount(async () => {
+    // Fetch scenes + vibes in parallel — both are read-only GETs and
+    // can race independently.
+    const [sceneRes, vibeRes] = await Promise.allSettled([
+      fetch('/api/guest/scenes').then((r) => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/guest/vibes').then((r) => r.ok ? r.json() : null).catch(() => null),
+    ])
+    if (sceneRes.status === 'fulfilled' && sceneRes.value) {
+      scenes = sceneRes.value.scenes ?? []
+    }
+    scenesLoaded = true
+    if (vibeRes.status === 'fulfilled' && vibeRes.value) {
+      vibes = vibeRes.value.vibes ?? []
+    }
+    vibesLoaded = true
   })
 
   onDestroy(() => {
     if (toastTimer) clearTimeout(toastTimer)
-    if (cooldownTimer) clearTimeout(cooldownTimer)
+    if (sceneCooldownTimer) clearTimeout(sceneCooldownTimer)
+    if (vibeCooldownTimer) clearTimeout(vibeCooldownTimer)
   })
 </script>
 
@@ -146,7 +202,7 @@
             class="scene-btn"
             class:loading={activatingScene === scene.name}
             on:click={() => activateScene(scene.name)}
-            disabled={cooldownActive || !!activatingScene}
+            disabled={sceneCooldownActive || !!activatingScene}
           >
             <div class="scene-preview">
               {#each ['1', '2', '3', '4'] as lid}
@@ -161,8 +217,38 @@
         {/each}
       </div>
     {/if}
-    {#if cooldownActive}
+    {#if sceneCooldownActive}
       <p class="cooldown">Cooling down… give the lights a sec.</p>
+    {/if}
+  </section>
+
+  <section class="guest-card">
+    <div class="card-head">
+      <Music2 size={20} strokeWidth={1.5} />
+      <h2>Pick the music</h2>
+    </div>
+    {#if !vibesLoaded}
+      <p class="muted">Loading…</p>
+    {:else if vibes.length === 0}
+      <p class="muted">Couldn't load vibes.</p>
+    {:else}
+      <div class="vibe-grid">
+        {#each vibes as vibe}
+          <button
+            type="button"
+            class="vibe-btn"
+            class:loading={activatingVibe === vibe.name}
+            on:click={() => activateVibe(vibe.name)}
+            disabled={vibeCooldownActive || !!activatingVibe}
+          >
+            <span class="vibe-label">{vibe.label}</span>
+            <span class="vibe-playlist">{vibe.playlist_title}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+    {#if vibeCooldownActive}
+      <p class="cooldown">Cooling down… give the music a sec.</p>
     {/if}
   </section>
 </main>
@@ -310,6 +396,56 @@
     font-weight: 500;
     letter-spacing: 0.01em;
     line-height: 1.2;
+  }
+
+  .vibe-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .vibe-btn {
+    appearance: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 84px;
+    padding: 14px 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 14px;
+    color: #fff;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.05s, border-color 0.15s;
+    text-align: center;
+    min-width: 0;
+  }
+  .vibe-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+  .vibe-btn:active:not(:disabled) { transform: scale(0.98); }
+  .vibe-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .vibe-btn.loading { background: rgba(255, 255, 255, 0.2); }
+  .vibe-label {
+    font-family: var(--font-display);
+    font-size: 18px;
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
+  .vibe-playlist {
+    font-size: 11px;
+    color: rgba(245, 243, 238, 0.55);
+    line-height: 1.2;
+    /* Long playlist titles ("Lo-fi-working") would push the column past
+       its 1fr width without min-width:0 from the parent — same trick as
+       the swatch row earlier. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
 
   .cooldown {
