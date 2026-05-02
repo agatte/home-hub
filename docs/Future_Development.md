@@ -2,7 +2,7 @@
 
 > Feature ideas beyond the current roadmap — large and small.
 >
-> **Last updated:** 2026-04-29
+> **Last updated:** 2026-05-01
 
 ---
 
@@ -29,6 +29,7 @@ Major work that landed during April 2026, roughly chronological. Tracked here so
 - **Camera-at-desk veto pattern.** Four push-toward-relax pathways (winddown, late-night rescue, behavioral predictor consumer, fusion `can_override`) gate on `is_at_desk_fresh()` so the system doesn't force relax while Anthony's actively at the desk.
 - **Override caller telemetry source kwarg.** `set_manual_override` / `clear_override` accept + log a `source` kwarg on all 7 callers — diagnose mysterious override flips via `journalctl`.
 - **2026-04-28 — mcp_server presence cleanup (`dcb3e30`).** Dead-code deletion of the standalone `get_presence_status` MCP tool and the 404'ing presence call in `get_live_state`'s aggregator.
+- **2026-05-01 — Override persistence across restarts (`ac1c8ed`).** `_manual_override` / `_override_mode` / `_override_time` and the zone+posture rule fire-stamp now persist to `app_settings["override_state"]` via `_persist_override_state()` on every set/clear/rule-fire; `load_override_state()` restores at boot, dropping anything past the 4h timeout (sleeping exempt). Mirrors the existing `dnd_state` pattern. Surfaced when a deploy mid-`relax` snapped to `working` for ~6 minutes until the rule re-dwelled — the in-memory override was wiped, the PC agent's `working` report flowed through unguarded.
 
 ### Documentation
 - **2026-04-28 — `docs/PROJECT_SPEC.md` updated for home/away retirement + predictor calibration (`683f483`).**
@@ -181,9 +182,10 @@ Stagger light transitions room-to-room on mode change. Morning: bedroom → livi
 
 **Shipped:**
 - `GuestWifiWidget` on the home dashboard. Opens a fullscreen modal with the big WiFi QR plus a smaller "then scan for tonight's info" QR that points at `/guest` — two-scan flow (join WiFi, then load page). Modal intentionally hides the password text (kiosk lives in the living room); the QR still encodes it for phones to read.
-- `/guest` landing page — Welcome header + Now Playing + House Notes only. Served behind a SvelteKit layout reset (`+layout@.svelte`) so the kiosk's `FloatingNav` / `VitalStrip` / `ModeBackground` don't leak in. Anyone reaching the page is already on the LAN, so re-displaying WiFi creds there is intentionally omitted.
+- `/guest` landing page — Welcome header + Now Playing + House Notes only. The route uses a SvelteKit layout reset (`routes/guest/+layout@.svelte`) to escape intermediate layouts, but the **root** `+layout.svelte` always wraps every page; `FloatingNav` and `NowPlayingChip` are explicitly gated behind `!$page.url.pathname.startsWith('/guest')` to keep the visitor screen nav-free. `VitalStrip` and `ErrorToast` still render — vitals are useful to glance at and a toast should never be suppressed. Anyone reaching the page is already on the LAN, so re-displaying WiFi creds there is intentionally omitted.
 - Backend `GET /api/guest/wifi` returns the standard `WIFI:T:<security>;S:<ssid>;P:<password>;H:false;;` URI for `qrcode.toDataURL()`. Credentials live in `.env` as `GUEST_WIFI_SSID` / `GUEST_WIFI_PASSWORD` / `GUEST_WIFI_SECURITY` (default `WPA`); special chars escaped per spec.
-- Mobile reconnect banner debounced via `connectionLost` derived store in `connection.js` (3s grace) — phone screen-lock cycles no longer flash "Reconnecting..." on the dashboard.
+- Mobile `NowPlayingChip` lifted above `FloatingNav` on small screens (≤768px: `bottom: 76px → 104px`; ≤480px: `64px → 92px`) so the chip sits clearly above the nav pill instead of sliding underneath it. Chip's `z-index: 45` was below nav's `z-index: 50`, so the math, not the stacking, was the bug.
+- Mobile reconnect: three-layer fix. (1) `connectionLost` derived store in `connection.js` debounces the banner 3s so sub-3s flickers don't paint. (2) `run.py` passes `ws_ping_interval=30, ws_ping_timeout=60` to uvicorn — was the 20s default, which was killing sockets during phone screen-sleep cycles. (3) `ws.js` registers a `visibilitychange` handler that calls `retryNowIfDead()` on tab resume — cancels pending backoff, resets delay, and reconnects immediately so the banner doesn't outlast the time it takes to glance at the screen.
 
 **Still open:**
 - `guest.homehub.local` Pi-hole DNS entry — currently reachable only as `http://192.168.1.210:8000/guest`.

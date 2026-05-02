@@ -357,7 +357,7 @@ External APIs (cloud):
 | value | JSON | Serialized config object |
 | updated_at | DateTime | UTC, auto-updated |
 
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`, `dnd_state`, `override_state`. The last two carry runtime state across restarts: `dnd_state` is `{enabled, expiry_utc, duration_minutes}`, and `override_state` is `{manual_override, override_mode, override_time_utc, zone_posture_last_fired_utc}` — restored at boot by `automation.load_dnd_state()` / `load_override_state()`, with override drops past the 4h timeout (sleeping exempt).
 
 **scenes** — User-created light presets
 | Column | Type | Notes |
@@ -827,15 +827,18 @@ Core brain — combines time rules with activity detection.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
-| `report_activity` | `(mode: str, source: str) → None` | Process activity report |
-| `set_manual_override` | `(mode: str) → None` | Override (4h timeout) |
-| `clear_override` | `() → None` | Clear manual override |
+| `report_activity` | `(mode: str, source: str, factors=None) → None` | Process activity report |
+| `set_manual_override` | `(mode: str, source: str = "internal") → None` | Override (4h timeout, except `sleeping`); persists to `app_settings["override_state"]` |
+| `clear_override` | `(source: str = "internal") → None` | Clear manual override; persists cleared state |
+| `load_override_state` | `() → None` | Restore override + zone+posture fire-stamp at boot; called from `bootstrap.py` |
 | `register_on_mode_change` | `(callback: async (str) → None) → None` | Subscribe to mode changes |
 | `run_loop` | `() → None` | Background loop (60s interval) |
 | `update_schedule_config` | `(config) → None` | Hot-reload schedule |
 | `update_mode_brightness` | `(brightness: dict) → None` | Hot-reload brightness |
 
 **Late-night rescue** — inside `run_loop`, after the external-off check and before time-based application: if `_get_time_period() == "late_night"` (23:00+), no manual override is active, `_current_mode ∈ {"working", "idle"}`, and `_sonos_is_playing()` returns False, the engine auto-applies `set_manual_override("relax")`. Respects real entertainment modes (gaming, watching, social, sleeping) and music playback as intentional signals. Complements the winddown routine (which runs at 22:00 and sets a 4h override) by covering the 02:00+ edge after that override expires.
+
+**Override persistence** — `_manual_override` / `_override_mode` / `_override_time` and the zone+posture rule's `_zone_posture_last_fired_at` stamp are written to `app_settings["override_state"]` on every set/clear/rule-fire and restored at boot. Before this fix (2026-05-01), a deploy mid-relax would briefly snap to whatever the PC agent was reporting until the rule re-fired after its 120s dwell. On restore, the engine drops anything past `override_timeout_hours` (sleeping exempt — no timeout by design); the rule stamp is always restored so gate 2's post-expiry refractory window survives intact.
 
 #### MusicMapper
 Maps modes to Sonos favorites with vibe-based matching and smart auto-play logic.
@@ -1284,7 +1287,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Now Playing chip** — Fixed bottom-right, shows album art + track, pulses when playing.
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering. Tapping "View Plants" opens the full plant app inside a fullscreen iframe modal layered over the dashboard (no new tab — the kiosk Firefox stays on the dashboard).
 - ✓ **Recommendation card QR modal** — on the music page, the "Open in Apple Music" action on each recommendation card opens an in-dashboard modal showing a client-side-generated QR code for the track's `itunes_url`. Anthony scans with his phone; iOS opens it in the native Apple Music app where Add-to-Library actually works. No `target="_blank"`, no kiosk lockout.
-- ✓ **Auto-reload on backend deploys** — the WebSocket `connection_status` message carries a `build_id` (short git SHA). When `scripts/deploy.sh` restarts the backend, the kiosk's WS reconnects, sees a new `build_id`, and calls `window.location.reload()`. Eliminates the manual F5 dance after every deploy.
+- ✓ **Auto-reload on backend deploys** — the WebSocket `connection_status` message carries a `build_id` (short git SHA). When `scripts/deploy.sh` restarts the backend, the kiosk's WS reconnects, sees a new `build_id`, and calls `window.location.reload()`. Eliminates the manual F5 dance after every deploy. Override state (manual mode + zone+posture rule fire-stamp) also persists to `app_settings["override_state"]` so a deploy mid-`relax` doesn't briefly flip to the raw PC-agent mode while the engine re-derives.
 - ✓ **Custom scene builder UI** — `CustomSceneEditor.svelte` opens from the scene browser's "New" button; per-light color and effect picker, save/update/delete via the existing `/api/scenes/custom` CRUD endpoints.
 - **Remaining:** Bar app widget (future).
 
