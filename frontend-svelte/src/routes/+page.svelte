@@ -9,6 +9,7 @@
   import AmbientSoundWidget from '$lib/components/AmbientSoundWidget.svelte'
   import PlantWidget from '$lib/components/PlantWidget.svelte'
   import BarWidget from '$lib/components/BarWidget.svelte'
+  import GuestWifiWidget from '$lib/components/GuestWifiWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
   import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
 
@@ -51,6 +52,11 @@
     <section class="widget widget-bar">
       <h2 class="widget-title">Home Bar</h2>
       <BarWidget />
+    </section>
+
+    <section class="widget widget-guest-wifi">
+      <h2 class="widget-title">Guests</h2>
+      <GuestWifiWidget />
     </section>
 
     <section class="widget widget-pihole">

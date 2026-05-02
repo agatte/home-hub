@@ -177,11 +177,11 @@ Stagger light transitions room-to-room on mode change. Morning: bedroom → livi
 
 ---
 
-### 12. Guest Wi-Fi Landing Page
+### 12. Guest Wi-Fi Landing Page — partial 2026-05-01
 
-`guest.homehub.local` landing page with Wi-Fi password, Party Mode QR code, now playing, "request a song" form, house rules. Pi-hole DNS already handles local domains.
+**Shipped:** WiFi QR widget on the home dashboard + `/guest` landing page (WiFi QR + now-playing + house rules). Backend `GET /api/guest/wifi` returns the standard `WIFI:` URI. Credentials live in `.env` as `GUEST_WIFI_SSID` / `GUEST_WIFI_PASSWORD` / `GUEST_WIFI_SECURITY`.
 
-**Touches:** New frontend route (`/guest`), Pi-hole DNS entry, new song queue API
+**Still open:** `guest.homehub.local` Pi-hole DNS entry (currently reachable as `http://192.168.1.210:8000/guest`), Party Mode QR, "request a song" form / song queue API.
 
 ---
 

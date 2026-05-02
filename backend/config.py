@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # Home Bar Integration
     BAR_APP_URL: Optional[str] = None
 
+    # Guest WiFi — surfaces a QR on the dashboard and /guest landing page.
+    # When SSID/password are empty, the widget renders a "not configured"
+    # state and the /api/guest/wifi route returns {configured: false}.
+    GUEST_WIFI_SSID: str = ""
+    GUEST_WIFI_PASSWORD: str = ""
+    GUEST_WIFI_SECURITY: str = "WPA"  # WPA | WEP | nopass
+
     # Pi-hole DNS ad blocker (optional — enables network stats widget)
     PIHOLE_API_URL: Optional[str] = None
     PIHOLE_API_KEY: Optional[str] = None

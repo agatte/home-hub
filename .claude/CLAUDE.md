@@ -272,6 +272,7 @@ All messages: JSON with `type` + `data` fields.
 | Routines | `/api/routines` | Morning + winddown config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
+| Guest | `/api/guest` | `GET /wifi` returns `{configured, ssid, password, qr_payload}` — payload is the WIFI: URI for `qrcode.toDataURL()`. `{configured: false}` when env vars unset. Surfaced by `GuestWifiWidget` on home + `/guest` landing page (layout-reset, no FloatingNav) |
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 
@@ -396,6 +397,9 @@ ZONE_POSTURE_RULE_APPLY=false  # Zone+posture→relax actuation. Default false =
 PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot.
 HOME_HUB_API_KEY=<urlsafe random>  # Required for write endpoints. Unset → all writes 503. Localhost + TRUSTED_LAN_IPS bypass X-API-Key.
 TRUSTED_LAN_IPS=192.168.1.30   # Comma-separated LAN IPs that bypass X-API-Key. Empty = "kiosk only".
+GUEST_WIFI_SSID=               # Surfaces a QR on home dashboard + /guest. Empty = "not configured".
+GUEST_WIFI_PASSWORD=
+GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 ```
 
 ### SQLite Persisted Settings (`app_settings` table)
