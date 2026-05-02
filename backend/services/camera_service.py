@@ -965,6 +965,13 @@ class CameraService:
             return
 
         if candidate == self._last_zone:
+            # Steady-state confirmation: refresh the commit timestamp so
+            # downstream freshness gates (ZONE_POSTURE_FRESHNESS_SECONDS in
+            # the lighting overlay) see a live reading. Without this refresh,
+            # `_last_zone_at` only updates on zone TRANSITIONS, so a user who
+            # has been in the same zone for >5 min appears "stale" to the
+            # overlay and Branch 3 (bed-zone dim) silently disengages.
+            self._last_zone_at = now
             self._candidate_zone = None
             self._candidate_zone_since = None
             return
@@ -1010,6 +1017,12 @@ class CameraService:
             return
 
         if candidate == self._last_posture:
+            # Steady-state confirmation: refresh the commit timestamp so
+            # downstream freshness gates see a live reading. Mirrors the
+            # zone hysteresis fix; without it, posture goes "stale" to the
+            # lighting overlay even though the camera is still observing
+            # the same posture every frame.
+            self._last_posture_at = now
             self._candidate_posture = None
             self._candidate_posture_since = None
             return

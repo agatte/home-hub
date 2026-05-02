@@ -232,6 +232,107 @@ class TestAbsentCountdown:
         assert service._candidate_posture_since is None
 
 
+class TestFreshnessRefreshOnConfirm:
+    """Steady-state confirmation refreshes the commit timestamp.
+
+    Without this, ``zone_committed_at`` / ``posture_committed_at`` only
+    update on TRANSITIONS, so a user who has been in the same zone for
+    >5 min (ZONE_POSTURE_FRESHNESS_SECONDS) appears stale to the lighting
+    overlay's freshness gate and Branch 3 (bed-zone dim) silently
+    disengages even while the camera is actively observing the user.
+    """
+
+    def test_zone_steady_state_refreshes_timestamp(self):
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        # Simulate an initial commit ~10 min ago.
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "bed"
+        service._last_zone_at = old
+
+        # Camera frame still confirms zone=bed.
+        service._apply_zone_hysteresis("bed")
+
+        # Timestamp must have moved forward.
+        assert service._last_zone_at is not None
+        assert service._last_zone_at > old
+        # And must be very recent.
+        delta = (datetime.now(timezone.utc) - service._last_zone_at).total_seconds()
+        assert delta < 1.0
+
+    def test_zone_brief_absence_preserves_timestamp(self):
+        """candidate=None during a brief absence must NOT refresh
+        (we only refresh on active confirmation)."""
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "bed"
+        service._last_zone_at = old
+
+        service._apply_zone_hysteresis(None)
+
+        # Timestamp unchanged — absence preserves but doesn't refresh.
+        assert service._last_zone_at == old
+
+    def test_posture_steady_state_refreshes_timestamp(self):
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_posture = "reclined"
+        service._last_posture_at = old
+
+        service._apply_posture_hysteresis("reclined")
+
+        assert service._last_posture_at is not None
+        assert service._last_posture_at > old
+        delta = (
+            datetime.now(timezone.utc) - service._last_posture_at
+        ).total_seconds()
+        assert delta < 1.0
+
+    def test_posture_none_does_not_refresh(self):
+        """For posture, candidate=None means 'not observed this poll'
+        (face-only path) — preserve but don't refresh."""
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_posture = "reclined"
+        service._last_posture_at = old
+
+        service._apply_posture_hysteresis(None)
+
+        assert service._last_posture_at == old
+
+    def test_zone_change_still_commits_with_fresh_timestamp(self):
+        """Regression guard: the steady-state refresh must not break
+        the existing transition-commit path."""
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "bed"
+        service._last_zone_at = old
+
+        # Fire enough hysteresis ticks to commit a change to "desk".
+        # Set candidate state directly to simulate >ZONE_HYSTERESIS_SECONDS held.
+        from backend.services.camera_service import ZONE_HYSTERESIS_SECONDS
+        service._candidate_zone = "desk"
+        service._candidate_zone_since = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=ZONE_HYSTERESIS_SECONDS + 1)
+        )
+
+        service._apply_zone_hysteresis("desk")
+
+        assert service._last_zone == "desk"
+        assert service._last_zone_at > old
+        assert service._candidate_zone is None
+
+
 # ---------------------------------------------------------------------------
 # Ambient lux
 # ---------------------------------------------------------------------------
