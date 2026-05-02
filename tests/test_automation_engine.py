@@ -253,6 +253,102 @@ class TestAutomationEngine:
 
 
 # ---------------------------------------------------------------------------
+# User-respect cooldown — clicking "auto" suppresses autonomous pushes
+# ---------------------------------------------------------------------------
+
+class TestUserClearCooldown:
+    """When the user presses 'auto' on the dashboard (api:* clear), the
+    engine should suppress autonomous-source set_manual_override calls
+    for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS so the choice actually sticks.
+
+    Calendar events (winddown_routine), user-initiated API calls (api:*),
+    and rule-suggestion accepts (rule_suggestion_accept:*) bypass.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+
+    async def test_api_clear_arms_cooldown_stamp(self, engine):
+        await engine.set_manual_override("relax", source="api:1.2.3.4")
+        assert engine._user_cleared_override_at is None
+        await engine.clear_override(source="api:1.2.3.4")
+        assert engine._user_cleared_override_at is not None
+
+    async def test_internal_clear_does_not_arm_cooldown(self, engine):
+        # Auto-timeout-driven clears (timeout_4h) shouldn't suppress later
+        # autonomous pushes — those represent override expiry, not user intent.
+        await engine.set_manual_override("relax")
+        await engine.clear_override(source="timeout_4h")
+        assert engine._user_cleared_override_at is None
+
+    async def test_cooldown_blocks_late_night_rescue(self, engine):
+        await engine.clear_override(source="api:1.2.3.4")
+        # Same instant — cooldown definitely active. Autonomous push suppressed.
+        await engine.set_manual_override("relax", source="late_night_rescue")
+        assert engine.manual_override is False
+
+    async def test_cooldown_blocks_zone_posture_rule(self, engine):
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override("relax", source="zone_posture_rule")
+        assert engine.manual_override is False
+
+    async def test_cooldown_blocks_fusion_can_override(self, engine):
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override("watching", source="fusion_can_override")
+        assert engine.manual_override is False
+
+    async def test_cooldown_blocks_fusion_auto_apply(self, engine):
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override("watching", source="fusion_auto_apply")
+        assert engine.manual_override is False
+
+    async def test_cooldown_blocks_behavioral_predictor(self, engine):
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override("relax", source="behavioral_predictor")
+        assert engine.manual_override is False
+
+    async def test_cooldown_does_not_block_winddown_routine(self, engine):
+        # Calendar events bypass — wind-down at 22:00 should still fire even
+        # if the user cleared an override 5 min earlier.
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override("relax", source="winddown_routine")
+        assert engine.manual_override is True
+
+    async def test_cooldown_does_not_block_user_api_set(self, engine):
+        # User picks a different mode via the dashboard — bypass the cooldown
+        # they just armed.
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override("watching", source="api:1.2.3.4")
+        assert engine.manual_override is True
+        assert engine.override_mode == "watching"
+
+    async def test_cooldown_does_not_block_rule_suggestion_accept(self, engine):
+        await engine.clear_override(source="api:1.2.3.4")
+        await engine.set_manual_override(
+            "relax", source="rule_suggestion_accept:1.2.3.4",
+        )
+        assert engine.manual_override is True
+
+    async def test_cooldown_expires_after_window(self, engine):
+        from backend.services.automation_engine import (
+            USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS,
+        )
+        await engine.clear_override(source="api:1.2.3.4")
+        # Fast-forward past the cooldown.
+        engine._user_cleared_override_at = (
+            datetime.now(tz=TZ)
+            - timedelta(seconds=USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS + 60)
+        )
+        await engine.set_manual_override("relax", source="late_night_rescue")
+        assert engine.manual_override is True
+
+
+# ---------------------------------------------------------------------------
 # Zone+posture → relax rule
 # ---------------------------------------------------------------------------
 
@@ -487,6 +583,51 @@ class TestZonePostureRule:
         engine._camera_service = _FakeCamera(zone="bed", posture="upright")
         await engine._evaluate_zone_posture_rule(self.EVENING)
         assert engine._zone_posture_reclined_since is None
+
+    async def test_stamp_set_before_set_manual_override_raises(self, engine):
+        """Pre-fix bug: if set_manual_override raises (transient Hue error,
+        broadcast failure, etc.), the rule's stamp assign + persist never
+        run, so gate 2 keeps letting the rule re-fire on every dwell window
+        within the supposed 4h refractory.
+
+        Post-fix: stamp is committed BEFORE set_manual_override, so even
+        when it raises, gate 2 holds.
+        """
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("simulated transient hue failure")
+
+        engine.set_manual_override = _boom
+
+        with pytest.raises(RuntimeError):
+            await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+
+        # The stamp must be in-memory despite the raise.
+        assert engine._zone_posture_last_fired_at is not None
+
+    async def test_gate_2_holds_after_set_manual_override_raises(self, engine):
+        """End-to-end: after the rule's first fire raises mid-set_manual_override,
+        a second tick within the refractory window should still suppress.
+        """
+        original_set_override = engine.set_manual_override
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("simulated transient failure")
+
+        engine.set_manual_override = _boom
+        with pytest.raises(RuntimeError):
+            await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+
+        # Restore so the next call wouldn't raise — but gate 2 should still
+        # short-circuit before reaching it.
+        engine.set_manual_override = original_set_override
+        engine._ml_logger.calls.clear()
+
+        # Second tick a few minutes later, conditions still met, dwell hit.
+        later = self.EVENING + timedelta(minutes=5)
+        await self._tick(engine, later, dwell_offset_seconds=301)
+
+        # Gate 2 should have suppressed: no new ml_decision row, no new fire.
+        assert engine._ml_logger.calls == []
 
 
 # ---------------------------------------------------------------------------

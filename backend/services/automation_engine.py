@@ -56,6 +56,27 @@ ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
 ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working"))
 
 
+# User-respect cooldown — when the user clears an override via the dashboard
+# (api:* source), suppress autonomous mode-pushes for this window so "auto"
+# actually means auto. Calendar routines (winddown_routine) and explicit user
+# actions (api:*, rule_suggestion_accept:*) bypass.
+USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
+
+# Source labels that get blocked by the cooldown above. These are the
+# sensor-driven autonomous pushes — they should defer to a recent user
+# choice. Calendar events (winddown_routine), user-API actions (api:*),
+# and rule-suggestion accepts (rule_suggestion_accept:*) are deliberately
+# absent: those represent intent or scheduled actions, not sensor reactivity.
+AUTONOMOUS_PUSH_SOURCES = frozenset({
+    "late_night_rescue",
+    "zone_posture_rule",
+    "behavioral_predictor",
+    "fusion_can_override",
+    "fusion_auto_apply",
+    "internal",
+})
+
+
 # ---------------------------------------------------------------------------
 # Configurable schedule dataclasses
 # ---------------------------------------------------------------------------
@@ -297,6 +318,11 @@ class AutomationEngine:
         # shadow cadence tracks what live cadence would look like.
         self._zone_posture_reclined_since: Optional[datetime] = None
         self._zone_posture_last_fired_at: Optional[datetime] = None
+        # User-respect cooldown stamp — set when the user clears an override
+        # via api:* (dashboard "auto" button). While within the cooldown,
+        # set_manual_override blocks autonomous-source pushes (rescue, rule,
+        # fusion, predictor) so the user's "auto" press actually sticks.
+        self._user_cleared_override_at: Optional[datetime] = None
         # Last applied lux multiplier — if the new multiplier is within
         # LUX_MULT_EPSILON of this, we keep using the old value so the final
         # state dict is identical and the per-light dedupe at _apply_state
@@ -827,6 +853,27 @@ class AutomationEngine:
             )
             return
 
+        # User-respect cooldown — if the user just cleared an override via
+        # the dashboard, block autonomous-source pushes for the cooldown
+        # window so "auto" actually means auto. Calendar events
+        # (winddown_routine) and user-initiated actions (api:*,
+        # rule_suggestion_accept:*) bypass — they aren't sensor reactivity.
+        if (
+            source in AUTONOMOUS_PUSH_SOURCES
+            and self._user_cleared_override_at is not None
+        ):
+            elapsed = (
+                datetime.now(tz=TZ) - self._user_cleared_override_at
+            ).total_seconds()
+            if elapsed < USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS:
+                logger.info(
+                    "Autonomous override blocked by user-clear cooldown: "
+                    "mode=%s source=%s elapsed=%.0fs / %ds",
+                    mode, source, elapsed,
+                    USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS,
+                )
+                return
+
         # Capture the effective mode (override if active, else detected) so that
         # event logging and callback gating see the real "previous" mode, not
         # the stale private _current_mode which only reflects PC agent state.
@@ -882,6 +929,13 @@ class AutomationEngine:
                 source,
             )
             return
+
+        # Stamp the user-respect cooldown when this clear came from the
+        # dashboard "auto" button. Subsequent autonomous mode pushes get
+        # suppressed for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS so the user's
+        # explicit "auto" choice isn't immediately undone by a sensor lane.
+        if source.startswith("api:"):
+            self._user_cleared_override_at = datetime.now(tz=TZ)
 
         old_effective = self._override_mode
         was_overridden = self._manual_override
@@ -1035,6 +1089,10 @@ class AutomationEngine:
                 self._zone_posture_last_fired_at.astimezone(timezone.utc).isoformat()
                 if self._zone_posture_last_fired_at is not None else None
             ),
+            "user_cleared_override_at_utc": (
+                self._user_cleared_override_at.astimezone(timezone.utc).isoformat()
+                if self._user_cleared_override_at is not None else None
+            ),
         }
         try:
             await save_setting(OVERRIDE_STATE_KEY, payload)
@@ -1072,6 +1130,19 @@ class AutomationEngine:
             except (TypeError, ValueError):
                 logger.warning(
                     "Invalid zone_posture stamp on load: %r", stamp_str,
+                )
+
+        # Restore user-clear cooldown stamp so a deploy/restart mid-cooldown
+        # doesn't drop the suppression window.
+        clear_str = saved.get("user_cleared_override_at_utc")
+        if clear_str:
+            try:
+                self._user_cleared_override_at = (
+                    datetime.fromisoformat(clear_str).astimezone(TZ)
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid user_cleared_override stamp on load: %r", clear_str,
                 )
 
         if not saved.get("manual_override"):
@@ -2276,6 +2347,15 @@ class AutomationEngine:
             "trigger": trigger_reason,
         }
 
+        # Commit the refractory stamp BEFORE any risky await. If
+        # set_manual_override raises (transient Hue error, broadcast
+        # failure, callback exception), the stamp is already in-memory
+        # and persisted, so gate 2 still suppresses for the next 4h
+        # instead of letting the rule re-fire on every dwell window.
+        self._zone_posture_last_fired_at = now
+        self._zone_posture_reclined_since = None
+        await self._persist_override_state()
+
         if should_apply:
             logger.info(
                 "Zone+posture rule firing: %s + %s held %.0fs → relax",
@@ -2297,15 +2377,6 @@ class AutomationEngine:
                 factors=factors,
                 applied=should_apply,
             )
-
-        # Record fire time; reset dwell so next eligible window needs fresh
-        # accumulation (not just surviving override expiry instantly).
-        self._zone_posture_last_fired_at = now
-        self._zone_posture_reclined_since = None
-        # Persist the stamp even on shadow-mode fires so gate 2's refractory
-        # survives restarts (the apply-mode path also persists via
-        # set_manual_override, but shadow fires would otherwise be lost).
-        await self._persist_override_state()
 
     async def _check_external_off(self) -> bool:
         """
