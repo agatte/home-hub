@@ -53,8 +53,8 @@ GUEST_VIBE_LABELS: dict[str, str] = {
     "throwback":  "Throwback",
 }
 GUEST_VIBE_DEFAULTS: dict[str, str] = {
-    "hype":       "Party-Jazz",
-    "singalong":  "AJR",
+    "hype":       "It's Lit!",
+    "singalong":  "2000s Hits Essentials",
     "throwback":  "Replay-all-time",
 }
 GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
