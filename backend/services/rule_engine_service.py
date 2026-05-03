@@ -254,15 +254,10 @@ class RuleEngineService:
         now = datetime.now(TZ)
         day = now.weekday()
         hour = now.hour
-        logger.info(
-            "DIAG check_rules entry: day=%d hour=%d cur=%s",
-            day, hour, current_mode,
-        )
 
         # Blackout: don't predict during the user's at-the-office hours
         # even if a stale rule somehow exists for one of those slots.
         if (day, hour) in _BLACKOUT_SLOTS:
-            logger.info("DIAG check_rules bail: blackout slot")
             return None
 
         async with async_session() as session:
@@ -276,25 +271,26 @@ class RuleEngineService:
             rule = result.scalar_one_or_none()
 
         if not rule:
-            logger.info(
-                "DIAG check_rules bail: no rule for slot (%d,%d)", day, hour,
-            )
             return None
 
         # Defensive: a rule predicting a retired mode would be silently
         # rejected by fusion's report_signal — bail before that happens.
         if rule.predicted_mode not in VALID_MODES:
-            logger.info(
-                "DIAG check_rules bail: invalid mode %s", rule.predicted_mode,
-            )
             return None
 
-        logger.info(
-            "DIAG check_rules MATCH: rule_id=%d mode=%s conf=%.2f "
-            "fusion=%s ml_logger=%s",
-            rule.id, rule.predicted_mode, rule.confidence,
-            self._fusion is not None, self._ml_logger is not None,
-        )
+        # Permanent guardrail — if either dependency is missing at the
+        # moment of a real match, the lane is silent for this rule fire
+        # AND every future one (deps are set once at construction). Log
+        # WARN so journalctl catches the regression. Was previously
+        # masked by `if self._fusion:` / `if self._ml_logger:` guards.
+        if self._fusion is None or self._ml_logger is None:
+            logger.warning(
+                "rule_engine match for rule_id=%d (day=%d hour=%d %s) "
+                "but deps missing: fusion=%s ml_logger=%s — fusion lane "
+                "will be silent. Check bootstrap construction order.",
+                rule.id, day, hour, rule.predicted_mode,
+                self._fusion is not None, self._ml_logger is not None,
+            )
 
         # Vote in confidence fusion regardless of current mode — fusion
         # weighs this against the active signals.
@@ -305,7 +301,6 @@ class RuleEngineService:
                 rule.confidence,
                 factors=_build_rule_factors(rule),
             )
-            logger.info("DIAG check_rules: report_signal ok")
 
         # Persist a per-lane row in ml_decisions so per-source accuracy
         # and the analytics dashboard have something to show. Shadow row
@@ -324,7 +319,6 @@ class RuleEngineService:
                 applied=False,
                 broadcast=False,
             )
-            logger.info("DIAG check_rules: log_decision ok")
 
         # Nudges are only useful when we don't already know what the user
         # is doing — skip the suggestion path otherwise.
