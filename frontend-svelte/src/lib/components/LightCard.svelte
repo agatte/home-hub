@@ -20,11 +20,16 @@
 
   let presetTab = 'color' // 'color' | 'temp'
 
-  // Leading + trailing throttle: fire the first update immediately, then cap
-  // subsequent updates at one per THROTTLE_MS while the user drags. Flush on
-  // drag end (via Slider's onCommit) so the final value always lands even if
-  // it arrived mid-throttle-window.
-  const THROTTLE_MS = 150
+  // Leading + trailing throttle: cap mid-drag updates to one per THROTTLE_MS.
+  // Flush on drag end (via Slider's onCommit) so the final value always lands
+  // even if it arrived mid-throttle-window. Mid-drag commands ride a short
+  // transitiontime (~100ms) so the bridge follows the slider tightly without
+  // a long fade — without that, each new command interrupts the previous
+  // 0.4s transition mid-flight and the bulb visibly bounces between targets.
+  // The flush call deliberately omits transitiontime so the final landing
+  // gets phue2's default 0.4s smooth fade.
+  const THROTTLE_MS = 250
+  const MID_DRAG_TRANSITION = 1  // 100ms — snappy mid-drag follow
   /** @type {ReturnType<typeof setTimeout> | null} */
   let throttleTimer = null
   /** @type {Record<string, unknown> | null} */
@@ -36,15 +41,16 @@
   function throttledUpdate(state) {
     const now = Date.now()
     const elapsed = now - lastSentAt
+    const payload = { ...state, transitiontime: MID_DRAG_TRANSITION }
     if (elapsed >= THROTTLE_MS) {
       // Leading edge — send now and clear any trailing schedule.
       lastSentAt = now
       pendingState = null
       if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
-      setLight(light.light_id, state)
+      setLight(light.light_id, payload)
     } else {
       // Inside window — stash the latest state and schedule a trailing fire.
-      pendingState = state
+      pendingState = payload
       if (!throttleTimer) {
         throttleTimer = setTimeout(() => {
           throttleTimer = null
@@ -60,7 +66,8 @@
   }
 
   /** Called from Slider on release — flush any pending update so the bulb
-   *  lands on the finger-up value even if it was swallowed by the throttle. */
+   *  lands on the finger-up value even if it was swallowed by the throttle.
+   *  No transitiontime here: phue2's 0.4s default gives a smooth landing. */
   function flushBrightness(bri) {
     if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
     pendingState = null

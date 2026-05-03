@@ -82,6 +82,27 @@ AUTONOMOUS_PUSH_SOURCES = frozenset({
 })
 
 
+# Sources that should preserve per-light manual overrides across mode changes.
+# When the user manually drags a brightness slider, mark_light_manual stamps
+# that light so automation reconcile skips it. Picking a new mode normally
+# wipes those stamps so the user gets the new mode's full default state — but
+# only when the user themselves chose the new mode. Autonomous mode-setters
+# (calendar routines, late-night rescue, fusion, predictor, zone+posture rule)
+# should respect manual brightness; the user's stated rule is "manual sticks
+# until I change it." Plus timeout_4h on clear_override: the override expiring
+# isn't a user action, so per-light stamps shouldn't get wiped along with it
+# (their own 4h expiry runs independently in run_loop).
+PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
+    "winddown_routine",
+    "late_night_rescue",
+    "behavioral_predictor",
+    "fusion_can_override",
+    "fusion_auto_apply",
+    "zone_posture_rule",
+    "timeout_4h",
+})
+
+
 # ---------------------------------------------------------------------------
 # Configurable schedule dataclasses
 # ---------------------------------------------------------------------------
@@ -890,7 +911,12 @@ class AutomationEngine:
         self._override_time = datetime.now(tz=TZ)
         self._last_activity_change = self._override_time
 
-        self._clear_per_light_overrides()
+        # Only wipe per-light manual brightness/color when the user picked
+        # this mode. Autonomous sources (winddown, late-night rescue, fusion,
+        # predictor, zone+posture rule) preserve them — see
+        # PRESERVE_PER_LIGHT_OVERRIDE_SOURCES.
+        if source not in PRESERVE_PER_LIGHT_OVERRIDE_SOURCES:
+            self._clear_per_light_overrides()
         logger.info(
             "Manual override set: %s (source=%s, prior=%s, was_overridden=%s)",
             mode, source, prior_override, was_overridden,
@@ -948,7 +974,11 @@ class AutomationEngine:
         self._override_mode = None
         self._override_time = None
 
-        self._clear_per_light_overrides()
+        # Same gate as set_manual_override — autonomous clears (4h timeout,
+        # etc.) preserve per-light overrides; user-initiated "auto" presses
+        # wipe them so the dashboard's "auto" feels like a clean slate.
+        if source not in PRESERVE_PER_LIGHT_OVERRIDE_SOURCES:
+            self._clear_per_light_overrides()
         logger.info(
             "Manual override cleared — returning to auto "
             "(source=%s, prior_override=%s, was_overridden=%s)",

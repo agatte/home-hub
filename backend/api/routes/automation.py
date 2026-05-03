@@ -228,6 +228,13 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
+    # Don't trample a manually-set bedroom lamp. If the user has dragged L2's
+    # slider during watching/gaming, mark_light_manual stamped it; the same
+    # "manual sticks" rule that protects automation reconcile should pause
+    # screen-sync writes until the override is released (mode change / 4h).
+    if sync.target_light in engine.manual_light_overrides:
+        return {"status": "ok", "applied": False, "reason": "manual_override"}
+
     # Pull zone + posture from the camera service so the sync cap can differ
     # between watching-at-desk (brighter bias), watching-in-bed-reclined
     # (hard projector-safe dim), and watching-in-bed-upright (middle ground).

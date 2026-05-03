@@ -88,11 +88,10 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     if automation:
         automation.mark_light_manual(str(light_id))
 
-    # Broadcast update to WebSocket clients
-    updated = await hue.get_light(light_id)
-    if updated:
-        ws_manager = request.app.state.ws_manager
-        await ws_manager.broadcast("light_update", updated)
+    # No post-write broadcast — the bridge is mid-transition and a fresh
+    # read returns an intermediate value. Polling broadcasts after the
+    # in-flight window (hue_service.poll_state_loop) and the frontend
+    # optimistically patched its local store on the way in.
 
     await _log_light_change(request, light_id, before, state_dict, trigger="rest")
     return {"status": "ok", "light_id": light_id}

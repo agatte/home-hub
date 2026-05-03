@@ -120,6 +120,11 @@ class ScreenSyncService:
     def last_source(self) -> Optional[str]:
         return self._last_source
 
+    @property
+    def target_light(self) -> str:
+        """The Hue light id this service writes to (e.g. "2" for the bedroom lamp)."""
+        return self._target_light
+
     async def apply_color(
         self,
         r: int,

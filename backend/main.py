@@ -290,10 +290,12 @@ async def _handle_light_command(
     if automation:
         automation.mark_light_manual(str(light_id))
 
-    # Broadcast updated state to all clients
-    updated = await hue.get_light(light_id)
-    if updated:
-        await ws_manager.broadcast("light_update", updated)
+    # No post-write broadcast: the bridge is mid-transition right now and a
+    # fresh get_light read returns an intermediate value that the slider
+    # would snap to on drag-release. The polling loop already broadcasts
+    # state and honors the in-flight window (hue_service.poll_state_loop),
+    # and the frontend optimistically patched the local store before this
+    # command was sent.
 
     # Log the manual adjustment (covers bri/hue/sat/ct changes)
     event_logger = getattr(app.state, "event_logger", None)

@@ -349,6 +349,104 @@ class TestUserClearCooldown:
 
 
 # ---------------------------------------------------------------------------
+# Per-light manual override preservation across mode changes
+# ---------------------------------------------------------------------------
+
+class TestPerLightOverridePreserve:
+    """Per-light manual brightness/color overrides should survive autonomous
+    mode pushes (winddown, late-night rescue, fusion, predictor, zone+posture
+    rule) but get wiped when the user themselves picks a new mode.
+
+    The user's invariant: "manual brightness sticks until I change it." Before
+    this gate, every set_manual_override unconditionally cleared
+    _manual_light_overrides, so e.g. winddown_routine at 22:00 would erase a
+    manually-set kitchen brightness from earlier in the day.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+
+    async def test_winddown_routine_preserves_per_light(self, engine):
+        engine.mark_light_manual("3")
+        engine.mark_light_manual("4")
+        await engine.set_manual_override("relax", source="winddown_routine")
+        assert "3" in engine.manual_light_overrides
+        assert "4" in engine.manual_light_overrides
+
+    async def test_late_night_rescue_preserves_per_light(self, engine):
+        engine.mark_light_manual("3")
+        await engine.set_manual_override("relax", source="late_night_rescue")
+        assert "3" in engine.manual_light_overrides
+
+    async def test_zone_posture_rule_preserves_per_light(self, engine):
+        engine.mark_light_manual("3")
+        await engine.set_manual_override("relax", source="zone_posture_rule")
+        assert "3" in engine.manual_light_overrides
+
+    async def test_fusion_can_override_preserves_per_light(self, engine):
+        engine.mark_light_manual("2")
+        await engine.set_manual_override("watching", source="fusion_can_override")
+        assert "2" in engine.manual_light_overrides
+
+    async def test_fusion_auto_apply_preserves_per_light(self, engine):
+        engine.mark_light_manual("2")
+        await engine.set_manual_override("watching", source="fusion_auto_apply")
+        assert "2" in engine.manual_light_overrides
+
+    async def test_behavioral_predictor_preserves_per_light(self, engine):
+        engine.mark_light_manual("3")
+        await engine.set_manual_override("relax", source="behavioral_predictor")
+        assert "3" in engine.manual_light_overrides
+
+    async def test_user_dashboard_clears_per_light(self, engine):
+        # User picking a new mode on the dashboard means "give me this mode's
+        # full default state" — wipe the stamps so the new mode shows clean.
+        engine.mark_light_manual("3")
+        await engine.set_manual_override("relax", source="api:192.168.1.30")
+        assert "3" not in engine.manual_light_overrides
+
+    async def test_manual_source_clears_per_light(self, engine):
+        engine.mark_light_manual("3")
+        await engine.set_manual_override("relax", source="manual")
+        assert "3" not in engine.manual_light_overrides
+
+    async def test_guest_clears_per_light(self, engine):
+        # Guest-mode party scene activation rewrites all lights anyway —
+        # clearing per-light stamps is consistent with that takeover.
+        engine.mark_light_manual("3")
+        await engine.set_manual_override("social", source="guest")
+        assert "3" not in engine.manual_light_overrides
+
+    async def test_rule_suggestion_accept_clears_per_light(self, engine):
+        engine.mark_light_manual("3")
+        await engine.set_manual_override(
+            "relax", source="rule_suggestion_accept:1.2.3.4",
+        )
+        assert "3" not in engine.manual_light_overrides
+
+    async def test_user_clear_override_wipes_per_light(self, engine):
+        # User pressing "auto" on the dashboard means "release my tweaks
+        # too" — pair with the cooldown that already arms here.
+        await engine.set_manual_override("relax", source="api:1.2.3.4")
+        engine.mark_light_manual("3")
+        await engine.clear_override(source="api:1.2.3.4")
+        assert "3" not in engine.manual_light_overrides
+
+    async def test_timeout_clear_preserves_per_light(self, engine):
+        # The 4h override expiry isn't a user action; per-light stamps have
+        # their own independent 4h expiry in run_loop.
+        await engine.set_manual_override("relax", source="api:1.2.3.4")
+        engine.mark_light_manual("3")
+        await engine.clear_override(source="timeout_4h")
+        assert "3" in engine.manual_light_overrides
+
+
+# ---------------------------------------------------------------------------
 # Zone+posture → relax rule
 # ---------------------------------------------------------------------------
 
