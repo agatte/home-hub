@@ -833,8 +833,9 @@ Core brain — combines time rules with activity detection.
 | Method | Signature | Purpose |
 |--------|-----------|---------|
 | `report_activity` | `(mode: str, source: str, factors=None) → None` | Process activity report |
-| `set_manual_override` | `(mode: str, source: str = "internal") → None` | Override (4h timeout, except `sleeping`); persists to `app_settings["override_state"]` |
-| `clear_override` | `(source: str = "internal") → None` | Clear manual override; persists cleared state |
+| `set_manual_override` | `(mode: str, source: str = "internal") → None` | Override (4h timeout, except `sleeping`); persists to `app_settings["override_state"]`. Wipes `_manual_light_overrides` only when `source` is user-initiated (api/manual/guest/rule_suggestion_accept); autonomous sources in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` (winddown, late-night rescue, fusion, predictor, zone+posture rule) keep manual brightness stamps so user slider drags survive routine mode pushes |
+| `clear_override` | `(source: str = "internal") → None` | Clear manual override; persists cleared state. Same preserve gate as `set_manual_override`: `timeout_4h` keeps per-light stamps; user-initiated `api:*` clears them |
+| `mark_light_manual` | `(light_id: str) → None` | Stamp `_manual_light_overrides[light_id]` so reconcile and screen-sync skip this light. Called from REST `PUT /api/lights/{id}` and the WS `light_command` handler. 4h auto-expiry sweep runs in `run_loop` |
 | `load_override_state` | `() → None` | Restore override + zone+posture fire-stamp at boot; called from `bootstrap.py` |
 | `register_on_mode_change` | `(callback: async (str) → None) → None` | Subscribe to mode changes |
 | `run_loop` | `() → None` | Background loop (60s interval) |

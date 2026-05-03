@@ -326,7 +326,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Scene drift:** After 30min in **relax**, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness. Scoped to relax only — functional modes need stable, paired values.
 
-**Kitchen pair rule:** L3 (kitchen front) and L4 (kitchen back) must match `bri` and on/off in functional modes (working, gaming, watching, cooking). Free to diverge in relax/social.
+**Kitchen pair rule:** L3 (kitchen front) and L4 (kitchen back) must match `bri` and on/off in functional modes (working, gaming, watching, cooking). Free to diverge in relax/social. Dashboard fuses them into a single "Kitchen" card via `LightCard`'s `linkedIds` prop — every command on L3 fans out to L4 too. ApartmentViz still shows them as separate dots since they're physically distinct bulbs.
 
 **Post-sunset warmth cutoff:** No CT-mode light drops below `ct=333` (~3000K) in evening/night. Watching's D65 bias is a daytime-only exception.
 
@@ -334,7 +334,9 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Effect reconciliation:** `_reconcile_effect` runs AFTER `_apply_state` so brightness is already at target before the old effect stops (otherwise brightness pops to 100%). 0.5s guard between stop and start.
 
-**In-flight window:** `hue_service` tracks per-light write deadlines; polling skips broadcasting `light_update` until transition time + 0.5s elapses. Prevents UI bouncing back to stale mid-transition reads.
+**In-flight window:** `hue_service` tracks per-light write deadlines; polling skips broadcasting `light_update` until transition time + 0.5s elapses. WS + REST handlers don't re-broadcast post-write — polling is sole arbiter (the echo was reading mid-transition). Mid-drag slider commands ride `transitiontime=1` (100ms tight follow); release flush uses default 0.4s.
+
+**Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile, screen-sync, and override-clear all skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (winddown, late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry sweeps in `run_loop`.
 
 **Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
 
