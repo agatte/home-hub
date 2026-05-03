@@ -2119,6 +2119,12 @@ class AutomationEngine:
                 # fresh, even under a manual override. check_rules()
                 # internally gates the user-nudge path on current_mode == idle.
                 rule_engine = getattr(self, "_rule_engine", None)
+                if not getattr(self, "_diag_rule_engine_logged", False):
+                    logger.info(
+                        "DIAG rule_engine call site: rule_engine=%s current_mode=%s",
+                        rule_engine is not None, self._current_mode,
+                    )
+                    self._diag_rule_engine_logged = True
                 if rule_engine:
                     await rule_engine.check_rules(self._current_mode)
 
