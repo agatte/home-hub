@@ -247,6 +247,11 @@ that identifies what kind of sound is occurring.
 - Phase 1b: When classifier agrees with RMS >90% of the time AND catches cases RMS misses, switch automation to classifier.
 - Phase 1c: Shorten social detection window from 2 minutes to 30 seconds using `speech_multiple` confidence.
 
+**2026-05-03 Checkpoint 1 (36h shadow data) — gate is structurally unreachable.**
+Class distribution from 90,978 rows over 36h *including* the 5/02 18:00–23:00 ET guest-visit ground-truth window: silence 83.5%, **speech_single 16.0%**, music 0.3%, mechanical_noise/doorbell/game_audio <0.1% combined. **`speech_multiple` fired 0 times — even during the real two-person guest conversation.** During the guest window, `speech_single` peaked at conf 0.999 (avg 0.838 across 4,027 samples), so YAMNet detected speech but never classified it as multi-speaker. The mapping above is aspirational; on this hardware/mic geometry, no `mode_signal='social'` would fire even if `--active` were flipped today (60,905 `quiet` / 30,072 null / 0 `social`).
+
+The 5/09 Phase 1b decision is therefore reframed from "flip-or-not" to one of: **(A) retarget the gate to sustained `speech_single` + RMS floor** (most pragmatic; needs RMS distribution analysis to set the floor without tripping on TV/podcast), **(B) retrain YAMNet with multi-speaker examples** (heavy lift — small-room/distant-mic acoustics may be a domain mismatch), or **(C) abandon audio-driven social detection on this hardware** (manual override + future calendar covers ~95% of cases). See `project_audio_classifier_shadow_followup.md` for the corrected SQL queries to run on 5/09.
+
 **Files touched:**
 - `backend/services/pc_agent/ambient_monitor.py` — Major refactor: add spectrogram pipeline, load ONNX model, emit classified results
 - New `backend/services/ml/audio_classifier.py` — Model loading, inference, class collapsing
@@ -1370,10 +1375,24 @@ Audio classifier promotion from shadow to active
 
 Posture as a separate fusion lane
   - BlazePose detection itself shipped; posture is consumed today by
-    AutomationEngine._evaluate_zone_posture_rule (since 2026-04-27)
+    AutomationEngine._evaluate_zone_posture_rule (since 2026-04-27;
+    extended 2026-05-03 to supersede stale social override)
     and by ScreenSyncService MODE_ZONE_MAX_BRIGHTNESS keying
   - Promoting posture into ConfidenceFusion as its own voter is the
     deferred work — needs more override data to justify a weight
+
+Zone+posture rule — social-supersede extension (shipped 2026-05-03)
+  - Original rule (2026-04-27) ELIGIBLE_MODES = {idle, working};
+    silently bailed under any manual override per Gate 1
+  - 30-day audit (5/03): 6 occurrences of social override outliving
+    its context (guest left → host stayed in social → went to bed →
+    manual relax press 38min–7h later)
+  - Fix: ELIGIBLE_MODES = {idle, working, social}; Gate 1 bypassed
+    for social override only when override age >= 30 min
+    (ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS); dwell extended to
+    180s (ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS) for social path
+  - factors dict gains effective_mode + dwell_required so rule
+    fires that came via the social path are visible in ml_decisions
 ```
 
 **Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ Away detection under 30 seconds (achieved 15s). ✓ Posture detection shipped and consumed by the zone+posture rule. Audio promotion + posture-as-fusion-lane deferred to Phase 2b.

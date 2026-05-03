@@ -6,7 +6,11 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-04-29 (v3)
+> **Last updated:** 2026-05-03 (v3)
+
+## v3 Changelog (2026-05-03)
+
+`7282b11` — **Rule-engine wiring verified end-to-end + permanent guardrail.** Despite the 4/29 fix (b8c285a), 5/03 audit found rule_engine still in `never_reported` with 0 `ml_decisions` rows over the previous 18.7h PID's life. Wiring traced clean (bootstrap → engine → check_rules), and a test rule insert (Sun-15 at 15:43 ET) on a fresh PID produced the full happy path: matched, reported, logged. The old PID's silence remains unexplained — fusion's `never_reported` resets on construction, so we have no replayable evidence (most plausible: in-memory state corruption). DIAG INFO logs replaced with a single anomaly-only WARN: `check_rules` now emits `rule_engine match for rule_id=N but deps missing: fusion=False ml_logger=False` if `_fusion`/`_ml_logger` ever mutate to None at match time. Both deps are set once at construction with no documented mutation paths, so a None at fire time = real regression worth journal investigation.
 
 ## v3 Changelog (2026-04-29)
 

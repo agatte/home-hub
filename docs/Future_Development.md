@@ -2,7 +2,7 @@
 
 > Feature ideas beyond the current roadmap — large and small.
 >
-> **Last updated:** 2026-05-01
+> **Last updated:** 2026-05-03
 
 ---
 
@@ -23,6 +23,9 @@ Major work that landed during April 2026, roughly chronological. Tracked here so
 - **2026-04-27 — Behavioral predictor lane stripped from fusion (`c0b50ad`).** Single-class collapse audit found 898/898 → one class at 0.64% real accuracy. Predictor still runs as a standalone service (`/api/learning/predictor`); no longer votes.
 - **2026-04-27 — Predictor train/serve feature parity (`82c72ed`).** Inference builds features through the same code path as training, closing a divergence that masked real prediction quality.
 - **2026-04-28 — rule_engine fusion lane wiring (`7b64644`).** Dropped retired-mode rows in `regenerate_rules`; wired `ml_logger.log_decision(decision_source="rule_engine", ...)`; defensive `VALID_MODES` guard at vote time; M-F 8am-4:59pm office-hours blackout to suppress generation/voting outside genuine at-home hours. Closes audit `[H]` "rule_engine fusion lane silent in prod."
+- **2026-05-03 — rule_engine fusion lane verified end-to-end + bootstrap WARN guardrail (`7282b11`).** After the 4/29 fix, prod still showed `never_reported=["rule_engine"]` on the old PID. Added DIAG logs at the call site + `check_rules` body and inserted a test rule into the live slot — saw `entry → MATCH → report_signal ok → log_decision ok` on the new PID, confirming the wiring is sound. The silence on the older process remains unexplained but is no longer reproducible. DIAG logs replaced with a single WARN at the MATCH point that fires only if `_fusion is None or _ml_logger is None`, so any future bootstrap wiring drift surfaces immediately in journalctl instead of silently parking the lane in `never_reported`.
+- **2026-05-03 — Zone+posture rule social-supersede (`b2061d9`, item #20 carve-out).** Original `ELIGIBLE_MODES = {idle, working}` plus Gate 1's blanket "any override bails" meant the rule could never catch the bed-reclined-after-social pattern. 30 days of `activity_events` showed 6 social→relax manual press sequences where the override outlived its context (guest left, host went to bed); the 5/02 21:07 social → 5/03 04:22 manual relax press was the seventh. Three coordinated changes: `ELIGIBLE_MODES` now includes `social`; Gate 1 bypasses for a social override only if `(now - _override_time) ≥ 30min` (`ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS`); dwell extends 120s → 180s when `effective_mode == 'social'` (`ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS`). Gate 4 now evaluates `effective_mode = override_mode if override else current_mode`. `factors` dict gains `effective_mode` + `dwell_required` so `ml_decisions` shows which path triggered. 4 new tests in `TestZonePostureRule` (non-social blocks, fresh social blocks, old social superseded, longer dwell respected); 93/93 pass. Misfire surface narrow — fresh sub-30-min social, headboard-upright posture, and the 4h refractory all carve out the obvious failure modes.
+- **2026-05-03 — YAMNet shadow Checkpoint 1 finding (`7f3d8e0` rolled out 5/01).** 36h / 90,978 rows: silence 83.5% / `speech_single` 16% / music 0.3% / **`speech_multiple` 0 fires** including the Sat 5/02 guest-visit ground-truth window. Avg `speech_single` confidence during the guest visit was 0.838. The `speech_multiple ≥ 0.80` social gate is structurally unreachable on this hardware. Checkpoint 2 (2026-05-09) reframed from "flip-or-not" to picking among: (a) retarget the social gate to sustained `speech_single` + an RMS floor, (b) retrain YAMNet with multi-speaker examples, (c) abandon audio-driven social detection on this hardware.
 
 ### Architecture
 - **2026-04-27 — `presence_service` and home/away retired (`b8fdbfe`).** Phone-WiFi presence (iOS Shortcut + ARP probing) was too unreliable on its own. Fusion drops the phone-WiFi lane; `/api/automation/presence/*` routes removed; `mode='away'` no longer in `VALID_MODES`. Camera presence (face/pose) and Hue's native geofencing carry the home/away signal now.
@@ -284,13 +287,14 @@ Pure read over existing `event_logger` tables — no new data sources. Writes to
 
 ### 20. Zone-Driven Mode Transitions — remaining carve-outs
 
-**Base rule shipped 2026-04-27** (see Completed section above). The zone+posture → relax actuation rule lives at `backend/services/automation_engine.py::_evaluate_zone_posture_rule` and is the first sensor signal that drives a mode *transition* (not just an overlay).
+**Base rule shipped 2026-04-27**, **social-supersede shipped 2026-05-03** (both in Completed section above). The zone+posture → relax actuation rule lives at `backend/services/automation_engine.py::_evaluate_zone_posture_rule` and is the first sensor signal that drives a mode *transition* (not just an overlay). Eligible modes are `{idle, working, social}`; dwell is 120s for idle/working and 180s for social; a fresh (<30min) social override is preserved.
 
-This idea now tracks the open carve-outs:
+This idea now tracks the remaining open carve-outs:
 
 - **Late-night-working carve-out.** `zone=desk + process=working + after 22:00` should bypass the late-night-rescue path (keep Anthony in working when he's actively at the keyboard past 22:00). The current rule only handles `zone=bed`.
 - **Fusion integration.** Today the rule calls `set_manual_override` directly. Future option: publish zone+posture as a new signal lane in `confidence_fusion.py` so it votes alongside process/camera/audio/rule_engine instead of acting unilaterally. Worth considering once shadow data confirms the rule fires correctly — fusion gives finer-grained tuning. (Rule rather than fusion is the right primitive for now because the rule is high-confidence and binary; fusion adds value once the signal is probabilistic.)
 - **Morning lounge nudge.** The current time gate blocks mornings globally. If Anthony lies back down for a post-wake rest, we may eventually want a specific "morning lounge" nudge rather than nothing.
+- **Social-supersede checkback 2026-05-17.** Query `ml_decisions WHERE decision_source='zone_posture_rule' AND timestamp > date('now','-14 days')` and inspect `factors.effective_mode == 'social'` rows. Confirm at least one fired on a real "guest left" pattern (not a misfire). If misfires appear → bump `SOCIAL_MIN_AGE` to 60min or remove `social` from `ELIGIBLE_MODES`.
 
 **Touches:** `automation_engine.py` (new gate in `_evaluate_zone_posture_rule` for the late-night-working carve), `confidence_fusion.py` (new signal lane if we go that route).
 
