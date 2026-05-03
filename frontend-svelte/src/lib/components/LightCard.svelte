@@ -8,6 +8,26 @@
   /** @type {{ light_id: string, name: string, on: boolean, bri: number, hue: number, sat: number, ct?: number, colormode?: string, reachable: boolean }} */
   export let light
 
+  /** Additional light ids that should mirror every command sent from this
+   *  card. Used to fuse the kitchen pair (L3+L4) into a single Kitchen card —
+   *  the grid renders L3 with linkedIds=['4'] and hides the L4 card. The
+   *  primary light's state drives the displayed values; commands fan out to
+   *  the primary plus every linked id. Empty by default. */
+  /** @type {string[]} */
+  export let linkedIds = []
+
+  /** Optional display-name override. When the card represents a fused pair
+   *  (e.g. Kitchen front + Kitchen back), the primary's "Kitchen front"
+   *  reads weird; pass nameOverride="Kitchen" instead. */
+  /** @type {string | undefined} */
+  export let nameOverride = undefined
+
+  /** @param {string} id @param {Record<string, unknown>} state */
+  function fanout(id, state) {
+    setLight(id, state)
+    for (const linked of linkedIds) setLight(linked, state)
+  }
+
   const COLOR_PRESETS = [
     { name: 'Warm',     hue: 8000,  sat: 140 },
     { name: 'Cool',     hue: 34000, sat: 50 },
@@ -47,7 +67,7 @@
       lastSentAt = now
       pendingState = null
       if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
-      setLight(light.light_id, payload)
+      fanout(light.light_id, payload)
     } else {
       // Inside window — stash the latest state and schedule a trailing fire.
       pendingState = payload
@@ -58,7 +78,7 @@
             lastSentAt = Date.now()
             const s = pendingState
             pendingState = null
-            setLight(light.light_id, s)
+            fanout(light.light_id, s)
           }
         }, THROTTLE_MS - elapsed)
       }
@@ -72,18 +92,18 @@
     if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
     pendingState = null
     lastSentAt = Date.now()
-    setLight(light.light_id, { bri })
+    fanout(light.light_id, { bri })
   }
 
-  function togglePower() { setLight(light.light_id, { on: !light.on }) }
+  function togglePower() { fanout(light.light_id, { on: !light.on }) }
   function setBrightness(bri) { throttledUpdate({ bri }) }
   function setColor(hue, sat) {
-    setLight(light.light_id, { hue, sat })
+    fanout(light.light_id, { hue, sat })
     showPresets = false
   }
 
   function setCT(ct) {
-    setLight(light.light_id, { ct })
+    fanout(light.light_id, { ct })
     showPresets = false
   }
 
@@ -99,7 +119,7 @@
     tabindex={light.on ? 0 : -1}
   ></button>
 
-  <span class="chip-name">{light.name}</span>
+  <span class="chip-name">{nameOverride ?? light.name}</span>
 
   {#if light.on}
     <div class="chip-slider">
