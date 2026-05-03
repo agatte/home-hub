@@ -272,7 +272,7 @@ All messages: JSON with `type` + `data` fields.
 | Routines | `/api/routines` | Morning + winddown config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
-| Guest | `/api/guest` | `GET /wifi` returns `{configured, ssid, password, qr_payload}` (WIFI: URI). `POST /scene/{name}` activates a guest-safelisted curated scene (`party→house_party`, `neon→neon_tokyo`, `sunset→sunset_strip`, `chill→candlelit`); 60s global cooldown returns 429+`Retry-After`; sets a `source="guest"` manual override. `/guest/*` is a layout-reset visitor mini-app (Home/WiFi/Bar/Plants/Vibe via `GuestBottomNav`); root layout strips kiosk chrome on `/guest` paths |
+| Guest | `/api/guest` | `GET /wifi` returns `{configured, ssid, password, qr_payload}` (WIFI: URI). `GET /scenes` lists the 6 safelisted party scenes with per-light states for color previews. `POST /scene/{name}` activates one of `party|neon|miami|arcade|aurora|sunset` (→ `house_party|neon_tokyo|miami_vice|arcade|northern_lights|sunset_strip`); 15s scene-cooldown returns 429+`Retry-After`; sets `source="guest"` override (party→social, others→relax). `GET /vibes` lists 3 music tiles (`hype|singalong|throwback`) with their resolved Sonos favorite titles. `POST /vibe/{name}` calls `SonosService.play_favorite` and overrides social; 15s vibe-cooldown (independent of scene). Vibe→favorite mapping is `app_settings["guest_vibe_playlists"]` (defaults: hype→`It's Lit!`, singalong→`2000s Hits Essentials`, throwback→`Replay-all-time`). `/guest/*` is a layout-reset visitor mini-app (Home/WiFi/Bar/Plants/Vibe via `GuestBottomNav`); root layout strips kiosk chrome on `/guest` paths |
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 
@@ -413,6 +413,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — settings-page sliders for projector-in-bed brightness. Loaded at boot + live-patched via `PUT /api/automation/watching-posture`. |
 | `camera_enabled` | `{enabled: bool}` — opt-in toggle for the MediaPipe camera service |
 | `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure calibration + baseline for adaptive brightness (working/relax). Written by `POST /api/camera/calibrate`. |
+| `guest_vibe_playlists` | `{hype: <favorite_title>, singalong: <favorite_title>, throwback: <favorite_title>}` — overrides the hardcoded `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit (no UI yet) to point a vibe at a different Sonos favorite. Missing keys fall back to defaults. |
 
 ---
 

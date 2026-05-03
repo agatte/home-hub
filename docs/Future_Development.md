@@ -73,7 +73,6 @@ Worth doing eventually but don't have a clear forcing function yet. Each has a "
 - **#5 Sonos Volume Curves** — Sonos doesn't model state the way Hue does, so the abstraction is lossy; think harder before building
 - **#8 Contextual Music Memory** — needs more bandit data to justify expanding arm key
 - **#11 Adaptive Transition Choreography** — small but tempting to over-engineer; wait until #17 transition-curve learning has data
-- **#12 Guest Wi-Fi Page** — only worth it if guests start being a recurring use case
 - **#17 Transition Curve Learner** — needs more nudge-during-transition data
 - **#18 Focus Envelope** — heaviest UX cost in the list; design before building
 - **#21 (slimmed) Pose Landmarks Visualization** — debugging widget, nice-to-have
@@ -178,19 +177,32 @@ Stagger light transitions room-to-room on mode change. Morning: bedroom → livi
 
 ---
 
-### 12. Guest Wi-Fi Landing Page — partial 2026-05-01
+### 12. Guest Mini-App — substantially shipped 2026-05-02
 
-**Shipped:**
+What started as a thin "WiFi QR + Welcome page" grew into a full visitor surface with its own bottom-tab nav, four sub-pages, a curated party-scene picker, and a music-vibe nudge. Guests get something to *do*; the host stays in control via tightly-scoped safelists and per-surface cooldowns.
+
+**Shipped (foundation, 2026-05-01):**
 - `GuestWifiWidget` on the home dashboard. Opens a fullscreen modal with the big WiFi QR plus a smaller "then scan for tonight's info" QR that points at `/guest` — two-scan flow (join WiFi, then load page). Modal intentionally hides the password text (kiosk lives in the living room); the QR still encodes it for phones to read.
-- `/guest` landing page — Welcome header + Now Playing + House Notes only. The route uses a SvelteKit layout reset (`routes/guest/+layout@.svelte`) to escape intermediate layouts, but the **root** `+layout.svelte` always wraps every page; `FloatingNav` and `NowPlayingChip` are explicitly gated behind `!$page.url.pathname.startsWith('/guest')` to keep the visitor screen nav-free. `VitalStrip` and `ErrorToast` still render — vitals are useful to glance at and a toast should never be suppressed. Anyone reaching the page is already on the LAN, so re-displaying WiFi creds there is intentionally omitted.
 - Backend `GET /api/guest/wifi` returns the standard `WIFI:T:<security>;S:<ssid>;P:<password>;H:false;;` URI for `qrcode.toDataURL()`. Credentials live in `.env` as `GUEST_WIFI_SSID` / `GUEST_WIFI_PASSWORD` / `GUEST_WIFI_SECURITY` (default `WPA`); special chars escaped per spec.
 - Mobile `NowPlayingChip` lifted above `FloatingNav` on small screens (≤768px: `bottom: 76px → 104px`; ≤480px: `64px → 92px`) so the chip sits clearly above the nav pill instead of sliding underneath it. Chip's `z-index: 45` was below nav's `z-index: 50`, so the math, not the stacking, was the bug.
 - Mobile reconnect: three-layer fix. (1) `connectionLost` derived store in `connection.js` debounces the banner 3s so sub-3s flickers don't paint. (2) `run.py` passes `ws_ping_interval=30, ws_ping_timeout=60` to uvicorn — was the 20s default, which was killing sockets during phone screen-sleep cycles. (3) `ws.js` registers a `visibilitychange` handler that calls `retryNowIfDead()` on tab resume — cancels pending backoff, resets delay, and reconnects immediately so the banner doesn't outlast the time it takes to glance at the screen.
 
+**Shipped (mini-app expansion, 2026-05-02):**
+- **Stripped kiosk chrome from `/guest/*`.** The first cut only hid `FloatingNav` + `NowPlayingChip`; everything else (`ModeBackground`, `ModeOverlay`, `NowPlayingIdle`, idle hint, `VitalStrip`) still leaked onto visitors' phones, dominating the screen with a kiosk-style "I D L E" overlay and "Tap anywhere to wake" hint. Root `+layout.svelte` now gates the entire kiosk surface behind `{#if !isGuestRoute}` — only `<slot/>` + `<ErrorToast/>` survive on guest paths.
+- **`GuestBottomNav` (`$lib/components/`).** Fixed-bottom 5-tab thumb-zone nav (Home / WiFi / Bar / Plants / Vibe) with Lucide icons, safe-area-aware via `env(safe-area-inset-bottom)`, ≥56px touch targets. Active-state reactivity gotcha worth knowing about: the first cut hid `pathname` inside `isActive(href)` and Svelte's compiler couldn't track it through the function call, so Home stayed lit on every page — fix is to pass pathname as an explicit arg (`isActive(href, pathname)`) so the template expression sees the dependency.
+- **Sub-pages.** `/guest/wifi` (re-renders `GuestWifiWidget` so a guest can re-share the QR), `/guest/bar` (`/api/bar/status` summary + deep link to the external bar app, friendly "not set up here yet" empty state on 503), `/guest/plants` (`/api/plants/status` snapshot — total / thirsty count / next watering, same 503 fallback). Each sub-page is its own `+page.svelte` under `routes/guest/`.
+- **`/guest/vibe` — the centerpiece.** Three sections.
+  - *Right Now*: real Lucide icon mapped per `automation.mode` (Sparkles for idle, PartyPopper for social, Flame for relax, etc.) tinted with the mode color, the big mode label, and a horizontal row of 4 colored circles built from the live `lights` store via `lightStateToCSS` (`$lib/utils/lightColor.js`). No labels — the dots are a status snapshot, not a control. Off lights render as outlined dashed rings.
+  - *Set the Mood*: 6 party-curated scenes loaded from `GET /api/guest/scenes`, each rendered as a card with a 4-dot color preview pulled from the actual preset states (the colors *are* the icon — a deliberate visual-first call rather than per-scene Lucide icons). Tap → `POST /api/guest/scene/{name}` → 15s cooldown returns 429 + `Retry-After`. Safelist (`GUEST_SCENE_WHITELIST` in `routes/guest.py`): `party→house_party`, `neon→neon_tokyo`, `miami→miami_vice`, `arcade→arcade`, `aurora→northern_lights`, `sunset→sunset_strip`. Activation tags `set_manual_override(target, source="guest")` (party→social, others→relax) so the next automation tick doesn't immediately revert.
+  - *Pick the Music*: 3 vibe tiles loaded from `GET /api/guest/vibes` (Hype / Sing-along / Throwback), each showing the vibe label + the currently-mapped Sonos favorite title underneath. Tap → `POST /api/guest/vibe/{name}` → calls `SonosService.play_favorite` (case-insensitive title match), tags override `social`, independent 15s vibe-cooldown (separate from scene cooldown — lights and music are unrelated controls). Vibe→favorite mapping is `app_settings["guest_vibe_playlists"]` over `GUEST_VIBE_DEFAULTS` (hype→`It's Lit!`, singalong→`2000s Hits Essentials`, throwback→`Replay-all-time`).
+- **Auth model unchanged.** Both POST endpoints live behind `require_api_key`, but the existing RFC1918 LAN bypass means visitors on the WiFi never present a header. The trust boundary is "if you're on the apartment LAN, you're in." No per-IP rate limiting — global cooldown is enough.
+- **House Notes** at `/guest` updated with the welcome message Anthony writes for guests.
+
 **Still open:**
 - `guest.homehub.local` Pi-hole DNS entry — currently reachable only as `http://192.168.1.210:8000/guest`.
 - Captive-portal-style auto-redirect — infeasible without router-level DNS control (guest's phone uses router DHCP DNS, not Pi-hole). Documented in CLAUDE.md so future-Anthony doesn't relitigate.
-- Party Mode QR + "request a song" form / song queue API.
+- Settings UI for `guest_vibe_playlists` (currently hand-edit `app_settings`) — small but worth it if the vibe→favorite mapping needs tuning often.
+- Optional "Tell the host" free-text channel — not yet built. Would need a small kiosk-side notification component to surface inbound requests; vibe-nudge covers the common case so this stays deferred.
 
 ---
 
