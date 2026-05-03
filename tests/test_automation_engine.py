@@ -542,12 +542,47 @@ class TestZonePostureRule:
         await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
         assert engine._ml_logger.calls == []
 
-    async def test_manual_override_suppresses(self, engine):
-        """If the user (or rule) already set an override, rule stands down."""
-        await engine.set_manual_override("social")
+    async def test_non_social_override_suppresses(self, engine):
+        """Any override OTHER than social blocks the rule unconditionally."""
+        await engine.set_manual_override("gaming")
         await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
         assert engine._ml_logger.calls == []
         assert engine._zone_posture_reclined_since is None
+
+    async def test_fresh_social_override_suppresses(self, engine):
+        """Social override younger than SOCIAL_MIN_AGE_SECONDS = fresh user
+        intent. Rule respects it and stands down."""
+        await engine.set_manual_override("social")
+        # Override is 10 min old — under the 30-min min-age threshold.
+        engine._override_time = self.EVENING - timedelta(minutes=10)
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+        assert engine._ml_logger.calls == []
+        assert engine._zone_posture_reclined_since is None
+
+    async def test_old_social_override_can_be_superseded(self, engine):
+        """Social override ≥SOCIAL_MIN_AGE old + bed-reclined dwell met:
+        rule supersedes (covers the 'guest left, host stayed in social
+        and went to bed' pattern observed 6× in 30 days)."""
+        await engine.set_manual_override("social")
+        # Backdate the override so it's 1h old — past the 30-min gate.
+        engine._override_time = self.EVENING - timedelta(hours=1)
+        # Social uses the longer 180s dwell, not 120s.
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=181)
+        assert len(engine._ml_logger.calls) == 1
+        assert engine._ml_logger.calls[0]["predicted_mode"] == "relax"
+        assert engine._ml_logger.calls[0]["factors"]["effective_mode"] == "social"
+        assert engine.override_mode == "relax"
+
+    async def test_old_social_override_respects_longer_dwell(self, engine):
+        """Past the social min-age gate, the 180s dwell still applies —
+        a brief lie-down (120s) under stale social shouldn't trip."""
+        await engine.set_manual_override("social")
+        engine._override_time = self.EVENING - timedelta(hours=1)
+        # 130s dwell — would trip under 120s but not 180s
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=130)
+        assert engine._ml_logger.calls == []
+        # Timer is set, waiting for more dwell
+        assert engine._zone_posture_reclined_since is not None
 
     async def test_morning_does_not_trigger(self, engine):
         """Weekday morning: reclined on bed means 'still sleeping', not relax."""

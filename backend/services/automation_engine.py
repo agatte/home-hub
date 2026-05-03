@@ -42,18 +42,23 @@ SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
 # before flipping to live actuation. Full spec in docs/PROJECT_SPEC.md.
 #
 # Design notes:
-# - Dwell (5 min) filters brief lean-backs and phone-checks.
+# - Dwell (2 min idle/working, 3 min social) filters brief lean-backs.
 # - Projector-from-bed carves itself out: sitting up against the headboard
 #   keeps posture=upright, so the (bed, reclined) gate never trips.
 # - Re-fire suppression reuses `_override_timeout_hours` so shadow and live
 #   cadence match: once the rule logs/fires, it won't re-fire for 4h.
-# - Eligible modes exclude everything except idle/working — we never
-#   stomp explicit modes like gaming / watching / social / cooking /
-#   sleeping / relax.
+# - Eligible modes are idle/working/social. Social is included because the
+#   override often outlives its context (guest left, Anthony stays in social
+#   then goes to bed — observed 6× in 30 days). Gated by minimum
+#   override age so actively-set social isn't instantly stomped.
 # - Time gate: evening always; weekend afternoons (≥13:00) also eligible.
 ZONE_POSTURE_RULE_DWELL_SECONDS = 120
+ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS = 180
+# Minimum age of a social override before the rule may supersede it.
+# Below this, treat the social setting as fresh user intent and stay out.
+ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS = 30 * 60
 ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
-ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working"))
+ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working", "social"))
 
 
 # User-respect cooldown — when the user clears an override via the dashboard
@@ -2281,10 +2286,22 @@ class AutomationEngine:
             self._zone_posture_reclined_since = None
             return
 
-        # Gate 1: any active manual override (user or rule) takes precedence.
+        # Gate 1: any active manual override takes precedence — EXCEPT
+        # `social`, which we allow the rule to supersede when it's been
+        # in place ≥SOCIAL_MIN_AGE. Social tends to outlive its context
+        # (guest left, host stayed in social then went to bed); the
+        # min-age gate protects an actively-set social from instant override.
         if self._manual_override:
-            self._zone_posture_reclined_since = None
-            return
+            if self._override_mode != "social":
+                self._zone_posture_reclined_since = None
+                return
+            override_age = (
+                (now - self._override_time).total_seconds()
+                if self._override_time else 0
+            )
+            if override_age < ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS:
+                self._zone_posture_reclined_since = None
+                return
 
         # Gate 2: recent fire suppression — parallels override_timeout_hours
         # so shadow logging cadence matches what live firing would produce.
@@ -2305,9 +2322,14 @@ class AutomationEngine:
             self._zone_posture_reclined_since = None
             return
 
-        # Gate 4: eligible current mode. Explicit activity modes (gaming,
-        # watching, social, cooking, sleeping) and relax itself are excluded.
-        if self._current_mode not in ZONE_POSTURE_RULE_ELIGIBLE_MODES:
+        # Gate 4: eligible mode. Use override mode when override is active
+        # (only social reaches here per gate 1), else current detected mode.
+        # Explicit modes other than social (gaming/watching/cooking/sleeping)
+        # and relax itself are excluded.
+        effective_mode = (
+            self._override_mode if self._manual_override else self._current_mode
+        )
+        if effective_mode not in ZONE_POSTURE_RULE_ELIGIBLE_MODES:
             self._zone_posture_reclined_since = None
             return
 
@@ -2331,7 +2353,12 @@ class AutomationEngine:
             return
 
         elapsed = (now - self._zone_posture_reclined_since).total_seconds()
-        if elapsed < ZONE_POSTURE_RULE_DWELL_SECONDS:
+        dwell_required = (
+            ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS
+            if effective_mode == "social"
+            else ZONE_POSTURE_RULE_DWELL_SECONDS
+        )
+        if elapsed < dwell_required:
             return
 
         # Dwell met — fire (live) or shadow-log.
@@ -2341,7 +2368,9 @@ class AutomationEngine:
             "zone": zone,
             "posture": posture,
             "current_mode": self._current_mode,
+            "effective_mode": effective_mode,
             "dwell_seconds": int(elapsed),
+            "dwell_required": int(dwell_required),
             "is_weekend": is_weekend,
             "hour": now.hour,
             "trigger": trigger_reason,
