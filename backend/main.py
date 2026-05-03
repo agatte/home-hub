@@ -303,7 +303,7 @@ async def _handle_light_command(
         mode = automation.current_mode if automation else None
         await event_logger.log_light_adjustment(
             light_id=str(light_id),
-            light_name=(updated or before).get("name"),
+            light_name=before.get("name"),
             bri_before=before.get("bri") if "bri" in state else None,
             bri_after=state.get("bri"),
             hue_before=before.get("hue") if "hue" in state else None,
