@@ -73,8 +73,10 @@ _last_guest_effect_at: float = 0.0
 # Brightness rocker bumps every on-light by ±10% multiplicatively, clamped
 # to the per-mode ceiling (254 × mode_brightness_config[current_mode]).
 # 800ms throttle keeps a hammered + button from queueing 20 PUTs to the
-# bridge.
+# bridge. Min-step floor of 20 ensures perceptible change even at low bri
+# where pure 10% rounds to 3-4 units (invisible against ambient light).
 GUEST_BRIGHTNESS_STEP = 1.10
+GUEST_BRIGHTNESS_MIN_STEP = 20
 GUEST_BRIGHTNESS_COOLDOWN_SECONDS = 0.8
 _last_guest_brightness_at: float = 0.0
 
@@ -483,11 +485,8 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
         mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
     ceiling = max(1, min(254, int(254 * mode_mult)))
 
-    factor = (
-        GUEST_BRIGHTNESS_STEP
-        if direction == "up"
-        else (1.0 / GUEST_BRIGHTNESS_STEP)
-    )
+    sign = 1 if direction == "up" else -1
+    multiplicative_delta = GUEST_BRIGHTNESS_STEP - 1.0  # 0.10
 
     lights = await hue.get_all_lights()
     updated: list[dict] = []
@@ -495,11 +494,21 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
         if not light.get("on") or "bri" not in light:
             continue
         current = light["bri"]
-        new_bri = max(1, min(ceiling, round(current * factor)))
+        # Floor the step at GUEST_BRIGHTNESS_MIN_STEP so a tap is always
+        # visible. Pure 10% on bri=40 = 4 units — invisible against an
+        # already-lit room. floor=20 ensures every tap is a real change.
+        delta = max(GUEST_BRIGHTNESS_MIN_STEP, round(current * multiplicative_delta))
+        new_bri = max(1, min(ceiling, current + sign * delta))
         if new_bri == current:
             continue
         light_id = light["light_id"]
         await hue.set_light(light_id, {"bri": new_bri})
+        # Stamp manual override so the engine's next 60s tick doesn't
+        # revert the tweak. The guest's existing override (set when they
+        # picked the scene) keeps the mode pinned; this stamp keeps the
+        # specific bri value pinned.
+        if automation:
+            automation.mark_light_manual(light_id)
         updated.append({"id": light_id, "bri": new_bri})
 
     _last_guest_brightness_at = now

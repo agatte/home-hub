@@ -257,6 +257,13 @@
         showToast(`Couldn't adjust brightness (${res.status})`)
         return
       }
+      const body = await res.json().catch(() => ({}))
+      // Empty `updated` means every on-light was already at the ceiling
+      // (or floor) — don't lie about UI state. Toast the limit instead.
+      if (Array.isArray(body.updated) && body.updated.length === 0) {
+        showToast(direction === 'up' ? 'Already at max' : 'Already at min')
+        return
+      }
       brightnessLevel += direction === 'up' ? 1 : -1
       persistTuningState()
     } catch {
