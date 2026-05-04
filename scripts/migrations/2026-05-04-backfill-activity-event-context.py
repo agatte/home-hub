@@ -40,9 +40,10 @@ COMMIT_INTERVAL = 500
 # How many camera candidates to pull per event when picking values. The
 # closest camera row often has zone=None / posture=None (per-frame detection
 # fails); pulling several lets us walk outward in time and grab the closest
-# row that actually has each field committed. 30 covers ~60s at the camera's
-# 2s poll cadence — within the WINDOW_SECONDS bound.
-CAMERA_CANDIDATE_LIMIT = 30
+# row that actually has each field committed. At the camera's 2s poll cadence,
+# 60 rows cover the full ±60s window (30 rows = ±30s only — the original 30
+# missed the outer halves of the window).
+CAMERA_CANDIDATE_LIMIT = 60
 
 
 def main() -> int:
