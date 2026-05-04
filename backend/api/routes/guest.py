@@ -309,3 +309,25 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
         "playlist": favorite_title,
         "cooldown_seconds": GUEST_VIBE_COOLDOWN_SECONDS,
     }
+
+
+@router.post("/handback", dependencies=[Depends(require_api_key)])
+async def guest_handback(request: Request) -> dict:
+    """Clear any guest-set manual override and return to host's automation.
+
+    No cooldown — pressing twice is a harmless no-op on an already-cleared
+    override. Tagged source="guest_handback" so journalctl distinguishes
+    "guest pressed Hand It Back" from "host pressed Auto on the kiosk"
+    (which lands as source=`api:<LAN-IP>`).
+    """
+    automation = getattr(request.app.state, "automation", None)
+    if not automation:
+        raise HTTPException(
+            status_code=503, detail="Automation engine not initialized"
+        )
+    await automation.clear_override(source="guest_handback")
+    logger.info(
+        "Guest handed control back from %s",
+        request.client.host if request.client else "unknown",
+    )
+    return {"status": "ok"}

@@ -2,9 +2,10 @@
   import { onDestroy, onMount } from 'svelte'
   import {
     Sparkles, Gamepad2, Monitor, Tv, PartyPopper, Flame, ChefHat, Moon, Bot,
-    Music2,
+    Music2, Pause, Play, SkipForward, Volume2, VolumeX, Home as HomeIcon,
   } from 'lucide-svelte'
   import { lights } from '$lib/stores/lights.js'
+  import { sonos } from '$lib/stores/sonos.js'
   import { automation } from '$lib/stores/automation.js'
   import { modeLabel, modeColor } from '$lib/theme.js'
   import { lightStateToCSS } from '$lib/utils/lightColor.js'
@@ -50,6 +51,21 @@
   let toastMessage = null
   /** @type {ReturnType<typeof setTimeout> | null} */
   let toastTimer = null
+
+  // Music transport guardrails. Era at 30 is genuinely loud in this
+  // apartment; floor 5 because sub-5 is functionally muted and defeats
+  // the affordance. Throttle prevents 20-PUT spam from a hammered +/-.
+  const VOL_FLOOR = 5
+  const VOL_CEILING = 30
+  const VOL_STEP = 2
+  const VOL_THROTTLE_MS = 400
+
+  let transportBusy = false
+  let volBusy = false
+  let lastVolAt = 0
+  let handbackBusy = false
+
+  $: isPlaying = $sonos.state === 'PLAYING'
 
   function showToast(msg) {
     toastMessage = msg
@@ -126,6 +142,62 @@
     }
   }
 
+  async function postSonos(path) {
+    if (transportBusy) return
+    transportBusy = true
+    try {
+      const res = await fetch(path, { method: 'POST' })
+      if (!res.ok) showToast(`Couldn't reach the speaker (${res.status})`)
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      transportBusy = false
+    }
+  }
+
+  const togglePlayPause = () =>
+    postSonos(isPlaying ? '/api/sonos/pause' : '/api/sonos/play')
+
+  const skipNext = () => postSonos('/api/sonos/next')
+
+  async function bumpVolume(delta) {
+    const now = Date.now()
+    if (now - lastVolAt < VOL_THROTTLE_MS) return
+    lastVolAt = now
+    const current = $sonos.volume ?? 10
+    const next = Math.max(VOL_FLOOR, Math.min(VOL_CEILING, current + delta))
+    if (next === current) return
+    volBusy = true
+    try {
+      await fetch('/api/sonos/volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: next }),
+      })
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      volBusy = false
+    }
+  }
+
+  async function handBack() {
+    if (handbackBusy) return
+    handbackBusy = true
+    try {
+      const res = await fetch('/api/guest/handback', { method: 'POST' })
+      if (!res.ok) {
+        showToast(`Couldn't hand back (${res.status})`)
+        return
+      }
+      showToast('Returned to host autopilot')
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      handbackBusy = false
+    }
+  }
+
   onMount(async () => {
     // Fetch scenes + vibes in parallel — both are read-only GETs and
     // can race independently.
@@ -155,6 +227,18 @@
 </svelte:head>
 
 <main class="guest-page">
+  {#if $automation.manual_override}
+    <button
+      type="button"
+      class="handback-btn"
+      on:click={handBack}
+      disabled={handbackBusy}
+    >
+      <HomeIcon size={16} strokeWidth={1.6} />
+      <span>Hand it back to the host</span>
+    </button>
+  {/if}
+
   <header class="guest-header">
     <h1>Vibe</h1>
     <p class="guest-subtitle">What the room is doing</p>
@@ -172,6 +256,13 @@
     </div>
     <div class="mode-line">
       <span class="mode-name">{modeLabel($automation.mode)}</span>
+      {#if $automation.manual_override}
+        {#if $automation.source === 'guest'}
+          <span class="src-chip src-chip-guest">🏠 Set by a guest</span>
+        {:else}
+          <span class="src-chip src-chip-manual">Manual override</span>
+        {/if}
+      {/if}
     </div>
     <div class="swatch-row">
       {#each orderedLights as light}
@@ -182,6 +273,69 @@
           title={light.name}
         ></div>
       {/each}
+    </div>
+    {#if $sonos.state === 'PLAYING' && ($sonos.track || $sonos.artist)}
+      <div class="now-playing">
+        {#if $sonos.art_url}
+          <img class="np-art" src={$sonos.art_url} alt="Album artwork" />
+        {/if}
+        <div class="np-text">
+          <div class="np-title">{$sonos.track || '—'}</div>
+          {#if $sonos.artist}
+            <div class="np-artist">{$sonos.artist}</div>
+          {/if}
+        </div>
+      </div>
+    {:else}
+      <p class="np-empty">Speaker is quiet.</p>
+    {/if}
+  </section>
+
+  <section class="guest-card">
+    <div class="card-head">
+      <Music2 size={20} strokeWidth={1.5} />
+      <h2>Music controls</h2>
+    </div>
+    <div class="transport-row">
+      <button
+        type="button"
+        class="transport-btn"
+        on:click={togglePlayPause}
+        disabled={transportBusy}
+        aria-label={isPlaying ? 'Pause' : 'Play'}
+      >
+        <svelte:component this={isPlaying ? Pause : Play} size={22} strokeWidth={1.6} />
+      </button>
+      <button
+        type="button"
+        class="transport-btn"
+        on:click={skipNext}
+        disabled={transportBusy}
+        aria-label="Skip"
+      >
+        <SkipForward size={22} strokeWidth={1.6} />
+      </button>
+      <div class="volume-rocker">
+        <button
+          type="button"
+          class="vol-btn"
+          on:click={() => bumpVolume(-VOL_STEP)}
+          disabled={volBusy || ($sonos.volume ?? 0) <= VOL_FLOOR}
+          aria-label="Volume down"
+        >
+          <VolumeX size={18} strokeWidth={1.6} />
+        </button>
+        <span class="vol-readout">{$sonos.volume ?? '—'}</span>
+        <button
+          type="button"
+          class="vol-btn"
+          on:click={() => bumpVolume(VOL_STEP)}
+          disabled={volBusy || ($sonos.volume ?? 0) >= VOL_CEILING}
+          aria-label="Volume up"
+        >
+          <Volume2 size={18} strokeWidth={1.6} />
+        </button>
+      </div>
     </div>
   </section>
 
@@ -489,5 +643,156 @@
     .scene-grid {
       grid-template-columns: repeat(3, 1fr);
     }
+  }
+
+  /* "Hand it back to the host" — only renders while a manual override is
+     active. Stays understated; this is the "calm down" button, not a
+     headline action. */
+  .handback-btn {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    color: rgba(245, 243, 238, 0.85);
+    font-family: var(--font-body);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .handback-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.28);
+  }
+  .handback-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Source chip — sits inline with the mode label so the override status
+     reads as "STATE · who set it". */
+  .src-chip {
+    display: inline-block;
+    margin-left: 12px;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(245, 243, 238, 0.7);
+    vertical-align: middle;
+    letter-spacing: 0.02em;
+  }
+  .src-chip-guest {
+    background: rgba(170, 110, 240, 0.18);
+    color: rgba(220, 200, 255, 0.92);
+  }
+
+  /* Now-playing strip inside "Right now" — mirrors the strip on /guest
+     home (+page.svelte) so both pages render consistently. Slimmer art
+     (48px) since the card already has the swatch row above. */
+  .now-playing {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .np-art {
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .np-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .np-title {
+    font-size: 14px;
+    color: #fff;
+    font-weight: 500;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .np-artist {
+    font-size: 12px;
+    color: rgba(245, 243, 238, 0.6);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .np-empty {
+    font-size: 13px;
+    color: rgba(245, 243, 238, 0.5);
+    margin: 16px 0 0;
+  }
+
+  /* Music transport — pause/skip on the left, vol rocker pinned right. */
+  .transport-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .transport-btn {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 14px;
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.05s, border-color 0.15s;
+  }
+  .transport-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+  .transport-btn:active:not(:disabled) { transform: scale(0.95); }
+  .transport-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .volume-rocker {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+  }
+  .vol-btn {
+    appearance: none;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    color: #fff;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background 0.15s;
+  }
+  .vol-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
+  .vol-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .vol-readout {
+    font-family: var(--font-display);
+    font-size: 18px;
+    color: rgba(245, 243, 238, 0.85);
+    min-width: 28px;
+    text-align: center;
+    letter-spacing: 0.04em;
   }
 </style>
