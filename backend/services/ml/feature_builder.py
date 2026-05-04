@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from backend.database import async_session
 from backend.models import ActivityEvent, LightAdjustment
@@ -113,6 +113,56 @@ MODE_ENCODING.update({"idle": len(PREDICTABLE_MODES)})
 
 SEASON_ENCODING = {"winter": 0, "spring": 1, "summer": 2, "fall": 3}
 
+# Camera + audio context encodings. Stable + hard-coded so a new label
+# from upstream (e.g. YAMNet emitting a class we didn't enumerate) maps
+# to a known sentinel rather than shifting indices on retrain. Audio
+# falls through to "other" so unknown YAMNet classes are still in
+# vocabulary; zone/posture use len(MAP) as the unknown bucket — a
+# distinct integer the model can split on.
+ZONE_ENCODING = {"desk": 0, "bed": 1, "couch": 2}
+POSTURE_ENCODING = {"upright": 0, "reclined": 1}
+AUDIO_CLASS_ENCODING = {
+    "silence": 0,
+    "speech_single": 1,
+    "speech_multiple": 2,
+    "music": 3,
+    "mechanical_noise": 4,
+    "doorbell": 5,
+    "game_audio": 6,
+    "other": 7,
+}
+
+
+def _encode_zone(zone: Optional[str]) -> int:
+    return ZONE_ENCODING.get(zone, len(ZONE_ENCODING)) if zone else len(ZONE_ENCODING)
+
+
+def _encode_posture(posture: Optional[str]) -> int:
+    return (
+        POSTURE_ENCODING.get(posture, len(POSTURE_ENCODING))
+        if posture
+        else len(POSTURE_ENCODING)
+    )
+
+
+def _encode_audio_class(audio_class: Optional[str]) -> int:
+    if not audio_class:
+        return AUDIO_CLASS_ENCODING["other"]
+    return AUDIO_CLASS_ENCODING.get(audio_class, AUDIO_CLASS_ENCODING["other"])
+
+
+def _encode_lux(lux: Optional[float]) -> float:
+    """LightGBM handles NaN natively, so use it for missing lux. Cleaner
+    than a sentinel like -1 because the model doesn't have to learn the
+    sentinel's special meaning — NaN routes to a built-in missing-value
+    branch."""
+    if lux is None:
+        return float("nan")
+    try:
+        return float(lux)
+    except (TypeError, ValueError):
+        return float("nan")
+
 
 async def build_training_data(days: int = 60) -> list[dict]:
     """Build feature rows from activity_events for predictor training.
@@ -190,6 +240,13 @@ async def build_training_data(days: int = 60) -> list[dict]:
             "mode_transitions_today": transitions_today,
             "manual_override_count_7d": override_count,
             "season_enc": SEASON_ENCODING.get(features["season"], 0),
+            # Camera + audio context (populated by EventLogger going forward,
+            # backfilled historically). NULL → sentinel index for categoricals,
+            # NaN for continuous lux.
+            "zone_enc": _encode_zone(getattr(ev, "zone", None)),
+            "posture_enc": _encode_posture(getattr(ev, "posture", None)),
+            "audio_class_enc": _encode_audio_class(getattr(ev, "audio_class", None)),
+            "lux": _encode_lux(getattr(ev, "lux", None)),
         })
 
         # Target
@@ -205,6 +262,10 @@ def build_current_features(
     transitions_today: int = 0,
     manual_override_count_7d: int = 0,
     minutes_since_wake: float = 0,
+    zone: Optional[str] = None,
+    posture: Optional[str] = None,
+    audio_class: Optional[str] = None,
+    lux: Optional[float] = None,
 ) -> dict:
     """Build a feature vector for real-time prediction.
 
@@ -223,11 +284,48 @@ def build_current_features(
         "mode_transitions_today": transitions_today,
         "manual_override_count_7d": manual_override_count_7d,
         "season_enc": SEASON_ENCODING.get(features["season"], 0),
+        "zone_enc": _encode_zone(zone),
+        "posture_enc": _encode_posture(posture),
+        "audio_class_enc": _encode_audio_class(audio_class),
+        "lux": _encode_lux(lux),
     })
     return features
 
 
-async def build_runtime_features(current_mode: str) -> dict:
+async def latest_audio_class(window_seconds: int = 60) -> Optional[str]:
+    """Return the top_class from the most recent audio_ml ml_decisions row
+    within the last N seconds, or None if no such row exists or the query
+    fails. Best-effort — never raises.
+
+    Used by the behavioral predictor's runtime feature builder and the
+    automation engine's predict() call site to give the model the same
+    audio context that EventLogger captured at training time.
+    """
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                text(
+                    "SELECT json_extract(factors, '$.top_class') "
+                    "FROM ml_decisions "
+                    "WHERE decision_source = 'audio_ml' "
+                    "  AND timestamp >= datetime('now', :window) "
+                    "ORDER BY timestamp DESC LIMIT 1"
+                ),
+                {"window": f"-{int(window_seconds)} seconds"},
+            )
+            row = result.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+async def build_runtime_features(
+    current_mode: str,
+    zone: Optional[str] = None,
+    posture: Optional[str] = None,
+    audio_class: Optional[str] = None,
+    lux: Optional[float] = None,
+) -> dict:
     """Build a feature vector for live prediction by querying recent events.
 
     The behavioral predictor was previously trained with four
@@ -294,4 +392,8 @@ async def build_runtime_features(current_mode: str) -> dict:
         transitions_today=transitions_today,
         manual_override_count_7d=manual_overrides_7d,
         minutes_since_wake=minutes_since_wake,
+        zone=zone,
+        posture=posture,
+        audio_class=audio_class,
+        lux=lux,
     )

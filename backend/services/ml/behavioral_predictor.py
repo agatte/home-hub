@@ -22,8 +22,11 @@ from sqlalchemy import func, select
 from backend.database import async_session
 from backend.models import ActivityEvent
 from backend.services.ml.feature_builder import (
+    AUDIO_CLASS_ENCODING,
     MODE_ENCODING,
+    POSTURE_ENCODING,
     PREDICTABLE_MODES,
+    ZONE_ENCODING,
     build_runtime_features,
     build_training_data,
 )
@@ -35,7 +38,10 @@ logger = logging.getLogger("home_hub.ml")
 # Minimum events required before training is attempted.
 MIN_TRAINING_EVENTS = 500
 
-# Features used by the model (order matters for LightGBM).
+# Features used by the model (order matters for LightGBM — APPEND only;
+# reordering invalidates feature_importance and breaks any saved model).
+# The four trailing entries (zone_enc / posture_enc / audio_class_enc /
+# lux) were added 2026-05-04 as part of the camera+audio enrichment work.
 FEATURE_COLUMNS = [
     "hour",
     "minute_bucket",
@@ -47,6 +53,10 @@ FEATURE_COLUMNS = [
     "minutes_since_wake",
     "mode_transitions_today",
     "manual_override_count_7d",
+    "zone_enc",
+    "posture_enc",
+    "audio_class_enc",
+    "lux",
 ]
 
 # Confidence thresholds for gated actions.
@@ -74,6 +84,10 @@ _FEATURE_LABELS: dict[str, str] = {
     "minutes_since_wake": "Since Wake",
     "mode_transitions_today": "Transitions",
     "manual_override_count_7d": "Overrides 7d",
+    "zone_enc": "Zone",
+    "posture_enc": "Posture",
+    "audio_class_enc": "Audio",
+    "lux": "Lux",
 }
 
 _DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -106,10 +120,36 @@ def _format_feature_display(col: str, value: Any) -> str:
     if col == "previous_mode":
         # Reverse-encoded lookup — MODE_ENCODING lives in feature_builder.
         try:
-            from backend.services.ml.feature_builder import MODE_ENCODING
             reverse = {v: k for k, v in MODE_ENCODING.items()}
             return reverse.get(int(value), str(value))
         except Exception:
+            return str(value)
+    if col == "zone_enc":
+        try:
+            idx = int(value)
+            reverse = {v: k for k, v in ZONE_ENCODING.items()}
+            return reverse.get(idx, "—" if idx == len(ZONE_ENCODING) else str(value))
+        except Exception:
+            return str(value)
+    if col == "posture_enc":
+        try:
+            idx = int(value)
+            reverse = {v: k for k, v in POSTURE_ENCODING.items()}
+            return reverse.get(idx, "—" if idx == len(POSTURE_ENCODING) else str(value))
+        except Exception:
+            return str(value)
+    if col == "audio_class_enc":
+        try:
+            idx = int(value)
+            reverse = {v: k for k, v in AUDIO_CLASS_ENCODING.items()}
+            return reverse.get(idx, str(value))
+        except Exception:
+            return str(value)
+    if col == "lux":
+        try:
+            v = float(value)
+            return "—" if v != v else f"{v:.0f}"  # NaN check via self-inequality
+        except (TypeError, ValueError):
             return str(value)
     if col in ("previous_mode_duration_min", "minutes_since_wake"):
         try:
@@ -163,6 +203,25 @@ class BehavioralPredictor(HealthTrackable):
         if model_path.exists():
             try:
                 self._model = lgb.Booster(model_file=str(model_path))
+
+                # Refuse stale models whose feature count no longer matches
+                # FEATURE_COLUMNS — would crash predict() with a length
+                # mismatch on the input vector. The 04:00 nightly retrain
+                # rebuilds against the current FEATURE_COLUMNS, so dropping
+                # the old model here is graceful: predict() returns None
+                # until the new model lands.
+                loaded_n = self._model.num_feature()
+                if loaded_n != len(FEATURE_COLUMNS):
+                    logger.warning(
+                        "Behavioral predictor model has stale feature count "
+                        "(loaded=%d, expected=%d) — refusing to load; will "
+                        "rebuild on next nightly retrain.",
+                        loaded_n,
+                        len(FEATURE_COLUMNS),
+                    )
+                    self._model = None
+                    return
+
                 self._status = meta.get("status", "shadow")
                 self._last_trained = meta.get("version")
                 self._last_accuracy = meta.get("accuracy_7d")
@@ -331,7 +390,14 @@ class BehavioralPredictor(HealthTrackable):
     # Prediction
     # ------------------------------------------------------------------
 
-    async def predict(self, current_mode: str) -> Optional[dict]:
+    async def predict(
+        self,
+        current_mode: str,
+        zone: Optional[str] = None,
+        posture: Optional[str] = None,
+        audio_class: Optional[str] = None,
+        lux: Optional[float] = None,
+    ) -> Optional[dict]:
         """Predict the most likely mode given current context.
 
         Queries activity_events to build the live feature vector — same
@@ -344,6 +410,11 @@ class BehavioralPredictor(HealthTrackable):
         Args:
             current_mode: The mode the engine currently believes is
                 active. Used as ``previous_mode`` in the feature vector.
+            zone, posture, audio_class, lux: Camera + audio context at
+                inference time. None values are encoded as the unknown
+                sentinel for categoricals or NaN for lux. Caller should
+                pass the camera service's freshness-gated values so
+                stale committed state doesn't poison inference.
 
         Returns:
             Dict with ``predicted_mode``, ``confidence``, ``factors``,
@@ -361,7 +432,13 @@ class BehavioralPredictor(HealthTrackable):
             return None
 
         try:
-            features = await build_runtime_features(current_mode)
+            features = await build_runtime_features(
+                current_mode,
+                zone=zone,
+                posture=posture,
+                audio_class=audio_class,
+                lux=lux,
+            )
 
             # Build feature vector in the same column order as training
             x = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])

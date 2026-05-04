@@ -205,3 +205,187 @@ class TestEncodings:
     def test_season_encoding_complete(self):
         for season in ("winter", "spring", "summer", "fall"):
             assert season in fb.SEASON_ENCODING
+
+
+class TestCameraAudioEncodings:
+    """Encoding maps for the four columns added 2026-05-04.
+
+    Stable hard-coded indices: a new label out of YAMNet (or a typo on the
+    camera side) must route to the unknown sentinel, not silently shift
+    every other class's index when the model retrains.
+    """
+
+    def test_zone_encoding_known_values(self):
+        assert fb._encode_zone("desk") == 0
+        assert fb._encode_zone("bed") == 1
+        assert fb._encode_zone("couch") == 2
+
+    def test_zone_encoding_unknown_routes_to_sentinel(self):
+        sentinel = len(fb.ZONE_ENCODING)
+        assert fb._encode_zone(None) == sentinel
+        assert fb._encode_zone("kitchen") == sentinel
+
+    def test_posture_encoding_known_values(self):
+        assert fb._encode_posture("upright") == 0
+        assert fb._encode_posture("reclined") == 1
+
+    def test_posture_encoding_unknown_routes_to_sentinel(self):
+        sentinel = len(fb.POSTURE_ENCODING)
+        assert fb._encode_posture(None) == sentinel
+        assert fb._encode_posture("lying") == sentinel
+
+    def test_audio_class_encoding_known_values(self):
+        assert fb._encode_audio_class("silence") == 0
+        assert fb._encode_audio_class("speech_multiple") == 2
+        assert fb._encode_audio_class("game_audio") == 6
+
+    def test_audio_class_unknown_routes_to_other(self):
+        # Unlike zone/posture, unknown audio falls through to the "other"
+        # bucket so previously-unseen YAMNet classes still land in vocab.
+        assert fb._encode_audio_class(None) == fb.AUDIO_CLASS_ENCODING["other"]
+        assert fb._encode_audio_class("cooking") == fb.AUDIO_CLASS_ENCODING["other"]
+
+    def test_lux_encoding_passes_through_floats(self):
+        assert fb._encode_lux(150.0) == 150.0
+        assert fb._encode_lux(0.0) == 0.0
+
+    def test_lux_encoding_none_becomes_nan(self):
+        result = fb._encode_lux(None)
+        # NaN is the only float that is not equal to itself.
+        assert result != result
+
+    def test_lux_encoding_handles_garbage(self):
+        result = fb._encode_lux("not-a-number")
+        assert result != result  # NaN
+
+
+class TestBuildCurrentFeaturesContext:
+    """The 4 new context kwargs must reach the encoded fields."""
+
+    def test_camera_and_audio_kwargs_encoded(self):
+        features = fb.build_current_features(
+            current_mode="working",
+            zone="bed",
+            posture="reclined",
+            audio_class="speech_multiple",
+            lux=85.5,
+        )
+        assert features["zone_enc"] == fb.ZONE_ENCODING["bed"]
+        assert features["posture_enc"] == fb.POSTURE_ENCODING["reclined"]
+        assert features["audio_class_enc"] == fb.AUDIO_CLASS_ENCODING["speech_multiple"]
+        assert features["lux"] == 85.5
+
+    def test_missing_context_uses_sentinels(self):
+        features = fb.build_current_features(current_mode="idle")
+        assert features["zone_enc"] == len(fb.ZONE_ENCODING)
+        assert features["posture_enc"] == len(fb.POSTURE_ENCODING)
+        assert features["audio_class_enc"] == fb.AUDIO_CLASS_ENCODING["other"]
+        assert features["lux"] != features["lux"]  # NaN
+
+
+@pytest.mark.asyncio
+class TestBuildTrainingDataContext:
+    """activity_events.zone/posture/audio_class/lux must reach training rows."""
+
+    async def test_columns_round_trip_through_training(self, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            session.add(ActivityEvent(
+                timestamp=now - timedelta(hours=1),
+                mode="working", source="manual",
+                zone="desk", posture="upright",
+                audio_class="speech_single", lux=210.0,
+            ))
+            await session.commit()
+
+        rows = await fb.build_training_data(days=2)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["zone_enc"] == fb.ZONE_ENCODING["desk"]
+        assert row["posture_enc"] == fb.POSTURE_ENCODING["upright"]
+        assert row["audio_class_enc"] == fb.AUDIO_CLASS_ENCODING["speech_single"]
+        assert row["lux"] == 210.0
+
+    async def test_null_columns_use_sentinels(self, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            session.add(ActivityEvent(
+                timestamp=now - timedelta(hours=1),
+                mode="working", source="manual",
+                # zone/posture/audio_class/lux all NULL — historical rows
+                # the backfill couldn't populate (camera off-frame, no
+                # nearby audio_ml row).
+            ))
+            await session.commit()
+
+        rows = await fb.build_training_data(days=2)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["zone_enc"] == len(fb.ZONE_ENCODING)
+        assert row["posture_enc"] == len(fb.POSTURE_ENCODING)
+        assert row["audio_class_enc"] == fb.AUDIO_CLASS_ENCODING["other"]
+        assert row["lux"] != row["lux"]  # NaN
+
+
+@pytest.mark.asyncio
+class TestBuildRuntimeFeaturesContext:
+    """The async wrapper must forward the 4 new kwargs."""
+
+    async def test_kwargs_forwarded(self, ml_db):
+        features = await fb.build_runtime_features(
+            current_mode="watching",
+            zone="bed",
+            posture="reclined",
+            audio_class="music",
+            lux=42.0,
+        )
+        assert features["zone_enc"] == fb.ZONE_ENCODING["bed"]
+        assert features["posture_enc"] == fb.POSTURE_ENCODING["reclined"]
+        assert features["audio_class_enc"] == fb.AUDIO_CLASS_ENCODING["music"]
+        assert features["lux"] == 42.0
+
+    async def test_missing_kwargs_use_sentinels(self, ml_db):
+        features = await fb.build_runtime_features(current_mode="working")
+        assert features["zone_enc"] == len(fb.ZONE_ENCODING)
+        assert features["posture_enc"] == len(fb.POSTURE_ENCODING)
+        assert features["audio_class_enc"] == fb.AUDIO_CLASS_ENCODING["other"]
+        assert features["lux"] != features["lux"]  # NaN
+
+
+@pytest.mark.asyncio
+class TestLatestAudioClass:
+    """latest_audio_class queries ml_decisions by source + recency."""
+
+    async def test_returns_top_class_within_window(self, ml_db):
+        from backend.models import MLDecision
+        async with ml_db() as session:
+            session.add(MLDecision(
+                predicted_mode="silence",
+                applied=False,
+                confidence=0.9,
+                decision_source="audio_ml",
+                factors={"top_class": "speech_multiple"},
+            ))
+            await session.commit()
+
+        result = await fb.latest_audio_class(window_seconds=60)
+        assert result == "speech_multiple"
+
+    async def test_returns_none_when_no_recent_row(self, ml_db):
+        result = await fb.latest_audio_class(window_seconds=60)
+        assert result is None
+
+    async def test_ignores_non_audio_sources(self, ml_db):
+        from backend.models import MLDecision
+        async with ml_db() as session:
+            session.add(MLDecision(
+                predicted_mode="working",
+                applied=False,
+                confidence=0.9,
+                decision_source="camera",
+                factors={"top_class": "speech_multiple"},  # camera shouldn't have this
+            ))
+            await session.commit()
+
+        result = await fb.latest_audio_class(window_seconds=60)
+        assert result is None

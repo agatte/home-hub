@@ -154,6 +154,48 @@ except ImportError:
 
 
 @pytest.mark.skipif(not _HAS_LIGHTGBM, reason="lightgbm not installed")
+class TestStaleFeatureCount:
+    """A saved model whose feature count no longer matches FEATURE_COLUMNS
+    must be refused on load — predict() would crash with a length mismatch
+    on the input vector. The 04:00 nightly retrain rebuilds against the
+    current FEATURE_COLUMNS, so dropping the model is graceful.
+
+    Unlike TestStaleEncoder, the empty-bytes trick won't work here — the
+    feature-count check runs AFTER lgb.Booster() parses the file, so we
+    need a real saved model with the wrong feature count.
+    """
+
+    def test_load_refuses_stale_feature_count(self, tmp_model_manager):
+        import lightgbm as lgb
+        import numpy as np
+
+        # Train a tiny 10-feature booster — the pre-2026-05-04 shape.
+        rng = np.random.default_rng(0)
+        x = rng.random((50, 10))
+        y = rng.integers(0, 3, size=50)
+        ds = lgb.Dataset(x, label=y)
+        booster = lgb.train(
+            {"objective": "multiclass", "num_class": 3, "verbose": -1},
+            ds,
+            num_boost_round=2,
+        )
+
+        model_path = tmp_model_manager.data_dir / "mode_predictor.lgb"
+        booster.save_model(str(model_path))
+        tmp_model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb",
+            "status": "shadow",
+            "label_encoder": {"0": "working", "1": "gaming", "2": "watching"},
+        }
+
+        predictor = BehavioralPredictor(tmp_model_manager)
+        assert predictor._model is None
+        # Predict path returns None cleanly while we wait for retrain.
+        import asyncio
+        assert asyncio.run(predictor.predict(current_mode="working")) is None
+
+
+@pytest.mark.skipif(not _HAS_LIGHTGBM, reason="lightgbm not installed")
 @pytest.mark.asyncio
 class TestRetrainWithLightGBM:
     async def test_sufficient_data_trains_model(self, predictor, ml_db):

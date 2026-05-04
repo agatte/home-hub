@@ -2081,8 +2081,30 @@ class AutomationEngine:
                 ml_logger = getattr(self, "_ml_logger", None)
                 prediction = None
                 if predictor and not self._manual_override:
+                    # Pass the same camera + audio context EventLogger
+                    # captures at training time so inference sees the
+                    # feature shape the model was trained on. Camera
+                    # values use the freshness-gated read so a stale
+                    # committed value (e.g. user left an hour ago)
+                    # doesn't poison the prediction.
+                    from backend.services.ml.feature_builder import (
+                        latest_audio_class,
+                    )
+                    camera = self._camera_service
                     prediction = await predictor.predict(
                         current_mode=self._current_mode,
+                        zone=(
+                            self._fresh_camera_attr(
+                                camera, "zone", "zone_committed_at",
+                            ) if camera else None
+                        ),
+                        posture=(
+                            self._fresh_camera_attr(
+                                camera, "posture", "posture_committed_at",
+                            ) if camera else None
+                        ),
+                        audio_class=await latest_audio_class(),
+                        lux=getattr(camera, "ema_lux", None) if camera else None,
                     )
                 if (
                     prediction
