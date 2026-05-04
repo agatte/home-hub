@@ -22,6 +22,10 @@ from typing import Optional
 
 DB = Path("data/home_hub.db")
 WINDOW_SECONDS = 60
+# Print a progress line every PROGRESS_INTERVAL rows scanned.
+PROGRESS_INTERVAL = 200
+# Commit every COMMIT_INTERVAL rows so an interrupted run preserves partial work.
+COMMIT_INTERVAL = 500
 
 
 def main() -> int:
@@ -33,6 +37,21 @@ def main() -> int:
     conn.row_factory = sqlite3.Row
     try:
         before = _count_nulls(conn)
+        print(f"NULL counts before: {before}", flush=True)
+        # Sanity check — print the query plan so we can confirm the
+        # index is being used. Look for "USING INDEX" in the output.
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT factors FROM ml_decisions"
+            " WHERE timestamp >= ? AND timestamp <= ?"
+            " AND decision_source = 'camera'"
+            " ORDER BY ABS(julianday(timestamp) - julianday(?)) ASC LIMIT 1",
+            ("2026-04-01 00:00:00.000000", "2026-04-01 00:01:00.000000",
+             "2026-04-01 00:00:30"),
+        ).fetchall()
+        print("Query plan:", flush=True)
+        for r in plan:
+            print(f"  {dict(r)}", flush=True)
+
         cam_updates, audio_updates, scanned = _backfill(conn)
         conn.commit()
         after = _count_nulls(conn)
@@ -73,19 +92,32 @@ def _backfill(conn: sqlite3.Connection) -> tuple[int, int, int]:
         ORDER BY timestamp ASC
     """)
     rows = cur.fetchall()
+    total = len(rows)
+    print(f"Backfilling {total} activity_events rows...", flush=True)
 
     cam_updates = 0
     audio_updates = 0
 
-    for row in rows:
+    for i, row in enumerate(rows, 1):
         cam_changed = _backfill_camera(cur, row)
         audio_changed = _backfill_audio(cur, row)
         if cam_changed:
             cam_updates += 1
         if audio_changed:
             audio_updates += 1
+        if i % PROGRESS_INTERVAL == 0:
+            pct = (i / total) * 100
+            print(
+                f"  [{i}/{total}] {pct:.1f}% — "
+                f"camera={cam_updates}, audio={audio_updates}",
+                flush=True,
+            )
+        if i % COMMIT_INTERVAL == 0:
+            conn = cur.connection
+            conn.commit()
+            print(f"  [{i}/{total}] partial commit", flush=True)
 
-    return cam_updates, audio_updates, len(rows)
+    return cam_updates, audio_updates, total
 
 
 def _backfill_camera(cur: sqlite3.Cursor, row: sqlite3.Row) -> bool:
