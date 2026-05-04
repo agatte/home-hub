@@ -20,6 +20,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+# Force line-buffered stdout. ssh "host cmd" doesn't allocate a TTY so
+# Python defaults to block-buffered output; without this, progress lines
+# don't reach the operator's terminal until the buffer fills (or process
+# exits), making a healthy run look stuck. Equivalent to `python3 -u`.
+try:
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+except (AttributeError, OSError):
+    pass
+
+print("backfill: starting", flush=True)
+
 DB = Path("data/home_hub.db")
 WINDOW_SECONDS = 60
 # Print a progress line every PROGRESS_INTERVAL rows scanned.
@@ -33,8 +44,10 @@ def main() -> int:
         print(f"FAIL: database not found at {DB.resolve()}", file=sys.stderr)
         return 1
 
-    conn = sqlite3.connect(str(DB))
+    print(f"backfill: opening DB at {DB.resolve()}", flush=True)
+    conn = sqlite3.connect(str(DB), timeout=10.0)
     conn.row_factory = sqlite3.Row
+    print("backfill: connected", flush=True)
     try:
         before = _count_nulls(conn)
         print(f"NULL counts before: {before}", flush=True)
