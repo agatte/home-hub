@@ -291,6 +291,50 @@ def test_backfill_partial_population(tmp_path, monkeypatch):
     assert row == ("desk", None, None, None)
 
 
+def test_backfill_walks_outward_for_missing_camera_fields(
+    tmp_path, monkeypatch
+):
+    """When the closest camera row has zone=None, the picker walks outward
+    in time and uses the next closest row that actually has zone set.
+    Per-field — so zone, posture, and lux can each come from different rows
+    in the same window."""
+    db = _build_test_db(tmp_path, monkeypatch)
+    base = datetime(2026, 5, 4, 18, 0, 0, tzinfo=timezone.utc)
+    fmt = lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S")  # noqa: E731
+
+    conn = sqlite3.connect(str(db))
+    event_id = _insert_event(conn, fmt(base))
+    # Closest camera row (1s before) — face detection failed, no zone/posture.
+    _insert_camera_row(
+        conn, fmt(base - timedelta(seconds=1)),
+        ambient_lux=145.0,
+    )
+    # 5s before — has zone but still no posture.
+    _insert_camera_row(
+        conn, fmt(base - timedelta(seconds=5)),
+        zone="desk", ambient_lux=144.0,
+    )
+    # 10s before — finally has posture.
+    _insert_camera_row(
+        conn, fmt(base - timedelta(seconds=10)),
+        zone="desk", posture="upright", ambient_lux=143.0,
+    )
+    conn.commit()
+    conn.close()
+
+    backfill.main()
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT zone, posture, lux FROM activity_events WHERE id = ?",
+        (event_id,),
+    ).fetchone()
+    conn.close()
+    # zone from the 5s-before row, posture from the 10s-before row,
+    # lux from the closest (1s-before) row that had it.
+    assert row == ("desk", "upright", pytest.approx(145.0))
+
+
 def test_backfill_picks_closest_camera_row(tmp_path, monkeypatch):
     """When multiple camera rows are within ±60s, the closest one wins."""
     db = _build_test_db(tmp_path, monkeypatch)

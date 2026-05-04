@@ -37,6 +37,12 @@ WINDOW_SECONDS = 60
 PROGRESS_INTERVAL = 200
 # Commit every COMMIT_INTERVAL rows so an interrupted run preserves partial work.
 COMMIT_INTERVAL = 500
+# How many camera candidates to pull per event when picking values. The
+# closest camera row often has zone=None / posture=None (per-frame detection
+# fails); pulling several lets us walk outward in time and grab the closest
+# row that actually has each field committed. 30 covers ~60s at the camera's
+# 2s poll cadence — within the WINDOW_SECONDS bound.
+CAMERA_CANDIDATE_LIMIT = 30
 
 
 def main() -> int:
@@ -199,8 +205,16 @@ def _bounds(event_ts: str) -> tuple[str, str]:
 def _find_camera_context(
     cur: sqlite3.Cursor, event_ts: str,
 ) -> tuple[Optional[str], Optional[str], Optional[float]]:
-    """Closest decision_source='camera' ml_decisions row within ±60s.
-    Camera factors carry top-level zone, posture, ambient_lux keys."""
+    """Walks the closest CAMERA_CANDIDATE_LIMIT camera rows within ±60s
+    in time-order from the event and returns, for each of (zone, posture,
+    ambient_lux), the value from the first row that actually has it set.
+
+    Rationale: the single closest camera row often has zone=None /
+    posture=None because face/pose detection fails per-frame even while
+    the user is at the desk. Walking outward gives us the closest row
+    that committed each specific field rather than a single row that may
+    be silent on one or more of them.
+    """
     lower, upper = _bounds(event_ts)
     cur.execute("""
         SELECT factors
@@ -208,12 +222,25 @@ def _find_camera_context(
         WHERE timestamp >= ? AND timestamp <= ?
           AND decision_source = 'camera'
         ORDER BY ABS(julianday(timestamp) - julianday(?)) ASC
-        LIMIT 1
-    """, (lower, upper, event_ts))
-    fetched = cur.fetchone()
-    if not fetched:
-        return None, None, None
-    return _extract_camera_factors(fetched["factors"])
+        LIMIT ?
+    """, (lower, upper, event_ts, CAMERA_CANDIDATE_LIMIT))
+
+    zone: Optional[str] = None
+    posture: Optional[str] = None
+    lux: Optional[float] = None
+
+    for row in cur.fetchall():
+        z, p, l = _extract_camera_factors(row["factors"])
+        if zone is None and z is not None:
+            zone = z
+        if posture is None and p is not None:
+            posture = p
+        if lux is None and l is not None:
+            lux = l
+        if zone is not None and posture is not None and lux is not None:
+            break
+
+    return zone, posture, lux
 
 
 def _find_audio_class(cur: sqlite3.Cursor, event_ts: str) -> Optional[str]:
