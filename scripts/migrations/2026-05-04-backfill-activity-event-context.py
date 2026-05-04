@@ -16,6 +16,7 @@ Run from the repo root, on the machine that owns the DB (prod = Latitude):
 import json
 import sqlite3
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -137,19 +138,33 @@ def _backfill_audio(cur: sqlite3.Cursor, row: sqlite3.Row) -> bool:
     return True
 
 
+def _bounds(event_ts: str) -> tuple[str, str]:
+    """Compute ISO-format ±60s bounds around an SQLite-stored timestamp.
+    Returned as text so the comparison against ``timestamp`` can use the
+    ``ix_ml_decisions_timestamp`` index — wrapping the column in
+    ``julianday()`` would force a full-table scan, which on prod's
+    ~1M+ row ml_decisions table is far too slow for a per-row loop.
+    """
+    event_dt = datetime.fromisoformat(event_ts)
+    lower = (event_dt - timedelta(seconds=WINDOW_SECONDS)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    upper = (event_dt + timedelta(seconds=WINDOW_SECONDS)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    return lower, upper
+
+
 def _find_camera_context(
     cur: sqlite3.Cursor, event_ts: str,
 ) -> tuple[Optional[str], Optional[str], Optional[float]]:
     """Closest decision_source='camera' ml_decisions row within ±60s.
     Camera factors carry top-level zone, posture, ambient_lux keys."""
+    lower, upper = _bounds(event_ts)
     cur.execute("""
         SELECT factors
         FROM ml_decisions
-        WHERE decision_source = 'camera'
-          AND ABS(julianday(timestamp) - julianday(?)) * 86400 <= ?
-        ORDER BY ABS(julianday(timestamp) - julianday(?)) * 86400 ASC
+        WHERE timestamp >= ? AND timestamp <= ?
+          AND decision_source = 'camera'
+        ORDER BY ABS(julianday(timestamp) - julianday(?)) ASC
         LIMIT 1
-    """, (event_ts, WINDOW_SECONDS, event_ts))
+    """, (lower, upper, event_ts))
     fetched = cur.fetchone()
     if not fetched:
         return None, None, None
@@ -158,14 +173,15 @@ def _find_camera_context(
 
 def _find_audio_class(cur: sqlite3.Cursor, event_ts: str) -> Optional[str]:
     """Closest decision_source='audio_ml' ml_decisions row within ±60s."""
+    lower, upper = _bounds(event_ts)
     cur.execute("""
         SELECT factors
         FROM ml_decisions
-        WHERE decision_source = 'audio_ml'
-          AND ABS(julianday(timestamp) - julianday(?)) * 86400 <= ?
-        ORDER BY ABS(julianday(timestamp) - julianday(?)) * 86400 ASC
+        WHERE timestamp >= ? AND timestamp <= ?
+          AND decision_source = 'audio_ml'
+        ORDER BY ABS(julianday(timestamp) - julianday(?)) ASC
         LIMIT 1
-    """, (event_ts, WINDOW_SECONDS, event_ts))
+    """, (lower, upper, event_ts))
     fetched = cur.fetchone()
     if not fetched:
         return None
