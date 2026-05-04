@@ -54,6 +54,9 @@ frontend-svelte/.svelte-kit/
 # Personal helpers
 start.txt
 
+# Local-only planning / brainstorm docs (not committed)
+docs/GUEST_APP_BRAINSTORM.md
+
 # Experiments (Phase 2 prototyping sandbox)
 experiments/**/.svelte-kit/
 experiments/**/build/
