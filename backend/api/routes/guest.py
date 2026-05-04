@@ -498,7 +498,7 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
         new_bri = max(1, min(ceiling, round(current * factor)))
         if new_bri == current:
             continue
-        await hue.set_light(light["id"], bri=new_bri)
+        await hue.set_light(light["id"], {"bri": new_bri})
         updated.append({"id": light["id"], "bri": new_bri})
 
     _last_guest_brightness_at = now
