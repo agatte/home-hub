@@ -44,6 +44,18 @@ async def _run_migrations(conn) -> None:
     if "trigger" not in la_cols:
         await conn.execute(text("ALTER TABLE light_adjustments ADD COLUMN trigger TEXT"))
 
+    # Camera + audio context columns on activity_events (predictor enrichment)
+    result = await conn.execute(text("PRAGMA table_info(activity_events)"))
+    ae_cols = {row[1] for row in result.fetchall()}
+    for col, ddl_type in (
+        ("zone", "TEXT"),
+        ("posture", "TEXT"),
+        ("audio_class", "TEXT"),
+        ("lux", "FLOAT"),
+    ):
+        if col not in ae_cols:
+            await conn.execute(text(f"ALTER TABLE activity_events ADD COLUMN {col} {ddl_type}"))
+
     # ML decision and metrics tables (Phase 3: ML foundation)
     result = await conn.execute(
         text("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_decisions'")

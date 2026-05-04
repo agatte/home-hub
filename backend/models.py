@@ -167,6 +167,13 @@ class ActivityEvent(Base):
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     # duration_seconds is filled in when the *next* event arrives
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Camera + audio context at the moment of the transition. Populated by
+    # EventLogger from camera_service / latest audio_ml ml_decisions row.
+    # All nullable — pre-enrichment rows + camera-disabled sessions store None.
+    zone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    posture: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    audio_class: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    lux: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
 class LightAdjustment(Base):
