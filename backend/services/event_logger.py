@@ -17,7 +17,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, TimeoutError as SATimeoutError
 
 from backend.database import async_session
@@ -43,7 +43,12 @@ _WriteFn = Callable[["async_session"], Awaitable[None]]
 class EventLogger:
     """Thin async wrapper for writing behavioral events to the database."""
 
-    def __init__(self) -> None:
+    def __init__(self, camera_service=None) -> None:
+        # Optional camera_service reference for enrichment of activity_events
+        # with zone/posture/lux at the moment of each mode transition. Late-
+        # bind via set_camera_service when bootstrap order has the logger
+        # constructed before the camera (current ordering — see bootstrap.py).
+        self._camera_service = camera_service
         # Cumulative events dropped by family — both DB-error drops and
         # queue-overflow drops accumulate here so /health shows total loss.
         self._drop_count: dict[str, int] = {
@@ -78,6 +83,10 @@ class EventLogger:
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_camera_service(self, camera_service) -> None:
+        """Inject the camera service (called from lifespan after camera starts)."""
+        self._camera_service = camera_service
 
     # ------------------------------------------------------------------ public
 
@@ -124,8 +133,15 @@ class EventLogger:
         the elapsed time since it was written. The `captured_now` is frozen
         at call time so retries compute duration against the real event
         time, not the retry time.
+
+        Enrichment: snapshots camera zone/posture/lux and looks up the most
+        recent audio_ml class within the last 60 seconds. All four are frozen
+        at call time so retries log the context as it was during the transition,
+        not as it is at retry time.
         """
         captured_now = datetime.now(timezone.utc)
+        zone, posture, lux = self._snapshot_camera_state()
+        audio_class = await self._lookup_recent_audio_class()
 
         async def _write(session) -> None:
             # Backfill duration on the most recent prior undurated event.
@@ -159,9 +175,51 @@ class EventLogger:
                 mode=mode,
                 previous_mode=previous_mode,
                 source=source,
+                zone=zone,
+                posture=posture,
+                audio_class=audio_class,
+                lux=lux,
             ))
 
         await self._write("mode", _write)
+
+    def _snapshot_camera_state(self) -> tuple[Optional[str], Optional[str], Optional[float]]:
+        """Read current zone/posture/lux from the camera service, tolerating
+        a missing service or a service whose properties happen to raise.
+        Returns ``(None, None, None)`` if anything goes wrong — enrichment is
+        best-effort, never blocks the write path.
+        """
+        cs = self._camera_service
+        if cs is None:
+            return None, None, None
+        try:
+            return (
+                getattr(cs, "zone", None),
+                getattr(cs, "posture", None),
+                getattr(cs, "ema_lux", None),
+            )
+        except Exception:  # pragma: no cover — defensive
+            return None, None, None
+
+    async def _lookup_recent_audio_class(self) -> Optional[str]:
+        """Return the top_class from the most recent audio_ml ml_decisions
+        row within the last 60 seconds, or None if no such row exists or the
+        query fails. Best-effort — never raises.
+        """
+        try:
+            async with async_session() as session:
+                result = await session.execute(text("""
+                    SELECT json_extract(factors, '$.top_class')
+                    FROM ml_decisions
+                    WHERE decision_source = 'audio_ml'
+                      AND timestamp >= datetime('now', '-60 seconds')
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """))
+                row = result.fetchone()
+                return row[0] if row else None
+        except Exception:
+            return None
 
     async def log_light_adjustment(
         self,

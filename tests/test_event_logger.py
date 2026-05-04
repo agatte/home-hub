@@ -65,7 +65,11 @@ def _failing_then_succeeding_session(fail_times: int):
 
 @pytest.mark.asyncio
 async def test_transient_error_enqueues_then_drain_succeeds():
-    cm, state = _failing_then_succeeding_session(fail_times=1)
+    # log_mode_change now opens two sessions per call: one for the audio_class
+    # lookup (failures are swallowed silently — best-effort enrichment) and
+    # one for the actual write. fail_times=2 makes both fail on the first
+    # call so the write enqueues; the drain's session call then succeeds.
+    cm, state = _failing_then_succeeding_session(fail_times=2)
     el = EventLogger()
 
     with patch.object(event_logger_module, "async_session", cm):
@@ -74,12 +78,12 @@ async def test_transient_error_enqueues_then_drain_succeeds():
         assert el.get_drop_counts()["mode"] == 0
         assert el.get_queue_depth() == 1
 
-        # Drive one drain cycle manually — second async_session() call succeeds.
+        # Drive one drain cycle manually — third async_session() call succeeds.
         await el._drain_once()
 
         assert el.get_queue_depth() == 0
         assert el.get_drop_counts()["mode"] == 0
-        assert state["calls"] == 2
+        assert state["calls"] == 3
         assert len(state["sessions"]) == 1
         assert state["sessions"][0].committed
 
@@ -194,3 +198,138 @@ async def test_skipped_no_change_light_adjustment_does_not_touch_db():
             bri_after=100,
         )
     assert calls["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Enrichment — camera + audio context on activity_events rows
+# ---------------------------------------------------------------------------
+
+class _FakeCameraService:
+    """Stand-in for CameraService — exposes the three properties EventLogger reads."""
+
+    def __init__(self, zone=None, posture=None, ema_lux=None) -> None:
+        self.zone = zone
+        self.posture = posture
+        self.ema_lux = ema_lux
+
+
+@pytest.mark.asyncio
+async def test_log_mode_change_enriches_with_camera_state(ml_db):
+    """zone/posture/lux from the camera service land on the new ActivityEvent row."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import ActivityEvent
+
+    cam = _FakeCameraService(zone="bed", posture="reclined", ema_lux=42.5)
+    el = EventLogger(camera_service=cam)
+
+    await el.log_mode_change(mode="relax", previous_mode="working", source="manual")
+
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(ActivityEvent))).scalars().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.mode == "relax"
+    assert row.zone == "bed"
+    assert row.posture == "reclined"
+    assert row.lux == 42.5
+    assert row.audio_class is None  # No audio_ml row seeded
+
+
+@pytest.mark.asyncio
+async def test_log_mode_change_enriches_with_recent_audio_class(ml_db):
+    """audio_class pulls top_class from the most recent audio_ml ml_decisions row."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import ActivityEvent, MLDecision
+
+    # Seed a recent audio_ml decision — uses SQL-side `datetime('now')` default.
+    async with ml_db() as session:
+        session.add(MLDecision(
+            predicted_mode="silence",
+            applied=False,
+            confidence=0.92,
+            decision_source="audio_ml",
+            factors={"top_class": "speech_single", "rms_avg": 0.18},
+        ))
+        await session.commit()
+
+    el = EventLogger()  # No camera_service — tests the audio path in isolation
+    await el.log_mode_change(mode="working", previous_mode="idle", source="process")
+
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(ActivityEvent))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].audio_class == "speech_single"
+    assert rows[0].zone is None
+    assert rows[0].posture is None
+    assert rows[0].lux is None
+
+
+@pytest.mark.asyncio
+async def test_log_mode_change_audio_lookup_ignores_stale_rows(ml_db):
+    """audio_ml rows older than 60s must not leak into the new event's audio_class."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select as sa_select
+
+    from backend.models import ActivityEvent, MLDecision
+
+    stale = datetime.now(timezone.utc) - timedelta(seconds=120)
+    async with ml_db() as session:
+        session.add(MLDecision(
+            timestamp=stale,
+            predicted_mode="silence",
+            applied=False,
+            confidence=0.9,
+            decision_source="audio_ml",
+            factors={"top_class": "music"},
+        ))
+        await session.commit()
+
+    el = EventLogger()
+    await el.log_mode_change(mode="cooking", previous_mode="idle", source="manual")
+
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(ActivityEvent))).scalars().all()
+    assert rows[0].audio_class is None  # Stale row ignored
+
+
+@pytest.mark.asyncio
+async def test_log_mode_change_camera_disabled_session_logs_none(ml_db):
+    """Camera service present but properties returning None (disabled / not yet committed)
+    stores None values rather than crashing or lying."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import ActivityEvent
+
+    cam = _FakeCameraService(zone=None, posture=None, ema_lux=None)
+    el = EventLogger(camera_service=cam)
+
+    await el.log_mode_change(mode="working", previous_mode="idle", source="process")
+
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(ActivityEvent))).scalars().all()
+    assert rows[0].zone is None
+    assert rows[0].posture is None
+    assert rows[0].lux is None
+
+
+@pytest.mark.asyncio
+async def test_set_camera_service_late_bind_works(ml_db):
+    """set_camera_service after construction (bootstrap order) wires correctly."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import ActivityEvent
+
+    el = EventLogger()  # No camera at construction
+    cam = _FakeCameraService(zone="desk", posture="upright", ema_lux=180.0)
+    el.set_camera_service(cam)
+
+    await el.log_mode_change(mode="working", previous_mode="idle", source="process")
+
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(ActivityEvent))).scalars().all()
+    assert rows[0].zone == "desk"
+    assert rows[0].posture == "upright"
+    assert rows[0].lux == 180.0
