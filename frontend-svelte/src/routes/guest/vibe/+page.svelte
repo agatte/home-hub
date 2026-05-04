@@ -1,8 +1,10 @@
 <script>
   import { onDestroy, onMount } from 'svelte'
+  import { browser } from '$app/environment'
   import {
     Sparkles, Gamepad2, Monitor, Tv, PartyPopper, Flame, ChefHat, Moon, Bot,
     Music2, Pause, Play, SkipForward, Volume2, VolumeX, Home as HomeIcon,
+    Sliders,
   } from 'lucide-svelte'
   import { lights } from '$lib/stores/lights.js'
   import { sonos } from '$lib/stores/sonos.js'
@@ -65,7 +67,56 @@
   let lastVolAt = 0
   let handbackBusy = false
 
+  // Wave 2 — in-scene tuning. Persisted in sessionStorage so a phone-lock
+  // + reload during the same browser session doesn't dump the guest back
+  // to "no scene active". Cleared on hand-back (override → false).
+  const TUNE_STATE_KEY = 'guest-vibe-tuning-v1'
+  const BRIGHTNESS_LEVEL_CAP = 3
+  const BRIGHTNESS_THROTTLE_MS = 800
+
+  /** @type {string | null} */
+  let activeScene = null
+  /** @type {'candle' | 'sparkle' | null} */
+  let activeEffectOverlay = null
+  let kitchenDropped = false
+  let brightnessLevel = 0
+
+  let tuningBusy = false
+  let lastBrightnessAt = 0
+
   $: isPlaying = $sonos.state === 'PLAYING'
+
+  // Drop tuning state when the override goes away (hand-back, host kiosk
+  // override-clear, or 4h timeout). Survives reload otherwise.
+  $: if (browser && !$automation.manual_override && activeScene !== null) {
+    activeScene = null
+    activeEffectOverlay = null
+    kitchenDropped = false
+    brightnessLevel = 0
+    sessionStorage.removeItem(TUNE_STATE_KEY)
+  }
+
+  function persistTuningState() {
+    if (!browser) return
+    sessionStorage.setItem(TUNE_STATE_KEY, JSON.stringify({
+      activeScene, activeEffectOverlay, kitchenDropped, brightnessLevel,
+    }))
+  }
+
+  function loadTuningState() {
+    if (!browser) return
+    try {
+      const raw = sessionStorage.getItem(TUNE_STATE_KEY)
+      if (!raw) return
+      const s = JSON.parse(raw)
+      activeScene = s.activeScene ?? null
+      activeEffectOverlay = s.activeEffectOverlay ?? null
+      kitchenDropped = s.kitchenDropped ?? false
+      brightnessLevel = s.brightnessLevel ?? 0
+    } catch {
+      /* malformed payload — ignore */
+    }
+  }
 
   function showToast(msg) {
     toastMessage = msg
@@ -105,6 +156,13 @@
       startSceneCooldown(body.cooldown_seconds ?? 15)
       const sceneLabel = body.scene || name
       showToast(`Lights set to ${sceneLabel}`)
+      // Activating a fresh scene resets all tuning — guest's previous
+      // tweaks shouldn't carry over to a different palette.
+      activeScene = name
+      activeEffectOverlay = null
+      kitchenDropped = false
+      brightnessLevel = 0
+      persistTuningState()
     } catch {
       showToast(`Couldn't reach the server`)
     } finally {
@@ -181,6 +239,118 @@
     }
   }
 
+  async function bumpBrightness(direction) {
+    if (tuningBusy) return
+    const now = Date.now()
+    if (now - lastBrightnessAt < BRIGHTNESS_THROTTLE_MS) return
+    lastBrightnessAt = now
+    if (direction === 'up' && brightnessLevel >= BRIGHTNESS_LEVEL_CAP) return
+    if (direction === 'down' && brightnessLevel <= -BRIGHTNESS_LEVEL_CAP) return
+    tuningBusy = true
+    try {
+      const res = await fetch(`/api/guest/brightness/${direction}`, { method: 'POST' })
+      if (res.status === 429) {
+        showToast('Slow down a sec')
+        return
+      }
+      if (!res.ok) {
+        showToast(`Couldn't adjust brightness (${res.status})`)
+        return
+      }
+      brightnessLevel += direction === 'up' ? 1 : -1
+      persistTuningState()
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      tuningBusy = false
+    }
+  }
+
+  async function toggleKitchen() {
+    if (tuningBusy || !activeScene) return
+    tuningBusy = true
+    try {
+      if (kitchenDropped) {
+        // Restore the kitchen pair from the active scene's preset baseline.
+        // We re-PUT the original L3/L4 states (not just `on:true`) so colors
+        // / brightness match the rest of the palette, not whatever the bridge
+        // remembered before "off".
+        const preset = scenes.find((s) => s.name === activeScene)
+        for (const id of ['3', '4']) {
+          const ls = preset?.lights?.[id]
+          if (!ls) continue
+          await fetch(`/api/lights/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ls),
+          })
+        }
+        kitchenDropped = false
+      } else {
+        for (const id of ['3', '4']) {
+          await fetch(`/api/lights/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ on: false }),
+          })
+        }
+        kitchenDropped = true
+      }
+      persistTuningState()
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      tuningBusy = false
+    }
+  }
+
+  async function toggleEffect(name) {
+    if (tuningBusy) return
+    tuningBusy = true
+    try {
+      // Mutual exclusivity: tap the active chip → stop. Tap a different chip
+      // → that effect replaces the previous one (Hue v2 only runs one effect
+      // at a time anyway).
+      const target = activeEffectOverlay === name ? 'stop' : name
+      const res = await fetch(`/api/guest/effect/${target}`, { method: 'POST' })
+      if (res.status === 429) {
+        showToast('Effect cooling down')
+        return
+      }
+      if (!res.ok) {
+        showToast(`Couldn't change effect (${res.status})`)
+        return
+      }
+      activeEffectOverlay = target === 'stop' ? null : name
+      persistTuningState()
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      tuningBusy = false
+    }
+  }
+
+  async function resetScene() {
+    if (tuningBusy || !activeScene) return
+    tuningBusy = true
+    try {
+      const res = await fetch(`/api/guest/scene/${activeScene}/reset`, { method: 'POST' })
+      if (!res.ok) {
+        showToast(`Couldn't reset (${res.status})`)
+        return
+      }
+      activeEffectOverlay = null
+      kitchenDropped = false
+      brightnessLevel = 0
+      persistTuningState()
+      showToast('Scene reset to baseline')
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      tuningBusy = false
+    }
+  }
+
   async function handBack() {
     if (handbackBusy) return
     handbackBusy = true
@@ -199,6 +369,8 @@
   }
 
   onMount(async () => {
+    // Restore any in-flight tuning state from before the page reloaded.
+    loadTuningState()
     // Fetch scenes + vibes in parallel — both are read-only GETs and
     // can race independently.
     const [sceneRes, vibeRes] = await Promise.allSettled([
@@ -338,6 +510,83 @@
       </div>
     </div>
   </section>
+
+  {#if activeScene}
+    <section class="guest-card tuning-card">
+      <div class="card-head">
+        <Sliders size={20} strokeWidth={1.5} />
+        <h2>Tune this scene</h2>
+        <button
+          type="button"
+          class="reset-btn"
+          on:click={resetScene}
+          disabled={tuningBusy}
+        >
+          Reset
+        </button>
+      </div>
+
+      <div class="tune-row">
+        <span class="tune-label">Brightness</span>
+        <div class="brightness-rocker">
+          <button
+            type="button"
+            class="rocker-btn"
+            on:click={() => bumpBrightness('down')}
+            disabled={tuningBusy || brightnessLevel <= -BRIGHTNESS_LEVEL_CAP}
+            aria-label="Dimmer"
+          >−</button>
+          <span class="rocker-readout">
+            {brightnessLevel === 0 ? '·' : brightnessLevel > 0 ? `+${brightnessLevel}` : `${brightnessLevel}`}
+          </span>
+          <button
+            type="button"
+            class="rocker-btn"
+            on:click={() => bumpBrightness('up')}
+            disabled={tuningBusy || brightnessLevel >= BRIGHTNESS_LEVEL_CAP}
+            aria-label="Brighter"
+          >+</button>
+        </div>
+      </div>
+
+      <div class="tune-row">
+        <span class="tune-label">Kitchen</span>
+        <button
+          type="button"
+          class="toggle-pill"
+          class:active={!kitchenDropped}
+          on:click={toggleKitchen}
+          disabled={tuningBusy}
+        >
+          {kitchenDropped ? 'Off' : 'On'}
+        </button>
+      </div>
+
+      <div class="tune-row">
+        <span class="tune-label">Effect</span>
+        <div class="effect-chips">
+          <button
+            type="button"
+            class="chip"
+            class:active={activeEffectOverlay === 'candle'}
+            on:click={() => toggleEffect('candle')}
+            disabled={tuningBusy}
+          >
+            🕯 Candle
+          </button>
+          <button
+            type="button"
+            class="chip"
+            class:active={activeEffectOverlay === 'sparkle'}
+            on:click={() => toggleEffect('sparkle')}
+            disabled={tuningBusy}
+          >
+            ✨ Sparkle
+          </button>
+        </div>
+      </div>
+    </section>
+  {/if}
 
   <section class="guest-card">
     <div class="card-head">
@@ -794,5 +1043,125 @@
     min-width: 28px;
     text-align: center;
     letter-spacing: 0.04em;
+  }
+
+  /* Wave 2 — in-scene tuning card. Renders only while a guest scene is
+     active. Active toggles/chips use the same purple-tinted accent as the
+     "Set by a guest" source chip so the connection reads visually. */
+  .tuning-card .card-head { gap: 10px; }
+  .reset-btn {
+    appearance: none;
+    margin-left: auto;
+    padding: 4px 12px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
+    color: rgba(245, 243, 238, 0.7);
+    font-family: var(--font-body);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .reset-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+  .reset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .tune-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .tune-row:first-of-type { border-top: 0; padding-top: 4px; }
+  .tune-label {
+    font-size: 13px;
+    color: rgba(245, 243, 238, 0.7);
+    flex-shrink: 0;
+    min-width: 80px;
+  }
+
+  .brightness-rocker {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+  }
+  .rocker-btn {
+    appearance: none;
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: 0;
+    color: #fff;
+    font-size: 18px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background 0.15s;
+  }
+  .rocker-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
+  .rocker-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .rocker-readout {
+    font-family: var(--font-display);
+    font-size: 16px;
+    color: rgba(245, 243, 238, 0.85);
+    min-width: 32px;
+    text-align: center;
+    letter-spacing: 0.04em;
+  }
+
+  .toggle-pill {
+    appearance: none;
+    margin-left: auto;
+    padding: 6px 18px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    color: rgba(245, 243, 238, 0.7);
+    font-family: var(--font-body);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    min-width: 64px;
+  }
+  .toggle-pill:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); }
+  .toggle-pill:disabled { opacity: 0.5; cursor: not-allowed; }
+  .toggle-pill.active {
+    background: rgba(170, 110, 240, 0.18);
+    border-color: rgba(170, 110, 240, 0.35);
+    color: rgba(220, 200, 255, 0.95);
+  }
+
+  .effect-chips {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .chip {
+    appearance: none;
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    color: rgba(245, 243, 238, 0.8);
+    font-family: var(--font-body);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .chip:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); }
+  .chip:disabled { opacity: 0.4; cursor: not-allowed; }
+  .chip.active {
+    background: rgba(170, 110, 240, 0.22);
+    border-color: rgba(170, 110, 240, 0.4);
+    color: rgba(230, 215, 255, 0.98);
   }
 </style>

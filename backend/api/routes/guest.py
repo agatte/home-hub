@@ -61,6 +61,23 @@ GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
 GUEST_VIBE_COOLDOWN_SECONDS = 15
 _last_guest_vibe_at: float = 0.0
 
+# Wave 2 in-scene tuning. Effects are layered on top of the active scene
+# via Hue v2 set_effect_all (all-lights). Mutually exclusive on the frontend
+# (tap +Sparkle while +Candle is active → sparkle replaces). Cooldown is
+# separate from scene/vibe — guests should be able to layer an effect right
+# after picking a scene.
+GUEST_OVERLAY_EFFECTS = {"candle", "sparkle"}
+GUEST_EFFECT_COOLDOWN_SECONDS = 3
+_last_guest_effect_at: float = 0.0
+
+# Brightness rocker bumps every on-light by ±10% multiplicatively, clamped
+# to the per-mode ceiling (254 × mode_brightness_config[current_mode]).
+# 800ms throttle keeps a hammered + button from queueing 20 PUTs to the
+# bridge.
+GUEST_BRIGHTNESS_STEP = 1.10
+GUEST_BRIGHTNESS_COOLDOWN_SECONDS = 0.8
+_last_guest_brightness_at: float = 0.0
+
 
 async def _resolve_vibe_mapping() -> dict[str, str]:
     """Load the current vibe→favorite-title mapping from app_settings,
@@ -222,6 +239,52 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
     }
 
 
+@router.post("/scene/{name}/reset", dependencies=[Depends(require_api_key)])
+async def reset_guest_scene(name: str, request: Request) -> dict:
+    """Re-apply the baseline preset for an already-active guest scene.
+
+    Skips the 15s scene cooldown — this isn't a new pick, it's a reset.
+    Stops any v2 effect overlay the guest layered on top, then re-runs
+    the same per-light + paired-effect flow as `/scene/{name}`.
+    """
+    if name not in GUEST_SCENE_WHITELIST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown guest scene '{name}'. Pick one of: "
+                   f"{', '.join(sorted(GUEST_SCENE_WHITELIST))}",
+        )
+
+    preset_id = GUEST_SCENE_WHITELIST[name]
+    preset = SCENE_PRESETS[preset_id]
+
+    hue = request.app.state.hue
+    if not hue.connected:
+        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+
+    hue_v2 = getattr(request.app.state, "hue_v2", None)
+    ws_manager = request.app.state.ws_manager
+
+    # Stop overlay effect first — if the guest layered candle/sparkle on top
+    # of the scene, reset means "back to baseline" which includes whatever
+    # effect (if any) the preset itself specifies.
+    if hue_v2:
+        await hue_v2.stop_effect_all()
+    await _activate_per_light(hue, preset["lights"])
+    await _activate_effect_if_needed(hue_v2, preset.get("effect"))
+
+    await asyncio.sleep(0.3)
+    light_states = await hue.get_all_lights()
+    for light in light_states:
+        await ws_manager.broadcast("light_update", light)
+
+    logger.info(
+        "Guest reset scene '%s' from %s",
+        name,
+        request.client.host if request.client else "unknown",
+    )
+    return {"status": "ok", "scene": preset["display_name"]}
+
+
 @router.get("/vibes")
 async def list_guest_vibes() -> dict:
     """Return the guest music vibes with their current playlist mapping.
@@ -331,3 +394,124 @@ async def guest_handback(request: Request) -> dict:
         request.client.host if request.client else "unknown",
     )
     return {"status": "ok"}
+
+
+@router.post("/effect/{name}", dependencies=[Depends(require_api_key)])
+async def activate_guest_effect(name: str, request: Request) -> dict:
+    """Layer a v2 effect overlay on the active scene, or stop it.
+
+    `name` ∈ {candle, sparkle, stop}. All-lights only (per the v2 service
+    today). Mutual exclusivity is enforced client-side: tapping the active
+    chip again sends 'stop'; switching effects sends the new name (which
+    replaces).
+    """
+    global _last_guest_effect_at
+
+    if name != "stop" and name not in GUEST_OVERLAY_EFFECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown overlay effect '{name}'. Pick one of: "
+                   f"{', '.join(sorted(GUEST_OVERLAY_EFFECTS))} or 'stop'",
+        )
+
+    now = time.monotonic()
+    elapsed = now - _last_guest_effect_at
+    if elapsed < GUEST_EFFECT_COOLDOWN_SECONDS:
+        retry_after = int(GUEST_EFFECT_COOLDOWN_SECONDS - elapsed) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooling down — try again in {retry_after}s",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    hue_v2 = getattr(request.app.state, "hue_v2", None)
+    if not hue_v2:
+        raise HTTPException(status_code=503, detail="Hue v2 service not available")
+
+    if name == "stop":
+        await hue_v2.stop_effect_all()
+    else:
+        await hue_v2.set_effect_all(name)
+
+    _last_guest_effect_at = now
+    logger.info(
+        "Guest set overlay effect '%s' from %s",
+        name,
+        request.client.host if request.client else "unknown",
+    )
+    return {
+        "status": "ok",
+        "effect": name,
+        "cooldown_seconds": GUEST_EFFECT_COOLDOWN_SECONDS,
+    }
+
+
+@router.post("/brightness/{direction}", dependencies=[Depends(require_api_key)])
+async def adjust_guest_brightness(direction: str, request: Request) -> dict:
+    """Bump every on-light's brightness ±10%, clamped to the mode ceiling.
+
+    `direction` ∈ {up, down}. Multiplicative — each tap is `bri × 1.10` or
+    `bri / 1.10`. Ceiling = `min(254, floor(254 × mode_multiplier))` where
+    multiplier comes from `mode_brightness_config[current_mode]` (default 1.0).
+    Off-lights are skipped — guests don't get to turn lights ON via this knob.
+    """
+    global _last_guest_brightness_at
+
+    if direction not in {"up", "down"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Direction must be 'up' or 'down'",
+        )
+
+    now = time.monotonic()
+    elapsed = now - _last_guest_brightness_at
+    if elapsed < GUEST_BRIGHTNESS_COOLDOWN_SECONDS:
+        retry_after = max(1, int(GUEST_BRIGHTNESS_COOLDOWN_SECONDS - elapsed) + 1)
+        raise HTTPException(
+            status_code=429,
+            detail="Slow down a sec",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    hue = request.app.state.hue
+    if not hue.connected:
+        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+
+    automation = getattr(request.app.state, "automation", None)
+    mode_mult = 1.0
+    if automation:
+        mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
+    ceiling = max(1, min(254, int(254 * mode_mult)))
+
+    factor = (
+        GUEST_BRIGHTNESS_STEP
+        if direction == "up"
+        else (1.0 / GUEST_BRIGHTNESS_STEP)
+    )
+
+    lights = await hue.get_all_lights()
+    updated: list[dict] = []
+    for light in lights:
+        if not light.get("on") or "bri" not in light:
+            continue
+        current = light["bri"]
+        new_bri = max(1, min(ceiling, round(current * factor)))
+        if new_bri == current:
+            continue
+        await hue.set_light(light["id"], bri=new_bri)
+        updated.append({"id": light["id"], "bri": new_bri})
+
+    _last_guest_brightness_at = now
+    logger.info(
+        "Guest brightness %s on %d lights (ceiling=%d) from %s",
+        direction,
+        len(updated),
+        ceiling,
+        request.client.host if request.client else "unknown",
+    )
+    return {
+        "status": "ok",
+        "direction": direction,
+        "updated": updated,
+        "ceiling": ceiling,
+    }
