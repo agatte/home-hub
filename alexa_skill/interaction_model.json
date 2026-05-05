@@ -35,9 +35,7 @@
             "go to {Mode} mode",
             "set the apartment to {Mode}",
             "make it {Mode}",
-            "activate {Mode} mode",
-            "release the override",
-            "go back to auto"
+            "activate {Mode} mode"
           ]
         },
         {
@@ -61,6 +59,26 @@
             "stop the music",
             "pause"
           ]
+        },
+        {
+          "name": "ReleaseOverrideIntent",
+          "slots": [],
+          "samples": [
+            "auto",
+            "auto mode",
+            "set auto",
+            "set auto mode",
+            "go auto",
+            "go to auto",
+            "release",
+            "release the override",
+            "clear the override",
+            "release the mode",
+            "clear the mode",
+            "back to auto",
+            "back to automatic",
+            "automatic"
+          ]
         }
       ],
       "types": [
@@ -73,8 +91,7 @@
             { "id": "social",   "name": { "value": "social",   "synonyms": ["party", "company", "guests", "hosting"] } },
             { "id": "relax",    "name": { "value": "relax",    "synonyms": ["chill", "lounge", "wind down", "winding down"] } },
             { "id": "cooking",  "name": { "value": "cooking",  "synonyms": ["kitchen", "cook", "chef"] } },
-            { "id": "sleeping", "name": { "value": "sleeping", "synonyms": ["bed", "bedtime", "sleep", "good night"] } },
-            { "id": "auto",     "name": { "value": "auto",     "synonyms": ["automatic", "automation", "default", "release"] } }
+            { "id": "sleeping", "name": { "value": "sleeping", "synonyms": ["bed", "bedtime", "sleep", "good night"] } }
           ]
         }
       ]

@@ -36,10 +36,13 @@ logger.setLevel(logging.INFO)
 
 
 # Valid Home Hub modes — kept in sync with backend automation_engine.py.
-# "auto" is the dashboard's "release manual override" pseudo-mode.
+# "auto" is intentionally NOT in this set: it's a pseudo-mode that
+# releases the manual override, and Alexa NLU misroutes single-word
+# slot values reliably enough that it gets its own dedicated intent
+# (ReleaseOverrideIntent) instead of being a SetModeIntent slot value.
 VALID_MODES = frozenset({
     "gaming", "working", "watching", "social",
-    "relax", "cooking", "sleeping", "auto",
+    "relax", "cooking", "sleeping",
 })
 
 
@@ -137,14 +140,29 @@ def _handle_set_mode(slots: dict) -> dict:
     mode = _slot_value(slots, "Mode")
     if not mode:
         return _speak("Which mode? You can say gaming, working, relax, "
-                      "watching, social, cooking, sleeping, or auto.")
+                      "watching, social, cooking, or sleeping. "
+                      "For automatic, just say auto.")
     if mode not in VALID_MODES:
         return _speak(f"I don't know the mode {mode}.")
     status, _ = _post_to_homehub("/api/automation/override", {"mode": mode})
     if 200 <= status < 300:
-        if mode == "auto":
-            return _speak("Releasing manual override.")
         return _speak(f"Setting {mode} mode.")
+    if status == 401:
+        return _speak("Home Hub rejected the request. Check the skill token.")
+    return _speak("Home Hub didn't respond.")
+
+
+def _handle_release_override(_slots: dict) -> dict:
+    """Dedicated handler for the auto / release-override pseudo-mode.
+
+    Carved out of SetModeIntent because Alexa NLU misroutes "tell home
+    hub to set auto" — single-token slot values fall under the
+    confidence threshold and Alexa fallback-routes to smart-home,
+    where the most-recently-used Hue scene name wins.
+    """
+    status, _ = _post_to_homehub("/api/automation/override", {"mode": "auto"})
+    if 200 <= status < 300:
+        return _speak("Releasing manual override.")
     if status == 401:
         return _speak("Home Hub rejected the request. Check the skill token.")
     return _speak("Home Hub didn't respond.")
@@ -166,6 +184,7 @@ def _handle_pause_music(_slots: dict) -> dict:
 
 INTENT_HANDLERS = {
     "SetModeIntent": _handle_set_mode,
+    "ReleaseOverrideIntent": _handle_release_override,
     "PlayMusicIntent": _handle_play_music,
     "PauseMusicIntent": _handle_pause_music,
 }
