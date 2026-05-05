@@ -153,6 +153,11 @@ EXPOSURE_TARGET_LUX = 100   # Target frame mean at calibration time
 EXPOSURE_TOLERANCE = 10     # Accept calibration within target ± tolerance
 CALIBRATION_FRAMES = 10     # Frames averaged per exposure probe
 LUX_EMA_ALPHA = 0.3         # Smoothing factor (α*raw + (1-α)*ema) — ~20s to 95%
+# How long the EMA may sit untouched (e.g. all-night sleeping pause, all-day
+# absence) before the next reading should snap rather than blend. Without
+# this the first post-pause frame is averaged with yesterday's room light
+# and the multiplier swings ±15% wildly while the EMA catches up.
+LUX_EMA_STALE_RESET_SECONDS = 300
 LUX_CALIBRATION_SETTING_KEY = "lux_calibration_config"
 # OpenCV DirectShow/V4L2 auto-exposure magic numbers:
 #   0.25 = manual exposure, 0.75 = auto (on Windows DShow backend)
@@ -534,12 +539,25 @@ class CameraService:
         }
 
     def _update_ema_lux(self, raw_lux: float) -> None:
-        """Update exponential moving average of ambient lux (α=0.1)."""
-        if self._ema_lux is None:
+        """Update exponential moving average of ambient lux.
+
+        If the EMA is uninitialized OR hasn't been updated for longer than
+        LUX_EMA_STALE_RESET_SECONDS (sleeping pause / all-day absence /
+        watchdog reopen), snap to the raw reading instead of blending —
+        otherwise the first post-resume frame averages yesterday's room
+        light with today's, jerking the brightness multiplier.
+        """
+        now = datetime.now(timezone.utc)
+        stale = (
+            self._last_lux_update is None
+            or (now - self._last_lux_update).total_seconds()
+            >= LUX_EMA_STALE_RESET_SECONDS
+        )
+        if self._ema_lux is None or stale:
             self._ema_lux = raw_lux
         else:
             self._ema_lux = LUX_EMA_ALPHA * raw_lux + (1 - LUX_EMA_ALPHA) * self._ema_lux
-        self._last_lux_update = datetime.now(timezone.utc)
+        self._last_lux_update = now
 
     @property
     def ema_lux(self) -> Optional[float]:

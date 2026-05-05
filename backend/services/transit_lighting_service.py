@@ -32,6 +32,8 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from backend.services.camera_service import FACE_TRUST_THRESHOLD
+
 logger = logging.getLogger("home_hub.transit_lighting")
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
@@ -82,13 +84,13 @@ STATIONARY_ZONES = frozenset({"bed"})
 BED_EXIT_ABSENT_FRAMES = 5
 
 # Face confidence below which transit treats the detection as "not really
-# there." Mirrors camera_service.FACE_TRUST_THRESHOLD by intent — values
+# there." Imported from camera_service so the two stay in lockstep — values
 # below this are commonly chair-backs / picture frames / wall art that
 # clear MIN_FACE_CONFIDENCE but aren't actually Anthony. 2026-05-05
 # verification: with him out of the bedroom for 90s+, the camera reported
 # `detection_source=face, confidence~0.49` continuously (chair-back),
 # which kept consecutive_absent pinned at 0 and blocked transit.
-TRANSIT_FACE_TRUST_THRESHOLD = 0.70
+TRANSIT_FACE_TRUST_THRESHOLD = FACE_TRUST_THRESHOLD
 
 # Late-night adjustment — don't blind him if it's past 23:00 or before 06:00.
 LATE_NIGHT_START_HOUR = 23

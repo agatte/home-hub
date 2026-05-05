@@ -706,12 +706,16 @@ class AutomationEngine:
 
     async def _fire_mode_change_callbacks(self, mode: str) -> None:
         """Invoke all registered mode-change callbacks with timeout protection."""
+        # 15s budget per callback. CameraService.start() reopens V4L2 on
+        # resume-from-sleeping, which can take 5-8s under contention; the
+        # earlier 8s ceiling clipped legitimate restarts and orphaned the
+        # camera silent.
         for callback in self._on_mode_change_callbacks:
             try:
-                await asyncio.wait_for(callback(mode), timeout=8.0)
+                await asyncio.wait_for(callback(mode), timeout=15.0)
             except asyncio.TimeoutError:
                 logger.warning(
-                    "Mode change callback %s timed out after 8s for mode '%s'",
+                    "Mode change callback %s timed out after 15s for mode '%s'",
                     getattr(callback, "__qualname__", callback),
                     mode,
                 )

@@ -67,6 +67,11 @@ class TTSService:
         vol = volume if volume is not None else self._default_volume
         logger.info(f"TTS requested volume={volume}, default={self._default_volume}, using vol={vol}")
 
+        mp3_path: Optional[Path] = None
+        snapshot = None
+        original_volume: Optional[int] = None
+        success = False
+
         try:
             # Generate MP3
             mp3_path = await self._generate_audio(text)
@@ -80,36 +85,45 @@ class TTSService:
                 f"/static/tts/{filename}"
             )
 
-            # Duck-and-resume: save current playback state
+            # Duck-and-resume: capture state BEFORE play_uri changes anything,
+            # so the finally block can always restore even when play_uri raises
+            # mid-volume-bump.
             snapshot = await self._sonos.get_current_playback_snapshot()
-            original_volume = (await self._sonos.get_status()).get("volume", vol)
+            status = await self._sonos.get_status()
+            original_volume = status.get("volume", vol)
 
             # Play TTS with volume set atomically (same thread call)
             success = await self._sonos.play_uri(audio_url, volume=vol)
 
             if success:
                 logger.info(f"TTS playing: '{text[:50]}...' at volume {vol}")
-
                 # Wait for TTS to finish (estimate ~100ms per word + buffer)
                 word_count = len(text.split())
                 wait_time = max(2.0, word_count * 0.4 + 1.0)
                 await asyncio.sleep(wait_time)
-
-                # Restore previous playback
-                if snapshot:
-                    await self._sonos.set_volume(original_volume)
-                    await self._sonos.restore_playback(snapshot)
-                else:
-                    await self._sonos.set_volume(original_volume)
-
-            # Schedule cleanup
-            asyncio.create_task(self._cleanup_file(mp3_path, delay=60))
 
             return success
 
         except Exception as e:
             logger.error(f"TTS error: {e}", exc_info=True)
             return False
+
+        finally:
+            # Always restore volume + playback even if play_uri failed mid-bump
+            # or wait_time was interrupted. Without this, a failed TTS would
+            # leave Sonos sitting at the elevated TTS volume forever.
+            if original_volume is not None:
+                try:
+                    await self._sonos.set_volume(original_volume)
+                except Exception as exc:
+                    logger.error(f"TTS restore volume failed: {exc}")
+            if snapshot:
+                try:
+                    await self._sonos.restore_playback(snapshot)
+                except Exception as exc:
+                    logger.error(f"TTS restore playback failed: {exc}")
+            if mp3_path is not None:
+                asyncio.create_task(self._cleanup_file(mp3_path, delay=60))
 
     async def _generate_audio(self, text: str) -> Optional[Path]:
         """

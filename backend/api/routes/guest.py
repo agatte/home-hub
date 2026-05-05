@@ -41,8 +41,14 @@ GUEST_SCENE_WHITELIST: dict[str, str] = {
 # Global cooldown shared across all guests. Two visitors fighting over the
 # lights still get rate-limited together; the goal is to prevent rapid
 # strobing, not to track per-IP fairness.
+#
+# Each cooldown gets its own asyncio.Lock so the check-and-set is atomic:
+# without the lock, two requests arriving inside the same event-loop tick
+# can both observe `elapsed >= cooldown`, both apply the action, and only
+# one ever updates the timestamp — defeating the cooldown entirely.
 GUEST_SCENE_COOLDOWN_SECONDS = 15
 _last_guest_scene_at: float = 0.0
+_guest_scene_lock = asyncio.Lock()
 
 # Music vibe nudge — guests pick a vibe (hype/singalong/throwback), backend
 # resolves to a Sonos favorite title and plays it. Mapping is configurable
@@ -62,6 +68,7 @@ GUEST_VIBE_DEFAULTS: dict[str, str] = {
 GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
 GUEST_VIBE_COOLDOWN_SECONDS = 15
 _last_guest_vibe_at: float = 0.0
+_guest_vibe_lock = asyncio.Lock()
 
 # Wave 2 in-scene tuning. Effects are layered on top of the active scene
 # via Hue v2 set_effect_all (all-lights). Mutually exclusive on the frontend
@@ -71,6 +78,7 @@ _last_guest_vibe_at: float = 0.0
 GUEST_OVERLAY_EFFECTS = {"candle", "sparkle"}
 GUEST_EFFECT_COOLDOWN_SECONDS = 3
 _last_guest_effect_at: float = 0.0
+_guest_effect_lock = asyncio.Lock()
 
 # Brightness rocker bumps every on-light by ±10% multiplicatively, clamped
 # to the per-mode ceiling (254 × mode_brightness_config[current_mode]).
@@ -81,6 +89,7 @@ GUEST_BRIGHTNESS_STEP = 1.10
 GUEST_BRIGHTNESS_MIN_STEP = 20
 GUEST_BRIGHTNESS_COOLDOWN_SECONDS = 0.8
 _last_guest_brightness_at: float = 0.0
+_guest_brightness_lock = asyncio.Lock()
 
 # Toast TTS — guests submit a short text, system speaks it through Sonos
 # with a sparkle lighting flourish. Trust-the-room v1: no profanity filter,
@@ -92,6 +101,7 @@ GUEST_TOAST_MAX_CHARS = 120
 GUEST_TOAST_MAX_NAME_CHARS = 30
 GUEST_TOAST_VOLUME = 25
 _last_guest_toast_at: float = 0.0
+_guest_toast_lock = asyncio.Lock()
 
 
 class ToastRequest(BaseModel):
@@ -203,15 +213,20 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
                    f"{', '.join(sorted(GUEST_SCENE_WHITELIST))}",
         )
 
-    now = time.monotonic()
-    elapsed = now - _last_guest_scene_at
-    if elapsed < GUEST_SCENE_COOLDOWN_SECONDS:
-        retry_after = int(GUEST_SCENE_COOLDOWN_SECONDS - elapsed) + 1
-        raise HTTPException(
-            status_code=429,
-            detail=f"Cooling down — try again in {retry_after}s",
-            headers={"Retry-After": str(retry_after)},
-        )
+    # Atomic check-and-claim — hold the lock just long enough to claim
+    # the timestamp slot. Two simultaneous requests can otherwise both
+    # observe `elapsed >= cooldown` and both apply the scene.
+    async with _guest_scene_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_scene_at
+        if elapsed < GUEST_SCENE_COOLDOWN_SECONDS:
+            retry_after = int(GUEST_SCENE_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"Cooling down — try again in {retry_after}s",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_scene_at = now
 
     preset_id = GUEST_SCENE_WHITELIST[name]
     preset = SCENE_PRESETS[preset_id]
@@ -247,7 +262,6 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
         request, preset_id, preset.get("display_name"), "guest"
     )
 
-    _last_guest_scene_at = now
     logger.info(
         "Guest activated scene '%s' (preset=%s) from %s",
         name, preset_id,
@@ -353,15 +367,17 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
                    f"{', '.join(sorted(GUEST_VIBE_LABELS))}",
         )
 
-    now = time.monotonic()
-    elapsed = now - _last_guest_vibe_at
-    if elapsed < GUEST_VIBE_COOLDOWN_SECONDS:
-        retry_after = int(GUEST_VIBE_COOLDOWN_SECONDS - elapsed) + 1
-        raise HTTPException(
-            status_code=429,
-            detail=f"Cooling down — try again in {retry_after}s",
-            headers={"Retry-After": str(retry_after)},
-        )
+    async with _guest_vibe_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_vibe_at
+        if elapsed < GUEST_VIBE_COOLDOWN_SECONDS:
+            retry_after = int(GUEST_VIBE_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"Cooling down — try again in {retry_after}s",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_vibe_at = now
 
     sonos = getattr(request.app.state, "sonos", None)
     if not sonos or not sonos.connected:
@@ -381,7 +397,6 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
     if automation:
         await automation.set_manual_override("social", source="guest")
 
-    _last_guest_vibe_at = now
     logger.info(
         "Guest activated vibe '%s' → favorite '%s' from %s",
         name, favorite_title,
@@ -436,15 +451,17 @@ async def activate_guest_effect(name: str, request: Request) -> dict:
                    f"{', '.join(sorted(GUEST_OVERLAY_EFFECTS))} or 'stop'",
         )
 
-    now = time.monotonic()
-    elapsed = now - _last_guest_effect_at
-    if elapsed < GUEST_EFFECT_COOLDOWN_SECONDS:
-        retry_after = int(GUEST_EFFECT_COOLDOWN_SECONDS - elapsed) + 1
-        raise HTTPException(
-            status_code=429,
-            detail=f"Cooling down — try again in {retry_after}s",
-            headers={"Retry-After": str(retry_after)},
-        )
+    async with _guest_effect_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_effect_at
+        if elapsed < GUEST_EFFECT_COOLDOWN_SECONDS:
+            retry_after = int(GUEST_EFFECT_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"Cooling down — try again in {retry_after}s",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_effect_at = now
 
     hue_v2 = getattr(request.app.state, "hue_v2", None)
     if not hue_v2:
@@ -455,7 +472,6 @@ async def activate_guest_effect(name: str, request: Request) -> dict:
     else:
         await hue_v2.set_effect_all(name)
 
-    _last_guest_effect_at = now
     logger.info(
         "Guest set overlay effect '%s' from %s",
         name,
@@ -485,15 +501,17 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
             detail="Direction must be 'up' or 'down'",
         )
 
-    now = time.monotonic()
-    elapsed = now - _last_guest_brightness_at
-    if elapsed < GUEST_BRIGHTNESS_COOLDOWN_SECONDS:
-        retry_after = max(1, int(GUEST_BRIGHTNESS_COOLDOWN_SECONDS - elapsed) + 1)
-        raise HTTPException(
-            status_code=429,
-            detail="Slow down a sec",
-            headers={"Retry-After": str(retry_after)},
-        )
+    async with _guest_brightness_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_brightness_at
+        if elapsed < GUEST_BRIGHTNESS_COOLDOWN_SECONDS:
+            retry_after = max(1, int(GUEST_BRIGHTNESS_COOLDOWN_SECONDS - elapsed) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail="Slow down a sec",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_brightness_at = now
 
     hue = request.app.state.hue
     if not hue.connected:
@@ -531,7 +549,6 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
             automation.mark_light_manual(light_id)
         updated.append({"id": light_id, "bri": new_bri})
 
-    _last_guest_brightness_at = now
     logger.info(
         "Guest brightness %s on %d lights (ceiling=%d) from %s",
         direction,
@@ -563,15 +580,17 @@ async def speak_guest_toast(body: ToastRequest, request: Request) -> dict:
     """
     global _last_guest_toast_at
 
-    now = time.monotonic()
-    elapsed = now - _last_guest_toast_at
-    if elapsed < GUEST_TOAST_COOLDOWN_SECONDS:
-        retry_after = int(GUEST_TOAST_COOLDOWN_SECONDS - elapsed) + 1
-        raise HTTPException(
-            status_code=429,
-            detail=f"Cooling down — try again in {retry_after}s",
-            headers={"Retry-After": str(retry_after)},
-        )
+    async with _guest_toast_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_toast_at
+        if elapsed < GUEST_TOAST_COOLDOWN_SECONDS:
+            retry_after = int(GUEST_TOAST_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"Cooling down — try again in {retry_after}s",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_toast_at = now
 
     message = body.message.strip()
     name = body.name.strip() if body.name else None
@@ -610,7 +629,6 @@ async def speak_guest_toast(body: ToastRequest, request: Request) -> dict:
             status_code=503, detail="Sonos couldn't play the toast — try again"
         )
 
-    _last_guest_toast_at = now
     logger.info(
         "Guest toast '%s' (name=%s, %d chars) spoken from %s",
         message[:60], name or "-", len(message),

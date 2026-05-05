@@ -565,6 +565,52 @@ async def lifespan(app: FastAPI):
         enabled=True,
     ))
 
+    # 90-day event-table retention sweep. CLAUDE.md documents the policy
+    # but nothing was deleting old rows — activity_events, light_adjustments,
+    # sonos_playback_events, scene_activations, and ml_decisions all grew
+    # unbounded. Weekly aggregation into summaries (per spec) is deferred;
+    # this task just keeps the rolling window honest. Runs at 03:00 — after
+    # the journal (02:00) has read yesterday's events and before the fusion
+    # weight tuning (03:30) reads its 14-day window.
+    async def retention_sweep() -> None:
+        from sqlalchemy import text as _sql_text
+        from backend.database import async_session
+        cutoff_sql = "datetime('now', '-90 days')"
+        targets = (
+            ("activity_events", "timestamp"),
+            ("light_adjustments", "timestamp"),
+            ("sonos_playback_events", "timestamp"),
+            ("scene_activations", "timestamp"),
+            ("ml_decisions", "timestamp"),
+        )
+        deleted_total = 0
+        async with async_session() as session:
+            for table, ts_col in targets:
+                try:
+                    result = await session.execute(
+                        _sql_text(
+                            f"DELETE FROM {table} WHERE {ts_col} < {cutoff_sql}"
+                        )
+                    )
+                    deleted_total += result.rowcount or 0
+                except Exception as exc:
+                    app_logger.warning(
+                        "retention_sweep: failed to prune %s: %s", table, exc,
+                    )
+            await session.commit()
+        app_logger.info(
+            "retention_sweep: pruned %d rows older than 90 days", deleted_total,
+        )
+
+    scheduler.add_task(ScheduledTask(
+        name="retention_sweep",
+        hour=3,
+        minute=0,
+        weekdays=[0, 1, 2, 3, 4, 5, 6],
+        callback=retention_sweep,
+        enabled=True,
+    ))
+
     app.state.scheduler = scheduler
 
     # Background tasks
