@@ -4,7 +4,7 @@ Cloudflare Tunnel passthrough — Phase 5 Custom Alexa Skill.
 Cloudflared delivers external (tunneled) traffic to loopback, which would
 otherwise classify as the localhost bypass in `require_api_key`. To
 distinguish "tunneled from the public internet" from "kiosk on the same
-machine," cloudflared is pointed at THIS proxy on 127.0.0.1:8001 instead
+machine," cloudflared is pointed at THIS proxy on 127.0.0.1:8002 instead
 of the main app on 127.0.0.1:8000. The proxy:
 
 1. Adds `X-Tunnel-Origin: cloudflare` to every forwarded request — the
@@ -18,10 +18,10 @@ Run as a separate uvicorn process — keeps the proxy's lifecycle decoupled
 from the main app and makes it impossible for an in-process bug to leak
 the injection.
 
-Binding: 127.0.0.1:8001 only. Cloudflared is local; nothing else needs
+Binding: 127.0.0.1:8002 only. Cloudflared is local; nothing else needs
 to reach this port. If a stray client on the LAN tried to inject a
 forged `X-Tunnel-Origin` directly to :8000, the LAN bypass would fire
-before reaching the gate — but the LAN can't reach :8001 because we
+before reaching the gate — but the LAN can't reach :8002 because we
 never bind it externally.
 """
 from __future__ import annotations

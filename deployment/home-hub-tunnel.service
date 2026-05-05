@@ -1,11 +1,11 @@
 # Home Hub Cloudflare Tunnel passthrough — systemd user unit.
 #
 # Sits between cloudflared and the main FastAPI backend on the Latitude.
-# Cloudflared points its ingress at http://localhost:8001 (this service);
+# Cloudflared points its ingress at http://localhost:8002 (this service);
 # this service injects X-Tunnel-Origin: cloudflare and forwards to
 # 127.0.0.1:8000 (home-hub.service). Phase 5 Custom Alexa Skill flow:
 #
-#   Alexa → Lambda → cloudflared → :8001 (this) → :8000 (main backend)
+#   Alexa → Lambda → cloudflared → :8002 (this) → :8000 (main backend)
 #
 # See backend/api/tunnel_proxy.py for the proxy itself.
 #
@@ -30,7 +30,7 @@ Type=simple
 WorkingDirectory=%h/home-hub
 # Bind to localhost only — cloudflared connects locally; this port must
 # never be reachable from the LAN or public internet.
-ExecStart=%h/home-hub/venv/bin/python -m uvicorn backend.api.tunnel_proxy:app --host 127.0.0.1 --port 8001 --log-level info
+ExecStart=%h/home-hub/venv/bin/python -m uvicorn backend.api.tunnel_proxy:app --host 127.0.0.1 --port 8002 --log-level info
 Restart=always
 RestartSec=5
 Environment="PATH=%h/home-hub/venv/bin:/usr/bin"
