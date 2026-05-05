@@ -69,6 +69,14 @@ ABSENT_THRESHOLD = 15
 # dampened by the larger ABSENT_THRESHOLD above. Fixed corner view has no
 # other face-like regions (bed / wall art) that false-trigger at this score.
 MIN_FACE_CONFIDENCE = 0.15
+# Face confidence above which face wins outright over pose. Below this, when
+# pose is strong, pose takes priority — this protects against face-like
+# furniture silhouettes (chair backs, accent chair) competing with the real
+# face for `max(detections, key=score)` selection. Observed chair-back vs
+# real-face range during the 2026-05-05 oscillation incident was 0.16–0.55,
+# so the bar sits just above the noise floor. Real desk sessions in good
+# lighting typically clear 0.6–0.8.
+FACE_TRUST_THRESHOLD = 0.55
 # Pose fallback — MediaPipe Pose Landmarker (Tasks API). Declares "present"
 # when enough torso landmarks (nose, shoulders, hips) are visible above
 # MIN_POSE_VISIBILITY. This catches Anthony at the desk in deep profile,
@@ -1099,11 +1107,22 @@ class CameraService:
         return POSTURE_UPRIGHT if delta >= POSTURE_UPRIGHT_MIN_DELTA else POSTURE_RECLINED
 
     def _process_frame(self) -> Optional[dict]:
-        """Capture a frame, run face detection (then pose if face missed),
-        compute ambient lux.
+        """Capture a frame, run both face detection and pose landmarker,
+        arbitrate via face-confidence threshold, compute ambient lux.
 
         Runs in a thread pool executor. Frames never leave this method —
         they are overwritten and dereferenced before returning.
+
+        Selection (in order):
+          1. Face strong (conf ≥ FACE_TRUST_THRESHOLD) → face wins; if pose
+             also present, borrow its posture as a free upgrade.
+          2. Pose strong + face weak/missing → pose wins. Rescues the
+             chair-back-vs-real-face ambiguous case where two face
+             detections trade `max(score)` frame-to-frame.
+          3. Face detected (any conf ≥ MIN_FACE_CONFIDENCE) + pose weak →
+             face wins (existing fallback).
+          4. Pose detected (weak) → pose wins (existing fallback).
+          5. Else → absent.
 
         Returns:
             Dict with status, confidence, source, ambient_lux, and
@@ -1135,34 +1154,36 @@ class CameraService:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-            # Fast path — face detection (~15ms at 640×480)
+            # Face detection (~15ms at 640×480)
+            face_best = None
+            face_conf = 0.0
+            face_zone = None
             face_results = self._face_detector.detect(mp_image)
             if face_results.detections:
-                best = max(
+                face_best = max(
                     face_results.detections,
                     key=lambda d: d.categories[0].score,
                 )
-                # Zone from face bbox center-X (normalized by frame width).
-                bbox = best.bounding_box
+                face_conf = float(face_best.categories[0].score)
+                bbox = face_best.bounding_box
                 cx = (bbox.origin_x + bbox.width / 2) / max(w, 1)
-                zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
-                return {
-                    "status": "present",
-                    "confidence": float(best.categories[0].score),
-                    "source": "face",
-                    "pose_landmark_count": 0,
-                    "ambient_lux": ambient_lux,
-                    "zone": zone,
-                    "posture": None,  # Face path can't derive torso geometry
-                }
+                face_zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
 
-            # Fallback — pose landmarker (~60ms at 640×480, only on face miss)
+            # Pose landmarker (~60ms at 640×480) — runs every frame so it can
+            # arbitrate when face is unreliable. Total per-frame cost ~75ms,
+            # well under the 2s poll budget.
+            pose_present = False
+            pose_mean_vis = 0.0
+            pose_count = 0
+            pose_zone = None
+            pose_posture = None
+            pose_result = None
             if self._pose_landmarker is not None:
                 pose_result = self._pose_landmarker.detect(mp_image)
-                is_present, mean_vis, count = self._evaluate_pose(pose_result)
-                if is_present:
-                    # Zone from torso midline (average of visible shoulder X).
-                    zone = None
+                pose_present, pose_mean_vis, pose_count = self._evaluate_pose(
+                    pose_result
+                )
+                if pose_present:
                     landmarks = pose_result.pose_landmarks[0]
                     shoulders = [
                         landmarks[idx]
@@ -1174,17 +1195,46 @@ class CameraService:
                     if shoulders:
                         # MediaPipe pose landmark .x is already normalized 0–1.
                         cx = sum(s.x for s in shoulders) / len(shoulders)
-                        zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
-                    posture = self._evaluate_posture(pose_result)
-                    return {
-                        "status": "present",
-                        "confidence": mean_vis,
-                        "source": "pose",
-                        "pose_landmark_count": count,
-                        "ambient_lux": ambient_lux,
-                        "zone": zone,
-                        "posture": posture,
-                    }
+                        pose_zone = (
+                            ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
+                        )
+                    pose_posture = self._evaluate_posture(pose_result)
+
+            # Selection — face wins outright above the trust threshold,
+            # otherwise pose-strong overrules a weak face read.
+            if face_best is not None and face_conf >= FACE_TRUST_THRESHOLD:
+                return {
+                    "status": "present",
+                    "confidence": face_conf,
+                    "source": "face",
+                    "pose_landmark_count": pose_count,
+                    "ambient_lux": ambient_lux,
+                    "zone": face_zone,
+                    # Borrow pose's posture as a free upgrade when available.
+                    "posture": pose_posture if pose_present else None,
+                }
+
+            if pose_present:
+                return {
+                    "status": "present",
+                    "confidence": pose_mean_vis,
+                    "source": "pose",
+                    "pose_landmark_count": pose_count,
+                    "ambient_lux": ambient_lux,
+                    "zone": pose_zone,
+                    "posture": pose_posture,
+                }
+
+            if face_best is not None:
+                return {
+                    "status": "present",
+                    "confidence": face_conf,
+                    "source": "face",
+                    "pose_landmark_count": 0,
+                    "ambient_lux": ambient_lux,
+                    "zone": face_zone,
+                    "posture": None,  # Face path can't derive torso geometry
+                }
 
             return {
                 "status": "absent",
