@@ -31,7 +31,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
 - Activity-driven modes: gaming, working, watching, relax, cooking, social — each with per-light state definitions
 - **Colorspace exclusivity** — CT and HSB are never mixed in the command sent to the bridge. `hue_service.set_light` emits `sat=0` before `ct` (bridge is JSON-order-sensitive) and drops any stray `hue`/`sat` in the payload when `ct` is present. Prevents residual HSB on the bridge (or a learner overlay) from tinting "white" CT commands — the fix for the "greenish bedroom" bug.
-- **Kitchen pair rule** — L3 (kitchen front) and L4 (kitchen back) always match `bri` and on/off in **functional** modes (working, gaming, watching, cooking). In **aesthetic** modes (relax, social) they're free to diverge for intentional depth.
+- **Kitchen pair rule** — L3 (kitchen front) and L4 (kitchen back) always match `bri` + `hue/sat` + on/off in **functional** modes (working, gaming, watching, cooking) and in the 6 **guest party scenes** (`house_party`, `neon_tokyo`, `arcade`, `miami_vice`, `northern_lights`, `sunset_strip`) — identical pendants over a shared island shouldn't read as two different colors. **Relax** and custom non-party aesthetic scenes may diverge for intentional depth.
 - **Post-sunset warmth cutoff** — no CT-mode light drops below `ct=333` (~3000K) in evening/night across any mode. Watching loses true D65 bias-light color accuracy after sunset in favor of room-wide evening consistency; gaming HSB tightens brightness caps progressively.
 - **Science-based per-mode lighting** — each mode uses distinct per-light variation: working uses ct-mode clean whites with IES 1:3 monitor-ambient contrast at night (desk lamp at 2700K/bri=130 + warm ambient fill); gaming uses blue/purple HSB accents; relax uses warm amber gradients; watching is projector-friendly (warm throughout, no D65 — cool light washes projected blacks — with L2 as soft bias from the wall opposite the projection surface); cooking uses neutral 3500K kitchen peak for accurate food color.
 - **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching cinematic (3s), cooking quick (1s), sleeping gradual (5s) via MODE_TRANSITION_TIME
@@ -1168,7 +1168,7 @@ scheduler.add_task(task)
 Define per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES`. A few invariants from the April 2026 lighting redesign must hold:
 
 1. **One colorspace per state dict.** Functional modes (working, watching, cooking) use `ct` only. Aesthetic modes (gaming, relax, social) use `hue`/`sat` only. Never mix — `hue_service.set_light` will drop stray `hue`/`sat` from CT commands anyway (colorspace exclusivity), but keeping it clean in the state dict avoids confusion.
-2. **Kitchen pair in functional modes.** L3 (kitchen front) and L4 (kitchen back) must have matching `bri` and on/off state in working, gaming, watching, and cooking. They may have slight `ct` variance for depth. In relax/social, they're free to diverge.
+2. **Kitchen pair in functional modes and party scenes.** L3 (kitchen front) and L4 (kitchen back) must have matching `bri` + `hue/sat` + on/off state in working, gaming, watching, cooking, and in the 6 guest party scenes (`house_party`, `neon_tokyo`, `arcade`, `miami_vice`, `northern_lights`, `sunset_strip`). They may have slight `ct` variance for depth in functional modes. In relax and custom non-party aesthetic scenes, they're free to diverge.
 3. **Post-sunset warmth cutoff.** Evening and night periods must not emit `ct<333` (cooler than ~3000K). Watching's D65 (6500K) bias is a daytime-only exception; evening and night warm to 3000K or warmer.
 4. **Night working contrast target.** If the mode is meant to co-exist with an active monitor at night, keep ambient visible enough to hit IES 1:3 contrast (desk lamp at ~2700K/bri=130, living room ambient at ~2200K/bri=60 for the current apartment).
 
@@ -1305,7 +1305,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **CT (color temperature) support** — mirek values (153=6500K → 500=2000K) as first-class parameter
 - ✓ **20 curated scenes** — per-light color harmony (analogous, complementary, triadic), paired effects
 - ✓ **Custom scene CRUD** — save/load/update/delete with category and effect
-- ✓ **Effect auto-activation** — candle for relax nights, glisten for relax days, prism for party
+- ✓ **Effect auto-activation** — candle for relax nights, opal for relax days, glisten for watching eve/night. Party scenes use static palettes only (bridge effects flatten per-light HSB to their own color base — incompatible with custom palettes).
 - ✓ **Science-based night work** — desk lamp at 3200K + dim ambient fill (contrast-optimized)
 - **Remaining:** per-room mode overrides
 

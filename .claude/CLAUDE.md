@@ -326,7 +326,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Scene drift:** After 30min in **relax**, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness. Scoped to relax only — functional modes need stable, paired values.
 
-**Kitchen pair rule:** L3 (kitchen front) and L4 (kitchen back) must match `bri` and on/off in functional modes (working, gaming, watching, cooking). Free to diverge in relax/social. Dashboard fuses them into a single "Kitchen" card via `LightCard`'s `linkedIds` prop — every command on L3 fans out to L4 too. ApartmentViz still shows them as separate dots since they're physically distinct bulbs.
+**Kitchen pair rule:** L3 + L4 must match `bri` + `hue/sat` + on/off in functional modes (working, gaming, watching, cooking) and in the 6 guest party scenes — identical pendants shouldn't read as different colors. Free to diverge in relax + custom non-party scenes. Dashboard fuses them into a single "Kitchen" card via `LightCard`'s `linkedIds` prop; ApartmentViz shows them as distinct bulbs.
 
 **Post-sunset warmth cutoff:** No CT-mode light drops below `ct=333` (~3000K) in evening/night. Watching's D65 bias is a daytime-only exception.
 
@@ -346,7 +346,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 ## Dynamic Effects (Hue v2)
 
-Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `sparkle` (bright flashes), `prism` (slow color cycle), `glisten` (shimmer), `opal` (soft pastel). Activate via `POST /api/scenes/effects/{name}` (all lights) or `.../effects/{name}/light/{id}` (single).
+Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `sparkle` (bright flashes), `prism` (slow color cycle), `glisten` (shimmer), `opal` (soft pastel). Activate via `POST /api/scenes/effects/{name}` (all lights) or `.../effects/{name}/light/{id}` (single). **Effects flatten per-light HSB** to the effect's own color base — custom-palette scenes must use `effect: None`.
 
 **EFFECT_AUTO_MAP** entries `{"effect": name, "lights": [...] | None}` — `lights=None` = all, list scopes to v1 IDs. Mappings: relax → opal day / candle eve / fire night+late_night (candle/fire scoped to L1/L2 so moss pendants stay static); watching → glisten eve/night; social, gaming, working, cooking → none.
 

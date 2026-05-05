@@ -165,7 +165,7 @@ Your memory of "12 times" is in the right ballpark — the Zigbee Touchlink spec
 Any of these additions would require backend changes in `backend/services/automation_engine.py`:
 
 - **New light IDs** added to `ACTIVITY_LIGHT_STATES` for every mode × time period (follows Pattern 7 in `.claude/CLAUDE.md`). Each new light needs a considered state — don't `_uniform()`.
-- **Kitchen-pair rule extension** — if L11 (OmniGlow cabinet uplight) and L12 (under-cabinet task) are added, they're a new functional pair for `cooking`. In `relax/social` they're free to diverge.
+- **Kitchen-pair rule extension** — if L11 (OmniGlow cabinet uplight) and L12 (under-cabinet task) are added, they're a new functional pair for `cooking` + the 6 guest party scenes. In relax + custom non-party aesthetic scenes they're free to diverge.
 - **Bias-pair rule** — L5/L6 Play bars become a monitor-flanking pair; group with L2 for screen sync entertainment area.
 - **`EFFECT_AUTO_MAP`** — new lights inherit mode effects automatically unless excluded (Wall Washer + Signe + Festavia are all Hue v2 effect-capable; OmniGlow supports effects too).
 - **Screen sync service** — Play Sync Box would replace `screen_sync.py` entirely; if added, remove the mss path and route sync through the box's Entertainment API. Much lower latency, frees the dev PC from running mss.
