@@ -69,6 +69,16 @@ TRIGGER_MODES = frozenset({"working", "gaming", "watching", "relax"})
 # inside camera_service), so brief absences don't drop the gate either.
 STATIONARY_ZONES = frozenset({"bed"})
 
+# Bypass STATIONARY_ZONES when camera has been continuously absent for this
+# many polls with ZERO mixed-in present frames. ``consecutive_absent`` resets
+# to 0 on any present detection — flicker scenarios always include some
+# single-frame present detections, so they never accumulate this many in a
+# row. A real bedroom exit produces sustained pure absence. 5 polls ≈ 10s
+# at the camera's 2s cadence; combined with the 4s ABSENT_TRIGGER_SECONDS
+# (already met by the time we hit 5 consecutive), transit fires ~10s after
+# Anthony actually gets up.
+BED_EXIT_ABSENT_FRAMES = 5
+
 # Late-night adjustment — don't blind him if it's past 23:00 or before 06:00.
 LATE_NIGHT_START_HOUR = 23
 LATE_NIGHT_END_HOUR = 6
@@ -194,12 +204,18 @@ class TransitLightingService:
             self._record_block(f"mode={mode} (not in trigger set)")
             return
         # Last committed zone is "bed" → he's reclined in the bedroom. Camera
-        # absences in this state are detection flicker (face/pose tossing
-        # under blankets in low light), not navigation. Block before the
-        # absent-dwell timer accumulates so a flap-storm can't fire transit.
+        # absences in this state are usually detection flicker (face/pose
+        # tossing under blankets in low light), not navigation. Block before
+        # the absent-dwell timer accumulates so a flap-storm can't fire
+        # transit. Exception: if camera reports BED_EXIT_ABSENT_FRAMES
+        # consecutive absent polls with NO mixed-in present frames, that's
+        # real bedroom exit — flicker always includes some single-frame
+        # present detections, real exit produces sustained pure absence.
         if zone in STATIONARY_ZONES:
-            self._record_block(f"zone={zone} (user stationary)")
-            return
+            consecutive_absent = cam_status.get("consecutive_absent", 0)
+            if consecutive_absent < BED_EXIT_ABSENT_FRAMES:
+                self._record_block(f"zone={zone} (user stationary)")
+                return
 
         # All gates clear — log the unblock so journalctl shows when the
         # service became eligible again.
