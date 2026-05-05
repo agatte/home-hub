@@ -69,15 +69,26 @@ TRIGGER_MODES = frozenset({"working", "gaming", "watching", "relax"})
 # inside camera_service), so brief absences don't drop the gate either.
 STATIONARY_ZONES = frozenset({"bed"})
 
-# Bypass STATIONARY_ZONES when camera has been continuously absent for this
-# many polls with ZERO mixed-in present frames. ``consecutive_absent`` resets
-# to 0 on any present detection — flicker scenarios always include some
-# single-frame present detections, so they never accumulate this many in a
-# row. A real bedroom exit produces sustained pure absence. 5 polls ≈ 10s
-# at the camera's 2s cadence; combined with the 4s ABSENT_TRIGGER_SECONDS
-# (already met by the time we hit 5 consecutive), transit fires ~10s after
+# Bypass STATIONARY_ZONES when camera has been continuously NOT-strongly-
+# present for this many polls. Strong presence = pose detection OR face
+# above TRANSIT_FACE_TRUST_THRESHOLD. The streak resets to 0 on any
+# strongly-present frame — pose-flicker scenarios always include occasional
+# strong frames, but a real bedroom exit produces sustained absence (the
+# only "presence" signal during a real exit is weak-face from chair-back /
+# picture-frame false positives, which don't count toward the streak).
+# 5 polls ≈ 10s at the camera's 2s cadence; combined with the 4s
+# ABSENT_TRIGGER_SECONDS (already met by then), transit fires ~10s after
 # Anthony actually gets up.
 BED_EXIT_ABSENT_FRAMES = 5
+
+# Face confidence below which transit treats the detection as "not really
+# there." Mirrors camera_service.FACE_TRUST_THRESHOLD by intent — values
+# below this are commonly chair-backs / picture frames / wall art that
+# clear MIN_FACE_CONFIDENCE but aren't actually Anthony. 2026-05-05
+# verification: with him out of the bedroom for 90s+, the camera reported
+# `detection_source=face, confidence~0.49` continuously (chair-back),
+# which kept consecutive_absent pinned at 0 and blocked transit.
+TRANSIT_FACE_TRUST_THRESHOLD = 0.70
 
 # Late-night adjustment — don't blind him if it's past 23:00 or before 06:00.
 LATE_NIGHT_START_HOUR = 23
@@ -116,6 +127,11 @@ class TransitLightingService:
         # same reason stay quiet to avoid spamming. None means "currently
         # eligible to fire (or already firing)."
         self._last_block_reason: Optional[str] = None
+        # Polls in a row where the camera failed to report strong presence
+        # (pose, or face above TRANSIT_FACE_TRUST_THRESHOLD). Used to bypass
+        # the STATIONARY_ZONES gate when sustained — see BED_EXIT_ABSENT_FRAMES.
+        # Resets to 0 on any strongly-present frame.
+        self._strong_absent_streak: int = 0
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
 
     def set_heartbeat_registry(self, registry) -> None:
@@ -160,6 +176,7 @@ class TransitLightingService:
             # comes back online.
             self._camera_absent_since = None
             self._presence_during_absent_since = None
+            self._strong_absent_streak = 0
             if self._active:
                 await self._deactivate("camera disabled")
             self._record_block("camera disabled")
@@ -167,6 +184,21 @@ class TransitLightingService:
 
         detection = cam_status.get("last_detection", "unknown")
         zone = cam_status.get("zone")
+        src = cam_status.get("detection_source")
+        conf = cam_status.get("confidence", 0.0) or 0.0
+
+        # Strong presence = pose detection OR face above the trust threshold.
+        # Weak-face-only counts as absent for transit's purposes — chair-back /
+        # picture-frame false positives clear MIN_FACE_CONFIDENCE indefinitely
+        # while Anthony is actually away, so we can't trust them.
+        strongly_present = detection == "present" and (
+            src == "pose"
+            or (src == "face" and conf >= TRANSIT_FACE_TRUST_THRESHOLD)
+        )
+        if strongly_present:
+            self._strong_absent_streak = 0
+        else:
+            self._strong_absent_streak += 1
 
         # ── If already active: look for conditions to clear ──
         if self._active:
@@ -188,8 +220,9 @@ class TransitLightingService:
                 await self._deactivate("hard timeout")
                 return
 
-            # Camera sees him again — revert after brief dwell
-            if detection == "present":
+            # Camera sees him again — revert after brief dwell. Use strong
+            # presence so weak-face false positives don't prematurely revert.
+            if strongly_present:
                 if self._camera_present_since is None:
                     self._camera_present_since = now
                 elif (now - self._camera_present_since).total_seconds() >= PRESENT_CLEAR_SECONDS:
@@ -207,13 +240,12 @@ class TransitLightingService:
         # absences in this state are usually detection flicker (face/pose
         # tossing under blankets in low light), not navigation. Block before
         # the absent-dwell timer accumulates so a flap-storm can't fire
-        # transit. Exception: if camera reports BED_EXIT_ABSENT_FRAMES
-        # consecutive absent polls with NO mixed-in present frames, that's
-        # real bedroom exit — flicker always includes some single-frame
-        # present detections, real exit produces sustained pure absence.
+        # transit. Exception: if we've had BED_EXIT_ABSENT_FRAMES consecutive
+        # polls without strong presence, that's real bedroom exit (pose-flicker
+        # under blankets always includes some strong frames; chair-back false
+        # positives don't count toward the streak).
         if zone in STATIONARY_ZONES:
-            consecutive_absent = cam_status.get("consecutive_absent", 0)
-            if consecutive_absent < BED_EXIT_ABSENT_FRAMES:
+            if self._strong_absent_streak < BED_EXIT_ABSENT_FRAMES:
                 self._record_block(f"zone={zone} (user stationary)")
                 return
 
@@ -221,20 +253,20 @@ class TransitLightingService:
         # service became eligible again.
         self._record_unblock()
 
-        if detection != "absent":
+        if strongly_present:
             if self._camera_absent_since is None:
                 # Not currently waiting on the absent dwell — nothing to debounce.
                 self._presence_during_absent_since = None
                 return
-            # Already mid-dwell: a single "present" frame might be MediaPipe pose
-            # extrapolating a partial body. Require PRESENT_CLEAR_SECONDS of
-            # sustained presence before treating it as a true return.
+            # Already mid-dwell: a single strong-present frame might be a
+            # transient pose detection. Require PRESENT_CLEAR_SECONDS of
+            # sustained strong presence before treating it as a true return.
             if self._presence_during_absent_since is None:
                 self._presence_during_absent_since = now
                 return
             if (now - self._presence_during_absent_since).total_seconds() >= PRESENT_CLEAR_SECONDS:
                 logger.info(
-                    "Transit: absent timer reset (sustained present for %ss)",
+                    "Transit: absent timer reset (sustained strong-present for %ss)",
                     PRESENT_CLEAR_SECONDS,
                 )
                 self._camera_absent_since = None
@@ -242,7 +274,7 @@ class TransitLightingService:
             # Else: still inside flap window — keep the absent timer running.
             return
 
-        # Detection is absent — clear flap tracking and advance the dwell.
+        # Not strongly present — clear flap tracking and advance the dwell.
         self._presence_during_absent_since = None
         if self._camera_absent_since is None:
             self._camera_absent_since = now

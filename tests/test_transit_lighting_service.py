@@ -60,24 +60,37 @@ class _FakeCamera:
         enabled: bool = True,
         last_detection: str = "absent",
         zone: Optional[str] = None,
+        detection_source: Optional[str] = "pose",
+        confidence: float = 0.95,
     ) -> None:
         self.enabled = enabled
         self.last_detection = last_detection
         self.zone = zone
+        # Defaults represent "strong presence" so tests that set
+        # last_detection="present" without specifying source/confidence
+        # match the pre-2026-05-05 semantics where any present counted.
+        self.detection_source = detection_source
+        self.confidence = confidence
 
     def get_status(self) -> dict:
         return {
             "enabled": self.enabled,
             "last_detection": self.last_detection,
             "zone": self.zone,
+            "detection_source": self.detection_source,
+            "confidence": self.confidence,
         }
 
 
 def _make_service(mode="working", override=False, override_mode=None,
                   cam_detection="absent", cam_enabled=True,
-                  cam_zone=None):
+                  cam_zone=None, cam_detection_source="pose",
+                  cam_confidence=0.95):
     auto = _FakeAutomation(mode=mode, manual_override=override, override_mode=override_mode)
-    cam = _FakeCamera(enabled=cam_enabled, last_detection=cam_detection, zone=cam_zone)
+    cam = _FakeCamera(
+        enabled=cam_enabled, last_detection=cam_detection, zone=cam_zone,
+        detection_source=cam_detection_source, confidence=cam_confidence,
+    )
     return TransitLightingService(auto, cam), auto, cam
 
 
@@ -211,6 +224,72 @@ class TestStationaryZoneGate:
         # by the camera, it should be added here too.
         assert "bed" in STATIONARY_ZONES
         assert "desk" not in STATIONARY_ZONES
+
+    async def test_weak_face_only_bypasses_stationary_after_5_polls(self):
+        # 2026-05-05 regression: when Anthony leaves the bedroom, the camera
+        # often keeps reporting "present" via face detection of a chair-back
+        # / picture-frame at confidence ~0.5. consecutive_absent stays at 0
+        # so the simple gate-bypass never triggers. Transit's local
+        # _strong_absent_streak counts these weak-face frames as not-strongly-
+        # present and ticks up — after BED_EXIT_ABSENT_FRAMES polls the
+        # STATIONARY_ZONES gate bypasses, the absent-dwell timer accumulates
+        # for ABSENT_TRIGGER_SECONDS, then transit fires.
+        from datetime import timedelta
+        from backend.services.transit_lighting_service import (
+            BED_EXIT_ABSENT_FRAMES,
+        )
+        svc, auto, cam = _make_service(
+            mode="working", cam_zone="bed",
+            cam_detection="present", cam_detection_source="face",
+            cam_confidence=0.49,  # below TRANSIT_FACE_TRUST_THRESHOLD = 0.70
+        )
+        # Drive BED_EXIT_ABSENT_FRAMES polls of weak-face → still gated, but
+        # the streak builds.
+        for _ in range(BED_EXIT_ABSENT_FRAMES):
+            await svc._check()
+            assert svc.active is False
+        assert svc._strong_absent_streak >= BED_EXIT_ABSENT_FRAMES
+
+        # Next poll: gate bypasses, absent-dwell timer starts.
+        await svc._check()
+        assert svc._camera_absent_since is not None
+        assert svc.active is False  # ABSENT_TRIGGER_SECONDS not yet met
+
+        # Backdate the dwell so the trigger threshold is met, then tick.
+        svc._camera_absent_since -= timedelta(seconds=ABSENT_TRIGGER_SECONDS + 1)
+        await svc._check()
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
+
+    async def test_pose_present_resets_strong_absent_streak(self):
+        # Anti-flap: while in bed, occasional pose-present frames must reset
+        # the streak so transit doesn't fire from intermittent pose
+        # blanket-flicker.
+        from backend.services.transit_lighting_service import (
+            BED_EXIT_ABSENT_FRAMES,
+        )
+        svc, _, cam = _make_service(
+            mode="working", cam_zone="bed",
+            cam_detection="present", cam_detection_source="face",
+            cam_confidence=0.49,
+        )
+        # Tick 4 weak-face polls — streak at 4.
+        for _ in range(4):
+            await svc._check()
+        assert svc._strong_absent_streak == 4
+
+        # One pose frame slips in.
+        cam.detection_source = "pose"
+        cam.confidence = 0.92
+        await svc._check()
+        assert svc._strong_absent_streak == 0  # reset
+
+        # Back to weak face — streak starts over at 1.
+        cam.detection_source = "face"
+        cam.confidence = 0.49
+        await svc._check()
+        assert svc._strong_absent_streak == 1
+        assert svc.active is False
 
 
 class TestFlapSuppression:
