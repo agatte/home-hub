@@ -2367,6 +2367,22 @@ class AutomationEngine:
             self._zone_posture_reclined_since = None
             return
 
+        # Gate 2.5: user-clear cooldown. When the user just cleared an
+        # override via the dashboard, set_manual_override silently rejects
+        # autonomous-source pushes for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS.
+        # Without this gate the rule would still meet dwell, log applied=1,
+        # and burn its 4h refractory on a fire that set_manual_override
+        # threw away — locking the rule out for the rest of the night even
+        # after the cooldown expired (2026-05-05 incident). Reset the dwell
+        # so a fresh 120s of bed+reclined is required after the cooldown.
+        if self._user_cleared_override_at is not None:
+            elapsed = (
+                (now - self._user_cleared_override_at).total_seconds()
+            )
+            if elapsed < USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS:
+                self._zone_posture_reclined_since = None
+                return
+
         # Gate 3: the core condition — committed zone + posture.
         zone = camera.zone
         posture = camera.posture
