@@ -39,6 +39,7 @@ GAME_PROCESSES: set[str] = {
     "bg3.exe",
     "palworld-win64-shipping.exe",
     "helldivers2.exe",
+    "oxygennotincluded.exe",
     # Epic / launchers (only count if a game is also running)
     # Not included: epicgameslauncher.exe, steam.exe (launcher ≠ gaming)
 }
