@@ -95,6 +95,121 @@ class TestFeatureImportances:
         assert predictor.get_feature_importances() == {}
 
 
+class _StubMLLogger:
+    """Minimal ml_logger stand-in that returns a fixed diversity dict.
+
+    The real MLLogger queries ml_decisions; for the auto-demote unit
+    tests we only care that the predictor reads the dict's
+    ``diverse`` + ``reason`` fields and acts on them correctly.
+    """
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+        self.calls = 0
+
+    async def compute_prediction_diversity(self, **_kwargs) -> dict:
+        self.calls += 1
+        return dict(self._payload)
+
+
+@pytest.mark.asyncio
+class TestAutoDemote:
+    """check_and_demote_if_degenerate is the runtime counterpart to the
+    /predictor/promote diversity gate. Same helper, opposite direction:
+    flips ``active`` → ``shadow`` automatically when shadow predictions
+    collapse, but never on missing-data signals (anti-flap)."""
+
+    async def test_skipped_when_shadow(self, predictor):
+        predictor._status = "shadow"
+        ml_log = _StubMLLogger({"diverse": False, "reason": "near_single_class"})
+        result = await predictor.check_and_demote_if_degenerate(ml_log)
+
+        assert result["action"] == "skipped"
+        assert result["reason"] == "not_active"
+        assert predictor._status == "shadow"
+        # We don't even ask the helper when status isn't active.
+        assert ml_log.calls == 0
+
+    async def test_kept_active_when_diverse(self, predictor):
+        predictor._model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb", "status": "shadow",
+        }
+        predictor.promote()
+        ml_log = _StubMLLogger({
+            "diverse": True, "reason": "ok",
+            "total": 200, "unique_modes": 4, "top_mode_share": 0.42,
+        })
+
+        result = await predictor.check_and_demote_if_degenerate(ml_log)
+
+        assert result["action"] == "kept_active"
+        assert predictor._status == "active"
+
+    async def test_kept_active_on_insufficient_samples(self, predictor):
+        """Anti-flap: <50 samples must NOT auto-demote a freshly-promoted
+        predictor. The diversity helper returns diverse=False for both
+        collapse and "not enough data yet" — we have to distinguish."""
+        predictor._model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb", "status": "shadow",
+        }
+        predictor.promote()
+        ml_log = _StubMLLogger({
+            "diverse": False, "reason": "insufficient_samples",
+            "total": 12, "min_samples": 50,
+        })
+
+        result = await predictor.check_and_demote_if_degenerate(ml_log)
+
+        assert result["action"] == "kept_active"
+        assert predictor._status == "active"
+
+    async def test_kept_active_on_query_failed(self, predictor):
+        predictor._model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb", "status": "shadow",
+        }
+        predictor.promote()
+        ml_log = _StubMLLogger({
+            "diverse": False, "reason": "query_failed", "total": 0,
+        })
+
+        result = await predictor.check_and_demote_if_degenerate(ml_log)
+        assert result["action"] == "kept_active"
+        assert predictor._status == "active"
+
+    async def test_demoted_on_near_single_class(self, predictor):
+        predictor._model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb", "status": "shadow",
+        }
+        predictor.promote()
+        ml_log = _StubMLLogger({
+            "diverse": False, "reason": "near_single_class",
+            "total": 600, "unique_modes": 7, "top_mode_share": 0.98,
+        })
+
+        result = await predictor.check_and_demote_if_degenerate(ml_log)
+
+        assert result["action"] == "auto_demoted"
+        assert result["reason"] == "near_single_class"
+        assert predictor._status == "shadow"
+        # Persisted status flip.
+        assert predictor._model_manager._meta["mode_predictor"]["status"] == "shadow"
+
+    async def test_demoted_on_single_class(self, predictor):
+        predictor._model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb", "status": "shadow",
+        }
+        predictor.promote()
+        ml_log = _StubMLLogger({
+            "diverse": False, "reason": "single_class",
+            "total": 800, "unique_modes": 1, "top_mode_share": 1.0,
+        })
+
+        result = await predictor.check_and_demote_if_degenerate(ml_log)
+
+        assert result["action"] == "auto_demoted"
+        assert predictor._status == "shadow"
+
+
 @pytest.mark.asyncio
 class TestRetrain:
     async def test_insufficient_events_skips_training(self, predictor, ml_db):

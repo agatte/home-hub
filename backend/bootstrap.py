@@ -541,6 +541,30 @@ async def lifespan(app: FastAPI):
         enabled=True,
     ))
 
+    # Predictor auto-demote at 3:45 AM — counterpart to the diversity gate
+    # on /predictor/promote. If a promoted predictor's recent shadow
+    # outputs collapse (single-class / near-single-class over 7d), flip
+    # back to shadow automatically so the apartment doesn't get driven by
+    # a degenerate model. Anti-flap baked into check_and_demote_if_degenerate
+    # (only confirmed-collapse reasons trigger; insufficient_samples /
+    # no_predictions are treated as "don't know yet"). Runs after weight
+    # tuning (3:30) and before the 4:00 retrain so the upcoming retrain
+    # has a chance to fix the underlying issue.
+    async def predictor_auto_demote_check() -> None:
+        if behavioral_predictor is None:
+            return
+        result = await behavioral_predictor.check_and_demote_if_degenerate(ml_logger)
+        app_logger.info("predictor_auto_demote_check: %s", result)
+
+    scheduler.add_task(ScheduledTask(
+        name="predictor_auto_demote_check",
+        hour=3,
+        minute=45,
+        weekdays=[0, 1, 2, 3, 4, 5, 6],
+        callback=predictor_auto_demote_check,
+        enabled=True,
+    ))
+
     app.state.scheduler = scheduler
 
     # Background tasks

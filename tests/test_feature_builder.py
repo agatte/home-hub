@@ -161,24 +161,27 @@ class TestBuildRuntimeFeatures:
         assert features["previous_mode"] == fb.MODE_ENCODING["working"]
 
     async def test_history_populates_features(self, ml_db):
-        # Use offsets from `now` so the test isn't sensitive to the wall
-        # clock — putting events at a fixed today_start+8h breaks if the
-        # suite runs before 08:00 (events live in the future).
+        # Anchor every "today" event off today_start, not off `now` —
+        # `now - 20m` ran before today_start in the post-midnight UTC
+        # window (00:00–00:20) and silently dropped one transition.
+        # Using fractions of (now - today_start) keeps every event
+        # strictly inside today regardless of wall-clock hour.
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elapsed = now - today_start
         async with ml_db() as session:
             # First non-idle event of "today" — wake.
             session.add(ActivityEvent(
-                timestamp=today_start + timedelta(minutes=1),
+                timestamp=today_start + timedelta(seconds=30),
                 mode="working", source="process", duration_seconds=600,
             ))
-            # Two more transitions today.
+            # Two more transitions today, both safely after today_start.
             session.add(ActivityEvent(
-                timestamp=now - timedelta(minutes=20),
+                timestamp=today_start + elapsed * 0.5,
                 mode="watching", source="process", duration_seconds=600,
             ))
             session.add(ActivityEvent(
-                timestamp=now - timedelta(minutes=10),
+                timestamp=today_start + elapsed * 0.9,
                 mode="working", source="process", duration_seconds=600,
             ))
             # A manual override 2 days ago — still inside the 7d window.

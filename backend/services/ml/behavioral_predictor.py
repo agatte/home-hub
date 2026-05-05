@@ -597,3 +597,35 @@ class BehavioralPredictor(HealthTrackable):
         self._status = "shadow"
         self._model_manager.update_meta("mode_predictor", status="shadow")
         logger.info("Behavioral predictor DEMOTED to shadow")
+
+    async def check_and_demote_if_degenerate(self, ml_logger) -> dict:
+        """Auto-demote counterpart to /predictor/promote's diversity gate.
+
+        No-op when status != 'active' (nothing to demote). Otherwise
+        queries the same compute_prediction_diversity helper and only
+        demotes on a confirmed-collapse reason ('single_class' or
+        'near_single_class'). 'insufficient_samples' / 'no_predictions'
+        / 'query_failed' are treated as "don't know yet" — they will
+        never trigger demotion of an otherwise-healthy promoted
+        predictor (a freshly-promoted model with <50 logged
+        predictions would otherwise flap straight back to shadow).
+
+        Returns ``{"action": "skipped"|"kept_active"|"auto_demoted", ...}``
+        merged with the diversity diagnostics — for journalctl + the
+        scheduler's per-task log line.
+        """
+        if self._status != "active":
+            return {"action": "skipped", "reason": "not_active"}
+        diversity = await ml_logger.compute_prediction_diversity()
+        if diversity.get("diverse"):
+            return {"action": "kept_active", **diversity}
+        if diversity.get("reason") not in ("single_class", "near_single_class"):
+            # Anti-flap: missing data isn't grounds for demotion.
+            return {"action": "kept_active", **diversity}
+        self.demote()
+        logger.warning(
+            "Behavioral predictor AUTO-DEMOTED to shadow — degenerate "
+            "outputs over %sd window: %s",
+            diversity.get("window_days"), diversity,
+        )
+        return {"action": "auto_demoted", **diversity}
