@@ -119,7 +119,19 @@ SPEECH_FALLBACK_KEYWORDS = ["speech"]
 # It requires both Speech AND Television scores > 0.3.
 TV_DIALOG_KEYWORDS = ["television"]
 
-# Confidence thresholds for mode mapping (from ML_SPEC)
+# Confidence thresholds for mode mapping (from ML_SPEC).
+#
+# DEFERRED DECISION (2026-05-09 deadline): The `speech_multiple` gate is
+# structurally unreachable in production — the 5/03 36-hour checkpoint
+# logged 0 firings, including a multi-person guest visit. YAMNet's
+# `speech_multiple` keyword set in this codebase doesn't actually map to
+# a class YAMNet outputs at >0.80 confidence in real living-room acoustics.
+# The 5/09 review lands on one of: (a) retarget the gate to existing
+# YAMNet classes that DO score, (b) collect labeled audio + retrain a
+# small head, (c) abandon the social audio gate and lean on manual
+# override / process detection only.
+# Until the 5/09 decision, leave the entry in place but treat it as
+# documentation, not behavior. See memory `project_audio_classifier_shadow_followup.md`.
 MODE_THRESHOLDS: dict[str, dict] = {
     "speech_multiple": {"confidence": 0.80, "sustain_s": 30, "mode": "social"},
     "silence": {"confidence": 0.70, "sustain_s": 60, "mode": "quiet"},

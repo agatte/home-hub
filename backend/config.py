@@ -46,8 +46,9 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
-    # Morning routine
-    OPENWEATHER_API_KEY: Optional[str] = None
+    # Morning routine — weather comes from NWS (api.weather.gov, no API
+    # key needed); the OpenWeather setting from before that switch was
+    # removed 2026-05-05 (audit). Don't re-add without a use case.
     GOOGLE_MAPS_API_KEY: Optional[str] = None
     HOME_ADDRESS: str = ""
     WORK_ADDRESS: str = ""

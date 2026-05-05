@@ -71,6 +71,11 @@ FEATURE_COLUMNS = [
 # AUTO_APPLY_THRESHOLD still protects production behavior.
 AUTO_APPLY_THRESHOLD = 0.95
 SUGGEST_THRESHOLD = 0.30
+# Predictions below this threshold are still emitted (so shadow logs see
+# the predictor's full output) but are tagged low_confidence=True so
+# accuracy metrics can ignore them. Calibrated to ~4× the uniform-random
+# baseline on an 8-way softmax (1/8 ≈ 0.125).
+LOW_CONFIDENCE_TAG_THRESHOLD = 0.50
 
 # Human-readable labels and display formatters for the analytics constellation.
 _FEATURE_LABELS: dict[str, str] = {
@@ -226,6 +231,14 @@ class BehavioralPredictor(HealthTrackable):
                 self._last_trained = meta.get("version")
                 self._last_accuracy = meta.get("accuracy_7d")
                 self._training_rows = meta.get("training_rows", 0)
+                # Make a silently-reverted promotion visible — boot logs
+                # reveal whether the predictor came up shadow or active.
+                logger.info(
+                    "Behavioral predictor loaded: status=%s, accuracy_7d=%s, "
+                    "training_rows=%d, last_trained=%s",
+                    self._status, self._last_accuracy,
+                    self._training_rows, self._last_trained,
+                )
 
                 # Reconstruct label encoder from metadata
                 encoder_data = meta.get("label_encoder", {})
@@ -470,6 +483,13 @@ class BehavioralPredictor(HealthTrackable):
         if predicted_mode == "unknown" or confidence < SUGGEST_THRESHOLD:
             return None
 
+        # Tag low-confidence predictions so accuracy metrics can filter
+        # them out. SUGGEST_THRESHOLD=0.30 floods ml_decisions with
+        # near-random predictions (1/8 ≈ 0.125 baseline on an 8-way
+        # softmax); without the tag, those rows poison per-source
+        # accuracy. compute_per_source_metrics excludes these.
+        low_confidence = confidence < LOW_CONFIDENCE_TAG_THRESHOLD
+
         # Build top contributing features for explainability
         feature_rows = [
             {"feature": col, "value": features[col]}
@@ -481,6 +501,7 @@ class BehavioralPredictor(HealthTrackable):
             "predicted_mode": predicted_mode,
             "confidence": confidence,
             "source": "behavioral_predictor",
+            "low_confidence": low_confidence,
             "factors": {
                 # ``features`` is a feature-vector echo for explainability;
                 # ``distribution`` is the full per-class softmax so we can
@@ -488,6 +509,7 @@ class BehavioralPredictor(HealthTrackable):
                 # without re-running inference.
                 "features": feature_rows[:5],
                 "distribution": distribution,
+                "low_confidence": low_confidence,
             },
             "fusion_factors": self._build_fusion_factors(features),
         }
