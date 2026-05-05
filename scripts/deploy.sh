@@ -62,6 +62,7 @@ fi
 
 RESTART_BACKEND=0
 RESTART_AMBIENT=0
+RESTART_TUNNEL=0
 REBUILD_FRONTEND=0
 
 if [[ -z "$LAST_DEPLOYED" ]]; then
@@ -76,6 +77,7 @@ if [[ -z "$LAST_DEPLOYED" ]]; then
     REBUILD_FRONTEND=1
     RESTART_BACKEND=1
     RESTART_AMBIENT=1
+    RESTART_TUNNEL=1
 else
     echo "Deploying ${LAST_DEPLOYED:0:7} → ${NEW_HEAD:0:7}"
     echo
@@ -107,6 +109,12 @@ else
 
     if echo "$CHANGED" | grep -q "^backend/services/pc_agent/ambient_monitor\.py$"; then
         RESTART_AMBIENT=1
+    fi
+
+    # Tunnel proxy is its own uvicorn process — restart when its sources
+    # or the auth gate it relies on change.
+    if echo "$CHANGED" | grep -qE "^backend/api/(tunnel_proxy|auth)\.py$"; then
+        RESTART_TUNNEL=1
     fi
 fi
 
@@ -232,6 +240,20 @@ fi
 if [[ "$RESTART_AMBIENT" == "1" ]]; then
     echo "→ Restarting home-hub-ambient.service..."
     systemctl --user restart home-hub-ambient.service
+fi
+
+if [[ "$RESTART_TUNNEL" == "1" ]]; then
+    # Best-effort: home-hub-tunnel.service is a one-time manual install
+    # (see deployment/home-hub-tunnel.service). If it isn't installed yet,
+    # skip cleanly so deploy doesn't fail on Latitudes pre-Phase 5.
+    if systemctl --user list-unit-files home-hub-tunnel.service \
+            --no-pager | grep -q "home-hub-tunnel.service"; then
+        echo "→ Restarting home-hub-tunnel.service..."
+        systemctl --user restart home-hub-tunnel.service || \
+            echo "  (tunnel restart failed; main backend is unaffected)"
+    else
+        echo "  (home-hub-tunnel.service not installed — see deployment/home-hub-tunnel.service)"
+    fi
 fi
 
 # Record success — only reached if every step above passed (set -e).

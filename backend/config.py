@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     # desktop. Leave empty for "kiosk only" (only localhost bypasses).
     TRUSTED_LAN_IPS: str = ""
 
+    # Custom Alexa Skill (Phase 5) — separate secret from HOME_HUB_API_KEY
+    # so the Skill can be rotated independently. Required on tunneled
+    # callers (X-Tunnel-Origin: cloudflare); ignored everywhere else.
+    HOME_HUB_SKILL_TOKEN: Optional[str] = None
+
     # Zone+posture → relax rule — when enabled, the automation engine
     # auto-applies the "relax" manual override after a sustained
     # zone=bed + posture=reclined window (evening or weekend afternoons

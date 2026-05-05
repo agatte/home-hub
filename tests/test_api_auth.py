@@ -27,13 +27,25 @@ def client():
         yield c
 
 
-def _make_request(host: str, header_value: str | None = None) -> MagicMock:
-    """Build a fake Request with a controllable client.host."""
+def _make_request(
+    host: str,
+    header_value: str | None = None,
+    *,
+    tunnel: bool = False,
+) -> MagicMock:
+    """Build a fake Request with a controllable client.host.
+
+    When ``tunnel=True``, the X-Tunnel-Origin header is set so the gate
+    treats the caller as cloudflared-forwarded and skips bypasses.
+    """
     req = MagicMock()
     req.client.host = host
-    req.headers = {}
+    headers: dict[str, str] = {}
     if header_value is not None:
-        req.headers = {"X-API-Key": header_value}
+        headers["X-API-Key"] = header_value
+    if tunnel:
+        headers["X-Tunnel-Origin"] = "cloudflare"
+    req.headers = headers
     return req
 
 
@@ -142,6 +154,112 @@ class TestRequireApiKeyDependency:
             # 1.2.3.4 is public — neither pinned nor RFC1918.
             await require_api_key(_make_request("1.2.3.4"), x_api_key=None)
         assert exc_info.value.status_code == 401
+
+
+class TestTunnelOriginGate:
+    """Phase 5: cloudflared-forwarded traffic must hit the strict path.
+
+    The tunnel passthrough on 127.0.0.1:8001 injects ``X-Tunnel-Origin:
+    cloudflare`` on every request. When that header is present:
+    - Localhost / RFC1918 / TRUSTED_LAN_IPS bypasses must NOT fire
+      (cloudflared delivers to loopback, which would otherwise be
+      indistinguishable from the kiosk).
+    - Both X-API-Key AND X-Skill-Token are required.
+    """
+
+    @pytest.mark.asyncio
+    async def test_tunnel_skips_localhost_bypass(self, monkeypatch):
+        """Even from 127.0.0.1, the tunnel header forces the header check."""
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "skill-secret")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(
+                _make_request("127.0.0.1", tunnel=True),
+                x_api_key=None,
+                x_skill_token=None,
+            )
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_tunnel_skips_rfc1918_bypass(self, monkeypatch):
+        """Forged tunnel header from a LAN IP also routes through header check."""
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "skill-secret")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(
+                _make_request("192.168.1.148", tunnel=True),
+                x_api_key=None,
+                x_skill_token=None,
+            )
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_tunnel_requires_both_headers(self, monkeypatch):
+        """API key alone (no skill token) → 401 when tunneled."""
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "skill-secret")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(
+                _make_request("127.0.0.1", tunnel=True),
+                x_api_key="secret",
+                x_skill_token=None,
+            )
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_tunnel_wrong_skill_token(self, monkeypatch):
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "skill-secret")
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(
+                _make_request("127.0.0.1", tunnel=True),
+                x_api_key="secret",
+                x_skill_token="not-it",
+            )
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_tunnel_both_headers_correct(self, monkeypatch):
+        """Both headers correct → pass."""
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", "skill-secret")
+        await require_api_key(
+            _make_request("127.0.0.1", tunnel=True),
+            x_api_key="secret",
+            x_skill_token="skill-secret",
+        )
+
+    @pytest.mark.asyncio
+    async def test_tunnel_unset_skill_token_fails_closed(self, monkeypatch):
+        """If the deploy didn't provision HOME_HUB_SKILL_TOKEN, tunneled
+        traffic must 503 — refuse rather than silently degrade to API-key
+        only."""
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", None)
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key(
+                _make_request("127.0.0.1", tunnel=True),
+                x_api_key="secret",
+                x_skill_token="anything",
+            )
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_non_tunnel_unaffected_by_skill_token(self, monkeypatch):
+        """LAN traffic (no tunnel header) MUST NOT need a skill token."""
+        monkeypatch.setattr(settings, "HOME_HUB_API_KEY", "secret")
+        monkeypatch.setattr(settings, "HOME_HUB_SKILL_TOKEN", None)
+        # RFC1918 caller without any headers — bypass fires.
+        await require_api_key(
+            _make_request("192.168.1.148", tunnel=False),
+            x_api_key=None,
+            x_skill_token=None,
+        )
 
 
 class TestTrustedLanIpsParsing:
