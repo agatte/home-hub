@@ -73,17 +73,22 @@ def _post_to_homehub(path: str, body: dict | None) -> tuple[int, str]:
     try:
         with urllib.request.urlopen(req, timeout=4) as resp:
             text = resp.read().decode("utf-8", errors="replace")
+            logger.info("Home Hub %s -> %d (%d bytes)", path, resp.status, len(text))
             return resp.status, text
     except urllib.error.HTTPError as e:
         text = e.read().decode("utf-8", errors="replace")
+        # First 200 chars only — body may include the bridge token in
+        # rare error paths; trim to avoid surprising leaks in CloudWatch.
+        logger.warning(
+            "Home Hub %s -> HTTP %d body=%r", path, e.code, text[:200]
+        )
         return e.code, text
     except urllib.error.URLError as e:
-        # Backend down, DNS failed, TLS issue. Logged; the caller
-        # speaks a friendly message.
-        logger.error("Home Hub URL error: %s", e)
+        # Backend down, DNS failed, TLS issue.
+        logger.error("Home Hub %s URL error: %s", path, e)
         return 0, str(e)
     except Exception as e:
-        logger.exception("Home Hub call unexpectedly failed")
+        logger.exception("Home Hub %s call unexpectedly failed", path)
         return 0, str(e)
 
 
