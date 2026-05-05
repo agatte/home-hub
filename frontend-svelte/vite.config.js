@@ -12,6 +12,12 @@ export default defineConfig({
       brotliSize: true,
     })] : []),
   ],
+  build: {
+    // Threlte + Three.js produces a ~700kB chunk on the index route (moon
+    // scene). Lazy-splitting it is a separate task; bump the warning floor
+    // until then so the build output stays clean.
+    chunkSizeWarningLimit: 800,
+  },
   server: {
     port: 3001,
     proxy: {
