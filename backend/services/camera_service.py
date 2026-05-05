@@ -73,10 +73,10 @@ MIN_FACE_CONFIDENCE = 0.15
 # pose is strong, pose takes priority — this protects against face-like
 # furniture silhouettes (chair backs, accent chair) competing with the real
 # face for `max(detections, key=score)` selection. Observed chair-back vs
-# real-face range during the 2026-05-05 oscillation incident was 0.16–0.55,
-# so the bar sits just above the noise floor. Real desk sessions in good
-# lighting typically clear 0.6–0.8.
-FACE_TRUST_THRESHOLD = 0.55
+# real-face range during the 2026-05-05 oscillation incident was 0.16–0.65,
+# so the bar sits above the chair-back ceiling. Real desk sessions in good
+# lighting typically clear 0.7–0.85.
+FACE_TRUST_THRESHOLD = 0.70
 # Pose fallback — MediaPipe Pose Landmarker (Tasks API). Declares "present"
 # when enough torso landmarks (nose, shoulders, hips) are visible above
 # MIN_POSE_VISIBILITY. This catches Anthony at the desk in deep profile,
@@ -1114,15 +1114,17 @@ class CameraService:
         they are overwritten and dereferenced before returning.
 
         Selection (in order):
-          1. Face strong (conf ≥ FACE_TRUST_THRESHOLD) → face wins; if pose
-             also present, borrow its posture as a free upgrade.
-          2. Pose strong + face weak/missing → pose wins. Rescues the
-             chair-back-vs-real-face ambiguous case where two face
-             detections trade `max(score)` frame-to-frame.
-          3. Face detected (any conf ≥ MIN_FACE_CONFIDENCE) + pose weak →
-             face wins (existing fallback).
-          4. Pose detected (weak) → pose wins (existing fallback).
-          5. Else → absent.
+          1. Face strong (conf ≥ FACE_TRUST_THRESHOLD) → face wins outright;
+             if pose also present, borrow its posture as a free upgrade.
+          2. Pose present (≥3 torso landmarks at ≥MIN_POSE_VISIBILITY) → pose
+             wins. Rescues the chair-back-vs-real-face ambiguous case where
+             two face detections trade `max(score)` frame-to-frame.
+          3. Weak face only (no pose) → presence accepted but zone=None and
+             posture=None. We don't trust low-confidence face detections to
+             drive zone changes — chair-back / picture-frame silhouettes
+             regularly clear MIN_FACE_CONFIDENCE. Hysteresis preserves the
+             last pose-committed zone through dim periods.
+          4. Else → absent.
 
         Returns:
             Dict with status, confidence, source, ambient_lux, and
@@ -1226,13 +1228,21 @@ class CameraService:
                 }
 
             if face_best is not None:
+                # Weak face + no pose. We trust the detection for *presence*
+                # but not for *zone disambiguation*: face-like silhouettes
+                # (high-back office chair, picture frames) regularly clear
+                # MIN_FACE_CONFIDENCE under low light. Emit zone=None so
+                # the hysteresis layer preserves whatever pose last
+                # committed — prevents the bed-overlay-dims-room → pose-
+                # blinded → chair-back-wins-face → zone-flips-to-desk loop
+                # observed 2026-05-05.
                 return {
                     "status": "present",
                     "confidence": face_conf,
                     "source": "face",
                     "pose_landmark_count": 0,
                     "ambient_lux": ambient_lux,
-                    "zone": face_zone,
+                    "zone": None,
                     "posture": None,  # Face path can't derive torso geometry
                 }
 
