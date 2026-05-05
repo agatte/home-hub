@@ -4,7 +4,7 @@
   import {
     Sparkles, Gamepad2, Monitor, Tv, PartyPopper, Flame, ChefHat, Moon, Bot,
     Music2, Pause, Play, SkipForward, Volume2, VolumeX, Home as HomeIcon,
-    Sliders,
+    Sliders, Mic,
   } from 'lucide-svelte'
   import { lights } from '$lib/stores/lights.js'
   import { sonos } from '$lib/stores/sonos.js'
@@ -83,6 +83,22 @@
 
   let tuningBusy = false
   let lastBrightnessAt = 0
+
+  // Toast TTS — guest types a short message, system speaks it through the
+  // Sonos. Server enforces a 60s global cooldown; we mirror it client-side
+  // so the button shows a live countdown instead of a delayed 429 toast.
+  const TOAST_MAX_CHARS = 120
+  const TOAST_NAME_MAX_CHARS = 30
+  let toastInput = ''
+  let toastNameInput = ''
+  let toastSending = false
+  /** Epoch ms when the cooldown ends. 0 = no active cooldown. */
+  let toastCooldownUntil = 0
+  /** Reactive "now" for the cooldown countdown — bumped every second. */
+  let toastNow = Date.now()
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let toastTicker = null
+  $: toastCooldownRemaining = Math.max(0, Math.ceil((toastCooldownUntil - toastNow) / 1000))
 
   $: isPlaying = $sonos.state === 'PLAYING'
 
@@ -358,6 +374,53 @@
     }
   }
 
+  function startToastCooldown(seconds) {
+    toastCooldownUntil = Date.now() + seconds * 1000
+    if (!toastTicker) {
+      toastTicker = setInterval(() => {
+        toastNow = Date.now()
+        if (toastNow >= toastCooldownUntil && toastTicker) {
+          clearInterval(toastTicker)
+          toastTicker = null
+        }
+      }, 1000)
+    }
+  }
+
+  async function sendToast() {
+    if (toastSending || toastCooldownRemaining > 0) return
+    const message = toastInput.trim()
+    if (!message) return
+    const name = toastNameInput.trim()
+    toastSending = true
+    try {
+      const res = await fetch('/api/guest/toast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, name: name || null }),
+      })
+      if (res.status === 429) {
+        const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10) || 60
+        startToastCooldown(retryAfter)
+        showToast(`Hold on — try again in ${retryAfter}s`)
+        return
+      }
+      if (!res.ok) {
+        showToast(`Couldn't send the toast (${res.status})`)
+        return
+      }
+      const body = await res.json()
+      startToastCooldown(body.cooldown_seconds ?? 60)
+      toastInput = ''
+      toastNameInput = ''
+      showToast('Toast sent — listen up 🥂')
+    } catch {
+      showToast(`Couldn't reach the server`)
+    } finally {
+      toastSending = false
+    }
+  }
+
   async function handBack() {
     if (handbackBusy) return
     handbackBusy = true
@@ -398,6 +461,7 @@
     if (toastTimer) clearTimeout(toastTimer)
     if (sceneCooldownTimer) clearTimeout(sceneCooldownTimer)
     if (vibeCooldownTimer) clearTimeout(vibeCooldownTimer)
+    if (toastTicker) clearInterval(toastTicker)
   })
 </script>
 
@@ -661,6 +725,46 @@
       <p class="cooldown">Cooling down… give the music a sec.</p>
     {/if}
   </section>
+
+  <section class="guest-card">
+    <div class="card-head">
+      <Mic size={20} strokeWidth={1.5} />
+      <h2>Send a toast</h2>
+    </div>
+    <p class="toast-hint">Speak it through the room. Sparkle while it plays.</p>
+    <div class="toast-form">
+      <input
+        type="text"
+        class="toast-input"
+        placeholder="Say something to the room…"
+        maxlength={TOAST_MAX_CHARS}
+        bind:value={toastInput}
+        disabled={toastSending}
+      />
+      <input
+        type="text"
+        class="toast-input"
+        placeholder="Your name (optional)"
+        maxlength={TOAST_NAME_MAX_CHARS}
+        bind:value={toastNameInput}
+        disabled={toastSending}
+      />
+      <button
+        type="button"
+        class="toast-send"
+        on:click={sendToast}
+        disabled={toastSending || toastCooldownRemaining > 0 || !toastInput.trim()}
+      >
+        {#if toastCooldownRemaining > 0}
+          Wait {toastCooldownRemaining}s
+        {:else if toastSending}
+          Speaking…
+        {:else}
+          🎤 Speak it
+        {/if}
+      </button>
+    </div>
+  </section>
 </main>
 
 {#if toastMessage}
@@ -863,6 +967,65 @@
     font-size: 12px;
     color: rgba(245, 243, 238, 0.55);
     text-align: center;
+  }
+
+  .toast-hint {
+    font-size: 13px;
+    color: rgba(245, 243, 238, 0.55);
+    margin: 0 0 14px;
+  }
+  .toast-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .toast-input {
+    appearance: none;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    color: #fff;
+    font-family: var(--font-body);
+    font-size: 15px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .toast-input::placeholder {
+    color: rgba(245, 243, 238, 0.4);
+  }
+  .toast-input:focus {
+    outline: none;
+    background: rgba(0, 0, 0, 0.4);
+    border-color: rgba(255, 255, 255, 0.32);
+  }
+  .toast-input:disabled {
+    opacity: 0.5;
+  }
+  .toast-send {
+    appearance: none;
+    width: 100%;
+    padding: 14px 16px;
+    background: linear-gradient(135deg, rgba(245, 178, 60, 0.85), rgba(220, 110, 60, 0.85));
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    color: #fff;
+    font-family: var(--font-display);
+    font-size: 18px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: transform 0.05s, opacity 0.15s, filter 0.15s;
+  }
+  .toast-send:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  .toast-send:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .toast-send:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .muted {

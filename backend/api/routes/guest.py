@@ -5,8 +5,10 @@ page and the home dashboard's GuestWifiWidget.
 import asyncio
 import logging
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
 from backend.api.routes.scenes import (
@@ -79,6 +81,24 @@ GUEST_BRIGHTNESS_STEP = 1.10
 GUEST_BRIGHTNESS_MIN_STEP = 20
 GUEST_BRIGHTNESS_COOLDOWN_SECONDS = 0.8
 _last_guest_brightness_at: float = 0.0
+
+# Toast TTS — guests submit a short text, system speaks it through Sonos
+# with a sparkle lighting flourish. Trust-the-room v1: no profanity filter,
+# no host-approval gate. Just a length cap + global cooldown. Volume is
+# hardcoded above the typical music level so the toast carries over a
+# loud room; revisit if it's too aggressive in quieter contexts.
+GUEST_TOAST_COOLDOWN_SECONDS = 60
+GUEST_TOAST_MAX_CHARS = 120
+GUEST_TOAST_MAX_NAME_CHARS = 30
+GUEST_TOAST_VOLUME = 25
+_last_guest_toast_at: float = 0.0
+
+
+class ToastRequest(BaseModel):
+    """Guest-submitted toast payload — short message, optional name."""
+
+    message: str = Field(min_length=1, max_length=GUEST_TOAST_MAX_CHARS)
+    name: Optional[str] = Field(default=None, max_length=GUEST_TOAST_MAX_NAME_CHARS)
 
 
 async def _resolve_vibe_mapping() -> dict[str, str]:
@@ -524,4 +544,80 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
         "direction": direction,
         "updated": updated,
         "ceiling": ceiling,
+    }
+
+
+@router.post("/toast", dependencies=[Depends(require_api_key)])
+async def speak_guest_toast(body: ToastRequest, request: Request) -> dict:
+    """Speak a guest-submitted toast through Sonos with a sparkle flourish.
+
+    Composes "From {name}: {message}" if a name was provided, otherwise
+    speaks the bare message. Wraps `TTSService.speak()` which already
+    handles Sonos duck-and-resume. Sparkle runs concurrently for the
+    duration of the speech to give a real "everyone listen" moment;
+    if a guest had +Sparkle as a scene overlay before the toast, that
+    overlay will end with the toast (re-tap +Sparkle to restore it).
+
+    Returns 429 (with Retry-After) when the cooldown is still active,
+    503 when TTS or Sonos can't run.
+    """
+    global _last_guest_toast_at
+
+    now = time.monotonic()
+    elapsed = now - _last_guest_toast_at
+    if elapsed < GUEST_TOAST_COOLDOWN_SECONDS:
+        retry_after = int(GUEST_TOAST_COOLDOWN_SECONDS - elapsed) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooling down — try again in {retry_after}s",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    message = body.message.strip()
+    name = body.name.strip() if body.name else None
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    text = f"From {name}: {message}" if name else message
+
+    tts = getattr(request.app.state, "tts", None)
+    if not tts:
+        raise HTTPException(status_code=503, detail="TTS service not initialized")
+
+    hue_v2 = getattr(request.app.state, "hue_v2", None)
+
+    # Sparkle flourish — set it for the toast, stop it after. Done directly
+    # against hue_v2 to mirror the existing /effect/{name} pattern (which
+    # also bypasses the EffectManager). Edge case: if a guest had +Sparkle
+    # as a scene overlay, this stop will end their overlay too. Acceptable
+    # v1 limitation; toasts are rare and re-tapping +Sparkle costs a second.
+    if hue_v2:
+        try:
+            await hue_v2.set_effect_all("sparkle")
+        except Exception:
+            logger.warning("Couldn't start sparkle for toast", exc_info=True)
+
+    try:
+        spoken = await tts.speak(text, volume=GUEST_TOAST_VOLUME)
+    finally:
+        if hue_v2:
+            try:
+                await hue_v2.stop_effect_all()
+            except Exception:
+                logger.warning("Couldn't stop sparkle after toast", exc_info=True)
+
+    if not spoken:
+        raise HTTPException(
+            status_code=503, detail="Sonos couldn't play the toast — try again"
+        )
+
+    _last_guest_toast_at = now
+    logger.info(
+        "Guest toast '%s' (name=%s, %d chars) spoken from %s",
+        message[:60], name or "-", len(message),
+        request.client.host if request.client else "unknown",
+    )
+    return {
+        "status": "ok",
+        "spoken": text,
+        "cooldown_seconds": GUEST_TOAST_COOLDOWN_SECONDS,
     }
