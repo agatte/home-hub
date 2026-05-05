@@ -1,0 +1,83 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "home hub",
+      "intents": [
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
+        {
+          "name": "SetModeIntent",
+          "slots": [
+            {
+              "name": "Mode",
+              "type": "HOMEHUB_MODE"
+            }
+          ],
+          "samples": [
+            "set {Mode} mode",
+            "set {Mode}",
+            "switch to {Mode}",
+            "switch to {Mode} mode",
+            "go to {Mode} mode",
+            "set the apartment to {Mode}",
+            "make it {Mode}",
+            "activate {Mode} mode",
+            "release the override",
+            "go back to auto"
+          ]
+        },
+        {
+          "name": "PlayMusicIntent",
+          "slots": [],
+          "samples": [
+            "play music",
+            "play the music",
+            "resume music",
+            "resume the music",
+            "start the music",
+            "play"
+          ]
+        },
+        {
+          "name": "PauseMusicIntent",
+          "slots": [],
+          "samples": [
+            "pause music",
+            "pause the music",
+            "stop the music",
+            "pause"
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "HOMEHUB_MODE",
+          "values": [
+            { "id": "gaming",   "name": { "value": "gaming",   "synonyms": ["game", "game time", "gaming time"] } },
+            { "id": "working",  "name": { "value": "working",  "synonyms": ["work", "work time", "focus", "deep focus"] } },
+            { "id": "watching", "name": { "value": "watching", "synonyms": ["movie", "tv", "movie time", "cinema", "film"] } },
+            { "id": "social",   "name": { "value": "social",   "synonyms": ["party", "company", "guests", "hosting"] } },
+            { "id": "relax",    "name": { "value": "relax",    "synonyms": ["chill", "lounge", "wind down", "winding down"] } },
+            { "id": "cooking",  "name": { "value": "cooking",  "synonyms": ["kitchen", "cook", "chef"] } },
+            { "id": "sleeping", "name": { "value": "sleeping", "synonyms": ["bed", "bedtime", "sleep", "good night"] } },
+            { "id": "auto",     "name": { "value": "auto",     "synonyms": ["automatic", "automation", "default", "release"] } }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "name": "Home Hub",
+          "summary": "Personal apartment automation control.",
+          "description": "Custom skill for the Home Hub apartment automation system. Sets activity modes (gaming, working, relax, etc.), controls Sonos playback, and runs scenes via voice. Single-user, unpublished — runs only on Anthony's developer-account Echo devices.",
+          "examplePhrases": [
+            "Alexa, tell home hub to set relax mode",
+            "Alexa, ask home hub to pause the music",
+            "Alexa, open home hub"
+          ],
+          "keywords": ["home", "automation", "apartment", "lights", "music"],
+          "smallIconUri": "",
+          "largeIconUri": ""
+        }
+      },
+      "isAvailableWorldwide": false,
+      "testingInstructions": "Single-user developer skill. No certification needed — invoked on Anthony's developer-account-linked Echo only.",
+      "category": "SMART_HOME",
+      "distributionCountries": ["US"]
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "<arn:aws:lambda:REGION:ACCOUNT:function:home-hub-skill>"
+        }
+      }
+    },
+    "manifestVersion": "1.0",
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "usesPersonalInfo": false,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "",
+          "termsOfUseUrl": ""
+        }
+      }
+    }
+  }
+}
