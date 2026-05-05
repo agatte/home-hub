@@ -67,6 +67,11 @@ def _post_to_homehub(path: str, body: dict | None) -> tuple[int, str]:
             "Content-Type": "application/json",
             "X-API-Key": api_key,
             "X-Skill-Token": skill_token,
+            # Cloudflare's bot-fight blocks "Python-urllib/X.Y" with
+            # error 1010 ("banned based on browser's signature").
+            # Identify ourselves clearly and don't masquerade as a
+            # browser; the X-Skill-Token already proves auth.
+            "User-Agent": "HomeHub-AlexaSkill/1.0 (+aws-lambda)",
         },
         method="POST",
     )
