@@ -2385,7 +2385,11 @@ class AutomationEngine:
             self._zone_posture_reclined_since = None
             return
 
-        # Gate 5: time-of-day — evening always; weekends also allow afternoon.
+        # Gate 5: time-of-day — evening through pre-wake (wraps midnight);
+        # weekends also allow afternoon. Without the midnight wrap the rule
+        # would silently disengage exactly when it's most needed (the
+        # 2026-05-05 incident: bed+reclined at 04:30 ET kept the lights
+        # bright because hour=4 failed `hour >= evening_start_hour`).
         is_weekend = now.weekday() >= 5
         schedule = (
             self._schedule_config.weekend if is_weekend
@@ -2394,7 +2398,10 @@ class AutomationEngine:
         afternoon_ok = (
             is_weekend and now.hour >= ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR
         )
-        evening_ok = now.hour >= schedule.evening_start_hour
+        evening_ok = (
+            now.hour >= schedule.evening_start_hour
+            or now.hour < schedule.wake_hour
+        )
         if not (afternoon_ok or evening_ok):
             self._zone_posture_reclined_since = None
             return
