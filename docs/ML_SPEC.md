@@ -286,17 +286,18 @@ that learns from richer features.
 
 | Attribute | Value |
 |-----------|-------|
-| **Input** | `activity_events` table + time features + optional weather |
-| **Feature engineering** | `day_of_week`, `hour`, `minute_bucket` (15-min bins), `is_weekend`, `minutes_since_last_mode_change`, `previous_mode`, `previous_mode_duration`, `time_since_wake` (first non-away event), `weather_condition` (from cache), `season`, `manual_override_rate_7d` |
-| **Model** | LightGBM (`GradientBoostingClassifier`). Trains in seconds on CPU. Model file <1MB. scikit-learn fallback if LightGBM dep is unwanted. |
+| **Input** | `activity_events` table (now enriched with camera + audio context — see schema in PROJECT_SPEC.md) + time features |
+| **Feature engineering** | 14 columns. Temporal: `hour`, `minute_bucket` (15-min), `day_of_week`, `is_weekend`, `season_enc`. Behavioral: `previous_mode`, `previous_mode_duration_min`, `minutes_since_wake` (first non-idle event), `mode_transitions_today`, `manual_override_count_7d`. Context (added 2026-05-04): `zone_enc`, `posture_enc`, `audio_class_enc` (categoricals → stable hard-coded indices, unknown values route to a sentinel bucket), `lux` (continuous, NaN passthrough so LightGBM's native missing-value handling routes it). |
+| **Model** | LightGBM `Booster` with `multiclass` objective. Trains in seconds on CPU. Model file <1MB. |
 | **Output** | Multi-class probabilities: gaming, working, watching, relax, social, cooking. Top class + confidence score. |
-| **Inference frequency** | Every 60 seconds (piggyback on automation loop). Only consulted when current mode is idle/away (same gate as `check_rules`). |
-| **Integration point** | New `BehavioralPredictor` class called from `AutomationEngine.run_loop()`. Shares the same interface as `RuleEngineService.check_rules()`: returns `Optional[dict]` with `predicted_mode` and `confidence`. |
-| **Training schedule** | Nightly at 4 AM via `AsyncScheduler`. Scans all activity_events within 60-day rolling window. Training completes in <5 seconds. |
-| **Cold start** | First 2 weeks: rule engine runs as-is. Week 2: begin training in shadow mode (predict but don't act, log accuracy). Week 4: if shadow accuracy > rule engine accuracy on held-out 7-day window, promote to primary. Rule engine becomes the fallback. |
-| **Minimum data** | 500+ activity events (~1 week of normal use with 60s heartbeats) |
-| **Expected accuracy** | 75-85% on mode prediction for active modes (excluding idle/away). Baseline (rule engine): ~60-70%. |
-| **Concept drift** | Retrain nightly. If accuracy on last 7 days drops below rule engine baseline for 3 consecutive evaluations, auto-demote and log warning. |
+| **Inference frequency** | Every 60 seconds (piggyback on automation loop). Only consulted when current mode is idle. |
+| **Integration point** | `BehavioralPredictor` called from `AutomationEngine.run_loop()`. Returns `Optional[dict]` with `predicted_mode`, `confidence`, `factors` (features + full softmax distribution). The engine passes camera context through `_fresh_camera_attr` so a stale committed value can't poison inference. |
+| **Training schedule** | Nightly at 4 AM via the scheduler. Scans all activity_events within a 60-day rolling window. Training completes in <5 seconds. |
+| **Stale-model gate** | `_load_existing()` refuses any saved model whose `num_feature()` doesn't match `len(FEATURE_COLUMNS)` — graceful no-op until the next nightly retrain rebuilds against the current shape. Mirrors the existing stale-encoder gate (which catches retired modes in the saved label encoder, e.g. `away`). |
+| **Promote / auto-demote** | Manual promote via `POST /api/learning/predictor/promote`, gated on `compute_prediction_diversity` over the last 7d (≥50 samples, top mode <95%). The opposite direction is automatic: a daily 03:45 ET ScheduledTask (`predictor_auto_demote_check`) calls the same helper and demotes a promoted predictor whose recent shadow outputs collapse to a single class. Anti-flap: only `single_class` / `near_single_class` reasons trigger demotion — `insufficient_samples` / `query_failed` are treated as "don't know yet". |
+| **Cold start** | Rule engine runs alone until enough activity_events accumulate. Predictor begins training in shadow mode and stays there until manually promoted. |
+| **Minimum data** | 500+ activity events (~1 week of normal use). |
+| **Expected accuracy** | 75-85% on active modes; rule-engine baseline 60-70%. The predictor lane was stripped from `ConfidenceFusion` 2026-04-27 after the first model collapsed to single-class output (see §15 v3 changelog). It still trains nightly and writes shadow rows; re-adding the lane is gated on diversity + per-class accuracy after the 14-feature retrain accumulates a week of observations. |
 
 **Feature engineering details:**
 
@@ -313,24 +314,30 @@ features = {
 
 # Behavioral features (from recent activity_events)
 features.update({
-    "previous_mode": "working",        # Categorical
+    "previous_mode": "working",        # Categorical (encoded via MODE_ENCODING)
     "previous_mode_duration_min": 120, # How long in previous mode
     "mode_transitions_today": 4,       # Number of transitions so far
     "manual_override_count_7d": 3,     # Overrides in last week
 })
 
-# Environmental features (optional, from weather cache)
+# Camera + audio context (from EventLogger enrichment — added 2026-05-04)
 features.update({
-    "weather_condition": "cloudy",     # Categorical
-    "temperature_f": 68,
+    "zone_enc": 0,        # ZONE_ENCODING: desk=0, bed=1, couch=2, unknown=3
+    "posture_enc": 0,     # POSTURE_ENCODING: upright=0, reclined=1, unknown=2
+    "audio_class_enc": 1, # AUDIO_CLASS_ENCODING: silence=0, speech_single=1,
+                          #   speech_multiple=2, music=3, mechanical_noise=4,
+                          #   doorbell=5, game_audio=6, other=7
+    "lux": 165.0,         # EMA lux from camera_service.ema_lux; float("nan")
+                          #   when missing (LightGBM handles natively)
 })
 ```
 
 **Files touched:**
-- New `backend/services/ml/behavioral_predictor.py`
-- New `backend/services/ml/feature_builder.py` — Shared feature engineering
-- `backend/services/automation_engine.py` — Call predictor in `run_loop()`, after time rules, before applying state
-- `backend/services/rule_engine_service.py` — Add shadow mode comparison logging
+- `backend/services/ml/behavioral_predictor.py` — `BehavioralPredictor` class, `FEATURE_COLUMNS`, stale-model gate, `predict()` kwargs, `check_and_demote_if_degenerate()`.
+- `backend/services/ml/feature_builder.py` — Shared feature engineering. `MODE_ENCODING`, `SEASON_ENCODING`, `ZONE_ENCODING`, `POSTURE_ENCODING`, `AUDIO_CLASS_ENCODING`, `build_training_data`, `build_runtime_features`, `latest_audio_class()` helper.
+- `backend/services/event_logger.py` — Captures zone/posture/audio_class/lux at write time so each new `activity_events` row carries the same context the model trains on.
+- `backend/services/automation_engine.py` — Calls `predictor.predict()` in `run_loop()`, passing camera context via `_fresh_camera_attr`.
+- `backend/bootstrap.py` — Registers `predictor_auto_demote_check` ScheduledTask at 03:45 ET daily.
 
 ---
 
@@ -1218,10 +1225,17 @@ async def test_ml_prediction_in_automation_loop():
 ### Regression Tests
 
 After each nightly retrain:
-1. Run the new model against a frozen test set (last 30 days, sampled)
-2. Compute accuracy and compare to previous model
-3. If accuracy drops >5%, log warning (don't auto-demote for single drops)
-4. If accuracy drops >5% for 3 consecutive retrains, auto-demote
+1. Run the new model against a frozen test set (last 30 days, sampled).
+2. Compute accuracy and compare to previous model.
+3. If accuracy drops >5%, log warning.
+
+Auto-demote of a *promoted* predictor is now diversity-driven rather than
+accuracy-driven — see the §3.2 "Promote / auto-demote" row. Diversity is
+the metric the original 4/27 incident actually surfaced (single-class
+collapse ≠ low accuracy because a constant-output model could in principle
+beat baseline). The accuracy-drop monitor remains as a logging check; the
+demote action is gated on `compute_prediction_diversity` returning
+`single_class` / `near_single_class` reasons over a 7d window.
 
 ### A/B Comparison
 
@@ -1346,8 +1360,8 @@ except ImportError:
 - ✓ `ml_decisions` + `ml_metrics` database tables with indexes.
 - ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle/away, ML logger registered as mode-change callback.
 
-**Current state (as of 2026-04-18):**
-- **Behavioral predictor — BLOCKED**: `lightgbm` is not installed on the Latitude. `main.py:320` logs "lightgbm not installed — behavioral predictor disabled" at startup and the predictor writes zero rows to `ml_decisions`. There's sufficient training data in principle (765 activity events across 8 days, above the 500 threshold) but no inference is happening until `pip install lightgbm` lands on the Latitude. Re-evaluate ~7 days after that change.
+**Current state (as of 2026-05-04):**
+- **Behavioral predictor — shadow mode, stripped from fusion.** `lightgbm` installed on the Latitude, model trains nightly at 04:00. The April 27 audit removed the predictor lane from `ConfidenceFusion` after the first model collapsed to single-class output (898/898 → `away`); the predictor still writes shadow rows to `ml_decisions` so future retrains can be evaluated. Step 4 (May 4) extended `FEATURE_COLUMNS` from 10 → 14 columns to include `zone_enc` / `posture_enc` / `audio_class_enc` / `lux`. The next retrain produces a 14-feature model; a 7-day shadow observation window starts 2026-05-05 to decide whether to re-add the lane (see `project_step5_predictor_validation.md`). Promotion is gated by `compute_prediction_diversity`; auto-demote is the symmetric counterpart shipped May 4 — see Phase 3 changelog entry.
 - **Lighting learner**: active on production. Overlay applications are now logged to `ml_decisions` with `decision_source="lighting_learner"`.
 - **Audio classifier (YAMNet)**: shadow mode on Windows desktop (Blue Yeti mic). 17,922 predictions logged to date. Of the 81 rows with `actual_mode` backfilled, only **2 are correct (2.5%)** — the classifier is predicting "idle" for "silence" almost every cycle and missing mode transitions. The 521→9 → user-mode mapping needs rework before promotion is meaningful. Kept in shadow.
 - **Camera presence (MediaPipe)**: active on Latitude webcam with 15s away detection.
@@ -1431,10 +1445,15 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 - ✓ **Override-rate metric** — `GET /api/learning/override-rate` returns 7d + 30d rates. An "override" is a `source='manual'` event whose mode differs from the nearest prior `activity_events` row within `window_minutes` (default 5). Cold manual switches (no differing prior event) don't count. Primary Phase 3 autonomy gate metric.
 - ✓ **A/B comparison endpoint** — `GET /api/learning/compare` computes fusion vs rule-engine-only vs process-priority accuracy on the same fusion-decision row set (where `actual_mode` is backfilled). All three strategies read from the same `factors.signal_details` rows, so the comparison is apples-to-apples.
 
+**Shipped (May 4, 2026) — predictor enrichment + auto-demote:**
+- ✓ **`activity_events` enriched with camera + audio context.** New columns `zone`, `posture`, `audio_class`, `lux` populated by `EventLogger` at write time from `camera_service` + the most recent `audio_ml` `ml_decisions` row within ±60s. A one-shot backfill walked the historical 21d window: 96% audio_class / 74% lux / 31% zone / 25% posture coverage (camera fields limited by visibility patterns — off-frame, mobile, away from home — not bugs). Schema migration in `_run_migrations()`; backfill script at `scripts/migrations/2026-05-04-backfill-activity-event-context.py`.
+- ✓ **Predictor extended to 14 features.** `FEATURE_COLUMNS` appended (no reorder, so existing feature_importance positional indexing stays valid) with `zone_enc`, `posture_enc`, `audio_class_enc`, `lux`. `_load_existing()` gains a stale-feature-count gate that refuses any saved model whose `num_feature()` doesn't match — graceful no-op until the next 04:00 retrain rebuilds. `predict()` takes the four context kwargs and forwards them through `build_runtime_features`; the engine call site passes camera values via `_fresh_camera_attr` so a stale committed value can't poison inference.
+- ✓ **Auto-demote — counterpart to the diversity gate.** New `BehavioralPredictor.check_and_demote_if_degenerate(ml_logger)` calls `compute_prediction_diversity()` and demotes a promoted predictor when shadow outputs collapse. Anti-flap: only `single_class` / `near_single_class` reasons fire — `insufficient_samples` / `query_failed` are treated as "don't know yet" so a freshly-promoted predictor with <50 logged predictions can't get auto-demoted prematurely. Wired as the `predictor_auto_demote_check` ScheduledTask at 03:45 ET daily, between `fusion_weight_tuning` (3:30) and `ml_nightly_training` (4:00) so the upcoming retrain has a chance to fix the underlying issue. Closes the autonomy-gate loop opened by the 4/27 promote-side diversity gate.
+
 **Remaining:**
-- **Auto-demote trigger (planned 2026-05-04)** — counterpart to the diversity gate shipped 2026-04-27. When the predictor's live accuracy or override rate degrades past a threshold, automatically revert to the last good model (or to no-model state) without requiring a manual `/api/learning/predictor/demote` call. Closes the autonomy-gate loop alongside the diversity gate.
-- Analytics-page dashboard UI (frontend Svelte card) surfacing `/override-rate` and `/compare`
-- Threshold tuning based on observed false positive rate once ≥30 days of shadow+backfill data accrues
+- Re-adding the predictor lane to fusion — gated on diversity + per-class accuracy of the 14-feature retrain. Validation window: 7+ days from 2026-05-05 (first 14-feature model land) per `project_step5_predictor_validation.md`.
+- Analytics-page dashboard UI (frontend Svelte card) surfacing `/override-rate` and `/compare`.
+- Threshold tuning based on observed false positive rate once ≥30 days of shadow+backfill data accrues.
 
 ```
 Current:    Shadow logging + backfill now live. By 2026-04-22 cron,

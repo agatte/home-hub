@@ -436,14 +436,15 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | Column | Type | Notes |
 |--------|------|-------|
 | id | Integer | PK, auto-increment |
+| timestamp | DateTime | UTC, indexed — when the transition was logged |
 | mode | String(50) | Mode that was activated |
 | previous_mode | String(50) | Mode before transition |
-| source | String(50) | What triggered: time, process, ambient, manual, alexa, learned |
-| started_at | DateTime | UTC, when mode began |
-| ended_at | DateTime | UTC, nullable — filled when mode ends |
-| duration_seconds | Integer | Computed on end |
-| day_of_week | Integer | 0=Monday, for pattern analysis |
-| hour_of_day | Integer | 0-23, for pattern analysis |
+| source | String(30) | What triggered: time, process, ambient, manual, alexa, learned |
+| duration_seconds | Integer | Filled in when the *next* event arrives |
+| zone | String(20) | Camera-derived zone at the moment of the transition (`desk`/`bed`/null). Populated by `EventLogger` from `camera_service`; backfilled historically from nearby `ml_decisions` camera rows. |
+| posture | String(20) | Camera-derived posture (`upright`/`reclined`/null). Same source as zone. |
+| audio_class | String(40) | YAMNet top class from the most recent `audio_ml` `ml_decisions` row within ±60s (`silence`/`speech_single`/`speech_multiple`/`music`/`mechanical_noise`/`doorbell`/`game_audio`/null). |
+| lux | Float | Camera EMA lux at the moment of the transition. Backfill source = `ambient_lux` from the same camera frame; live writes use `camera_service.ema_lux`. |
 
 **light_adjustments** — Manual light change log
 | Column | Type | Notes |
