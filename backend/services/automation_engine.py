@@ -988,8 +988,16 @@ class AutomationEngine:
 
         if old_effective == "sleeping":
             # User is (probably) still asleep or just waking — they'll pick a
-            # new mode on the dashboard. Leave lights off.
+            # new mode on the dashboard. Leave lights off, but DO fire mode
+            # change callbacks so subscribers (camera unpause, ambient sound,
+            # ML logger) sync to the new effective mode. The 2026-05-05 bug:
+            # camera stayed paused all day after each morning's "Auto" tap
+            # because this branch skipped callbacks entirely. MusicMapper has
+            # its own auto-play gates (idle has no playlist) so waking to
+            # idle won't trigger music.
             await self._broadcast_mode()
+            if old_effective != self._current_mode:
+                await self._fire_mode_change_callbacks(self._current_mode)
             return
 
         # Re-apply current detected mode or time-based. force_resend=True
