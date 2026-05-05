@@ -169,8 +169,8 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         "lights": {
             "1": {"on": True, "bri": 240, "hue": 56100, "sat": 210},
             "2": {"on": True, "bri": 230, "hue": 46920, "sat": 210},
-            "3": {"on": True, "bri": 220, "hue": 52000, "sat": 210},
-            "4": {"on": True, "bri": 210, "hue": 60000, "sat": 200},
+            "3": {"on": True, "bri": 200, "hue": 52000, "sat": 210},
+            "4": {"on": True, "bri": 200, "hue": 52000, "sat": 210},
         },
     },
     "arcade": {
@@ -178,10 +178,10 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         "category": "vibrant",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 25500, "sat": 210},
-            "2": {"on": True, "bri": 230, "hue": 50000, "sat": 210},
-            "3": {"on": True, "bri": 220, "hue": 36000, "sat": 210},
-            "4": {"on": True, "bri": 210, "hue": 25500, "sat": 200},
+            "1": {"on": True, "bri": 240, "hue": 64500, "sat": 220},
+            "2": {"on": True, "bri": 230, "hue": 52000, "sat": 220},
+            "3": {"on": True, "bri": 200, "hue": 46000, "sat": 220},
+            "4": {"on": True, "bri": 200, "hue": 46000, "sat": 220},
         },
     },
     "miami_vice": {
@@ -189,10 +189,10 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         "category": "vibrant",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 60000, "sat": 210},
-            "2": {"on": True, "bri": 230, "hue": 36000, "sat": 200},
-            "3": {"on": True, "bri": 220, "hue": 58000, "sat": 210},
-            "4": {"on": True, "bri": 210, "hue": 34000, "sat": 190},
+            "1": {"on": True, "bri": 240, "hue": 58000, "sat": 215},
+            "2": {"on": True, "bri": 230, "hue": 2500, "sat": 200},
+            "3": {"on": True, "bri": 200, "hue": 39000, "sat": 210},
+            "4": {"on": True, "bri": 200, "hue": 39000, "sat": 210},
         },
     },
 
@@ -202,12 +202,12 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     "northern_lights": {
         "display_name": "Northern Lights",
         "category": "nature",
-        "effect": "glisten",
+        "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 220, "hue": 25500, "sat": 200},
-            "2": {"on": True, "bri": 210, "hue": 34000, "sat": 190},
-            "3": {"on": True, "bri": 200, "hue": 50000, "sat": 180},
-            "4": {"on": True, "bri": 200, "hue": 28000, "sat": 210},
+            "1": {"on": True, "bri": 220, "hue": 51000, "sat": 200},
+            "2": {"on": True, "bri": 210, "hue": 44000, "sat": 200},
+            "3": {"on": True, "bri": 180, "hue": 22000, "sat": 200},
+            "4": {"on": True, "bri": 180, "hue": 22000, "sat": 200},
         },
     },
     "sunset_strip": {
@@ -215,10 +215,10 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         "category": "nature",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 0, "sat": 210},
+            "1": {"on": True, "bri": 240, "hue": 64500, "sat": 215},
             "2": {"on": True, "bri": 230, "hue": 5000, "sat": 210},
-            "3": {"on": True, "bri": 220, "hue": 60000, "sat": 190},
-            "4": {"on": True, "bri": 210, "hue": 52000, "sat": 180},
+            "3": {"on": True, "bri": 200, "hue": 58500, "sat": 210},
+            "4": {"on": True, "bri": 200, "hue": 58500, "sat": 210},
         },
     },
     "deep_ocean": {
@@ -274,12 +274,12 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     "house_party": {
         "display_name": "House Party",
         "category": "social",
-        "effect": "prism",
+        "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 254, "hue": 0, "sat": 210},
-            "2": {"on": True, "bri": 254, "hue": 25500, "sat": 210},
-            "3": {"on": True, "bri": 254, "hue": 46920, "sat": 210},
-            "4": {"on": True, "bri": 254, "hue": 56100, "sat": 210},
+            "1": {"on": True, "bri": 254, "hue": 58500, "sat": 215},
+            "2": {"on": True, "bri": 240, "hue": 4500, "sat": 210},
+            "3": {"on": True, "bri": 200, "hue": 54000, "sat": 215},
+            "4": {"on": True, "bri": 200, "hue": 54000, "sat": 215},
         },
     },
 }
