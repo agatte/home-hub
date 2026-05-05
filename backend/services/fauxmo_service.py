@@ -109,22 +109,6 @@ DEVICE_MAP: list[dict[str, Any]] = [
         "on": ("POST", "/api/automation/override", {"mode": "social"}),
         "off": ("POST", "/api/automation/override", {"mode": "auto"}),
     },
-    # "working" and "watching" added 2026-05-05 — without explicit
-    # devices for these modes, Alexa NLU fuzzy-matched "set working" to
-    # the closest Fauxmo device by name ("cooking mode") and silently
-    # flipped to cooking. Pinning short-form utterances anchors them
-    # back to the right mode. Custom-Skill commands ("tell home hub to
-    # set working") still work alongside.
-    {
-        "name": "working mode",
-        "on": ("POST", "/api/automation/override", {"mode": "working"}),
-        "off": ("POST", "/api/automation/override", {"mode": "auto"}),
-    },
-    {
-        "name": "watching mode",
-        "on": ("POST", "/api/automation/override", {"mode": "watching"}),
-        "off": ("POST", "/api/automation/override", {"mode": "auto"}),
-    },
     {
         "name": "bedtime",
         "on": ("POST", "/api/automation/override", {"mode": "sleeping"}),
