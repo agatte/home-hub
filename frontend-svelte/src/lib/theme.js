@@ -132,18 +132,6 @@ export const MODE_CONFIG = {
   },
 }
 
-/** @type {Array<{ name: string, hue: number, sat: number }>} */
-export const LIGHT_COLOR_PRESETS = [
-  { name: 'warm',   hue: 8000,  sat: 180 },
-  { name: 'cool',   hue: 40000, sat: 120 },
-  { name: 'red',    hue: 0,     sat: 254 },
-  { name: 'orange', hue: 5000,  sat: 254 },
-  { name: 'yellow', hue: 12750, sat: 254 },
-  { name: 'green',  hue: 25500, sat: 254 },
-  { name: 'blue',   hue: 46920, sat: 254 },
-  { name: 'purple', hue: 56100, sat: 254 },
-]
-
 /** @type {Array<{ name: string, ct: number, label: string }>} */
 export const LIGHT_CT_PRESETS = [
   { name: 'candle',   ct: 500, label: '2000K' },

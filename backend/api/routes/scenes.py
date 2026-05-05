@@ -41,14 +41,17 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     # ===================== FUNCTIONAL =====================
 
     "deep_focus": {
+        # 4000K — alert without the D65 cool cast that flattens the warm-wood
+        # + cream textile palette. 200K (~5000K) read as harsh blue-white in
+        # the cozy room; 250K stays neutral-bright for desk work.
         "display_name": "Deep Focus",
         "category": "functional",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 254, "ct": 200},
-            "2": {"on": True, "bri": 254, "ct": 200},
-            "3": {"on": True, "bri": 254, "ct": 200},
-            "4": {"on": True, "bri": 254, "ct": 200},
+            "1": {"on": True, "bri": 254, "ct": 250},
+            "2": {"on": True, "bri": 254, "ct": 250},
+            "3": {"on": True, "bri": 254, "ct": 250},
+            "4": {"on": True, "bri": 254, "ct": 250},
         },
     },
     "night_work": {
@@ -63,14 +66,17 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         },
     },
     "morning_energize": {
+        # 4500K — energy without the harsh blue cast. 153K (~6500K) is full
+        # daylight and clashes with chocolate brown + cream bouclé first
+        # thing in the morning. 220K still reads bright and alerting.
         "display_name": "Morning Energize",
         "category": "functional",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 254, "ct": 153},
-            "2": {"on": True, "bri": 254, "ct": 153},
-            "3": {"on": True, "bri": 254, "ct": 153},
-            "4": {"on": True, "bri": 254, "ct": 153},
+            "1": {"on": True, "bri": 254, "ct": 220},
+            "2": {"on": True, "bri": 254, "ct": 220},
+            "3": {"on": True, "bri": 254, "ct": 220},
+            "4": {"on": True, "bri": 254, "ct": 220},
         },
     },
     "wind_down": {
@@ -100,14 +106,19 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         },
     },
     "ember": {
+        # Retuned 2026-05-05: red-dominant sat254 overwhelmed the chocolate
+        # brown couch. Now amber L1/L2 (hue 8K, deep-amber zone) at sat220
+        # with sage-hint kitchen at sat100 — the fire effect (Hue v2 dynamic)
+        # still scopes to L1/L2 via EFFECT_AUTO_MAP, kitchen pendants stay
+        # static and let the sage breathe alongside the fire.
         "display_name": "Ember",
         "category": "cozy",
         "effect": "fire",
         "lights": {
-            "1": {"on": True, "bri": 140, "hue": 1500, "sat": 254},
-            "2": {"on": True, "bri": 100, "hue": 0, "sat": 240},
-            "3": {"on": True, "bri": 80, "hue": 3000, "sat": 254},
-            "4": {"on": True, "bri": 120, "hue": 500, "sat": 254},
+            "1": {"on": True, "bri": 140, "hue": 8000, "sat": 220},
+            "2": {"on": True, "bri": 100, "hue": 6500, "sat": 230},
+            "3": {"on": True, "bri": 80, "hue": 22000, "sat": 100},
+            "4": {"on": True, "bri": 80, "hue": 22000, "sat": 100},
         },
     },
     "candlelit": {
@@ -126,36 +137,48 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     # Complementary + deep saturation, low brightness for drama
 
     "noir": {
-        "display_name": "Noir",
+        # Retuned 2026-05-05 (was purple/blue at sat254 — fought the room's
+        # warm wood + teal pieces). Now "Inky Forest": deep-teal living
+        # room paired with muted moss kitchen — drama from low brightness +
+        # rich saturation in the room's actual hue band, not from
+        # complementary clash.
+        "display_name": "Inky Forest",
         "category": "moody",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 60, "hue": 46920, "sat": 254},
-            "2": {"on": True, "bri": 100, "hue": 7000, "sat": 200},
-            "3": {"on": True, "bri": 40, "hue": 50000, "sat": 220},
-            "4": {"on": True, "bri": 50, "hue": 48000, "sat": 240},
+            "1": {"on": True, "bri": 80, "hue": 48000, "sat": 200},
+            "2": {"on": True, "bri": 70, "hue": 46000, "sat": 200},
+            "3": {"on": True, "bri": 60, "hue": 22000, "sat": 140},
+            "4": {"on": True, "bri": 60, "hue": 22000, "sat": 140},
         },
     },
     "midnight": {
-        "display_name": "Midnight",
+        # Retuned 2026-05-05 (was purple/blue + glisten — too aggressive on
+        # warm-wood room). Now "Midnight Garden" — Northern-Lights hue band
+        # at lower brightness; glisten effect kept for shimmer but flattens
+        # to the effect base on bridge so colors set ambience pre-shimmer.
+        "display_name": "Midnight Garden",
         "category": "moody",
         "effect": "glisten",
         "lights": {
-            "1": {"on": True, "bri": 80, "hue": 48000, "sat": 254},
-            "2": {"on": True, "bri": 60, "hue": 52000, "sat": 200},
-            "3": {"on": True, "bri": 50, "hue": 46920, "sat": 220},
-            "4": {"on": True, "bri": 40, "hue": 50000, "sat": 240},
+            "1": {"on": True, "bri": 60, "hue": 51000, "sat": 200},
+            "2": {"on": True, "bri": 50, "hue": 44000, "sat": 200},
+            "3": {"on": True, "bri": 30, "hue": 22000, "sat": 160},
+            "4": {"on": True, "bri": 30, "hue": 22000, "sat": 160},
         },
     },
     "blood_moon": {
-        "display_name": "Blood Moon",
+        # Retuned 2026-05-05 (was sat254 red overwhelming cream/sage). Now
+        # "Harvest Moon": amber living room, deep moss kitchen — the
+        # designer-canonical chocolate+sage analogous pairing, just dim.
+        "display_name": "Harvest Moon",
         "category": "moody",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 120, "hue": 0, "sat": 254},
-            "2": {"on": True, "bri": 80, "hue": 36000, "sat": 200},
-            "3": {"on": True, "bri": 60, "hue": 1000, "sat": 254},
-            "4": {"on": True, "bri": 50, "hue": 34000, "sat": 180},
+            "1": {"on": True, "bri": 70, "hue": 5000, "sat": 230},
+            "2": {"on": True, "bri": 60, "hue": 4000, "sat": 230},
+            "3": {"on": True, "bri": 40, "hue": 22000, "sat": 140},
+            "4": {"on": True, "bri": 40, "hue": 22000, "sat": 140},
         },
     },
 
@@ -163,36 +186,45 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     # Triadic + split-complementary, high saturation, bold
 
     "neon_tokyo": {
+        # Retuned 2026-05-05: was full RGB-pop (sat210 bri240). Now muted
+        # neon — same hue band but sat→160, bri→180. Reads as evening-vibe
+        # rather than arcade. Guest "neon" still hits this preset.
         "display_name": "Neon Tokyo",
         "category": "vibrant",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 56100, "sat": 210},
-            "2": {"on": True, "bri": 230, "hue": 46920, "sat": 210},
-            "3": {"on": True, "bri": 200, "hue": 52000, "sat": 210},
-            "4": {"on": True, "bri": 200, "hue": 52000, "sat": 210},
+            "1": {"on": True, "bri": 180, "hue": 56100, "sat": 160},
+            "2": {"on": True, "bri": 170, "hue": 46920, "sat": 160},
+            "3": {"on": True, "bri": 150, "hue": 52000, "sat": 160},
+            "4": {"on": True, "bri": 150, "hue": 52000, "sat": 160},
         },
     },
     "arcade": {
+        # Retuned 2026-05-05: same RGB-pop issue as Neon Tokyo. Sat 220→170,
+        # bri 240→180. Guest "arcade" still hits this preset.
         "display_name": "Arcade",
         "category": "vibrant",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 64500, "sat": 220},
-            "2": {"on": True, "bri": 230, "hue": 52000, "sat": 220},
-            "3": {"on": True, "bri": 200, "hue": 46000, "sat": 220},
-            "4": {"on": True, "bri": 200, "hue": 46000, "sat": 220},
+            "1": {"on": True, "bri": 180, "hue": 64500, "sat": 170},
+            "2": {"on": True, "bri": 170, "hue": 52000, "sat": 170},
+            "3": {"on": True, "bri": 150, "hue": 46000, "sat": 170},
+            "4": {"on": True, "bri": 150, "hue": 46000, "sat": 170},
         },
     },
     "miami_vice": {
+        # Retuned 2026-05-05: was cyan+red polar split. Now keeps the
+        # dual-tone dynamic but pairs muted teal (sat 215→150) with warm
+        # amber (hue 2500→5000) — the same designer-canonical analogous
+        # pairing the room actually uses. Guest "miami" still hits this.
         "display_name": "Miami Vice",
         "category": "vibrant",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 58000, "sat": 215},
-            "2": {"on": True, "bri": 230, "hue": 2500, "sat": 200},
-            "3": {"on": True, "bri": 200, "hue": 39000, "sat": 210},
-            "4": {"on": True, "bri": 200, "hue": 39000, "sat": 210},
+            "1": {"on": True, "bri": 200, "hue": 58000, "sat": 150},
+            "2": {"on": True, "bri": 190, "hue": 5000, "sat": 200},
+            "3": {"on": True, "bri": 170, "hue": 39000, "sat": 150},
+            "4": {"on": True, "bri": 170, "hue": 39000, "sat": 150},
         },
     },
 
@@ -211,14 +243,18 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         },
     },
     "sunset_strip": {
+        # Retuned 2026-05-05: was cyan + warm-red polar split. Now an actual
+        # sunset gradient — amber living room → muted rose kitchen. Drops
+        # the cyan that was fighting the room's warm wood. Guest "sunset"
+        # still hits this preset.
         "display_name": "Sunset Strip",
         "category": "nature",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 240, "hue": 64500, "sat": 215},
-            "2": {"on": True, "bri": 230, "hue": 5000, "sat": 210},
-            "3": {"on": True, "bri": 200, "hue": 58500, "sat": 210},
-            "4": {"on": True, "bri": 200, "hue": 58500, "sat": 210},
+            "1": {"on": True, "bri": 220, "hue": 6000, "sat": 200},
+            "2": {"on": True, "bri": 210, "hue": 4500, "sat": 220},
+            "3": {"on": True, "bri": 170, "hue": 60000, "sat": 140},
+            "4": {"on": True, "bri": 170, "hue": 60000, "sat": 140},
         },
     },
     "deep_ocean": {
@@ -258,28 +294,35 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
         },
     },
     "game_time": {
+        # Retuned 2026-05-05: was vibrant blue/magenta clashing with the
+        # warm-wood room. Sat dropped 200→160 across the board. Kitchen
+        # pair (3+4) now identical per kitchen-pair rule for functional modes.
         "display_name": "Game Time",
         "category": "entertainment",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 150, "hue": 50000, "sat": 200},
-            "2": {"on": True, "bri": 120, "hue": 46920, "sat": 180},
+            "1": {"on": True, "bri": 150, "hue": 50000, "sat": 160},
+            "2": {"on": True, "bri": 120, "hue": 46920, "sat": 160},
             "3": {"on": True, "bri": 100, "hue": 52000, "sat": 160},
-            "4": {"on": True, "bri": 80, "hue": 46920, "sat": 200},
+            "4": {"on": True, "bri": 100, "hue": 52000, "sat": 160},
         },
     },
 
     # ===================== SOCIAL =====================
 
     "house_party": {
+        # Retuned 2026-05-05: was cyan+red vibrant clash. Now "warm party"
+        # — bright amber living room paired with sage kitchen. Energy without
+        # the RGB-pop that fights the warm-wood + cream textile palette.
+        # Guest "party" still hits this preset.
         "display_name": "House Party",
         "category": "social",
         "effect": None,
         "lights": {
-            "1": {"on": True, "bri": 254, "hue": 58500, "sat": 215},
-            "2": {"on": True, "bri": 240, "hue": 4500, "sat": 210},
-            "3": {"on": True, "bri": 200, "hue": 54000, "sat": 215},
-            "4": {"on": True, "bri": 200, "hue": 54000, "sat": 215},
+            "1": {"on": True, "bri": 254, "hue": 6000, "sat": 200},
+            "2": {"on": True, "bri": 240, "hue": 4500, "sat": 200},
+            "3": {"on": True, "bri": 200, "hue": 22000, "sat": 140},
+            "4": {"on": True, "bri": 200, "hue": 22000, "sat": 140},
         },
     },
 }

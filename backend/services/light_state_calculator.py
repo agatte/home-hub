@@ -149,24 +149,39 @@ EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
 
 ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # ── Gaming ────────────────────────────────────────────────────────
+    # Retuned 2026-05-05: blue palette (hue 46920–50000) is intentional and
+    # maps onto the room's existing teal accents, but saturation 220–240
+    # was overcooked — the warm-wood + cream textile palette can't absorb
+    # that much pure blue. Sat dropped to 180; same hue band, less visual
+    # weight. Added an explicit late_night state that warms toward relax-
+    # adjacent values for past-23:00 sessions.
     "gaming": {
         "day": {
-            "1": {"on": True, "bri": 130, "hue": 47000, "sat": 220},
-            "2": {"on": True, "bri": 240, "hue": 46920, "sat": 220},
-            "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},
-            "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 220},
+            "1": {"on": True, "bri": 130, "hue": 47000, "sat": 180},
+            "2": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
+            "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
+            "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
         },
         "evening": {
-            "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 230},
-            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 230},
-            "3": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},
-            "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 230},
+            "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 190},
+            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
+            "3": {"on": True, "bri": 22,  "hue": 50000, "sat": 190},
+            "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 190},
         },
         "night": {
-            "1": {"on": True, "bri": 55,  "hue": 47000, "sat": 240},
-            "2": {"on": True, "bri": 140, "hue": 46920, "sat": 240},
-            "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 240},
-            "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 240},
+            "1": {"on": True, "bri": 55,  "hue": 47000, "sat": 200},
+            "2": {"on": True, "bri": 140, "hue": 46920, "sat": 200},
+            "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 200},
+            "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 200},
+        },
+        # Late-night gaming — warmer accent, less saturation, dimmed overall.
+        # L1 shifts toward muted teal, L2 (desk dominant) keeps the blue but
+        # at lower bri to ease eye strain. Kitchen drops further into accent.
+        "late_night": {
+            "1": {"on": True, "bri": 40,  "hue": 47000, "sat": 160},
+            "2": {"on": True, "bri": 110, "hue": 46920, "sat": 170},
+            "3": {"on": True, "bri": 18,  "hue": 50000, "sat": 180},
+            "4": {"on": True, "bri": 18,  "hue": 50000, "sat": 180},
         },
     },
     # ── Working ───────────────────────────────────────────────────────
@@ -201,9 +216,12 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     },
     # ── Watching ──────────────────────────────────────────────────────
     "watching": {
+        # Day CT bumped 320→286 (3500K) to match cooking — projector food
+        # scenes read more accurate at 286 mirek; 320K was slightly cool
+        # for daytime color rendition.
         "day": {
-            "1": {"on": True, "bri": 80,  "ct": 320},
-            "2": {"on": True, "bri": 70,  "ct": 370},
+            "1": {"on": True, "bri": 80,  "ct": 286},
+            "2": {"on": True, "bri": 70,  "ct": 333},
             "3": {"on": True, "bri": 30,  "ct": 333},
             "4": {"on": True, "bri": 30,  "ct": 333},
         },
@@ -221,11 +239,16 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         },
     },
     # ── Social ────────────────────────────────────────────────────────
+    # "Velvet Speakeasy" — retuned 2026-05-05. L3/L4 burnt-orange dropped
+    # from sat254/bri70 to sat210/bri55: max saturation overpowered the
+    # sage accent palette and pulled the kitchen into a too-loud focal
+    # point. Lower sat lets olive breathe; lower bri keeps it ambient,
+    # not center-stage. L1 (dusty rose) and L2 (cognac amber) unchanged.
     "social": {
         "1": {"on": True, "bri": 140, "hue": 58500, "sat": 160},
         "2": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},
-        "3": {"on": True, "bri": 70,  "hue": 4000,  "sat": 254},
-        "4": {"on": True, "bri": 70,  "hue": 4000,  "sat": 254},
+        "3": {"on": True, "bri": 55,  "hue": 4000,  "sat": 210},
+        "4": {"on": True, "bri": 55,  "hue": 4000,  "sat": 210},
     },
     # ── Relax ─────────────────────────────────────────────────────────
     "relax": {
@@ -247,9 +270,12 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},
         },
+        # Late-night relax — retuned 2026-05-05. L1/L2 sat254 at bri 28/22
+        # produced oppressive cave-burgundy. Sat dropped to 240 (still
+        # deep amber) and bri lifted to 34/26 for readable softness.
         "late_night": {
-            "1": {"on": True, "bri": 28, "hue": 3000,  "sat": 254},
-            "2": {"on": True, "bri": 22, "hue": 2500,  "sat": 254},
+            "1": {"on": True, "bri": 34, "hue": 3000,  "sat": 240},
+            "2": {"on": True, "bri": 26, "hue": 2500,  "sat": 240},
             "3": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},
         },
