@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { camera as cameraStore } from '$lib/stores/camera.js'
   import { automation } from '$lib/stores/automation.js'
@@ -36,8 +36,32 @@
   }
 
   $: dndState = $automation.dnd ?? { enabled: false, minutes_remaining: 0, expiry_utc: null }
+
+  // The WS-pushed `minutes_remaining` is correct at the moment of broadcast,
+  // but the dashboard sits idle for tens of minutes and the displayed
+  // countdown would otherwise freeze. `dndTickNow` is bumped every 30s so
+  // the reactive label re-derives from `expiry_utc`.
+  let dndTickNow = Date.now()
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let dndTickTimer = null
+  onMount(() => {
+    dndTickTimer = setInterval(() => { dndTickNow = Date.now() }, 30_000)
+  })
+  onDestroy(() => {
+    if (dndTickTimer) clearInterval(dndTickTimer)
+  })
+
   $: dndRemainingLabel = (() => {
-    const m = dndState.minutes_remaining ?? 0
+    // Prefer expiry_utc if present — gives an always-fresh countdown that
+    // doesn't go stale between WS broadcasts. Falls back to the raw
+    // minutes_remaining for older payloads.
+    let m
+    if (dndState.expiry_utc) {
+      const ms = new Date(dndState.expiry_utc).getTime() - dndTickNow
+      m = Math.max(0, Math.round(ms / 60_000))
+    } else {
+      m = dndState.minutes_remaining ?? 0
+    }
     if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`
     return `${m}m`
   })()

@@ -9,7 +9,12 @@
 </script>
 
 {#if hasTrack}
-  <a href="/music" class="now-playing-chip" class:is-playing={playing}>
+  <a
+    href="/music"
+    class="now-playing-chip"
+    class:is-playing={playing}
+    aria-label={artist ? `Now playing: ${track} by ${artist}` : `Now playing: ${track}`}
+  >
     {#if artUrl}
       <img class="chip-art" src={artUrl} alt="" width="32" height="32" />
     {:else}

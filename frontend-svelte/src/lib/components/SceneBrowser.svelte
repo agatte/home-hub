@@ -165,6 +165,8 @@
         {@const catMeta = SCENE_CATEGORIES[scene.category] || SCENE_CATEGORIES.custom}
         <div
           class="scene-wrap"
+          role="group"
+          aria-label={scene.display_name}
           on:mouseenter={() => { if (scene.lights) onPreview(scene.lights) }}
           on:mouseleave={() => onPreviewEnd()}
         >

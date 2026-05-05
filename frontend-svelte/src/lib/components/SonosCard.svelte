@@ -18,7 +18,11 @@
 <div class="sonos-strip" class:is-playing={isPlaying}>
   <div class="strip-art-wrap">
     {#if $sonos.art_url}
-      <img src={$sonos.art_url} alt="Album art" class="strip-art" />
+      <img
+        src={$sonos.art_url}
+        alt={$sonos.artist && $sonos.track ? `${$sonos.artist} — ${$sonos.track} album art` : 'Album art'}
+        class="strip-art"
+      />
     {:else}
       <div class="strip-art strip-art-placeholder">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
