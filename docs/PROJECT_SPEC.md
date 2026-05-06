@@ -1358,12 +1358,13 @@ The system observes everything and evolves from rules to autopilot:
 - Sub-second latency, $0 cost, runs alongside the server
 - Limitation: simple on/off per device, no parameters
 
-**Phase 2 — Custom Alexa Skill + Cloudflare Tunnel:**
-- Full flexibility: "Alexa, tell Home Hub to set gaming mode and play my playlist"
-- AWS Lambda (~100 lines Python) → Cloudflare Tunnel (free) → local API
-- Supports complex commands with parameters
-- $0-5/month
-- Every voice command logged as a learning signal for the intelligence system
+**Phase 2 — Custom Alexa Skill + Cloudflare Tunnel (✓ shipped):**
+- Invocation: `command center` ("home hub" collides with Alexa's smart-home category)
+- AWS Lambda (`home-hub-skill` in `us-east-1`) → Cloudflare Tunnel (`home-hub.gatte-home.com`) → tunnel proxy (`backend/api/tunnel_proxy.py` on `127.0.0.1:8002`) → main backend on `127.0.0.1:8000`
+- Tunnel-origin auth: `X-Tunnel-Origin: cloudflare` header injected by tunnel proxy forces require_api_key to demand BOTH `X-API-Key` AND `X-Skill-Token` (skips loopback/RFC1918 bypass)
+- Three intents shipped: `SetModeIntent`, `PlayMusicIntent`, `PauseMusicIntent`, plus `ReleaseOverrideIntent` (carved out so "auto" gets a dedicated handler — single-token slot values misroute reliably) and built-ins (`AMAZON.HelpIntent`, `AMAZON.CancelIntent`, `AMAZON.StopIntent`). See `alexa_skill/` for code + manifest + setup README
+- **Critical: requires Alexa+ (Amazon's generative-AI tier) to be DISABLED.** Alexa+'s LLM routing intercepts custom skills and falls back to smart-home. See `alexa_skill/README.md` "Critical prerequisite" section
+- Phase 3 plan: brightness, scenes, effects, DND, status query intents
 
 ### Game Day Engine
 

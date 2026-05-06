@@ -20,7 +20,7 @@ The dashboard is a living interface with bold, mode-aware themed backgrounds —
 - **Invisible automation** — Detects activity, adjusts lights and music, manages routines without manual input
 - **Full autopilot learning** — Observes interactions, starts with simple rules, evolves toward autonomous decision-making
 - **Bold, living UI** — Animated backgrounds that change with mode and time of day
-- **Voice control** — Alexa via Fauxmo locally, custom skill later
+- **Voice control** — Alexa via Fauxmo (7 WeMos) + Custom Skill (`command center` via Lambda+Tunnel)
 - **Game day magic** — Colts games: synchronized lights, TTS celebrations, live scoreboard, pixel art field
 - **Personal, not generic** — Every rule, mode, animation, and routine tuned for one person's apartment
 
@@ -165,7 +165,6 @@ PC Agent (standalone processes, same machine)
 Key additions beyond current:
 - **EventLogger** — Middleware that intercepts all state changes → event tables (for learning)
 - **LearningEngine** — Separate process, reads events, generates rules, exposes `/predict` API
-- **FauxmoService** — WeMo emulation for Alexa voice control (local UPnP)
 - **GameDayEngine** — ESPN polling, play detection, celebration orchestration
 - **Database migration** — SQLite → PostgreSQL (Supabase) as event volume grows
 - See `docs/PROJECT_SPEC.md` for full target architecture diagram
@@ -398,6 +397,7 @@ SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 ZONE_POSTURE_RULE_APPLY=false  # Zone+posture→relax actuation. Default false = shadow ml_decisions only.
 PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot.
 HOME_HUB_API_KEY=<urlsafe random>  # Required for write endpoints. Unset → all writes 503. Localhost + RFC1918 LAN auto-bypass X-API-Key.
+HOME_HUB_SKILL_TOKEN=<urlsafe random>  # Tunnel-origin auth (Alexa Skill), paired with HOME_HUB_API_KEY.
 TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs). Private-range callers already bypass.
 GUEST_WIFI_SSID=               # Surfaces a QR on home dashboard + /guest. Empty = "not configured".
 GUEST_WIFI_PASSWORD=
@@ -438,9 +438,9 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Phase | Timeline | Focus |
 |-------|----------|-------|
 | Phases 1–2 | ✓ Complete | Core foundation + dashboard redesign — see `docs/PROJECT_SPEC.md` |
-| **Phase 3: Intelligence & Voice** | June 2026 | Simple rule engine from events, Fauxmo Alexa integration, override pattern analysis, nudge system |
+| **Phase 3: Intelligence & Voice** | Voice ✓; rules pending | Fauxmo (7 WeMos) + Custom Skill (`command center`, Lambda→Tunnel→:8002→:8000; see `alexa_skill/`). Rule engine + override patterns next |
 | **Phase 4: Game Day** | July–August 2026 | ESPN API, GameDay page, celebration orchestration, pixel art field, pre-game mode |
-| **Phase 5: Polish & Expand** | September 2026+ | Custom Alexa Skill, Apple Music API, full autopilot, bar app widget |
+| **Phase 5: Polish & Expand** | September 2026+ | Apple Music API, full autopilot, bar app widget |
 
 ---
 
@@ -454,7 +454,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 - **edge-tts requires internet** — Falls back to gTTS (also internet). No offline TTS currently.
 - **SQLite concurrency** — Single-writer. Event logging at high frequency may need batching.
 - **Indiana timezone** — `America/Indiana/Indianapolis` has unique DST rules. All scheduling must use this timezone explicitly.
-- **Fauxmo device limits** — Simple on/off per virtual device. Complex voice commands require the custom Alexa Skill (Phase 3).
+- **Fauxmo device limits** — Simple on/off per virtual device. Complex voice commands use the Custom Skill.
 - **1080p landscape primary** — Animated backgrounds designed for this. Must degrade gracefully on mobile.
 - **Android tablet blank page** — Known issue, deferred.
 
