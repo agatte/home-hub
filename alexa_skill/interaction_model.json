@@ -203,14 +203,15 @@
             }
           ],
           "samples": [
-            "{VolumeDirection}",
-            "volume {VolumeDirection}",
-            "{VolumeDirection} the volume",
-            "make the volume {VolumeDirection}",
-            "turn the volume {VolumeDirection}",
-            "make the music {VolumeDirection}",
             "turn the music {VolumeDirection}",
-            "make it {VolumeDirection}"
+            "make the music {VolumeDirection}",
+            "music {VolumeDirection}",
+            "{VolumeDirection} the music",
+            "bump the music {VolumeDirection}",
+            "the music is too {VolumeDirection}",
+            "set the music {VolumeDirection}",
+            "song {VolumeDirection}",
+            "the song is too {VolumeDirection}"
           ]
         },
         {
