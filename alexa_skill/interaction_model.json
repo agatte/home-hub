@@ -35,7 +35,10 @@
             "go to {Mode} mode",
             "set the apartment to {Mode}",
             "make it {Mode}",
-            "activate {Mode} mode"
+            "activate {Mode} mode",
+            "turn on {Mode}",
+            "turn on {Mode} mode",
+            "start {Mode} mode"
           ]
         },
         {
@@ -155,7 +158,6 @@
             "activate the {Scene} scene",
             "run {Scene}",
             "run the {Scene} scene",
-            "play {Scene}",
             "set the scene to {Scene}",
             "switch to the {Scene} scene"
           ]
@@ -209,8 +211,8 @@
         {
           "name": "HOMEHUB_DIRECTION",
           "values": [
-            { "id": "up",   "name": { "value": "up",   "synonyms": ["brighter", "lighter", "higher", "louder"] } },
-            { "id": "down", "name": { "value": "down", "synonyms": ["dimmer",  "darker",  "lower",  "softer"] } }
+            { "id": "up",   "name": { "value": "up",   "synonyms": ["brighter", "lighter", "higher"] } },
+            { "id": "down", "name": { "value": "down", "synonyms": ["dimmer",  "darker",  "lower"]  } }
           ]
         },
         {

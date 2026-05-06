@@ -146,16 +146,19 @@ def _speak(text: str, end_session: bool = True) -> dict:
     }
 
 
-def _slot_value(slots: dict, name: str) -> str | None:
-    """Pull the resolved (or raw) slot value, lowercased.
+def _resolved_slot(slots: dict, name: str) -> tuple[str | None, str | None]:
+    """Pull the resolved (id, value name) tuple for a slot, lowercased.
 
-    Alexa returns slot values nested. Prefer the resolved authority value
-    (the canonical one matching our slot type); fall back to the raw user
-    utterance if no resolution exists.
+    Returns (id, value) on a successful match, (None, raw) when the user
+    said something the slot type doesn't know, or (None, None) when the
+    slot is missing entirely. The id is what the backend wants for slot
+    types where the spoken word and the canonical key differ (e.g.,
+    HOMEHUB_SCENE: spoken "party" → id "house_party"). The value is the
+    canonical display string ("party") and is used for TTS.
     """
     slot = slots.get(name)
     if not slot:
-        return None
+        return None, None
     res = (
         slot.get("resolutions", {})
             .get("resolutionsPerAuthority", [])
@@ -164,9 +167,24 @@ def _slot_value(slots: dict, name: str) -> str | None:
         status = authority.get("status", {}).get("code")
         values = authority.get("values", [])
         if status == "ER_SUCCESS_MATCH" and values:
-            return values[0]["value"]["name"].strip().lower()
+            entry = values[0]["value"]
+            return (
+                str(entry.get("id", "")).strip().lower() or None,
+                entry["name"].strip().lower(),
+            )
     raw = slot.get("value")
-    return raw.strip().lower() if isinstance(raw, str) else None
+    return None, (raw.strip().lower() if isinstance(raw, str) else None)
+
+
+def _slot_value(slots: dict, name: str) -> str | None:
+    """Resolved canonical name, or raw user utterance if no resolution.
+
+    For slot types where id == value name (HOMEHUB_MODE, HOMEHUB_EFFECT,
+    HOMEHUB_DIRECTION) this is exactly what callers want. Use
+    _resolved_slot() directly when the id and value diverge.
+    """
+    _id, value = _resolved_slot(slots, name)
+    return value
 
 
 # ---- Intent handlers ----
@@ -256,21 +274,20 @@ def _handle_stop_effect(_slots: dict) -> dict:
 
 
 def _handle_activate_scene(slots: dict) -> dict:
-    scene_id = _slot_value(slots, "Scene")
-    if not scene_id:
+    scene_id, spoken = _resolved_slot(slots, "Scene")
+    if scene_id is None:
+        # Either no slot at all or the user said something off-list.
+        if spoken:
+            return _speak(f"I don't have a scene called {spoken}.")
         return _speak(
             "Which scene? Try party, neon, miami, arcade, aurora, "
             "or sunset.",
         )
     if scene_id not in VALID_SCENE_IDS:
-        return _speak(f"I don't have a scene called {scene_id}.")
+        return _speak(f"I don't have a scene called {spoken or scene_id}.")
     status, _ = _post_to_homehub(f"/api/scenes/{scene_id}/activate", None)
     if 200 <= status < 300:
-        # Scene IDs are snake_case — the spoken display value matches the
-        # slot's value field (e.g. "party"), but we don't get that back from
-        # _slot_value once it's resolved. Drop the underscore for TTS.
-        spoken = scene_id.replace("_", " ")
-        return _speak(f"Setting the {spoken} scene.")
+        return _speak(f"Setting the {spoken or scene_id} scene.")
     return _speak("Couldn't activate that scene.")
 
 
