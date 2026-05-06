@@ -39,8 +39,9 @@ MIN_BRIGHTNESS = 15
 # Watching allows dim bias lighting (dark scenes → dim L2 → projection stays
 # the room's brightest surface, which is what we want).
 MODE_MIN_BRIGHTNESS: dict[str, int] = {
-    "gaming": 85,     # Hold a comfortable bedroom bias level even on dark scenes
-                      # so the desk lamp doesn't drop below ~1:3 monitor contrast.
+    "gaming": 130,    # Sits at gaming evening/night engine baseline (140/150)
+                      # so screen sync can't drop L2 below a readable bias level
+                      # on overcast days. Highlights still pop up to the 240 cap.
 }
 
 # Zone- and posture-aware brightness overrides. When a detected (mode, zone)

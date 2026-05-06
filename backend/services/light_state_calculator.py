@@ -66,17 +66,27 @@ MODE_TRANSITION_TIME: dict[str, int] = {
 # Ambient lux adaptive brightness
 # ---------------------------------------------------------------------------
 
-# Modes where ambient adaptation is desirable. ±15% is small enough that
-# gaming/watching's intentional spatial palettes stay recognizable while
-# still compensating when the room is significantly darker (or brighter)
+# Modes where ambient adaptation is desirable. +30%/-15% range is small
+# enough that gaming/watching's intentional spatial palettes stay recognizable
+# while still compensating when the room is significantly darker (or brighter)
 # than the calibrated baseline. Cooking + social keep their intentional
 # bright/medium palettes — explicit user-mode choices that shouldn't drift.
 LUX_MODES = frozenset(("working", "relax", "gaming", "watching"))
 
 # Piecewise-linear curve mapping camera-derived ambient brightness
 # (gray.mean, 0–255) to a brightness multiplier. Dark rooms (low lux)
-# lift brightness; bright rooms dim.
-LUX_CURVE: list[tuple[float, float]] = [(40.0, 1.15), (90.0, 1.00), (180.0, 0.85)]
+# lift brightness; bright rooms dim. Low-end anchor (20.0, 1.30) gives
+# overcast-day rooms more headroom than the original (40, 1.15) ceiling
+# — needed for the heavy-rain case where the lamp at +15% still felt
+# dim against a darker-than-baseline room.
+LUX_CURVE: list[tuple[float, float]] = [
+    (20.0, 1.30), (40.0, 1.20), (90.0, 1.00), (180.0, 0.85),
+]
+# The neutral anchor — lux value where multiplier = 1.00. Used by the
+# baseline-shift in lux_to_multiplier so an uncalibrated room (default
+# baseline=90) lands neutral here, and a calibrated room shifts the
+# whole curve so its baseline_lux maps onto this point.
+LUX_NEUTRAL_LUX = 90.0
 LUX_MULT_EPSILON = 0.03      # Skip re-apply if multiplier change < 3%
 LUX_STALE_SECONDS = 30       # Ignore readings older than this
 
@@ -85,14 +95,14 @@ def lux_to_multiplier(lux: float, baseline: float = 90.0) -> float:
     """Piecewise-linear interpolation across LUX_CURVE anchors.
 
     The ``baseline`` argument shifts the curve so the user's calibrated
-    "normal room" reading lands at the middle anchor (multiplier = 1.00).
+    "normal room" reading lands at the neutral anchor (multiplier = 1.00).
     Default baseline of 90 matches the raw LUX_CURVE anchors — used when
     no calibration baseline is available yet.
 
     Clamps to the first/last anchor's multiplier when lux is outside the
     anchor range. Dark rooms (low lux) lift brightness; bright rooms dim.
     """
-    effective = lux - baseline + LUX_CURVE[1][0]
+    effective = lux - baseline + LUX_NEUTRAL_LUX
     if effective <= LUX_CURVE[0][0]:
         return LUX_CURVE[0][1]
     if effective >= LUX_CURVE[-1][0]:

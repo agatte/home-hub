@@ -29,8 +29,11 @@ from backend.services.automation_engine import (
 class TestLuxToMultiplier:
     """Verify the piecewise-linear lux → multiplier curve."""
 
+    def test_pitch_dark_anchor(self):
+        assert lux_to_multiplier(20.0) == pytest.approx(1.30)
+
     def test_dark_anchor(self):
-        assert lux_to_multiplier(40.0) == pytest.approx(1.15)
+        assert lux_to_multiplier(40.0) == pytest.approx(1.20)
 
     def test_mid_anchor(self):
         assert lux_to_multiplier(90.0) == pytest.approx(1.00)
@@ -39,17 +42,23 @@ class TestLuxToMultiplier:
         assert lux_to_multiplier(180.0) == pytest.approx(0.85)
 
     def test_below_range_clamps_to_bright_lift(self):
-        assert lux_to_multiplier(0.0) == pytest.approx(1.15)
-        assert lux_to_multiplier(-50.0) == pytest.approx(1.15)
+        # Below the (20, 1.30) low anchor, clamps to 1.30.
+        assert lux_to_multiplier(0.0) == pytest.approx(1.30)
+        assert lux_to_multiplier(-50.0) == pytest.approx(1.30)
 
     def test_above_range_clamps_to_dim(self):
         assert lux_to_multiplier(255.0) == pytest.approx(0.85)
         assert lux_to_multiplier(1000.0) == pytest.approx(0.85)
 
     def test_midpoint_dark_to_normal(self):
-        # lux=65 is midway between anchors (40, 1.15) and (90, 1.00)
-        # Expected: 1.15 + (65-40)/(90-40) * (1.00-1.15) = 1.15 - 0.075 = 1.075
-        assert lux_to_multiplier(65.0) == pytest.approx(1.075)
+        # lux=65 is midway between anchors (40, 1.20) and (90, 1.00).
+        # Expected: 1.20 + (65-40)/(90-40) * (1.00-1.20) = 1.20 - 0.10 = 1.10
+        assert lux_to_multiplier(65.0) == pytest.approx(1.10)
+
+    def test_midpoint_pitch_dark_to_dark(self):
+        # lux=30 is midway between (20, 1.30) and (40, 1.20).
+        # Expected: 1.30 + (30-20)/(40-20) * (1.20-1.30) = 1.30 - 0.05 = 1.25
+        assert lux_to_multiplier(30.0) == pytest.approx(1.25)
 
     def test_midpoint_normal_to_bright(self):
         # lux=135 is midway between (90, 1.00) and (180, 0.85)
@@ -63,7 +72,9 @@ class TestLuxToMultiplier:
 
     def test_curve_definition_matches_spec(self):
         # Sanity check: anchors are what the spec committed to.
-        assert LUX_CURVE == [(40.0, 1.15), (90.0, 1.00), (180.0, 0.85)]
+        assert LUX_CURVE == [
+            (20.0, 1.30), (40.0, 1.20), (90.0, 1.00), (180.0, 0.85),
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +90,10 @@ class TestLuxToMultiplierWithBaseline:
     """
 
     def test_default_baseline_preserves_original_curve(self):
-        # Without a baseline kwarg, legacy behavior is unchanged.
-        assert lux_to_multiplier(40.0) == pytest.approx(1.15)
+        # Without a baseline kwarg, default baseline=90 anchors line up with
+        # the raw curve values.
+        assert lux_to_multiplier(20.0) == pytest.approx(1.30)
+        assert lux_to_multiplier(40.0) == pytest.approx(1.20)
         assert lux_to_multiplier(90.0) == pytest.approx(1.00)
         assert lux_to_multiplier(180.0) == pytest.approx(0.85)
 
@@ -94,8 +107,8 @@ class TestLuxToMultiplierWithBaseline:
         assert lux_to_multiplier(141.0, 141.0) == pytest.approx(1.00)
 
     def test_baseline_141_lux_below_baseline_lifts(self):
-        # Effective lux = 91 - 141 + 90 = 40 → full 1.15 lift.
-        assert lux_to_multiplier(91.0, 141.0) == pytest.approx(1.15)
+        # Effective lux = 91 - 141 + 90 = 40 → 1.20 lift.
+        assert lux_to_multiplier(91.0, 141.0) == pytest.approx(1.20)
 
     def test_baseline_141_lux_above_baseline_dims(self):
         # Effective lux = 231 - 141 + 90 = 180 → full 0.85 dim.
@@ -181,7 +194,7 @@ class TestApplyLuxMultiplierGuards:
 
     def test_gaming_now_modulates(self, engine):
         # Gaming was added to LUX_MODES so dim rooms get a brightness lift.
-        # Spatial design stays — the ±15% range doesn't reshape it.
+        # Spatial design stays — the +20%/-15% range doesn't reshape it.
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 200}}
         result = engine._apply_lux_multiplier(state, "gaming")
@@ -245,8 +258,8 @@ class TestApplyLuxMultiplierArithmetic:
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 150, "ct": 250}}
         result = engine._apply_lux_multiplier(state, "working")
-        # multiplier = 1.15, 150 * 1.15 = 172.5 -> int = 172
-        assert result["1"]["bri"] == 172
+        # multiplier = 1.20, 150 * 1.20 = 180
+        assert result["1"]["bri"] == 180
 
     def test_kitchen_pair_preserved_in_working(self, engine):
         engine.set_camera_service(_fake_camera(135.0))
@@ -268,10 +281,10 @@ class TestApplyLuxMultiplierArithmetic:
         assert result["3"]["bri"] == 1
 
     def test_relax_night_low_bri_lift(self, engine):
-        engine.set_camera_service(_fake_camera(40.0))  # multiplier 1.15
+        engine.set_camera_service(_fake_camera(40.0))  # multiplier 1.20
         state = {"3": {"on": True, "bri": 30}}
         result = engine._apply_lux_multiplier(state, "relax")
-        assert result["3"]["bri"] == 34  # int(30 * 1.15) = 34
+        assert result["3"]["bri"] == 36  # int(30 * 1.20) = 36
 
     def test_off_lights_untouched(self, engine):
         engine.set_camera_service(_fake_camera(40.0))
@@ -283,10 +296,10 @@ class TestApplyLuxMultiplierArithmetic:
         assert result["2"] == {"on": False}  # no bri added
 
     def test_bri_clamp_upper_bound(self, engine):
-        engine.set_camera_service(_fake_camera(40.0))  # multiplier 1.15
+        engine.set_camera_service(_fake_camera(40.0))  # multiplier 1.20
         state = {"2": {"on": True, "bri": 254}}
         result = engine._apply_lux_multiplier(state, "working")
-        # 254 * 1.15 = 292 -> clamped to 254
+        # 254 * 1.20 = 304.8 -> clamped to 254
         assert result["2"]["bri"] == 254
 
     def test_hysteresis_avoids_tiny_changes(self, engine):
@@ -318,12 +331,12 @@ class TestApplyLuxMultiplierArithmetic:
         assert result["2"]["bri"] == 200  # no modulation at baseline
 
     def test_baseline_dark_room_lifts_bri(self, engine):
-        # lux=91 < baseline=141 → full lift (×1.15).
+        # lux=91 < baseline=141 → effective=40 → 1.20 lift.
         engine.set_camera_service(_fake_camera(91.0, baseline_lux=141.0))
         state = {"2": {"on": True, "bri": 200}}
         result = engine._apply_lux_multiplier(state, "working")
-        # 200 * 1.15 = 229.9999... in binary float; int() truncates to 229.
-        assert result["2"]["bri"] == 229
+        # 200 * 1.20 = 240.
+        assert result["2"]["bri"] == 240
 
     def test_baseline_bright_room_dims_bri(self, engine):
         # lux=231 > baseline=141 → full dim (×0.85).

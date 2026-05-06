@@ -214,10 +214,9 @@ class TestApplyLuxMultiplier:
         assert out_state["1"]["bri"] < 100
 
     def test_hysteresis_within_epsilon_keeps_old_multiplier(self):
-        # last_multiplier was 1.10; new reading produces ~1.115 (within 0.03).
-        state = {"1": {"on": True, "bri": 100}}
-        # lux=70 → mult = lerp between (40,1.15) and (90,1.00) at 0.6 → 1.06
+        # lux=70 → mult = lerp between (40,1.20) and (90,1.00) at 0.6 → 1.08.
         # If last was 1.07, the diff is 0.01 < 0.03, so we keep 1.07.
+        state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult = apply_lux_multiplier(
             state, "working", lux_reading=70.0, last_multiplier=1.07,
         )
@@ -227,12 +226,12 @@ class TestApplyLuxMultiplier:
 
     def test_hysteresis_outside_epsilon_uses_new_multiplier(self):
         state = {"1": {"on": True, "bri": 100}}
-        # lux=40 → 1.15; last was 1.0 → diff 0.15 > epsilon → use 1.15.
+        # lux=40 → 1.20; last was 1.0 → diff 0.20 > epsilon → use 1.20.
         out_state, out_mult = apply_lux_multiplier(
             state, "working", lux_reading=40.0, last_multiplier=1.0,
         )
-        assert out_mult == pytest.approx(1.15)
-        assert out_state["1"]["bri"] == int(100 * 1.15)
+        assert out_mult == pytest.approx(1.20)
+        assert out_state["1"]["bri"] == int(100 * 1.20)
 
 
 # ---------------------------------------------------------------------------

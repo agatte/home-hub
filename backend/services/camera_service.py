@@ -156,7 +156,7 @@ LUX_EMA_ALPHA = 0.3         # Smoothing factor (α*raw + (1-α)*ema) — ~20s to
 # How long the EMA may sit untouched (e.g. all-night sleeping pause, all-day
 # absence) before the next reading should snap rather than blend. Without
 # this the first post-pause frame is averaged with yesterday's room light
-# and the multiplier swings ±15% wildly while the EMA catches up.
+# and the multiplier swings the full +30%/-15% range while the EMA catches up.
 LUX_EMA_STALE_RESET_SECONDS = 300
 LUX_CALIBRATION_SETTING_KEY = "lux_calibration_config"
 # OpenCV DirectShow/V4L2 auto-exposure magic numbers:
