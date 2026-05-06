@@ -18,7 +18,7 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 
 ### Tier 1 — Ship soon (high value, low complexity)
 
-**Lighting curator.** Review subagent that knows the apartment palette + the rules in `feedback_lighting_design_principles.md` (kitchen pair, post-sunset CT≥333 mirek, IES 1:3 contrast, HSB-vs-CT exclusivity, effects flatten per-light HSB). When you (or the main session) propose changes to `light_state_calculator.py` or curated scenes in `routes/scenes.py`, this agent reviews the diff against the rules before commit. Catches lighting-design rule violations the main session occasionally misses. **Effort:** small — one agent definition + a memory citation list.
+**Lighting curator.** **Shipped 2026-05-06. ✓** Review subagent that knows the apartment palette + the rules in `feedback_lighting_design_principles.md` (kitchen pair, post-sunset CT≥333 mirek, IES 1:3 contrast, HSB-vs-CT exclusivity, effects flatten per-light HSB). When you (or the main session) propose changes to `light_state_calculator.py` or curated scenes in `routes/scenes.py`, this agent reviews the diff against the rules before commit. Catches lighting-design rule violations the main session occasionally misses. Verified end-to-end: smoke test on `f1fac03` reported STATUS: ok with bonus structural insight; negative test against 3 contrived violations caught all 3 + 1 emergent finding (unreachable `wee_hours` period key). PreToolUse nudge hook live. **Effort:** small — one agent definition + a memory citation list.
 
 **Memory hygiene auditor.** Quarterly read-only scan of `~/.claude/projects/.../memory/`. Flags: memories citing dates >60d old without recent verification, conflicting pairs (two memories taking opposite positions), orphan memories no longer referenced. Outputs a cleanup queue. Memory currently has 60+ entries and drift is real. **Effort:** small — one agent + a runbook entry firing every 90 days.
 
@@ -127,10 +127,14 @@ Phase B at 4 worktree agents × ~2-3 days each ≈ **~12-15× tokens** vs. main-
 
 ---
 
-## Recommended first move
+## Recommended next move
 
-If validating the agent-investment thesis cheaply: ship the **lighting curator** (Tier 1). Smallest scope, clearest payoff, shows whether reviewer agents catch what they're meant to catch.
+The Tier 1 thesis is validated. The lighting curator (shipped 2026-05-06) caught what static linters can't — including emergent reasoning about unreachable code, not just rule lookups. Per-commit feedback loop works. The investment-vs-payoff question is answered for review-class specialists.
 
-If preparing for Game Day specifically: do **Phase A** with main session — spec + interface contracts + mockup. ~1-2 hour conversation, valuable regardless of whether Phase B goes parallel-fleet or solo-serial.
+Forward-looking candidates, in priority order:
 
-The two paths are complementary, not exclusive.
+1. **Game Day Phase A** with main session — spec + interface contracts + mockup. ~1-2 hour conversation. Roadmap calls Game Day for July–August 2026, so a May start gives Phase A breathing room before Phase B (parallel implementation fleet) becomes the gating path. Phase A's output is valuable regardless of whether Phase B runs fleet or solo-serial.
+2. **ML model evaluator** (Tier 2) — consolidates 3+ recurring runbook entries (predictor validation, audio classifier checkpoints, override-rate trend, retention sweep) into one specialist that owns ML observability. Per-week feedback rather than quarterly. Medium effort but addresses real ongoing pain.
+3. **Memory hygiene auditor / doc drift checker** (Tier 1) — defer. Quarterly cadence is too slow to teach the fleet anything new, and doc drift overlaps with the Aug 1 remote agent.
+
+Game Day Phase A and ML model evaluator are complementary, not exclusive — Phase A is sequential main-session work; the evaluator can ship in parallel without competing for the same surface area.
