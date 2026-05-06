@@ -134,6 +134,44 @@ async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
     return {"status": "ok" if success else "error", "volume": body.volume}
 
 
+# ±5 per tap matches voice ergonomics — Sonos remote default of 2 is too
+# small for "louder" / "quieter" to feel responsive, but anything bigger
+# than 5 jumps too aggressively in a quiet room.
+_VOLUME_STEP = 5
+
+
+@router.post("/volume/{direction}", dependencies=[Depends(require_api_key)])
+async def adjust_sonos_volume(direction: str, request: Request) -> dict:
+    """Bump Sonos volume ±5, clamped to [0, 100].
+
+    Owner-facing relative companion to `POST /volume`. Used by the Alexa
+    skill ("louder" / "quieter").
+    """
+    if direction not in {"up", "down"}:
+        raise HTTPException(status_code=400, detail="Direction must be 'up' or 'down'")
+
+    sonos = request.app.state.sonos
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+
+    status = await sonos.get_status()
+    current = int(status.get("volume", 0))
+    sign = 1 if direction == "up" else -1
+    new_volume = max(0, min(100, current + sign * _VOLUME_STEP))
+
+    if new_volume == current:
+        return {"status": "ok", "volume": current, "direction": direction}
+
+    success = await sonos.set_volume(new_volume)
+    if success:
+        await _log_manual_sonos(request, "volume", volume=new_volume)
+    return {
+        "status": "ok" if success else "error",
+        "volume": new_volume,
+        "direction": direction,
+    }
+
+
 @router.post("/tts", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
 async def speak_text(body: TTSRequest, request: Request) -> dict:

@@ -25,6 +25,8 @@ Intent coverage:
   ReleaseOverrideIntent
 - Phase 3: AdjustBrightnessIntent, SetEffectIntent, StopEffectIntent,
   ActivateSceneIntent, EnableDNDIntent, DisableDNDIntent
+- Phase 3.5: AdjustVolumeIntent, NextTrackIntent, PreviousTrackIntent,
+  WhatModeIntent, WhatsPlayingIntent
 """
 from __future__ import annotations
 
@@ -309,6 +311,81 @@ def _handle_disable_dnd(_slots: dict) -> dict:
     return _speak("Couldn't clear do not disturb.")
 
 
+def _handle_adjust_volume(slots: dict) -> dict:
+    direction = _slot_value(slots, "Direction")
+    if direction not in {"up", "down"}:
+        return _speak("Say louder or quieter.")
+    status, _ = _post_to_homehub(
+        f"/api/sonos/volume/{direction}", None,
+    )
+    if 200 <= status < 300:
+        return _speak("Louder." if direction == "up" else "Quieter.")
+    if status == 503:
+        return _speak("Sonos isn't connected.")
+    return _speak("Couldn't change the volume.")
+
+
+def _handle_next_track(_slots: dict) -> dict:
+    status, _ = _post_to_homehub("/api/sonos/next", None)
+    if 200 <= status < 300:
+        return _speak("Skipping.")
+    if status == 503:
+        return _speak("Sonos isn't connected.")
+    return _speak("Couldn't skip the track.")
+
+
+def _handle_previous_track(_slots: dict) -> dict:
+    status, _ = _post_to_homehub("/api/sonos/previous", None)
+    if 200 <= status < 300:
+        return _speak("Going back.")
+    if status == 503:
+        return _speak("Sonos isn't connected.")
+    return _speak("Couldn't go back a track.")
+
+
+def _handle_what_mode(_slots: dict) -> dict:
+    status, body = _call_homehub("/api/automation/status", None, method="GET")
+    if not (200 <= status < 300):
+        return _speak("Couldn't read the current mode.")
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return _speak("Couldn't read the current mode.")
+    mode = data.get("current_mode")
+    if not mode:
+        return _speak("No mode is set right now.")
+    if data.get("manual_override"):
+        return _speak(f"{mode} mode, manually set.")
+    return _speak(f"{mode} mode.")
+
+
+def _handle_whats_playing(_slots: dict) -> dict:
+    status, body = _call_homehub("/api/sonos/status", None, method="GET")
+    if status == 503:
+        return _speak("Sonos isn't connected.")
+    if not (200 <= status < 300):
+        return _speak("Couldn't read what's playing.")
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return _speak("Couldn't read what's playing.")
+
+    state = (data.get("state") or "").upper()
+    track = data.get("track") or ""
+    artist = data.get("artist") or ""
+
+    if not track:
+        return _speak("Nothing's playing.")
+
+    # Sonos states: PLAYING, PAUSED_PLAYBACK, STOPPED, TRANSITIONING.
+    track_phrase = f"{track} by {artist}" if artist else track
+    if state == "PLAYING":
+        return _speak(f"Playing {track_phrase}.")
+    if state.startswith("PAUSED"):
+        return _speak(f"Paused on {track_phrase}.")
+    return _speak(f"{track_phrase} is loaded but not playing.")
+
+
 INTENT_HANDLERS = {
     "SetModeIntent": _handle_set_mode,
     "ReleaseOverrideIntent": _handle_release_override,
@@ -320,6 +397,11 @@ INTENT_HANDLERS = {
     "ActivateSceneIntent": _handle_activate_scene,
     "EnableDNDIntent": _handle_enable_dnd,
     "DisableDNDIntent": _handle_disable_dnd,
+    "AdjustVolumeIntent": _handle_adjust_volume,
+    "NextTrackIntent": _handle_next_track,
+    "PreviousTrackIntent": _handle_previous_track,
+    "WhatModeIntent": _handle_what_mode,
+    "WhatsPlayingIntent": _handle_whats_playing,
 }
 
 
@@ -329,16 +411,16 @@ def _handle_launch() -> dict:
     """No-arg invocation: 'Alexa, open Home Hub.' Stay in session so the
     next utterance can land an intent without re-saying the wake word."""
     return _speak(
-        "Home Hub is ready. You can set a mode, run a scene, dim the "
-        "lights, or turn on do not disturb.",
+        "Home Hub is ready. You can set a mode, run a scene, change the "
+        "volume, or ask what's playing.",
         end_session=False,
     )
 
 
 def _handle_help() -> dict:
     return _speak(
-        "Try: set relax mode. Make it brighter. Run the party scene. "
-        "Turn on the candle effect. Or enable do not disturb.",
+        "Try: set relax mode. Louder. Skip this song. What mode am I in. "
+        "Run the party scene. Or enable do not disturb.",
         end_session=False,
     )
 

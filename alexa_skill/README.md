@@ -13,7 +13,7 @@ AWS Lambda → Cloudflare Tunnel → tunnel proxy → FastAPI on the Latitude.
    → home-hub.service on :8000   (sets mode, lights flip)
 ```
 
-Intents shipped (Phase 2 + 3):
+Intents shipped:
 
 | Intent | Try saying | What it does |
 |---|---|---|
@@ -27,6 +27,11 @@ Intents shipped (Phase 2 + 3):
 | `ActivateSceneIntent` | "run the party scene" | Curated safelist: party, neon, miami, arcade, aurora, sunset |
 | `EnableDNDIntent` | "enable do not disturb" | 2-hour DND window |
 | `DisableDNDIntent` | "turn off do not disturb" | Clears DND |
+| `AdjustVolumeIntent` | "louder", "make it quieter" | ±5 on Sonos volume |
+| `NextTrackIntent` | "skip this song", "next track" | Sonos next |
+| `PreviousTrackIntent` | "go back a song", "previous track" | Sonos previous |
+| `WhatModeIntent` | "what mode am I in" | Speaks current mode + override status |
+| `WhatsPlayingIntent` | "what's playing", "what song is this" | Speaks current track + artist |
 
 ---
 

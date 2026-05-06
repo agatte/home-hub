@@ -193,6 +193,83 @@
             "turn off d n d",
             "d n d off"
           ]
+        },
+        {
+          "name": "AdjustVolumeIntent",
+          "slots": [
+            {
+              "name": "Direction",
+              "type": "HOMEHUB_VOLUME_DIRECTION"
+            }
+          ],
+          "samples": [
+            "{Direction}",
+            "volume {Direction}",
+            "{Direction} the volume",
+            "make the volume {Direction}",
+            "turn the volume {Direction}",
+            "make the music {Direction}",
+            "turn the music {Direction}",
+            "make it {Direction}"
+          ]
+        },
+        {
+          "name": "NextTrackIntent",
+          "slots": [],
+          "samples": [
+            "next",
+            "next song",
+            "next track",
+            "skip",
+            "skip this song",
+            "skip the song",
+            "skip this track",
+            "skip the track"
+          ]
+        },
+        {
+          "name": "PreviousTrackIntent",
+          "slots": [],
+          "samples": [
+            "previous",
+            "previous song",
+            "previous track",
+            "go back a song",
+            "back a song",
+            "last song",
+            "play the last song",
+            "play the previous song"
+          ]
+        },
+        {
+          "name": "WhatModeIntent",
+          "slots": [],
+          "samples": [
+            "what mode",
+            "what mode am I in",
+            "what mode is on",
+            "what's the mode",
+            "current mode",
+            "what mode are we in",
+            "tell me the mode",
+            "which mode is on"
+          ]
+        },
+        {
+          "name": "WhatsPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what's playing",
+            "what is playing",
+            "what song",
+            "what song is this",
+            "what's this song",
+            "what's the song",
+            "current track",
+            "current song",
+            "what's the track",
+            "what am I listening to"
+          ]
         }
       ],
       "types": [
@@ -213,6 +290,13 @@
           "values": [
             { "id": "up",   "name": { "value": "up",   "synonyms": ["brighter", "lighter", "higher"] } },
             { "id": "down", "name": { "value": "down", "synonyms": ["dimmer",  "darker",  "lower"]  } }
+          ]
+        },
+        {
+          "name": "HOMEHUB_VOLUME_DIRECTION",
+          "values": [
+            { "id": "up",   "name": { "value": "up",   "synonyms": ["louder",  "higher"] } },
+            { "id": "down", "name": { "value": "down", "synonyms": ["quieter", "softer", "lower"] } }
           ]
         },
         {
