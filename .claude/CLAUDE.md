@@ -96,6 +96,7 @@ python -m backend.mcp_server
 - **PostToolUse Edit/Write** — `backend/**/*.py` → `ruff check --fix`; `frontend-svelte/src/**/*.{js,svelte}` → ESLint.
 - **SessionStart** (`session_start_homehub.py`) — injects mode/source/override + anomaly-only fields (`offline=`, `stale_tasks=`, `breakers=`, `event_drops=`, `digest_warns=`) via `additionalContext`. Healthy systems stay terse.
 - **PostToolUse Bash** (`post_git_push.py`) — after a real `git push`, nudges `/deploy-home`.
+- **PreToolUse Bash** (`pre_commit_lighting_curator.py`) — on `git commit`, if staged diff touches `light_state_calculator.py` or `scenes.py` AND a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, etc.), injects an `additionalContext` reminder to spawn `lighting-curator` first. Soft nudge — non-blocking.
 
 ### Slash commands + subagents
 
