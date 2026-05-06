@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "home hub",
+      "invocationName": "command center",
       "intents": [
         {
           "name": "AMAZON.HelpIntent",

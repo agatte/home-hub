@@ -4,7 +4,7 @@ Phase 5 voice control. Bridges your Echo to the Home Hub backend through
 AWS Lambda → Cloudflare Tunnel → tunnel proxy → FastAPI on the Latitude.
 
 ```
-"Alexa, tell home hub to set relax mode"
+"Alexa, tell command center to set relax mode"
    → Alexa cloud (intent extraction)
    → AWS Lambda (lambda_function.py)
    → https://home-hub.gatte-home.com/api/automation/override
@@ -17,6 +17,31 @@ Phase 2 ships three intents: `SetModeIntent`, `PlayMusicIntent`,
 `PauseMusicIntent`. Phase 3 will add brightness, scenes, effects, DND.
 
 ---
+
+## Critical prerequisite — Alexa+ must be OFF
+
+**If your Echo is on Alexa+ (Amazon's generative-AI tier), custom skills
+do not route reliably.** Alexa+ uses LLM-based routing that intercepts
+slot-based intents and routes them to its own smart-home executor instead
+of your skill, even with explicit "ask command center" prefixes.
+
+Check + disable: Alexa app → **More** → **Settings** → **Alexa+** →
+disable. Wait ~60 seconds for propagation.
+
+This was the single largest blocker during the initial setup. If voice
+commands "Setting X mode" don't return verbal responses but the
+simulator works, Alexa+ is the prime suspect.
+
+## Why "command center" instead of something simpler
+
+The invocation name MUST NOT collide with built-in Alexa concepts.
+"home hub" was the obvious first choice but it collides with Alexa's
+built-in smart-home hub category — Alexa interprets "ask home hub" as
+"manage my smart home" and never invokes the skill. "command center"
+is two distinct words that aren't an Alexa-reserved category.
+
+Reserved/colliding names to avoid: `home hub`, `smart home`, `gaming`,
+`movie`, `cinema` (any phrase Alexa uses for built-in features).
 
 ## One-time setup
 
