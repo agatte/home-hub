@@ -104,6 +104,7 @@ Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-
 Subagents (`~/.claude/agents/`):
 - **`homehub-verifier`** — Read-only state inspector. Spawned by every check-back fire.
 - **`deploy-verifier`** — Post-flight after `/deploy-home`: build_id strict-comparison (now possible since `/health` exposes it), endpoint smoke, post-restart event scan.
+- **`lighting-curator`** — Spawn before committing changes to `light_state_calculator.py` or `scenes.py`. Reviews diff against `feedback_lighting_design_principles.md` rules + visual references at `~/.claude/agents/reference/lighting-curator/`.
 
 ### Ambient verification loop
 
