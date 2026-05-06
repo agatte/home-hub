@@ -27,7 +27,7 @@ Intents shipped:
 | `ActivateSceneIntent` | "run the party scene" | Curated safelist: party, neon, miami, arcade, aurora, sunset |
 | `EnableDNDIntent` | "enable do not disturb" | 2-hour DND window |
 | `DisableDNDIntent` | "turn off do not disturb" | Clears DND |
-| `AdjustVolumeIntent` | "turn the music up", "make the music louder" | ±5 on Sonos volume (must say "music"/"song" — Alexa hijacks bare "louder"/"quieter") |
+| `AdjustVolumeIntent` | "turn the music up", "music down", "bump the song up" | ±5 on Sonos volume. **Must use up/down + music/song.** Alexa hijacks "louder"/"quieter" at the wake-word router so those words can't reach the skill |
 | `NextTrackIntent` | "skip this song", "next track" | Sonos next |
 | `PreviousTrackIntent` | "go back a song", "previous track" | Sonos previous |
 | `WhatModeIntent` | "what mode am I in" | Speaks current mode + override status |
@@ -173,4 +173,4 @@ for the error.
 | Slot value not resolving | User said something not in the synonym list | Add the synonym to interaction_model.json, rebuild |
 | "I don't have a {scene/effect} called X" when X is on the safelist | Lambda is reading the slot's `name.value` instead of its `id` | Use `_resolved_slot()` (returns id) when the slot type's id ≠ value. Currently HOMEHUB_SCENE — spoken "party" → id "house_party" |
 | "Turn on {Mode}" misroutes and Alexa asks "Which effect?" | Two custom intents share a verb pattern but only one had it | Mirror the verb shape on every colliding intent so NLU disambiguates by slot-type validity. Each "turn on {X}" / "start {X}" lives on both SetModeIntent and SetEffectIntent for this reason |
-| "Louder" / "make it louder" changes the Echo's own volume, not Sonos | Reserved Alexa volume tokens hijack at the wake-word router before the skill is invoked | Anchor every AdjustVolumeIntent sample on "music" or "song" ("turn the music up", "make the music louder"). Drop bare-slot and "make it {X}" samples — they always route to device volume |
+| "Louder" / "make it louder" changes the Echo's own volume, not Sonos | Reserved Alexa volume tokens hijack at the wake-word router before the skill is invoked. Even "make the music louder" hijacks — any utterance containing "louder"/"quieter" routes to device volume | Use "up"/"down" only ("turn the music up", "music down"). Don't put "louder"/"quieter" in synonyms or samples — they're poison anywhere in the utterance |
