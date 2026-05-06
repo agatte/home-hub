@@ -109,6 +109,8 @@ Subagents (`~/.claude/agents/`):
 
 `/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — 9-check hourly anomaly sweep + a dated queue of one-shot decisions (audio classifier checkpoints, predictor validation, retention sweep efficacy, DST backfill, etc — the runbook is the authoritative list). Each fire writes a markdown block to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. Pre-flights `get_health`; on MCP-down writes `[skipped]` and back-offs to 600s. Auto-starts at Windows login via `home-hub-loop.cmd` (Windows Terminal). Polling-not-push rationale: memory `project_loop_session_anomaly_polling.md`.
 
+A parallel `/watcher-loop` (`homehub-watcher.cmd` Startup file, separate session) polls those same digests every 600s. For each warn/error block lacking a `**Diagnosis (` marker, it spawns the read-only `homehub-investigator` subagent (MCP read tools + `ssh homehub` for journalctl + Read/Grep/Glob) with a per-anomaly playbook from `~/.claude/runbooks/homehub-watcher.md`, then appends a structured root-cause diagnosis (cause + evidence + recommended fix) inline above the block's closing `---`. Watcher is investigation-only; never mutates state. User decides whether to ship a fix.
+
 ---
 
 ## Architecture
