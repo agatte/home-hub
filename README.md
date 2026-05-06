@@ -105,7 +105,7 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
    └── pc_agent/ambient_monitor.py    (PyAudio — Blue Yeti RMS, party detection)
 
    AI Integration:
-   └── mcp_server.py  (FastMCP — 20 tools, registered in .claude/mcp.json)
+   └── mcp_server.py  (FastMCP — 20 tools, registered in .mcp.json)
        ├── Lights, Scenes, Effects
        ├── Automation mode + schedule
        ├── Sonos playback + favorites

@@ -55,21 +55,9 @@ Server runs at http://localhost:8000. Frontend dev server: `cd frontend-svelte &
 
 ### Production deploy (Latitude at 192.168.1.210)
 
-```bash
-# After git push from the dev machine, ship to production:
-ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
-```
+Use the `/deploy-home` skill — it commits/pushes/SSHes/spawns deploy-verifier end-to-end. Direct CLI shorthand: `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"` (passwordless via `id_ed25519_homehub` + `~/.ssh/config` Host alias).
 
-`scripts/deploy.sh` runs on the Latitude — `git pull --ff-only`,
-diffs HEAD, reinstalls Python deps / rebuilds frontend / restarts
-`home-hub.service` based on what changed, then health-checks via
-`/health`. Verify via MCP tools (`mcp__home-hub__get_health`) without
-leaving the dev machine.
-
-When the backend restarts, the kiosk dashboard's WebSocket reconnects,
-sees a new `build_id` in the `connection_status` message, and reloads
-itself within ~1s — no manual F5 needed. Frontend rebuilds also trigger
-a backend restart so the kiosk picks up the new `build_id`.
+`scripts/deploy.sh` does `git pull --ff-only`, conditionally reinstalls deps / rebuilds frontend / restarts `home-hub.service`, then health-checks `/health`. Backend restarts emit a new `build_id` on `connection_status`, the kiosk WebSocket reloads within ~1s.
 
 ---
 
@@ -106,20 +94,20 @@ python -m backend.mcp_server
 ### Hooks (`.claude/settings.json` + `.claude/hooks/`)
 
 - **PostToolUse Edit/Write** — `backend/**/*.py` → `ruff check --fix`; `frontend-svelte/src/**/*.{js,svelte}` → ESLint.
-- **SessionStart** (`session_start_homehub.py`) — injects live mode/source/override/offline-devices into Claude's context via `additionalContext` (no chat-visible line; ask "what mode is home-hub in?" to verify).
-- **PostToolUse Bash** (`post_git_push.py`) — after a real `git push` (skips `--dry-run`/`--tags`), nudges `/deploy-home`.
+- **SessionStart** (`session_start_homehub.py`) — injects mode/source/override + anomaly-only fields (`offline=`, `stale_tasks=`, `breakers=`, `event_drops=`, `digest_warns=`) via `additionalContext`. Healthy systems stay terse.
+- **PostToolUse Bash** (`post_git_push.py`) — after a real `git push`, nudges `/deploy-home`.
 
 ### Slash commands + subagents
 
-Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
+Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`. `/deploy-home` runs the full lifecycle (commit → push → `ssh homehub` → spawn `deploy-verifier` → report). `/checkback-loop` self-paces against the runbook.
 
 Subagents (`~/.claude/agents/`):
-- **`homehub-verifier`** — Read-only state inspector; home-hub MCP read tools + `query_db` SELECT-only. Spawned by every scheduled check-back.
-- **`deploy-verifier`** — Post-flight after `/deploy-home`: build_id rollover, endpoint smoke, post-restart event scan.
+- **`homehub-verifier`** — Read-only state inspector. Spawned by every check-back fire.
+- **`deploy-verifier`** — Post-flight after `/deploy-home`: build_id strict-comparison (now possible since `/health` exposes it), endpoint smoke, post-restart event scan.
 
 ### Ambient verification loop
 
-`/checkback-loop` invokes `/loop` (dynamic, self-paced) against `~/.claude/runbooks/homehub-checkbacks.md`: hourly anomaly sweep (mode lock, camera freshness, fusion lane silence, sleep override) + dated check-backs (5/9 audio classifier, 5/11 predictor validation, 5/26 GH Node 24, 6/1 rule expansion, weekly override-rate). Auto-starts at Windows login via `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\home-hub-loop.cmd`. Disable: delete the .cmd. Polling-not-push design rationale: memory `project_loop_session_anomaly_polling.md`.
+`/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — 9-check hourly anomaly sweep + a dated queue of one-shot decisions (audio classifier checkpoints, predictor validation, retention sweep efficacy, DST backfill, etc — the runbook is the authoritative list). Each fire writes a markdown block to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. Pre-flights `get_health`; on MCP-down writes `[skipped]` and back-offs to 600s. Auto-starts at Windows login via `home-hub-loop.cmd` (Windows Terminal). Polling-not-push rationale: memory `project_loop_session_anomaly_polling.md`.
 
 ---
 
@@ -196,20 +184,20 @@ Key additions beyond current:
 - **`hue_v2_service.py`** — CLIP API v2/httpx: native bridge scenes and dynamic effects. Maintains v1↔v2 UUID mapping cache.
 - **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
 - **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
-- **`automation_engine.py`** — Background loop (60s). Combines time rules + activity reports → per-light state with per-light variation (not uniform). Supports CT (mirek) and HSB color modes. `EFFECT_AUTO_MAP` auto-activates effects by mode+time; weather effects (rain→candle, storm→sparkle) overlay when no mode effect is set. Same-effect cycles skipped to preserve brightness base. `MODE_TRANSITION_TIME` per mode; scene drift adds subtle variation during long relax sessions. `mode_scene_overrides` DB table checked before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout. Mode priority: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > sleeping (0). Late-night rescue (23:00+, no override, mode ∈ {working, idle}, Sonos not playing) auto-applies relax. `_evaluate_zone_posture_rule` auto-applies `relax` when camera reports `zone=bed + posture=reclined` (gates: effective mode ∈ {idle, working, social}, evening or weekend afternoon, 120s dwell — 180s for social, which also requires the social override be ≥30min old); env-gated by `ZONE_POSTURE_RULE_APPLY` (default True since 4/27).
-- **`weather_service.py`** — NWS API (api.weather.gov), 5-min cache. Returns temp, feels_like, description, humidity, wind, icon, sunrise/sunset. Severe alerts polled every 2 min — descriptions override stale observation data so automation catches storms immediately. Sunrise/sunset from sunrise-sunset.org (24h cache). No API key needed.
+- **`automation_engine.py`** — 60s background loop. Time rules + activity reports → per-light state (per-light variation, not uniform). Supports CT and HSB. Drives effects via `EFFECT_AUTO_MAP` + weather overlays (rain→candle, storm→sparkle). `mode_scene_overrides` DB table consulted before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout (sleeping exempt). Mode priority: gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0). Late-night rescue + zone+posture rule + camera-at-desk veto live here — see Late-night autopilot cascade below. `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY`.
+- **`weather_service.py`** — NWS API, 5-min cache. Returns temp/feels_like/description/humidity/wind/icon/sunrise/sunset. Severe alerts polled every 2 min — descriptions override stale observations so storms surface immediately. No API key.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
-- **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing (α=0.3), 2.5s interval, 2s transitions. Auto-starts in watching/gaming mode. Per-mode brightness caps in `MODE_MAX_BRIGHTNESS` (gaming=240, watching=80, default=80); overrides in `MODE_ZONE_MAX_BRIGHTNESS` keyed by `(mode, zone)` or `(mode, zone, posture)` — 3-tuple wins over 2-tuple. See watching mode row for current values. `apply_color(..., zone=..., posture=...)` takes optional camera zone/posture pulled in the route handler.
+- **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing, ~2.5s interval. Auto-starts in watching/gaming. Per-mode brightness caps in `MODE_MAX_BRIGHTNESS`; zone/posture overrides via `MODE_ZONE_MAX_BRIGHTNESS` (3-tuple wins over 2-tuple). `apply_color(..., zone=..., posture=...)` takes camera context from the route handler.
 - **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning + wind-down routines.
 - **`morning_routine.py`** — Fetches weather (via shared WeatherService) + commute (Google Maps), generates TTS, plays on Sonos.
 - **`winddown_routine.py`** — Evening relax at 22:00 weekdays: candlelight + dims + lowers volume + TTS. `_ACTIVE_MODES = {gaming, watching, social}` *delays* via `skip_if_active` — working is intentionally excluded so late-night dev doesn't block it.
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML; extracts artist play counts + genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` discovery. 30-day DB cache, mode-specific seeds with cross-mode dedup.
 - **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
-- **`camera_service.py`** — MediaPipe face + pose on the Latitude webcam, opt-in via `camera_enabled`. Polls every 2s at 640×480 — **re-run lux calibration after any resolution change** (`gray.mean()` varies with pixel count). Face (full-range BlazeFace, `MIN_FACE_CONFIDENCE=0.15`, ~15ms) runs first; if it misses, pose landmarker (lite, ~60ms) declares "present" when ≥3 of {nose, L/R shoulder, L/R hip} have visibility ≥0.5. `detection_source` (`face`/`pose`/`None`) flows to `/api/camera/status`, `camera_update` WS, and ML logger. 15 absent frames (~30s) → `report_activity(mode="idle", source="camera")`. **Zone** (`desk` if center-X < `ZONE_DESK_THRESHOLD=0.40`, else `bed`) from face bbox or pose shoulder midline; 15s hysteresis gates commits, brief absence preserves committed zone. **Posture** (`upright`/`reclined`) from pose `mean(hip_y) - mean(shoulder_y)`, delta ≥ `POSTURE_UPRIGHT_MIN_DELTA=0.12` is upright; face-only sessions emit `posture=None`. Both fields published on `/api/camera/status`, WS `camera_update`, ML logger. **`_apply_zone_overlay`** branches: (a) `zone=desk + watching` lifts L2, (b) `zone=bed + posture=reclined` evening/night/late_night lowers L1/L2 (lower-only, any mode except sleeping). Screen-sync cap keyed by `(mode, zone, posture)`. `GET /api/camera/snapshot?annotate=true` returns JPEG with face box + skeleton + zone line + lux. Same frames produce EMA lux (α=0.3) feeding `AutomationEngine._apply_lux_multiplier` (working/relax/gaming/watching, +30%/-15% bri anchored at calibrated baseline). `POST /api/camera/calibrate` picks fixed exposure in `[-12, 0]` and records `baseline_lux` — uses poll-cadence sleeps (burst reads inflate baseline via auto-gain). Pauses during sleeping mode. `poll_loop` wraps `_process_frame` in a 5s `asyncio.wait_for` watchdog; on timeout `_recover_capture()` releases + reopens the V4L2 handle (guards against blocking `cap.read()` after sleeping-mode reopen). `_open_capture()` consolidates boot + resume opens with V4L2 read/open timeouts and a discard-first-frame warm-up.
-- **`transit_lighting_service.py`** — Brightens the navigation path (L1 + L3/L4) when Anthony leaves the bedroom. Trigger: camera absent ≥4s + non-stationary zone + mode ∈ {working, gaming, watching, relax}. Applies a per-light override via `AutomationEngine.apply_transit_override` (populates `_transit_light_overrides`, skipped by reconciliation like `_manual_light_overrides`). Reverts when camera sees him again ≥2s, hard 10-min timeout, or mode exits the trigger set. Intentionally invisible UX — no WS surface, no event log.
-- **`pc_agent/activity_detector.py`** — Standalone. psutil process detection every 5s → POST `/api/automation/activity`. `GAME_PROCESSES` in `game_list.py` is intentionally narrow — `javaw.exe` is excluded because it matches every JVM process (JetBrains IDEs, Gradle), which would silently force gaming over working. **Media classification requires foreground context**: a running MEDIA_PROCESSES entry alone does not return "watching" — the foreground window must be the media app, a browser with a watching-title keyword, or no work tools running. Prevents background Stremio from trumping foreground VS Code.
-- **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS + YAMNet classification. RMS produces only the "idle" edge (60s of below-threshold quiet) and the heartbeat. **Social is YAMNet-gated** — requires `speech_multiple` class at ≥0.80 confidence sustained 30s (see `MODE_THRESHOLDS` in `backend/services/ml/audio_classifier.py`). Requires `--classifier --active`; in `--shadow` or default mode, social is manual-only. Never records audio.
+- **`camera_service.py`** — MediaPipe face + pose on the Latitude webcam, opt-in via `camera_enabled`. Polls 2s at 640×480 — **re-run lux calibration after any resolution change**. Face (BlazeFace) runs first; pose landmarker fallback declares "present" when ≥3 torso landmarks pass visibility threshold. `detection_source` ∈ {face, pose, None} flows to status / WS / ML logger. ~30s of absence → `report_activity(mode="idle", source="camera")`. **Zone** (`desk`/`bed`) and **posture** (`upright`/`reclined`) computed from face bbox or pose midline with hysteresis; both surface on `/api/camera/status`. `_apply_zone_overlay` branches: `desk + watching` lifts L2; `bed + reclined` evening+ lowers L1/L2 (any mode except sleeping). Screen-sync cap keyed by `(mode, zone, posture)`. EMA lux (α=0.3) feeds `_apply_lux_multiplier` for working/relax/gaming/watching against a calibrated baseline (`POST /api/camera/calibrate`). Pauses during sleeping mode. `poll_loop` has a 5s `asyncio.wait_for` watchdog; on timeout `_recover_capture()` releases + reopens the V4L2 handle.
+- **`transit_lighting_service.py`** — Brightens the nav path (L1 + L3/L4) on camera absence + non-stationary zone in functional modes. Applies a per-light override via `apply_transit_override` (skipped by reconciliation like `_manual_light_overrides`). Reverts on re-presence ≥2s, 10-min hard timeout, or mode exit. Invisible UX — no WS, no event log.
+- **`pc_agent/activity_detector.py`** — Standalone. psutil every 5s → POST `/api/automation/activity`. `GAME_PROCESSES` in `game_list.py` is intentionally narrow (excludes `javaw.exe` to avoid JetBrains/Gradle false positives). Media classification is foreground-gated: a background Stremio doesn't trump a foreground VS Code.
+- **`pc_agent/ambient_monitor.py`** — Standalone. Blue Yeti RMS + YAMNet classification. RMS produces only the "idle" edge + heartbeat. **Social is YAMNet-gated** (`speech_multiple` ≥0.80 sustained 30s); in `--shadow` mode social is manual-only. Never records audio.
 
 ---
 
@@ -221,7 +209,7 @@ Key additions beyond current:
 - **`src/routes/+page.svelte`** — Home: SonosCard strip + QuickActions + widget grid (Mode, Weather, Lights, Scenes, Routines) + MusicSuggestionToast.
 - **`src/routes/music/+page.svelte`** — Taste profile, mode→playlist mapping, discovery feed. Glass card grid.
 - **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, mode→scene overrides, morning/wind-down routine config, TTS test. Glass card grid.
-- **`src/lib/backgrounds/`** — Mode-specific scenes: `PixelScene` (gaming, code-drawn pixel art), `ParallaxScene` (working, scrolling PNG sprite sheets + weather/time-aware sky), `AuroraScene` (relax, simplex-noise aurora), `MoonScene` (sleeping, Threlte/Three.js), `GenerativeCanvas` (fallback: blobs + flow-field particles, 15fps). `layer-config.js` holds per-mode PNG layer defs; `scene-utils.js` shared drawing helpers.
+- **`src/lib/backgrounds/`** — Mode scenes: `PixelScene` (gaming), `ParallaxScene` (working, sprite layers + weather/time sky), `AuroraScene` (relax), `MoonScene` (sleeping, Threlte), `GenerativeCanvas` (fallback). `layer-config.js` per-mode PNG defs.
 - **`src/lib/components/ModeBackground.svelte`** — Routes `$automation.mode` to the appropriate scene.
 - **`src/lib/components/{SceneBrowser,WeatherCard}.svelte`** — Scene browser (tabbed) and NWS weather widget.
 - **`src/lib/theme.js`** — MODE_CONFIG, LIGHT_COLOR_PRESETS, LIGHT_CT_PRESETS, SCENE_CATEGORIES, VIBE_COLORS.
@@ -263,7 +251,7 @@ All messages: JSON with `type` + `data` fields.
 
 | Group | Prefix | Key endpoints |
 |-------|--------|---------------|
-| System | `/health`, `/ws` | Health check, WebSocket sync |
+| System | `/health`, `/ws` | Health check (status, devices, breakers, ml, tasks, `scheduler_tasks`, `build_id`), WebSocket sync |
 | Lights | `/api/lights` | CRUD per-light state (on, bri, hue, sat, ct), bulk set |
 | Scenes | `/api/scenes` | Curated + custom + bridge scenes, activate, effects (per-light or all) |
 | Weather | `/api/weather` | Current conditions (5-min cache, NWS), alerts |
@@ -306,6 +294,8 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Known keys: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
 
+**Source attribution on write endpoints.** Write routes that log to `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` should pull caller identity via `source_from_request(request, fallback="...")` from `backend.api.auth`. The Alexa lambda sets `X-Source: alexa:<intent>`; absent header → route's existing default (`api:<ip>`, `rest`, `manual`, `preset`/`custom`/`bridge`).
+
 ---
 
 ## Automation Modes
@@ -314,7 +304,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 |------|-----------|-------------------|
 | `gaming` | Specific game binaries in `game_list.py` (NOT `javaw.exe` — matches JetBrains IDEs) | Neutral fill + blue/purple peripheral accents, warm desk-lamp bias. Night: deep blue ambient. Screen sync on L2, glisten effect eve/night |
 | `working` | Terminals + IDEs (powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains, wezterm, alacritty) | ct-mode clean whites, desk-dominant. IES 1:3 monitor-ambient contrast. Night: L2 130/2700K + L1 60/2270K + kitchen OFF |
-| `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` → L2 lifts (sync cap 180); `zone=bed + posture=reclined` evening/night → L1/L2 drop further (sync cap 25); `zone=bed + posture=upright` → sync cap 60. Numeric vectors in `automation_engine.py` |
+| `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` lifts L2; `zone=bed + reclined` evening/night drops L1/L2; `zone=bed + upright` is mid-bright. Numeric vectors in `automation_engine.py` |
 | `social` | YAMNet `speech_multiple` ≥0.80 for 30s (supervisor `--active`), or manual | "Velvet Speakeasy" static: L1 dusty rose, L2 cognac amber, L3/L4 matched burnt-orange. Saturation does the work, no effect. 1s snap |
 | `relax` | Manual override | "Moss & Candlelight": L1/L2 warm ember/honey, L3/L4 moss/sage (pendants stay static). Late-night "Moss & Ember": deeper ember + hunter-green. opal day / candle eve / fire night — candle/fire scoped to L1/L2 only |
 | `cooking` | Manual override | L3+L4 paired peak 3500K (accurate food colors), L1 warm, L2 dim. 1s snap |
@@ -341,7 +331,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
 
-**Late-night autopilot cascade:** Three stacked layers. (1) **22:00 weekdays** — `winddown_routine` sets override to `relax`, lowers Sonos volume, plays TTS; skipped if in gaming/watching/social. (2) **22:00–06:00** — `ConfidenceFusion` applies `LATE_NIGHT_PROCESS_WEIGHT_FACTOR=0.6` so stale dev tools don't lock the fused mode to "working". (3) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` auto-applies `relax` as safety net after winddown's 4h override expires. Real gaming/watching/social/sleeping respected. Fusion override threshold `0.92`. **Camera-at-desk veto:** all four push-toward-relax pathways (winddown lights, late-night rescue, behavioral predictor, fusion `can_override`) skip when `AutomationEngine.is_at_desk_fresh()` is True; winddown still plays TTS + drops volume. `working` has its own `late_night` state (L1 90/454, L2 160/400, kitchen OFF) — readable for past-23:00 dev.
+**Late-night autopilot cascade:** Three stacked layers. (1) **22:00 weekdays** — `winddown_routine` sets override to `relax`, lowers Sonos volume, plays TTS; skipped if in gaming/watching/social. (2) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools so they don't lock fused mode to "working". (3) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` auto-applies `relax` as safety net after winddown's 4h override expires. Real gaming/watching/social/sleeping respected. **Camera-at-desk veto:** all four push-toward-relax pathways skip when `is_at_desk_fresh()` is True; winddown still plays TTS + drops volume. `working` has its own `late_night` state for past-23:00 dev.
 
 ---
 
@@ -398,9 +388,9 @@ LASTFM_API_KEY=...
 SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
 ZONE_POSTURE_RULE_APPLY=false  # Zone+posture→relax actuation. Default false = shadow ml_decisions only.
 PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot.
-HOME_HUB_API_KEY=<urlsafe random>  # Required for write endpoints. Unset → all writes 503. Localhost + RFC1918 LAN auto-bypass X-API-Key.
-HOME_HUB_SKILL_TOKEN=<urlsafe random>  # Tunnel-origin auth (Alexa Skill), paired with HOME_HUB_API_KEY.
-TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs). Private-range callers already bypass.
+HOME_HUB_API_KEY=<urlsafe random>  # Write-endpoint gate. Unset → 503. Localhost + RFC1918 LAN auto-bypass.
+HOME_HUB_SKILL_TOKEN=<urlsafe random>  # Tunnel-origin auth (Alexa Skill), paired with API_KEY.
+TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs).
 GUEST_WIFI_SSID=               # Surfaces a QR on home dashboard + /guest. Empty = "not configured".
 GUEST_WIFI_PASSWORD=
 GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
@@ -414,10 +404,10 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `winddown_routine_config` | `{hour, minute, enabled, volume, candlelight, weekdays_only}` |
 | `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ..., late_night_start_hour}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
-| `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — settings-page sliders for projector-in-bed brightness. Loaded at boot + live-patched via `PUT /api/automation/watching-posture`. |
-| `camera_enabled` | `{enabled: bool}` — opt-in toggle for the MediaPipe camera service |
-| `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure calibration + baseline for adaptive brightness (working/relax). Written by `POST /api/camera/calibrate`. |
-| `guest_vibe_playlists` | `{hype: <favorite_title>, singalong: <favorite_title>, throwback: <favorite_title>}` — overrides the hardcoded `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit (no UI yet) to point a vibe at a different Sonos favorite. Missing keys fall back to defaults. |
+| `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — projector-in-bed sliders, live-patched via `PUT /api/automation/watching-posture` |
+| `camera_enabled` | `{enabled: bool}` — opt-in toggle for the camera service |
+| `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |
+| `guest_vibe_playlists` | `{hype, singalong, throwback}` → favorite_title — overrides `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit; missing keys fall back |
 
 ---
 
@@ -431,7 +421,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Sonos Era 100 | 192.168.1.157 | "Bedroom" speaker. `SONOS_IP` hardcoded in `.env` on the Latitude to defeat cold-boot SSDP discovery race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page issue deferred) |
 
-**iOS WiFi-rejoin caveat:** Forgetting + rejoining the home network on iPhone (e.g. after scanning the guest WiFi QR for testing) resets per-device settings — manual IP `192.168.1.148`, manual DNS → Pi-hole (`192.168.1.210`), and "Private WiFi Address: Fixed". After any rejoin, restore in Settings → WiFi → (i) → Configure DNS / Configure IP / Private Address. Not Pi-hole's fault — iOS treats every fresh join as a clean profile.
+**iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings. After any rejoin, restore in Settings → WiFi → (i): manual IP `192.168.1.148`, DNS → Pi-hole (`192.168.1.210`), Private WiFi Address → Fixed. iOS treats every fresh join as a clean profile (not a Pi-hole bug).
 
 ---
 

@@ -37,6 +37,15 @@ Intents shipped:
 two-column command reference. Re-generate after intent changes via
 `python scripts/generate_voice_command_sheet.py`.
 
+**Source attribution.** Every API call from the Lambda carries
+`X-Source: alexa:<intent_name>` (set via a `ContextVar` in the
+dispatcher, read by `_call_homehub`). Backend write routes thread the
+header into the `activity_events` / `light_adjustments` /
+`sonos_playback_events` / `scene_activations` row's source column —
+which is what makes voice traffic distinguishable from any other LAN
+write. After a Lambda update, smoke-check by running an intent and
+querying `SELECT source, COUNT(*) FROM activity_events WHERE source LIKE 'alexa:%'`.
+
 ---
 
 ## Critical prerequisite — Alexa+ must be OFF

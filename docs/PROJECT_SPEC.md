@@ -611,7 +611,7 @@ All messages are JSON with `type` + `data` fields.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | System status, device connectivity, WebSocket client count |
+| GET | `/health` | System status, `build_id` (running SHA), device connectivity, circuit breakers, ML predictor health, heartbeat tasks, scheduler tasks (cron-style: `retention_sweep`, `fusion_weight_tuning`, `predictor_auto_demote_check`, `journal_nightly`, `morning_routine`, `winddown_routine`, `sunrise_ramp`, `ml_nightly_training` with `last_run`, `last_status`, `last_error`), event logger drops, WebSocket client count |
 
 #### Lights — `/api/lights/`
 
@@ -1362,6 +1362,7 @@ The system observes everything and evolves from rules to autopilot:
 - Invocation: `command center` ("home hub" collides with Alexa's smart-home category)
 - AWS Lambda (`home-hub-skill` in `us-east-1`) → Cloudflare Tunnel (`home-hub.gatte-home.com`) → tunnel proxy (`backend/api/tunnel_proxy.py` on `127.0.0.1:8002`) → main backend on `127.0.0.1:8000`
 - Tunnel-origin auth: `X-Tunnel-Origin: cloudflare` header injected by tunnel proxy forces require_api_key to demand BOTH `X-API-Key` AND `X-Skill-Token` (skips loopback/RFC1918 bypass)
+- Source attribution: lambda sets `X-Source: alexa:<intent>` on every API call (set by a `ContextVar` in the dispatcher, read by `_call_homehub`). Backend write routes call `source_from_request(request, fallback=...)` from `backend.api.auth` and tag the resulting `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` row accordingly. Without this, tunneled Alexa traffic was indistinguishable from any other LAN write — every row landed as `api:127.0.0.1`
 - Intents shipped: `SetModeIntent`, `PlayMusicIntent`, `PauseMusicIntent`, `ReleaseOverrideIntent` (auto override clear — carved out because single-token slot values misroute reliably), `AdjustBrightnessIntent` (±10% relative bump via new `/api/lights/brightness/{up\|down}`), `SetEffectIntent` + `StopEffectIntent` (candle/fire/sparkle/prism/glisten/opal), `ActivateSceneIntent` (6-scene safelist mirroring `/guest`: party/neon/miami/arcade/aurora/sunset), `EnableDNDIntent` + `DisableDNDIntent` (default 2h window), `AdjustVolumeIntent` (±5 Sonos volume via new `/api/sonos/volume/{up\|down}`), `NextTrackIntent` + `PreviousTrackIntent`, `WhatModeIntent` + `WhatsPlayingIntent` (read-only status queries), plus built-ins (`AMAZON.HelpIntent`, `AMAZON.CancelIntent`, `AMAZON.StopIntent`). See `alexa_skill/` for code + manifest + setup README
 - **Critical: requires Alexa+ (Amazon's generative-AI tier) to be DISABLED.** Alexa+'s LLM routing intercepts custom skills and falls back to smart-home. See `alexa_skill/README.md` "Critical prerequisite" section
 - Routing gotchas (sample collisions): when two custom intents could plausibly share a verb pattern (e.g. "turn on {X}"), the same shape must exist on every colliding intent so NLU disambiguates by slot-type validity — otherwise the lone owner raw-fills the slot and the handler hits a dead-end clarify prompt. SetModeIntent therefore mirrors SetEffectIntent's "turn on {Mode}" pattern
@@ -1464,24 +1465,29 @@ gitignored).
 
 ### Deployment workflow
 
-**Code changes** flow from dev → production via git:
+**Code changes** flow from dev → production via the `/deploy-home`
+Claude Code skill, which handles the full lifecycle end-to-end:
 
 1. Edit code on the Windows dev machine
-2. `git commit` + `git push` from the dev machine
-3. On the Latitude (via SSH from the dev machine): run
-   `~/home-hub/scripts/deploy.sh`
-4. Verify production state via Claude Code MCP tools
-   (`mcp__home-hub__get_health`, etc.) without leaving the dev
-   machine
+2. `git commit` + `git push` happen inside the skill
+3. SSH to the Latitude runs automatically — passwordless via the
+   `id_ed25519_homehub` keypair and `~/.ssh/config` Host alias
+   `homehub` (set up 2026-05-06). Direct CLI shorthand:
+   `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"`
+4. The `deploy-verifier` subagent auto-spawns post-deploy: confirms
+   `build_id` rolled forward (the SHA is now exposed on `/health`),
+   runs an API smoke across every major endpoint group, and scans
+   the post-restart event window for regressions before reporting
+   STATUS
 
-`scripts/deploy.sh` (added in commit `3821cb2`) handles the full
-deploy: `git pull --ff-only`, diffs `HEAD` to detect what changed,
-reinstalls Python deps if `requirements.txt` changed, runs
-`npm install` if `frontend-svelte/package*.json` changed, rebuilds
-the frontend if source files changed, restarts `home-hub.service` if
-backend code changed, health-checks the backend via `/health` after
-restart, and restarts `home-hub-ambient.service` if the ambient
-monitor changed. Exits non-zero if the health check fails.
+`scripts/deploy.sh` handles the remote side: `git pull --ff-only`,
+diffs `HEAD` to detect what changed, reinstalls Python deps if
+`requirements.txt` changed, runs `npm install` if
+`frontend-svelte/package*.json` changed, rebuilds the frontend if
+source files changed, restarts `home-hub.service` if backend code
+changed, health-checks the backend via `/health` after restart, and
+restarts `home-hub-ambient.service` if the ambient monitor changed.
+Exits non-zero if the health check fails.
 
 **`.env` updates** (new secrets, API keys, etc.) are not git-tracked
 and must be nano-edited directly on the Latitude via SSH, followed by
