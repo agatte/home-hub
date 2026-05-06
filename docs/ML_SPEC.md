@@ -438,8 +438,8 @@ else:
 **Ambient light measurement — adaptive brightness (shipped April 18 2026):**
 
 The same webcam frame used for face detection produces a grayscale-mean
-reading that drives a brightness multiplier for `working` and `relax`
-modes. Implementation details:
+reading that drives a brightness multiplier for `working`, `relax`,
+`gaming`, and `watching` modes. Implementation details:
 
 ```python
 # Per-frame in camera_service.py
@@ -450,8 +450,9 @@ self._ema_lux = α*raw + (1-α)*self._ema_lux    # α = 0.3, 2s polling → ~20s
 # Per-tick in automation_engine.py
 effective = ema_lux - baseline_lux + 90        # shift curve by calibrated baseline
 multiplier = piecewise_linear(                 # LUX_CURVE anchors:
-    effective,                                 #   40  → 1.15 (dark room, lift)
-    [(40, 1.15), (90, 1.00), (180, 0.85)]      #   90  → 1.00 (at calibrated baseline)
+    effective,                                 #   20  → 1.30 (pitch dark, max lift)
+    [(20, 1.30), (40, 1.20),                   #   40  → 1.20 (dim room)
+     (90, 1.00), (180, 0.85)]                  #   90  → 1.00 (at calibrated baseline)
 )                                              #   180 → 0.85 (bright room, dim)
 state[light]["bri"] *= multiplier              # per-light, post mode_brightness_config
 ```
@@ -466,8 +467,9 @@ burst-mode binary search inflated readings by ~5× because AGC wound up
 high during rapid frame reads but settled down between sparse live polls.
 
 **Guardrails:**
-- Only `working` and `relax` modes modulate (`LUX_MODES`). Functional
-  modes (gaming, watching, cooking, social) stay predictable.
+- `working`, `relax`, `gaming`, and `watching` modulate (`LUX_MODES`).
+  `cooking` and `social` keep their explicit bright/medium palettes
+  regardless of ambient light.
 - Mode-scene overrides (`activate_scene` path) bypass the multiplier
   entirely — explicit intent wins over adaptation.
 - Manual light overrides (4h timeout) are filtered downstream of the
