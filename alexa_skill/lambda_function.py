@@ -35,9 +35,21 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from contextvars import ContextVar
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+# Per-invocation intent name, set by the dispatcher before each handler
+# runs and read by `_call_homehub` to stamp X-Source on outbound requests.
+# ContextVar (not a plain global) is the right tool for "current request
+# scope" — Lambda is single-threaded per invocation but reuses workers
+# across invocations, and the dispatcher's `reset(token)` guarantees we
+# never leak a stale intent into the next request's headers.
+_current_intent_ctx: ContextVar[str] = ContextVar(
+    "_current_intent_ctx", default=""
+)
 
 
 # Valid Home Hub modes — kept in sync with backend automation_engine.py.
@@ -91,19 +103,27 @@ def _call_homehub(
     skill_token = _env("HOME_HUB_SKILL_TOKEN")
 
     data = json.dumps(body).encode("utf-8") if body is not None else b""
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": api_key,
+        "X-Skill-Token": skill_token,
+        # Cloudflare's bot-fight blocks "Python-urllib/X.Y" with
+        # error 1010 ("banned based on browser's signature").
+        # Identify ourselves clearly and don't masquerade as a
+        # browser; the X-Skill-Token already proves auth.
+        "User-Agent": "HomeHub-AlexaSkill/1.0 (+aws-lambda)",
+    }
+    intent = _current_intent_ctx.get()
+    if intent:
+        # Tagged so backend write routes can record `alexa:<intent>`
+        # in activity_events / light_adjustments / sonos_playback_events
+        # / scene_activations. Without this, every Alexa-originated row
+        # ends up tagged `api:127.0.0.1` (the tunnel proxy's loopback).
+        headers["X-Source"] = f"alexa:{intent}"
     req = urllib.request.Request(
         url=api_base.rstrip("/") + path,
         data=data,
-        headers={
-            "Content-Type": "application/json",
-            "X-API-Key": api_key,
-            "X-Skill-Token": skill_token,
-            # Cloudflare's bot-fight blocks "Python-urllib/X.Y" with
-            # error 1010 ("banned based on browser's signature").
-            # Identify ourselves clearly and don't masquerade as a
-            # browser; the X-Skill-Token already proves auth.
-            "User-Agent": "HomeHub-AlexaSkill/1.0 (+aws-lambda)",
-        },
+        headers=headers,
         method=method,
     )
     try:
@@ -486,7 +506,13 @@ def lambda_handler(event: dict, _context) -> dict:
             handler = INTENT_HANDLERS.get(name)
             if handler is None:
                 return _speak(f"I don't have a handler for {name}.")
-            return handler(slots)
+            # Set the per-invocation intent context so every backend
+            # call inside the handler tags itself as `alexa:<intent>`.
+            token = _current_intent_ctx.set(name)
+            try:
+                return handler(slots)
+            finally:
+                _current_intent_ctx.reset(token)
 
         return _speak(f"Unsupported request type {request_type}.")
 
