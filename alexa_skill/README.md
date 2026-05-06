@@ -33,6 +33,10 @@ Intents shipped:
 | `WhatModeIntent` | "what mode am I in" | Speaks current mode + override status |
 | `WhatsPlayingIntent` | "what's playing", "what song is this" | Speaks current track + artist |
 
+**Printable cheat sheet:** `alexa_skill/voice_commands.pdf` — single-page,
+two-column command reference. Re-generate after intent changes via
+`python scripts/generate_voice_command_sheet.py`.
+
 ---
 
 ## Critical prerequisite — Alexa+ must be OFF
