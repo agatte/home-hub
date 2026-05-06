@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 from backend.rate_limit import limiter
 
@@ -29,7 +29,7 @@ async def _log_manual_sonos(
             favorite_title=favorite_title,
             mode_at_time=mode,
             volume=volume,
-            triggered_by="manual",
+            triggered_by=source_from_request(request, fallback="manual"),
         )
 
 

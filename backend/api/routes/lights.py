@@ -3,7 +3,7 @@ Hue light control endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.lights import LightResponse, LightState
 
 router = APIRouter(prefix="/api/lights", tags=["lights"])
@@ -98,7 +98,10 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     # in-flight window (hue_service.poll_state_loop) and the frontend
     # optimistically patched its local store on the way in.
 
-    await _log_light_change(request, light_id, before, state_dict, trigger="rest")
+    await _log_light_change(
+        request, light_id, before, state_dict,
+        trigger=source_from_request(request, fallback="rest"),
+    )
     return {"status": "ok", "light_id": light_id}
 
 
@@ -125,6 +128,7 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
 
     sign = 1 if direction == "up" else -1
     multiplicative_delta = _BRIGHTNESS_STEP - 1.0
+    trigger = source_from_request(request, fallback="brightness_step")
 
     lights = await hue.get_all_lights()
     updated: list[dict] = []
@@ -141,6 +145,11 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
         if automation:
             automation.mark_light_manual(str(light_id))
         updated.append({"id": light_id, "bri": new_bri})
+        # Per-light row in light_adjustments so Alexa "brighter"/"dimmer"
+        # is visible in the same place as dashboard slider drags.
+        await _log_light_change(
+            request, str(light_id), light, {"bri": new_bri}, trigger=trigger,
+        )
 
     return {
         "status": "ok",

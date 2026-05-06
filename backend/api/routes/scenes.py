@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.lights import CustomSceneCreate
 from backend.database import async_session
 
@@ -456,7 +456,8 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
             await ws_manager.broadcast("light_update", light)
 
         await _log_scene_activation(
-            request, scene_id, preset.get("display_name"), "preset"
+            request, scene_id, preset.get("display_name"),
+            source_from_request(request, fallback="preset"),
         )
         return {"status": "ok", "scene": scene_id, "source": "preset"}
 
@@ -487,7 +488,10 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                 for light in lights:
                     await ws_manager.broadcast("light_update", light)
 
-                await _log_scene_activation(request, scene_id, scene_name, "custom")
+                await _log_scene_activation(
+                    request, scene_id, scene_name,
+                    source_from_request(request, fallback="custom"),
+                )
                 return {"status": "ok", "scene": scene_id, "source": "custom"}
         except HTTPException:
             raise
@@ -514,7 +518,10 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
-    await _log_scene_activation(request, scene_id, None, "bridge")
+    await _log_scene_activation(
+        request, scene_id, None,
+        source_from_request(request, fallback="bridge"),
+    )
     return {"status": "ok", "scene": scene_id, "source": "bridge"}
 
 

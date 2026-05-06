@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, source_from_request
 from backend.config import settings
 from backend.rate_limit import limiter
 
@@ -154,7 +154,7 @@ async def enable_dnd_route(req: DNDRequest, request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Automation engine not initialized")
 
     remote = getattr(request.client, "host", None) or "unknown"
-    caller = f"api:{remote}"
+    caller = source_from_request(request, fallback=f"api:{remote}")
     state = await engine.enable_dnd(req.duration_minutes, source=caller)
     return {"status": "ok", **state}
 
@@ -168,7 +168,7 @@ async def clear_dnd_route(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Automation engine not initialized")
 
     remote = getattr(request.client, "host", None) or "unknown"
-    caller = f"api:{remote}"
+    caller = source_from_request(request, fallback=f"api:{remote}")
     state = await engine.clear_dnd(source=caller)
     return {"status": "ok", **state}
 
@@ -200,8 +200,11 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
     # Caller-context label for telemetry — answers "who flipped the override"
     # in journalctl after the fact. Includes the route's own client IP so we
     # can distinguish kiosk dashboard from dev desktop from external scripts.
+    # The X-Source header (set by the Alexa lambda) overrides the IP-based
+    # default so voice actions surface as `alexa:<intent>` instead of
+    # `api:127.0.0.1` (the tunnel proxy's loopback).
     remote = getattr(request.client, "host", None) or "unknown"
-    caller = f"api:{remote}"
+    caller = source_from_request(request, fallback=f"api:{remote}")
     if override.mode == "auto":
         await engine.clear_override(source=caller)
         return {"status": "ok", "message": "Override cleared — returning to auto"}

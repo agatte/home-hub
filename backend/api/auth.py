@@ -127,3 +127,23 @@ async def require_api_key(
                 status_code=401,
                 detail="Invalid or missing skill token",
             )
+
+
+def source_from_request(request: Request, fallback: str) -> str:
+    """Extract the X-Source header for telemetry, with a route-specific fallback.
+
+    Used by write endpoints to tag the resulting `activity_events` /
+    override / scene-activation row with a meaningful source label. The
+    Alexa lambda passes ``alexa:<intent_name>``; other callers (dashboard,
+    curl, scripts) typically pass nothing and fall back to whatever the
+    route was already using (e.g. ``api:<ip>``, ``rest``, ``manual``,
+    ``preset`` / ``custom`` / ``bridge``).
+
+    Empty or whitespace-only headers count as "not set" so a misbehaving
+    client can't tag everything as the empty string.
+    """
+    raw = request.headers.get("X-Source")
+    if not raw:
+        return fallback
+    cleaned = raw.strip()
+    return cleaned or fallback
