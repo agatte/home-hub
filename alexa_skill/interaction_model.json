@@ -172,10 +172,7 @@
             "do not disturb on",
             "start do not disturb",
             "set do not disturb",
-            "activate do not disturb",
-            "enable d n d",
-            "turn on d n d",
-            "d n d on"
+            "activate do not disturb"
           ]
         },
         {
@@ -188,10 +185,7 @@
             "stop do not disturb",
             "cancel do not disturb",
             "clear do not disturb",
-            "end do not disturb",
-            "disable d n d",
-            "turn off d n d",
-            "d n d off"
+            "end do not disturb"
           ]
         },
         {
