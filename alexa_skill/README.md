@@ -13,8 +13,20 @@ AWS Lambda → Cloudflare Tunnel → tunnel proxy → FastAPI on the Latitude.
    → home-hub.service on :8000   (sets mode, lights flip)
 ```
 
-Phase 2 ships three intents: `SetModeIntent`, `PlayMusicIntent`,
-`PauseMusicIntent`. Phase 3 will add brightness, scenes, effects, DND.
+Intents shipped (Phase 2 + 3):
+
+| Intent | Try saying | What it does |
+|---|---|---|
+| `SetModeIntent` | "set relax mode", "make it gaming" | Manually overrides the activity mode |
+| `ReleaseOverrideIntent` | "auto", "back to automatic" | Clears the manual mode override |
+| `PlayMusicIntent` | "play the music" | Smart-play on Sonos |
+| `PauseMusicIntent` | "pause the music" | Pauses Sonos |
+| `AdjustBrightnessIntent` | "brighter", "make it dimmer" | ±10% on every on-light, mode-ceiling clamped |
+| `SetEffectIntent` | "turn on the candle effect" | candle / fire / sparkle / prism / glisten / opal |
+| `StopEffectIntent` | "stop the effect" | Stops any running dynamic effect |
+| `ActivateSceneIntent` | "run the party scene" | Curated safelist: party, neon, miami, arcade, aurora, sunset |
+| `EnableDNDIntent` | "enable do not disturb" | 2-hour DND window |
+| `DisableDNDIntent` | "turn off do not disturb" | Clears DND |
 
 ---
 
@@ -93,7 +105,7 @@ Reserved/colliding names to avoid: `home hub`, `smart home`, `gaming`,
    - **Choose a type to start with**: Custom
    - **Choose a method to host**: Provision your own (we use AWS Lambda)
    - Click **Create skill** → **Start from scratch** → **Continue with template**
-3. **Invocation → Skill Invocation Name**: enter `home hub` (lowercase, two words).
+3. **Invocation → Skill Invocation Name**: enter `command center` (lowercase, two words). The interaction model JSON ships this value too — keep them in sync.
 4. **Interaction Model → JSON Editor**: paste the contents of
    `alexa_skill/interaction_model.json`. Click **Save Model**.
 5. **Endpoint**:
@@ -106,9 +118,9 @@ Reserved/colliding names to avoid: `home hub`, `smart home`, `gaming`,
    Go back to the Lambda console and paste it into the Alexa Skills Kit
    trigger you added in step 2.
 8. **Test** tab (top nav): switch the dropdown from "Off" to **Development**.
-9. In the test simulator, type or speak: `open home hub`. You should hear
-   "Home Hub is ready..."
-10. Try `tell home hub to set relax mode`. Lights should flip on the
+9. In the test simulator, type or speak: `open command center`. You should
+   hear "Home Hub is ready..."
+10. Try `tell command center to set relax mode`. Lights should flip on the
     Latitude dashboard within 2 seconds.
 
 ---
@@ -119,9 +131,12 @@ Any Echo signed into the same Amazon account that owns the developer
 console gets the skill automatically (in Development mode). Just speak
 to it:
 
-- "Alexa, open home hub" → enters skill session
-- "Alexa, tell home hub to set gaming mode"
-- "Alexa, ask home hub to pause the music"
+- "Alexa, open command center" → enters skill session
+- "Alexa, tell command center to set gaming mode"
+- "Alexa, ask command center to pause the music"
+- "Alexa, tell command center to make it brighter"
+- "Alexa, tell command center to run the party scene"
+- "Alexa, ask command center to enable do not disturb"
 
 If the skill doesn't respond, the most likely culprit is the Lambda env
 vars — check **CloudWatch Logs** (Lambda → Monitor → View CloudWatch logs)

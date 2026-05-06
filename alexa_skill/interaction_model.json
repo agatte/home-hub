@@ -79,6 +79,118 @@
             "back to automatic",
             "automatic"
           ]
+        },
+        {
+          "name": "AdjustBrightnessIntent",
+          "slots": [
+            {
+              "name": "Direction",
+              "type": "HOMEHUB_DIRECTION"
+            }
+          ],
+          "samples": [
+            "{Direction}",
+            "go {Direction}",
+            "make it {Direction}",
+            "make the lights {Direction}",
+            "make the room {Direction}",
+            "turn the lights {Direction}",
+            "turn it {Direction}",
+            "lights {Direction}",
+            "{Direction} the lights",
+            "{Direction} please"
+          ]
+        },
+        {
+          "name": "SetEffectIntent",
+          "slots": [
+            {
+              "name": "Effect",
+              "type": "HOMEHUB_EFFECT"
+            }
+          ],
+          "samples": [
+            "set {Effect} effect",
+            "set the {Effect} effect",
+            "turn on {Effect}",
+            "turn on the {Effect}",
+            "turn on the {Effect} effect",
+            "start {Effect}",
+            "start the {Effect}",
+            "activate {Effect}",
+            "activate the {Effect} effect",
+            "{Effect} effect",
+            "play the {Effect} effect"
+          ]
+        },
+        {
+          "name": "StopEffectIntent",
+          "slots": [],
+          "samples": [
+            "stop the effect",
+            "stop the effects",
+            "stop effect",
+            "stop effects",
+            "kill the effect",
+            "cancel the effect",
+            "turn off the effect",
+            "turn off effects",
+            "no effect"
+          ]
+        },
+        {
+          "name": "ActivateSceneIntent",
+          "slots": [
+            {
+              "name": "Scene",
+              "type": "HOMEHUB_SCENE"
+            }
+          ],
+          "samples": [
+            "{Scene} scene",
+            "set {Scene} scene",
+            "set the {Scene} scene",
+            "activate {Scene}",
+            "activate {Scene} scene",
+            "activate the {Scene} scene",
+            "run {Scene}",
+            "run the {Scene} scene",
+            "play {Scene}",
+            "set the scene to {Scene}",
+            "switch to the {Scene} scene"
+          ]
+        },
+        {
+          "name": "EnableDNDIntent",
+          "slots": [],
+          "samples": [
+            "enable do not disturb",
+            "turn on do not disturb",
+            "do not disturb",
+            "do not disturb on",
+            "start do not disturb",
+            "set do not disturb",
+            "activate do not disturb",
+            "enable d n d",
+            "turn on d n d",
+            "d n d on"
+          ]
+        },
+        {
+          "name": "DisableDNDIntent",
+          "slots": [],
+          "samples": [
+            "disable do not disturb",
+            "turn off do not disturb",
+            "do not disturb off",
+            "stop do not disturb",
+            "cancel do not disturb",
+            "clear do not disturb",
+            "end do not disturb",
+            "disable d n d",
+            "turn off d n d",
+            "d n d off"
+          ]
         }
       ],
       "types": [
@@ -92,6 +204,35 @@
             { "id": "relax",    "name": { "value": "relax",    "synonyms": ["chill", "lounge", "wind down", "winding down"] } },
             { "id": "cooking",  "name": { "value": "cooking",  "synonyms": ["kitchen", "cook", "chef"] } },
             { "id": "sleeping", "name": { "value": "sleeping", "synonyms": ["bed", "bedtime", "sleep", "good night"] } }
+          ]
+        },
+        {
+          "name": "HOMEHUB_DIRECTION",
+          "values": [
+            { "id": "up",   "name": { "value": "up",   "synonyms": ["brighter", "lighter", "higher", "louder"] } },
+            { "id": "down", "name": { "value": "down", "synonyms": ["dimmer",  "darker",  "lower",  "softer"] } }
+          ]
+        },
+        {
+          "name": "HOMEHUB_EFFECT",
+          "values": [
+            { "id": "candle",  "name": { "value": "candle",  "synonyms": ["candlelight", "candles", "candle light"] } },
+            { "id": "fire",    "name": { "value": "fire",    "synonyms": ["fireplace", "fire place"] } },
+            { "id": "sparkle", "name": { "value": "sparkle", "synonyms": ["sparkles", "twinkle", "shimmer"] } },
+            { "id": "prism",   "name": { "value": "prism",   "synonyms": ["rainbow", "color cycle"] } },
+            { "id": "glisten", "name": { "value": "glisten", "synonyms": ["glisten effect"] } },
+            { "id": "opal",    "name": { "value": "opal",    "synonyms": ["opal effect", "pastel"] } }
+          ]
+        },
+        {
+          "name": "HOMEHUB_SCENE",
+          "values": [
+            { "id": "house_party",     "name": { "value": "party",  "synonyms": ["house party", "dance party"] } },
+            { "id": "neon_tokyo",      "name": { "value": "neon",   "synonyms": ["neon tokyo", "tokyo"] } },
+            { "id": "miami_vice",      "name": { "value": "miami",  "synonyms": ["miami vice", "vice"] } },
+            { "id": "arcade",          "name": { "value": "arcade", "synonyms": ["arcade scene"] } },
+            { "id": "northern_lights", "name": { "value": "aurora", "synonyms": ["northern lights"] } },
+            { "id": "sunset_strip",    "name": { "value": "sunset", "synonyms": ["sunset strip"] } }
           ]
         }
       ]

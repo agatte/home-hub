@@ -8,6 +8,11 @@ from backend.api.schemas.lights import LightResponse, LightState
 
 router = APIRouter(prefix="/api/lights", tags=["lights"])
 
+# Relative brightness step (multiplicative). Mirrors the guest endpoint —
+# 10% per tap, floor of 20 units so taps stay perceptible at low bri.
+_BRIGHTNESS_STEP = 1.10
+_BRIGHTNESS_MIN_STEP = 20
+
 
 @router.get("", response_model=list[LightResponse])
 async def get_all_lights(request: Request) -> list[dict]:
@@ -95,6 +100,54 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
 
     await _log_light_change(request, light_id, before, state_dict, trigger="rest")
     return {"status": "ok", "light_id": light_id}
+
+
+@router.post("/brightness/{direction}", dependencies=[Depends(require_api_key)])
+async def adjust_brightness(direction: str, request: Request) -> dict:
+    """Bump every on-light's brightness ±10%, clamped to the mode ceiling.
+
+    Owner-facing counterpart to `/api/guest/brightness/{direction}`. Used by
+    the Alexa skill ("brighter" / "dimmer"). No per-call cooldown — Alexa's
+    own cadence + the engine's manual-override stamping are sufficient.
+    """
+    if direction not in {"up", "down"}:
+        raise HTTPException(status_code=400, detail="Direction must be 'up' or 'down'")
+
+    hue = request.app.state.hue
+    if not hue.connected:
+        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+
+    automation = getattr(request.app.state, "automation", None)
+    mode_mult = 1.0
+    if automation:
+        mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
+    ceiling = max(1, min(254, int(254 * mode_mult)))
+
+    sign = 1 if direction == "up" else -1
+    multiplicative_delta = _BRIGHTNESS_STEP - 1.0
+
+    lights = await hue.get_all_lights()
+    updated: list[dict] = []
+    for light in lights:
+        if not light.get("on") or "bri" not in light:
+            continue
+        current = light["bri"]
+        delta = max(_BRIGHTNESS_MIN_STEP, round(current * multiplicative_delta))
+        new_bri = max(1, min(ceiling, current + sign * delta))
+        if new_bri == current:
+            continue
+        light_id = light["light_id"]
+        await hue.set_light(light_id, {"bri": new_bri})
+        if automation:
+            automation.mark_light_manual(str(light_id))
+        updated.append({"id": light_id, "bri": new_bri})
+
+    return {
+        "status": "ok",
+        "direction": direction,
+        "updated": updated,
+        "ceiling": ceiling,
+    }
 
 
 @router.post("/all", dependencies=[Depends(require_api_key)])

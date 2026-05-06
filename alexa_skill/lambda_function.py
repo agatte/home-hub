@@ -20,8 +20,11 @@ Why urllib.request and not requests/httpx?
   the Lambda function fits in a single .py file you can paste into the
   AWS console editor.
 
-Phase 2 scope: SetModeIntent + PauseMusicIntent + PlayMusicIntent. The
-plan adds more intents in Phase 3.
+Intent coverage:
+- Phase 2: SetModeIntent, PlayMusicIntent, PauseMusicIntent,
+  ReleaseOverrideIntent
+- Phase 3: AdjustBrightnessIntent, SetEffectIntent, StopEffectIntent,
+  ActivateSceneIntent, EnableDNDIntent, DisableDNDIntent
 """
 from __future__ import annotations
 
@@ -45,6 +48,24 @@ VALID_MODES = frozenset({
     "relax", "cooking", "sleeping",
 })
 
+# Hue v2 dynamic effects exposed by the backend (`/api/scenes/effects`).
+VALID_EFFECTS = frozenset({
+    "candle", "fire", "sparkle", "prism", "glisten", "opal",
+})
+
+# Curated scene safelist — same six the /guest mini-app exposes. Slot IDs
+# are the SCENE_PRESETS keys so we can pass them straight to
+# `/api/scenes/{scene_id}/activate`. The display label (party, neon, ...)
+# is what Alexa hears; the canonical ID is what the backend wants.
+VALID_SCENE_IDS = frozenset({
+    "house_party", "neon_tokyo", "miami_vice",
+    "arcade", "northern_lights", "sunset_strip",
+})
+
+# Default DND window when the user doesn't specify one. Matches the
+# backend's own default (DNDRequest.duration_minutes=120).
+DEFAULT_DND_MINUTES = 120
+
 
 def _env(name: str) -> str:
     """Read a required env var; raise loudly on miss so CloudWatch
@@ -55,9 +76,14 @@ def _env(name: str) -> str:
     return val
 
 
-def _post_to_homehub(path: str, body: dict | None) -> tuple[int, str]:
-    """POST a JSON payload (or empty body) to the Home Hub backend through
-    the Cloudflare Tunnel. Returns (status_code, response_body_text)."""
+def _call_homehub(
+    path: str, body: dict | None = None, method: str = "POST",
+) -> tuple[int, str]:
+    """Send a request to the Home Hub backend through the Cloudflare Tunnel.
+
+    Returns (status_code, response_body_text). Default method is POST to
+    preserve Phase-2 callers; DND clear uses DELETE.
+    """
     api_base = _env("HOME_HUB_API_BASE")
     api_key = _env("HOME_HUB_API_KEY")
     skill_token = _env("HOME_HUB_SKILL_TOKEN")
@@ -76,28 +102,37 @@ def _post_to_homehub(path: str, body: dict | None) -> tuple[int, str]:
             # browser; the X-Skill-Token already proves auth.
             "User-Agent": "HomeHub-AlexaSkill/1.0 (+aws-lambda)",
         },
-        method="POST",
+        method=method,
     )
     try:
         with urllib.request.urlopen(req, timeout=4) as resp:
             text = resp.read().decode("utf-8", errors="replace")
-            logger.info("Home Hub %s -> %d (%d bytes)", path, resp.status, len(text))
+            logger.info(
+                "Home Hub %s %s -> %d (%d bytes)",
+                method, path, resp.status, len(text),
+            )
             return resp.status, text
     except urllib.error.HTTPError as e:
         text = e.read().decode("utf-8", errors="replace")
         # First 200 chars only — body may include the bridge token in
         # rare error paths; trim to avoid surprising leaks in CloudWatch.
         logger.warning(
-            "Home Hub %s -> HTTP %d body=%r", path, e.code, text[:200]
+            "Home Hub %s %s -> HTTP %d body=%r",
+            method, path, e.code, text[:200],
         )
         return e.code, text
     except urllib.error.URLError as e:
         # Backend down, DNS failed, TLS issue.
-        logger.error("Home Hub %s URL error: %s", path, e)
+        logger.error("Home Hub %s %s URL error: %s", method, path, e)
         return 0, str(e)
-    except Exception as e:
-        logger.exception("Home Hub %s call unexpectedly failed", path)
-        return 0, str(e)
+    except Exception:
+        logger.exception("Home Hub %s %s call unexpectedly failed", method, path)
+        return 0, "unexpected"
+
+
+def _post_to_homehub(path: str, body: dict | None) -> tuple[int, str]:
+    """Backwards-compatible POST wrapper."""
+    return _call_homehub(path, body, method="POST")
 
 
 def _speak(text: str, end_session: bool = True) -> dict:
@@ -182,11 +217,92 @@ def _handle_pause_music(_slots: dict) -> dict:
     return _speak("Couldn't pause the music.")
 
 
+def _handle_adjust_brightness(slots: dict) -> dict:
+    direction = _slot_value(slots, "Direction")
+    if direction not in {"up", "down"}:
+        return _speak("Say brighter or dimmer.")
+    status, _ = _post_to_homehub(
+        f"/api/lights/brightness/{direction}", None,
+    )
+    if 200 <= status < 300:
+        return _speak("Brighter." if direction == "up" else "Dimmer.")
+    return _speak("Couldn't adjust the lights.")
+
+
+def _handle_set_effect(slots: dict) -> dict:
+    effect = _slot_value(slots, "Effect")
+    if not effect:
+        return _speak(
+            "Which effect? Try candle, fire, sparkle, prism, "
+            "glisten, or opal.",
+        )
+    if effect not in VALID_EFFECTS:
+        return _speak(f"I don't have an effect called {effect}.")
+    status, _ = _post_to_homehub(f"/api/scenes/effects/{effect}", None)
+    if 200 <= status < 300:
+        return _speak(f"{effect.capitalize()} effect on.")
+    if status == 503:
+        return _speak("The Hue bridge isn't ready for effects right now.")
+    return _speak("Couldn't start the effect.")
+
+
+def _handle_stop_effect(_slots: dict) -> dict:
+    status, _ = _post_to_homehub("/api/scenes/effects/stop", None)
+    if 200 <= status < 300:
+        return _speak("Effect stopped.")
+    if status == 503:
+        return _speak("The Hue bridge isn't ready right now.")
+    return _speak("Couldn't stop the effect.")
+
+
+def _handle_activate_scene(slots: dict) -> dict:
+    scene_id = _slot_value(slots, "Scene")
+    if not scene_id:
+        return _speak(
+            "Which scene? Try party, neon, miami, arcade, aurora, "
+            "or sunset.",
+        )
+    if scene_id not in VALID_SCENE_IDS:
+        return _speak(f"I don't have a scene called {scene_id}.")
+    status, _ = _post_to_homehub(f"/api/scenes/{scene_id}/activate", None)
+    if 200 <= status < 300:
+        # Scene IDs are snake_case — the spoken display value matches the
+        # slot's value field (e.g. "party"), but we don't get that back from
+        # _slot_value once it's resolved. Drop the underscore for TTS.
+        spoken = scene_id.replace("_", " ")
+        return _speak(f"Setting the {spoken} scene.")
+    return _speak("Couldn't activate that scene.")
+
+
+def _handle_enable_dnd(_slots: dict) -> dict:
+    status, _ = _post_to_homehub(
+        "/api/automation/dnd",
+        {"duration_minutes": DEFAULT_DND_MINUTES},
+    )
+    if 200 <= status < 300:
+        hours = DEFAULT_DND_MINUTES // 60
+        return _speak(f"Do not disturb on for {hours} hours.")
+    return _speak("Couldn't enable do not disturb.")
+
+
+def _handle_disable_dnd(_slots: dict) -> dict:
+    status, _ = _call_homehub("/api/automation/dnd", None, method="DELETE")
+    if 200 <= status < 300:
+        return _speak("Do not disturb off.")
+    return _speak("Couldn't clear do not disturb.")
+
+
 INTENT_HANDLERS = {
     "SetModeIntent": _handle_set_mode,
     "ReleaseOverrideIntent": _handle_release_override,
     "PlayMusicIntent": _handle_play_music,
     "PauseMusicIntent": _handle_pause_music,
+    "AdjustBrightnessIntent": _handle_adjust_brightness,
+    "SetEffectIntent": _handle_set_effect,
+    "StopEffectIntent": _handle_stop_effect,
+    "ActivateSceneIntent": _handle_activate_scene,
+    "EnableDNDIntent": _handle_enable_dnd,
+    "DisableDNDIntent": _handle_disable_dnd,
 }
 
 
@@ -196,16 +312,16 @@ def _handle_launch() -> dict:
     """No-arg invocation: 'Alexa, open Home Hub.' Stay in session so the
     next utterance can land an intent without re-saying the wake word."""
     return _speak(
-        "Home Hub is ready. You can say things like set gaming mode, "
-        "or pause the music.",
+        "Home Hub is ready. You can set a mode, run a scene, dim the "
+        "lights, or turn on do not disturb.",
         end_session=False,
     )
 
 
 def _handle_help() -> dict:
     return _speak(
-        "Try saying: set relax mode. Pause the music. Or set the apartment "
-        "to working.",
+        "Try: set relax mode. Make it brighter. Run the party scene. "
+        "Turn on the candle effect. Or enable do not disturb.",
         end_session=False,
     )
 
