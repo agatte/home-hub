@@ -312,7 +312,7 @@ def _handle_disable_dnd(_slots: dict) -> dict:
 
 
 def _handle_adjust_volume(slots: dict) -> dict:
-    direction = _slot_value(slots, "Direction")
+    direction = _slot_value(slots, "VolumeDirection")
     if direction not in {"up", "down"}:
         return _speak("Say louder or quieter.")
     status, _ = _post_to_homehub(

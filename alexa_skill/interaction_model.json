@@ -198,19 +198,19 @@
           "name": "AdjustVolumeIntent",
           "slots": [
             {
-              "name": "Direction",
+              "name": "VolumeDirection",
               "type": "HOMEHUB_VOLUME_DIRECTION"
             }
           ],
           "samples": [
-            "{Direction}",
-            "volume {Direction}",
-            "{Direction} the volume",
-            "make the volume {Direction}",
-            "turn the volume {Direction}",
-            "make the music {Direction}",
-            "turn the music {Direction}",
-            "make it {Direction}"
+            "{VolumeDirection}",
+            "volume {VolumeDirection}",
+            "{VolumeDirection} the volume",
+            "make the volume {VolumeDirection}",
+            "turn the volume {VolumeDirection}",
+            "make the music {VolumeDirection}",
+            "turn the music {VolumeDirection}",
+            "make it {VolumeDirection}"
           ]
         },
         {
