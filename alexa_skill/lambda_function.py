@@ -311,15 +311,38 @@ def _handle_disable_dnd(_slots: dict) -> dict:
     return _speak("Couldn't clear do not disturb.")
 
 
+# Map raw slot values (whatever the user actually said) to canonical
+# up/down. The slot type's synonyms only cover "up"/"down"/"higher"/"lower"
+# because Alexa's wake-word router hijacks the louder/quieter family —
+# but if the user does say "louder" inside a longer skill-directed
+# utterance ("make the song go louder") it sometimes reaches the skill
+# with the raw word in the slot. Mapping here means any volume-flavored
+# word resolves correctly regardless of whether Alexa pre-resolved it.
+_VOLUME_UP_WORDS = frozenset({
+    "up", "louder", "higher", "more", "boost", "raise", "crank",
+})
+_VOLUME_DOWN_WORDS = frozenset({
+    "down", "lower", "quieter", "softer", "less", "reduce",
+})
+
+
 def _handle_adjust_volume(slots: dict) -> dict:
-    direction = _slot_value(slots, "VolumeDirection")
-    if direction not in {"up", "down"}:
-        return _speak("Say louder or quieter.")
+    raw = _slot_value(slots, "VolumeDirection")
+    direction = None
+    if raw in _VOLUME_UP_WORDS:
+        direction = "up"
+    elif raw in _VOLUME_DOWN_WORDS:
+        direction = "down"
+    if direction is None:
+        return _speak(
+            "Say up or down. For example, music up, or music down.",
+            end_session=False,
+        )
     status, _ = _post_to_homehub(
         f"/api/sonos/volume/{direction}", None,
     )
     if 200 <= status < 300:
-        return _speak("Louder." if direction == "up" else "Quieter.")
+        return _speak("Music up." if direction == "up" else "Music down.")
     if status == 503:
         return _speak("Sonos isn't connected.")
     return _speak("Couldn't change the volume.")

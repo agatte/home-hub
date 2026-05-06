@@ -203,6 +203,7 @@
             }
           ],
           "samples": [
+            "{VolumeDirection}",
             "turn the music {VolumeDirection}",
             "turn the song {VolumeDirection}",
             "music {VolumeDirection}",
@@ -210,7 +211,9 @@
             "bump the music {VolumeDirection}",
             "bump the song {VolumeDirection}",
             "make the music go {VolumeDirection}",
-            "make the song go {VolumeDirection}"
+            "make the song go {VolumeDirection}",
+            "make the music {VolumeDirection}",
+            "make the song {VolumeDirection}"
           ]
         },
         {
@@ -295,8 +298,8 @@
         {
           "name": "HOMEHUB_VOLUME_DIRECTION",
           "values": [
-            { "id": "up",   "name": { "value": "up",   "synonyms": ["higher"] } },
-            { "id": "down", "name": { "value": "down", "synonyms": ["lower"]  } }
+            { "id": "up",   "name": { "value": "up",   "synonyms": ["higher", "louder",  "more",  "boost", "raise"]  } },
+            { "id": "down", "name": { "value": "down", "synonyms": ["lower",  "quieter", "softer", "less", "reduce"] } }
           ]
         },
         {
