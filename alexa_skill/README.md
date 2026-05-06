@@ -178,3 +178,27 @@ for the error.
 | "I don't have a {scene/effect} called X" when X is on the safelist | Lambda is reading the slot's `name.value` instead of its `id` | Use `_resolved_slot()` (returns id) when the slot type's id ≠ value. Currently HOMEHUB_SCENE — spoken "party" → id "house_party" |
 | "Turn on {Mode}" misroutes and Alexa asks "Which effect?" | Two custom intents share a verb pattern but only one had it | Mirror the verb shape on every colliding intent so NLU disambiguates by slot-type validity. Each "turn on {X}" / "start {X}" lives on both SetModeIntent and SetEffectIntent for this reason |
 | "Louder" / "make it louder" changes the Echo's own volume, not Sonos | Reserved Alexa volume tokens hijack at the wake-word router before the skill is invoked. Even "make the music louder" hijacks — any utterance containing "louder"/"quieter" routes to device volume | Use "up"/"down" only ("turn the music up", "music down"). Don't put "louder"/"quieter" in synonyms or samples — they're poison anywhere in the utterance |
+
+---
+
+## Post-ship audit notes (2026-05-06)
+
+Findings from the regression sweep after Phase 3.5 shipped — recorded here so they don't get rediscovered later.
+
+### `AdjustBrightnessIntent` doesn't show up in `light_adjustments`
+
+`POST /api/lights/brightness/{up,down}` — the route Alexa hits for "make it brighter / dimmer" — bumps every on-light through a multi-light bulk path that bypasses `_log_light_change()`. End-to-end the lights respond correctly, but the change is invisible in the `light_adjustments` event table. Direct per-light writes (`PUT /api/lights/{id}`) and `automation`-driven changes are still logged.
+
+Impact: when behavioral mining starts pulling from `light_adjustments`, Alexa-initiated brightness bumps will be silent. Guest brightness bumps share the same path and have the same gap.
+
+Not a Phase 3.5 regression — neither pathway has ever logged. Worth a one-line `_log_light_change(trigger="rest")` call in the bulk handler if/when it matters.
+
+### `/health` reports `fauxmo: false`
+
+The Phase-1/2 voice-control story (CLAUDE.md, `docs/PROJECT_SPEC.md` §"Voice Control") describes Fauxmo + Custom Skill running side by side — 7 virtual WeMos for simple on/off intents plus the skill for everything else. Audit shows Fauxmo isn't running on the Latitude.
+
+Either Fauxmo was intentionally retired now that the Custom Skill covers all 15 intents, or it's stalled and nobody noticed. Skill alone is sufficient for current voice surface, so this isn't a functional gap. Decision pending: either revive Fauxmo (`FAUXMO_ENABLED=true` + restart) or strike Fauxmo from the spec.
+
+### `ml_metrics` still emits retired-lane rows
+
+`compute_per_source_metrics` walks 14 days of `ml_decisions`, so `accuracy_behavioral` and `accuracy_presence` rows continue to appear in `ml_metrics` even though both lanes were retired in the 2026-04-27 fusion refactor / Path-A predictor strip. Self-purges by 2026-05-11 (the 14-day window). Cosmetic, no action needed.
