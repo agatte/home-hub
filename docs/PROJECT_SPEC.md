@@ -1362,9 +1362,11 @@ The system observes everything and evolves from rules to autopilot:
 - Invocation: `command center` ("home hub" collides with Alexa's smart-home category)
 - AWS Lambda (`home-hub-skill` in `us-east-1`) → Cloudflare Tunnel (`home-hub.gatte-home.com`) → tunnel proxy (`backend/api/tunnel_proxy.py` on `127.0.0.1:8002`) → main backend on `127.0.0.1:8000`
 - Tunnel-origin auth: `X-Tunnel-Origin: cloudflare` header injected by tunnel proxy forces require_api_key to demand BOTH `X-API-Key` AND `X-Skill-Token` (skips loopback/RFC1918 bypass)
-- Three intents shipped: `SetModeIntent`, `PlayMusicIntent`, `PauseMusicIntent`, plus `ReleaseOverrideIntent` (carved out so "auto" gets a dedicated handler — single-token slot values misroute reliably) and built-ins (`AMAZON.HelpIntent`, `AMAZON.CancelIntent`, `AMAZON.StopIntent`). See `alexa_skill/` for code + manifest + setup README
+- Intents shipped: `SetModeIntent`, `PlayMusicIntent`, `PauseMusicIntent`, `ReleaseOverrideIntent` (auto override clear — carved out because single-token slot values misroute reliably), `AdjustBrightnessIntent` (±10% relative bump via new `/api/lights/brightness/{up\|down}`), `SetEffectIntent` + `StopEffectIntent` (candle/fire/sparkle/prism/glisten/opal), `ActivateSceneIntent` (6-scene safelist mirroring `/guest`: party/neon/miami/arcade/aurora/sunset), `EnableDNDIntent` + `DisableDNDIntent` (default 2h window), plus built-ins (`AMAZON.HelpIntent`, `AMAZON.CancelIntent`, `AMAZON.StopIntent`). See `alexa_skill/` for code + manifest + setup README
 - **Critical: requires Alexa+ (Amazon's generative-AI tier) to be DISABLED.** Alexa+'s LLM routing intercepts custom skills and falls back to smart-home. See `alexa_skill/README.md` "Critical prerequisite" section
-- Phase 3 plan: brightness, scenes, effects, DND, status query intents
+- Routing gotchas (sample collisions): when two custom intents could plausibly share a verb pattern (e.g. "turn on {X}"), the same shape must exist on every colliding intent so NLU disambiguates by slot-type validity — otherwise the lone owner raw-fills the slot and the handler hits a dead-end clarify prompt. SetModeIntent therefore mirrors SetEffectIntent's "turn on {Mode}" pattern
+- Slot id vs value: when a slot type's `id` differs from its `name.value` (currently HOMEHUB_SCENE: spoken "party" → id "house_party"), Lambda must read the resolved id for backend lookups. `_resolved_slot()` in `lambda_function.py` returns `(id, value)` for that path; `_slot_value()` is fine for slot types where id == value name (HOMEHUB_MODE, HOMEHUB_EFFECT, HOMEHUB_DIRECTION)
+- Future intents (deferred): status query ("what mode am I in"), Sonos volume, custom-scene activation by name
 
 ### Game Day Engine
 
