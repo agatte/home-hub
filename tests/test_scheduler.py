@@ -107,3 +107,71 @@ class TestAsyncScheduler:
         result = scheduler._next_run_time(task, now)
         assert result is not None
         assert result.weekday() == 0  # Monday
+
+
+# ---------------------------------------------------------------------------
+# Task status fields surfaced via /health.scheduler_tasks
+# ---------------------------------------------------------------------------
+
+class TestTaskStatusFields:
+    """Verify last_status / last_error stamping + get_tasks shape."""
+
+    def test_default_status_is_pending(self):
+        task = ScheduledTask(name="t", hour=8, minute=0)
+        assert task.last_status == "pending"
+        assert task.last_error is None
+
+    def test_get_tasks_includes_status_fields(self):
+        scheduler = AsyncScheduler()
+        scheduler.add_task(ScheduledTask(name="morning", hour=6, minute=40))
+        snapshot = scheduler.get_tasks()[0]
+        assert snapshot["last_status"] == "pending"
+        assert snapshot["last_error"] is None
+        assert snapshot["last_run_age_seconds"] is None
+
+    @pytest.mark.asyncio
+    async def test_execute_task_success_path(self):
+        scheduler = AsyncScheduler()
+        ran = []
+
+        async def cb():
+            ran.append(1)
+
+        task = ScheduledTask(name="t", hour=0, minute=0, callback=cb)
+        await scheduler._execute_task(task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ))
+
+        assert ran == [1]
+        assert task.last_status == "ok"
+        assert task.last_error is None
+        assert task.last_run is not None
+
+    @pytest.mark.asyncio
+    async def test_execute_task_failure_captures_error(self):
+        scheduler = AsyncScheduler()
+
+        async def cb():
+            raise RuntimeError("boom")
+
+        task = ScheduledTask(name="t", hour=0, minute=0, callback=cb)
+        # Helper must not propagate the exception — scheduler can't crash
+        # on one task or every other task in the loop dies.
+        await scheduler._execute_task(task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ))
+
+        assert task.last_status == "error"
+        assert "RuntimeError" in (task.last_error or "")
+        assert "boom" in (task.last_error or "")
+        assert task.last_run is not None  # task fired even though it raised
+
+    @pytest.mark.asyncio
+    async def test_execute_task_truncates_long_errors(self):
+        scheduler = AsyncScheduler()
+        long_msg = "x" * 1000
+
+        async def cb():
+            raise RuntimeError(long_msg)
+
+        task = ScheduledTask(name="t", hour=0, minute=0, callback=cb)
+        await scheduler._execute_task(task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ))
+
+        assert task.last_error is not None
+        assert len(task.last_error) <= 500

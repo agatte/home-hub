@@ -113,9 +113,14 @@ async def health_check(request: Request) -> dict:
     if any(p.get("status") == "unhealthy" for p in ml.values()):
         status = "degraded"
 
+    scheduler_tasks: list[dict] = []
+    if hasattr(app.state, "scheduler"):
+        scheduler_tasks = app.state.scheduler.get_tasks()
+
     return {
         "status": status,
         "service": "Home Hub",
+        "build_id": getattr(app.state, "build_id", None),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "devices": {
             "hue_bridge": hue_connected,
@@ -129,6 +134,7 @@ async def health_check(request: Request) -> dict:
         "event_logger_queue_depth": event_logger_queue_depth,
         "tasks": tasks,
         "tasks_stale": tasks_stale,
+        "scheduler_tasks": scheduler_tasks,
         "circuit_breakers": circuit_breakers,
         "ml": ml,
     }

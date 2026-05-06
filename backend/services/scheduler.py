@@ -27,6 +27,8 @@ class ScheduledTask:
     callback: Callable[[], Coroutine] = None
     enabled: bool = True
     last_run: datetime | None = None
+    last_status: str = "pending"  # pending | ok | error
+    last_error: str | None = None
 
 
 class AsyncScheduler:
@@ -70,15 +72,22 @@ class AsyncScheduler:
     def get_tasks(self) -> list[dict]:
         """Get all registered tasks with their status."""
         result = []
+        now = datetime.now(tz=TZ)
         for task in self._tasks.values():
-            now = datetime.now(tz=TZ)
             next_run = self._next_run_time(task, now)
+            last_run_age = (
+                (now - task.last_run).total_seconds()
+                if task.last_run is not None else None
+            )
             result.append({
                 "name": task.name,
                 "time": f"{task.hour:02d}:{task.minute:02d}",
                 "weekdays": task.weekdays,
                 "enabled": task.enabled,
                 "last_run": task.last_run.isoformat() if task.last_run else None,
+                "last_run_age_seconds": last_run_age,
+                "last_status": task.last_status,
+                "last_error": task.last_error,
                 "next_run": next_run.isoformat() if next_run else None,
             })
         return result
@@ -100,6 +109,28 @@ class AsyncScheduler:
                 return candidate
 
         return None
+
+    async def _execute_task(self, task: ScheduledTask, now: datetime) -> None:
+        """Run a scheduled task once and stamp its status fields.
+
+        ``last_run`` is stamped before the callback fires (the task fired,
+        regardless of outcome). ``last_status`` / ``last_error`` reflect
+        the callback's result — surfaced via ``/health.scheduler_tasks``
+        for the runbook to query.
+        """
+        logger.info(f"Executing scheduled task: {task.name}")
+        task.last_run = now
+        try:
+            await task.callback()
+            task.last_status = "ok"
+            task.last_error = None
+        except Exception as e:
+            task.last_status = "error"
+            task.last_error = repr(e)[:500]
+            logger.error(
+                f"Scheduled task '{task.name}' failed: {e}",
+                exc_info=True,
+            )
 
     async def run_loop(self) -> None:
         """
@@ -139,16 +170,7 @@ class AsyncScheduler:
                             ):
                                 continue
 
-                        logger.info(f"Executing scheduled task: {task.name}")
-                        task.last_run = now
-
-                        try:
-                            await task.callback()
-                        except Exception as e:
-                            logger.error(
-                                f"Scheduled task '{task.name}' failed: {e}",
-                                exc_info=True,
-                            )
+                        await self._execute_task(task, now)
 
                 await asyncio.sleep(30)
 

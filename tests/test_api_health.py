@@ -196,6 +196,53 @@ class TestHealthMLPredictors:
             bp._consecutive_failures = original_failures
 
 
+class TestHealthBuildId:
+    """Verify build_id is exposed on /health (deploy-verifier needs it)."""
+
+    def test_build_id_present(self, client):
+        data = client.get("/health").json()
+        assert "build_id" in data
+
+    def test_build_id_matches_app_state(self, client):
+        data = client.get("/health").json()
+        # Either the SHA from the running git repo, or None if startup couldn't
+        # compute it (rare — the helper has a fallback). Either way, the field
+        # must equal what's on app.state.
+        assert data["build_id"] == getattr(app.state, "build_id", None)
+
+
+class TestHealthSchedulerTasks:
+    """Verify scheduler_tasks is exposed and well-shaped."""
+
+    def test_scheduler_tasks_present(self, client):
+        data = client.get("/health").json()
+        assert "scheduler_tasks" in data
+        assert isinstance(data["scheduler_tasks"], list)
+
+    def test_each_scheduler_task_has_expected_shape(self, client):
+        data = client.get("/health").json()
+        if not data["scheduler_tasks"]:
+            pytest.skip("No scheduler tasks registered — likely a partial lifespan")
+        row = data["scheduler_tasks"][0]
+        for key in (
+            "name", "time", "weekdays", "enabled",
+            "last_run", "last_run_age_seconds",
+            "last_status", "last_error", "next_run",
+        ):
+            assert key in row, f"missing {key} in scheduler_tasks row"
+        assert row["last_status"] in {"pending", "ok", "error"}
+
+    def test_retention_sweep_registered(self, client):
+        # The 90-day retention sweep is the canonical case the runbook
+        # entry 8a check-back relies on. If this regresses, the entry
+        # will fire warn on every check.
+        data = client.get("/health").json()
+        names = [t["name"] for t in data["scheduler_tasks"]]
+        if not names:
+            pytest.skip("No scheduler tasks registered — likely a partial lifespan")
+        assert "retention_sweep" in names
+
+
 class TestLightsAPI:
     """Basic smoke tests for /api/lights."""
 
