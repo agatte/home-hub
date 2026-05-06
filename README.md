@@ -17,7 +17,7 @@ The standout feature: a [Model Context Protocol (MCP)](https://modelcontextproto
 ## Features
 
 ### 🤖 MCP Server — AI-Native Control
-Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastMCP. It exposes 20 tools across every subsystem, registered in `.claude/mcp.json` for seamless Claude Code integration.
+Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastMCP. It exposes 20 tools across every subsystem, registered in `.mcp.json` for seamless Claude Code integration.
 
 **Tool categories:**
 - **System** — health check, Hue bridge + Sonos connectivity, WebSocket client count
@@ -170,7 +170,7 @@ cd frontend-svelte && npm run dev
 
 ## MCP Integration
 
-Home Hub is registered as a Claude Code MCP server via `.claude/mcp.json`. With the MCP server running alongside the main server, Claude Code can inspect and control the live system directly — useful for verifying that code changes work against real hardware without manual testing.
+Home Hub is registered as a Claude Code MCP server via `.mcp.json`. With the MCP server running alongside the main server, Claude Code can inspect and control the live system directly — useful for verifying that code changes work against real hardware without manual testing.
 
 Example interactions:
 - "What mode is the system in right now?"

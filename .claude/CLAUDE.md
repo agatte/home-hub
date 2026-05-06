@@ -103,21 +103,23 @@ python -m backend.mcp_server
 
 **Registered in:** `.mcp.json` (project root — Claude Code auto-loads this on startup and prompts to approve on first run)
 
-### Hooks (`.claude/settings.json`)
+### Hooks (`.claude/settings.json` + `.claude/hooks/`)
 
-Hooks fire automatically after file edits:
+- **PostToolUse Edit/Write** — `backend/**/*.py` → `ruff check --fix`; `frontend-svelte/src/**/*.{js,svelte}` → ESLint.
+- **SessionStart** (`session_start_homehub.py`) — injects live mode/source/override/offline-devices into Claude's context via `additionalContext` (no chat-visible line; ask "what mode is home-hub in?" to verify).
+- **PostToolUse Bash** (`post_git_push.py`) — after a real `git push` (skips `--dry-run`/`--tags`), nudges `/deploy-home`.
 
-- **Python files (`backend/**/*.py`):** Runs `ruff check --fix` after every edit. Auto-fixes imports, style, and common issues.
-- **Frontend files (`frontend-svelte/src/**/*.{js,svelte}`):** Runs ESLint after every edit.
+### Slash commands + subagents
 
-### Skills
+Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
 
-| Skill | Command | Purpose |
-|-------|---------|---------|
-| `home-hub-dev` | `/home-hub-dev` | Start dev environment, verify Hue/Sonos connectivity |
-| `api-audit` | `/api-audit` | Smoke test all API endpoints via MCP |
-| `ui-audit` | `/ui-audit` | Playwright screenshots at desktop + mobile widths |
-| `project-spec` | `/project-spec` | Create or update `docs/PROJECT_SPEC.md` |
+Subagents (`~/.claude/agents/`):
+- **`homehub-verifier`** — Read-only state inspector; home-hub MCP read tools + `query_db` SELECT-only. Spawned by every scheduled check-back.
+- **`deploy-verifier`** — Post-flight after `/deploy-home`: build_id rollover, endpoint smoke, post-restart event scan.
+
+### Ambient verification loop
+
+`/checkback-loop` invokes `/loop` (dynamic, self-paced) against `~/.claude/runbooks/homehub-checkbacks.md`: hourly anomaly sweep (mode lock, camera freshness, fusion lane silence, sleep override) + dated check-backs (5/9 audio classifier, 5/11 predictor validation, 5/26 GH Node 24, 6/1 rule expansion, weekly override-rate). Auto-starts at Windows login via `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\home-hub-loop.cmd`. Disable: delete the .cmd. Polling-not-push design rationale: memory `project_loop_session_anomaly_polling.md`.
 
 ---
 
