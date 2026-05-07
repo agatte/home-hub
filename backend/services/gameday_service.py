@@ -79,7 +79,17 @@ PlayType = Literal["touchdown", "field_goal", "kickoff", "other"]
 
 @dataclass
 class PlayEvent:
-    """A single scoring play (or kickoff) emitted to subscribers."""
+    """A single scoring play (or kickoff) emitted to subscribers.
+
+    ``wpa`` is the Colts-perspective Win Probability Added for this
+    play, sampled from ESPN's ``summary.winprobability`` array. Present
+    for scoring plays once ESPN's WP model has caught up (typically
+    within 30-60s of the play); ``None`` when the WP model hasn't yet
+    indexed this play OR for synthetic test events. Sign convention:
+    positive = Colts WP went up (good for Colts), negative = down.
+    Used by celebration_volume_policy to scale TTS volume by the size
+    of the swing.
+    """
     timestamp: datetime
     play_type: PlayType
     description: str
@@ -87,6 +97,7 @@ class PlayEvent:
     kicker: Optional[str]
     yards: Optional[int]
     scoring_team: Optional[Literal["colts", "opp"]]
+    wpa: Optional[float] = None
 
 
 @dataclass
@@ -347,16 +358,21 @@ class GameDayService:
             )
 
             opponent = None
+            colts_are_home = False
             for competitor in comp.get("competitors", []) or []:
                 team = competitor.get("team") or {}
-                if str(team.get("id")) != COLTS_TEAM_ID:
+                team_id = str(team.get("id"))
+                home_away = str(competitor.get("homeAway") or "").lower()
+                if team_id == COLTS_TEAM_ID:
+                    colts_are_home = (home_away == "home")
+                else:
                     opponent = team.get("displayName") or team.get("name")
-                    break
 
             return {
                 "id": game_id,
                 "kickoff_utc": kickoff_utc,
                 "opponent": opponent,
+                "colts_are_home": colts_are_home,
                 "status": status,
                 "name": evt.get("name"),
                 "short_name": evt.get("shortName"),
@@ -483,8 +499,17 @@ class GameDayService:
         return self._parse_play(plays[-1])
 
     def _extract_new_plays(self, summary: dict) -> list[PlayEvent]:
-        """Walk scoringPlays + drives, return only plays we haven't seen."""
+        """Walk scoringPlays + drives, return only plays we haven't seen.
+
+        Annotates each emitted play with ``wpa`` (Colts-perspective Win
+        Probability Added) sampled from ``summary.winprobability``. WPA
+        may be None when ESPN's WP model hasn't yet indexed the play
+        (typical lag is 30-60s); the celebration volume policy degrades
+        gracefully via the margin+clock fallback.
+        """
         out: list[PlayEvent] = []
+        active = self._find_active_game() or {}
+        colts_are_home = bool(active.get("colts_are_home", False))
 
         # The top-level scoringPlays array is the canonical source of truth
         # for TDs/FGs. Walk in order; dedup against known ids.
@@ -495,10 +520,51 @@ class GameDayService:
                 continue
             play = self._parse_play(raw)
             if play.play_type in ("touchdown", "field_goal"):
+                play.wpa = self._compute_wpa(play_id, summary, colts_are_home)
                 out.append(play)
                 self._known_play_ids.add(play_id)
 
         return out
+
+    @staticmethod
+    def _compute_wpa(
+        scoring_play_id: str,
+        summary: dict,
+        colts_are_home: bool,
+    ) -> Optional[float]:
+        """Compute Colts-perspective WPA for a scoring play.
+
+        ESPN's ``summary.winprobability`` is an ordered list of
+        ``{playId, homeWinPercentage, tiePercentage}`` entries. WPA is
+        the delta between this play's home WP and the prior play's home
+        WP, then sign-flipped if Colts are away.
+
+        Returns None when:
+            • Play not yet in the WP array (ESPN's WP model lags
+              30-60s — we cannot block the celebration on it).
+            • WP array is empty/missing (e.g. final-only summary).
+        """
+        wp = summary.get("winprobability") or []
+        if not wp:
+            return None
+
+        for idx, entry in enumerate(wp):
+            if str(entry.get("playId") or "") == scoring_play_id:
+                wp_after = entry.get("homeWinPercentage")
+                if wp_after is None:
+                    return None
+                if idx == 0:
+                    wp_before = 0.5  # season prior; rare — only true coin-flip openers
+                else:
+                    wp_before = wp[idx - 1].get("homeWinPercentage", 0.5)
+                try:
+                    wpa_home = float(wp_after) - float(wp_before)
+                except (TypeError, ValueError):
+                    return None
+                return wpa_home if colts_are_home else -wpa_home
+
+        # Play not (yet) in the WP array.
+        return None
 
     def _parse_play(self, raw: dict) -> PlayEvent:
         """Convert an ESPN play dict to a PlayEvent. Best-effort regex

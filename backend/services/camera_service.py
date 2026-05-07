@@ -625,6 +625,29 @@ class CameraService:
         """
         return self._last_detection_at
 
+    def is_present_within_seconds(self, seconds: int = 300) -> bool:
+        """Coarse "is anyone home recently?" helper for non-zone-aware
+        consumers (CelebrationOrchestrator, future TTS gating).
+
+        Returns True iff:
+            • The camera is disabled (we can't tell, so assume present —
+              don't penalize TTS for an opt-out).
+            • Last detection was "present" within the last ``seconds``.
+
+        Returns False when:
+            • Camera is enabled, last detection was "absent" or "unknown".
+            • Camera is enabled, last "present" detection is older than
+              the window (apartment empty long enough to dial volume back).
+        """
+        if not self._enabled:
+            return True
+        if self._last_detection != "present":
+            return False
+        if self._last_detection_at is None:
+            return False
+        age = (datetime.now(timezone.utc) - self._last_detection_at).total_seconds()
+        return age <= seconds
+
     def _build_fusion_factors(
         self,
         status: str,
