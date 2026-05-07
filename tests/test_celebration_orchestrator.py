@@ -392,7 +392,9 @@ class TestTemplateSubstitution:
 
     async def test_missing_player_falls_back_safely(self):
         """ESPN parser sometimes can't extract a player name. The line
-        should still render — {player} is replaced by 'Colts' fallback."""
+        should still render — {player} is replaced by 'Indy' fallback
+        (changed from 'Colts' 2026-05-07 to avoid double-Colts redundancy
+        in templates that already include 'Colts' or 'for the Colts')."""
         orch, _, tts, _, _ = _make_orchestrator()
         evt = PlayEvent(
             timestamp=datetime.now(timezone.utc),
@@ -406,8 +408,10 @@ class TestTemplateSubstitution:
         await orch.on_play_event(evt)
         text = tts.speak.await_args.args[0]
         assert "{" not in text
-        # Falls back to 'Colts' per _build_context.
-        assert "Colts" in text or "colts" in text.lower()
+        # Falls back to 'Indy' per _build_context — every TD pool line
+        # still references either "Indy" (via fallback) or "Colts" (via
+        # template's literal Colts mention).
+        assert "Indy" in text or "Colts" in text
 
 
 # ---------------------------------------------------------------------------

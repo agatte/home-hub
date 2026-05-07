@@ -580,6 +580,8 @@ class CelebrationOrchestrator:
             template = self._pick_field_goal_template(context)
         elif sequence_key == "touchdown":
             template = self._pick_touchdown_template(context)
+        elif sequence_key == "end_of_game_win":
+            template = self._pick_eog_win_template(context)
         else:
             template = random.choice(sequence.tts_lines)
         try:
@@ -667,6 +669,23 @@ class CelebrationOrchestrator:
             if state.quarter >= 3 and deficit >= 21:
                 return f"losing blowout (Q{state.quarter}, down {deficit})"
         return "unknown"
+
+    def _pick_eog_win_template(self, context: dict) -> str:
+        """Dispatch to `eog_tts_picker.pick_eog_win_tts` with the final
+        score from context. Two pools: close (margin ≤ 7) and
+        comfortable (margin > 7). Defensive coercion for str/int/None
+        scores (synthetic test fires sometimes pass strings)."""
+        from backend.services.eog_tts_picker import pick_eog_win_tts
+
+        try:
+            colts_score = int(context.get("colts_score") or 0)
+            opp_score = int(context.get("opp_score") or 0)
+        except (TypeError, ValueError):
+            colts_score = 0
+            opp_score = 0
+        return pick_eog_win_tts(
+            colts_score=colts_score, opp_score=opp_score,
+        )
 
     def _pick_touchdown_template(self, context: dict) -> str:
         """Dispatch to `td_tts_picker.pick_td_tts` with the play-level
