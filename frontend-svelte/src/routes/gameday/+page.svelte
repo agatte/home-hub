@@ -106,8 +106,10 @@
   .gameday-page {
     position: relative;
     width: 100%;
+    height: 100dvh;
     min-height: 100dvh;
     color: var(--text-primary);
+    overflow: hidden;
   }
 
   /* HUD shared surface — same glass as .widget so chrome reads cohesive. */

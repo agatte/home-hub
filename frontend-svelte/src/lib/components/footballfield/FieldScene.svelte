@@ -89,17 +89,17 @@
 </script>
 
 <!--
-  Camera. Top-down with a slight tilt so the labels and ball read with
-  some depth. Perspective gives the broadcast feel; ortho would also
-  work. The camera sits high above the field and slightly forward, then
-  rotates manually rather than using lookAt so the orientation is
-  deterministic across Threlte's render cycles.
+  Camera. TV-broadcast overhead-side view: high midfield, ~30° pitch from
+  horizontal so the field reads as a perspective rectangle (long axis X
+  stretching left-right on screen). Rotation is set explicitly rather
+  than lookAt so the orientation is deterministic across Threlte's
+  render cycles. atan2(50, 87) ≈ 0.522 rad ≈ 30°.
   -->
 <T.PerspectiveCamera
   makeDefault
-  position={[0, 70, 18]}
-  rotation={[-1.32, 0, 0]}
-  fov={45}
+  position={[0, 50, 87]}
+  rotation={[-Math.atan2(50, 87), 0, 0]}
+  fov={60}
   near={0.5}
   far={400}
 />
@@ -210,15 +210,16 @@
 {/each}
 
 <!--
-  Endzone team labels. troika-three-text via @threlte/extras gives
-  us 3D text without needing a font asset bundled in static/. Rotated
-  90° on Y so the text reads correctly when the camera looks down.
+  Endzone team labels. troika-three-text via @threlte/extras gives us
+  3D text without needing a font asset bundled in static/. Flat on the
+  field plane (rotation.x = -π/2), no Z-rotation — letters read
+  horizontally on screen from the broadcast camera at +Z.
 -->
 <Text
   text="IND"
   position={[COLTS_ENDZONE_X, 0.05, 0]}
-  rotation={[-Math.PI / 2, 0, -Math.PI / 2]}
-  fontSize={5}
+  rotation={[-Math.PI / 2, 0, 0]}
+  fontSize={4}
   color="#ffffff"
   anchorX="center"
   anchorY="middle"
@@ -228,8 +229,8 @@
 <Text
   text={opponentAbbr}
   position={[OPP_ENDZONE_X, 0.05, 0]}
-  rotation={[-Math.PI / 2, 0, Math.PI / 2]}
-  fontSize={5}
+  rotation={[-Math.PI / 2, 0, 0]}
+  fontSize={4}
   color={theme.primary}
   anchorX="center"
   anchorY="middle"
