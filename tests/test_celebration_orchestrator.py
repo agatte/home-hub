@@ -677,6 +677,120 @@ class TestEventLoggerWiring:
         assert event_logger.log_light_adjustment.await_count == n_steps - 1
 
 
+class TestKickoffTeamFormReader:
+    """The orchestrator's `_pick_kickoff_template` reads team form from
+    `app_settings['gameday_team_form']` and passes it to the picker.
+    Valid shape → dimes/jones swap kicks in. Absent / malformed →
+    defaults to None (jones pool)."""
+
+    async def _make_orch(self):
+        orch, hue, tts, ws, gameday = _make_orchestrator()
+        # Pin gameday state so kickoff_at lands on a Sunday afternoon.
+        from datetime import datetime as _dt
+        sunday_afternoon = _dt(2026, 9, 13, 13, 0, tzinfo=timezone.utc).astimezone(
+            __import__("zoneinfo").ZoneInfo("America/Indiana/Indianapolis")
+        )
+        gameday.current_state = MagicMock(
+            return_value=GameDayState(
+                status="scheduled",
+                opponent="Houston Texans",
+                kickoff_utc=sunday_afternoon,
+                score_colts=0,
+                score_opp=0,
+                quarter=0,
+                clock="",
+                possession=None,
+                last_play=None,
+            )
+        )
+        return orch
+
+    async def test_no_app_setting_returns_jones_line(self, monkeypatch):
+        orch = await self._make_orch()
+
+        async def _stub_load_setting(key):
+            return {}  # no row
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", _stub_load_setting,
+        )
+
+        line = await orch._pick_kickoff_template()
+        assert "Daniel Jones" in line
+        assert "Danny Dimes" not in line
+
+    async def test_winning_form_returns_dimes_line(self, monkeypatch):
+        orch = await self._make_orch()
+
+        async def _stub_load_setting(key):
+            assert key == "gameday_team_form"
+            return {
+                "last4_record": [3, 1],
+                "win_streak": 2,
+                "season_record": [7, 3, 0],
+            }
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", _stub_load_setting,
+        )
+
+        line = await orch._pick_kickoff_template()
+        assert "Danny Dimes" in line
+        assert "Daniel Jones" not in line
+
+    async def test_struggling_form_returns_jones_line(self, monkeypatch):
+        orch = await self._make_orch()
+
+        async def _stub_load_setting(key):
+            return {
+                "last4_record": [1, 3],
+                "win_streak": 0,
+                "season_record": [2, 5, 0],
+            }
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", _stub_load_setting,
+        )
+
+        line = await orch._pick_kickoff_template()
+        assert "Daniel Jones" in line
+        assert "Danny Dimes" not in line
+
+    async def test_malformed_app_setting_falls_back_to_jones(self, monkeypatch):
+        """A bad shape in app_settings (e.g. wrong types or missing keys)
+        must never block a kickoff — picker falls through to None form
+        and picks from the jones pool."""
+        orch = await self._make_orch()
+
+        async def _stub_load_setting(key):
+            return {"last4_record": "not-a-list", "win_streak": "also-bad"}
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", _stub_load_setting,
+        )
+
+        line = await orch._pick_kickoff_template()
+        # Doesn't raise; gets a real line; falls back to jones.
+        assert isinstance(line, str)
+        assert "Danny Dimes" not in line
+
+    async def test_load_setting_raises_falls_back_to_jones(self, monkeypatch):
+        """If `load_setting` itself raises (DB hiccup), the kickoff still
+        fires with the measured pool."""
+        orch = await self._make_orch()
+
+        async def _stub_load_setting(key):
+            raise RuntimeError("DB unreachable")
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", _stub_load_setting,
+        )
+
+        line = await orch._pick_kickoff_template()
+        assert isinstance(line, str)
+        assert "Danny Dimes" not in line
+
+
 class TestKitchenPairRule:
     """Gameday is a functional mode → kitchen pair (lights 3 + 4) MUST
     match in every authored sequence frame. We verify by walking each

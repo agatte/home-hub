@@ -575,7 +575,7 @@ class CelebrationOrchestrator:
             return
 
         if sequence_key == "kickoff":
-            template = self._pick_kickoff_template()
+            template = await self._pick_kickoff_template()
         else:
             template = random.choice(sequence.tts_lines)
         try:
@@ -664,30 +664,60 @@ class CelebrationOrchestrator:
                 return f"losing blowout (Q{state.quarter}, down {deficit})"
         return "unknown"
 
-    def _pick_kickoff_template(self) -> str:
+    async def _pick_kickoff_template(self) -> str:
         """Dispatch to `kickoff_tts_picker.pick_kickoff_tts` with context
-        gathered from gameday_service + (future) app_settings.
+        gathered from gameday_service + `app_settings['gameday_team_form']`.
 
-        team_form is `None` for now — the picker falls back to the
-        "jones" (measured) variant pool. A follow-up commit will add a
-        ScheduledTask that refreshes Colts form weekly into
-        `app_settings['gameday_team_form']`, and this helper will read
-        + deserialize it. Until then, every kickoff uses the measured
-        QB-name variant; the day-of-week awareness still differentiates
-        Sunday-afternoon / SNF / MNF / TNF / Saturday-primetime pools.
+        team_form storage shape (JSON in app_settings):
+          {
+            "last4_record": [wins, losses],
+            "win_streak": int,
+            "season_record": [wins, losses, ties]
+          }
+        Absent / malformed → picker falls back to the "jones" (measured)
+        pool. The ESPN-driven refresh task that populates this row is a
+        separate follow-up; users can manually seed via SQL for testing
+        the dimes/jones swap.
         """
-        # Local import keeps the kickoff-specific dep out of the module's
-        # cold-load path for non-kickoff sequences.
-        from backend.services.kickoff_tts_picker import pick_kickoff_tts
+        # Local imports keep the kickoff-specific deps out of the cold-
+        # load path for non-kickoff sequences.
+        from backend.api.routes.routines import load_setting
+        from backend.services.kickoff_tts_picker import (
+            TeamForm,
+            pick_kickoff_tts,
+        )
 
         state = self._safe_current_state()
         kickoff_at = (
             state.kickoff_utc if state and state.kickoff_utc is not None
             else datetime.now(timezone.utc)
         )
-        # TODO: read app_settings['gameday_team_form'] once the refresh
-        # task ships. For now `None` always picks the "jones" variant.
-        team_form = None
+
+        team_form: Optional[TeamForm] = None
+        try:
+            raw = await load_setting("gameday_team_form")
+            if raw:
+                last4 = raw.get("last4_record")
+                streak = raw.get("win_streak")
+                season = raw.get("season_record")
+                if (isinstance(last4, list) and len(last4) == 2
+                        and isinstance(streak, int)
+                        and isinstance(season, list) and len(season) == 3):
+                    team_form = TeamForm(
+                        last4_record=(int(last4[0]), int(last4[1])),
+                        win_streak=int(streak),
+                        season_record=(
+                            int(season[0]), int(season[1]), int(season[2]),
+                        ),
+                    )
+        except Exception:
+            # Best-effort — bad app_settings shape must never block a
+            # kickoff TTS line. Falls through to team_form=None.
+            logger.debug(
+                "celebration: team_form load failed, defaulting to None",
+                exc_info=True,
+            )
+
         return pick_kickoff_tts(kickoff_at=kickoff_at, team_form=team_form)
 
     # ------------------------------------------------------------------ Helpers
