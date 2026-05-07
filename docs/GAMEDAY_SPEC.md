@@ -408,3 +408,135 @@ Final clamp `[5, 50]`.
 **WPA plumbing**: GameDayService extracts per-play win probability from ESPN's `summary.winprobability[]` array and attaches Colts-perspective WPA to each emitted PlayEvent. Sign-flips when Colts are away. Returns `None` gracefully when ESPN's WP model hasn't yet indexed the play (10s polling cadence vs ESPN's WP-lag).
 
 **Late-night gotcha**: at 22:00–05:59 Indy local, even big plays cap at vol 18. Synthetic test endpoint hits the all-fallback path (no WPA, no game state) so an after-hours smoke test will get vol 18 — that's the policy working correctly, not a bug.
+
+---
+
+## 10. Pre-game ambient mode (v2 design)
+
+**Status:** spec only. Implementation deferred to a separate Plan agent + ship cycle before preseason 2026-08-15.
+
+The pre-game window is the hour leading up to kickoff. The current architecture has the apartment doing whatever it was doing (working, idle, etc) right up until the T-30 auto-flip lands the gameday baseline. v2 fills that hour with anticipation: lighting starts shifting earlier, and audio reads the season's stakes the same way `compute_celebration_volume` reads each play's stakes.
+
+### 10.1 Decision summary
+
+- **New mode `pregameday`**, priority 6 (matches `gameday`). gameday_service auto-flips the apartment to `pregameday` at T-60 and to `gameday` at T-30 (existing flip mechanic). `pregameday` clears at T-30 by way of being displaced; it doesn't have an independent clear path.
+- **Lighting** is a "full pre-game palette" — all 4 lights take a Colts-tinted feel, distinct from the in-game gameday baseline. Kitchen pair held. Time-of-day variants (day / evening / night / late_night) parallel the existing gameday baseline structure in `light_state_calculator.py`.
+- **Audio** is **playoff-stakes-aware** — same design philosophy as the WPA-driven celebration volume policy. Big-implication game → TTS announcement at T-30 + Sonos hype playlist auto-play. Out-of-playoff-running game → silent, lights only. Early-season fallback rules cover the period before playoff odds stabilize.
+- **Verification** uses synthetic time injection on `gameday_service` (a `--mock-now` test hook) so the auto-flip can be exercised in dev without waiting for an actual kickoff window.
+
+### 10.2 Lighting
+
+**Trigger:** at T-60 ± 30s (poll cadence is 10s — actual flip lands within the next polling tick after the threshold crosses).
+
+**Palette intent:** the "build" — Colts blue clearly present in the room, but with enough warm fill that the apartment doesn't feel like a sports bar yet. The in-game gameday baseline (already in `light_state_calculator.py:280-304`) is the destination; pre-game is a slightly less saturated, slightly cooler-temperature warmup. Kitchen pair invariant (L3 ≡ L4) held in every time-of-day variant.
+
+**Schema parallel:** add a new top-level key `"pregameday"` to `ACTIVITY_LIGHT_STATES` with the same `day` / `evening` / `night` / `late_night` sub-structure already used by `gameday`. Each variant has 4 light entries. Real values land via lighting-curator iteration before preseason — placeholder structure matches gameday's saturation/brightness shape, dialed back ~15-20% on saturation and brightness.
+
+**Curator iteration knob:** the saturation cap (currently `_COLTS_BLUE_SAT=215` for celebration pulses) provides a precedent. Pre-game L1 likely lands around `sat=170-185` (between mode-baseline warmth and gameday's full Colts-blue commit).
+
+### 10.3 Audio — playoff-stakes-aware
+
+Pure function in a new module `backend/services/pregame_audio_policy.py`, mirroring `celebration_volume_policy.py`'s shape:
+
+```python
+def compute_pregame_audio(
+    *,
+    season_week: int,        # NFL week 1-18 (preseason = week 0)
+    is_preseason: bool,
+    playoff_probability: float | None,  # ESPN's playoff odds, 0.0-1.0 or None
+    is_eliminated: bool,     # mathematically out of contention
+    division_gap_games: int | None,  # games behind division leader (None pre-week-3)
+    record: tuple[int, int, int],    # (wins, losses, ties)
+    sleeping_mode: bool = False,
+    dnd_active: bool = False,
+    now: datetime | None = None,
+) -> PregameAudioDecision:
+    """Returns {'tts_line': str | None, 'sonos_hype_play': bool}.
+    Both None/False = silent pre-game (lights only).
+    Hard suppressions (sleeping_mode, dnd_active) return both None/False
+    regardless of stakes."""
+```
+
+**Decision shape** (`PregameAudioDecision`): `tts_line` is the line to speak (substituted with `{opponent}` etc), `sonos_hype_play` triggers `MusicMapper`-equivalent auto-play of a hype playlist. Both can fire (TTS first, Sonos starts after TTS finishes).
+
+**Stakes tiers** (drive the decision):
+
+| Tier | Condition | TTS | Sonos hype |
+|---|---|---|---|
+| **Eliminated** | `is_eliminated=True` | None | False |
+| **Big stakes** | `playoff_probability ∈ [0.20, 0.80]` AND `season_week >= 8` | line from "big-stakes" pool | True |
+| **Late-season clutch** | `season_week >= 14` AND `division_gap_games <= 1` | line from "clutch" pool | True |
+| **Locked playoff seed** | `playoff_probability >= 0.95` AND `season_week >= 15` | line from "victory-lap" pool | True (mellow playlist) |
+| **Standard / early season** | preseason OR `season_week <= 7` OR no special tier | line from "standard" pool | False (lights + TTS only) |
+
+**TTS line pools** (authored later via curator + user iteration):
+- "standard": `["Colts kick off in 30 minutes against the {opponent}.", "Game day. Colts and {opponent} in 30."]`
+- "big-stakes": `["Colts and {opponent} in 30 minutes — big implications today.", ...]`
+- "clutch": `["This is a must-win, Colts and {opponent} in half an hour.", ...]`
+- "victory-lap": `["Playoffs locked, Colts and {opponent} in 30. Resting starters?", ...]`
+- (Preseason override: `["Preseason kickoff in 30 minutes — Colts and {opponent}. Tuning the apparatus."]`)
+
+**Sonos hype playlist** wired via the existing `mode_playlists` table — add a `pregameday` row with the user's pre-game playlist favorite_title. MusicMapper's existing on_mode_change callback handles the dispatch when the mode flips.
+
+**Apartment-context modifiers (mirror celebration volume policy):**
+- `sleeping_mode` or `dnd_active` → both `tts_line=None` AND `sonos_hype_play=False` (lights still flip).
+- Local hour ∈ [22, 06) → if TTS would fire, gate volume to ≤18 (same late-night cap).
+
+**Fire timing:**
+- T-60: pre-game lighting palette activates (pregameday mode).
+- T-60 → T-30: silent (lights-only build).
+- T-30: gameday flip lands. Audio fires AFTER the flip via a new `on_mode_change` callback in MusicMapper-equivalent that handles `pregameday → gameday` specifically. TTS first (uses existing TTSService.speak), then Sonos auto-play begins ~2s later.
+
+### 10.4 Architecture impact
+
+**New module:** `backend/services/pregame_audio_policy.py` — pure function, no I/O, no service deps. Tests in `tests/test_pregame_audio_policy.py` cover all stakes-tier combinations + apartment-context modifiers + edge cases (week 0 preseason, mid-season bye, mathematical elimination boundary).
+
+**Modified modules:**
+- `backend/services/automation_engine.py` — add `"pregameday": 6` to `MODE_PRIORITIES`. Add `"pregameday"` block to `ACTIVITY_LIGHT_STATES` (in `light_state_calculator.py` actually, per current file split). Add `"pregameday"` to `MODE_TRANSITION_TIMES` (recommend 4s — slow build).
+- `backend/services/light_state_calculator.py` — add `"pregameday"` block alongside `"gameday"` at line ~280. Day/evening/night/late_night variants. Effects: `pregameday` gets weather effects same as `gameday` (none by default).
+- `backend/services/gameday_service.py` — extend `_check_pregame_window()` (currently fires at T-30) to also handle T-60. Add `_maybe_flip_pregame_ambient()` method that flips mode to `pregameday` at T-60 (idempotent, only if status=SCHEDULED). The existing `_maybe_flip_pregame()` becomes `_maybe_flip_gameday()` and continues to fire at T-30.
+- `backend/services/music_mapper.py` (or a new sibling): on `on_mode_change(prev=pregameday, new=gameday)`, dispatch the playoff-stakes audio policy and fire TTS + (conditionally) Sonos hype.
+- `backend/api/routes/gameday.py` — add `POST /api/gameday/test/pregame` for synthetic firing (mirrors existing test/{event} endpoints). Triggers a 30-second pregameday window then auto-clears.
+
+**Constants** (in `gameday_service.py` near existing `PRE_KICKOFF_FLIP_MINUTES`):
+```python
+PRE_KICKOFF_FLIP_MINUTES = 30          # existing — gameday flip
+PRE_GAME_AMBIENT_FLIP_MINUTES = 60     # new — pregameday flip
+```
+
+### 10.5 Playoff-odds sourcing
+
+ESPN provides playoff probability via `summary.predictor.homeTeam.playoffProbability` and `awayTeam.playoffProbability` on game pages, but only after week 4-5. For weeks 1-3, the stakes function falls back to record + division-gap heuristics. For preseason (week 0 / `is_preseason=True`), the function returns the preseason-override TTS line and skips the playoff-tier branching.
+
+**Sourcing implementation:**
+- Cache playoff probability in `app_settings` under `gameday_playoff_state` after each game's poll. Refresh weekly on Tuesday after the Monday Night Football final (when ESPN's playoff model recomputes).
+- Background `ScheduledTask` in scheduler.py: `playoff_state_refresh` at Tue 06:00 ET, fetches ESPN standings + playoff page for COLTS, extracts `playoffProbability`, writes to `app_settings`.
+- gameday_service reads from `app_settings` at T-60 to feed the audio policy.
+
+### 10.6 Verification
+
+**Synthetic time injection:** add a `_now_override: datetime | None = None` class attribute to `GameDayService`. When set, `_check_pregame_window` and `_check_postgame_clear` use it instead of `datetime.now(timezone.utc)`. Cleared after each test run.
+
+**Synthetic flow** (in dev or pre-preseason testing):
+1. Stub a fake game in `gameday_service._schedule` with `kickoff_utc = real_now + 65 minutes`.
+2. Set `_now_override = real_now`. Run `_check_pregame_window` once → mode flips to pregameday.
+3. Advance `_now_override = real_now + 35 minutes` (T-30). Run again → mode flips to gameday, audio policy fires.
+4. Advance `_now_override = real_now + 95 minutes` (T+30 of the fake game). Run `_check_postgame_clear` → mode clears.
+5. Verify lights, TTS, and Sonos behave correctly at each step.
+
+**Synthetic endpoint** for live exercising: `POST /api/gameday/test/pregame`. Body: `{"opponent": "Houston Texans", "stakes_tier": "big_stakes"}`. Triggers a real (non-mock-time) flip to pregameday for 30 seconds, fires the audio policy with the supplied stakes_tier, then auto-clears. Useful for "make the lights do the thing" without altering the real schedule.
+
+**Pre-preseason validation** (during dev, before 2026-08-15):
+- Unit test coverage on `pregame_audio_policy.compute_pregame_audio` (target: 25+ tests).
+- Synthetic time injection test covering the T-60 → T-30 → T+30 lifecycle.
+- One manual fire of `POST /api/gameday/test/pregame` from the Latitude — apartment lights flip to pregameday, TTS plays, Sonos hype starts. Visual + audible verification.
+- Preseason 2026-08-15 is the first real-game validation. Note the postmortem digest entry should specifically note pre-game behavior (lighting palette feel + audio decision) for tuning.
+
+### 10.7 Open questions / iteration
+
+- **Early-season stakes computation** — week 1-3 has no ESPN playoff odds. Fallback to record-only is crude (1-0 vs 0-1 isn't meaningfully predictive). Acceptable for v1; revisit if real-game data shows the early-season tier mis-classifies often.
+- **Playoff-odds refresh cadence** — Tuesday 06:00 may be too coarse if a game ends Monday night and the user has a Wednesday pre-game window. Consider per-game refresh on T-90 instead (out of scope for v1 ship).
+- **Sonos hype playlist content** — user picks a Colts-themed playlist; mode_playlists row gets the favorite_title. Iteration knob for later.
+- **TTS line authoring** — pools per stakes tier are placeholder values. Run through curator + user authoring before preseason.
+- **Multi-game days** — Sunday with a 1pm and 4pm Colts game? Out of scope (Colts plays once a week).
+- **Postseason** — playoff games shift the stakes math entirely. Out of scope for v1; revisit if Colts make the playoffs.
