@@ -1,21 +1,65 @@
 <script>
+  import { onMount } from 'svelte'
+  import { gameday, fetchGamedayInitial } from '$lib/stores/gameday.js'
+
   /** @type {any} */
   export let data = undefined
   /** @type {any} */
   export let params = undefined
   data; params;
 
-  const game = {
-    status: 'in-progress',
-    opponent: 'Texans',
-    score_colts: 21,
-    score_opp: 14,
-    quarter: 3,
-    clock: '4:32',
-    possession: 'colts',
-    last_play: {
-      description: 'Jonathan Taylor 5 yard run for a TOUCHDOWN',
-      play_type: 'touchdown'
+  onMount(() => {
+    // Best-effort REST priming. WS messages route in via init.js's central
+    // dispatcher (wired post-merge by main session). Until then, only REST
+    // data appears — fine because there's no live game in May 2026.
+    fetchGamedayInitial()
+  })
+
+  // Reactive view-model. Pull from the store so the no-game vs in-game
+  // branches stay declarative.
+  $: state = $gameday.state
+  $: lastPlay = $gameday.lastPlay
+  $: schedule = $gameday.schedule
+  $: scheduleLoaded = $gameday.scheduleLoaded
+  $: hasGame = state !== null
+
+  // No-game fallback — next scheduled game (or "no schedule yet").
+  $: nextGame = schedule.length > 0 ? schedule[0] : null
+  $: nextGameLabel = nextGame
+    ? `Next: ${nextGame.opponent || 'TBD'} · ${formatKickoff(nextGame.kickoff_utc)}`
+    : scheduleLoaded
+      ? 'No game scheduled'
+      : 'Loading schedule...'
+
+  // In-game derived values. Guard with `state &&` so the markup template
+  // can read them unconditionally without throwing.
+  $: scoreColts = state?.score_colts ?? 0
+  $: scoreOpp = state?.score_opp ?? 0
+  $: opponent = (state?.opponent || 'TBD').toUpperCase()
+  $: quarter = state?.quarter ?? 0
+  $: clock = state?.clock || ''
+  $: lastPlayDescription =
+    lastPlay?.description ||
+    state?.last_play?.description ||
+    'Awaiting first play...'
+
+  /**
+   * Format an ISO kickoff timestamp into a short human-readable label.
+   * Falls back to the raw string on parse failure.
+   * @param {string | null | undefined} iso
+   */
+  function formatKickoff(iso) {
+    if (!iso) return 'TBD'
+    try {
+      const dt = new Date(iso)
+      if (Number.isNaN(dt.getTime())) return iso
+      return dt.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      })
+    } catch (_) {
+      return iso
     }
   }
 </script>
@@ -26,25 +70,38 @@
     <span class="field-stub-hint">Field placeholder · Slice D</span>
   </div>
 
-  <header class="hud hud-scoreboard">
-    <div class="team team-home">
-      <span class="team-name">COLTS</span>
-      <span class="team-score">{game.score_colts}</span>
-    </div>
-    <div class="game-clock">
-      <span class="quarter">Q{game.quarter}</span>
-      <span class="clock">{game.clock}</span>
-    </div>
-    <div class="team team-away">
-      <span class="team-score">{game.score_opp}</span>
-      <span class="team-name">{game.opponent.toUpperCase()}</span>
-    </div>
-  </header>
+  {#if hasGame}
+    <header class="hud hud-scoreboard">
+      <div class="team team-home">
+        <span class="team-name">COLTS</span>
+        <span class="team-score">{scoreColts}</span>
+      </div>
+      <div class="game-clock">
+        <span class="quarter">Q{quarter}</span>
+        <span class="clock">{clock}</span>
+      </div>
+      <div class="team team-away">
+        <span class="team-score">{scoreOpp}</span>
+        <span class="team-name">{opponent}</span>
+      </div>
+    </header>
 
-  <footer class="hud hud-last-play">
-    <span class="last-play-label">Last play</span>
-    <span class="last-play-text">{game.last_play.description}</span>
-  </footer>
+    <footer class="hud hud-last-play">
+      <span class="last-play-label">Last play</span>
+      <span class="last-play-text">{lastPlayDescription}</span>
+    </footer>
+  {:else}
+    <header class="hud hud-scoreboard hud-scoreboard-empty">
+      <span class="next-game">{nextGameLabel}</span>
+    </header>
+
+    <footer class="hud hud-last-play">
+      <span class="last-play-label">Schedule</span>
+      <span class="last-play-text">
+        Schedule loads from ESPN — typically May/June for the 2026 season.
+      </span>
+    </footer>
+  {/if}
 </main>
 
 <style>
@@ -146,6 +203,21 @@
       var(--bg-card);
   }
 
+  /* No-game variant — single centered "Next: ..." line, same glass + border. */
+  .hud-scoreboard-empty {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 22px 36px;
+  }
+  .next-game {
+    font-family: var(--font-display);
+    font-size: 1.85rem;
+    letter-spacing: 0.06em;
+    color: var(--text-primary);
+    text-align: center;
+  }
+
   .team {
     display: flex;
     align-items: baseline;
@@ -236,6 +308,7 @@
     .team-name { font-size: 1.2rem; }
     .team-score { font-size: 2.6rem; }
     .clock { font-size: 1.3rem; }
+    .next-game { font-size: 1.2rem; }
 
     .hud-last-play {
       bottom: 100px;
