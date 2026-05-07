@@ -955,7 +955,7 @@ class AutomationEngine:
             await self._event_logger.log_mode_change(
                 mode=mode,
                 previous_mode=old_mode,
-                source="manual",
+                source=source,
             )
 
     async def clear_override(self, source: str = "internal") -> None:
