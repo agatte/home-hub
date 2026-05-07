@@ -467,7 +467,7 @@ class CelebrationOrchestrator:
         #    exceptions so a bridge hiccup doesn't kill the TTS line.
         await asyncio.gather(
             self._run_light_steps(sequence.light_steps, key),
-            self._run_tts(sequence, context, target_volume),
+            self._run_tts(sequence, context, target_volume, key),
             return_exceptions=True,
         )
 
@@ -553,6 +553,7 @@ class CelebrationOrchestrator:
         sequence: CelebrationSequence,
         context: dict,
         target_volume: Optional[int],
+        sequence_key: str,
     ) -> None:
         """Pick a random line from the sequence pool, substitute context
         variables, hand off to TTSService.speak (duck-and-resume on Sonos).
@@ -561,13 +562,22 @@ class CelebrationOrchestrator:
             • Pool is empty (loss is silent by spec).
             • ``target_volume`` is None — volume policy hard-suppressed
               (sleeping, DND, or losing blowout).
+
+        Kickoff special-cases via `kickoff_tts_picker.pick_kickoff_tts`
+        which selects a line based on day-of-week (Sunday afternoon /
+        SNF / MNF / TNF / Saturday primetime) and team form (Danny Dimes
+        when Colts have been winning, Daniel Jones otherwise). Other
+        sequences continue to pick from the flat `sequence.tts_lines`.
         """
         if not sequence.tts_lines:
             return
         if target_volume is None:
             return
 
-        template = random.choice(sequence.tts_lines)
+        if sequence_key == "kickoff":
+            template = self._pick_kickoff_template()
+        else:
+            template = random.choice(sequence.tts_lines)
         try:
             text = template.format_map(_SafeFormatDict(context))
         except Exception:
@@ -653,6 +663,32 @@ class CelebrationOrchestrator:
             if state.quarter >= 3 and deficit >= 21:
                 return f"losing blowout (Q{state.quarter}, down {deficit})"
         return "unknown"
+
+    def _pick_kickoff_template(self) -> str:
+        """Dispatch to `kickoff_tts_picker.pick_kickoff_tts` with context
+        gathered from gameday_service + (future) app_settings.
+
+        team_form is `None` for now — the picker falls back to the
+        "jones" (measured) variant pool. A follow-up commit will add a
+        ScheduledTask that refreshes Colts form weekly into
+        `app_settings['gameday_team_form']`, and this helper will read
+        + deserialize it. Until then, every kickoff uses the measured
+        QB-name variant; the day-of-week awareness still differentiates
+        Sunday-afternoon / SNF / MNF / TNF / Saturday-primetime pools.
+        """
+        # Local import keeps the kickoff-specific dep out of the module's
+        # cold-load path for non-kickoff sequences.
+        from backend.services.kickoff_tts_picker import pick_kickoff_tts
+
+        state = self._safe_current_state()
+        kickoff_at = (
+            state.kickoff_utc if state and state.kickoff_utc is not None
+            else datetime.now(timezone.utc)
+        )
+        # TODO: read app_settings['gameday_team_form'] once the refresh
+        # task ships. For now `None` always picks the "jones" variant.
+        team_form = None
+        return pick_kickoff_tts(kickoff_at=kickoff_at, team_form=team_form)
 
     # ------------------------------------------------------------------ Helpers
 
