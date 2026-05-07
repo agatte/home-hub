@@ -188,7 +188,7 @@ Key additions beyond current:
 - **`hue_v2_service.py`** — CLIP API v2/httpx: native bridge scenes and dynamic effects. Maintains v1↔v2 UUID mapping cache.
 - **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
 - **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
-- **`automation_engine.py`** — 60s background loop. Time rules + activity reports → per-light state (per-light variation, not uniform). Supports CT and HSB. Drives effects via `EFFECT_AUTO_MAP` + weather overlays (rain→candle, storm→sparkle). `mode_scene_overrides` DB table consulted before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout (sleeping exempt). Mode priority: gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0). Late-night rescue + zone+posture rule + camera-at-desk veto live here — see Late-night autopilot cascade below. `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY`.
+- **`automation_engine.py`** — 60s background loop. Time rules + activity reports → per-light state (per-light variation, not uniform). Supports CT and HSB. Drives effects via `EFFECT_AUTO_MAP` + weather overlays (rain→candle, storm→sparkle). `mode_scene_overrides` DB table consulted before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout (sleeping exempt). Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0). `report_activity` only force-resends the per-light dedup cache on real mode changes (`old_mode != mode`); same-source heartbeats ride the cache. Late-night rescue + zone+posture rule + camera-at-desk veto live here — see Late-night autopilot cascade below. `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY`.
 - **`weather_service.py`** — NWS API, 5-min cache. Returns temp/feels_like/description/humidity/wind/icon/sunrise/sunset. Severe alerts polled every 2 min — descriptions override stale observations so storms surface immediately. No API key.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
 - **`screen_sync.py`** — mss screen capture → dominant color → bedroom lamp. EMA smoothing, ~2.5s interval. Auto-starts in watching/gaming. Per-mode brightness caps in `MODE_MAX_BRIGHTNESS`; zone/posture overrides via `MODE_ZONE_MAX_BRIGHTNESS` (3-tuple wins over 2-tuple). `apply_color(..., zone=..., posture=...)` takes camera context from the route handler.
@@ -306,6 +306,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 | Mode | Detection | Lighting Strategy |
 |------|-----------|-------------------|
+| `gameday` | ESPN schedule auto-flip 30 min pre-kickoff + manual via Alexa (Phase B queued) | Colts blue accent on L1, warm-amber fill on L2/L3/L4, kitchen pair preserved. CelebrationOrchestrator overrides per-event during plays. Spec: `docs/GAMEDAY_SPEC.md` |
 | `gaming` | Specific game binaries in `game_list.py` (NOT `javaw.exe` — matches JetBrains IDEs) | Neutral fill + blue/purple peripheral accents, warm desk-lamp bias. Night: deep blue ambient. Screen sync on L2, glisten effect eve/night |
 | `working` | Terminals + IDEs (powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains, wezterm, alacritty) | ct-mode clean whites, desk-dominant. IES 1:3 monitor-ambient contrast. Night: L2 130/2700K + L1 60/2270K + kitchen OFF |
 | `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` lifts L2; `zone=bed + reclined` evening/night drops L1/L2; `zone=bed + upright` is mid-bright. Numeric vectors in `automation_engine.py` |
@@ -317,7 +318,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Mode priority:** `report_activity` guards against lower-priority cross-source displacement of a fresh higher-priority mode; same-source updates always pass. `SOURCE_STALE_SECONDS=300` — an owning source that hasn't reported in 5 min yields to lower-priority reports (prevents stale-lock).
 
-**Mode transition speeds:** gaming 0.5s (snappy), working 2s, watching 3s (cinematic), cooking 1s (snappy), relax 4s (gentle), sleeping 5s (gradual)
+**Mode transition speeds:** gaming 0.5s (snappy), gameday 1s (snap — celebrations are time-sensitive), working 2s, watching 3s (cinematic), cooking 1s (snappy), relax 4s (gentle), sleeping 5s (gradual)
 
 **Scene drift:** After 30min in **relax**, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness. Scoped to relax only — functional modes need stable, paired values.
 
