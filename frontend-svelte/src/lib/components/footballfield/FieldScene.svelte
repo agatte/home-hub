@@ -1,14 +1,26 @@
 <script>
   /**
-   * FieldScene — the Threlte scene graph for FootballField.
+   * FieldScene — top-level composition of the football field 3D scene.
    *
-   * Lives inside the parent's <Canvas>. Renders the field plane,
-   * yard lines, endzones, team labels, ball marker, and lighting.
+   * Phase 1a (current): HDRI environment for sky + image-based
+   * lighting, PBR grass field surface, broadcast-camera angle, ball
+   * marker. The "everything is black" void is replaced by the Poly
+   * Haven stadium HDRI.
    *
-   * All inputs are props from the parent FootballField. Pure component.
+   * Phase 1b (next): drop in a glTF stadium model + instanced crowd
+   * once a model is selected. The composition is modular so adding
+   * those is a one-component import.
+   *
+   * Phases 2+: see ~/.claude/plans/okay-with-our-agents-hashed-popcorn.md
+   *   - phase 2: stadium light towers, god rays, bloom, weather sky
+   *   - phase 3: cinematic camera dynamics
+   *   - phase 4: yard numbers, hash marks, midfield logo, confetti
    */
-  import { T, useTask } from '@threlte/core'
-  import { Text } from '@threlte/extras'
+  import { T } from '@threlte/core'
+  import BallMarker from './BallMarker.svelte'
+  import BroadcastCamera from './BroadcastCamera.svelte'
+  import FieldSurface from './FieldSurface.svelte'
+  import SkyDome from './SkyDome.svelte'
 
   /** @type {{ primary: string, secondary: string }} */
   export let theme
@@ -16,252 +28,68 @@
   /** @type {boolean} */
   export let hasGame = true
 
-  /** @type {string} */
-  export let opponentAbbr = 'OPP'
-
   /**
-   * Target X position for the ball, in field-yard units.
-   * Range: -50 (Colts goal line) .. +50 (Opp goal line).
-   * @type {number}
+   * Opponent abbreviation. Currently unused at the scene level (the
+   * +page.svelte HUD owns scoreboard chrome) but kept on the prop
+   * surface so phase 4's endzone painted-text can pick it up without
+   * a re-plumb.
    */
+  // eslint-disable-next-line no-unused-vars
+  export let opponentAbbr = 'OPP'
+  opponentAbbr;
+
+  /** Field-yard X position for the ball, in [-50, +50]. */
   export let targetBallX = 0
 
-  /** @type {boolean} */
+  /** True when prefers-reduced-motion is set. */
   export let reduceMotion = false
-
-  // ---------------------------------------------------------------------
-  // Field geometry constants. The mesh sits centered at origin with the
-  // long axis along X. Y is up. 100 yards long, 53 wide.
-  // ---------------------------------------------------------------------
-  const FIELD_LENGTH = 100
-  const FIELD_WIDTH = 53
-  const ENDZONE_DEPTH = 10
-
-  // Yard lines every 5 yards, drawn from -45 to +45 (excluding the
-  // endzone boundaries themselves which are baked into the endzone planes).
-  const YARD_LINE_X_VALUES = (() => {
-    const values = []
-    for (let x = -45; x <= 45; x += 5) values.push(x)
-    return values
-  })()
-
-  // The 50 yard line wants to be a bit thicker for readability.
-  const MIDFIELD_THICKNESS = 0.45
-  const REGULAR_THICKNESS = 0.25
-  const YARD_LINE_LIFT = 0.02 // tiny lift to prevent z-fighting with field
-
-  // Field colors. Two slightly-different greens striped along the length
-  // give the broadcast TV "mowed grass" look without a texture.
-  const FIELD_GREEN_A = 0x2d5a3a
-  const FIELD_GREEN_B = 0x356a44
-  const STRIPE_COUNT = 10 // 10 alternating stripes across the play field
-
-  // ---------------------------------------------------------------------
-  // Ball marker animation. Smoothly eases toward targetBallX with a
-  // mild bob so it feels alive even when the game is paused.
-  // ---------------------------------------------------------------------
-  let ballX = targetBallX
-  let ballY = 1.0
-  let bobPhase = 0
-  // Springiness: higher = snappier. 4.0 reaches target in ~0.5s.
-  const BALL_EASE_RATE = 4.0
-  const BOB_AMPLITUDE = 0.18
-
-  useTask((delta) => {
-    if (reduceMotion) {
-      ballX = targetBallX
-      ballY = 1.0
-      return
-    }
-    // Exponential ease toward target.
-    const dx = targetBallX - ballX
-    ballX += dx * Math.min(1, delta * BALL_EASE_RATE)
-    bobPhase += delta * 2.4
-    ballY = 1.0 + Math.sin(bobPhase) * BOB_AMPLITUDE
-  })
-
-  // Endzone center positions.
-  const COLTS_ENDZONE_X = -(FIELD_LENGTH / 2 - ENDZONE_DEPTH / 2)
-  const OPP_ENDZONE_X = FIELD_LENGTH / 2 - ENDZONE_DEPTH / 2
 
   // Field opacity dims when no live game (faded preview state).
   $: fieldOpacity = hasGame ? 1.0 : 0.55
 </script>
 
-<!--
-  Camera. TV-broadcast overhead-side view: high midfield, ~30° pitch from
-  horizontal so the field reads as a perspective rectangle (long axis X
-  stretching left-right on screen). Rotation is set explicitly rather
-  than lookAt so the orientation is deterministic across Threlte's
-  render cycles. atan2(50, 87) ≈ 0.522 rad ≈ 30°.
-  -->
-<T.PerspectiveCamera
-  makeDefault
-  position={[0, 50, 87]}
-  rotation={[-Math.atan2(50, 87), 0, 0]}
-  fov={60}
-  near={0.5}
-  far={400}
-/>
+<!-- Camera. Static broadcast preset for phase 1; phase 3 swaps for cinematic camera-controls. -->
+<BroadcastCamera {reduceMotion} />
 
-<!-- Lighting — ambient base + a directional sunbeam. Soft, broadcast-y. -->
-<T.AmbientLight intensity={0.65} color={0xffffff} />
+<!--
+  HDRI environment. Loads the Poly Haven Stadium 01 equirect map and
+  applies it as both scene background AND IBL source for PBR materials.
+  This is the single biggest visual upgrade vs the prior all-black scene.
+-->
+<SkyDome />
+
+<!--
+  Sun. Drives shadow direction; the HDRI's IBL handles diffuse fill on
+  PBR materials, so we only need one explicit directional light. Position
+  matches the Stadium 01 HDRI's roughly-east sun for visual consistency
+  between the cast shadows and the baked HDRI lighting.
+-->
 <T.DirectionalLight
-  position={[20, 60, 30]}
-  intensity={0.7}
-  color={0xfff4d8}
-/>
-<T.DirectionalLight
-  position={[-30, 40, -10]}
-  intensity={0.25}
-  color={0xb8c6ff}
-/>
-
-<!-- Stadium "ground" — large dark plane below the field for context. -->
-<T.Mesh rotation.x={-Math.PI / 2} position={[0, -0.5, 0]}>
-  <T.PlaneGeometry args={[200, 140]} />
-  <T.MeshStandardMaterial color={0x0a0d14} roughness={1.0} />
-</T.Mesh>
-
-<!--
-  Field base — the play area between the two endzones.
-  Striped greens for that mowed-grass look.
--->
-{#each Array(STRIPE_COUNT) as _, i}
-  {@const stripeWidth = (FIELD_LENGTH - 2 * ENDZONE_DEPTH) / STRIPE_COUNT}
-  {@const xCenter = -(FIELD_LENGTH / 2 - ENDZONE_DEPTH) + stripeWidth * (i + 0.5)}
-  <T.Mesh
-    rotation.x={-Math.PI / 2}
-    position={[xCenter, 0, 0]}
-  >
-    <T.PlaneGeometry args={[stripeWidth, FIELD_WIDTH]} />
-    <T.MeshStandardMaterial
-      color={i % 2 === 0 ? FIELD_GREEN_A : FIELD_GREEN_B}
-      roughness={0.95}
-      transparent
-      opacity={fieldOpacity}
-    />
-  </T.Mesh>
-{/each}
-
-<!-- Colts endzone (left). Tinted with theme.primary. -->
-<T.Mesh
-  rotation.x={-Math.PI / 2}
-  position={[COLTS_ENDZONE_X, 0.005, 0]}
->
-  <T.PlaneGeometry args={[ENDZONE_DEPTH, FIELD_WIDTH]} />
-  <T.MeshStandardMaterial
-    color={theme.primary}
-    roughness={0.85}
-    transparent
-    opacity={fieldOpacity}
-  />
-</T.Mesh>
-
-<!-- Opponent endzone (right). Neutral gray-white. -->
-<T.Mesh
-  rotation.x={-Math.PI / 2}
-  position={[OPP_ENDZONE_X, 0.005, 0]}
->
-  <T.PlaneGeometry args={[ENDZONE_DEPTH, FIELD_WIDTH]} />
-  <T.MeshStandardMaterial
-    color={0xd0d4dc}
-    roughness={0.85}
-    transparent
-    opacity={fieldOpacity}
-  />
-</T.Mesh>
-
-<!--
-  Yard lines. Drawn as thin white planes flush with the field surface,
-  perpendicular to the long axis. Midfield (x=0) is rendered thicker.
--->
-{#each YARD_LINE_X_VALUES as x}
-  {@const isMidfield = x === 0}
-  {@const thickness = isMidfield ? MIDFIELD_THICKNESS : REGULAR_THICKNESS}
-  <T.Mesh
-    rotation.x={-Math.PI / 2}
-    position={[x, YARD_LINE_LIFT, 0]}
-  >
-    <T.PlaneGeometry args={[thickness, FIELD_WIDTH]} />
-    <T.MeshStandardMaterial
-      color={0xf5f7fb}
-      roughness={0.7}
-      transparent
-      opacity={fieldOpacity}
-    />
-  </T.Mesh>
-{/each}
-
-<!-- Endzone goal-line markers (white edge lines at ±40). -->
-{#each [-(FIELD_LENGTH / 2 - ENDZONE_DEPTH), FIELD_LENGTH / 2 - ENDZONE_DEPTH] as goalX}
-  <T.Mesh
-    rotation.x={-Math.PI / 2}
-    position={[goalX, YARD_LINE_LIFT, 0]}
-  >
-    <T.PlaneGeometry args={[0.4, FIELD_WIDTH]} />
-    <T.MeshStandardMaterial
-      color={0xffffff}
-      roughness={0.7}
-      transparent
-      opacity={fieldOpacity}
-    />
-  </T.Mesh>
-{/each}
-
-<!--
-  Endzone team labels. troika-three-text via @threlte/extras gives us
-  3D text without needing a font asset bundled in static/. Flat on the
-  field plane (rotation.x = -π/2), no Z-rotation — letters read
-  horizontally on screen from the broadcast camera at +Z.
--->
-<Text
-  text="IND"
-  position={[COLTS_ENDZONE_X, 0.05, 0]}
-  rotation={[-Math.PI / 2, 0, 0]}
-  fontSize={4}
-  color="#ffffff"
-  anchorX="center"
-  anchorY="middle"
-  outlineWidth={0.08}
-  outlineColor="#000000"
-/>
-<Text
-  text={opponentAbbr}
-  position={[OPP_ENDZONE_X, 0.05, 0]}
-  rotation={[-Math.PI / 2, 0, 0]}
-  fontSize={4}
-  color={theme.primary}
-  anchorX="center"
-  anchorY="middle"
-  outlineWidth={0.08}
-  outlineColor="#ffffff"
+  position={[40, 80, 25]}
+  intensity={1.4}
+  color={0xffeacc}
+  castShadow
+  shadow.mapSize.width={2048}
+  shadow.mapSize.height={2048}
+  shadow.camera.near={1}
+  shadow.camera.far={300}
+  shadow.camera.left={-80}
+  shadow.camera.right={80}
+  shadow.camera.top={80}
+  shadow.camera.bottom={-80}
+  shadow.bias={-0.0005}
 />
 
 <!--
-  Ball marker. Brown sphere with a slight elongated scale so it reads
-  as a football rather than a generic sphere. Tinted theme color
-  faintly when Colts have it for a quick visual cue.
+  Low-intensity ambient lift. The HDRI's environment map already
+  supplies most of the indirect light via IBL on the PBR materials, so
+  this is just a small nudge to keep cast-shadow blacks readable rather
+  than crushed.
 -->
-<T.Group position={[ballX, ballY, 0]}>
-  <T.Mesh scale={[1.4, 0.9, 0.9]}>
-    <T.SphereGeometry args={[0.85, 24, 16]} />
-    <T.MeshStandardMaterial
-      color={0x6a3a1a}
-      emissive={0x2a1808}
-      emissiveIntensity={0.4}
-      roughness={0.55}
-      metalness={0.05}
-    />
-  </T.Mesh>
-  <!-- Soft glow under the ball as a "this is the live ball" indicator -->
-  <T.Mesh rotation.x={-Math.PI / 2} position={[0, -0.95, 0]}>
-    <T.CircleGeometry args={[1.6, 24]} />
-    <T.MeshBasicMaterial
-      color={0xfff4d8}
-      transparent
-      opacity={hasGame ? 0.22 : 0.0}
-      depthWrite={false}
-    />
-  </T.Mesh>
-</T.Group>
+<T.AmbientLight intensity={0.15} color={0xffffff} />
+
+<!-- Playing field, endzones, yard lines, goal lines (PBR grass). -->
+<FieldSurface {theme} opacity={fieldOpacity} />
+
+<!-- Live ball marker (phase 1b will animate yard-line position from PlayEvent). -->
+<BallMarker {targetBallX} {hasGame} {reduceMotion} />

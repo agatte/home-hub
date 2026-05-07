@@ -59,7 +59,16 @@
 </script>
 
 <div class="football-field">
-  <Canvas>
+  <!--
+    Canvas inherits Threlte's defaults: ACESFilmicToneMapping for the
+    broadcast look + sRGB colour management for PBR. We override two
+    things: enable shadows (used by the FieldScene sun light) and
+    request antialiasing for cleaner edges on the field decals.
+  -->
+  <Canvas
+    rendererParameters={{ antialias: true }}
+    shadows={true}
+  >
     <FieldScene
       {theme}
       {hasGame}
