@@ -268,12 +268,12 @@ All messages: JSON with `type` + `data` fields.
 | Guest | `/api/guest` | `GET /wifi` returns the WIFI: QR payload from `.env`. `GET /scenes` + `POST /scene/{name}` over 6-item safelist (`party|neon|miami|arcade|aurora|sunset`); 15s scene-cooldown 429+`Retry-After`; `source="guest"` override (party→social, others→relax). `POST /scene/{name}/reset` re-applies preset baseline (skips cooldown). `GET /vibes` + `POST /vibe/{name}` plays a Sonos favorite (15s independent cooldown, overrides social). `POST /effect/{name}` layers `candle`/`sparkle`/`stop` (all-lights, 3s cooldown). `POST /brightness/{up\|down}` bumps every on-light ±10% mult, clamped to mode ceiling, stamps `_manual_light_overrides` (0.8s throttle). `POST /handback` clears the override. `POST /toast` speaks `≤120 char` message via `TTSService.speak` + sparkle flourish (60s cooldown, no profanity filter). Vibe→favorite mapping is `app_settings["guest_vibe_playlists"]`. `/guest/*` is a layout-reset visitor mini-app (Home/WiFi/Bar/Plants/Vibe via `GuestBottomNav`) |
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
+| Game Day | `/api/gameday` | `GET /state`, `GET /schedule`, `POST /test/{event}`. WS: `gameday_state`/`gameday_play`/`gameday_celebration`. Spec: `docs/GAMEDAY_SPEC.md` |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
 - `/api/learning/` — Learning engine rules, patterns, predictions
 - `/api/events/` — Activity/playback history
-- `/api/gameday/` — Game state, schedule, celebrations
 - `/api/widgets/` — External app widget status
 
 ---
@@ -306,7 +306,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 | Mode | Detection | Lighting Strategy |
 |------|-----------|-------------------|
-| `gameday` | ESPN schedule auto-flip 30 min pre-kickoff + manual via Alexa (Phase B queued) | Colts blue accent on L1, warm-amber fill on L2/L3/L4, kitchen pair preserved. CelebrationOrchestrator overrides per-event during plays. Spec: `docs/GAMEDAY_SPEC.md` |
+| `gameday` | `GameDayService` ESPN polling, T-30 auto-flip, T+30 conditional clear | Colts blue L1 + warm-amber L2/L3/L4 baseline, kitchen pair preserved. `CelebrationOrchestrator` runs custom light + TTS sequences per scoring play (8s cooldown); TTS volume is WPA-driven with apartment-context suppressions. Spec: `docs/GAMEDAY_SPEC.md` |
 | `gaming` | Specific game binaries in `game_list.py` (NOT `javaw.exe` — matches JetBrains IDEs) | Neutral fill + blue/purple peripheral accents, warm desk-lamp bias. Night: deep blue ambient. Screen sync on L2, glisten effect eve/night |
 | `working` | Terminals + IDEs (powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains, wezterm, alacritty) | ct-mode clean whites, desk-dominant. IES 1:3 monitor-ambient contrast. Night: L2 130/2700K + L1 60/2270K + kitchen OFF |
 | `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` lifts L2; `zone=bed + reclined` evening/night drops L1/L2; `zone=bed + upright` is mid-bright. Numeric vectors in `automation_engine.py` |
@@ -436,7 +436,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 |-------|----------|-------|
 | Phases 1–2 | ✓ Complete | Core foundation + dashboard redesign — see `docs/PROJECT_SPEC.md` |
 | **Phase 3: Intelligence & Voice** | Voice ✓; rules pending | Fauxmo (7 WeMos) + Custom Skill (`command center`, Lambda→Tunnel→:8002→:8000; see `alexa_skill/`). Rule engine + override patterns next |
-| **Phase 4: Game Day** | July–August 2026 | ESPN API, GameDay page, celebration orchestration, pixel art field, pre-game mode |
+| **Phase 4: Game Day** | A+B ✓; C queued | Phases A+B shipped May 2026 — see `docs/GAMEDAY_SPEC.md`. Phase C (nav/Alexa/MODE_CONFIG) + preseason validation 2026-08-15 still pending |
 | **Phase 5: Polish & Expand** | September 2026+ | Apple Music API, full autopilot, bar app widget |
 
 ---

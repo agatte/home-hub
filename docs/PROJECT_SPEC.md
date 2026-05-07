@@ -549,7 +549,7 @@ Not yet in `backend/models.py`. Listed here so the schema shape is decided when 
 | page | String(50) | Which page/section |
 | created_at | DateTime | UTC |
 
-*(Phase 4 Game Day will add `game_schedule` and `celebration_log` — see the Game Day Engine section.)*
+*(Phase 4 Game Day shipped 2026-05-07 without new DB tables — `GameDayService` is in-memory + ESPN polling, `CelebrationOrchestrator` is callback-driven. The `game_schedule` and `celebration_log` tables originally projected here weren't built. Note `light_adjustments` does NOT capture celebration writes — orchestrator's `hue.set_light` calls bypass the EventLogger middleware, so celebrations are invisible in `get_state_history` / nightly journal. Filed as memory `project_celebration_no_event_log.md` for a future bundle.)*
 
 **Data retention policy:** 90-day rolling window for raw events. Older data aggregated into daily/weekly summaries stored in a separate `event_summaries` table. Aggregation runs as a scheduled task in the learning engine.
 
@@ -771,15 +771,15 @@ All messages are JSON with `type` + `data` fields.
 | POST | `/api/guest/handback` | Clears any guest-set manual override and returns to host automation via `automation.clear_override(source="guest_handback")`. No cooldown — pressing twice is a harmless no-op on an already-cleared override. The source tag distinguishes "guest pressed Hand It Back" from `source=api:<LAN-IP>` (host kiosk Auto button) in journalctl |
 | POST | `/api/guest/toast` | Speaks a guest-submitted toast (`message ≤120 chars` + optional `name ≤30 chars`) through Sonos with a sparkle flourish. Composes `"From {name}: {message}"` if name provided. Wraps `TTSService.speak` (which already duck-and-resumes Sonos); starts sparkle before speak, stops it in `finally`. Trust-the-room v1: no profanity filter, no host-approval gate — just 60s global cooldown and the length cap. 422 on Pydantic validation; 429 with `Retry-After` on cooldown; 503 if TTS or Sonos can't run. Edge case: if a guest had +Sparkle as a scene overlay before the toast, the post-toast stop will end their overlay (re-tap +Sparkle to restore) |
 
-#### Game Day — `/api/gameday/` **(future)**
+#### Game Day — `/api/gameday/` **(shipped 2026-05-07)**
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/gameday/status` | Current game state (or next upcoming) |
-| GET | `/api/gameday/schedule` | Upcoming Colts games |
-| POST | `/api/gameday/mode` | Activate/deactivate game day mode |
-| GET | `/api/gameday/celebrations` | Celebration history log |
-| PUT | `/api/gameday/config` | Celebration preferences (which plays trigger what) |
+| GET | `/api/gameday/state` | Current `GameDayState` snapshot or `{"status": "no-game"}` |
+| GET | `/api/gameday/schedule` | Next 5 scheduled / in-progress Colts games |
+| POST | `/api/gameday/test/{event}` | Auth-gated. Fires a synthetic `PlayEvent` through `register_on_play_event` subscribers — exercises the full pipeline (orchestrator → lights + TTS + WS). `event ∈ {touchdown, field_goal, kickoff, end_of_game_win, end_of_game_loss}` |
+
+WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `gameday_play` (per new scoring play), `gameday_celebration` (when CelebrationOrchestrator fires a sequence). Mode-flip auto-fires at T-30 pre-kickoff via `automation.set_manual_override("gameday", source="gameday:auto")`; T+30 post-game auto-clear conditional on `automation.override_source` still being `gameday:auto` (skips if user overrode mid-game). Originally projected `/status`, `/mode`, `/celebrations`, `/config` endpoints weren't needed — mode flips ride the standard `/api/automation/override`, celebration history is journalctl-only (see retention note above), config is hardcoded in `CelebrationOrchestrator.SEQUENCES`.
 
 #### Widgets — `/api/widgets/` **(future)**
 
@@ -1371,15 +1371,19 @@ The system observes everything and evolves from rules to autopilot:
 - Volume token hijack (unfixable from the skill side): Alexa's wake-word router intercepts "louder", "quieter", "softer", "volume up", "volume down", "make it louder" before any custom skill receives the utterance. AdjustVolumeIntent samples must use up/down + a music/song anchor ("turn the music up", "music down", "bump the song up"). Lambda also raw-maps the louder/quieter family to up/down for utterances that *do* slip through inside longer skill-directed phrases
 - Future intents (deferred): absolute volume ("set volume to 5"), DND/weather status queries, missing-slot reprompts, routine triggers, favorite-by-name play, custom-scene-by-name activation
 
-### Game Day Engine
+### Game Day Engine — shipped 2026-05-07
 
-- **ESPN API integration** — Poll for live Colts game data (score, play-by-play, game state)
-- **Play detection** — Identify touchdowns, field goals, big plays, turnovers, game start/end
-- **Celebration orchestration** — Synchronized light shows + TTS on scoring plays (blue/white flash for TD, pulse for FG, alert for turnovers)
-- **GameDay page** — Live score, game clock, down & distance, drive summary on the dashboard
-- **Pixel art field** — Threlte/Three.js retro football field with animated sprites showing recent plays (consistent with the rest of the animation stack)
-- **Pre-game mode** — Auto-activate Colts lighting and hype playlist before kickoff
-- **Commercial break detection** — Dim celebration mode during breaks, re-engage on play resume
+See `docs/GAMEDAY_SPEC.md` for the full spec; this section is the architecture summary.
+
+- ✓ **ESPN API integration** — `GameDayService` polls `site.api.espn.com/apis/site/v2/sports/football/nfl/...` (no auth, no key) for the Colts schedule (15-min cache) and live play-by-play (10s during in-progress, 60s during pregame/final).
+- ✓ **Play detection** — Diffs `summary.scoringPlays[]` per tick; emits `PlayEvent` for new TDs/FGs/kickoffs through `register_on_play_event` subscribers. Best-effort regex parse of player/kicker/yards from ESPN play text (validated against real 2025 Colts game data — handles both canonical and abbreviated formats).
+- ✓ **Celebration orchestration** — `CelebrationOrchestrator` subscribes; runs custom light sequences (Colts blue/white pulse rotation for TD, single-pulse-flash for FG, baseline activation for kickoff, win/loss split for end-of-game) with 8s cooldown. Lighting-curator-reviewed palette.
+- ✓ **GameDay page** — Edge-to-edge field-bleed layout, scoreboard + last-play HUDs floating over the field via existing glass-card chrome. Subscribes to `gameday_state`/`gameday_play`/`gameday_celebration` WS broadcasts via the new `gameday` Svelte store.
+- ✓ **3D Threlte field** — Pure prop-driven `FootballField` component: top-down low-poly mesh, vertical yard lines, Colts-blue + neutral endzone tints, ball marker easing toward possession-derived position.
+- ✓ **Mode auto-flip** — T-30 pre-kickoff sets gameday override (`source="gameday:auto"`); T+30 post-game conditionally clears only if user didn't override mid-game (verified via `automation.override_source`, a property added in Slice A).
+- ✓ **Dynamic celebration TTS volume** — `celebration_volume_policy.py` reads game state (WPA primary, margin+time fallback) × apartment context (sleeping/DND/late-night/camera-absent) to scale Sonos volume `5-50` or suppress entirely. See GAMEDAY_SPEC.md §9.
+- **Pre-game ambient mode** — deferred to v2 (continuous Colts-tinted lighting before kickoff).
+- **Commercial-break detection** — deferred to v2 (would require a separate ESPN signal not currently exposed).
 
 #### Game Day Architecture
 
@@ -1576,11 +1580,20 @@ cleanup landed:
 - ~~**WiFi Presence Detection**~~ (Phase 3e) — **Retired 2026-04-28** (`b8fdbfe`). iOS Shortcut webhooks flapped despite three rounds of mitigation; ARP probing alone wasn't worth the plumbing. Home/away as a concept is gone — Hue native geofencing handles arrivals/departures outside Home Hub. See git history for the original implementation.
 - Override pattern analysis tracked via `override_rate` in patterns API. v1 was nudge-only; auto-apply shipped April 15 via confidence fusion (Phase 4.5 ML Phase 3)
 
-### Phase 4: Game Day (July-August 2026)
+### Phase 4: Game Day (May 2026, ahead of schedule)
 
-- ✓ **Phase A complete (2026-05-06)** — spec, interface contracts, mockup placeholder. See `docs/GAMEDAY_SPEC.md`. v1 scope: TD + FG + kickoff + end-of-game. Pre-game ambient + commercial deferred to v2. Mode trigger: auto-flip 30 min pre-kickoff via ESPN schedule + manual override. Choreography: fully custom CelebrationOrchestrator sequences with free-choice color palette per event. TTS: 3-5 hand-written variations + ESPN play data threading; duck-and-resume; win-only at end-of-game. Visual: 3D pixel-art Threlte field. Mode integration: first-class, priority 6 (top auto-detected slot). Phase B committed to 4-worktree parallel fleet.
-- **Phase B (queued):** parallel implementation across 4 worktree-isolated agents — `feature/gameday-service` (ESPN poller + state model + routes), `feature/celebration-orchestrator` (light + TTS choreography), `feature/gameday-frontend` (SvelteKit page + store), `feature/threlte-football-field` (3D component). Staggered spawn, file-disjoint slices. Refactor seam pass on `automation_engine.py` mode priority list runs first.
-- **Phase C (queued):** integration + smoke. Main session wires lifespan, FloatingNav entry, Alexa skill `gameday` slot value, end-to-end test against preseason game 1 (target 2026-08-15).
+Originally targeted July–August 2026. Phase A + Phase B both shipped in early May; preseason 2026-08-15 is now a tuning-and-validation window rather than a build window.
+
+- ✓ **Phase A complete (2026-05-06)** — spec, interface contracts, mockup placeholder. See `docs/GAMEDAY_SPEC.md`. v1 scope: TD + FG + kickoff + end-of-game. Pre-game ambient + commercial deferred to v2. Mode trigger: auto-flip 30 min pre-kickoff via ESPN schedule + manual override. Mode integration: first-class, priority 6 (top auto-detected slot).
+- ✓ **Phase B complete (2026-05-07)** — full worktree-fleet experiment validated end-to-end (see `docs/AGENT_STRATEGY.md` Part 4 for retrospective):
+  - Slice A: `GameDayService` with ESPN polling, `/api/gameday/*` routes, T-30 pre-kickoff auto-flip, T+30 post-game auto-clear that no-ops if user manually overrode mid-game, real-fixture parser test against 2025-09-07 Colts game.
+  - Slice B: `CelebrationOrchestrator` with custom light + TTS sequences for TD/FG/kickoff/end-of-game; 8s cooldown; lighting-curator-reviewed Colts-blue palette; `_COLTS_BLUE_SAT=215` matching gaming-retune precedent.
+  - Slice C: SvelteKit `/gameday` page + Svelte store + WS subscription; preserved field-bleed layout; in-game and no-game branches.
+  - Slice D: pure Threlte `FootballField` component — top-down low-poly field, vertical yard lines, Colts-blue + neutral endzone tints, ball marker easing toward possession-derived position, HTML scoreboard overlay.
+  - Integration: `bootstrap.py` wires both services + registers callbacks; `init.js` central WS dispatcher routes `gameday_state`/`gameday_play`/`gameday_celebration` into the store; `+page.svelte` imports the FootballField component.
+  - **Dynamic celebration TTS volume** (Decision 1.8, also 2026-05-07): `celebration_volume_policy.py` is a pure function that scales Sonos volume by WPA (when ESPN's win-probability has indexed the play) or margin+time fallback, with apartment-context modifiers (sleeping/DND/late-night/camera-absent suppressions or caps) and silent on losing blowouts. WPA is sourced from ESPN's `summary.winprobability[]` array, sign-flipped for away games. See GAMEDAY_SPEC.md §9.
+- **Phase C (queued, gates on no concrete need):** add `gameday` to FloatingNav nav array, add `gameday` MODE_CONFIG entry in `theme.js`, add `gameday` to Alexa `HOMEHUB_MODE` slot + lambda + interaction model. Solo-serial main-session work. Done anytime before preseason 2026-08-15.
+- **Live preseason validation 2026-08-15** — first real Colts game. Synthetic test endpoint (`POST /api/gameday/test/{event}`) exercises the full pipeline today; preseason is for iterating on palette/TTS/timings against reality with the lighting-curator subagent.
 
 ### Phase 4.5: Machine Learning (April-September 2026)
 

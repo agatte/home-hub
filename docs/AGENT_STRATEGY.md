@@ -127,14 +127,49 @@ Phase B at 4 worktree agents × ~2-3 days each ≈ **~12-15× tokens** vs. main-
 
 ---
 
+## Part 4 — Phase B fleet experiment retrospective (2026-05-07)
+
+The fleet ran end-to-end. Game Day Phase B Slices B + C + D were spawned in 3 parallel worktree-isolated `general-purpose` agents. Slice A had been done solo-serial earlier (correctly — A was the unblocking interface; parallelism gains nothing on sequentially-required work). Master session coordinated: pre-allocated file ownership (no overlap), wrote self-contained briefs per slice, spawned all three in a single message, waited for all three to return, ran lighting-curator on Slice B's diff, merged in dependency order, did the integration commits.
+
+### What worked
+
+- **File-disjoint plan held perfectly.** Zero merge conflicts across 4 branches (B/C/D + integration). The interface-pinning that Phase A spec §4 enforced was the load-bearing piece — none of the agents had to invent contracts.
+- **Curator caught a real anti-pattern.** Slice B agent set `_COLTS_BLUE_SAT = 254` for the celebration pulse helper. Lighting-curator subagent flagged this as the same room-overload pattern the gaming retune (sat 240→180) addressed; we dropped it to 215 before merge. A static linter wouldn't have caught this — the curator reasoned about the apartment's textile palette and the time-window of all-lights-saturated-blue.
+- **Agent continuity via SendMessage paid off** for the follow-up dynamic-volume work. The Slice B agent was resumed (not re-spawned) — retained context on the orchestrator's design (kitchen-pair invariant test, `_SafeFormatDict` template substitution, cooldown stamping, SEQUENCES dict structure), synced its worktree to current master, and shipped 199 tests + ruff-clean code in a single session.
+- **Live verification end-to-end worked first try.** Synthetic touchdown fired through GameDayService → CelebrationOrchestrator → HueService + TTSService + WebSocketManager, all observed in journalctl with correct ordering. The deploy-verifier subagent (already auto-fires after `/deploy-home`) caught no regressions.
+
+### Token cost reality check (actual vs. predicted)
+
+The strategy doc's Part 2 predicted "Phase B at 4 worktree agents × ~2-3 days each ≈ ~12-15× tokens." Actuals:
+
+- 3 parallel Slice agents (B + C + D): ~385k tokens combined (~120-135k each).
+- Lighting-curator review on Slice B: ~73k tokens.
+- Slice B agent resumption for dynamic-volume work: ~236k tokens.
+- Wall-clock: ~9 minutes for the parallel fleet (longest slice = D at 9.3min).
+
+Roughly the predicted ~9-15× ratio vs. solo-serial main-session work. The token spend is real and worth being honest about — full fleet only pays off when you genuinely have 3+ disjoint slices ready to ship. Solo-serial is right for sequential work and small slices.
+
+### What failed (or would have)
+
+- The strategy doc predicted "review bottleneck if 4 PRs land same-day." We didn't hit this in practice because all three fleet agents finished within a 9-minute window and main session reviewed serially in the next ~30 minutes — but the integration commits + curator review easily would have stretched to a full hour if the slices had been more complex. For a longer feature, staggering would matter more.
+- The pre-flight prep (Phase A spec + e6766c3 seam pass) was the load-bearing investment. A vague spec would have meant agents inventing contracts and diverging. The spec session was ~2 hours of main-session work; that's where the parallelism gain was earned.
+
+### Updated thesis
+
+Tier 1 specialists pay off (curator, deploy-verifier). The fleet pattern pays off for week-scale features WITH pre-pinned interfaces. Default recommendation pattern (memorialized in `feedback_recommend_agents_proactively.md`):
+- Large tasks (3+ disjoint slices, week-scale): worktree fleet, file-ownership table, brief per slice, main-session orchestrates.
+- Smaller precision tasks: spawn the relevant specialist subagent at planning time. Don't drift back to solo-serial.
+- Follow-up work on a feature an agent already built: SendMessage to that agent (continuity) rather than spawn fresh.
+
+---
+
 ## Recommended next move
 
-The Tier 1 thesis is validated. The lighting curator (shipped 2026-05-06) caught what static linters can't — including emergent reasoning about unreachable code, not just rule lookups. Per-commit feedback loop works. The investment-vs-payoff question is answered for review-class specialists.
+The Tier 1 thesis is validated. The lighting curator (shipped 2026-05-06) caught a real Slice B anti-pattern during the fleet run. Per-commit feedback loop works. The fleet pattern itself is now battle-tested for this codebase.
 
 Forward-looking candidates, in priority order:
 
-1. **Game Day Phase A** with main session — spec + interface contracts + mockup. ~1-2 hour conversation. Roadmap calls Game Day for July–August 2026, so a May start gives Phase A breathing room before Phase B (parallel implementation fleet) becomes the gating path. Phase A's output is valuable regardless of whether Phase B runs fleet or solo-serial.
-2. **ML model evaluator** (Tier 2) — consolidates 3+ recurring runbook entries (predictor validation, audio classifier checkpoints, override-rate trend, retention sweep) into one specialist that owns ML observability. Per-week feedback rather than quarterly. Medium effort but addresses real ongoing pain.
-3. **Memory hygiene auditor / doc drift checker** (Tier 1) — defer. Quarterly cadence is too slow to teach the fleet anything new, and doc drift overlaps with the Aug 1 remote agent.
-
-Game Day Phase A and ML model evaluator are complementary, not exclusive — Phase A is sequential main-session work; the evaluator can ship in parallel without competing for the same surface area.
+1. **Game Day Phase C integration** — small main-session work: add `gameday` to FloatingNav nav array, add `gameday` MODE_CONFIG entry in `theme.js`, update `HOMEHUB_MODE` Alexa slot + lambda + interaction model. Solo-serial; ~1-2 hour task. Gates on no concrete need until preseason approaches but worth knocking out anytime.
+2. **ML model evaluator** (Tier 2) — consolidates 3+ recurring runbook entries (predictor validation, audio classifier checkpoints, override-rate trend, retention sweep) into one specialist that owns ML observability. Per-week feedback rather than quarterly. Medium effort. Already specified in memory `project_ml_evaluator.md` with first fire 2026-05-11.
+3. **Lighting palette + TTS line iteration** for Game Day SEQUENCES — Slice B agent shipped placeholders. User-driven authoring with curator review on each diff before preseason 2026-08-15. Not an "agent" task per se; more an iterative collaboration.
+4. **Memory hygiene auditor / doc drift checker** (Tier 1) — defer. Quarterly cadence is too slow; doc drift overlaps with the Aug 1 remote agent.

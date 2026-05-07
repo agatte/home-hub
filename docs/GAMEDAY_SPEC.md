@@ -1,8 +1,10 @@
-# Game Day — Feature Spec (Phase A)
+# Game Day — Feature Spec (Phases A + B shipped)
 
-> **Phase A complete: 2026-05-06.** Spec, interface contracts, and mockup placeholder. Phase B (parallel implementation across 4 worktree-isolated agents) is the next gate. See `docs/AGENT_STRATEGY.md` Part 3 for the multi-agent playbook.
+> **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). Phase C (Alexa slot, FloatingNav entry, MODE_CONFIG theme entry) still queued — gating on no concrete need until preseason approaches.
+>
+> Live preseason validation: 2026-08-15.
 
-Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; a 3D pixel-art football field on the SvelteKit page mirrors live game state. Roadmap window: **July–August 2026** (preseason starts 2026-08-15).
+Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; a 3D Threlte football field on the SvelteKit page mirrors live game state. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 
 ---
 
@@ -20,6 +22,7 @@ Game Day is a season-bounded mode that turns the apartment into a Colts viewing 
 | 1.5 | GameDay page visual | 3D pixel-art Threlte field with team logos, ball position synced to play state, floating scoreboard. |
 | 1.6 | Mode integration | First-class automation mode, priority `6` (top auto-detected slot). Sleeping override still wins (persistent). |
 | 1.7 | Phase B fleet commitment | Commit to 4-worktree parallel fleet now. Phase A spec is written for parallelism. |
+| 1.8 | TTS volume model | Dynamic, "reads the room." WPA-driven (ESPN winprobability) primary signal with margin+time fallback; apartment-context modifiers (sleeping/DND/late-night/camera-absent); silent on losing blowouts. See §9. |
 
 ---
 
@@ -282,27 +285,27 @@ Renders:
 
 ---
 
-## 5. Implementation slices (Phase B)
+## 5. Implementation slices (Phase B) — shipped
 
-Per `docs/AGENT_STRATEGY.md` Part 3 — 4 worktree-isolated agents, staggered. Phase A spec defines interfaces with no cross-slice file overlap.
+Per `docs/AGENT_STRATEGY.md` Part 3 — 4 worktree-isolated agents (only 3 ran in parallel; Slice A was solo-serial because it was the unblocking interface). Spec §4 interfaces held — zero merge conflicts across all four slices. See `AGENT_STRATEGY.md` Part 4 for the experiment retrospective.
 
-| Slice | Worktree | Owns | Files |
-|---|---|---|---|
-| **A** | `feature/gameday-service` | ESPN poller + game-state model + `/api/gameday/*` | `backend/services/gameday_service.py`, `backend/api/routes/gameday.py`, `tests/test_gameday_service.py` |
-| **B** | `feature/celebration-orchestrator` | Light + TTS choreography subscribed to play events | `backend/services/celebration_orchestrator.py`, `tests/test_celebration_orchestrator.py` |
-| **C** | `feature/gameday-frontend` | SvelteKit page + store + WS subscription | `frontend-svelte/src/routes/gameday/+page.svelte`, `frontend-svelte/src/lib/stores/gameday.js` |
-| **D** | `feature/threlte-football-field` | Pure Threlte 3D component | `frontend-svelte/src/lib/components/FootballField.svelte` and supporting helpers |
+| Slice | Status | Owns |
+|---|---|---|
+| **A** | ✓ Shipped 2026-05-06 (solo-serial main session) | ESPN poller + game-state model + `/api/gameday/*` routes + `automation.override_source` property |
+| **B** | ✓ Shipped 2026-05-07 (worktree fleet) | `CelebrationOrchestrator` — light + TTS sequences subscribed to play events |
+| **C** | ✓ Shipped 2026-05-07 (worktree fleet) | SvelteKit page rewrite + Svelte store + WS subscription |
+| **D** | ✓ Shipped 2026-05-07 (worktree fleet) | Pure Threlte 3D `FootballField` component (top-down field + endzone tints + ball marker + HTML scoreboard overlay) |
+| **Integration** | ✓ Shipped 2026-05-07 (main session) | `bootstrap.py` wiring + `init.js` WS dispatch + `+page.svelte` `<FootballField>` import |
+| **Dynamic volume (§9)** | ✓ Shipped 2026-05-07 (Slice B agent continuation via SendMessage) | `celebration_volume_policy.py` + WPA on PlayEvent + apartment-context suppressions |
 
-**Shared touchpoints owned by main session, NOT by any slice agent**:
-- `backend/main.py` lifespan — wire up GameDayService + register CelebrationOrchestrator's callbacks. Main session does the integration after slices land.
-- `backend/services/automation_engine.py` — add `gameday` to mode priority list (=6) and to the per-mode state tables in `light_state_calculator.py`. Main session does this BEFORE Phase B starts so slice agents don't race on it.
-- `frontend-svelte/src/routes/+layout.svelte` — add gameday entry to FloatingNav. Main session does this in Phase C integration.
-- `alexa_skill/lambda_function.py` + interaction model — add `gameday` to `HOMEHUB_MODE` slot. Main session does this in Phase C.
+**Shared touchpoints owned by main session, NOT by any slice agent** (the file-disjoint plan worked — zero merge conflicts):
+- `backend/bootstrap.py` lifespan — instantiates GameDayService + CelebrationOrchestrator, registers callbacks. ✓ wired.
+- `backend/services/automation_engine.py` — `gameday` already in `MODE_PRIORITY` (=6) and `ACTIVITY_LIGHT_STATES` from the e6766c3 seam pass. ✓.
+- `frontend-svelte/src/lib/stores/init.js` — three WS message types dispatched into the gameday store. ✓ wired.
+- `frontend-svelte/src/routes/+layout.svelte` + `FloatingNav.svelte` — gameday FloatingNav entry **deferred to Phase C** (page reachable via direct URL during dev).
+- `alexa_skill/lambda_function.py` + interaction model — `gameday` added to `HOMEHUB_MODE` slot **deferred to Phase C**.
 
-**Stagger plan**:
-- Spawn slice A first; once `register_on_play_event` interface is concrete (~24h in), spawn slice B.
-- Spawn slices C and D in parallel against the SvelteKit/Threlte boundary defined in §4.5–4.6.
-- Each slice opens a PR; main session reviews and cherry-picks. Run `/api-audit` after merges; `/deploy-home` when frontend + backend are both in.
+**Live verification** (2026-05-07): `POST /api/gameday/test/touchdown` from desktop → Latitude logged `play_event: touchdown team=colts player=Test Player`, fired `celebration: firing touchdown sequence`, hue.set_light commands hit lights 1-4 with curator-tuned `_COLTS_BLUE_SAT=215`, kitchen pair held across all timestamps, Sonos ducked + played the templated TTS line, automation reconciled the post-celebration baseline back to the user's prior mode within ~20s.
 
 ---
 
@@ -316,23 +319,86 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 
 ---
 
-## 7. Open questions / Phase B refinements
+## 7. Open questions / refinements
 
-These don't block Phase A approval but need answers during slice authoring:
-
-- **ESPN play description parser quality**: confirm during slice A that `play.description` reliably contains `<player_name>` for TD runs and `<kicker_name>` + `<yards>` for FG. If parsing is flaky, fall back to generic TTS lines (no `{player}` substitution). Sample a 2025 Colts game's API response in slice A's first PR to verify.
-- **Light sequence values**: §2.2 placeholders are starting points. User authors actual `LightStep` arrays during slice B in tight iteration with the lighting curator agent (review each diff against `feedback_lighting_design_principles.md`).
-- **Pre-game / commercial behavior in v2**: deferred. Note for v2 spec: pre-game ambient mode (continuous Colts-tinted lighting) and commercial-break behavior (lights restore to mode default + Sonos resume).
-- **Preseason 2026-08-15 first test**: target Indianapolis Colts preseason game 1 as the first live integration test. Confirm date once 2026 schedule publishes (typically May/June).
+- **ESPN play description parser quality** — ✓ **answered 2026-05-07.** Slice A's real-fixture test against `tests/fixtures/espn_colts_2025_summary.json` (Colts vs Dolphins 2025-09-07) confirmed both ESPN response formats parse cleanly: canonical `scoringPlays[]` full names ("Daniel Jones 1 Yd Rush", "Michael Pittman Jr. 27 Yd pass from Daniel Jones") AND abbreviated `drives.previous[].plays[]` initials ("D.Jones", "S.Shrader"). The parser tries TD-pass → TD-rush → abbreviated regexes in order; FGs try full-name → abbreviated. Tests cover both paths.
+- **Light sequence values** — ✓ initial values shipped + curator-reviewed. Slice B agent authored placeholder Colts-blue/white pulse sequences for TD/FG/kickoff/end-of-game; lighting-curator caught + we applied an over-saturation fix (`_COLTS_BLUE_SAT` 254 → 215) before merge. **Iterative authoring still pending** — user iterates with the curator on real palettes during preseason.
+- **Pre-game / commercial behavior in v2** — still deferred. Pre-game ambient mode (continuous Colts-tinted lighting before kickoff) and commercial-break behavior (lights restore to mode default + Sonos resume on commercials) are out of scope for v1. Revisit post-preseason.
+- **Preseason 2026-08-15 first test** — pending. 2026 schedule typically publishes May–June; check ESPN once published. The synthetic `/api/gameday/test/{event}` endpoint exercises the full pipeline (play_event → orchestrator → lights + TTS + WS) so we have confidence in the wiring; the preseason game is for tuning palette/timings/TTS lines against reality.
+- **Celebration writes don't appear in `light_adjustments`** — `CelebrationOrchestrator._run_sequence` calls `hue.set_light` directly, bypassing the EventLogger middleware. Lights pulse correctly; celebrations are just invisible to `get_state_history`, the nightly journal, and DB analysis. Filed as memory `project_celebration_no_event_log.md` for future bundle. Not blocking.
 
 ---
 
-## 8. Verification
+## 8. Verification — shipped status
 
-Phase A is verified by:
-1. This document reads end-to-end with all 7 sub-decisions explicitly recorded (§1).
-2. Interface contracts (§4) name services, methods, file paths, and JSON shapes concretely — slice agents can begin without ambiguity.
-3. `frontend-svelte/src/routes/gameday/+page.svelte` mockup renders in dev with hardcoded data.
-4. `docs/PROJECT_SPEC.md` Roadmap section reflects "Phase A complete, Phase B queued."
+**Phase A** (2026-05-06):
+1. ✓ Spec reads end-to-end with all 8 sub-decisions explicitly recorded (§1).
+2. ✓ Interface contracts (§4) name services, methods, file paths, JSON shapes concretely.
+3. ✓ Mockup page renders cleanly with hardcoded data and the field-bleed layout.
+4. ✓ `docs/PROJECT_SPEC.md` Roadmap section updated.
 
-No tests, no deploy. Phase B owns those.
+**Phase B** (2026-05-07):
+1. ✓ Slice A: 21 GameDayService tests pass including a real-ESPN-response parser test.
+2. ✓ Slice B: 30 CelebrationOrchestrator tests pass with kitchen-pair invariant + cooldown enforcement.
+3. ✓ Slice C: frontend builds clean; no-game and in-game branches both render.
+4. ✓ Slice D: Threlte component builds clean; defensive null-prop handling.
+5. ✓ Integration: `POST /api/gameday/test/touchdown` fired live on the Latitude — lights pulsed, TTS played, WS broadcasts emitted, automation reconciled cleanly.
+6. ✓ Curator review on Slice B's SEQUENCES caught + fixed an over-saturation anti-pattern.
+7. ✓ Phase B integration build (commit `d9c1fcd`) shipped via `/deploy-home`; deploy-verifier returned STATUS=ok across 6/6 checks.
+
+**Dynamic volume policy** (§9, also 2026-05-07):
+1. ✓ 32 unit tests on `compute_celebration_volume` covering WPA bands, fallback formula, hard suppressions, apartment modifiers, clamping.
+2. ✓ Real-fixture WPA computation test — extracts win-probability deltas from the 2025-09-07 Colts game.
+3. ✓ Backend re-deployed (commit `ca712bd`); deploy-verifier ok.
+
+---
+
+## 9. Dynamic celebration TTS volume — "read the room"
+
+Shipped post-Phase-B (2026-05-07). Solves a real-world feedback loop: Slice B's hardcoded `duck_volume=10` was inaudible from the couch, but the right answer wasn't a louder constant — it was context-aware volume that scales with the moment.
+
+**Module**: `backend/services/celebration_volume_policy.py` — pure function, no I/O, no service deps.
+
+```python
+def compute_celebration_volume(
+    play: PlayEvent,
+    game_state: GameDayState | None,
+    *,
+    base_volume: int = 30,
+    sleeping_mode: bool = False,
+    dnd_active: bool = False,
+    camera_absent: bool = False,
+    now: datetime | None = None,
+) -> int | None:
+    """Returns target Sonos volume (5-50) or None to suppress TTS.
+    Lights fire regardless; this gates only the audio."""
+```
+
+**Hard suppressions** (return `None`, lights still fire):
+- `sleeping_mode` — apartment is asleep
+- `dnd_active` — Do Not Disturb override
+- Losing blowout — `game_state.quarter >= 3 AND (score_colts - score_opp) <= -21`
+
+**Primary signal: WPA** (when `play.wpa is not None`):
+- `|WPA| >= 0.25` → +15 (huge swing — game-changing)
+- `|WPA| >= 0.15` → +10 (big swing)
+- `|WPA| >= 0.05` → 0 (standard)
+- `|WPA| < 0.05` → -10 (decided game / polite)
+
+**Fallback: margin + time** (when WPA not yet available — ESPN's WP model lags ~30-60s):
+- Q4/OT, `|margin| <= 7`, `time_left < 120s` → +15 (clutch / 2-min drill)
+- Q4/OT, `|margin| <= 7` → +10 (late close)
+- `|margin| <= 3` → +5 (one-score game)
+- Q4/OT, `margin >= 21` → -10 (winning blowout)
+
+**Apartment-context modifiers**:
+- Local hour ∈ [22, 06) → cap at 18 (late-night)
+- `camera_absent` (no detection within 5 min) → vol − 10
+
+Final clamp `[5, 50]`.
+
+**Per-sequence base volumes**: TD 30, FG 28, kickoff 22, end_of_game_win 35, end_of_game_loss 0 (silent — `tts_lines=[]`).
+
+**WPA plumbing**: GameDayService extracts per-play win probability from ESPN's `summary.winprobability[]` array and attaches Colts-perspective WPA to each emitted PlayEvent. Sign-flips when Colts are away. Returns `None` gracefully when ESPN's WP model hasn't yet indexed the play (10s polling cadence vs ESPN's WP-lag).
+
+**Late-night gotcha**: at 22:00–05:59 Indy local, even big plays cap at vol 18. Synthetic test endpoint hits the all-fallback path (no WPA, no game state) so an after-hours smoke test will get vol 18 — that's the policy working correctly, not a bug.
