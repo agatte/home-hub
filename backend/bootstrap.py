@@ -633,6 +633,23 @@ async def lifespan(app: FastAPI):
     app.state.gameday = gameday
     app_logger.info("GameDayService initialized")
 
+    # CelebrationOrchestrator (Phase B Slice B) — subscribes to GameDayService
+    # play + state-transition events and runs light + TTS celebration sequences.
+    # Cooldown enforced internally (8s between any two sequences). Light
+    # sequence values are placeholders; iterate with lighting-curator subagent
+    # before preseason 2026-08-15.
+    from backend.services.celebration_orchestrator import CelebrationOrchestrator
+    celebration = CelebrationOrchestrator(
+        hue_service=hue,
+        tts_service=tts,
+        ws_manager=ws_manager,
+        gameday_service=gameday,
+    )
+    gameday.register_on_play_event(celebration.on_play_event)
+    gameday.register_on_state_transition(celebration.on_state_transition)
+    app.state.celebration_orchestrator = celebration
+    app_logger.info("CelebrationOrchestrator subscribed to GameDayService")
+
     # Background tasks
     tasks: list[asyncio.Task] = []
 

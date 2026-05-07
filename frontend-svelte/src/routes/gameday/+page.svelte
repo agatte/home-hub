@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { gameday, fetchGamedayInitial } from '$lib/stores/gameday.js'
+  import FootballField from '$lib/components/FootballField.svelte'
 
   /** @type {any} */
   export let data = undefined
@@ -65,10 +66,7 @@
 </script>
 
 <main class="gameday-page">
-  <!-- Phase B slice D: replace .field-stub with <FootballField {game} lastPlay={game.last_play} /> -->
-  <div class="field-stub" aria-hidden="true">
-    <span class="field-stub-hint">Field placeholder · Slice D</span>
-  </div>
+  <FootballField game={state} lastPlay={lastPlay} />
 
   {#if hasGame}
     <header class="hud hud-scoreboard">
@@ -110,71 +108,6 @@
     width: 100%;
     min-height: 100dvh;
     color: var(--text-primary);
-  }
-
-  /* Field placeholder — full bleed behind the HUDs. Layered backgrounds:
-     base grass → vertical yard lines every 10% → midfield 50-yard line →
-     endzone tints via ::before/::after. Drop-in replacement for the
-     eventual <FootballField /> Threlte component (Slice D). */
-  .field-stub {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    background:
-      /* midfield 50-yard line */
-      linear-gradient(
-        to right,
-        transparent 0,
-        transparent calc(50% - 1.5px),
-        rgba(255, 255, 255, 0.32) calc(50% - 1.5px),
-        rgba(255, 255, 255, 0.32) calc(50% + 1.5px),
-        transparent calc(50% + 1.5px),
-        transparent 100%
-      ),
-      /* yard lines every 10% of width */
-      repeating-linear-gradient(
-        to right,
-        transparent 0,
-        transparent calc(10% - 1px),
-        rgba(255, 255, 255, 0.18) calc(10% - 1px),
-        rgba(255, 255, 255, 0.18) 10%
-      ),
-      /* base grass */
-      linear-gradient(180deg, #1a4a26 0%, #143820 100%);
-  }
-
-  .field-stub::before,
-  .field-stub::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 10%;
-    pointer-events: none;
-  }
-  .field-stub::before {
-    left: 0;
-    background: rgba(0, 44, 95, 0.32);
-    border-right: 2px solid rgba(255, 255, 255, 0.4);
-  }
-  .field-stub::after {
-    right: 0;
-    background: rgba(255, 255, 255, 0.06);
-    border-left: 2px solid rgba(255, 255, 255, 0.4);
-  }
-
-  .field-stub-hint {
-    position: absolute;
-    bottom: 130px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-family: var(--font-body);
-    font-size: 11px;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.15em;
-    color: var(--text-muted);
-    opacity: 0.7;
   }
 
   /* HUD shared surface — same glass as .widget so chrome reads cohesive. */

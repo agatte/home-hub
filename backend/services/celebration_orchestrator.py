@@ -71,16 +71,25 @@ class CelebrationSequence:
 #   • Gameday uses HSB (saturated Colts blue / white pulses), not CT.
 # ---------------------------------------------------------------------------
 
-# Colts blue (Hue HSB ~46920 / sat ~254) and white (sat 0).
+# Colts blue (Hue HSB ~46920) and white (sat 0). Saturation calibrated by
+# the lighting curator: 215 instead of 254 for the pulse helper, matching
+# the gaming-retune precedent (sat=240 → 180-200) so the room's cream/wood
+# textile palette doesn't read as a saturated cave when all 4 lights pulse
+# at peak together. Single-light sustained accents (the L1 baseline) can
+# absorb a stronger saturation, but the celebration pulse is the primary
+# anti-pattern surface.
 _COLTS_BLUE_HUE = 46920
-_COLTS_BLUE_SAT = 254
+_COLTS_BLUE_SAT = 215
 _WHITE_SAT = 0
 
 # Gameday baseline that sequences fade back to: Colts blue accent on L1,
 # warm-amber fill on L2, and matched warm-amber on L3 + L4 (kitchen pair).
+# _BASELINE_KITCHEN is aliased to _BASELINE_FILL so future tuning of the
+# warm-amber post-celebration recovery state can't accidentally desync the
+# kitchen pair (curator finding 3).
 _BASELINE_L1 = {"on": True, "bri": 200, "hue": _COLTS_BLUE_HUE, "sat": _COLTS_BLUE_SAT}
 _BASELINE_FILL = {"on": True, "bri": 180, "hue": 8000, "sat": 180}  # warm amber
-_BASELINE_KITCHEN = {"on": True, "bri": 180, "hue": 8000, "sat": 180}  # matched pair
+_BASELINE_KITCHEN = dict(_BASELINE_FILL)  # kitchen pair alias — see curator note above
 
 
 def _pulse(light_id: str, delay_ms: int, *, blue: bool = True, bri: int = 254,
