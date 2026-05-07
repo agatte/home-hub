@@ -436,7 +436,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 |-------|----------|-------|
 | Phases 1–2 | ✓ Complete | Core foundation + dashboard redesign — see `docs/PROJECT_SPEC.md` |
 | **Phase 3: Intelligence & Voice** | Voice ✓; rules pending | Fauxmo (7 WeMos) + Custom Skill (`command center`, Lambda→Tunnel→:8002→:8000; see `alexa_skill/`). Rule engine + override patterns next |
-| **Phase 4: Game Day** | A+B ✓; C queued | Phases A+B shipped May 2026 — see `docs/GAMEDAY_SPEC.md`. Phase C (nav/Alexa/MODE_CONFIG) + preseason validation 2026-08-15 still pending |
+| **Phase 4: Game Day** | A+B+C ✓; preseason 2026-08-15 | Phases A+B+C shipped May 2026 — see `docs/GAMEDAY_SPEC.md`. SEQUENCES palette/TTS iteration + live preseason validation still pending |
 | **Phase 5: Polish & Expand** | September 2026+ | Apple Music API, full autopilot, bar app widget |
 
 ---

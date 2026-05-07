@@ -169,7 +169,7 @@ The Tier 1 thesis is validated. The lighting curator (shipped 2026-05-06) caught
 
 Forward-looking candidates, in priority order:
 
-1. **Game Day Phase C integration** — small main-session work: add `gameday` to FloatingNav nav array, add `gameday` MODE_CONFIG entry in `theme.js`, update `HOMEHUB_MODE` Alexa slot + lambda + interaction model. Solo-serial; ~1-2 hour task. Gates on no concrete need until preseason approaches but worth knocking out anytime.
+1. ✓ **Game Day Phase C integration shipped 2026-05-07** — `gameday` added to FloatingNav, theme.js MODE_CONFIG, Alexa HOMEHUB_MODE slot + lambda VALID_MODES. Voice end-to-end verified ("set relax mode" → `activity_events.source=alexa:SetModeIntent`). The verification surfaced a latent source-attribution bug in `set_manual_override` (engine hardcoded `source="manual"` instead of threading the route's `caller`), fixed in commit `31a1edf`. Documented in memory `project_override_caller_telemetry.md`.
 2. **ML model evaluator** (Tier 2) — consolidates 3+ recurring runbook entries (predictor validation, audio classifier checkpoints, override-rate trend, retention sweep) into one specialist that owns ML observability. Per-week feedback rather than quarterly. Medium effort. Already specified in memory `project_ml_evaluator.md` with first fire 2026-05-11.
 3. **Lighting palette + TTS line iteration** for Game Day SEQUENCES — Slice B agent shipped placeholders. User-driven authoring with curator review on each diff before preseason 2026-08-15. Not an "agent" task per se; more an iterative collaboration.
 4. **Memory hygiene auditor / doc drift checker** (Tier 1) — defer. Quarterly cadence is too slow; doc drift overlaps with the Aug 1 remote agent.

@@ -1,8 +1,8 @@
-# Game Day — Feature Spec (Phases A + B shipped)
+# Game Day — Feature Spec (Phases A + B + C shipped)
 
-> **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). Phase C (Alexa slot, FloatingNav entry, MODE_CONFIG theme entry) still queued — gating on no concrete need until preseason approaches.
+> **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). **Phase C shipped 2026-05-07** — `gameday` exposed in FloatingNav, MODE_CONFIG theme entry, Alexa `HOMEHUB_MODE` slot + lambda `VALID_MODES`. Voice-end-to-end verified.
 >
-> Live preseason validation: 2026-08-15.
+> Live preseason validation: 2026-08-15. Remaining work: SEQUENCES palette/TTS iteration with lighting-curator review.
 
 Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; a 3D Threlte football field on the SvelteKit page mirrors live game state. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 
@@ -302,8 +302,9 @@ Per `docs/AGENT_STRATEGY.md` Part 3 — 4 worktree-isolated agents (only 3 ran i
 - `backend/bootstrap.py` lifespan — instantiates GameDayService + CelebrationOrchestrator, registers callbacks. ✓ wired.
 - `backend/services/automation_engine.py` — `gameday` already in `MODE_PRIORITY` (=6) and `ACTIVITY_LIGHT_STATES` from the e6766c3 seam pass. ✓.
 - `frontend-svelte/src/lib/stores/init.js` — three WS message types dispatched into the gameday store. ✓ wired.
-- `frontend-svelte/src/routes/+layout.svelte` + `FloatingNav.svelte` — gameday FloatingNav entry **deferred to Phase C** (page reachable via direct URL during dev).
-- `alexa_skill/lambda_function.py` + interaction model — `gameday` added to `HOMEHUB_MODE` slot **deferred to Phase C**.
+- `frontend-svelte/src/lib/components/FloatingNav.svelte` — gameday entry (Trophy icon) ✓ Phase C 2026-05-07.
+- `frontend-svelte/src/lib/theme.js` — `gameday` MODE_CONFIG entry (Colts blue #003594, silver/gold accents, energetic generative params) ✓ Phase C 2026-05-07.
+- `alexa_skill/lambda_function.py` + `interaction_model.json` — `gameday` added to `HOMEHUB_MODE` slot (synonyms: "game day", "colts", "colts game", "football", "football mode"), `VALID_MODES`, disambiguation prompt ✓ Phase C 2026-05-07. Lambda + interaction model rebuild in AWS/Alexa Developer Console required (see `alexa_skill/README.md`).
 
 **Live verification** (2026-05-07): `POST /api/gameday/test/touchdown` from desktop → Latitude logged `play_event: touchdown team=colts player=Test Player`, fired `celebration: firing touchdown sequence`, hue.set_light commands hit lights 1-4 with curator-tuned `_COLTS_BLUE_SAT=215`, kitchen pair held across all timestamps, Sonos ducked + played the templated TTS line, automation reconciled the post-celebration baseline back to the user's prior mode within ~20s.
 
