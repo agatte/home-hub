@@ -1578,13 +1578,9 @@ cleanup landed:
 
 ### Phase 4: Game Day (July-August 2026)
 
-- ESPN API integration + game state polling
-- GameDay page with live scoreboard
-- Celebration orchestration (light flash + TTS)
-- Game Day animated background
-- Pixel art field with animated plays
-- Pre-game mode automation
-- Test during pre-season games
+- ✓ **Phase A complete (2026-05-06)** — spec, interface contracts, mockup placeholder. See `docs/GAMEDAY_SPEC.md`. v1 scope: TD + FG + kickoff + end-of-game. Pre-game ambient + commercial deferred to v2. Mode trigger: auto-flip 30 min pre-kickoff via ESPN schedule + manual override. Choreography: fully custom CelebrationOrchestrator sequences with free-choice color palette per event. TTS: 3-5 hand-written variations + ESPN play data threading; duck-and-resume; win-only at end-of-game. Visual: 3D pixel-art Threlte field. Mode integration: first-class, priority 6 (top auto-detected slot). Phase B committed to 4-worktree parallel fleet.
+- **Phase B (queued):** parallel implementation across 4 worktree-isolated agents — `feature/gameday-service` (ESPN poller + state model + routes), `feature/celebration-orchestrator` (light + TTS choreography), `feature/gameday-frontend` (SvelteKit page + store), `feature/threlte-football-field` (3D component). Staggered spawn, file-disjoint slices. Refactor seam pass on `automation_engine.py` mode priority list runs first.
+- **Phase C (queued):** integration + smoke. Main session wires lifespan, FloatingNav entry, Alexa skill `gameday` slot value, end-to-end test against preseason game 1 (target 2026-08-15).
 
 ### Phase 4.5: Machine Learning (April-September 2026)
 
