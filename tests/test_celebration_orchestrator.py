@@ -4,6 +4,12 @@ Tests for CelebrationOrchestrator — light + TTS choreography for gameday.
 Mocks HueService, TTSService, WebSocketManager, and GameDayService.
 Validates per-event dispatch, cooldown, win/loss split, TTS template
 substitution, and synthetic-test-event passthrough. Spec: docs/GAMEDAY_SPEC.md.
+
+The autouse ``_freeze_to_afternoon`` fixture pins
+``datetime.now(timezone.utc)`` inside the orchestrator module to a
+mid-afternoon Indy local time, so the volume policy's late-night cap
+(10pm-6am Indy local) doesn't fire and surprise volume assertions when
+the test suite runs at night.
 """
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from backend.services import celebration_orchestrator as _orch_module
 from backend.services.celebration_orchestrator import (
     CelebrationOrchestrator,
     CelebrationSequence,
@@ -25,6 +32,25 @@ from backend.services.gameday_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _freeze_to_afternoon(monkeypatch):
+    """Pin the orchestrator's `datetime.now(timezone.utc)` to 18:00 UTC
+    on a Tuesday — Indy local 14:00, comfortably outside the late-night
+    cap window. Prevents test flakes when the suite runs after 10pm
+    local time."""
+    fixed_utc = datetime(2026, 9, 15, 18, 0, 0, tzinfo=timezone.utc)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            if tz is None:
+                return fixed_utc.replace(tzinfo=None)
+            return fixed_utc.astimezone(tz)
+
+    monkeypatch.setattr(_orch_module, "datetime", _FrozenDatetime)
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -34,9 +60,19 @@ def _make_orchestrator(
     score_colts: int = 21,
     score_opp: int = 14,
     opponent: str = "Houston Texans",
+    quarter: int = 2,
+    clock: str = "5:32",
+    automation_mode: str = "gameday",
+    dnd_active: bool = False,
+    camera_present: bool = True,
+    with_apartment_context: bool = True,
 ) -> tuple[CelebrationOrchestrator, MagicMock, MagicMock, MagicMock, MagicMock]:
     """Build an orchestrator with all-mock collaborators; return the tuple
-    (orch, hue, tts, ws, gameday) so tests can assert on each."""
+    (orch, hue, tts, ws, gameday) so tests can assert on each.
+
+    ``with_apartment_context=False`` reproduces the original 4-arg
+    signature (no automation_engine, no camera_service) — used by the
+    backwards-compat tests."""
     hue = MagicMock()
     hue.set_light = AsyncMock(return_value=True)
 
@@ -54,23 +90,44 @@ def _make_orchestrator(
             kickoff_utc=datetime.now(timezone.utc),
             score_colts=score_colts,
             score_opp=score_opp,
-            quarter=2,
-            clock="5:32",
+            quarter=quarter,
+            clock=clock,
             possession="colts",
             last_play=None,
         )
     )
 
-    orch = CelebrationOrchestrator(
-        hue_service=hue,
-        tts_service=tts,
-        ws_manager=ws,
-        gameday_service=gameday,
-    )
+    if with_apartment_context:
+        automation = MagicMock()
+        automation.current_mode = automation_mode
+        automation.is_dnd_active = MagicMock(return_value=dnd_active)
+
+        camera = MagicMock()
+        camera.is_present_within_seconds = MagicMock(return_value=camera_present)
+
+        orch = CelebrationOrchestrator(
+            hue_service=hue,
+            tts_service=tts,
+            ws_manager=ws,
+            gameday_service=gameday,
+            automation_engine=automation,
+            camera_service=camera,
+        )
+    else:
+        # Backwards-compat: original 4-arg signature.
+        orch = CelebrationOrchestrator(
+            hue_service=hue,
+            tts_service=tts,
+            ws_manager=ws,
+            gameday_service=gameday,
+        )
     return orch, hue, tts, ws, gameday
 
 
-def _td_event(player: str = "Jonathan Taylor") -> PlayEvent:
+def _td_event(
+    player: str = "Jonathan Taylor",
+    wpa: float | None = None,
+) -> PlayEvent:
     return PlayEvent(
         timestamp=datetime.now(timezone.utc),
         play_type="touchdown",
@@ -79,10 +136,15 @@ def _td_event(player: str = "Jonathan Taylor") -> PlayEvent:
         kicker=None,
         yards=None,
         scoring_team="colts",
+        wpa=wpa,
     )
 
 
-def _fg_event(kicker: str = "Spencer Shrader", yards: int = 42) -> PlayEvent:
+def _fg_event(
+    kicker: str = "Spencer Shrader",
+    yards: int = 42,
+    wpa: float | None = None,
+) -> PlayEvent:
     return PlayEvent(
         timestamp=datetime.now(timezone.utc),
         play_type="field_goal",
@@ -91,6 +153,7 @@ def _fg_event(kicker: str = "Spencer Shrader", yards: int = 42) -> PlayEvent:
         kicker=kicker,
         yards=yards,
         scoring_team="colts",
+        wpa=wpa,
     )
 
 
@@ -151,8 +214,10 @@ class TestTouchdown:
         tts.speak.assert_awaited_once()
         text = tts.speak.await_args.args[0]
         assert "Jonathan Taylor" in text
-        # Volume routed via the duck_volume default.
-        assert tts.speak.await_args.kwargs.get("volume") == 10
+        # Volume comes from the volume policy. With base_volume=30, no WPA
+        # (None → fallback path with mid-game state, no special bands fire),
+        # camera present, no DND, no sleeping → unchanged base 30.
+        assert tts.speak.await_args.kwargs.get("volume") == 30
 
     async def test_td_synthetic_test_event_fires(self):
         """The /api/gameday/test/touchdown route emits a synthetic PlayEvent
@@ -343,6 +408,125 @@ class TestTemplateSubstitution:
         assert "{" not in text
         # Falls back to 'Colts' per _build_context.
         assert "Colts" in text or "colts" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Volume policy integration
+# ---------------------------------------------------------------------------
+
+class TestVolumePolicy:
+    """The orchestrator delegates volume selection to
+    celebration_volume_policy.compute_celebration_volume. These tests
+    verify that apartment-context signals reach the policy and are
+    honored — the policy itself is unit-tested separately."""
+
+    async def test_huge_wpa_bumps_volume_to_45(self):
+        """TD with |WPA| >= 0.25 → +15 from base 30 = 45."""
+        orch, _, tts, _, _ = _make_orchestrator()
+        await orch.on_play_event(_td_event(wpa=0.30))
+        tts.speak.assert_awaited_once()
+        assert tts.speak.await_args.kwargs.get("volume") == 45
+
+    async def test_sleeping_mode_suppresses_tts(self):
+        """current_mode == sleeping → TTS skipped, lights still fire."""
+        orch, hue, tts, ws, _ = _make_orchestrator(automation_mode="sleeping")
+        await orch.on_play_event(_td_event(wpa=0.30))
+
+        # Lights + WS still fire.
+        ws.broadcast.assert_awaited_once()
+        assert hue.set_light.await_count > 0
+        # TTS suppressed.
+        tts.speak.assert_not_awaited()
+
+    async def test_dnd_active_suppresses_tts(self):
+        orch, hue, tts, ws, _ = _make_orchestrator(dnd_active=True)
+        await orch.on_play_event(_td_event(wpa=0.30))
+        ws.broadcast.assert_awaited_once()
+        assert hue.set_light.await_count > 0
+        tts.speak.assert_not_awaited()
+
+    async def test_losing_blowout_suppresses_tts(self):
+        """Q4, Colts down 28 — silent celebration even on a Colts FG."""
+        orch, hue, tts, ws, _ = _make_orchestrator(
+            score_colts=7, score_opp=35, quarter=4, clock="5:00",
+        )
+        await orch.on_play_event(_fg_event(wpa=0.05))
+        ws.broadcast.assert_awaited_once()
+        assert hue.set_light.await_count > 0
+        tts.speak.assert_not_awaited()
+
+    async def test_camera_absent_dials_volume_down(self):
+        """Empty apartment → -10 from camera-absent modifier."""
+        orch, _, tts, _, _ = _make_orchestrator(camera_present=False)
+        await orch.on_play_event(_td_event(wpa=0.08))  # standard play
+        tts.speak.assert_awaited_once()
+        # base 30 + 0 from WPA - 10 from camera_absent = 20
+        assert tts.speak.await_args.kwargs.get("volume") == 20
+
+    async def test_loss_state_transition_no_tts(self):
+        """Loss is silent regardless of policy — empty tts_lines pool."""
+        orch, _, tts, _, _ = _make_orchestrator(
+            score_colts=14, score_opp=24,
+        )
+        await orch.on_state_transition(GameDayStateTransition(
+            from_status="in-progress",
+            to_status="final",
+            timestamp=datetime.now(timezone.utc),
+        ))
+        tts.speak.assert_not_awaited()
+
+    async def test_win_state_transition_uses_eog_base_35(self):
+        """end_of_game_win has base_volume=35, no WPA → 35."""
+        orch, _, tts, _, _ = _make_orchestrator(
+            score_colts=27, score_opp=20,
+        )
+        await orch.on_state_transition(GameDayStateTransition(
+            from_status="in-progress",
+            to_status="final",
+            timestamp=datetime.now(timezone.utc),
+        ))
+        tts.speak.assert_awaited_once()
+        assert tts.speak.await_args.kwargs.get("volume") == 35
+
+
+# ---------------------------------------------------------------------------
+# Backwards compatibility: original 4-arg constructor
+# ---------------------------------------------------------------------------
+
+class TestBackwardsCompatibility:
+    """The 4-arg constructor (no automation_engine, no camera_service)
+    must keep working — defaults to None and the policy treats absent
+    apartment context as "no suppression, no apartment modifier"."""
+
+    async def test_4arg_constructor_still_fires(self):
+        orch, hue, tts, ws, _ = _make_orchestrator(with_apartment_context=False)
+        await orch.on_play_event(_td_event())
+        ws.broadcast.assert_awaited_once()
+        assert hue.set_light.await_count > 0
+        tts.speak.assert_awaited_once()
+        # No apartment context → falls through to base_volume = 30.
+        assert tts.speak.await_args.kwargs.get("volume") == 30
+
+
+# ---------------------------------------------------------------------------
+# Sequence schema: per-event base_volume tuned post-d9c1fcd
+# ---------------------------------------------------------------------------
+
+class TestPerEventBaseVolume:
+    """Per-event base_volume values codify the d9c1fcd live-test
+    finding. Touchdown should be louder than kickoff; kickoff lower
+    than the rest."""
+
+    @pytest.mark.parametrize("key,expected_base", [
+        ("touchdown", 30),
+        ("field_goal", 28),
+        ("kickoff", 22),
+        ("end_of_game_win", 35),
+        ("end_of_game_loss", 0),
+    ])
+    def test_base_volume_per_event(self, key, expected_base):
+        seq = CelebrationOrchestrator.SEQUENCES[key]
+        assert seq.base_volume == expected_base
 
 
 # ---------------------------------------------------------------------------

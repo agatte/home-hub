@@ -644,6 +644,11 @@ async def lifespan(app: FastAPI):
         tts_service=tts,
         ws_manager=ws_manager,
         gameday_service=gameday,
+        automation_engine=automation,
+        # camera_service late-bound below — opt-in service is constructed
+        # later in this lifespan; we call set_camera_service() once it's
+        # available.
+        camera_service=None,
     )
     gameday.register_on_play_event(celebration.on_play_event)
     gameday.register_on_state_transition(celebration.on_state_transition)
@@ -712,6 +717,12 @@ async def lifespan(app: FastAPI):
             app_logger.warning("mediapipe/opencv not installed — camera service disabled")
     else:
         app_logger.info("Camera service disabled (camera_enabled=false)")
+
+    # Late-bind camera into the celebration orchestrator. Used by the
+    # volume policy to dial TTS down when no one is home (camera absent
+    # ≥5 minutes). When camera is disabled / unavailable, the policy
+    # treats the apartment as occupied (no penalty).
+    celebration.set_camera_service(getattr(app.state, "camera_service", None))
 
     # Transit lighting — brighten kitchen/living-room when Anthony steps out
     # of the bedroom (camera detects absence). 10-min hard timeout protects

@@ -15,9 +15,11 @@ import asyncio
 import logging
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Optional
 
+from backend.services.celebration_volume_policy import compute_celebration_volume
 from backend.services.gameday_service import (
     GameDayState,
     GameDayStateTransition,
@@ -43,12 +45,19 @@ class LightStep:
 
 @dataclass
 class CelebrationSequence:
-    """Hand-tuned light + TTS choreography for one event type."""
+    """Hand-tuned light + TTS choreography for one event type.
+
+    ``base_volume`` is the per-event starting volume the volume policy
+    builds on top of. The d9c1fcd live test showed ``duck_volume=10``
+    was inaudible from the couch — this is the floor that the policy
+    then bumps up for big WPA swings or down for blowouts / late-night
+    / no-one-home.
+    """
     light_steps: list[LightStep]
     tts_lines: list[str]
     duration_seconds: float
     tts_voice: str = "en-US-GuyNeural"
-    duck_volume: int = 10
+    base_volume: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +256,7 @@ class CelebrationOrchestrator:
                 "Touchdown Indianapolis! Way to go, {player}!",
             ],
             duration_seconds=6.0,
+            base_volume=30,
         ),
         "field_goal": CelebrationSequence(
             light_steps=_FG_STEPS,
@@ -258,6 +268,7 @@ class CelebrationOrchestrator:
                 "Colts on the board — {kicker} from {yards}.",
             ],
             duration_seconds=2.5,
+            base_volume=28,
         ),
         "kickoff": CelebrationSequence(
             light_steps=_KICKOFF_STEPS,
@@ -268,6 +279,7 @@ class CelebrationOrchestrator:
                 "Game on. Colts and {opponent}.",
             ],
             duration_seconds=1.5,
+            base_volume=22,
         ),
         "end_of_game_win": CelebrationSequence(
             light_steps=_EOG_WIN_STEPS,
@@ -278,11 +290,13 @@ class CelebrationOrchestrator:
                 "Final: Colts {colts_score}, {opponent} {opp_score}. Indy on top!",
             ],
             duration_seconds=6.0,
+            base_volume=35,
         ),
         "end_of_game_loss": CelebrationSequence(
             light_steps=_EOG_LOSS_STEPS,
             tts_lines=[],  # silent on a loss (spec §2.2)
             duration_seconds=6.0,
+            base_volume=0,  # tts_lines empty — base_volume unused
         ),
     }
 
@@ -294,12 +308,33 @@ class CelebrationOrchestrator:
         tts_service: Any,
         ws_manager: Any,
         gameday_service: Any,
+        automation_engine: Any = None,
+        camera_service: Any = None,
     ) -> None:
         self._hue = hue_service
         self._tts = tts_service
         self._ws = ws_manager
         self._gameday = gameday_service
+        # automation + camera are optional context for celebration_volume_policy:
+        # • automation: current_mode (sleeping → suppress) + is_dnd_active()
+        # • camera:    is_present_within_seconds(300) → -10 modifier
+        # Either being None just means "no apartment context for the policy" —
+        # falls back to base volume + WPA + game-state modifiers, no
+        # suppression. This keeps the constructor backwards-compatible with
+        # tests that haven't been updated.
+        self._automation = automation_engine
+        self._camera = camera_service
         self._last_celebration_at: float = 0.0
+
+    def set_automation_engine(self, automation_engine: Any) -> None:
+        """Late-bind the automation engine. Bootstrap may construct the
+        orchestrator before automation is fully wired (or vice versa)."""
+        self._automation = automation_engine
+
+    def set_camera_service(self, camera_service: Any) -> None:
+        """Late-bind the camera service. Camera is opt-in and may not be
+        on app.state at orchestrator construction time."""
+        self._camera = camera_service
 
     # ------------------------------------------------------------------ Subscribers
 
@@ -316,7 +351,7 @@ class CelebrationOrchestrator:
             return
 
         context = self._build_context(evt)
-        await self._run_sequence(key, context)
+        await self._run_sequence(key, context, play=evt)
 
     async def on_state_transition(self, transition: GameDayStateTransition) -> None:
         """Subscriber for GameDayService state transitions. We only celebrate
@@ -339,15 +374,38 @@ class CelebrationOrchestrator:
             "kicker": "",
             "yards": "",
         }
-        await self._run_sequence(key, context)
+        # Synthetic PlayEvent so the volume policy can apply apartment-
+        # context modifiers (sleeping/DND/late-night/camera). End-of-game
+        # has no WPA — the policy will fall through to per-event base.
+        synthetic = PlayEvent(
+            timestamp=datetime.now(timezone.utc),
+            play_type="other",  # not used by policy
+            description=f"end_of_game:{key}",
+            player=None,
+            kicker=None,
+            yards=None,
+            scoring_team="colts" if won else "opp",
+            wpa=None,
+        )
+        await self._run_sequence(key, context, play=synthetic)
 
     # ------------------------------------------------------------------ Core
 
-    async def _run_sequence(self, key: str, context: dict) -> None:
+    async def _run_sequence(
+        self,
+        key: str,
+        context: dict,
+        *,
+        play: Optional[PlayEvent] = None,
+    ) -> None:
         """Broadcast WS flair, then run light steps + TTS in parallel.
 
         Cooldown stamp lands at sequence START so back-to-back plays inside
         the 8s window all skip — only the first wins.
+
+        ``play`` feeds celebration_volume_policy: WPA for play events,
+        synthetic placeholder for end-of-game transitions, None for any
+        future caller that doesn't have one.
         """
         sequence = self.SEQUENCES.get(key)
         if sequence is None:
@@ -368,6 +426,11 @@ class CelebrationOrchestrator:
 
         logger.info("celebration: firing %s sequence", key)
 
+        # Volume policy runs before TTS dispatch so we can log a clean
+        # "suppressed: <reason>" line and skip the speak() call if it
+        # returns None. Lights still fire either way.
+        target_volume = self._compute_target_volume(sequence, play)
+
         # 1. WS broadcast first so the frontend can flair before the bridge
         #    write storm starts. Failure is non-fatal.
         try:
@@ -382,7 +445,7 @@ class CelebrationOrchestrator:
         #    exceptions so a bridge hiccup doesn't kill the TTS line.
         await asyncio.gather(
             self._run_light_steps(sequence.light_steps),
-            self._run_tts(sequence, context),
+            self._run_tts(sequence, context, target_volume),
             return_exceptions=True,
         )
 
@@ -412,12 +475,22 @@ class CelebrationOrchestrator:
                 )
 
     async def _run_tts(
-        self, sequence: CelebrationSequence, context: dict,
+        self,
+        sequence: CelebrationSequence,
+        context: dict,
+        target_volume: Optional[int],
     ) -> None:
         """Pick a random line from the sequence pool, substitute context
         variables, hand off to TTSService.speak (duck-and-resume on Sonos).
-        Empty pool (loss) → silent."""
+
+        Skipped when:
+            • Pool is empty (loss is silent by spec).
+            • ``target_volume`` is None — volume policy hard-suppressed
+              (sleeping, DND, or losing blowout).
+        """
         if not sequence.tts_lines:
+            return
+        if target_volume is None:
             return
 
         template = random.choice(sequence.tts_lines)
@@ -430,9 +503,82 @@ class CelebrationOrchestrator:
             text = template
 
         try:
-            await self._tts.speak(text, volume=sequence.duck_volume)
+            await self._tts.speak(text, volume=target_volume)
         except Exception:
             logger.exception("celebration: tts.speak failed")
+
+    def _compute_target_volume(
+        self, sequence: CelebrationSequence, play: Optional[PlayEvent],
+    ) -> Optional[int]:
+        """Gather apartment context, call the volume policy, log the
+        decision. Returns the int volume (5-50) or None to suppress.
+
+        Defensive against missing automation/camera deps — both are
+        optional kwargs to the constructor for backwards-compat with
+        existing tests, and the policy treats their absence as "no
+        suppression, no apartment-context modifier"."""
+        if play is None:
+            # No PlayEvent context — return base volume directly. Used
+            # by future callers that bypass the WPA path.
+            return sequence.base_volume
+
+        sleeping = False
+        dnd = False
+        if self._automation is not None:
+            try:
+                sleeping = (getattr(self._automation, "current_mode", None) == "sleeping")
+            except Exception:
+                logger.debug("celebration volume: current_mode read failed", exc_info=True)
+            try:
+                if hasattr(self._automation, "is_dnd_active"):
+                    dnd = bool(self._automation.is_dnd_active())
+            except Exception:
+                logger.debug("celebration volume: is_dnd_active read failed", exc_info=True)
+
+        camera_absent = False
+        if self._camera is not None:
+            try:
+                if hasattr(self._camera, "is_present_within_seconds"):
+                    camera_absent = not bool(self._camera.is_present_within_seconds(300))
+            except Exception:
+                logger.debug("celebration volume: camera presence read failed", exc_info=True)
+
+        state = self._safe_current_state()
+        target = compute_celebration_volume(
+            play=play,
+            game_state=state,
+            base_volume=sequence.base_volume,
+            sleeping_mode=sleeping,
+            dnd_active=dnd,
+            camera_absent=camera_absent,
+            now=datetime.now(timezone.utc),
+        )
+
+        if target is None:
+            reason = self._volume_suppression_reason(sleeping, dnd, state)
+            logger.info("celebration TTS suppressed: %s", reason)
+        else:
+            logger.info(
+                "celebration TTS volume=%d (base=%d wpa=%s sleeping=%s dnd=%s camera_absent=%s)",
+                target, sequence.base_volume, play.wpa, sleeping, dnd, camera_absent,
+            )
+        return target
+
+    @staticmethod
+    def _volume_suppression_reason(
+        sleeping: bool, dnd: bool, state: Optional[GameDayState],
+    ) -> str:
+        """Compose a human-readable reason string for the suppression
+        log line so journalctl tells us why TTS was silent."""
+        if sleeping:
+            return "sleeping mode"
+        if dnd:
+            return "DND active"
+        if state is not None:
+            deficit = state.score_opp - state.score_colts
+            if state.quarter >= 3 and deficit >= 21:
+                return f"losing blowout (Q{state.quarter}, down {deficit})"
+        return "unknown"
 
     # ------------------------------------------------------------------ Helpers
 
