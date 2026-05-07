@@ -279,6 +279,7 @@ class AutomationEngine:
         self._mode_source: str = "time"
         self._manual_override: bool = False
         self._override_mode: Optional[str] = None
+        self._override_source: Optional[str] = None
         self._override_time: Optional[datetime] = None
         self._last_activity: Optional[str] = None
         self._last_activity_change: Optional[datetime] = None
@@ -401,6 +402,14 @@ class AutomationEngine:
     @property
     def override_mode(self) -> Optional[str]:
         return self._override_mode
+
+    @property
+    def override_source(self) -> Optional[str]:
+        """Caller label of the active override (e.g. ``api:1.2.3.4``,
+        ``gameday:auto``). None when no override is active. Used by
+        GameDayService's post-game auto-clear to skip if the user
+        manually overrode the gameday flip mid/post-game."""
+        return self._override_source if self._manual_override else None
 
     @property
     def last_activity_change(self) -> Optional[datetime]:
@@ -919,6 +928,7 @@ class AutomationEngine:
         prior_override = self._override_mode
         self._manual_override = True
         self._override_mode = mode
+        self._override_source = source
         self._override_time = datetime.now(tz=TZ)
         self._last_activity_change = self._override_time
 
@@ -983,6 +993,7 @@ class AutomationEngine:
         was_overridden = self._manual_override
         self._manual_override = False
         self._override_mode = None
+        self._override_source = None
         self._override_time = None
 
         # Same gate as set_manual_override — autonomous clears (4h timeout,
@@ -1135,6 +1146,7 @@ class AutomationEngine:
         payload: dict[str, Any] = {
             "manual_override": self._manual_override,
             "override_mode": self._override_mode,
+            "override_source": self._override_source,
             "override_time_utc": (
                 self._override_time.astimezone(timezone.utc).isoformat()
                 if self._override_time is not None else None
@@ -1229,6 +1241,7 @@ class AutomationEngine:
                 return
 
         self._manual_override = True
+        self._override_source = saved.get("override_source")
         self._override_mode = mode
         self._override_time = override_time
         self._last_activity_change = override_time

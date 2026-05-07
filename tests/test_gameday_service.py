@@ -1,0 +1,510 @@
+"""
+Tests for GameDayService — schedule polling, play diffing, mode flips, parser.
+
+Mocks httpx; mocks AutomationEngine + WebSocketManager. Real ESPN response
+shapes are validated via tests/fixtures/espn_colts_2025_summary.json (Colts
+vs Dolphins, 2025-09-07, sampled once for parser-quality validation per
+spec §7).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from backend.services.gameday_service import (
+    COLTS_TEAM_ID,
+    GAMEDAY_AUTO_SOURCE,
+    POST_GAME_CLEAR_MINUTES,
+    PRE_KICKOFF_FLIP_MINUTES,
+    SCHEDULE_CACHE_TTL,
+    GameDayService,
+    GameDayState,
+    GameDayStateTransition,
+    PlayEvent,
+    _parse_espn_datetime,
+)
+
+
+FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "espn_colts_2025_summary.json"
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _mock_response(payload: dict, status: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = payload
+    return resp
+
+
+def _mock_client(responses: list[dict] | Exception) -> AsyncMock:
+    """httpx.AsyncClient mock — sequential responses or single exception."""
+    client = AsyncMock()
+    if isinstance(responses, Exception):
+        client.get = AsyncMock(side_effect=responses)
+    else:
+        client.get = AsyncMock(side_effect=[_mock_response(r) for r in responses])
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    return client
+
+
+def _make_automation_mock(
+    current_mode: str = "idle",
+    override_source: str | None = None,
+) -> AsyncMock:
+    """AutomationEngine stand-in. set_manual_override / clear_override are
+    AsyncMocks; current_mode + override_source are simple attributes the
+    test can read after."""
+    mock = MagicMock()
+    mock.current_mode = current_mode
+    mock.override_source = override_source
+    mock.set_manual_override = AsyncMock()
+    mock.clear_override = AsyncMock()
+    return mock
+
+
+def _make_ws_mock() -> MagicMock:
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
+    return ws
+
+
+def _make_service(automation=None, ws=None) -> GameDayService:
+    return GameDayService(
+        automation_engine=automation or _make_automation_mock(),
+        ws_manager=ws or _make_ws_mock(),
+    )
+
+
+def _schedule_event(
+    game_id: str,
+    kickoff_iso: str,
+    opponent_id: str = "15",
+    opponent_name: str = "Miami Dolphins",
+    status: str = "STATUS_SCHEDULED",
+) -> dict:
+    """Build an ESPN-shaped schedule event dict."""
+    return {
+        "id": game_id,
+        "date": kickoff_iso,
+        "name": f"{opponent_name} at Indianapolis Colts",
+        "shortName": "MIA @ IND",
+        "competitions": [
+            {
+                "status": {"type": {"name": status}},
+                "competitors": [
+                    {"team": {"id": COLTS_TEAM_ID, "displayName": "Indianapolis Colts"}},
+                    {"team": {"id": opponent_id, "displayName": opponent_name}},
+                ],
+            }
+        ],
+    }
+
+
+def _summary_payload(
+    status_name: str = "STATUS_IN_PROGRESS",
+    period: int = 2,
+    clock: str = "5:32",
+    score_colts: int = 14,
+    score_opp: int = 7,
+    plays: list[dict] | None = None,
+) -> dict:
+    """Build an ESPN-shaped /summary response."""
+    if plays is None:
+        plays = []
+    return {
+        "header": {
+            "competitions": [
+                {
+                    "status": {
+                        "type": {"name": status_name},
+                        "period": period,
+                        "clock": {"displayValue": clock},
+                    },
+                    "competitors": [
+                        {"team": {"id": COLTS_TEAM_ID, "abbreviation": "IND"},
+                         "score": str(score_colts)},
+                        {"team": {"id": "15", "abbreviation": "MIA"},
+                         "score": str(score_opp)},
+                    ],
+                }
+            ]
+        },
+        "drives": {"previous": [{"plays": plays}]},
+        "scoringPlays": [p for p in plays if p.get("scoringPlay")],
+    }
+
+
+def _td_play(play_id: str, text: str = "J.Taylor 5 yard run, TOUCHDOWN.") -> dict:
+    return {
+        "id": play_id,
+        "text": text,
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "RUSH TD"},
+        "type": {"text": "Rushing Touchdown"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 2},
+        "clock": {"displayValue": "5:32"},
+    }
+
+
+def _fg_play(play_id: str, text: str = "S.Shrader 24 yard field goal is GOOD.") -> dict:
+    return {
+        "id": play_id,
+        "text": text,
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "FG"},
+        "type": {"text": "Field Goal Good"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 1},
+        "clock": {"displayValue": "10:37"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Schedule + state
+# ---------------------------------------------------------------------------
+
+class TestSchedule:
+
+    async def test_no_game_returns_none(self):
+        svc = _make_service()
+        client = _mock_client([{"events": []}])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        assert svc.current_state() is None
+
+    async def test_schedule_parsing(self):
+        svc = _make_service()
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([{
+            "events": [
+                _schedule_event("401001", future, opponent_name="Miami Dolphins"),
+                _schedule_event("401002", future.replace("T", "T", 1),
+                                opponent_name="Houston Texans"),
+            ]
+        }])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            upcoming = await svc.get_upcoming_schedule(limit=5)
+        assert len(upcoming) == 2
+        assert upcoming[0]["opponent"] == "Miami Dolphins"
+        assert upcoming[0]["id"] == "401001"
+
+    async def test_cache_ttl(self):
+        svc = _make_service()
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%MZ")
+        sched = {"events": [_schedule_event("401001", future)]}
+
+        # First refresh hits httpx.
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=_mock_client([sched]),
+        ) as cm1:
+            await svc.connect()
+            assert cm1.called
+
+        # Second refresh within TTL — should NOT hit httpx (no client created).
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+        ) as cm2:
+            await svc._refresh_schedule_if_stale()
+            assert not cm2.called
+
+        # Expire the cache; next refresh hits httpx again.
+        svc._schedule_cache_time = time.time() - SCHEDULE_CACHE_TTL - 1
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=_mock_client([sched]),
+        ) as cm3:
+            await svc._refresh_schedule_if_stale()
+            assert cm3.called
+
+
+# ---------------------------------------------------------------------------
+# Play parsing
+# ---------------------------------------------------------------------------
+
+class TestPlayParser:
+
+    def test_td_player_extracted(self):
+        svc = _make_service()
+        play = svc._parse_play(_td_play("1", text="J.Taylor 5 yard run, TOUCHDOWN."))
+        assert play.play_type == "touchdown"
+        assert play.player == "J.Taylor"
+        assert play.scoring_team == "colts"
+
+    def test_fg_kicker_and_yards_extracted(self):
+        svc = _make_service()
+        play = svc._parse_play(_fg_play("2", text="S.Shrader 38 yard field goal is GOOD."))
+        assert play.play_type == "field_goal"
+        assert play.kicker == "S.Shrader"
+        assert play.yards == 38
+
+    def test_unparseable_text_falls_back_to_none(self):
+        svc = _make_service()
+        play = svc._parse_play({
+            "id": "x",
+            "text": "Weird unparseable description",
+            "scoringPlay": True,
+            "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        })
+        assert play.play_type == "touchdown"
+        assert play.player is None  # regex didn't match — graceful fallback
+
+    def test_real_fixture_finds_scoring_plays(self):
+        """Validates parser against a real 2025 Colts summary response.
+
+        Spec §7 open question: "confirm during slice A that play.description
+        reliably contains <player_name> for TD runs and <kicker_name> +
+        <yards> for FG." This test answers that question against the
+        2025-09-07 Colts vs Dolphins game.
+        """
+        with open(FIXTURE_PATH, encoding="utf-8") as f:
+            summary = json.load(f)
+
+        svc = _make_service()
+        scoring_plays = summary.get("scoringPlays") or []
+        assert len(scoring_plays) > 0, "fixture should have scoring plays"
+
+        parsed_tds = []
+        parsed_fgs = []
+        for raw in scoring_plays:
+            play = svc._parse_play(raw)
+            if play.play_type == "touchdown":
+                parsed_tds.append(play)
+            elif play.play_type == "field_goal":
+                parsed_fgs.append(play)
+
+        # At least one TD with an extractable player name.
+        td_with_player = [p for p in parsed_tds if p.player]
+        assert td_with_player, (
+            f"expected at least one TD with parseable player; "
+            f"got TDs: {[(p.description, p.player) for p in parsed_tds]}"
+        )
+
+        # At least one FG with extractable kicker + yards.
+        fg_with_kicker = [p for p in parsed_fgs if p.kicker and p.yards]
+        assert fg_with_kicker, (
+            f"expected at least one FG with parseable kicker+yards; "
+            f"got FGs: {[(p.description, p.kicker, p.yards) for p in parsed_fgs]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Play diffing
+# ---------------------------------------------------------------------------
+
+class TestPlayDiffing:
+
+    async def test_only_new_plays_emitted(self):
+        svc = _make_service()
+        # First tick — both plays are new.
+        first = _summary_payload(plays=[
+            _fg_play("p1"),
+            _td_play("p2"),
+        ])
+        new_plays = svc._extract_new_plays(first)
+        assert len(new_plays) == 2
+        assert {p.play_type for p in new_plays} == {"touchdown", "field_goal"}
+
+        # Second tick — same plays + one new TD. Only the new one fires.
+        second = _summary_payload(plays=[
+            _fg_play("p1"),
+            _td_play("p2"),
+            _td_play("p3", text="M.Pittman 12 yard pass, TOUCHDOWN."),
+        ])
+        new_plays = svc._extract_new_plays(second)
+        assert len(new_plays) == 1
+        assert new_plays[0].play_type == "touchdown"
+
+    async def test_play_callback_receives_event(self):
+        svc = _make_service()
+        received: list[PlayEvent] = []
+
+        async def cb(play):
+            received.append(play)
+
+        svc.register_on_play_event(cb)
+        await svc._fire_play_event(
+            PlayEvent(
+                timestamp=datetime.now(timezone.utc),
+                play_type="touchdown",
+                description="test",
+                player="J.Taylor", kicker=None, yards=None,
+                scoring_team="colts",
+            )
+        )
+        assert len(received) == 1
+        assert received[0].play_type == "touchdown"
+
+    async def test_synthetic_play_fires_callbacks(self):
+        svc = _make_service()
+        received: list[PlayEvent] = []
+
+        async def cb(play):
+            received.append(play)
+
+        svc.register_on_play_event(cb)
+        await svc.trigger_synthetic_play("touchdown")
+        assert len(received) == 1
+        assert received[0].description.startswith("[TEST]")
+
+
+# ---------------------------------------------------------------------------
+# Mode flips
+# ---------------------------------------------------------------------------
+
+class TestModeFlips:
+
+    async def test_t30_flip_when_kickoff_imminent(self):
+        automation = _make_automation_mock(current_mode="working")
+        svc = _make_service(automation=automation)
+
+        # Kickoff in 25 minutes — within the T-30 window.
+        kickoff_in_25 = (
+            datetime.now(timezone.utc) + timedelta(minutes=25)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_25)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+
+        automation.set_manual_override.assert_awaited_once_with(
+            "gameday", source=GAMEDAY_AUTO_SOURCE,
+        )
+
+    async def test_t30_no_flip_when_kickoff_far_away(self):
+        automation = _make_automation_mock(current_mode="working")
+        svc = _make_service(automation=automation)
+
+        kickoff_in_3h = (
+            datetime.now(timezone.utc) + timedelta(hours=3)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_3h)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+
+        automation.set_manual_override.assert_not_called()
+
+    async def test_t30_flip_idempotent_when_already_gameday(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        kickoff_in_25 = (
+            datetime.now(timezone.utc) + timedelta(minutes=25)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_25)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        # Already gameday — skip the flip.
+        automation.set_manual_override.assert_not_called()
+
+    async def test_post_game_clear_fires_when_source_still_gameday_auto(self):
+        automation = _make_automation_mock(
+            current_mode="gameday", override_source=GAMEDAY_AUTO_SOURCE,
+        )
+        svc = _make_service(automation=automation)
+        await svc._maybe_clear_postgame()
+        automation.clear_override.assert_awaited_once_with(source=GAMEDAY_AUTO_SOURCE)
+
+    async def test_post_game_clear_skipped_when_user_overrode(self):
+        automation = _make_automation_mock(
+            current_mode="working", override_source="api:192.168.1.30",
+        )
+        svc = _make_service(automation=automation)
+        await svc._maybe_clear_postgame()
+        # User touched it — don't clobber.
+        automation.clear_override.assert_not_called()
+
+    async def test_post_game_clear_scheduled_on_final_transition(self):
+        """When the game flips to final, a delayed clear task is scheduled."""
+        svc = _make_service()
+        assert svc._post_game_clear_task is None
+        svc._schedule_post_game_clear()
+        assert svc._post_game_clear_task is not None
+        # Cleanup — cancel the task so it doesn't run after the test.
+        svc._post_game_clear_task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# State transitions + WS broadcasts
+# ---------------------------------------------------------------------------
+
+class TestStateTransitions:
+
+    async def test_transition_callback_receives_event(self):
+        svc = _make_service()
+        received: list[GameDayStateTransition] = []
+
+        async def cb(t):
+            received.append(t)
+
+        svc.register_on_state_transition(cb)
+        await svc._fire_state_transition(
+            GameDayStateTransition(
+                from_status="pregame",
+                to_status="in-progress",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        assert len(received) == 1
+        assert received[0].from_status == "pregame"
+
+    async def test_ws_broadcast_on_state_update(self):
+        ws = _make_ws_mock()
+        svc = _make_service(ws=ws)
+        state = GameDayState(
+            status="in-progress", opponent="Dolphins",
+            kickoff_utc=None, score_colts=14, score_opp=7,
+            quarter=2, clock="5:32", possession="colts", last_play=None,
+        )
+        await svc._update_state(state)
+        ws.broadcast.assert_awaited_once()
+        args, _ = ws.broadcast.call_args
+        assert args[0] == "gameday_state"
+        assert args[1]["score_colts"] == 14
+
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+
+def test_parse_espn_datetime_handles_z_suffix():
+    dt = _parse_espn_datetime("2025-09-07T17:00Z")
+    assert dt is not None
+    assert dt.tzinfo is not None
+    assert dt.year == 2025 and dt.month == 9 and dt.day == 7
+
+
+def test_parse_espn_datetime_handles_offset():
+    dt = _parse_espn_datetime("2025-09-07T17:00:00+00:00")
+    assert dt is not None
+    assert dt.hour == 17
+
+
+def test_parse_espn_datetime_returns_none_for_garbage():
+    assert _parse_espn_datetime("not a date") is None
+    assert _parse_espn_datetime("") is None

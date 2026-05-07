@@ -323,11 +323,12 @@ async def lifespan(app: FastAPI):
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
     #
-    # Game Day Phase B (slice A) wires GameDayService here. Standard
-    # mode_playlists table entry for `gameday` carries the Colts pre-game
-    # playlist, so MusicMapper's existing on_mode_change auto-play handles
-    # the music side without needing a special callback ordering. See
-    # docs/GAMEDAY_SPEC.md §3.2 for the pre-game-flip sequence.
+    # GameDayService (Phase B slice A) does NOT register a mode-change
+    # callback — it sets modes (T-30 pre-kickoff, T+30 post-game clear),
+    # it doesn't listen. Its instantiation lives further down with the
+    # other late-stage services (~line 620). Music for `gameday` comes via
+    # mode_playlists + MusicMapper's existing on_mode_change auto-play —
+    # no callback ordering surgery needed. See docs/GAMEDAY_SPEC.md §3.2.
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
     automation.register_on_mode_change(ml_logger.on_mode_change)
@@ -619,6 +620,19 @@ async def lifespan(app: FastAPI):
 
     app.state.scheduler = scheduler
 
+    # Game Day service (Phase B slice A) — ESPN polling + Colts game state
+    # + auto-flip to gameday mode at T-30 / auto-clear at T+30. Subscribers
+    # for play events / state transitions register here in later slices
+    # (Slice B: CelebrationOrchestrator). Public read-only via /api/gameday/*.
+    from backend.services.gameday_service import GameDayService
+    gameday = GameDayService(
+        automation_engine=automation,
+        ws_manager=ws_manager,
+    )
+    await gameday.connect()
+    app.state.gameday = gameday
+    app_logger.info("GameDayService initialized")
+
     # Background tasks
     tasks: list[asyncio.Task] = []
 
@@ -657,6 +671,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(automation.run_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
+    tasks.append(asyncio.create_task(gameday.poll_state_loop()))
 
     # Camera presence detection (opt-in, runs on Latitude webcam)
     camera_enabled_setting = await load_setting("camera_enabled")
@@ -733,6 +748,7 @@ async def lifespan(app: FastAPI):
     #    already cancelled, so there's no race.
     await _safe_shutdown("hue_v2", hue_v2.close)
     await _safe_shutdown("rec_service", rec_service.close)
+    await _safe_shutdown("gameday", gameday.close)
     camera = getattr(app.state, "camera_service", None)
     if camera is not None:
         await _safe_shutdown("camera", camera.close)
