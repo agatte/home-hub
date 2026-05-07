@@ -533,6 +533,144 @@ class TestPerEventBaseVolume:
 # Lighting design rule: kitchen pair (L3 + L4)
 # ---------------------------------------------------------------------------
 
+class TestEventLoggerWiring:
+    """The orchestrator must mirror every successful set_light into the
+    EventLogger so celebrations show up in `light_adjustments`. Without
+    this, gameday choreography is invisible to get_state_history, the
+    nightly journal, and DB analytics.
+
+    Memory: ~/.claude/projects/.../project_celebration_no_event_log.md.
+    """
+
+    async def test_celebration_logs_to_event_logger(self):
+        """Kickoff is the smallest sequence (4 baseline steps, all at
+        delay_ms=0). Asserts every step produces a log_light_adjustment
+        call tagged trigger='celebration:kickoff'."""
+        hue = MagicMock()
+        hue.set_light = AsyncMock(return_value=True)
+        # Polled state cache — orchestrator reads `_last_states` for
+        # before-vector. Populate so before/after differs and the logger
+        # doesn't dedup.
+        hue._last_states = {
+            "1": {"name": "Lamp 1", "bri": 100, "hue": 8000, "sat": 100},
+            "2": {"name": "Lamp 2", "bri": 100, "hue": 8000, "sat": 100},
+            "3": {"name": "Kitchen 3", "bri": 100, "hue": 8000, "sat": 100},
+            "4": {"name": "Kitchen 4", "bri": 100, "hue": 8000, "sat": 100},
+        }
+
+        tts = MagicMock()
+        tts.speak = AsyncMock(return_value=True)
+
+        ws = MagicMock()
+        ws.broadcast = AsyncMock()
+
+        gameday = MagicMock()
+        gameday.current_state = MagicMock(
+            return_value=GameDayState(
+                status="in-progress",
+                opponent="Houston Texans",
+                kickoff_utc=datetime.now(timezone.utc),
+                score_colts=0,
+                score_opp=0,
+                quarter=1,
+                clock="15:00",
+                possession="colts",
+                last_play=None,
+            )
+        )
+
+        automation = MagicMock()
+        automation.current_mode = "gameday"
+        automation.is_dnd_active = MagicMock(return_value=False)
+
+        event_logger = MagicMock()
+        event_logger.log_light_adjustment = AsyncMock(return_value=None)
+
+        orch = CelebrationOrchestrator(
+            hue_service=hue,
+            tts_service=tts,
+            ws_manager=ws,
+            gameday_service=gameday,
+            automation_engine=automation,
+            camera_service=None,
+            event_logger=event_logger,
+        )
+
+        await orch.on_play_event(_kickoff_event())
+
+        kickoff_steps = CelebrationOrchestrator.SEQUENCES["kickoff"].light_steps
+        # set_light fired once per step.
+        assert hue.set_light.await_count == len(kickoff_steps)
+
+        # And every successful set_light produced a log_light_adjustment.
+        assert event_logger.log_light_adjustment.await_count == len(kickoff_steps)
+        assert event_logger.log_light_adjustment.await_count >= 4
+
+        # Every call must be tagged with the celebration trigger prefix.
+        for call in event_logger.log_light_adjustment.await_args_list:
+            kwargs = call.kwargs
+            assert "trigger" in kwargs
+            assert kwargs["trigger"].startswith("celebration:"), (
+                f"trigger should start with 'celebration:', got {kwargs['trigger']!r}"
+            )
+            assert kwargs["trigger"] == "celebration:kickoff"
+            # mode_at_time threaded through from the automation engine.
+            assert kwargs.get("mode_at_time") == "gameday"
+
+    async def test_celebration_works_without_event_logger(self):
+        """event_logger=None (the backwards-compat default) must not break
+        the sequence — set_light still fires, no log calls attempted."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        # Default _make_orchestrator omits event_logger → None.
+        assert orch._event_logger is None
+
+        await orch.on_play_event(_kickoff_event())
+
+        kickoff_steps = CelebrationOrchestrator.SEQUENCES["kickoff"].light_steps
+        assert hue.set_light.await_count == len(kickoff_steps)
+        # No exception raised, sequence ran end-to-end.
+        ws.broadcast.assert_awaited_once()
+
+    async def test_set_light_failure_skips_log(self):
+        """If hue.set_light raises, the corresponding log_light_adjustment
+        must NOT be called — we only mirror confirmed bridge writes."""
+        hue = MagicMock()
+        # First step raises, rest succeed.
+        hue.set_light = AsyncMock(side_effect=[
+            RuntimeError("bridge timeout"), True, True, True,
+        ])
+        hue._last_states = {
+            "1": {"name": "Lamp 1", "bri": 100, "hue": 8000, "sat": 100},
+            "2": {"name": "Lamp 2", "bri": 100, "hue": 8000, "sat": 100},
+            "3": {"name": "Kitchen 3", "bri": 100, "hue": 8000, "sat": 100},
+            "4": {"name": "Kitchen 4", "bri": 100, "hue": 8000, "sat": 100},
+        }
+
+        tts = MagicMock()
+        tts.speak = AsyncMock(return_value=True)
+        ws = MagicMock()
+        ws.broadcast = AsyncMock()
+        gameday = MagicMock()
+        gameday.current_state = MagicMock(return_value=None)
+
+        event_logger = MagicMock()
+        event_logger.log_light_adjustment = AsyncMock(return_value=None)
+
+        orch = CelebrationOrchestrator(
+            hue_service=hue,
+            tts_service=tts,
+            ws_manager=ws,
+            gameday_service=gameday,
+            event_logger=event_logger,
+        )
+
+        await orch.on_play_event(_kickoff_event())
+
+        # 4 set_light attempts (1 failure, 3 successes), but only 3 log calls.
+        assert hue.set_light.await_count == 4
+        assert event_logger.log_light_adjustment.await_count == 3
+
+
 class TestKitchenPairRule:
     """Gameday is a functional mode → kitchen pair (lights 3 + 4) MUST
     match in every authored sequence frame. We verify by walking each

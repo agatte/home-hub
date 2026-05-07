@@ -310,6 +310,7 @@ class CelebrationOrchestrator:
         gameday_service: Any,
         automation_engine: Any = None,
         camera_service: Any = None,
+        event_logger: Any = None,
     ) -> None:
         self._hue = hue_service
         self._tts = tts_service
@@ -324,6 +325,13 @@ class CelebrationOrchestrator:
         # tests that haven't been updated.
         self._automation = automation_engine
         self._camera = camera_service
+        # event_logger is optional for the same backwards-compat reason.
+        # When wired, every successful set_light inside a sequence emits a
+        # `light_adjustments` row tagged `trigger="celebration:<key>"` so
+        # celebrations show up in get_state_history / nightly journal /
+        # DB analytics. Bypass-fire-and-forget by contract: a logging
+        # exception must never bubble into _run_light_steps.
+        self._event_logger = event_logger
         self._last_celebration_at: float = 0.0
 
     def set_automation_engine(self, automation_engine: Any) -> None:
@@ -444,20 +452,35 @@ class CelebrationOrchestrator:
         # 2. Run lights + TTS in parallel. asyncio.gather catches per-task
         #    exceptions so a bridge hiccup doesn't kill the TTS line.
         await asyncio.gather(
-            self._run_light_steps(sequence.light_steps),
+            self._run_light_steps(sequence.light_steps, key),
             self._run_tts(sequence, context, target_volume),
             return_exceptions=True,
         )
 
-    async def _run_light_steps(self, steps: list[LightStep]) -> None:
+    async def _run_light_steps(
+        self, steps: list[LightStep], sequence_key: str,
+    ) -> None:
         """Walk an ordered list of LightSteps, sleeping cumulatively from
-        the sequence start. Each step's `delay_ms` is anchored to t=0."""
+        the sequence start. Each step's `delay_ms` is anchored to t=0.
+
+        Each successful set_light is mirrored into the EventLogger with
+        `trigger=f"celebration:{sequence_key}"` so the write shows up in
+        `light_adjustments` (queryable via `WHERE trigger LIKE 'celebration:%'`).
+        Without this, every gameday celebration is invisible to
+        get_state_history, the nightly journal, and DB analytics — the
+        bridge writes go through hue.set_light directly, which doesn't
+        sit behind EventLogger middleware.
+        """
         if not steps:
             return
         # Sort defensively; authored sequences should already be in order
         # but this protects against future hand-edits.
         steps_sorted = sorted(steps, key=lambda s: s.delay_ms)
         start = time.time()
+        # Snapshot of the bridge's polled state, used as the before-vector
+        # for log_light_adjustment. Falls back to {} if the hue service has
+        # no _last_states attribute (e.g. a future stub or a test mock).
+        last_states = getattr(self._hue, "_last_states", None)
         for step in steps_sorted:
             target = start + (step.delay_ms / 1000.0)
             wait = target - time.time()
@@ -466,6 +489,16 @@ class CelebrationOrchestrator:
                     await asyncio.sleep(wait)
                 except asyncio.CancelledError:
                     raise
+
+            # Snapshot prev BEFORE the write so log_light_adjustment gets
+            # accurate before/after pairs. We re-read on each step rather
+            # than caching across the loop because earlier steps may have
+            # already moved the bulb (sequences pulse the same light
+            # multiple times).
+            prev: dict = {}
+            if isinstance(last_states, dict):
+                prev = last_states.get(step.light_id) or {}
+
             try:
                 await self._hue.set_light(step.light_id, step.state)
             except Exception:
@@ -473,6 +506,33 @@ class CelebrationOrchestrator:
                     "celebration: set_light failed light=%s step_delay=%dms",
                     step.light_id, step.delay_ms,
                 )
+                # Skip the log call on failure — there's no confirmed
+                # bridge write to mirror.
+                continue
+
+            # Emit the EventLogger row. Wrapped defensively even though
+            # log_light_adjustment is fire-and-forget by contract; a
+            # future bug must not break the celebration loop.
+            if self._event_logger is not None:
+                try:
+                    mode_at_time = getattr(self._automation, "current_mode", None)
+                    new = step.state
+                    await self._event_logger.log_light_adjustment(
+                        light_id=step.light_id,
+                        light_name=prev.get("name"),
+                        bri_before=prev.get("bri"), bri_after=new.get("bri"),
+                        hue_before=prev.get("hue"), hue_after=new.get("hue"),
+                        sat_before=prev.get("sat"), sat_after=new.get("sat"),
+                        ct_before=prev.get("ct"), ct_after=new.get("ct"),
+                        mode_at_time=mode_at_time,
+                        trigger=f"celebration:{sequence_key}",
+                    )
+                except Exception:
+                    logger.exception(
+                        "celebration: event_logger.log_light_adjustment "
+                        "failed light=%s sequence=%s",
+                        step.light_id, sequence_key,
+                    )
 
     async def _run_tts(
         self,

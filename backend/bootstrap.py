@@ -649,6 +649,12 @@ async def lifespan(app: FastAPI):
         # later in this lifespan; we call set_camera_service() once it's
         # available.
         camera_service=None,
+        # event_logger mirrors every set_light from a celebration sequence
+        # into the `light_adjustments` table (trigger="celebration:<key>"),
+        # so gameday choreography shows up in get_state_history / the
+        # nightly journal / DB analytics. Without this, those writes only
+        # land in journalctl.
+        event_logger=event_logger,
     )
     gameday.register_on_play_event(celebration.on_play_event)
     gameday.register_on_state_transition(celebration.on_state_transition)
