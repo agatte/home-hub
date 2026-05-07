@@ -29,6 +29,12 @@
   // bottom-tab nav via /guest/+layout@.svelte + GuestBottomNav.
   $: isGuestRoute = $page.url.pathname.startsWith('/guest')
 
+  // /gameday goes edge-to-edge — the football field is the visual, so the
+  // generative ModeBackground is suppressed and the .app container loses
+  // its max-width + padding. Other chrome (FloatingNav, VitalStrip,
+  // ModeOverlay, NowPlayingChip) stays and layers over the field.
+  $: isGamedayRoute = $page.url.pathname === '/gameday'
+
   onMount(() => {
     const cleanupStores = initStores()
     const cleanupActivity = initActivityTracking()
@@ -37,14 +43,16 @@
   })
 </script>
 
-{#if !isGuestRoute}
+{#if !isGuestRoute && !isGamedayRoute}
   <ModeBackground />
+{/if}
+{#if !isGuestRoute}
   <ModeOverlay />
   <NowPlayingIdle />
 {/if}
 
 <div class="app-shell" class:user-idle={$userIdle}>
-  <div class="app">
+  <div class:app={!isGamedayRoute} class:app-bleed={isGamedayRoute}>
     <slot />
     {#if $connectionLost && !isGuestRoute}
       <div class="reconnect-banner">Reconnecting to server...</div>

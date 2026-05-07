@@ -126,6 +126,15 @@ button:active, .btn:active, [role="button"]:active {
   }
 }
 
+/* Edge-to-edge container — used on /gameday so the football field bleeds
+   to the viewport edges. Chrome (FloatingNav, VitalStrip, etc.) layers on
+   top via its existing fixed positioning + backdrop blur. */
+.app-bleed {
+  position: relative;
+  width: 100%;
+  min-height: 100dvh;
+}
+
 /* (Sidebar removed — replaced by FloatingNav + ModeOverlay) */
 
 /* (Quick actions now use component-scoped styles) */
