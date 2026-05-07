@@ -279,7 +279,8 @@
             { "id": "social",   "name": { "value": "social",   "synonyms": ["party", "company", "guests", "hosting"] } },
             { "id": "relax",    "name": { "value": "relax",    "synonyms": ["chill", "lounge", "wind down", "winding down"] } },
             { "id": "cooking",  "name": { "value": "cooking",  "synonyms": ["kitchen", "cook", "chef"] } },
-            { "id": "sleeping", "name": { "value": "sleeping", "synonyms": ["bed", "bedtime", "sleep", "good night"] } }
+            { "id": "sleeping", "name": { "value": "sleeping", "synonyms": ["bed", "bedtime", "sleep", "good night"] } },
+            { "id": "gameday",  "name": { "value": "gameday",  "synonyms": ["game day", "colts", "colts game", "football", "football mode"] } }
           ]
         },
         {

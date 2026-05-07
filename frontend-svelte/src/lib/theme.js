@@ -97,6 +97,17 @@ export const MODE_CONFIG = {
       secondaryColor: '#ea580c', accentColor: '#fed7aa',
     },
   },
+  gameday: {
+    label: 'Game Day', icon: '🏈', lucide: 'trophy', color: '#003594',
+    generative: {
+      blobCount: 4, blobOpacity: 0.20, blobSpeed: 0.5,
+      particleCount: 220, particleSize: 3, particleSpeed: 0.6,
+      particleTrail: 0.02, particleIntensity: 0.42, particleStyle: 'streaks',
+      geoPattern: 'radial', geoOpacity: 0.05,
+      musicBlobPulse: 0.18, musicSpeedBoost: 1.5, noiseFrequency: 0.8,
+      secondaryColor: '#a2aaad', accentColor: '#fbbf24',
+    },
+  },
   sleeping: {
     label: 'Sleeping', icon: '😴', lucide: 'moon', color: '#1e3a8a',
     generative: {

@@ -59,7 +59,7 @@ _current_intent_ctx: ContextVar[str] = ContextVar(
 # (ReleaseOverrideIntent) instead of being a SetModeIntent slot value.
 VALID_MODES = frozenset({
     "gaming", "working", "watching", "social",
-    "relax", "cooking", "sleeping",
+    "relax", "cooking", "sleeping", "gameday",
 })
 
 # Hue v2 dynamic effects exposed by the backend (`/api/scenes/effects`).
@@ -215,7 +215,7 @@ def _handle_set_mode(slots: dict) -> dict:
     mode = _slot_value(slots, "Mode")
     if not mode:
         return _speak("Which mode? You can say gaming, working, relax, "
-                      "watching, social, cooking, or sleeping. "
+                      "watching, social, cooking, sleeping, or game day. "
                       "For automatic, just say auto.")
     if mode not in VALID_MODES:
         return _speak(f"I don't know the mode {mode}.")
