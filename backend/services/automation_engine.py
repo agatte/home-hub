@@ -843,11 +843,17 @@ class AutomationEngine:
         if mode not in ("idle",):
             self._external_off_detected = False
 
-        # Apply the appropriate light state. force_resend=True because this
-        # branch only runs when the resolved mode actually changed — bridge
-        # state may have drifted (effects, external writes, prior overrides)
-        # and the cache should be invalidated.
-        await self._apply_mode(mode, force_resend=True)
+        # Apply the appropriate light state. force_resend=True only on a
+        # real mode change — invalidates the per-light dedup cache so any
+        # bridge drift from effects / external writes / prior overrides
+        # gets re-corrected. Same-mode heartbeats (PC agent fires every
+        # 5s in steady state) ride the cache so identical-state writes
+        # are suppressed; lux multiplier updates still propagate because
+        # _apply_mode runs the full state pipeline either way. The 2026-
+        # 05-06 audit found this branch was unconditionally clearing the
+        # cache on every report, producing ~3.5 no-op bridge writes per
+        # minute on L2 with bri_before=null in the log timeline.
+        await self._apply_mode(mode, force_resend=(old_mode != mode))
 
         # Fire mode change callbacks (e.g., music auto-play)
         if old_mode != mode:

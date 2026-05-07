@@ -28,10 +28,15 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 class TestModePriority:
     """Verify mode priority ordering is correct."""
 
-    def test_gaming_is_highest(self):
-        assert MODE_PRIORITY["gaming"] == max(MODE_PRIORITY.values())
+    def test_gameday_is_highest(self):
+        # gameday=6 (Decision 1.6 in docs/GAMEDAY_SPEC.md) — top auto-
+        # detected slot, sits above gaming so a Colts game during a
+        # Madden session still flips the room into team-color mode.
+        assert MODE_PRIORITY["gameday"] == max(MODE_PRIORITY.values())
+        assert MODE_PRIORITY["gameday"] > MODE_PRIORITY["gaming"]
 
     def test_priority_ordering(self):
+        assert MODE_PRIORITY["gameday"] > MODE_PRIORITY["gaming"]
         assert MODE_PRIORITY["gaming"] > MODE_PRIORITY["social"]
         assert MODE_PRIORITY["social"] > MODE_PRIORITY["watching"]
         assert MODE_PRIORITY["watching"] > MODE_PRIORITY["working"]
@@ -41,7 +46,10 @@ class TestModePriority:
         assert MODE_PRIORITY["sleeping"] == 0
 
     def test_all_expected_modes_present(self):
-        expected = {"sleeping", "idle", "working", "watching", "cooking", "social", "gaming"}
+        expected = {
+            "sleeping", "idle", "working", "watching", "cooking",
+            "social", "gaming", "gameday",
+        }
         assert set(MODE_PRIORITY.keys()) == expected
 
 
@@ -1109,6 +1117,60 @@ class TestApplyModeDedup:
         calls = self._wrap_set_light(mock_hue)
         await engine._apply_mode("working")  # no kwarg → default False
         assert calls == []
+
+    async def test_same_mode_report_does_not_thrash_bridge(
+        self, engine, mock_hue,
+    ):
+        """Regression test for the 2026-05-06 L2 churn audit.
+
+        report_activity used to call _apply_mode(force_resend=True)
+        unconditionally, which cleared _last_applied_per_light on every
+        PC-agent heartbeat and produced ~3.5 no-op bridge writes per
+        minute on L2 (logged with bri_before=null because the cache had
+        just been wiped). The fix gates force_resend on
+        old_mode != mode — same-mode heartbeats now ride the per-light
+        dedup, so identical-state writes are suppressed. This test locks
+        in that invariant.
+        """
+        # First report establishes the mode and pre-populates the cache
+        # (the very first apply will go to the bridge — that's the one
+        # legitimate write at session start).
+        await engine.report_activity("working", source="process")
+
+        # Wrap and count subsequent bridge writes only.
+        calls = self._wrap_set_light(mock_hue)
+
+        # Three same-mode heartbeats — what the PC agent does at 5s
+        # cadence in steady state. With the fix, none of them should
+        # reach the bridge (state hasn't changed, dedup catches them).
+        await engine.report_activity("working", source="process")
+        await engine.report_activity("working", source="process")
+        await engine.report_activity("working", source="process")
+
+        assert calls == [], (
+            f"same-mode heartbeats wrote to {calls}; force_resend should be "
+            f"False on no-mode-change reports so the dedup cache is preserved"
+        )
+
+    async def test_mode_change_report_still_invalidates_cache(
+        self, engine, mock_hue,
+    ):
+        """Counterpart to the above — when the mode actually changes,
+        force_resend must still be True so any bridge drift accumulated
+        during the prior mode (effects, external writes, override
+        releases) gets re-corrected on the transition."""
+        await engine.report_activity("working", source="process")
+
+        calls = self._wrap_set_light(mock_hue)
+
+        # Real mode change: working → gaming. Cache should be cleared,
+        # bridge should receive new state.
+        await engine.report_activity("gaming", source="process")
+
+        assert len(calls) > 0, (
+            "mode change should invalidate the cache and write new state "
+            "to the bridge"
+        )
 
 
 # ---------------------------------------------------------------------------
