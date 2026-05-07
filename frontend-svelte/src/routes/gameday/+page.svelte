@@ -66,7 +66,7 @@
 </script>
 
 <main class="gameday-page">
-  <FootballField game={state} lastPlay={lastPlay} />
+  <FootballField game={state} />
 
   {#if hasGame}
     <header class="hud hud-scoreboard">
@@ -249,10 +249,5 @@
       max-width: calc(100vw - 32px);
     }
     .last-play-text { font-size: 13px; }
-
-    .field-stub-hint {
-      bottom: 120px;
-      font-size: 10px;
-    }
   }
 </style>

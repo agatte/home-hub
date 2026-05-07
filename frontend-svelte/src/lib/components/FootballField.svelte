@@ -38,16 +38,6 @@
    */
   export let game = null
 
-  /**
-   * Latest PlayEvent. Currently unused inside the field render (the
-   * scoreboard already reflects scores; ball animation tracks
-   * possession). Reserved for future trajectory animations on touchdown
-   * or field goal events.
-   * @type {object | null}
-   */
-  // eslint-disable-next-line no-unused-vars
-  export let lastPlay = null
-
   /** @type {{ primary: string, secondary: string }} */
   export let theme = { primary: '#002C5F', secondary: '#FFFFFF' }
 
