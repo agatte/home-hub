@@ -17,6 +17,7 @@ from sqlalchemy import Integer, delete, func, select, update
 
 from backend.database import async_session
 from backend.models import ActivityEvent, MLDecision, MLMetric
+from backend.services.ml.feature_builder import PREDICTABLE_MODES
 
 logger = logging.getLogger("home_hub.ml")
 
@@ -113,6 +114,7 @@ class MLDecisionLogger:
 
     async def backfill_actual_range(
         self, actual_mode: str, since: Optional[datetime],
+        *, exclude_sources: Optional[tuple[str, ...]] = None,
     ) -> int:
         """Tag every decision row in [since, now] that lacks actual_mode.
 
@@ -126,6 +128,59 @@ class MLDecisionLogger:
         older than the cap stay NULL and correctly drop out of
         ``compute_accuracy_by_source``.
 
+        ``exclude_sources`` skips rows from listed ``decision_source``
+        values — used by ``on_mode_change`` to hand off predictor rows
+        (``decision_source='ml'``) to ``backfill_predictor_actual_range``,
+        which tags them with the *entering* mode rather than the
+        *leaving* mode.
+
+        Returns the number of rows updated (0 on error or empty window).
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            cap_cutoff = now - timedelta(hours=self._BACKFILL_MAX_HOURS)
+            effective_since = max(since, cap_cutoff) if since else cap_cutoff
+
+            async with async_session() as session:
+                stmt = (
+                    update(MLDecision)
+                    .where(
+                        MLDecision.actual_mode.is_(None),
+                        MLDecision.timestamp >= effective_since,
+                    )
+                )
+                if exclude_sources:
+                    stmt = stmt.where(
+                        MLDecision.decision_source.notin_(exclude_sources)
+                    )
+                result = await session.execute(
+                    stmt.values(actual_mode=actual_mode)
+                )
+                await session.commit()
+                return result.rowcount or 0
+        except Exception as exc:
+            logger.error(
+                "Failed to backfill actual mode range: %s", exc, exc_info=True,
+            )
+            return 0
+
+    async def backfill_predictor_actual_range(
+        self, new_mode: str, since: Optional[datetime],
+    ) -> int:
+        """Tag predictor rows in [since, now] with the mode being entered.
+
+        The behavioral predictor is gated to log only when the engine's
+        current mode is ``idle`` (see ``automation_engine.py:~2124``).
+        Each row's ``predicted_mode`` is a forecast of "the next non-idle
+        mode that will activate". The semantically meaningful truth tag
+        is therefore the ``new_mode`` being entered, not the ``idle``
+        mode being left — which is what ``backfill_actual_range`` would
+        have written. Caller (``on_mode_change``) gates this on a real
+        idle → predictable-mode transition.
+
+        Cap the window to ``_BACKFILL_MAX_HOURS`` to match the standard
+        backfill — rows older than the cap stay NULL.
+
         Returns the number of rows updated (0 on error or empty window).
         """
         try:
@@ -137,16 +192,18 @@ class MLDecisionLogger:
                 result = await session.execute(
                     update(MLDecision)
                     .where(
+                        MLDecision.decision_source == "ml",
                         MLDecision.actual_mode.is_(None),
                         MLDecision.timestamp >= effective_since,
                     )
-                    .values(actual_mode=actual_mode)
+                    .values(actual_mode=new_mode)
                 )
                 await session.commit()
                 return result.rowcount or 0
         except Exception as exc:
             logger.error(
-                "Failed to backfill actual mode range: %s", exc, exc_info=True,
+                "Failed to backfill predictor actual mode range: %s",
+                exc, exc_info=True,
             )
             return 0
 
@@ -154,15 +211,35 @@ class MLDecisionLogger:
         """Mode-change callback — backfills the just-ended session window.
 
         Tags every decision row written between the previous transition
-        (or a 2h cap, whichever is smaller) and now with the mode that
-        was active during that window. The first call after startup has
-        no previous mode to backfill — it just records state.
+        (or a 2h cap, whichever is smaller) and now. Two passes:
+
+        1. **Standard backfill** for non-predictor rows — tags with
+           ``self._last_mode`` (the mode that was active during the
+           window). Used by process / camera / fusion / audio_ml /
+           rule_engine lanes.
+
+        2. **Predictor backfill** for ``decision_source='ml'`` rows on
+           idle → predictable-mode transitions — tags with ``new_mode``
+           (the entering mode). The predictor logs only during idle,
+           so its rows are forecasts of "what mode comes next"; the
+           truth is the new mode being entered, not the idle mode being
+           left. Skipped on transitions to non-predictable modes
+           (sleeping, retired modes) so predictor rows stay NULL rather
+           than getting a meaningless tag.
+
+        The first call after startup has no previous mode to backfill —
+        it just records state.
         """
         now = datetime.now(timezone.utc)
         if self._last_mode is not None:
             await self.backfill_actual_range(
                 self._last_mode, self._last_transition_at,
+                exclude_sources=("ml",),
             )
+            if self._last_mode == "idle" and new_mode in PREDICTABLE_MODES:
+                await self.backfill_predictor_actual_range(
+                    new_mode, self._last_transition_at,
+                )
         self._last_mode = new_mode
         self._last_transition_at = now
 

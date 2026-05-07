@@ -96,6 +96,100 @@ class TestOnModeChange:
 
 
 @pytest.mark.asyncio
+class TestOnModeChangePredictor:
+    """Predictor rows (decision_source='ml') get tagged with the entering
+    mode on idle → predictable-mode transitions, not the leaving mode.
+
+    The predictor is gated to log only while current_mode='idle' (see
+    automation_engine.py). Each row's predicted_mode is a forecast of
+    "what mode comes next out of idle"; the truth tag is the new mode
+    being entered. Without this branch, every predictor row would be
+    tagged actual_mode='idle' and predicted != actual would always hold.
+    """
+
+    async def test_idle_to_working_tags_ml_rows_with_working(
+        self, logger, ml_db,
+    ):
+        # Establish session start in idle.
+        await logger.on_mode_change("idle")
+        # Predictor logs a forecast during idle.
+        await logger.log_decision(
+            predicted_mode="working", confidence=0.92,
+            decision_source="ml", broadcast=False,
+        )
+        # Idle → working: predictor row should be tagged 'working'.
+        await logger.on_mode_change("working")
+
+        async with ml_db() as session:
+            row = (await session.execute(select(MLDecision))).scalar_one()
+        assert row.decision_source == "ml"
+        assert row.actual_mode == "working"
+
+    async def test_non_predictor_rows_use_leaving_mode_semantics(
+        self, logger, ml_db,
+    ):
+        # Standard backfill semantics preserved for other lanes — the
+        # predictor branch in on_mode_change must not affect them.
+        await logger.on_mode_change("idle")
+        await logger.log_decision(
+            predicted_mode="working", confidence=0.8,
+            decision_source="process", broadcast=False,
+        )
+        await logger.log_decision(
+            predicted_mode="working", confidence=0.7,
+            decision_source="fusion", broadcast=False,
+        )
+        await logger.on_mode_change("working")
+
+        async with ml_db() as session:
+            rows = (await session.execute(
+                select(MLDecision).order_by(MLDecision.id.asc())
+            )).scalars().all()
+        # Both non-ml rows tagged with the leaving mode (idle).
+        assert rows[0].decision_source == "process"
+        assert rows[0].actual_mode == "idle"
+        assert rows[1].decision_source == "fusion"
+        assert rows[1].actual_mode == "idle"
+
+    async def test_working_to_gaming_no_predictor_backfill(
+        self, logger, ml_db,
+    ):
+        # Predictor doesn't log during non-idle; the new branch is gated
+        # on _last_mode='idle'. If an ml row somehow exists in a
+        # non-idle window, it must NOT get tagged via either path
+        # (standard backfill excludes ml; predictor backfill needs
+        # _last_mode='idle' which isn't true here).
+        await logger.on_mode_change("working")
+        await logger.log_decision(
+            predicted_mode="gaming", confidence=0.6,
+            decision_source="ml", broadcast=False,
+        )
+        await logger.on_mode_change("gaming")
+
+        async with ml_db() as session:
+            row = (await session.execute(select(MLDecision))).scalar_one()
+        assert row.decision_source == "ml"
+        assert row.actual_mode is None
+
+    async def test_idle_to_sleeping_skips_predictor_backfill(
+        self, logger, ml_db,
+    ):
+        # 'sleeping' is not in PREDICTABLE_MODES — predictor never
+        # predicts it, so tagging would be meaningless. Row stays NULL.
+        await logger.on_mode_change("idle")
+        await logger.log_decision(
+            predicted_mode="working", confidence=0.5,
+            decision_source="ml", broadcast=False,
+        )
+        await logger.on_mode_change("sleeping")
+
+        async with ml_db() as session:
+            row = (await session.execute(select(MLDecision))).scalar_one()
+        assert row.decision_source == "ml"
+        assert row.actual_mode is None
+
+
+@pytest.mark.asyncio
 class TestBackfillActualRange:
     async def test_only_updates_rows_since_cutoff(self, logger, ml_db):
         """A row older than `since` and the 2h cap stays NULL."""
@@ -124,6 +218,37 @@ class TestBackfillActualRange:
             rows = result.scalars().all()
         assert rows[0].actual_mode is None  # old row untouched
         assert rows[1].actual_mode == "working"
+
+    async def test_exclude_sources_skips_listed_lanes(self, logger, ml_db):
+        """exclude_sources=('ml',) keeps predictor rows untouched while
+        still tagging other lanes — used by on_mode_change to hand off
+        predictor rows to backfill_predictor_actual_range."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=10)
+        async with ml_db() as session:
+            session.add(MLDecision(
+                timestamp=recent, predicted_mode="working", confidence=0.9,
+                decision_source="ml", applied=False,
+            ))
+            session.add(MLDecision(
+                timestamp=recent, predicted_mode="working", confidence=0.9,
+                decision_source="fusion", applied=True,
+            ))
+            await session.commit()
+
+        n = await logger.backfill_actual_range(
+            "idle", since=datetime.now(timezone.utc) - timedelta(minutes=30),
+            exclude_sources=("ml",),
+        )
+        assert n == 1  # only fusion row tagged
+
+        async with ml_db() as session:
+            rows = (await session.execute(
+                select(MLDecision).order_by(MLDecision.id.asc())
+            )).scalars().all()
+        ml_row = next(r for r in rows if r.decision_source == "ml")
+        fusion_row = next(r for r in rows if r.decision_source == "fusion")
+        assert ml_row.actual_mode is None
+        assert fusion_row.actual_mode == "idle"
 
 
 @pytest.mark.asyncio
