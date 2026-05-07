@@ -1,0 +1,378 @@
+"""
+Tests for CelebrationOrchestrator — light + TTS choreography for gameday.
+
+Mocks HueService, TTSService, WebSocketManager, and GameDayService.
+Validates per-event dispatch, cooldown, win/loss split, TTS template
+substitution, and synthetic-test-event passthrough. Spec: docs/GAMEDAY_SPEC.md.
+"""
+from __future__ import annotations
+
+import time
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from backend.services.celebration_orchestrator import (
+    CelebrationOrchestrator,
+    CelebrationSequence,
+    LightStep,
+)
+from backend.services.gameday_service import (
+    GameDayState,
+    GameDayStateTransition,
+    PlayEvent,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_orchestrator(
+    *,
+    score_colts: int = 21,
+    score_opp: int = 14,
+    opponent: str = "Houston Texans",
+) -> tuple[CelebrationOrchestrator, MagicMock, MagicMock, MagicMock, MagicMock]:
+    """Build an orchestrator with all-mock collaborators; return the tuple
+    (orch, hue, tts, ws, gameday) so tests can assert on each."""
+    hue = MagicMock()
+    hue.set_light = AsyncMock(return_value=True)
+
+    tts = MagicMock()
+    tts.speak = AsyncMock(return_value=True)
+
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
+
+    gameday = MagicMock()
+    gameday.current_state = MagicMock(
+        return_value=GameDayState(
+            status="in-progress",
+            opponent=opponent,
+            kickoff_utc=datetime.now(timezone.utc),
+            score_colts=score_colts,
+            score_opp=score_opp,
+            quarter=2,
+            clock="5:32",
+            possession="colts",
+            last_play=None,
+        )
+    )
+
+    orch = CelebrationOrchestrator(
+        hue_service=hue,
+        tts_service=tts,
+        ws_manager=ws,
+        gameday_service=gameday,
+    )
+    return orch, hue, tts, ws, gameday
+
+
+def _td_event(player: str = "Jonathan Taylor") -> PlayEvent:
+    return PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type="touchdown",
+        description=f"{player} 5 Yd Rush (Spencer Shrader Kick)",
+        player=player,
+        kicker=None,
+        yards=None,
+        scoring_team="colts",
+    )
+
+
+def _fg_event(kicker: str = "Spencer Shrader", yards: int = 42) -> PlayEvent:
+    return PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type="field_goal",
+        description=f"{kicker} {yards} Yd Field Goal",
+        player=None,
+        kicker=kicker,
+        yards=yards,
+        scoring_team="colts",
+    )
+
+
+def _kickoff_event() -> PlayEvent:
+    return PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type="kickoff",
+        description="Kickoff",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team=None,
+    )
+
+
+def _other_event() -> PlayEvent:
+    return PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type="other",
+        description="3rd down conversion",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team="colts",
+    )
+
+
+def _final_transition() -> GameDayStateTransition:
+    return GameDayStateTransition(
+        from_status="in-progress",
+        to_status="final",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Touchdown
+# ---------------------------------------------------------------------------
+
+class TestTouchdown:
+
+    async def test_td_fires_lights_tts_and_broadcast(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_td_event(player="Jonathan Taylor"))
+
+        # WS broadcast first.
+        ws.broadcast.assert_awaited_once()
+        msg_type, payload = ws.broadcast.await_args.args
+        assert msg_type == "gameday_celebration"
+        assert payload["sequence_key"] == "touchdown"
+        assert "started_at" in payload
+
+        # Lights: every TD step should have produced a set_light call.
+        td_steps = CelebrationOrchestrator.SEQUENCES["touchdown"].light_steps
+        assert hue.set_light.await_count == len(td_steps)
+
+        # TTS: exactly one call, text substituted with the player name.
+        tts.speak.assert_awaited_once()
+        text = tts.speak.await_args.args[0]
+        assert "Jonathan Taylor" in text
+        # Volume routed via the duck_volume default.
+        assert tts.speak.await_args.kwargs.get("volume") == 10
+
+    async def test_td_synthetic_test_event_fires(self):
+        """The /api/gameday/test/touchdown route emits a synthetic PlayEvent
+        whose description starts with `[TEST]`. The orchestrator must run
+        it normally — this is the path Anthony uses to tune sequences."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        synthetic = PlayEvent(
+            timestamp=datetime.now(timezone.utc),
+            play_type="touchdown",
+            description="[TEST] Synthetic touchdown",
+            player="Test Player",
+            kicker=None,
+            yards=None,
+            scoring_team="colts",
+        )
+        await orch.on_play_event(synthetic)
+
+        # Sequence runs end-to-end.
+        ws.broadcast.assert_awaited_once()
+        assert hue.set_light.await_count > 0
+        tts.speak.assert_awaited_once()
+        assert "Test Player" in tts.speak.await_args.args[0]
+
+    async def test_other_play_type_is_noop(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_other_event())
+        ws.broadcast.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
+        tts.speak.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Field goal
+# ---------------------------------------------------------------------------
+
+class TestFieldGoal:
+
+    async def test_fg_substitutes_kicker_and_yards(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_fg_event(kicker="Spencer Shrader", yards=47))
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "field_goal"
+
+        fg_steps = CelebrationOrchestrator.SEQUENCES["field_goal"].light_steps
+        assert hue.set_light.await_count == len(fg_steps)
+
+        tts.speak.assert_awaited_once()
+        text = tts.speak.await_args.args[0]
+        assert "Spencer Shrader" in text
+        assert "47" in text
+
+
+# ---------------------------------------------------------------------------
+# Kickoff
+# ---------------------------------------------------------------------------
+
+class TestKickoff:
+
+    async def test_kickoff_substitutes_opponent(self):
+        orch, hue, tts, ws, _ = _make_orchestrator(opponent="Houston Texans")
+        await orch.on_play_event(_kickoff_event())
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "kickoff"
+
+        tts.speak.assert_awaited_once()
+        assert "Houston Texans" in tts.speak.await_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# Cooldown
+# ---------------------------------------------------------------------------
+
+class TestCooldown:
+
+    async def test_two_tds_within_cooldown_only_one_runs(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+
+        # Stamp manually instead of waiting through a real sequence; the
+        # cooldown logic checks `_last_celebration_at` and the value is
+        # written at sequence START.
+        await orch.on_play_event(_td_event())
+        first_count = ws.broadcast.await_count
+        first_lights = hue.set_light.await_count
+        first_tts = tts.speak.await_count
+
+        # Second TD immediately after — cooldown should reject it.
+        await orch.on_play_event(_td_event(player="Anthony Richardson"))
+        assert ws.broadcast.await_count == first_count
+        assert hue.set_light.await_count == first_lights
+        assert tts.speak.await_count == first_tts
+
+    async def test_two_tds_past_cooldown_both_run(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_td_event())
+        baseline_broadcasts = ws.broadcast.await_count
+
+        # Backdate the stamp past the cooldown window.
+        orch._last_celebration_at = (
+            time.time() - CelebrationOrchestrator.COOLDOWN_SECONDS - 0.1
+        )
+
+        await orch.on_play_event(_td_event(player="Anthony Richardson"))
+        assert ws.broadcast.await_count == baseline_broadcasts + 1
+        assert tts.speak.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# State transitions (end of game)
+# ---------------------------------------------------------------------------
+
+class TestEndOfGame:
+
+    async def test_win_runs_celebration_with_tts(self):
+        orch, hue, tts, ws, _ = _make_orchestrator(
+            score_colts=27, score_opp=20, opponent="Houston Texans",
+        )
+        await orch.on_state_transition(_final_transition())
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "end_of_game_win"
+
+        tts.speak.assert_awaited_once()
+        text = tts.speak.await_args.args[0]
+        assert "27" in text
+        assert "20" in text
+
+    async def test_loss_runs_lights_but_no_tts(self):
+        orch, hue, tts, ws, _ = _make_orchestrator(
+            score_colts=14, score_opp=24,
+        )
+        await orch.on_state_transition(_final_transition())
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "end_of_game_loss"
+
+        # Loss is silent — spec §2.2 explicit.
+        tts.speak.assert_not_awaited()
+
+        # Lights still fire.
+        loss_steps = CelebrationOrchestrator.SEQUENCES["end_of_game_loss"].light_steps
+        assert hue.set_light.await_count == len(loss_steps)
+
+    async def test_non_final_transition_is_noop(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        transition = GameDayStateTransition(
+            from_status="pregame",
+            to_status="in-progress",
+            timestamp=datetime.now(timezone.utc),
+        )
+        await orch.on_state_transition(transition)
+        ws.broadcast.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
+        tts.speak.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Template substitution + structural invariants
+# ---------------------------------------------------------------------------
+
+class TestTemplateSubstitution:
+
+    async def test_all_variables_substituted_in_td_template(self):
+        """Pick a TD template that exercises {player}, run with player set,
+        confirm format_map left no {placeholders} behind."""
+        orch, _, tts, _, _ = _make_orchestrator()
+        await orch.on_play_event(_td_event(player="Jonathan Taylor"))
+        text = tts.speak.await_args.args[0]
+        # No leftover braces from unsubstituted placeholders.
+        assert "{" not in text and "}" not in text
+
+    async def test_missing_player_falls_back_safely(self):
+        """ESPN parser sometimes can't extract a player name. The line
+        should still render — {player} is replaced by 'Colts' fallback."""
+        orch, _, tts, _, _ = _make_orchestrator()
+        evt = PlayEvent(
+            timestamp=datetime.now(timezone.utc),
+            play_type="touchdown",
+            description="generic TD",
+            player=None,
+            kicker=None,
+            yards=None,
+            scoring_team="colts",
+        )
+        await orch.on_play_event(evt)
+        text = tts.speak.await_args.args[0]
+        assert "{" not in text
+        # Falls back to 'Colts' per _build_context.
+        assert "Colts" in text or "colts" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Lighting design rule: kitchen pair (L3 + L4)
+# ---------------------------------------------------------------------------
+
+class TestKitchenPairRule:
+    """Gameday is a functional mode → kitchen pair (lights 3 + 4) MUST
+    match in every authored sequence frame. We verify by walking each
+    sequence and confirming that for every L3 frame at delay_ms = D, an
+    L4 frame at the same delay_ms exists with the same {bri, hue, sat,
+    ct, on}. Hard rule from feedback_lighting_design_principles.md."""
+
+    @pytest.mark.parametrize(
+        "key", ["touchdown", "field_goal", "kickoff",
+                "end_of_game_win", "end_of_game_loss"],
+    )
+    def test_kitchen_pair_matches(self, key):
+        seq = CelebrationOrchestrator.SEQUENCES[key]
+        l3_frames = {s.delay_ms: s.state for s in seq.light_steps if s.light_id == "3"}
+        l4_frames = {s.delay_ms: s.state for s in seq.light_steps if s.light_id == "4"}
+
+        assert set(l3_frames.keys()) == set(l4_frames.keys()), (
+            f"{key}: L3 + L4 must fire on the same delays"
+        )
+        for delay_ms, l3_state in l3_frames.items():
+            l4_state = l4_frames[delay_ms]
+            for k in ("on", "bri", "hue", "sat", "ct"):
+                if k in l3_state or k in l4_state:
+                    assert l3_state.get(k) == l4_state.get(k), (
+                        f"{key} @ {delay_ms}ms: kitchen pair diverges on {k!r} "
+                        f"(L3={l3_state.get(k)} L4={l4_state.get(k)})"
+                    )
