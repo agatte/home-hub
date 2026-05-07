@@ -80,25 +80,29 @@ class CelebrationSequence:
 #   • Gameday uses HSB (saturated Colts blue / white pulses), not CT.
 # ---------------------------------------------------------------------------
 
-# Colts blue (Hue HSB ~46920) and white (sat 0). Saturation calibrated by
-# the lighting curator: 215 instead of 254 for the pulse helper, matching
-# the gaming-retune precedent (sat=240 → 180-200) so the room's cream/wood
+# Colts blue (hue 47000) and white (sat 0). Saturation calibrated by the
+# lighting curator: 215 instead of 254 for the pulse helper, matching the
+# gaming-retune precedent (sat=240 → 180-200) so the room's cream/wood
 # textile palette doesn't read as a saturated cave when all 4 lights pulse
 # at peak together. Single-light sustained accents (the L1 baseline) can
 # absorb a stronger saturation, but the celebration pulse is the primary
-# anti-pattern surface.
-_COLTS_BLUE_HUE = 46920
+# anti-pattern surface. Hue aligned with light_state_calculator gameday
+# day variant (47000) so post-celebration fade-home matches the canonical
+# baseline the automation engine reconciles toward.
+_COLTS_BLUE_HUE = 47000
 _COLTS_BLUE_SAT = 215
 _WHITE_SAT = 0
 
-# Gameday baseline that sequences fade back to: Colts blue accent on L1,
-# warm-amber fill on L2, and matched warm-amber on L3 + L4 (kitchen pair).
-# _BASELINE_KITCHEN is aliased to _BASELINE_FILL so future tuning of the
-# warm-amber post-celebration recovery state can't accidentally desync the
-# kitchen pair (curator finding 3).
-_BASELINE_L1 = {"on": True, "bri": 200, "hue": _COLTS_BLUE_HUE, "sat": _COLTS_BLUE_SAT}
-_BASELINE_FILL = {"on": True, "bri": 180, "hue": 8000, "sat": 180}  # warm amber
-_BASELINE_KITCHEN = dict(_BASELINE_FILL)  # kitchen pair alias — see curator note above
+# Gameday baseline that sequences fade back to. Aligned with the day variant
+# of `ACTIVITY_LIGHT_STATES["gameday"]` in `light_state_calculator.py:282-285`
+# so a celebration's fade-home lands at the same per-light state the
+# automation engine reconciles to — eliminates the prior drift where post-
+# celebration values differed from steady-state gameday lighting.
+# Kitchen pair (L3 ≡ L4) preserved by both lights referencing
+# `_BASELINE_KITCHEN` (bri/hue/sat all matched).
+_BASELINE_L1 = {"on": True, "bri": 150, "hue": _COLTS_BLUE_HUE, "sat": 185}
+_BASELINE_FILL = {"on": True, "bri": 200, "hue": 8000, "sat": 130}  # L2 warm amber
+_BASELINE_KITCHEN = {"on": True, "bri": 140, "hue": 8000, "sat": 130}  # L3 + L4 kitchen pair
 
 
 def _pulse(light_id: str, delay_ms: int, *, blue: bool = True, bri: int = 254,
@@ -177,12 +181,22 @@ _FG_STEPS: list[LightStep] = [
     _baseline_step("4", 1500, _BASELINE_KITCHEN, transition=10),
 ]
 
-# ----- Kickoff: one-shot baseline activation (~1s).
+# ----- Kickoff: 3-beat wave across the apartment (~1.7s). L1 → L2 →
+#       (L3+L4 kitchen pair beat) at 150ms each, then settle to gameday
+#       baseline. Wave preserves the kitchen pair invariant by firing
+#       L3 and L4 on the same beat — the visual reads as a wave from the
+#       living room to the kitchen rather than four sequential beats.
 _KICKOFF_STEPS: list[LightStep] = [
-    _baseline_step("1", 0, _BASELINE_L1, transition=10),
-    _baseline_step("2", 0, _BASELINE_FILL, transition=10),
-    _baseline_step("3", 0, _BASELINE_KITCHEN, transition=10),
-    _baseline_step("4", 0, _BASELINE_KITCHEN, transition=10),
+    # Wave: each pulse fades in over ~100ms (transition=1).
+    _pulse("1", 0, blue=True),
+    _pulse("2", 150, blue=True),
+    _pulse("3", 300, blue=True),
+    _pulse("4", 300, blue=True),  # kitchen pair beat
+    # Settle to gameday baseline. transitiontime=10 (=1.0s).
+    _baseline_step("1", 700, _BASELINE_L1, transition=10),
+    _baseline_step("2", 700, _BASELINE_FILL, transition=10),
+    _baseline_step("3", 700, _BASELINE_KITCHEN, transition=10),
+    _baseline_step("4", 700, _BASELINE_KITCHEN, transition=10),
 ]
 
 # ----- End of game (win): 6s — sustained blue/white celebration → baseline.
@@ -278,7 +292,7 @@ class CelebrationOrchestrator:
                 "Here we go, Colts! Kickoff against the {opponent}.",
                 "Game on. Colts and {opponent}.",
             ],
-            duration_seconds=1.5,
+            duration_seconds=1.7,
             base_volume=22,
         ),
         "end_of_game_win": CelebrationSequence(

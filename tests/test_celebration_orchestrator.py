@@ -634,10 +634,16 @@ class TestEventLoggerWiring:
     async def test_set_light_failure_skips_log(self):
         """If hue.set_light raises, the corresponding log_light_adjustment
         must NOT be called — we only mirror confirmed bridge writes."""
+        # Derive step count from the live SEQUENCES so future iterations
+        # don't drift this fixture out of sync with kickoff's shape.
+        kickoff_steps = CelebrationOrchestrator.SEQUENCES["kickoff"].light_steps
+        n_steps = len(kickoff_steps)
+
         hue = MagicMock()
         # First step raises, rest succeed.
         hue.set_light = AsyncMock(side_effect=[
-            RuntimeError("bridge timeout"), True, True, True,
+            RuntimeError("bridge timeout"),
+            *[True] * (n_steps - 1),
         ])
         hue._last_states = {
             "1": {"name": "Lamp 1", "bri": 100, "hue": 8000, "sat": 100},
@@ -666,9 +672,9 @@ class TestEventLoggerWiring:
 
         await orch.on_play_event(_kickoff_event())
 
-        # 4 set_light attempts (1 failure, 3 successes), but only 3 log calls.
-        assert hue.set_light.await_count == 4
-        assert event_logger.log_light_adjustment.await_count == 3
+        # All steps attempted; one failed, so log calls = n_steps - 1.
+        assert hue.set_light.await_count == n_steps
+        assert event_logger.log_light_adjustment.await_count == n_steps - 1
 
 
 class TestKitchenPairRule:
