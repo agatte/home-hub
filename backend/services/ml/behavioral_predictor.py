@@ -367,7 +367,23 @@ class BehavioralPredictor(HealthTrackable):
                 logger.warning("Not enough diversity in training data")
                 return None, 0, {}
 
-            train_data = lgb.Dataset(X_train, label=y_train, feature_name=FEATURE_COLUMNS)
+            # Class-balanced sample weights — inverse frequency upweights
+            # minority modes so the model doesn't collapse toward the
+            # dominant class. 2026-05-06 smoke test (next-mode JOIN against
+            # activity_events) found predicted=watching at 0% (0/20) and
+            # predicted=relax at 0% (0/17) because training was dominated
+            # by the working class (~71% of rows). sklearn's "balanced"
+            # formula: n_samples / (n_classes * count_per_class).
+            class_counts = np.bincount(y_train, minlength=len(unique_modes))
+            class_weights = len(y_train) / (
+                len(unique_modes) * np.maximum(class_counts, 1)
+            )
+            sample_weight = class_weights[y_train]
+
+            train_data = lgb.Dataset(
+                X_train, label=y_train, weight=sample_weight,
+                feature_name=FEATURE_COLUMNS,
+            )
             val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
 
             params = {
@@ -392,6 +408,39 @@ class BehavioralPredictor(HealthTrackable):
             val_preds = model.predict(X_val)
             val_pred_classes = np.argmax(val_preds, axis=1)
             accuracy = float(np.mean(val_pred_classes == y_val))
+
+            # Per-class val accuracy — surfaces class-balance regressions
+            # in journalctl. With sample weights minority classes should
+            # gain accuracy at some cost to the majority class; if any
+            # class still reads 0% with sample size ≥ 5, the features
+            # don't carry the signal and weights alone won't fix it.
+            per_class_total: dict[str, int] = {}
+            per_class_correct: dict[str, int] = {}
+            for pred, actual in zip(val_pred_classes, y_val):
+                mode = label_encoder.get(int(actual), "unknown")
+                per_class_total[mode] = per_class_total.get(mode, 0) + 1
+                if int(pred) == int(actual):
+                    per_class_correct[mode] = per_class_correct.get(mode, 0) + 1
+            per_class_acc = {
+                mode: {
+                    "n": per_class_total[mode],
+                    "correct": per_class_correct.get(mode, 0),
+                    "acc": (
+                        per_class_correct.get(mode, 0) / per_class_total[mode]
+                        if per_class_total[mode] > 0 else 0.0
+                    ),
+                }
+                for mode in per_class_total
+            }
+            class_weight_str = ", ".join(
+                f"{label_encoder[i]}={class_weights[i]:.2f}"
+                for i in range(len(unique_modes))
+            )
+            logger.info(
+                "Behavioral predictor train: weights={%s}, per_class_val=%s, "
+                "overall_val=%.3f",
+                class_weight_str, per_class_acc, accuracy,
+            )
 
             return model, accuracy, label_encoder
 
