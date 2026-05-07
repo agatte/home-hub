@@ -285,3 +285,24 @@ class TestFormatSubstitution:
             # leading/trailing whitespace anomalies.
             assert substituted.strip() == substituted
             assert "  " not in substituted  # no double-spaces
+
+    def test_no_double_article_with_bare_fallback(self):
+        """Regression for the live test fire on 2026-05-07: when no game
+        state is available, _build_context substitutes the bare fallback
+        "opponent" (no article). Templates that say "vs the {opponent}"
+        produced "vs the the opponent" before the fallback was changed
+        from "the opponent" to "opponent". Walk every authored line in
+        every pool, substitute the bare fallback, assert no doubled
+        articles slip through."""
+        from backend.services.kickoff_tts_picker import _POOLS
+        for slot, variants in _POOLS.items():
+            for variant_name, lines in variants.items():
+                for line in lines:
+                    substituted = line.format_map({"opponent": "opponent"})
+                    lowered = substituted.lower()
+                    assert "the the" not in lowered, (
+                        f"Double 'the' in {slot.value}/{variant_name}: "
+                        f"{substituted!r}"
+                    )
+                    assert " a a " not in lowered
+                    assert " an an " not in lowered

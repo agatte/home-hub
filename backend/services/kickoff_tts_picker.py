@@ -121,20 +121,20 @@ _POOLS: dict[GameSlot, dict[str, list[str]]] = {
         "dimes": [
             "Sunday afternoon football, baby. Danny Dimes vs the {opponent}.",
             "Game time. Let's see if Danny Dimes can keep it rolling against the {opponent}.",
-            "Colts and {opponent}. Danny Dimes has the keys.",
+            "Colts and the {opponent}. Danny Dimes has the keys.",
             "Here we go — Danny Dimes leading the Colts against the {opponent}.",
         ],
         "jones": [
             "Colts kickoff against the {opponent}. Daniel Jones has work to do.",
             "Game time. Daniel Jones and the Colts vs the {opponent}.",
-            "Colts and {opponent}. Daniel Jones gets another chance.",
+            "Colts and the {opponent}. Daniel Jones gets another chance.",
             "Sunday football. Let's see what Daniel Jones brings against the {opponent}.",
         ],
     },
     GameSlot.SUNDAY_NIGHT: {
         "dimes": [
             "Sunday Night Football, baby. Danny Dimes and the Colts vs the {opponent}.",
-            "Primetime, Danny Dimes. Colts and {opponent} in the spotlight.",
+            "Primetime, Danny Dimes. Colts and the {opponent} in the spotlight.",
             "Sunday Night lights — Danny Dimes leading the Colts against the {opponent}.",
             "SNF, here we go. Danny Dimes vs the {opponent}.",
         ],
@@ -147,7 +147,7 @@ _POOLS: dict[GameSlot, dict[str, list[str]]] = {
     GameSlot.MONDAY_NIGHT: {
         "dimes": [
             "Monday Night Football, baby. Danny Dimes vs the {opponent}.",
-            "MNF — Colts and {opponent}. Danny Dimes in primetime.",
+            "MNF — Colts and the {opponent}. Danny Dimes in primetime.",
             "Monday Night lights. Danny Dimes leading the Colts against the {opponent}.",
             "Here we go, MNF. Danny Dimes vs the {opponent}.",
         ],
@@ -160,7 +160,7 @@ _POOLS: dict[GameSlot, dict[str, list[str]]] = {
     GameSlot.THURSDAY_NIGHT: {
         "dimes": [
             "Thursday Night Football. Danny Dimes vs the {opponent} on a short week.",
-            "TNF — short week, but Danny Dimes is rolling. Colts and {opponent}.",
+            "TNF — short week, but Danny Dimes is rolling. Colts and the {opponent}.",
             "Thursday Night, baby. Danny Dimes vs the {opponent}.",
         ],
         "jones": [

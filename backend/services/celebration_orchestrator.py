@@ -391,7 +391,7 @@ class CelebrationOrchestrator:
         context = {
             "colts_score": score_colts,
             "opp_score": score_opp,
-            "opponent": opponent or "the opponent",
+            "opponent": opponent or "opponent",
             "player": "",
             "kicker": "",
             "yards": "",
@@ -701,7 +701,14 @@ class CelebrationOrchestrator:
         still need *something* to format against.
         """
         state = self._safe_current_state()
-        opponent = state.opponent if state and state.opponent else "the opponent"
+        # Bare "opponent" fallback (no leading article). Templates that say
+        # "vs the {opponent}" / "the {opponent}" carry their own article;
+        # combining the article with a "the opponent" fallback produced
+        # "vs the the opponent" in synthetic test fires (verified live
+        # 2026-05-07 — kickoff fire said "vs the the opponent"). Real-game
+        # opponents land as bare team names (e.g. "Houston Texans") which
+        # read fine in both article-prefixed and bare-{opponent} templates.
+        opponent = state.opponent if state and state.opponent else "opponent"
         score_colts = state.score_colts if state else 0
         score_opp = state.score_opp if state else 0
 
