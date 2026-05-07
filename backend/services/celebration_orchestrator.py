@@ -578,6 +578,8 @@ class CelebrationOrchestrator:
             template = await self._pick_kickoff_template()
         elif sequence_key == "field_goal":
             template = self._pick_field_goal_template(context)
+        elif sequence_key == "touchdown":
+            template = self._pick_touchdown_template(context)
         else:
             template = random.choice(sequence.tts_lines)
         try:
@@ -665,6 +667,21 @@ class CelebrationOrchestrator:
             if state.quarter >= 3 and deficit >= 21:
                 return f"losing blowout (Q{state.quarter}, down {deficit})"
         return "unknown"
+
+    def _pick_touchdown_template(self, context: dict) -> str:
+        """Dispatch to `td_tts_picker.pick_td_tts` with the play-level
+        WPA from `context['wpa']`. Three energy tiers: standard
+        (|WPA|<0.10), big_play (0.10-0.20), game_changing (≥0.20).
+        Synchronous (no I/O)."""
+        from backend.services.td_tts_picker import pick_td_tts
+
+        raw_wpa = context.get("wpa")
+        wpa: Optional[float]
+        try:
+            wpa = float(raw_wpa) if raw_wpa is not None else None
+        except (TypeError, ValueError):
+            wpa = None
+        return pick_td_tts(wpa=wpa)
 
     def _pick_field_goal_template(self, context: dict) -> str:
         """Dispatch to `fg_tts_picker.pick_fg_tts` with the kick distance
@@ -762,12 +779,18 @@ class CelebrationOrchestrator:
         score_opp = state.score_opp if state else 0
 
         return {
-            "player": evt.player or "Colts",
+            # "Indy" fallback (not "Colts") avoids double-Colts redundancy
+            # in templates that already say "Touchdown Colts!" or
+            # "...for the Colts!" — curator-flagged 2026-05-07. Real
+            # plays carry the actual player name; the fallback only
+            # affects synthetic test fires.
+            "player": evt.player or "Indy",
             "kicker": evt.kicker or "the kicker",
             "yards": evt.yards if evt.yards is not None else "",
             "opponent": opponent,
             "colts_score": score_colts,
             "opp_score": score_opp,
+            "wpa": evt.wpa,
         }
 
     def _safe_current_state(self) -> Optional[GameDayState]:
