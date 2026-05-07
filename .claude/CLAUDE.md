@@ -96,16 +96,13 @@ python -m backend.mcp_server
 - **PostToolUse Edit/Write** (`post_edit_ruff.py`) — `backend/**/*.py` → `python -m ruff check --fix` (ruff is not on PATH; must invoke via module). No frontend lint hook — `frontend-svelte` has no ESLint configured (uses `svelte-check` on demand instead).
 - **SessionStart** (`session_start_homehub.py`) — injects mode/source/override + anomaly-only fields (`offline=`, `stale_tasks=`, `breakers=`, `event_drops=`, `digest_warns=`) via `additionalContext`. Healthy systems stay terse.
 - **PostToolUse Bash** (`post_git_push.py`) — after a real `git push`, nudges `/deploy-home`.
-- **PreToolUse Bash** (`pre_commit_lighting_curator.py`) — on `git commit`, if staged diff touches `light_state_calculator.py` or `scenes.py` AND a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, etc.), injects an `additionalContext` reminder to spawn `lighting-curator` first. Soft nudge — non-blocking.
+- **PreToolUse Bash** (`pre_commit_lighting_curator.py`) — on `git commit`, if staged diff touches `light_state_calculator.py` / `scenes.py` / `celebration_orchestrator.py` AND a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, `SEQUENCES`, etc.), BLOCKS the commit via `permissionDecision: deny` unless the message contains `[curator-reviewed]`. Override: spawn `lighting-curator`, address findings, re-commit with the token.
 
 ### Slash commands + subagents
 
 Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`. `/deploy-home` runs the full lifecycle (commit → push → `ssh homehub` → spawn `deploy-verifier` → report). `/checkback-loop` self-paces against the runbook.
 
-Subagents (`~/.claude/agents/`):
-- **`homehub-verifier`** — Read-only state inspector. Spawned by every check-back fire.
-- **`deploy-verifier`** — Post-flight after `/deploy-home`: build_id strict-comparison (now possible since `/health` exposes it), endpoint smoke, post-restart event scan.
-- **`lighting-curator`** — Spawn before committing changes to `light_state_calculator.py` or `scenes.py`. Reviews diff against `feedback_lighting_design_principles.md` rules + visual references at `~/.claude/agents/reference/lighting-curator/`.
+Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md` Part 5. Active fleet: `homehub-verifier` (check-back fires), `deploy-verifier` (post-`/deploy-home`), `lighting-curator` (pre-commit gate above), `gameday-preflight` (runbook entries #12 preseason + #13 weekly Sun Aug-Jan + manual T-90 game morning), `gameday-postmortem` (loop pre-fire detector on `gameday:auto` close — real games only), `ml-model-evaluator` (runbook entry #1 weekly Mon), `homehub-investigator` (spawned by `/watcher-loop` for un-diagnosed warns).
 
 ### Ambient verification loop
 

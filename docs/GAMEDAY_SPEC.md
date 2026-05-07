@@ -326,7 +326,8 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 - **Light sequence values** — ✓ initial values shipped + curator-reviewed. Slice B agent authored placeholder Colts-blue/white pulse sequences for TD/FG/kickoff/end-of-game; lighting-curator caught + we applied an over-saturation fix (`_COLTS_BLUE_SAT` 254 → 215) before merge. **Iterative authoring still pending** — user iterates with the curator on real palettes during preseason.
 - **Pre-game / commercial behavior in v2** — still deferred. Pre-game ambient mode (continuous Colts-tinted lighting before kickoff) and commercial-break behavior (lights restore to mode default + Sonos resume on commercials) are out of scope for v1. Revisit post-preseason.
 - **Preseason 2026-08-15 first test** — pending. 2026 schedule typically publishes May–June; check ESPN once published. The synthetic `/api/gameday/test/{event}` endpoint exercises the full pipeline (play_event → orchestrator → lights + TTS + WS) so we have confidence in the wiring; the preseason game is for tuning palette/timings/TTS lines against reality.
-- **Celebration writes don't appear in `light_adjustments`** — `CelebrationOrchestrator._run_sequence` calls `hue.set_light` directly, bypassing the EventLogger middleware. Lights pulse correctly; celebrations are just invisible to `get_state_history`, the nightly journal, and DB analysis. Filed as memory `project_celebration_no_event_log.md` for future bundle. Not blocking.
+- **Celebration EventLogger gap** — ✓ closed 2026-05-07 (commit `34fc550`). `CelebrationOrchestrator._run_light_steps` now mirrors every successful `set_light` to `log_light_adjustment` with `trigger=f"celebration:{sequence_key}"`. Query celebrations via `WHERE trigger LIKE 'celebration:%'`; journalctl is now corroboration, not primary.
+- **Agent fleet wiring** — ✓ shipped 2026-05-07. `gameday-preflight` fires from runbook entry #12 (preseason T-7) and #13 (weekly Sunday Aug-Jan) with bye-week early-exit. `gameday-postmortem` auto-fires from the loop's pre-fire detector when a `gameday:auto` window closes (real games only; manual `set_mode` doesn't trip it). See `docs/AGENT_STRATEGY.md` Part 5 for the full T-7d → T+90 timeline.
 
 ---
 
@@ -351,6 +352,10 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 1. ✓ 32 unit tests on `compute_celebration_volume` covering WPA bands, fallback formula, hard suppressions, apartment modifiers, clamping.
 2. ✓ Real-fixture WPA computation test — extracts win-probability deltas from the 2025-09-07 Colts game.
 3. ✓ Backend re-deployed (commit `ca712bd`); deploy-verifier ok.
+
+**Phase C polish** (also 2026-05-07):
+1. ✓ Celebration EventLogger wiring (β) — 33 celebration tests pass including 3 new `TestEventLoggerWiring` cases for the trigger format + backwards-compat + set_light failure handling. Shipped commit `34fc550`.
+2. ✓ Agent fleet — `gameday-preflight` + `gameday-postmortem` registered as spawnable subagents; runbook entries #12 #13 + Pre-fire detector live. Smoke tests verified both via registered subagent types post-restart.
 
 ---
 

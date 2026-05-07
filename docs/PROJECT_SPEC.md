@@ -172,6 +172,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - ~~Zero authentication middleware anywhere~~ — fixed: `require_api_key` is a global write-endpoint gate (see "No authentication on API endpoints" above). The LAN auto-bypass keeps friction at zero for the kiosk and Anthony's devices; a future Cloudflare Tunnel for Phase 5 Alexa would route through a non-private IP and naturally hit the header check
 - ~~`EventLogger` swallows exceptions silently~~ — fixed: `_drop_count` dict tracks per-family (mode/light/scene/sonos) drop counts, surfaced in `/health` JSON under `event_logger_drops` so Uptime Kuma can alert on growth
 - ~~Automation-triggered light changes aren't logged to `light_adjustments`~~ — fixed: `_apply_uniform` and `_apply_per_light` in `automation_engine.py` now call `log_light_adjustment(trigger="automation")` with before/after values when state actually changes (dedup check prevents hot-path spam)
+- ~~Celebration light steps bypass EventLogger~~ — fixed: `CelebrationOrchestrator._run_light_steps` now mirrors successful `set_light` to `log_light_adjustment(trigger=f"celebration:{sequence_key}")` (commit `34fc550`). DB primary, journalctl corroboration. Closed memory: `project_celebration_no_event_log.md`
 - ~~`LightingPreferenceLearner.get_overlay` merges learned deltas invisibly~~ — fixed: when the overlay actually changes a value, an `ml_decisions` row is written with `decision_source="lighting_learner"` and the per-light deltas in `factors`
 
 **Open bugs (from April 2026 audit):**
@@ -549,7 +550,7 @@ Not yet in `backend/models.py`. Listed here so the schema shape is decided when 
 | page | String(50) | Which page/section |
 | created_at | DateTime | UTC |
 
-*(Phase 4 Game Day shipped 2026-05-07 without new DB tables — `GameDayService` is in-memory + ESPN polling, `CelebrationOrchestrator` is callback-driven. The `game_schedule` and `celebration_log` tables originally projected here weren't built. Note `light_adjustments` does NOT capture celebration writes — orchestrator's `hue.set_light` calls bypass the EventLogger middleware, so celebrations are invisible in `get_state_history` / nightly journal. Filed as memory `project_celebration_no_event_log.md` for a future bundle.)*
+*(Phase 4 Game Day shipped 2026-05-07 without new DB tables — `GameDayService` is in-memory + ESPN polling, `CelebrationOrchestrator` is callback-driven. The `game_schedule` and `celebration_log` tables originally projected here weren't built. Celebration writes DO land in `light_adjustments` as of commit `34fc550` with `trigger="celebration:<key>"`, queryable via `WHERE trigger LIKE 'celebration:%'`.)*
 
 **Data retention policy:** 90-day rolling window for raw events. Older data aggregated into daily/weekly summaries stored in a separate `event_summaries` table. Aggregation runs as a scheduled task in the learning engine.
 
