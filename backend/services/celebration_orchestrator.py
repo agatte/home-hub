@@ -576,6 +576,8 @@ class CelebrationOrchestrator:
 
         if sequence_key == "kickoff":
             template = await self._pick_kickoff_template()
+        elif sequence_key == "field_goal":
+            template = self._pick_field_goal_template(context)
         else:
             template = random.choice(sequence.tts_lines)
         try:
@@ -663,6 +665,23 @@ class CelebrationOrchestrator:
             if state.quarter >= 3 and deficit >= 21:
                 return f"losing blowout (Q{state.quarter}, down {deficit})"
         return "unknown"
+
+    def _pick_field_goal_template(self, context: dict) -> str:
+        """Dispatch to `fg_tts_picker.pick_fg_tts` with the kick distance
+        extracted from `context['yards']`. Standard pool for sub-50yd
+        kicks, "big_kick" energy pool for 50+yd. Synchronous (no I/O)
+        unlike the kickoff picker — FG doesn't read team form."""
+        from backend.services.fg_tts_picker import pick_fg_tts
+
+        # context['yards'] may be int, str (from format_map), or "".
+        # Coerce defensively.
+        raw_yards = context.get("yards")
+        yards: Optional[int]
+        try:
+            yards = int(raw_yards) if raw_yards not in (None, "") else None
+        except (TypeError, ValueError):
+            yards = None
+        return pick_fg_tts(yards=yards)
 
     async def _pick_kickoff_template(self) -> str:
         """Dispatch to `kickoff_tts_picker.pick_kickoff_tts` with context
