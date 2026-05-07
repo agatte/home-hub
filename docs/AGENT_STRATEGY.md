@@ -163,6 +163,54 @@ Tier 1 specialists pay off (curator, deploy-verifier). The fleet pattern pays of
 
 ---
 
+## Part 5 — Fleet usage playbook (when each agent fires, 2026-05-07)
+
+The fleet is now substantially built. Most agents fire automatically — the only manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit).
+
+### Trigger map
+
+| Agent | Trigger | Cadence | Output sink |
+|---|---|---|---|
+| `homehub-verifier` | `/checkback-loop` dispatches | hourly anomaly sweep + dated entries (1, 3-11) | digest block in `~/.claude/runbooks/digests/YYYY-MM-DD.md` |
+| `homehub-investigator` | `/watcher-loop` polls digests | always-on, ~30s polling for un-diagnosed warns | inline `**Diagnosis (HH:MM):**` subsection appended to the warn block |
+| `ml-model-evaluator` | runbook entry #1 | weekly Mon 10:00 ET | digest block (agent writes its own) |
+| `deploy-verifier` | `/deploy-home` skill step 7 | post-deploy, automatic | inline conversation report (no digest) |
+| `lighting-curator` | PreToolUse hook on `git commit` | per-commit when staged diff matches lighting files + design identifiers | blocks commit unless `[curator-reviewed]` token in message |
+| `gameday-preflight` | runbook entry #12 (preseason T-7) + entry #13 (weekly Sun Aug-Jan) + manual T-90 game morning | once preseason + every Sunday in NFL season + ad-hoc | digest block (agent writes its own) |
+| `gameday-postmortem` | loop pre-fire detector on `gameday:auto` close (per `homehub-checkbacks.md` § Pre-fire detectors) + manual for test fires | within ~1h of every real game close (auto), ad-hoc otherwise | appends to today's digest |
+
+### Game Day vertical-slice timeline
+
+```
+T-7d   Sunday weekly preflight (entry #13) — apparatus check, no synthetic fire on bye weeks
+T-90   Game-morning preflight — manual spawn for hard-go/no-go (synthetic kickoff fires)
+T-30   AutomationEngine flips to gameday source="gameday:auto"  — no agent
+in     CelebrationOrchestrator drives lights+TTS on play events  — no agent
+T+30   AutomationEngine clears override source="gameday:auto"   — postmortem detector arms
+T+30…+90  Loop's next tick runs the detector SQL, spawns gameday-postmortem
+T+30…+120 Watcher loop notices the postmortem block; if STATUS: warn, spawns homehub-investigator
+next day Curator review on any subsequent SEQUENCES tweak (advisory section K) before commit
+```
+
+### Pre-commit gate (lighting changes)
+
+The PreToolUse hook on `git commit` (`.claude/hooks/pre_commit_lighting_curator.py`) blocks commits that touch one of the watched files (`light_state_calculator.py`, `routes/scenes.py`, `celebration_orchestrator.py`) AND contain a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, `BED_RECLINED`, `BED_ZONE_ONLY`, `LUX_CURVE`, `SEQUENCES`).
+
+Override path: spawn `lighting-curator`, address findings, then re-run `git commit -m "...[curator-reviewed]"`. The token is the deliberate sentinel — case-insensitive substring match against the bash command. Pure comment/whitespace edits skip the gate (the identifier filter rejects them).
+
+### Off-season behavior
+
+The runbook's queue runs year-round. NFL-season-specific entries (#13 weekly Sunday preflight) are skipped Feb-July with a one-line `[skipped — off-season]` digest entry. The postmortem auto-fire detector also runs year-round but is effectively a no-op outside the season because no `gameday:auto` flips happen.
+
+### Manual spawns that remain
+
+- Focused `homehub-verifier` recipes for one-off health checks (e.g., "audit override-rate trends manually for this week" outside the regular Sunday cadence)
+- `gameday-postmortem` on test fires (a `POST /api/gameday/test/touchdown` smoke test won't trigger the auto-fire because it carries `source=manual`, not `source=gameday:auto`)
+- `lighting-curator` deliberately on a diff before staging (when you want a review before deciding whether to commit at all)
+- Any specialist that doesn't have a runbook entry — most of the Tier 1/Tier 2 candidates from Part 1 still lack scheduled wiring
+
+---
+
 ## Recommended next move
 
 The Tier 1 thesis is validated. The lighting curator (shipped 2026-05-06) caught a real Slice B anti-pattern during the fleet run. Per-commit feedback loop works. The fleet pattern itself is now battle-tested for this codebase.
