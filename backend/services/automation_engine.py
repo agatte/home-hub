@@ -190,6 +190,7 @@ MODE_PRIORITY = {
     "cooking": 3,
     "social": 4,
     "gaming": 5,
+    "gameday": 6,
 }
 
 # Source-staleness cutoff for the priority guard. A current-mode source that

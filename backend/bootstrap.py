@@ -322,6 +322,12 @@ async def lifespan(app: FastAPI):
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
+    #
+    # Game Day Phase B (slice A) wires GameDayService here. Standard
+    # mode_playlists table entry for `gameday` carries the Colts pre-game
+    # playlist, so MusicMapper's existing on_mode_change auto-play handles
+    # the music side without needing a special callback ordering. See
+    # docs/GAMEDAY_SPEC.md §3.2 for the pre-game-flip sequence.
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
     automation.register_on_mode_change(ml_logger.on_mode_change)

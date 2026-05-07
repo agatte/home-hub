@@ -43,6 +43,7 @@ DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
     "relax": 1.0,
     "cooking": 1.0,
     "social": 1.0,
+    "gameday": 1.0,
 }
 
 
@@ -59,6 +60,7 @@ MODE_TRANSITION_TIME: dict[str, int] = {
     "sleeping": 50,   # 5s gradual
     "cooking":  10,   # 1s — kitchen lights up the moment you tap the tile
     "idle":     20,   # 2s
+    "gameday":  10,   # 1s snap — celebration windows are time-sensitive
 }
 
 
@@ -154,6 +156,10 @@ EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
         "evening": {"effect": "glisten", "lights": None},
         "night":   {"effect": "glisten", "lights": None},
     },
+    # Gameday — fully custom CelebrationOrchestrator sequences own all
+    # visual effects during plays (Decision 1.3a in docs/GAMEDAY_SPEC.md).
+    # Auto-effect map stays None across periods.
+    "gameday":  {"day": None, "evening": None, "night": None, "late_night": None},
 }
 
 
@@ -259,6 +265,43 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "2": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},
         "3": {"on": True, "bri": 55,  "hue": 4000,  "sat": 210},
         "4": {"on": True, "bri": 55,  "hue": 4000,  "sat": 210},
+    },
+    # ── Gameday ──────────────────────────────────────────────────────
+    # PLACEHOLDER values — slice B's CelebrationOrchestrator authoring
+    # finalizes these alongside per-event sequences. Baseline applies
+    # between plays / at halftime; CelebrationOrchestrator overrides
+    # during TD / FG / kickoff / end-of-game.
+    #
+    # Design intent: Colts royal blue accent on L1 (hue ~47000) +
+    # warm-amber fill on L2 + matched warm pendants on L3/L4 (kitchen
+    # pair, Rule 1). HSB throughout (Rule 4). Saturation moderated to
+    # coexist with the warm-earthy room (Rule 5). Lighting curator
+    # review owed before slice B commits real values.
+    "gameday": {
+        "day": {
+            "1": {"on": True, "bri": 150, "hue": 47000, "sat": 185},
+            "2": {"on": True, "bri": 200, "hue": 8000,  "sat": 130},
+            "3": {"on": True, "bri": 140, "hue": 8000,  "sat": 130},
+            "4": {"on": True, "bri": 140, "hue": 8000,  "sat": 130},
+        },
+        "evening": {
+            "1": {"on": True, "bri": 110, "hue": 47000, "sat": 200},
+            "2": {"on": True, "bri": 150, "hue": 7000,  "sat": 160},
+            "3": {"on": True, "bri": 60,  "hue": 7000,  "sat": 160},
+            "4": {"on": True, "bri": 60,  "hue": 7000,  "sat": 160},
+        },
+        "night": {
+            "1": {"on": True, "bri": 70,  "hue": 47000, "sat": 200},
+            "2": {"on": True, "bri": 100, "hue": 6500,  "sat": 200},
+            "3": {"on": True, "bri": 30,  "hue": 6500,  "sat": 200},
+            "4": {"on": True, "bri": 30,  "hue": 6500,  "sat": 200},
+        },
+        "late_night": {
+            "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 200},
+            "2": {"on": True, "bri": 70,  "hue": 6000,  "sat": 200},
+            "3": {"on": True, "bri": 18,  "hue": 6000,  "sat": 180},
+            "4": {"on": True, "bri": 18,  "hue": 6000,  "sat": 180},
+        },
     },
     # ── Relax ─────────────────────────────────────────────────────────
     "relax": {
