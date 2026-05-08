@@ -19,17 +19,21 @@
   export let reduceMotion = false
   reduceMotion;
 
-  // Sideline press-box style camera — INSIDE the stadium bowl, at
-  // moderate height, looking across the field. The Awbmegames bowl
-  // (after scale 0.81) extends to z=±82 and y≈76. We sit at z=60
-  // (inside the +z near wall) and y=28 (above the lower bowl). From
-  // here the camera looks at origin: field is clearly visible in
-  // the foreground, the opposite (z=-82) sideline wall and seating
-  // form the background, and the HDRI sky shows above the open
-  // bowl top.
+  // Above-and-behind-the-bowl angle. The Awbmegames stadium model
+  // is a continuous closed shell — its bowl walls (z=±82, y up to
+  // 76.5) and underlying seat slope mean any inside-bowl camera
+  // position sits inside or under the mesh, and back-face culling
+  // renders nothing. Putting the camera at [0, 110, 110] guarantees
+  // a clear line of sight: at z=82 the line of sight reaches y=82,
+  // above the bowl wall top of 76.5. Pitch = atan2(110, 110) = 45°.
+  //
+  // Trade-off: the field appears smaller in frame because we're
+  // looking at the whole stadium from above. To zoom in tighter
+  // without blocking the wall, this would need the bowl walls
+  // hidden via mesh traversal — deferred for a future iteration.
   const CAMERA_X = 0
-  const CAMERA_Y = 28
-  const CAMERA_Z = 60
+  const CAMERA_Y = 110
+  const CAMERA_Z = 110
   const CAMERA_PITCH = -Math.atan2(CAMERA_Y, CAMERA_Z)
 </script>
 
