@@ -41,13 +41,19 @@
    */
   function onLoad(event) {
     const data = event.detail
-    if (!data?.scene) return
+    if (!data?.scene) {
+      // eslint-disable-next-line no-console
+      console.warn('[StadiumModel] load fired with no scene')
+      return
+    }
     const targets = hideMeshes.map((s) => s.toLowerCase())
     let hidden = 0
     let total = 0
+    const allNames = []
     data.scene.traverse((obj) => {
       if (!obj.isMesh) return
       total += 1
+      allNames.push(obj.name || '(unnamed)')
       const name = (obj.name || '').toLowerCase()
       if (targets.some((t) => name.includes(t))) {
         obj.visible = false
@@ -55,7 +61,9 @@
       }
     })
     // eslint-disable-next-line no-console
-    console.info(`[StadiumModel] ${hidden}/${total} meshes hidden`)
+    console.warn(
+      `[StadiumModel] ${hidden}/${total} meshes hidden. Names: ${allNames.join(', ')}`,
+    )
   }
 </script>
 
