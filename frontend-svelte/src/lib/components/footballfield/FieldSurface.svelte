@@ -3,10 +3,11 @@
    * FieldSurface — the playing field, endzones, yard lines, goal lines.
    *
    * PBR grass plane (color/normal/roughness from Poly Haven leafy_grass)
-   * tiled densely across the 100×53 yard play area, with theme-tinted
-   * endzones and white yard-line decals layered above. The HDRI
-   * environment lighting (set up in SkyDome) provides image-based
-   * lighting for the PBR materials.
+   * tiled across an extended out-of-bounds surface (250×150 yd) so the
+   * grass blends visually outward to meet the HDRI horizon without a
+   * hard seam. Theme-tinted endzones and white yard-line decals layer
+   * on top at the standard football-field 100×53 positions in the
+   * middle of the wider grass.
    *
    * Coordinate system: origin at midfield, X = long axis (Colts goal at
    * -50, opp goal at +50), Z = sideline width, Y = up.
@@ -21,8 +22,9 @@
   /** Field opacity dims when no live game (faded preview state). */
   export let opacity = 1.0
 
-  // Field geometry — ported verbatim from the prior FieldScene so
-  // BallMarker's coordinate range (X ∈ [-50, +50]) stays valid.
+  // Painted-field geometry — yard lines, endzones, goal lines all
+  // derive from these. Real American football is 100×53.3 yards;
+  // BallMarker uses X ∈ [-50, +50] for possession-driven positions.
   const FIELD_LENGTH = 100
   const FIELD_WIDTH = 53
   const ENDZONE_DEPTH = 10
@@ -39,10 +41,14 @@
   const MIDFIELD_THICKNESS = 0.45
   const REGULAR_THICKNESS = 0.25
 
-  // Grass tiling. ~2 yards per tile is a sensible density given the
-  // textures are 2K source — fine detail without obvious repetition.
-  const GRASS_REPEAT_X = 50
-  const GRASS_REPEAT_Z = 26
+  // Grass plane is wider than the painted field so the surrounding
+  // surface blends outward to meet the HDRI horizon. ~2 yards per
+  // tile keeps the leafy_grass detail readable without obvious
+  // repetition (textures are 2K source).
+  const GRASS_PLANE_LENGTH = 250
+  const GRASS_PLANE_WIDTH = 150
+  const GRASS_REPEAT_X = 125
+  const GRASS_REPEAT_Z = 75
 
   // Load the 3 PBR maps as a record. Returns an async store keyed by
   // the same names; transform sets RepeatWrapping + tiling on each.
@@ -64,9 +70,14 @@
 </script>
 
 {#if $grass}
-  <!-- Main grass plane. PBR with full texture set. Receives shadows. -->
+  <!--
+    Extended grass plane (250×150 yd) — covers the painted field plus
+    a generous out-of-bounds margin so the grass blends out to the
+    HDRI horizon without a visible seam. PBR with full texture set,
+    receives shadows from the sun light.
+  -->
   <T.Mesh rotation.x={-Math.PI / 2} receiveShadow>
-    <T.PlaneGeometry args={[FIELD_LENGTH, FIELD_WIDTH]} />
+    <T.PlaneGeometry args={[GRASS_PLANE_LENGTH, GRASS_PLANE_WIDTH]} />
     <T.MeshStandardMaterial
       map={$grass.map}
       normalMap={$grass.normalMap}

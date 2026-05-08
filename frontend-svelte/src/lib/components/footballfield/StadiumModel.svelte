@@ -27,15 +27,20 @@
 
   /**
    * Names (substring match, case-insensitive) of meshes to hide
-   * after load. Default targets the main bowl shell + secondary
-   * shell of the Awbmegames model. Sketchfab strips spaces from
-   * mesh names — actual runtime names are `Football_Stadium_*`,
-   * not "Football Stadium". Matching on `stadium` catches both
-   * variants (Football_Stadium_Color_0 and Football_Stadium003_*).
-   * Smaller decorative meshes (Cube.*, Object.*) remain visible
-   * as ambient stadium chrome.
+   * after load. Sketchfab strips spaces from mesh names — actual
+   * runtime names are `Football_Stadium_Color_0`, `Cube004_Color_0`,
+   * etc. Defaults catch:
+   *   - `stadium` → Football_Stadium + Football_Stadium003 (the
+   *     bowl shell + the model's painted soccer field surface)
+   *   - `cube`    → Cube004/013/014/021 (Awbmegames is a soccer
+   *     model: these are the soccer goals + a couple of white
+   *     "bench" prop boxes near the field — off-genre clutter for
+   *     our American football scene)
+   * The remaining `Object001-006` meshes stay visible — they're
+   * the floodlight towers / press box structures that read as
+   * stadium ambience.
    */
-  export let hideMeshes = ['stadium']
+  export let hideMeshes = ['stadium', 'cube']
 
   /**
    * After GLTF load, walk the scene tree and toggle visibility
