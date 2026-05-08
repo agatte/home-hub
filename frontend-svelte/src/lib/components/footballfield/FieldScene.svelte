@@ -20,6 +20,8 @@
   import BallMarker from './BallMarker.svelte'
   import BroadcastCamera from './BroadcastCamera.svelte'
   import FieldSurface from './FieldSurface.svelte'
+  import LightTowers from './LightTowers.svelte'
+  import PostFX from './PostFX.svelte'
   import SkyDome from './SkyDome.svelte'
   import StadiumModel from './StadiumModel.svelte'
 
@@ -110,3 +112,18 @@
 
 <!-- Live ball marker (phase 1b will animate yard-line position from PlayEvent). -->
 <BallMarker {targetBallX} {hasGame} {reduceMotion} />
+
+<!--
+  Phase 2: 4 corner stadium light towers — emissive lamp heads pick
+  up bloom from PostFX, and PointLights illuminate the field/model
+  for the night-game feel.
+-->
+<LightTowers />
+
+<!--
+  Phase 2: post-processing pipeline (bloom + ACES tone mapping).
+  Must be the LAST scene component so its useTask runs after every
+  other task that updates scene state. Drives composer.render in
+  place of Threlte's default renderer (Canvas autoRender={false}).
+-->
+<PostFX />

@@ -20,6 +20,7 @@
    * empty field. Never throws.
    */
   import { Canvas } from '@threlte/core'
+  import { NoToneMapping } from 'three'
   import FieldScene from './footballfield/FieldScene.svelte'
 
   /** @type {{
@@ -60,14 +61,20 @@
 
 <div class="football-field">
   <!--
-    Canvas inherits Threlte's defaults: ACESFilmicToneMapping for the
-    broadcast look + sRGB colour management for PBR. We override two
-    things: enable shadows (used by the FieldScene sun light) and
-    request antialiasing for cleaner edges on the field decals.
+    Phase 2 changes vs Threlte defaults:
+    - autoRender={false} — PostFX.svelte's EffectComposer drives
+      rendering instead of Threlte's default render task.
+    - toneMapping={NoToneMapping} — postprocessing's ToneMappingEffect
+      applies ACES Filmic in the post chain; setting NoToneMapping on
+      the renderer prevents double-tone-mapping.
+    - shadows={true} stays for the sun + tower PointLights' shadows.
+    - antialiasing requested on the WebGL context for cleaner decals.
   -->
   <Canvas
     rendererParameters={{ antialias: true }}
     shadows={true}
+    autoRender={false}
+    toneMapping={NoToneMapping}
   >
     <FieldScene
       {theme}
