@@ -19,21 +19,17 @@
   export let reduceMotion = false
   reduceMotion;
 
-  // Above-and-behind-the-bowl angle. The Awbmegames stadium model
-  // is a continuous closed shell — its bowl walls (z=±82, y up to
-  // 76.5) and underlying seat slope mean any inside-bowl camera
-  // position sits inside or under the mesh, and back-face culling
-  // renders nothing. Putting the camera at [0, 110, 110] guarantees
-  // a clear line of sight: at z=82 the line of sight reaches y=82,
-  // above the bowl wall top of 76.5. Pitch = atan2(110, 110) = 45°.
+  // Sideline broadcast camera — moderate height, moderate pull-back,
+  // looking across the field. Now that StadiumModel hides the bowl
+  // shell on load, the camera no longer has to fly above y=76 to
+  // clear the wall — it can sit at a normal press-box height. The
+  // floodlights, press boxes, and signage from the model remain
+  // visible at the edges of frame as floating ambience.
   //
-  // Trade-off: the field appears smaller in frame because we're
-  // looking at the whole stadium from above. To zoom in tighter
-  // without blocking the wall, this would need the bowl walls
-  // hidden via mesh traversal — deferred for a future iteration.
+  // pitch = atan2(30, 75) ≈ 21.8° — natural broadcast angle.
   const CAMERA_X = 0
-  const CAMERA_Y = 110
-  const CAMERA_Z = 110
+  const CAMERA_Y = 30
+  const CAMERA_Z = 75
   const CAMERA_PITCH = -Math.atan2(CAMERA_Y, CAMERA_Z)
 </script>
 
@@ -41,7 +37,7 @@
   makeDefault
   position={[CAMERA_X, CAMERA_Y, CAMERA_Z]}
   rotation={[CAMERA_PITCH, 0, 0]}
-  fov={45}
+  fov={50}
   near={0.5}
-  far={1000}
+  far={500}
 />
