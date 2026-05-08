@@ -1,22 +1,25 @@
 """
-Ambient noise monitor — uses the Blue Yeti microphone for social detection.
+Ambient noise monitor — uses the Blue Yeti microphone for ambient signals.
 
-Measures real-time RMS audio levels from the mic to detect when multiple people
-are in the room (party/social mode). Optionally runs a YAMNet-based audio
-scene classifier in shadow mode alongside the RMS detector.
+Measures real-time RMS audio levels from the mic to drive the quiet/idle
+path, and optionally runs a YAMNet-based audio scene classifier alongside
+in shadow mode for analytics + non-social mode signals.
 
 Never records or saves audio — only measures volume levels and (when the
 classifier is enabled) computes ephemeral classification labels in memory.
 
 Detection logic (RMS):
-  - Sustained ambient noise above threshold for >2 minutes = "social" mode
+  - 60s of quiet → "quiet"/idle edge
   - Gaming mode (from activity_detector) takes priority — headset isolates
     game audio, so mic stays quiet during solo gaming sessions
 
 Detection logic (YAMNet classifier, shadow/active):
-  - speech_multiple ≥80% for 30s → social
-  - silence ≥70% for 60s → quiet (exit social)
+  - silence ≥70% for 60s → quiet (exit social/idle)
   - game_audio ≥75% → watching (when no game process detected)
+  - The speech_multiple → social gate was abandoned 2026-05-09
+    (structurally unreachable in production; see audio_classifier.py
+    and memory project_audio_classifier_shadow_followup.md). Social-mode
+    is manual-override only.
 
 Usage:
     python -m backend.services.pc_agent.ambient_monitor
@@ -51,11 +54,13 @@ FORMAT_WIDTH = 2  # 16-bit audio = 2 bytes
 
 # Detection settings
 WINDOW_SECONDS = 5  # RMS averaging window
-# RMS now only produces "quiet" edges for the idle/quiet path. Social is
-# YAMNet-gated (speech_multiple class, 0.80 confidence, 30s sustained — see
-# MODE_THRESHOLDS in backend/services/ml/audio_classifier.py). RMS alone
-# can't distinguish "people chatting" from "HVAC humming + typing" and
-# previously latched social on any sustained background noise.
+# RMS produces "quiet" edges for the idle/quiet path only. Social-mode
+# detection is manual-override only — the YAMNet `speech_multiple` gate
+# was abandoned 2026-05-09 (structurally unreachable in production; see
+# audio_classifier.py and memory `project_audio_classifier_shadow_followup.md`).
+# RMS alone can't distinguish "people chatting" from "HVAC humming + typing"
+# and previously latched social on any sustained background noise, so it
+# stays scoped to the quiet path.
 QUIET_SECONDS = 60  # 1 minute of quiet → report idle
 POLL_INTERVAL = 1  # Read mic every second
 DEFAULT_THRESHOLD = 800  # RMS threshold (calibrated per environment)

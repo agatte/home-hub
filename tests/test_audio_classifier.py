@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from backend.services.ml.audio_classifier import (
+    MODE_THRESHOLDS,
     SMOOTHING_WINDOW,
     YAMNET_SAMPLES,
     AudioSceneClassifier,
@@ -29,27 +30,15 @@ from backend.services.ml.audio_classifier import (
 class TestSceneState:
     """Verify sustained-duration + confidence gates for mode signals."""
 
-    def test_speech_multiple_below_sustain_returns_none(self):
+    def test_speech_multiple_no_longer_gated(self):
+        # Gate abandoned 2026-05-09 (structural unreachability in production).
+        # speech_multiple should never produce a mode signal regardless of
+        # confidence or sustain duration.
+        assert "speech_multiple" not in MODE_THRESHOLDS
         state = SceneState()
         now = time.time()
-        # First call sets the class
-        assert state.update("speech_multiple", 0.85, now) is None
-        # 29 seconds later — not yet sustained
-        assert state.update("speech_multiple", 0.85, now + 29) is None
-
-    def test_speech_multiple_above_sustain_returns_social(self):
-        state = SceneState()
-        now = time.time()
-        state.update("speech_multiple", 0.85, now)
-        result = state.update("speech_multiple", 0.85, now + 31)
-        assert result == "social"
-
-    def test_speech_multiple_below_confidence_never_triggers(self):
-        state = SceneState()
-        now = time.time()
-        state.update("speech_multiple", 0.79, now)
-        # Even after a long time, 79% < 80% threshold
-        assert state.update("speech_multiple", 0.79, now + 300) is None
+        state.update("speech_multiple", 0.99, now)
+        assert state.update("speech_multiple", 0.99, now + 600) is None
 
     def test_silence_returns_quiet_after_60s(self):
         state = SceneState()
@@ -74,18 +63,20 @@ class TestSceneState:
         assert result == "watching"
 
     def test_class_change_resets_timer(self):
+        # Use silence (60s sustain → quiet) as the gated vehicle now that
+        # speech_multiple has been abandoned. Same class-change-reset logic.
         state = SceneState()
         now = time.time()
-        state.update("speech_multiple", 0.85, now)
-        state.update("speech_multiple", 0.85, now + 20)
+        state.update("silence", 0.75, now)
+        state.update("silence", 0.75, now + 40)
         # Class changes — timer resets
-        state.update("music", 0.90, now + 25)
-        # Back to speech_multiple — timer starts over
-        state.update("speech_multiple", 0.85, now + 26)
-        # Only 10s since reset, not 30s
-        assert state.update("speech_multiple", 0.85, now + 36) is None
-        # Now 30s since reset
-        assert state.update("speech_multiple", 0.85, now + 57) == "social"
+        state.update("music", 0.90, now + 50)
+        # Back to silence — timer starts over
+        state.update("silence", 0.75, now + 51)
+        # Only 30s since reset, not 60s
+        assert state.update("silence", 0.75, now + 81) is None
+        # Now 60s since reset
+        assert state.update("silence", 0.75, now + 112) == "quiet"
 
     def test_unmapped_class_returns_none(self):
         state = SceneState()

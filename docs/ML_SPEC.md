@@ -236,7 +236,7 @@ that identifies what kind of sound is occurring.
 
 | Audio Class | Mode Signal | Confidence Required |
 |-------------|------------|---------------------|
-| `speech_multiple` (sustained 30s+) | social | 80% |
+| `speech_multiple` | ~~social~~ — gate **abandoned 2026-05-09** (structurally unreachable, see below) | — |
 | `speech_single` (sustained 60s+) | (no mode change, informational) | — |
 | `game_audio` + no game process | watching (likely streaming) | 75% |
 | `music` (loud, sustained) | (could be social if combined with speech) | — |
@@ -245,12 +245,12 @@ that identifies what kind of sound is occurring.
 **Rollout plan:**
 - Phase 1a: Run classifier alongside RMS in shadow mode. Log both outputs, compare.
 - Phase 1b: When classifier agrees with RMS >90% of the time AND catches cases RMS misses, switch automation to classifier.
-- Phase 1c: Shorten social detection window from 2 minutes to 30 seconds using `speech_multiple` confidence.
+- ~~Phase 1c: Shorten social detection window from 2 minutes to 30 seconds using `speech_multiple` confidence.~~ — superseded by the 2026-05-09 abandonment decision.
 
 **2026-05-03 Checkpoint 1 (36h shadow data) — gate is structurally unreachable.**
-Class distribution from 90,978 rows over 36h *including* the 5/02 18:00–23:00 ET guest-visit ground-truth window: silence 83.5%, **speech_single 16.0%**, music 0.3%, mechanical_noise/doorbell/game_audio <0.1% combined. **`speech_multiple` fired 0 times — even during the real two-person guest conversation.** During the guest window, `speech_single` peaked at conf 0.999 (avg 0.838 across 4,027 samples), so YAMNet detected speech but never classified it as multi-speaker. The mapping above is aspirational; on this hardware/mic geometry, no `mode_signal='social'` would fire even if `--active` were flipped today (60,905 `quiet` / 30,072 null / 0 `social`).
+Class distribution from 90,978 rows over 36h *including* the 5/02 18:00–23:00 ET guest-visit ground-truth window: silence 83.5%, **speech_single 16.0%**, music 0.3%, mechanical_noise/doorbell/game_audio <0.1% combined. **`speech_multiple` fired 0 times — even during the real two-person guest conversation.** During the guest window, `speech_single` peaked at conf 0.999 (avg 0.838 across 4,027 samples), so YAMNet detected speech but never classified it as multi-speaker. On this hardware/mic geometry, no `mode_signal='social'` would fire even if `--active` were flipped (60,905 `quiet` / 30,072 null / 0 `social`).
 
-The 5/09 Phase 1b decision is therefore reframed from "flip-or-not" to one of: **(A) retarget the gate to sustained `speech_single` + RMS floor** (most pragmatic; needs RMS distribution analysis to set the floor without tripping on TV/podcast), **(B) retrain YAMNet with multi-speaker examples** (heavy lift — small-room/distant-mic acoustics may be a domain mismatch), or **(C) abandon audio-driven social detection on this hardware** (manual override + future calendar covers ~95% of cases). See `project_audio_classifier_shadow_followup.md` for the corrected SQL queries to run on 5/09.
+**2026-05-09 Decision: ABANDONED (option C).** The 14-day re-evaluation across 838,629 production rows confirmed the 36h finding — `speech_multiple` MAX observed 0.088, never close to the 0.80 threshold. YAMNet is fundamentally a scene classifier, not a speaker-count diarizer; the `speech_multiple` keyword set conflates 2-person conversation with solo speech. Option A (`speech_single` + RMS floor) was rejected — `speech_single ≥ 0.80` fires 98,650 times in 14 days (~7,000/day) with 3.4% overlap into solo working-mode windows; RMS during conversation ≈ RMS during solo speech, so RMS doesn't disambiguate. Option B (retrain YAMNet) was rejected — wrong tool architecturally. The `speech_multiple` entry was removed from `MODE_THRESHOLDS` in `audio_classifier.py`; social-mode is now manual-override only. The score is still emitted into `all_scores` for analytics. Replacement direction (deferred to a separate plan): camera multi-face detection in `camera_service.py` extending the existing MediaPipe pipeline; SpeechBrain embeddings + clustering as a fallback if camera coverage gaps surface. See `project_audio_classifier_shadow_followup.md`.
 
 **Files touched:**
 - `backend/services/pc_agent/ambient_monitor.py` — Major refactor: add spectrogram pipeline, load ONNX model, emit classified results
@@ -975,7 +975,7 @@ degrade gracefully without NWS API access).
 |--------|---------|---------|-------------|
 | Mode change reaction | ~5s (process poll) | ~5s (no change) | — |
 | Away detection | 10 minutes (idle timer) | 15 seconds (camera) | **40x faster** |
-| Social detection | 2 minutes (sustained RMS) | Gate unreachable (2026-05-03 checkpoint: `speech_multiple` fired 0× in 36h incl. guest-visit window; redesign pending per §3.1) | — |
+| Social detection | 2 minutes (sustained RMS) | Manual override only (2026-05-09: `speech_multiple` gate abandoned — structurally unreachable, see §3.1; replacement direction deferred to camera multi-face path) | — |
 | Lighting preference application | 0 (no learning) | <1ms on mode change | New capability |
 | Music selection | Instant (heuristic) | Instant (bandit) | Better choices over time |
 
@@ -1377,7 +1377,7 @@ down 30% from baseline.
 **Implemented (April 14, 2026):**
 - ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
 - ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others. Rewards from play/skip behavior in `sonos_playback_events`. Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`. Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate.
-- ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `speech_multiple` ≥80% for 30s → social, `silence` ≥70% for 60s → exit social. Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
+- ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `silence` ≥70% for 60s → exit social/quiet, `game_audio` ≥75% → watching. The `speech_multiple` ≥80% for 30s → social gate was abandoned 2026-05-09 (structurally unreachable in production; the score is still emitted into `all_scores` for analytics — see §3.1). Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
 - ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. Captures one frame every 2s, downsampled to 320×240, runs face detection (~5ms CPU). 7 consecutive absent frames (~14s) triggers `away` mode — 40× faster than 10-minute idle timer. Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera source priority: `away` does not override process-detected gaming/working/watching; `idle` (present) does not downgrade higher-priority modes. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
 - ✓ **Adaptive Lux Brightness (shipped April 18, 2026)** — Same camera frames feed a per-poll grayscale mean (`ambient_lux`), EMA-smoothed (α=0.3, 2s poll → ~20s to 95% response), that drives a piecewise-linear brightness multiplier for `working` and `relax` modes only. `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records steady-state `baseline_lux` (typical value 80–150). The multiplier curve is anchored at the calibrated baseline: `(baseline−50 → 1.15×, baseline → 1.00×, baseline+90 → 0.85×)`, clamped outside. Integrated into `AutomationEngine._apply_lux_multiplier` between `_apply_brightness_multiplier` and `_weather_adjust`, skipping mode-scene-override paths and functional modes. Kitchen-pair and post-sunset CT rules preserved (multiplier is scalar, only affects `bri`). 39 unit tests under `tests/test_lux_multiplier.py`.
 
@@ -1575,9 +1575,9 @@ which ML feature addresses it.
 
 | Threshold | Current Value | Line | ML Feature |
 |-----------|--------------|------|------------|
-| RMS noise threshold | 800 | 46 | Audio classifier (replaces RMS entirely) |
-| Sustained noise for social | 120 seconds | 43 | Audio classifier (speech_multiple for 30s) |
-| Quiet exit from social | 60 seconds | 44 | Audio classifier (silence for 30s) |
+| RMS noise threshold | 800 | 61 | Audio classifier (RMS scoped to quiet path only) |
+| Sustained noise for social | n/a | n/a | Social-mode is manual-only — YAMNet `speech_multiple` gate abandoned 2026-05-09 |
+| Quiet exit from social | 60 seconds | n/a | Manual; `silence` (≥70% for 60s) still gates the engine's quiet path |
 | Calibration formula | floor x 2 | ~214 | Audio classifier (pretrained, no calibration needed) |
 | RMS averaging window | 5 seconds | 42 | Audio classifier (2-3s inference window) |
 
