@@ -1,20 +1,23 @@
 <script>
   /**
-   * FieldSurface — the playing field, endzones, yard lines, goal lines.
+   * FieldSurface — painted football-field markings.
    *
-   * PBR grass plane (color/normal/roughness from Poly Haven leafy_grass)
-   * tiled across an extended out-of-bounds surface (250×150 yd) so the
-   * grass blends visually outward to meet the HDRI horizon without a
-   * hard seam. Theme-tinted endzones and white yard-line decals layer
-   * on top at the standard football-field 100×53 positions in the
-   * middle of the wider grass.
+   * Phase 1.6: the visible "ground" is no longer a PBR grass plane —
+   * SkyDome's GroundedSkybox re-projects the HDRI's lower hemisphere
+   * onto a 3D ground disc, so the captured stadium grass shows
+   * through directly. This component now only renders the painted
+   * markings layered on top of that HDRI ground:
    *
-   * Coordinate system: origin at midfield, X = long axis (Colts goal at
-   * -50, opp goal at +50), Z = sideline width, Y = up.
+   *   - colored endzones (theme.primary / neutral white)
+   *   - 19 yard-line decals (every 5 yards, midfield thicker)
+   *   - 2 goal-line decals at ±40 X
+   *   - perimeter outline (2 sidelines + 2 end lines) marking the
+   *     field of play boundary
+   *
+   * Coordinate system: origin at midfield, X = long axis (Colts goal
+   * at -50, opp goal at +50), Z = sideline width, Y = up.
    */
   import { T } from '@threlte/core'
-  import { useTexture } from '@threlte/extras'
-  import { RepeatWrapping } from 'three'
 
   /** @type {{ primary: string, secondary: string }} */
   export let theme = { primary: '#002C5F', secondary: '#FFFFFF' }
@@ -22,8 +25,7 @@
   /** Field opacity dims when no live game (faded preview state). */
   export let opacity = 1.0
 
-  // Painted-field geometry — yard lines, endzones, goal lines all
-  // derive from these. Real American football is 100×53.3 yards;
+  // Painted-field geometry. Real American football is 100×53.3 yards;
   // BallMarker uses X ∈ [-50, +50] for possession-driven positions.
   const FIELD_LENGTH = 100
   const FIELD_WIDTH = 53
@@ -41,52 +43,14 @@
   const MIDFIELD_THICKNESS = 0.45
   const REGULAR_THICKNESS = 0.25
 
-  // Grass plane is wider than the painted field so the surrounding
-  // surface blends outward to meet the HDRI horizon. ~2 yards per
-  // tile keeps the leafy_grass detail readable without obvious
-  // repetition (textures are 2K source).
-  const GRASS_PLANE_LENGTH = 250
-  const GRASS_PLANE_WIDTH = 150
-  const GRASS_REPEAT_X = 125
-  const GRASS_REPEAT_Z = 75
-
-  // Load the 3 PBR maps as a record. Returns an async store keyed by
-  // the same names; transform sets RepeatWrapping + tiling on each.
-  const grass = useTexture(
-    {
-      map: '/3d/textures/grass-color.jpg',
-      normalMap: '/3d/textures/grass-normal.jpg',
-      roughnessMap: '/3d/textures/grass-roughness.jpg',
-    },
-    {
-      transform: (texture) => {
-        texture.wrapS = RepeatWrapping
-        texture.wrapT = RepeatWrapping
-        texture.repeat.set(GRASS_REPEAT_X, GRASS_REPEAT_Z)
-        return texture
-      },
-    },
-  )
+  // Field-perimeter outline. Sidelines run the long axis at Z=±26.5
+  // (full 100yd along X, including both endzones); end lines close
+  // the rectangle at X=±50 (full 53yd along Z). Thicker than yard
+  // lines (0.5 vs 0.25) — perimeter reads as more substantial.
+  const SIDELINE_THICKNESS = 0.5
+  const SIDELINE_Z = FIELD_WIDTH / 2
+  const END_LINE_X = FIELD_LENGTH / 2
 </script>
-
-{#if $grass}
-  <!--
-    Extended grass plane (250×150 yd) — covers the painted field plus
-    a generous out-of-bounds margin so the grass blends out to the
-    HDRI horizon without a visible seam. PBR with full texture set,
-    receives shadows from the sun light.
-  -->
-  <T.Mesh rotation.x={-Math.PI / 2} receiveShadow>
-    <T.PlaneGeometry args={[GRASS_PLANE_LENGTH, GRASS_PLANE_WIDTH]} />
-    <T.MeshStandardMaterial
-      map={$grass.map}
-      normalMap={$grass.normalMap}
-      roughnessMap={$grass.roughnessMap}
-      transparent
-      opacity={opacity}
-    />
-  </T.Mesh>
-{/if}
 
 <!-- Colts endzone (left, theme-tinted). -->
 <T.Mesh
@@ -137,6 +101,32 @@
 {#each [-(FIELD_LENGTH / 2 - ENDZONE_DEPTH), FIELD_LENGTH / 2 - ENDZONE_DEPTH] as goalX}
   <T.Mesh rotation.x={-Math.PI / 2} position={[goalX, YARD_LINE_LIFT, 0]}>
     <T.PlaneGeometry args={[0.4, FIELD_WIDTH]} />
+    <T.MeshStandardMaterial
+      color={0xffffff}
+      roughness={0.7}
+      transparent
+      opacity={opacity}
+    />
+  </T.Mesh>
+{/each}
+
+<!-- Sidelines (long sides at Z=±26.5, span full 100yd along X). -->
+{#each [-SIDELINE_Z, SIDELINE_Z] as z}
+  <T.Mesh rotation.x={-Math.PI / 2} position={[0, YARD_LINE_LIFT, z]}>
+    <T.PlaneGeometry args={[FIELD_LENGTH, SIDELINE_THICKNESS]} />
+    <T.MeshStandardMaterial
+      color={0xffffff}
+      roughness={0.7}
+      transparent
+      opacity={opacity}
+    />
+  </T.Mesh>
+{/each}
+
+<!-- End lines (short sides at X=±50, span full 53yd along Z). -->
+{#each [-END_LINE_X, END_LINE_X] as x}
+  <T.Mesh rotation.x={-Math.PI / 2} position={[x, YARD_LINE_LIFT, 0]}>
+    <T.PlaneGeometry args={[SIDELINE_THICKNESS, FIELD_WIDTH]} />
     <T.MeshStandardMaterial
       color={0xffffff}
       roughness={0.7}
