@@ -123,6 +123,25 @@ ZONE_DESK_THRESHOLD = 0.40
 # absent threshold (7 frames × 2s poll ≈ 14s).
 ZONE_HYSTERESIS_SECONDS = 15
 
+
+def _zone_weighted_lux(gray, zone: Optional[str]) -> float:
+    """Sample mean intensity from the frame half matching the user's zone.
+
+    Frame-level mean was producing perception-mismatched readings: a
+    bright bed-side wall pulled the average up while the user's desk-side
+    area was dim. Sampling only the active zone's half tracks the user's
+    actual perceptual environment. Falls back to full-frame when zone is
+    unknown (no commit yet, or just-resumed). The split mirrors
+    ``ZONE_DESK_THRESHOLD`` so lux and zone-detection share a boundary.
+    """
+    width = gray.shape[1]
+    split = int(ZONE_DESK_THRESHOLD * width)
+    if zone == ZONE_DESK:
+        return float(gray[:, :split].mean())
+    if zone == ZONE_BED:
+        return float(gray[:, split:].mean())
+    return float(gray.mean())
+
 # Posture classification — derived from pose landmarks when the pose path
 # fires. Compares mean shoulder-Y to mean hip-Y in MediaPipe's normalized
 # 0–1 coordinate space (Y=0 top, Y=1 bottom): upright torsos sit vertically
@@ -403,11 +422,24 @@ class CameraService:
             baseline = config.get("baseline_lux")
             self._baseline_lux = float(baseline) if baseline is not None else None
             self._calibrated = True
+            zone_sampled = config.get("zone_sampled")
             logger.info(
-                "Applied lux calibration: exposure=%.2f, baseline_lux=%s",
+                "Applied lux calibration: exposure=%.2f, baseline_lux=%s, zone=%s",
                 exposure,
                 f"{self._baseline_lux:.1f}" if self._baseline_lux is not None else "unset",
+                zone_sampled if zone_sampled is not None else "pre-roi",
             )
+            if zone_sampled is None:
+                # Persisted config predates the zone-weighted ROI metric. Live
+                # readings are now sliced by zone but the baseline reflects a
+                # full-frame mean — the multiplier will be biased until the
+                # user re-runs POST /api/camera/calibrate while zone-committed.
+                logger.warning(
+                    "Pre-ROI calibration loaded — multiplier will be biased "
+                    "until re-calibration. POST /api/camera/calibrate while "
+                    "seated at the desk (or in bed) to capture a "
+                    "zone-matched baseline."
+                )
         except Exception as exc:
             logger.error("Failed to apply lux calibration: %s", exc, exc_info=True)
 
@@ -418,8 +450,14 @@ class CameraService:
         exposure value to ``app_settings`` under ``lux_calibration_config`` so
         subsequent service restarts can re-apply it without re-calibrating.
 
+        Requires a committed zone — baseline must reflect the same surface
+        the live poll loop reads. With ``_last_zone == None`` we'd capture a
+        full-frame baseline against zone-sliced live readings, structurally
+        inflating the multiplier. Caller fix: sit at the desk (or in bed)
+        for ~20s so zone commits, then re-trigger.
+
         Returns:
-            ``{status, exposure_value, measured_lux, detail}``.
+            ``{status, exposure_value, measured_lux, zone_sampled, detail}``.
         """
         if not self._enabled or self._cap is None or not self._cap.isOpened():
             return {"status": "error", "detail": "camera not available"}
@@ -427,8 +465,18 @@ class CameraService:
             return {"status": "error", "detail": "camera paused (sleeping mode)"}
         if self._calibrating:
             return {"status": "error", "detail": "calibration already in progress"}
+        if self._last_zone is None:
+            return {
+                "status": "error",
+                "detail": (
+                    "no committed zone — sit at the desk or in bed for ~20s "
+                    "so a zone commits, then retry. Baseline must be captured "
+                    "at the same ROI the live poll loop will read against."
+                ),
+            }
 
         self._calibrating = True
+        zone_at_start = self._last_zone
         try:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, self._calibrate_exposure_sync)
@@ -446,6 +494,7 @@ class CameraService:
                     "target_lux": EXPOSURE_TARGET_LUX,
                     "baseline_lux": baseline,
                     "calibrated_at": now,
+                    "zone_sampled": zone_at_start,
                 },
             )
             self._exposure_value = result["exposure_value"]
@@ -458,10 +507,12 @@ class CameraService:
             self._last_lux_update = datetime.now(timezone.utc)
             self._calibrated = True
             logger.info(
-                "Calibration complete: exposure=%.2f, baseline_lux=%.1f",
+                "Calibration complete: exposure=%.2f, baseline_lux=%.1f, zone=%s",
                 result["exposure_value"],
                 baseline,
+                zone_at_start,
             )
+            result["zone_sampled"] = zone_at_start
             return result
         finally:
             self._calibrating = False
@@ -505,7 +556,9 @@ class CameraService:
                 ret, frame = self._cap.read()
                 if ret and frame is not None:
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    readings.append(float(gray.mean()))
+                    # Match poll-loop metric: sample the user's zone half
+                    # so baseline reflects the same surface as live reads.
+                    readings.append(_zone_weighted_lux(gray, self._last_zone))
                 time.sleep(FRAME_INTERVAL_S)
             if not readings:
                 return -1.0
@@ -1282,9 +1335,11 @@ class CameraService:
             if w > FRAME_WIDTH or h > FRAME_HEIGHT:
                 frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
 
-            # Compute ambient light level from grayscale mean
+            # Compute ambient light level from the zone-matching half of
+            # the frame. Full-frame mean was biased by the brighter bed
+            # side when the user was at the desk (and vice versa).
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            ambient_lux = float(gray.mean())
+            ambient_lux = _zone_weighted_lux(gray, self._last_zone)
 
             # Convert to RGB for MediaPipe (reused across both detectors)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
