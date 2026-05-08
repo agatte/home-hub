@@ -750,6 +750,33 @@ class AutomationEngine:
         """
         self._on_mode_change_callbacks.append(callback)
 
+    async def notify_camera_commit(self) -> None:
+        """Re-apply lighting after the camera commits a new zone or posture.
+
+        Called by ``camera_service.poll_loop`` on actual transitions
+        (zone or posture committing to a new non-None value), not on
+        steady-state refreshes. Forces a fresh light apply with
+        ``force_resend=True`` so the overlay's now-fresh zone/posture
+        values flow into ``apply_zone_overlay`` and the dedup cache
+        doesn't suppress the new computed state.
+
+        Why this exists: ``_apply_mode`` only runs on mode transitions,
+        and the 60s periodic re-apply in ``run_loop`` skips entirely
+        when ``_manual_override`` is active. So a zone/posture commit
+        that happens AFTER lights have settled (common post-restart,
+        when hysteresis takes 60-120s to re-commit) would otherwise
+        leave lights at the no-overlay baseline until the next mode
+        change.
+        """
+        mode = self.current_mode
+        if not mode:
+            return
+        logger.debug(
+            "Camera commit → re-apply mode=%s with overlay-aware overlay",
+            mode,
+        )
+        await self._apply_mode(mode, force_resend=True)
+
     async def _fire_mode_change_callbacks(self, mode: str) -> None:
         """Invoke all registered mode-change callbacks with timeout protection."""
         # 15s budget per callback. CameraService.start() reopens V4L2 on

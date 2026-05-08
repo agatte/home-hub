@@ -380,6 +380,128 @@ class TestFreshnessRefreshOnConfirm:
 
         assert service._last_posture_at is None
 
+    @pytest.mark.asyncio
+    async def test_maybe_notify_fires_on_zone_transition(self):
+        """When _last_zone transitions None → "bed" between calls,
+        the helper must invoke automation.notify_camera_commit() exactly
+        once. Repro of the 2026-05-08 01:35 EDT regression where
+        zone/posture committed late after a restart and the engine
+        had no signal to re-evaluate the overlay."""
+        automation = AsyncMock()
+        service = _make_service(automation=automation)
+
+        zone_before = service._last_zone  # None
+        service._last_zone = "bed"  # Simulate a hysteresis-driven commit.
+
+        await service._maybe_notify_camera_commit(
+            zone_before=zone_before,
+            posture_before=service._last_posture,
+        )
+
+        automation.notify_camera_commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_maybe_notify_fires_on_posture_transition(self):
+        """Same for posture."""
+        automation = AsyncMock()
+        service = _make_service(automation=automation)
+
+        posture_before = service._last_posture  # None
+        service._last_posture = "reclined"
+
+        await service._maybe_notify_camera_commit(
+            zone_before=service._last_zone,
+            posture_before=posture_before,
+        )
+
+        automation.notify_camera_commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_maybe_notify_dedups_when_both_commit_same_frame(self):
+        """If zone AND posture both commit in the same poll, only fire
+        the notification once — re-applying the lights twice would
+        burn dedup-cache + bridge writes for no benefit."""
+        automation = AsyncMock()
+        service = _make_service(automation=automation)
+
+        service._last_zone = "bed"
+        service._last_posture = "reclined"
+
+        await service._maybe_notify_camera_commit(
+            zone_before=None, posture_before=None,
+        )
+
+        automation.notify_camera_commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_maybe_notify_skips_steady_state_refresh(self):
+        """Same value before and after = steady-state refresh of the
+        timestamp only. The overlay's output won't change so we MUST
+        NOT trigger a re-apply (would amplify any write churn)."""
+        automation = AsyncMock()
+        service = _make_service(automation=automation)
+        service._last_zone = "bed"
+        service._last_posture = "reclined"
+
+        # Both values unchanged from before → no transition, no notify.
+        await service._maybe_notify_camera_commit(
+            zone_before="bed", posture_before="reclined",
+        )
+
+        automation.notify_camera_commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_notify_skips_clear_to_none(self):
+        """A commit being cleared (e.g. user left, ABSENT_THRESHOLD hit
+        and clear_committed wiped the state) shouldn't fire a re-apply
+        — the overlay just no-ops on missing zone/posture, so writing
+        again with the no-overlay state is wasted work."""
+        automation = AsyncMock()
+        service = _make_service(automation=automation)
+        # Post-clear state: was "bed", now None.
+        service._last_zone = None
+        service._last_posture = None
+
+        await service._maybe_notify_camera_commit(
+            zone_before="bed", posture_before="reclined",
+        )
+
+        automation.notify_camera_commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_notify_handles_missing_engine_method(self):
+        """Older engines / test stubs may not implement
+        notify_camera_commit. The helper must degrade gracefully."""
+        # Plain MagicMock → notify_camera_commit auto-resolves to another
+        # MagicMock. Use an object that explicitly lacks the attribute.
+        class _BareAuto:
+            pass
+
+        service = _make_service(automation=_BareAuto())
+        service._last_zone = "bed"
+
+        # Should not raise.
+        await service._maybe_notify_camera_commit(
+            zone_before=None, posture_before=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_maybe_notify_swallows_engine_exceptions(self):
+        """If the engine call raises, the camera poll must keep going —
+        the camera is the system's eyes; one failed re-apply must not
+        kill the freshness loop."""
+        automation = AsyncMock()
+        automation.notify_camera_commit.side_effect = RuntimeError("boom")
+        service = _make_service(automation=automation)
+        service._last_zone = "bed"
+
+        # Should not raise.
+        await service._maybe_notify_camera_commit(
+            zone_before=None, posture_before=None,
+        )
+
+        automation.notify_camera_commit.assert_awaited_once()
+
     def test_zone_change_still_commits_with_fresh_timestamp(self):
         """Regression guard: the steady-state refresh must not break
         the existing transition-commit path."""

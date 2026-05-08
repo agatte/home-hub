@@ -852,11 +852,17 @@ class CameraService:
                 # face without pose — prior commit still valid, refresh
                 # freshness so the lighting overlay honors it).
                 present_observed = status == "present"
+                zone_before = self._last_zone
+                posture_before = self._last_posture
                 self._apply_zone_hysteresis(
                     frame_zone, present_observed=present_observed,
                 )
                 self._apply_posture_hysteresis(
                     frame_posture, present_observed=present_observed,
+                )
+                await self._maybe_notify_camera_commit(
+                    zone_before=zone_before,
+                    posture_before=posture_before,
                 )
 
                 # Compute the lux multiplier once — used by fusion factors,
@@ -1133,6 +1139,56 @@ class CameraService:
             self._last_posture_at = now
             self._candidate_posture = None
             self._candidate_posture_since = None
+
+    async def _maybe_notify_camera_commit(
+        self,
+        *,
+        zone_before: Optional[str],
+        posture_before: Optional[str],
+    ) -> None:
+        """Nudge the engine to re-apply lights when zone or posture commits.
+
+        Called once per poll, after both hysteresis methods have run.
+        Compares pre-hysteresis state to post-hysteresis state and only
+        fires when a value transitioned to a new non-None commit
+        (None → "bed", "desk" → "bed", None → "reclined", etc.). Skips:
+
+        - Steady-state refreshes (value unchanged) — those touched the
+          ``_committed_at`` timestamp only; the overlay's output is
+          identical so a re-apply would just be wasted writes.
+        - Clears (commit → None) — overlay no-ops on missing values.
+        - First-frame initialization where both before and after are None.
+
+        Why this exists: ``_apply_mode`` only runs on mode transitions,
+        and ``run_loop``'s 60s periodic re-apply skips entirely when a
+        manual override is active. Without this hook, a zone/posture
+        commit landing AFTER lights have already settled (common
+        post-restart, when hysteresis takes 60-120s) would leave the
+        lights at the no-overlay baseline until the next mode change.
+        """
+        zone_committed = (
+            self._last_zone is not None
+            and self._last_zone != zone_before
+        )
+        posture_committed = (
+            self._last_posture is not None
+            and self._last_posture != posture_before
+        )
+        if not (zone_committed or posture_committed):
+            return
+        if self._automation is None:
+            return
+        notify = getattr(self._automation, "notify_camera_commit", None)
+        if notify is None:
+            return
+        try:
+            await notify()
+        except Exception:
+            logger.exception(
+                "notify_camera_commit failed (zone_committed=%s, "
+                "posture_committed=%s)",
+                zone_committed, posture_committed,
+            )
 
     def _evaluate_pose(self, pose_result: Any) -> tuple[bool, float, int]:
         """Decide whether a pose result constitutes a visible person.

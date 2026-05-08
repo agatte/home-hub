@@ -1178,6 +1178,103 @@ class TestApplyModeDedup:
 
 
 # ---------------------------------------------------------------------------
+# notify_camera_commit — re-apply lights when zone/posture transitions
+# ---------------------------------------------------------------------------
+
+
+class TestNotifyCameraCommit:
+    """Verify notify_camera_commit triggers a fresh light apply.
+
+    Repro of the 2026-05-08 01:35 EDT regression: service restart wiped
+    camera state, lights settled at the working baseline (~bri 176)
+    before zone/posture re-committed. The 60s periodic re-apply skips
+    when manual override is on, so without this hook, lights stayed
+    bright until the next mode change.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    async def test_notify_writes_to_bridge_after_settled_state(
+        self, engine, mock_hue,
+    ):
+        """The reproduction: lights are settled, manual override is on,
+        camera commits zone/posture late, notify_camera_commit must
+        force a re-apply so the overlay-aware state hits the bridge."""
+        # Settle into working with a manual override (mirrors the live
+        # 01:35 regression — mode_source=manual, no auto-reapply).
+        await engine.set_manual_override("working", source="api:test")
+
+        # Capture writes from this point forward only.
+        calls: list[str] = []
+        original = mock_hue.set_light
+
+        async def counting(lid, state):
+            calls.append(str(lid))
+            return await original(lid, state)
+
+        mock_hue.set_light = counting
+
+        # Camera-commit notification — should bust dedup and re-apply.
+        await engine.notify_camera_commit()
+
+        assert len(calls) > 0, (
+            "notify_camera_commit should clear the dedup cache and "
+            "write to the bridge so the now-fresh zone/posture overlay "
+            f"can take effect; got {calls}"
+        )
+
+    async def test_notify_no_op_when_mode_unset(self, engine, mock_hue):
+        """If somehow current_mode is falsy, don't crash and don't write."""
+        # Force-clear mode to simulate the very-early-startup edge case.
+        engine._current_mode = None
+        engine._manual_override = False
+        engine._override_mode = None
+
+        calls: list[str] = []
+        original = mock_hue.set_light
+
+        async def counting(lid, state):
+            calls.append(str(lid))
+            return await original(lid, state)
+
+        mock_hue.set_light = counting
+
+        # Should be a no-op, not an exception.
+        await engine.notify_camera_commit()
+        assert calls == []
+
+    async def test_notify_uses_override_mode_when_active(
+        self, engine, mock_hue,
+    ):
+        """current_mode resolves to the override when set — confirm the
+        re-apply happens against the overridden mode, not the detected
+        mode underneath."""
+        # Prime PC-detected mode as gaming, then override to working.
+        await engine.report_activity("gaming", source="process")
+        await engine.set_manual_override("working", source="api:test")
+
+        calls: list[tuple[str, dict]] = []
+        original = mock_hue.set_light
+
+        async def counting(lid, state):
+            calls.append((str(lid), state))
+            return await original(lid, state)
+
+        mock_hue.set_light = counting
+
+        await engine.notify_camera_commit()
+
+        # Expect writes (force_resend=True clears dedup). The exact
+        # state values are tested in TestZonePostureOverlay; here we
+        # just confirm the apply ran for the override mode.
+        assert len(calls) > 0
+
+
+# ---------------------------------------------------------------------------
 # Transit override revert respects manual override
 # ---------------------------------------------------------------------------
 
