@@ -27,7 +27,7 @@
     "svelte": "^4.2.0",
     "svelte-check": "^3.6.0",
     "vite": "^5.2.0",
-    "vitest": "^4.1.5"
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@threlte/core": "^7.3.0",
