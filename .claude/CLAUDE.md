@@ -103,7 +103,7 @@ python -m backend.mcp_server
 
 Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
 
-Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md` Part 5. Active fleet: `homehub-verifier`, `deploy-verifier`, `lighting-curator`, `lighting-shopper`, `gameday-preflight`, `gameday-postmortem`, `ml-model-evaluator`, `homehub-investigator`, `pr-review-backend`, `pr-review-frontend`, `doc-drift-checker`, `doc-curator`.
+Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md` Part 5. Active fleet: `homehub-verifier`, `deploy-verifier`, `lighting-curator`, `lighting-shopper`, `gameday-preflight`, `gameday-postmortem`, `ml-model-evaluator`, `homehub-investigator`, `pr-review-backend`, `pr-review-frontend`, `doc-drift-checker`, `doc-curator`, `roadmap-advisor`, `backup-verifier`.
 
 ### Ambient verification loop
 

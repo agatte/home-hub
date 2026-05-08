@@ -4,7 +4,7 @@
 
 This is a durable strategy document, not a plan-of-record. Shipping any individual agent listed here is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
 
-## Current fleet at a glance (13 agents)
+## Current fleet at a glance (14 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
@@ -16,13 +16,14 @@ This is a durable strategy document, not a plan-of-record. Shipping any individu
 | `doc-drift-checker` | 1 | shipped | manual |
 | `doc-curator` | 1 | shipped | manual + monthly runbook entry 15 |
 | `roadmap-advisor` | 1 | shipped | manual (ad-hoc when picking next slice) |
+| `backup-verifier` | 1 | shipped | manual (after backup-worthy surface change or strategy bootstrap) |
 | `pr-review-backend` | 1 | shipped | hook-nudged (pre-push) |
 | `pr-review-frontend` | 1 | shipped | hook-nudged (pre-push) |
 | `ml-model-evaluator` | 2 | shipped | auto (weekly Mon 10:00 ET, runbook entry #1) |
 | `gameday-preflight` | 3 | shipped | auto (preseason + weekly Sun NFL) + manual T-90 |
 | `gameday-postmortem` | 3 | shipped | auto (loop pre-fire detector) + manual on test fires |
 
-Tier-4 orchestration is implicit (main session plays lead). Tier-3 runtime specialists beyond the gameday pair (music librarian, routine advisor, backup verifier, dependency hygiene) remain unshipped — see Part 1.
+Tier-4 orchestration is implicit (main session plays lead). Tier-3 runtime specialists beyond the gameday pair (music librarian, routine advisor, dependency hygiene) remain unshipped — see Part 1.
 
 ---
 
@@ -48,6 +49,8 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 
 **Doc curator.** **Shipped 2026-05-07. ✓** Read-only auditor for the long-form spec docs (`PROJECT_SPEC`, `ML_SPEC`, `GAMEDAY_SPEC`, `CONFIDENCE_FUSION`, `GUEST_APP_BRAINSTORM`, `LIGHTING_EXPANSION`). Walks each doc against three sources of truth — current code, dated memory entries, and git history — and emits Edit-tool-ready `old_string`/`new_string` proposals for the caller to apply selectively. Special path for `LIGHTING_EXPANSION` reads lighting-curator's reference materials before reasoning. Complement to `doc-drift-checker` (which covers structural surfaces in CLAUDE.md / AGENT_STRATEGY tables). **Effort:** small-to-medium.
 
+**Backup verifier.** **Shipped 2026-05-08. ✓** Read-only verifier that the home-hub system's irreplaceable state (Latitude SQLite + `.env` + `data/journal`; `~/.claude` memory + agents + runbooks; lighting-curator photo references; AWS Lambda deployed code) has fresh, complete offsite backups. Walks the documented strategy at `~/.claude/runbooks/backup-strategy.md` against actual offsite state and reports gaps. First run when no strategy exists fails loud — that's the artifact (the agent emits a critical-surface enumeration + bootstrap recommendation so the strategy doc can be written from real ground truth). Read-only; never triggers backups. **Effort:** small.
+
 **Roadmap advisor.** **Shipped 2026-05-08. ✓** Cross-doc backlog synthesizer. Reads all 9 docs in `docs/` (each with its own backlog convention — Future_Development's Priority Bands, AUDIT's "Open follow-ups" with deadlines, ML_SPEC's Phase gates, GAMEDAY_SPEC's v1/v2, GUEST_APP_BRAINSTORM's Tiers, AGENT_STRATEGY's Tier 1/2/3/4) plus tactical memory entries; filters out shipped items via Future_Development's "Completed" section + memory shipped markers + recent git log; emits a categorized menu (Security · Backend · Frontend · ML · Lighting · Ops · Voice · Game Day · Docs/Tooling) of 1-2 actionable items per category. Default balanced; optional direction hint ("focus on frontend, 2-hour block") biases output. Complements `doc-curator` (accuracy) and `doc-drift-checker` (sync) by surfacing prioritization. Read-only — never edits. **Effort:** small.
 
 **PR review (backend + frontend).** **Shipped 2026-05-07. ✓** Two read-only specialist reviewers: `pr-review-backend` covers Python diffs against the global + project CLAUDE.md rules and the canonical memory footguns (current_mode field, camera-at-desk veto, manual-override preservation, refractory burn pattern, colorspace exclusivity); `pr-review-frontend` covers SvelteKit diffs against glass-card / Bebas Neue / Lucide / WS-into-stores / kitchen-pair-fusion conventions plus the build-warning hygiene list. On clean review each writes a marker file at `<git-dir>/.pr-review-{backend,frontend}-ok` containing the HEAD SHA. A pre-push hook (`pre_push_pr_review.py`) gates `git push` on the markers when the diff includes the relevant file types. Bypass: `SKIP_PR_REVIEW=1`. **Effort:** small — two agent files + one hook + settings.json wiring.
@@ -71,8 +74,6 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 **Music librarian.** Owns mode→playlist mapping refresh, vibe tag updates, taste profile rebuild on new XML imports.
 
 **Routine scheduler advisor.** Analyzes past mode-transition + Sonos data; proposes schedule tweaks ("Fridays you hit relax 2h earlier — should winddown move?").
-
-**Backup verifier.** Confirms event tables, settings, lambda code are backed up offsite. Currently no backup story exists; this agent's first run would expose that gap.
 
 **Dependency hygiene.** Pinned-version audit + security-advisory scan + breaking-change notes for proposed upgrades.
 
@@ -191,9 +192,9 @@ Tier 1 specialists pay off (curator, deploy-verifier). The fleet pattern pays of
 
 ---
 
-## Part 5 — Fleet usage playbook (when each agent fires, 2026-05-07)
+## Part 5 — Fleet usage playbook (when each agent fires, 2026-05-08)
 
-The fleet is 12 agents. Most fire automatically — the manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit, a `lighting-shopper` for product research, `doc-drift-checker` / `doc-curator` for ad-hoc audits, the PR reviewers when the pre-push hook denies).
+The fleet is 14 agents. Most fire automatically — the manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit, a `lighting-shopper` for product research, `doc-drift-checker` / `doc-curator` / `roadmap-advisor` for ad-hoc audits and planning, `backup-verifier` after irreplaceable-state changes, the PR reviewers when the pre-push hook denies).
 
 ### Trigger map
 
@@ -211,6 +212,7 @@ The fleet is 12 agents. Most fire automatically — the manual spawns left are d
 | `doc-drift-checker` | manual spawn (recommended after shipping a new agent / route / env var / app_setting key) | ad-hoc | inline drift report — never mutates docs |
 | `doc-curator` | manual spawn (recommended monthly third-Mon per runbook entry 15, or after a large feature ships) | monthly + ad-hoc | inline structured Edit-ready proposals — never mutates docs |
 | `roadmap-advisor` | manual spawn (when planning the week, picking the next slice, "what should I work on today" moments) | ad-hoc | inline categorized backlog menu — 1-2 items per category, optional direction hint |
+| `backup-verifier` | manual spawn (after a deploy that changed irreplaceable state, when adding a new backup-worthy surface, or to bootstrap the backup-strategy runbook) | ad-hoc | inline gap report; first-run-without-strategy emits critical-surface enumeration + bootstrap recommendation — never mutates state |
 | `lighting-shopper` | manual spawn (shopping trips, LIGHTING_EXPANSION wishlist refresh, evaluating unfamiliar products) | ad-hoc | inline product-fit report with citations — never edits docs |
 
 ### Game Day vertical-slice timeline
