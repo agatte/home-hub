@@ -19,14 +19,17 @@
   export let reduceMotion = false
   reduceMotion;
 
-  // Camera position is above + behind the stadium bowl so the line
-  // of sight clears the back wall and the HDRI horizon stays visible.
-  // The Awbmegames stadium (after our scale 0.81) tops out at y≈76
-  // and z=±82 — at [0, 110, 110] the line of sight at z=82 reaches
-  // y≈82 > 76, so the bowl wall isn't in the way. Pitch ~45°.
+  // Sideline press-box style camera — INSIDE the stadium bowl, at
+  // moderate height, looking across the field. The Awbmegames bowl
+  // (after scale 0.81) extends to z=±82 and y≈76. We sit at z=60
+  // (inside the +z near wall) and y=28 (above the lower bowl). From
+  // here the camera looks at origin: field is clearly visible in
+  // the foreground, the opposite (z=-82) sideline wall and seating
+  // form the background, and the HDRI sky shows above the open
+  // bowl top.
   const CAMERA_X = 0
-  const CAMERA_Y = 110
-  const CAMERA_Z = 110
+  const CAMERA_Y = 28
+  const CAMERA_Z = 60
   const CAMERA_PITCH = -Math.atan2(CAMERA_Y, CAMERA_Z)
 </script>
 
@@ -34,7 +37,7 @@
   makeDefault
   position={[CAMERA_X, CAMERA_Y, CAMERA_Z]}
   rotation={[CAMERA_PITCH, 0, 0]}
-  fov={50}
+  fov={45}
   near={0.5}
   far={1000}
 />
