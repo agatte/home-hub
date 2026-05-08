@@ -22,7 +22,9 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 
 **Memory hygiene auditor.** Quarterly read-only scan of `~/.claude/projects/.../memory/`. Flags: memories citing dates >60d old without recent verification, conflicting pairs (two memories taking opposite positions), orphan memories no longer referenced. Outputs a cleanup queue. Memory currently has 60+ entries and drift is real. **Effort:** small — one agent + a runbook entry firing every 90 days.
 
-**Doc drift checker.** Diffs `PROJECT_SPEC.md` against actual route files / service file contents. Flags sections that lie. The Aug 1 remote agent partially does this but quarterly is too infrequent. PROJECT_SPEC is large (127k chars) and rots silently. **Effort:** small-to-medium.
+**Doc drift checker.** **Shipped 2026-05-07. ✓** Walks a fixed set of authoritative-source-vs-doc comparisons: env vars in `config.py` vs CLAUDE.md `.env` block, route prefixes vs API Routes table, `app_settings` keys vs the SQLite Persisted Settings table, subagent fleet vs `~/.claude/agents/` filesystem, hook list vs `.claude/settings.json`, network device IPs vs `.env`, Tier shipped-status markers in this doc vs filesystem. Read-only — produces a drift report; caller decides which way to resolve (code is authoritative). The Aug 1 remote agent runs a similar audit quarterly; this agent is the on-demand variant. **Effort:** small-to-medium.
+
+**PR review (backend + frontend).** **Shipped 2026-05-07. ✓** Two read-only specialist reviewers: `pr-review-backend` covers Python diffs against the global + project CLAUDE.md rules and the canonical memory footguns (current_mode field, camera-at-desk veto, manual-override preservation, refractory burn pattern, colorspace exclusivity); `pr-review-frontend` covers SvelteKit diffs against glass-card / Bebas Neue / Lucide / WS-into-stores / kitchen-pair-fusion conventions plus the build-warning hygiene list. On clean review each writes a marker file at `<git-dir>/.pr-review-{backend,frontend}-ok` containing the HEAD SHA. A pre-push hook (`pre_push_pr_review.py`) gates `git push` on the markers when the diff includes the relevant file types. Bypass: `SKIP_PR_REVIEW=1`. **Effort:** small — two agent files + one hook + settings.json wiring.
 
 ### Tier 2 — Ship when relevant (medium value, medium complexity)
 
@@ -178,6 +180,9 @@ The fleet is now substantially built. Most agents fire automatically — the onl
 | `lighting-curator` | PreToolUse hook on `git commit` | per-commit when staged diff matches lighting files + design identifiers | blocks commit unless `[curator-reviewed]` token in message |
 | `gameday-preflight` | runbook entry #12 (preseason T-7) + entry #13 (weekly Sun Aug-Jan) + manual T-90 game morning | once preseason + every Sunday in NFL season + ad-hoc | digest block (agent writes its own) |
 | `gameday-postmortem` | loop pre-fire detector on `gameday:auto` close (per `homehub-checkbacks.md` § Pre-fire detectors) + manual for test fires | within ~1h of every real game close (auto), ad-hoc otherwise | appends to today's digest |
+| `pr-review-backend` | manual spawn before push (often via the deny message from the pre-push hook) | per-push when diff contains Python under `backend/`, `tests/`, `scripts/` | inline conversation report + writes `<git-dir>/.pr-review-backend-ok` containing HEAD SHA on PASS |
+| `pr-review-frontend` | manual spawn before push | per-push when diff contains SvelteKit changes under `frontend-svelte/` | inline report + writes `<git-dir>/.pr-review-frontend-ok` containing HEAD SHA on PASS |
+| `doc-drift-checker` | manual spawn (recommended after shipping a new agent / route / env var / app_setting key) | ad-hoc | inline drift report — never mutates docs |
 
 ### Game Day vertical-slice timeline
 
@@ -197,6 +202,12 @@ next day Curator review on any subsequent SEQUENCES tweak (advisory section K) b
 The PreToolUse hook on `git commit` (`.claude/hooks/pre_commit_lighting_curator.py`) blocks commits that touch one of the watched files (`light_state_calculator.py`, `routes/scenes.py`, `celebration_orchestrator.py`) AND contain a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, `BED_RECLINED`, `BED_ZONE_ONLY`, `LUX_CURVE`, `SEQUENCES`).
 
 Override path: spawn `lighting-curator`, address findings, then re-run `git commit -m "...[curator-reviewed]"`. The token is the deliberate sentinel — case-insensitive substring match against the bash command. Pure comment/whitespace edits skip the gate (the identifier filter rejects them).
+
+### Pre-push gate (PR review)
+
+The PreToolUse hook on `git push` (`.claude/hooks/pre_push_pr_review.py`) blocks pushes when the diff (`origin/master...HEAD` or upstream tracking branch if set) includes backend Python (`backend/`, `tests/`, `scripts/` `*.py`) or SvelteKit (`frontend-svelte/` `*.{svelte,ts,js,css,html}`) changes UNLESS a fresh PASS marker exists at `<git-dir>/.pr-review-{backend,frontend}-ok` recording the current `HEAD` SHA.
+
+Override paths: (1) spawn `pr-review-backend` and/or `pr-review-frontend`, address findings if any are `block`, let the agent write the marker, push again. (2) Set `SKIP_PR_REVIEW=1` for hot-fix pushes you've decided to ship without review. Doc-only / config-only pushes (`docs/**/*.md`, `.claude/**/*.md`, top-level `*.md`, `.gitignore`) skip the gate entirely. The marker is per-worktree (`git rev-parse --git-dir` resolves the worktree's own git dir), so reviews don't leak across worktrees.
 
 ### Off-season behavior
 
