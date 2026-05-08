@@ -27,12 +27,15 @@
 
   /**
    * Names (substring match, case-insensitive) of meshes to hide
-   * after load. Default targets the main bowl shell of the
-   * Awbmegames model — the giant continuous mesh that wraps the
-   * field. Smaller decorative meshes (Cube.*, Object.*) remain
-   * visible as ambient stadium chrome.
+   * after load. Default targets the main bowl shell + secondary
+   * shell of the Awbmegames model. Sketchfab strips spaces from
+   * mesh names — actual runtime names are `Football_Stadium_*`,
+   * not "Football Stadium". Matching on `stadium` catches both
+   * variants (Football_Stadium_Color_0 and Football_Stadium003_*).
+   * Smaller decorative meshes (Cube.*, Object.*) remain visible
+   * as ambient stadium chrome.
    */
-  export let hideMeshes = ['Football Stadium']
+  export let hideMeshes = ['stadium']
 
   /**
    * After GLTF load, walk the scene tree and toggle visibility
