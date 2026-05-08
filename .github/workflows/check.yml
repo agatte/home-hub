@@ -49,7 +49,10 @@ jobs:
           node-version: "22"
 
       - name: Pin npm to match the version that produced the lock
-        run: npm install -g npm@11
+        run: |
+          corepack enable
+          corepack prepare npm@11.7.0 --activate
+          npm --version
 
       - name: Install dependencies
         run: npm ci
