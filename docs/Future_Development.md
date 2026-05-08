@@ -112,11 +112,11 @@ Dedicated sleep insights page: bedtime consistency, fade duration, overnight ove
 
 ---
 
-### 4. "Do Not Disturb" Mode
+### 4. "Do Not Disturb" Mode — shipped 2026-04-29
 
-Toggle that locks current state — no mode changes, no auto-play, no TTS, no routines. Auto-expires after 2 hours. Subtle DND indicator on dashboard. Useful when you have someone over.
+`AutomationEngine.is_dnd_active()` gates autonomous mode-setters; user-source overrides (`api:<ip>`) still pass. Persisted to `app_settings["dnd_state"]`, restored on boot, auto-clears in `run_loop` once expiry tick fires. Endpoints `POST/DELETE /api/automation/dnd`; status fields appended to `GET /api/automation/status`. Frontend: subtle `DND • Xh Ym` chip on `ModeIndicator`, full toggle + duration picker on Settings.
 
-**Touches:** `automation_engine.py` (check flag before transitions), dashboard toggle component
+**Gated paths:** `report_activity`, `set_manual_override`, `clear_override`, late-night rescue, zone+posture rule, behavioral-predictor toast, music auto-play / weather suggestion, morning routine, sunrise ramp, winddown.
 
 ---
 
@@ -225,11 +225,9 @@ Day-of-year sine wave modifier on color temperature and hue ranges. Winter: cool
 
 ---
 
-### 15. Dashboard Vital Signs Strip
+### 15. Dashboard Vital Signs Strip — shipped 2026-04-29
 
-Always-visible 20px strip at kiosk bottom: Hue latency, Sonos status, ML fusion confidence, WiFi devices, Pi-hole blocks today, CPU temp. Turns red on anomalies.
-
-**Touches:** New `VitalStrip.svelte`, new `/api/vitals` endpoint
+Always-visible 22px strip at the kiosk bottom. `GET /api/vitals` aggregator (`backend/api/routes/vitals.py`) re-projects already-shipped surfaces — Hue / Sonos circuit-breaker state, fusion `_last_fusion_result`, Pi-hole `get_summary`, `psutil` mem/disk/CPU temp, `ws_manager.connection_count` — into per-metric `{value, status: ok|warn|error}` chips with a roll-up status. Frontend `VitalStrip.svelte` polls every 30s; collapsed → just an overall dot, expanded → all chips with mode-aware tinting (orange-warn, red-error). `FloatingNav` shifted up to clear the strip.
 
 ---
 
@@ -273,15 +271,11 @@ Auto-triggers when Cursor / VSCode / `claude` is focused for >25 min with no `al
 
 ---
 
-### 19. Apartment Logbook — Nightly Auto-Journal
+### 19. Apartment Logbook — shipped 2026-04-29
 
-A silent nightly (2am) job writes a single-file Markdown journal entry summarizing the day in narrative prose: *"Worked 4h12m (9:14am–2:05pm, paused at 11:30 for kitchen). Gaming 1h48m. Rain rolled in at 2:14pm, which triggered candle effect twice and shifted winddown 12 min early. Overrode the winddown routine once (stayed on watching until 11:52pm)."*
-
-Pure read over existing `event_logger` tables — no new data sources. Writes to `data/journal/YYYY-MM-DD.md`. Surfaced behind a `/journal` route (hidden from main nav). Also primes any future LLM-backed features: the journal file is ready-made grounding context.
+`backend/services/journal_service.py` reads activity / light / sonos / scene events for the previous local calendar day and writes Markdown to `data/journal/YYYY-MM-DD.md`. ScheduledTask `journal_nightly` at 02:00 daily. Endpoints `GET /api/journal/entries`, `GET /api/journal/{date}`, `POST /api/journal/generate/{date}`. Frontend route `/journal` (date rail + markdown render); intentionally excluded from `FloatingNav`. Pure read; no actuation. Also primes any future LLM-backed features — the journal file is ready-made grounding context.
 
 **Distinct from #1 Dashboard Replay:** Replay is real-time visual scrubbing. Logbook is compact, searchable, linkable prose. **Distinct from #3 Sleep Analytics:** Sleep is focused on sleep quality. Logbook covers the whole day as narrative.
-
-**Touches:** new `journal_service.py` (scheduled at 2am), new `/journal` frontend route
 
 ---
 

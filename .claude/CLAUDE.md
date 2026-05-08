@@ -103,7 +103,7 @@ python -m backend.mcp_server
 
 Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
 
-Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md` Part 5. Active fleet: `homehub-verifier`, `deploy-verifier`, `lighting-curator`, `gameday-preflight`, `gameday-postmortem`, `ml-model-evaluator`, `homehub-investigator`, `pr-review-backend`, `pr-review-frontend`, `doc-drift-checker`, `doc-curator`.
+Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md` Part 5. Active fleet: `homehub-verifier`, `deploy-verifier`, `lighting-curator`, `lighting-shopper`, `gameday-preflight`, `gameday-postmortem`, `ml-model-evaluator`, `homehub-investigator`, `pr-review-backend`, `pr-review-frontend`, `doc-drift-checker`, `doc-curator`.
 
 ### Ambient verification loop
 
@@ -127,7 +127,7 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, MLLogger, [future: GameDayEngine]
+   │   └── mode-change callbacks ──> MusicMapper, AmbientMonitor, MLLogger, CameraService, BarApp
    ├── ML Services (shipped) ──────> see docs/ML_SPEC.md
    │   ├── AudioClassifier ────────> YAMNet audio scene classification
    │   ├── BehavioralPredictor ────> LightGBM mode prediction
@@ -155,9 +155,6 @@ PC Agent (standalone processes, same machine)
 ### Target (upcoming work)
 
 Key additions beyond current:
-- **EventLogger** — Middleware that intercepts all state changes → event tables (for learning)
-- **LearningEngine** — Separate process, reads events, generates rules, exposes `/predict` API
-- **GameDayEngine** — ESPN polling, play detection, celebration orchestration
 - **Database migration** — SQLite → PostgreSQL (Supabase) as event volume grows
 - See `docs/PROJECT_SPEC.md` for full target architecture diagram
 
@@ -268,11 +265,15 @@ All messages: JSON with `type` + `data` fields.
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 | Game Day | `/api/gameday` | `GET /state`, `GET /schedule`, `POST /test/{event}`. WS: `gameday_state`/`gameday_play`/`gameday_celebration`. Spec: `docs/GAMEDAY_SPEC.md` |
+| Rules | `/api/rules` | View / enable-disable / regenerate learned RuleEngine rules; rule-suggestion accept endpoint |
+| Learning | `/api/learning` | Predictor status, override-rate metric, A/B comparison, fusion weight retune trigger, predictor promote/demote |
+| Events | `/api/events` | Activity/playback/light/scene event aggregation, filtering, mode timeline (backs `/journal` + analytics) |
+| Plants | `/api/plants` | `GET /status` summary from external plant-care app (10-min TTL cache); 503 when `PLANT_APP_*` unset |
+| Bar | `/api/bar` | `GET /status` summary from Home Bar app (inventory, party mode, cocktail suggestion); 503 when `BAR_APP_URL` unset |
+| Ambient | `/api/ambient` | Browser-side ambient audio: playback state, volume, mode→sound map, weather-reactive config |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
-- `/api/learning/` — Learning engine rules, patterns, predictions
-- `/api/events/` — Activity/playback history
 - `/api/widgets/` — External app widget status
 
 ---
@@ -375,13 +376,23 @@ Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `spa
 ### .env Variables
 
 ```
+# App
 APP_ENV=development
 LOCAL_IP=192.168.1.30          # Server LAN IP — Sonos fetches TTS MP3 from here
+FRONTEND_BUILD=frontend-svelte/build  # Relative path from repo root to the SvelteKit build dir
+TIMEZONE=America/Indiana/Indianapolis  # Scheduling timezone (Indiana DST rules)
+LOG_LEVEL=INFO
+
+# Hue + Sonos
 HUE_BRIDGE_IP=192.168.1.50
 HUE_USERNAME=<bridge token>    # From bridge pairing
+SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
+
+# TTS
 TTS_VOICE=en-US-GuyNeural
 TTS_VOLUME=10
-LOG_LEVEL=INFO
+
+# Routines + music discovery
 GOOGLE_MAPS_API_KEY=...
 HOME_ADDRESS=...
 WORK_ADDRESS=...
@@ -389,13 +400,39 @@ MORNING_ROUTINE_HOUR=6
 MORNING_ROUTINE_MINUTE=40
 MORNING_VOLUME=10
 LASTFM_API_KEY=...
-SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
-ZONE_POSTURE_RULE_APPLY=false  # Zone+posture→relax actuation. Default false = shadow ml_decisions only.
+
+# Plant App (optional widget integration)
+PLANT_APP_API_URL=
+PLANT_APP_EMAIL=
+PLANT_APP_PASSWORD=
 PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot.
+
+# Bar App (optional widget integration)
+BAR_APP_URL=
+
+# Pi-hole (optional — enables network stats widget)
+PIHOLE_API_URL=
+PIHOLE_API_KEY=
+
+# Voice (Phase 3 — Fauxmo virtual WeMos)
+FAUXMO_ENABLED=false
+
+# Game Day (Phase 4 — Colts celebrations)
+OPENAI_API_KEY=                # Optional — TTS celebration line generator
+ESPN_POLL_INTERVAL=5           # ESPN polling cadence in seconds
+BIG_PLAY_YARD_THRESHOLD=20     # Yards for "big play" celebration trigger
+FIELD_GOAL_YARD_THRESHOLD=40   # Yards for "long field goal" celebration trigger
+
+# ML rule
+ZONE_POSTURE_RULE_APPLY=true   # Zone+posture→relax actuation. Default True (live since 2026-04-27); set false to shadow-log only.
+
+# Auth — write endpoints + Alexa Skill
 HOME_HUB_API_KEY=<urlsafe random>  # Write-endpoint gate. Unset → 503. Localhost + RFC1918 LAN auto-bypass.
 HOME_HUB_SKILL_TOKEN=<urlsafe random>  # Tunnel-origin auth (Alexa Skill), paired with API_KEY.
 TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs).
-GUEST_WIFI_SSID=               # Surfaces a QR on home dashboard + /guest. Empty = "not configured".
+
+# Guest WiFi (surfaces QR on home dashboard + /guest)
+GUEST_WIFI_SSID=               # Empty = "not configured"
 GUEST_WIFI_PASSWORD=
 GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 ```
@@ -412,6 +449,10 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `camera_enabled` | `{enabled: bool}` — opt-in toggle for the camera service |
 | `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |
 | `guest_vibe_playlists` | `{hype, singalong, throwback}` → favorite_title — overrides `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit; missing keys fall back |
+| `screen_sync_laptop_enabled` | `{enabled: bool}` — laptop screen→bedroom-lamp sync toggle (independent of `camera_enabled`) |
+| `dnd_state` | `{enabled, until, source}` — Do Not Disturb persistence; `load_override_state()` restores at boot, `run_loop` auto-clears past `until` |
+| `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives restarts so a deploy mid-`relax` doesn't snap to `working`. Mirrors `dnd_state` pattern |
+| `ambient_config` | Browser-side ambient sound config (volume, mode→sound map, weather reactivity); written via `/api/ambient/*` |
 
 ---
 
