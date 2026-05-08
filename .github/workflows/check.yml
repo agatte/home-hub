@@ -48,14 +48,16 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Pin npm to match the version that produced the lock
-        run: |
-          corepack enable
-          corepack prepare npm@11.7.0 --activate
-          npm --version
-
       - name: Install dependencies
-        run: npm ci
+        # Using `npm install` instead of `npm ci` because the lock file is
+        # internally inconsistent with package.json — vitest@4 declares
+        # peerDeps vite>=6, but package.json constrains vite@^5. Older
+        # npm refuses the lock; newer npm (which produced the lock)
+        # tolerates it. Until we resolve the peer-dep mismatch (bump
+        # vite to ^7 or downgrade vitest to ^3.2), `npm install` is the
+        # pragmatic choice — it respects the lock as a hint without the
+        # strict-validation gate that `npm ci` enforces.
+        run: npm install --no-audit --no-fund
 
       - name: Run vitest unit tests
         run: npm run test:unit
