@@ -50,9 +50,11 @@
     const targets = hideMeshes.map((s) => s.toLowerCase())
     let hidden = 0
     let total = 0
+    const names = []
     gltf.scene.traverse((obj) => {
       if (!obj.isMesh) return
       total += 1
+      names.push(obj.name || '(unnamed)')
       const name = (obj.name || '').toLowerCase()
       if (targets.some((t) => name.includes(t))) {
         obj.visible = false
@@ -60,7 +62,10 @@
       }
     })
     // eslint-disable-next-line no-console
-    console.warn(`[StadiumModel] ${hidden}/${total} meshes hidden`)
+    console.warn(
+      `[StadiumModel] ${hidden}/${total} meshes hidden. Mesh names: ` +
+        names.join(' | '),
+    )
   }
 </script>
 
