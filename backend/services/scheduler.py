@@ -42,6 +42,7 @@ class AsyncScheduler:
     def __init__(self) -> None:
         self._tasks: dict[str, ScheduledTask] = {}
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+        self._running_tasks: set[asyncio.Task] = set()
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
@@ -110,16 +111,34 @@ class AsyncScheduler:
 
         return None
 
-    async def _execute_task(self, task: ScheduledTask, now: datetime) -> None:
-        """Run a scheduled task once and stamp its status fields.
+    async def _execute_task(
+        self, task: ScheduledTask, now: datetime
+    ) -> asyncio.Task:
+        """Dispatch a scheduled task as a background coroutine and stamp its status.
 
-        ``last_run`` is stamped before the callback fires (the task fired,
-        regardless of outcome). ``last_status`` / ``last_error`` reflect
-        the callback's result — surfaced via ``/health.scheduler_tasks``
-        for the runbook to query.
+        ``last_run`` is stamped synchronously before dispatch so the
+        per-minute dedup check in ``run_loop`` sees the new timestamp on
+        the next tick. The callback itself runs as an independent
+        ``asyncio.Task`` — a long-running callback (e.g., ``winddown_routine``'s
+        30-min retry sleep, ``sunrise_ramp``'s 20-min ramp) cannot block the
+        tick loop and starve the other 7 scheduled tasks. ``last_status`` /
+        ``last_error`` are stamped inside ``_run_callback`` when the callback
+        completes — surfaced via ``/health.scheduler_tasks`` for the runbook.
+
+        Returns the dispatched ``asyncio.Task`` so tests can await completion;
+        ``run_loop`` ignores the return value.
         """
         logger.info(f"Executing scheduled task: {task.name}")
         task.last_run = now
+        bg = asyncio.create_task(
+            self._run_callback(task), name=f"scheduled:{task.name}"
+        )
+        self._running_tasks.add(bg)
+        bg.add_done_callback(self._running_tasks.discard)
+        return bg
+
+    async def _run_callback(self, task: ScheduledTask) -> None:
+        """Execute a task's callback and stamp status fields with the result."""
         try:
             await task.callback()
             task.last_status = "ok"

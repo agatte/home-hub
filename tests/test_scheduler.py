@@ -1,6 +1,7 @@
 """
 Tests for the async scheduler — task registration, next-run calculation, dedup.
 """
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -138,12 +139,17 @@ class TestTaskStatusFields:
             ran.append(1)
 
         task = ScheduledTask(name="t", hour=0, minute=0, callback=cb)
-        await scheduler._execute_task(task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ))
+        bg = await scheduler._execute_task(
+            task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ)
+        )
+        # last_run stamps synchronously so the per-minute dedup check sees it
+        # on the next tick; status fields stamp when the dispatched task ends.
+        assert task.last_run is not None
+        await bg
 
         assert ran == [1]
         assert task.last_status == "ok"
         assert task.last_error is None
-        assert task.last_run is not None
 
     @pytest.mark.asyncio
     async def test_execute_task_failure_captures_error(self):
@@ -155,7 +161,10 @@ class TestTaskStatusFields:
         task = ScheduledTask(name="t", hour=0, minute=0, callback=cb)
         # Helper must not propagate the exception — scheduler can't crash
         # on one task or every other task in the loop dies.
-        await scheduler._execute_task(task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ))
+        bg = await scheduler._execute_task(
+            task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ)
+        )
+        await bg
 
         assert task.last_status == "error"
         assert "RuntimeError" in (task.last_error or "")
@@ -171,7 +180,47 @@ class TestTaskStatusFields:
             raise RuntimeError(long_msg)
 
         task = ScheduledTask(name="t", hour=0, minute=0, callback=cb)
-        await scheduler._execute_task(task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ))
+        bg = await scheduler._execute_task(
+            task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ)
+        )
+        await bg
 
         assert task.last_error is not None
         assert len(task.last_error) <= 500
+
+    @pytest.mark.asyncio
+    async def test_execute_task_does_not_block_on_long_callback(self):
+        """A long-running callback must not block the scheduler tick loop.
+
+        Regression for the 2026-05-07 winddown wedge: a 30-min retry sleep
+        inside ``winddown_routine.run`` ran inline under
+        ``await self._execute_task(...)`` and froze every other scheduled
+        task. After the fix, the callback dispatches as a background
+        ``asyncio.Task`` and ``_execute_task`` returns immediately.
+        """
+        scheduler = AsyncScheduler()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_cb():
+            started.set()
+            await release.wait()
+
+        task = ScheduledTask(name="t", hour=0, minute=0, callback=slow_cb)
+
+        bg = await asyncio.wait_for(
+            scheduler._execute_task(
+                task, datetime(2026, 5, 6, 12, 0, tzinfo=TZ)
+            ),
+            timeout=1.0,
+        )
+        # Yield once so the dispatched task gets to run up to its await point
+        await asyncio.sleep(0)
+        assert started.is_set()
+        assert not bg.done()
+        assert task.last_run is not None
+        assert task.last_status == "pending"  # bg hasn't completed yet
+
+        release.set()
+        await bg
+        assert task.last_status == "ok"
