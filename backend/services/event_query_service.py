@@ -34,107 +34,145 @@ class EventQueryService:
         High-level stats across all event tables for a time window.
 
         Returns activity mode counts, light adjustment stats, Sonos event
-        breakdown, and scene activation summary.
+        breakdown, and scene activation summary. All aggregations are
+        pushed into SQL — `light_adjustments` alone routinely exceeds 100k
+        rows in a 30-day window, so hydrating full ORM objects here would
+        blow the analytics-page client timeout.
         """
         since = _since(days)
 
         async with async_session() as session:
-            # Activity events
-            activity_rows = (await session.execute(
-                select(ActivityEvent).where(ActivityEvent.timestamp >= since)
-            )).scalars().all()
+            # ---- activity_events ----
+            mode_rows = (await session.execute(
+                select(
+                    ActivityEvent.mode,
+                    func.count().label("n"),
+                    func.avg(ActivityEvent.duration_seconds).label("avg_dur"),
+                )
+                .where(ActivityEvent.timestamp >= since)
+                .group_by(ActivityEvent.mode)
+            )).all()
 
-            mode_counts: dict[str, int] = defaultdict(int)
-            source_counts: dict[str, int] = defaultdict(int)
-            mode_durations: dict[str, list[int]] = defaultdict(list)
-            for row in activity_rows:
-                mode_counts[row.mode] += 1
-                source_counts[row.source] += 1
-                if row.duration_seconds is not None:
-                    mode_durations[row.mode].append(row.duration_seconds)
+            source_rows = (await session.execute(
+                select(ActivityEvent.source, func.count().label("n"))
+                .where(ActivityEvent.timestamp >= since)
+                .group_by(ActivityEvent.source)
+            )).all()
 
+            mode_counts = {mode: n for mode, n, _ in mode_rows}
+            source_counts = {source: n for source, n in source_rows}
             avg_duration = {
-                mode: round(sum(durs) / len(durs) / 60, 1)
-                for mode, durs in mode_durations.items() if durs
+                mode: round(avg_dur / 60, 1)
+                for mode, _, avg_dur in mode_rows
+                if avg_dur is not None
             }
+            total_transitions = sum(mode_counts.values())
 
-            # Light adjustments
-            light_rows = (await session.execute(
-                select(LightAdjustment).where(LightAdjustment.timestamp >= since)
-            )).scalars().all()
+            # ---- light_adjustments ----
+            trigger_rows = (await session.execute(
+                select(LightAdjustment.trigger, func.count().label("n"))
+                .where(
+                    LightAdjustment.timestamp >= since,
+                    LightAdjustment.trigger.isnot(None),
+                )
+                .group_by(LightAdjustment.trigger)
+            )).all()
 
-            trigger_counts: dict[str, int] = defaultdict(int)
-            light_counts: dict[str, dict] = defaultdict(lambda: {"count": 0, "name": ""})
-            for row in light_rows:
-                if row.trigger:
-                    trigger_counts[row.trigger] += 1
-                light_counts[row.light_id]["count"] += 1
-                light_counts[row.light_id]["name"] = row.light_name or row.light_id
+            total_adjustments = (await session.execute(
+                select(func.count(LightAdjustment.id))
+                .where(LightAdjustment.timestamp >= since)
+            )).scalar() or 0
 
+            top_light_row = (await session.execute(
+                select(
+                    LightAdjustment.light_id.label("light_id"),
+                    func.coalesce(
+                        func.max(LightAdjustment.light_name),
+                        LightAdjustment.light_id,
+                    ).label("name"),
+                    func.count().label("n"),
+                )
+                .where(LightAdjustment.timestamp >= since)
+                .group_by(LightAdjustment.light_id)
+                .order_by(func.count().desc())
+                .limit(1)
+            )).first()
+
+            trigger_counts = {trigger: n for trigger, n in trigger_rows}
             most_adjusted = None
-            if light_counts:
-                top_id = max(light_counts, key=lambda k: light_counts[k]["count"])
+            if top_light_row is not None:
                 most_adjusted = {
-                    "id": top_id,
-                    "name": light_counts[top_id]["name"],
-                    "count": light_counts[top_id]["count"],
+                    "id": top_light_row.light_id,
+                    "name": top_light_row.name,
+                    "count": top_light_row.n,
                 }
 
-            # Sonos events
-            sonos_rows = (await session.execute(
-                select(SonosPlaybackEvent).where(SonosPlaybackEvent.timestamp >= since)
-            )).scalars().all()
+            # ---- sonos_playback_events ----
+            type_rows = (await session.execute(
+                select(SonosPlaybackEvent.event_type, func.count().label("n"))
+                .where(SonosPlaybackEvent.timestamp >= since)
+                .group_by(SonosPlaybackEvent.event_type)
+            )).all()
 
-            type_counts: dict[str, int] = defaultdict(int)
-            fav_counts: dict[str, int] = defaultdict(int)
-            for row in sonos_rows:
-                type_counts[row.event_type] += 1
-                if row.favorite_title:
-                    fav_counts[row.favorite_title] += 1
+            fav_rows = (await session.execute(
+                select(SonosPlaybackEvent.favorite_title, func.count().label("n"))
+                .where(
+                    SonosPlaybackEvent.timestamp >= since,
+                    SonosPlaybackEvent.favorite_title.isnot(None),
+                )
+                .group_by(SonosPlaybackEvent.favorite_title)
+                .order_by(func.count().desc())
+                .limit(5)
+            )).all()
 
-            top_favorites = sorted(
-                [{"title": t, "count": c} for t, c in fav_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:5]
+            type_counts = {event_type: n for event_type, n in type_rows}
+            total_sonos_events = sum(type_counts.values())
+            top_favorites = [{"title": title, "count": n} for title, n in fav_rows]
 
-            # Scene activations
-            scene_rows = (await session.execute(
-                select(SceneActivation).where(SceneActivation.timestamp >= since)
-            )).scalars().all()
+            # ---- scene_activations ----
+            scene_source_rows = (await session.execute(
+                select(SceneActivation.source, func.count().label("n"))
+                .where(SceneActivation.timestamp >= since)
+                .group_by(SceneActivation.source)
+            )).all()
 
-            scene_source_counts: dict[str, int] = defaultdict(int)
-            scene_name_counts: dict[str, int] = defaultdict(int)
-            for row in scene_rows:
-                scene_source_counts[row.source] += 1
-                name = row.scene_name or row.scene_id
-                scene_name_counts[name] += 1
+            scene_name_expr = func.coalesce(
+                SceneActivation.scene_name,
+                SceneActivation.scene_id,
+            )
+            top_scene_rows = (await session.execute(
+                select(scene_name_expr.label("name"), func.count().label("n"))
+                .where(SceneActivation.timestamp >= since)
+                .group_by(scene_name_expr)
+                .order_by(func.count().desc())
+                .limit(5)
+            )).all()
 
-            top_scenes = sorted(
-                [{"name": n, "count": c} for n, c in scene_name_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:5]
+            scene_source_counts = {source: n for source, n in scene_source_rows}
+            total_scenes = sum(scene_source_counts.values())
+            top_scenes = [{"name": name, "count": n} for name, n in top_scene_rows]
 
         return {
             "period_days": min(days, MAX_DAYS),
             "activity": {
-                "total_transitions": len(activity_rows),
-                "modes": dict(mode_counts),
-                "sources": dict(source_counts),
+                "total_transitions": total_transitions,
+                "modes": mode_counts,
+                "sources": source_counts,
                 "avg_mode_duration_minutes": avg_duration,
             },
             "lights": {
-                "total_adjustments": len(light_rows),
-                "by_trigger": dict(trigger_counts),
+                "total_adjustments": total_adjustments,
+                "by_trigger": trigger_counts,
                 "most_adjusted_light": most_adjusted,
             },
             "sonos": {
-                "total_events": len(sonos_rows),
-                "by_type": dict(type_counts),
+                "total_events": total_sonos_events,
+                "by_type": type_counts,
                 "top_favorites": top_favorites,
             },
             "scenes": {
-                "total_activations": len(scene_rows),
-                "by_source": dict(scene_source_counts),
+                "total_activations": total_scenes,
+                "by_source": scene_source_counts,
                 "top_scenes": top_scenes,
             },
         }
