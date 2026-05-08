@@ -67,6 +67,17 @@ ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working", "social"))
 # actions (api:*, rule_suggestion_accept:*) bypass.
 USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
 
+# Process-attendance veto window for autonomous relax pushes (late-night
+# rescue + winddown). Camera-zone freshness is the primary "user is here"
+# signal, but the camera blips in dark rooms / pose-only conditions and the
+# 5-min freshness window can lapse. The PC agent reporting `working` is an
+# independent attendance signal — if it's been < this window, treat the user
+# as attended and skip the relax push. 10 minutes tolerates idle thinking
+# gaps while staying conservative against "user left for the night."
+# (2026-05-07: late-night rescue fired during a dev session because camera
+# zone went stale; PC agent had reported working 1.4s before the fire.)
+RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
+
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user
 # choice. Calendar events (winddown_routine), user-API actions (api:*),
@@ -285,6 +296,12 @@ class AutomationEngine:
         self._last_activity_change: Optional[datetime] = None
         # Per-source liveness for the priority guard (source → last report time).
         self._last_mode_source_report_at: dict[str, datetime] = {}
+
+        # Last time the PC agent reported mode=working. Independent of camera
+        # signal — used by late-night rescue + winddown as a parallel veto so
+        # a transient camera blip doesn't strand the user in relax while
+        # they're actively at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
+        self._last_process_working_at: Optional[datetime] = None
 
         # Per-light state tracking for deduplication
         self._last_applied_per_light: dict[str, dict] = {}
@@ -674,6 +691,25 @@ class AutomationEngine:
         zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
         return zone == "desk"
 
+    def is_recent_process_working(
+        self, window_seconds: int = RECENT_PROCESS_WORKING_SECONDS,
+    ) -> bool:
+        """True iff the PC agent reported ``mode=working`` within the window.
+
+        Camera zone is the primary attendance signal but is brittle in dark
+        rooms / pose-only conditions. The PC agent (psutil-driven, reports
+        every 5s when active) is an independent attendance signal — used as
+        a parallel veto by autonomous relax pushes (late-night rescue,
+        winddown). 10-minute default tolerates idle thinking gaps while
+        staying conservative against "user left for the night."
+        """
+        if self._last_process_working_at is None:
+            return False
+        age = (
+            datetime.now(tz=TZ) - self._last_process_working_at
+        ).total_seconds()
+        return age < window_seconds
+
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
@@ -822,6 +858,13 @@ class AutomationEngine:
         # Record this source's last-seen time regardless of whether the report
         # caused a mode change. Source freshness tracks liveness, not edges.
         self._last_mode_source_report_at[source] = now
+
+        # Stamp process-working liveness for the late-night rescue / winddown
+        # veto. Updated on every confirming report, not just on mode edges,
+        # so a steady stream of process-working heartbeats keeps the veto
+        # alive even when the engine has demoted current_mode to idle.
+        if source == "process" and mode == "working":
+            self._last_process_working_at = now
 
         old_mode = self._current_mode
 
@@ -2065,6 +2108,7 @@ class AutomationEngine:
                     not self._manual_override
                     and not self.is_dnd_active()
                     and not self.is_at_desk_fresh()
+                    and not self.is_recent_process_working()
                     and self._get_time_period() == "late_night"
                     and self._current_mode in ("working", "idle")
                     and not await self._sonos_is_playing()

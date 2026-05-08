@@ -9,14 +9,24 @@ from backend.services.winddown_routine import WinddownRoutineService
 class _FakeAutomation:
     """Minimal automation engine stub for winddown."""
 
-    def __init__(self, current_mode="working", at_desk=False, dnd=False):
+    def __init__(
+        self,
+        current_mode="working",
+        at_desk=False,
+        process_working=False,
+        dnd=False,
+    ):
         self.current_mode = current_mode
         self._at_desk = at_desk
+        self._process_working = process_working
         self._dnd = dnd
         self.override_calls: list[str] = []
 
     def is_at_desk_fresh(self) -> bool:
         return self._at_desk
+
+    def is_recent_process_working(self) -> bool:
+        return self._process_working
 
     def is_dnd_active(self) -> bool:
         return self._dnd
@@ -119,6 +129,7 @@ class TestWinddownCameraVeto:
         auto, sonos, tts = deps
         # Strip the helper to simulate an older automation engine.
         del type(auto).is_at_desk_fresh
+        del type(auto).is_recent_process_working
         try:
             wd = WinddownRoutineService(auto, sonos, tts)
             await wd.execute(force=True)
@@ -128,6 +139,48 @@ class TestWinddownCameraVeto:
             _FakeAutomation.is_at_desk_fresh = (
                 lambda self: getattr(self, "_at_desk", False)
             )
+            _FakeAutomation.is_recent_process_working = (
+                lambda self: getattr(self, "_process_working", False)
+            )
+
+
+class TestWinddownProcessAttendanceVeto:
+    """Process-attendance veto — defense in depth with the camera veto.
+
+    PC agent reports working independently of the camera. When the camera
+    blips (dark room, pose-only, V4L2 hang), the process signal still
+    catches active dev sessions and protects them from the relax flip.
+    Regression guard for the 2026-05-07 incident where late-night rescue
+    fired despite a fresh process-working report.
+    """
+
+    async def test_process_working_alone_skips_lights(self, deps):
+        auto, sonos, tts = deps
+        auto._at_desk = False
+        auto._process_working = True
+        wd = WinddownRoutineService(auto, sonos, tts, volume=12)
+        ok = await wd.execute(force=True)
+        assert ok is True
+        # Lights override skipped, audible cue still fires.
+        assert auto.override_calls == []
+        assert sonos.volume_calls == [12]
+        assert len(tts.spoken) == 1
+
+    async def test_both_signals_present_skips_lights(self, deps):
+        auto, sonos, tts = deps
+        auto._at_desk = True
+        auto._process_working = True
+        wd = WinddownRoutineService(auto, sonos, tts)
+        await wd.execute(force=True)
+        assert auto.override_calls == []
+
+    async def test_neither_signal_runs_normally(self, deps):
+        auto, sonos, tts = deps
+        auto._at_desk = False
+        auto._process_working = False
+        wd = WinddownRoutineService(auto, sonos, tts)
+        await wd.execute(force=True)
+        assert auto.override_calls == ["relax"]
 
 
 class TestWinddownDndGate:

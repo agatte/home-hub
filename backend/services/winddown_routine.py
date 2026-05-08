@@ -97,19 +97,30 @@ class WinddownRoutineService:
 
         logger.info("Executing evening wind-down routine")
 
-        # Camera-at-desk veto: if Anthony is visibly at the desk, skip the
-        # lighting override but still play the audible nudge (TTS + volume
-        # drop) so the routine isn't silent. The veto is best-effort —
-        # missing helper or no camera fall through to the legacy behavior.
+        # Attendance veto: if Anthony is visibly at the desk OR the PC agent
+        # has reported active work in the last 10 minutes, skip the lighting
+        # override but still play the audible nudge (TTS + volume drop) so
+        # the routine isn't silent. Two parallel signals because the camera
+        # blips in dark rooms / pose-only conditions; process-attendance
+        # provides defense in depth. Both checks are best-effort — missing
+        # helpers fall through to the legacy "no veto" behavior.
         camera_at_desk = bool(
             self._automation is not None
             and getattr(self._automation, "is_at_desk_fresh", lambda: False)()
         )
+        process_working = bool(
+            self._automation is not None
+            and getattr(
+                self._automation, "is_recent_process_working", lambda: False,
+            )()
+        )
 
-        if camera_at_desk:
+        if camera_at_desk or process_working:
             logger.info(
-                "Wind-down: camera sees desk — skipping lights override, "
-                "TTS + volume nudge still plays"
+                "Wind-down: user attended (camera_at_desk=%s, "
+                "process_working=%s) — skipping lights override, "
+                "TTS + volume nudge still plays",
+                camera_at_desk, process_working,
             )
         else:
             try:
