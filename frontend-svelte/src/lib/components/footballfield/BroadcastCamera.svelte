@@ -19,16 +19,22 @@
   export let reduceMotion = false
   reduceMotion;
 
-  // Camera at midfield press-box height, ~70 yards back from the
-  // sideline. atan2(35, 70) ≈ 0.4636 rad ≈ 26.6° pitch.
-  const CAMERA_PITCH = -Math.atan2(35, 70)
+  // Camera position is above + behind the stadium bowl so the line
+  // of sight clears the back wall and the HDRI horizon stays visible.
+  // The Awbmegames stadium (after our scale 0.81) tops out at y≈76
+  // and z=±82 — at [0, 110, 110] the line of sight at z=82 reaches
+  // y≈82 > 76, so the bowl wall isn't in the way. Pitch ~45°.
+  const CAMERA_X = 0
+  const CAMERA_Y = 110
+  const CAMERA_Z = 110
+  const CAMERA_PITCH = -Math.atan2(CAMERA_Y, CAMERA_Z)
 </script>
 
 <T.PerspectiveCamera
   makeDefault
-  position={[0, 35, 70]}
+  position={[CAMERA_X, CAMERA_Y, CAMERA_Z]}
   rotation={[CAMERA_PITCH, 0, 0]}
   fov={50}
   near={0.5}
-  far={500}
+  far={1000}
 />
