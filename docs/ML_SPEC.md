@@ -56,7 +56,7 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection). Remaining for Phase 2b: posture classification (BlazePose upgrade) | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
+| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
 | **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
 
 ### Design Principles
@@ -140,7 +140,7 @@ confident prediction:
 2. Confidence fusion        → Weighted ensemble of 4 signals: process, camera,
                               audio_ml, rule_engine (Phase 3)
    - Can auto-apply at 95%+ when idle
-   - Can override stale process detection at 98%+ with 80%+ agreement
+   - Can override stale process detection at 92%+ with 80%+ agreement
 3. Activity detection       → Process-based (gaming, working, watching)
    + Camera presence        → Absent/present (Phase 2)
    + Audio classification   → Speech, music, silence (Phase 2)
@@ -272,7 +272,7 @@ The 5/09 Phase 1b decision is therefore reframed from "flip-or-not" to one of: *
 > `/api/learning/predictor`, but it does **not** vote in fusion or the
 > live fallback chain. Promotion is gated on a diversity check
 > (`abe6343`). Auto-demote (counterpart for promoted-then-degenerate
-> models) is planned 2026-05-04. The output class set is 7 (gaming,
+> models) shipped 2026-05-04 (`predictor_auto_demote_check` ScheduledTask at 03:45 ET daily — see §15 Phase 3 changelog). The output class set is 7 (gaming,
 > working, watching, relax, social, cooking, idle).
 
 **Problem:** The existing `RuleEngineService` uses frequency counting on
@@ -709,7 +709,7 @@ via the existing activity report interface:
 ```python
 # Camera and audio classifier use this pattern
 await automation.report_activity(mode="social", source="audio_ml")
-await automation.report_activity(mode="away", source="camera")
+await automation.report_activity(mode="idle", source="camera")  # away mode retired 2026-04-28
 ```
 
 The existing `MODE_PRIORITY` dict arbitrates between sources. Camera "absent"
@@ -809,9 +809,9 @@ New event types for ML status and predictions:
 Applies to both individual ML predictions and the fused ensemble score:
 
 ```
->=98% fused confidence  →  Can override stale process detection
+>=92% fused confidence  →  Can override stale process detection
                             (requires 80%+ signal agreement)
->=95% fused confidence  →  Auto-apply mode when idle/away. Log decision.
+>=95% fused confidence  →  Auto-apply mode when idle. Log decision.
 70-95% confidence       →  Show ModeSuggestionToast with reasoning.
                             User accepts or dismisses. Log outcome.
 <70% confidence         →  Silent. Log prediction for shadow evaluation.
@@ -975,7 +975,7 @@ degrade gracefully without NWS API access).
 |--------|---------|---------|-------------|
 | Mode change reaction | ~5s (process poll) | ~5s (no change) | — |
 | Away detection | 10 minutes (idle timer) | 15 seconds (camera) | **40x faster** |
-| Social detection | 2 minutes (sustained RMS) | 30 seconds (speech classification) | **4x faster** |
+| Social detection | 2 minutes (sustained RMS) | Gate unreachable (2026-05-03 checkpoint: `speech_multiple` fired 0× in 36h incl. guest-visit window; redesign pending per §3.1) | — |
 | Lighting preference application | 0 (no learning) | <1ms on mode change | New capability |
 | Music selection | Instant (heuristic) | Instant (bandit) | Better choices over time |
 
@@ -1419,7 +1419,7 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 - ✓ `ConfidenceFusion` service — weighted ensemble. Lane-count evolution: **v1** 5-signal (April 15). **v2** 6-signal after phone-WiFi presence joined as the 6th voter (April 21). **v3** 4-signal after presence + behavioral lanes were both removed (April 27) — current shape is process / camera / audio_ml / rule_engine.
 - ✓ Fusion integrated into automation loop — computes every 60s cycle
 - ✓ Auto-apply at 95%+ confidence when idle/away
-- ✓ Stale process override at 98%+ confidence with 80%+ signal agreement
+- ✓ Stale process override at 92%+ confidence with 80%+ signal agreement
 - ✓ Live pipeline dashboard — replaced with the force-directed signal constellation in v2
 - ✓ Decision logging with `decision_source="fusion"`
 

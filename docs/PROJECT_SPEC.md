@@ -64,7 +64,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - PC activity detection (psutil process monitoring for games/media)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
 - Camera-based presence (MediaPipe face + pose) is the sole "is the user here" signal in-app. Home/away as a concept was retired 2026-04-28; arrivals/departures are now handled by Hue's native geofencing outside Home Hub.
-- Mode priority system: gaming (5) > social (4) > watching (3) > working (2) > idle (1) > sleeping (0)
+- Mode priority system: gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
@@ -203,7 +203,7 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, RuleEngine, MLLogger, LightingLearner
+   │   └── mode-change callbacks ──> MusicMapper, AmbientMonitor, MLLogger, CameraService, BarApp
    ├── ML Services ────────────────> see docs/ML_SPEC.md
    │   ├── MLDecisionLogger ───────> logs every mode decision with reasoning
    │   ├── ConfidenceFusion ───────> 4-lane weighted ensemble (process/camera/audio_ml/rule_engine)
@@ -911,18 +911,8 @@ Manages Alexa virtual device registration and command handling. 7 virtual WeMo d
 
 **Virtual devices:** "gaming mode", "relax mode", "cooking mode", "bedtime", "music play", "music pause"
 
-#### GameDayEngine (future)
-ESPN polling, play detection, celebration orchestration.
-
-| Method | Signature | Purpose |
-|--------|-----------|---------|
-| `start_monitoring` | `(game_id?) → None` | Begin polling ESPN for active/upcoming Colts game |
-| `stop_monitoring` | `() → None` | Stop polling |
-| `get_game_state` | `() → dict` | Current score, quarter, clock, possession |
-| `on_play_detected` | `(play) → None` | Trigger celebration if scoring play |
-| `get_schedule` | `() → list[Game]` | Upcoming Colts games |
-
-**Registers as mode-change callback:** When mode switches to "game_day", starts ESPN polling. Orchestrates HueService, TTSService, and WebSocket broadcasts on scoring plays.
+#### GameDayService + CelebrationOrchestrator (shipped 2026-05-07)
+ESPN polling, play detection, and celebration orchestration. See `docs/GAMEDAY_SPEC.md` for the full interface contracts (`GameDayService`, `CelebrationOrchestrator`, `PlayEvent`, `GameDayState`) and the "Game Day Engine — shipped 2026-05-07" section below for the architecture summary.
 
 ---
 
@@ -1133,7 +1123,7 @@ if __name__ == "__main__":
     main()
 ```
 
-**Mode priority (engine enforces automatically):** gaming (5) > social (4) > watching (3) > working (2) > idle (1) > sleeping (0)
+**Mode priority (engine enforces automatically):** gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 
 ### Pattern 6: Adding a Scheduled Routine
 

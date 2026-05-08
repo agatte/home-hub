@@ -116,7 +116,7 @@ Fusion takes the independent signals and makes them **vote together**:
 
 **After (v3):** Four signals — process / camera / audio_ml / rule_engine — report their current best guess + confidence into a shared pool. The fusion service weights them, groups votes by mode, computes an ensemble confidence score, and asks "do enough signals agree?" (Earlier ensemble shapes — v1 5-signal, v2 6-signal — are documented in the changelog above.)
 
-**New capability:** Fusion can **override stale process detection**. If you close a game but the client is still running, pre-fusion the system would keep saying "gaming" forever. Now, if camera says absent + audio says silence + WiFi says phone gone, fusion can hit 98%+ confidence and override the stale process state.
+**New capability:** Fusion can **override stale process detection**. If you close a game but the client is still running, pre-fusion the system would keep saying "gaming" forever. Now, if camera says absent + audio says silence + rule engine agrees, fusion can hit 92%+ confidence and override the stale process state. (The phone-WiFi presence lane was retired 2026-04-27 alongside the home/away concept; v3 fusion has 4 lanes: process / camera / audio_ml / rule_engine.)
 
 **The key conceptual shift:**
 
@@ -203,7 +203,7 @@ Fusion only acts when specific conditions are met:
 | Threshold | Meaning | Requires |
 |-----------|---------|----------|
 | `auto_apply = True` | Fused confidence ≥ 95% | Just a high score |
-| `can_override = True` | Fused confidence ≥ 98% **AND** agreement ≥ 80% | Near-unanimous signal agreement |
+| `can_override = True` | Fused confidence ≥ 92% **AND** agreement ≥ 80% | Strong multi-signal agreement |
 
 The difference matters:
 
