@@ -102,10 +102,10 @@ def create_app() -> FastAPI:
         except httpx.ConnectError as exc:
             logger.error("Upstream connection refused: %s", exc)
             return Response(status_code=502, content=b"upstream unreachable")
-        except httpx.TimeoutException as exc:
+        except httpx.TimeoutException:
             logger.warning("Upstream timeout: %s %s", request.method, url)
             return Response(status_code=504, content=b"upstream timeout")
-        except Exception as exc:
+        except Exception:
             logger.exception("Upstream forward failed: %s %s", request.method, url)
             return Response(status_code=502, content=b"upstream error")
 
