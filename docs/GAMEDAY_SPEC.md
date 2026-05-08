@@ -264,24 +264,36 @@ Subscribes via `$gamedayStore` (new store at `frontend-svelte/src/lib/stores/gam
 
 Falls back to a `no-game` state when `GameDayState.status == "no-game"`: shows the next scheduled game (date + opponent) and a faded field render.
 
-### 4.6 `Threlte FootballField.svelte` (frontend)
+### 4.6 `FootballField.svelte` + `footballfield/` subcomponents (frontend)
 
-**File**: `frontend-svelte/src/lib/components/FootballField.svelte` (new)
+**Top-level file:** `frontend-svelte/src/lib/components/FootballField.svelte` — thin wrapper that defensively derives `hasGame`, `opponentAbbr`, `targetBallX` from the `game` prop and mounts a Threlte `<Canvas>` with `autoRender={false}` + `toneMapping={NoToneMapping}` + `shadows={true}` so the post-processing pipeline (PostFX) can drive rendering. The HUD scoreboard is owned by the `+page.svelte` route, not by FootballField.
 
-Pure Threlte component, prop-driven (no store imports — keeps it reusable).
+**Subcomponents:** `frontend-svelte/src/lib/components/footballfield/`. Each is a pure prop-driven Threlte component composed by `FieldScene.svelte` (the top-level scene composition).
 
+| Component | Role |
+|---|---|
+| `FieldScene.svelte` | Composition root inside `<Canvas>`. Imports + renders all sub-pieces. `<PostFX />` placed last so its `useTask` fires after every other scene-state task. |
+| `BroadcastCamera.svelte` | Static `T.PerspectiveCamera` at `[0, 30, 75]`, ~22° pitch, FOV 50°. Phase 3 will swap to `camera-controls` for cinematic dynamics on plays. |
+| `SkyDome.svelte` | Loads Poly Haven `stadium_01_2k.hdr` via `RGBELoader`, sets `scene.environment` for IBL on PBR materials, and instantiates a three.js `GroundedSkybox` mesh that re-projects the HDR's lower hemisphere onto a flat ground disc at world y=0. (Why static-import: see "Field rendering subsystem" §11 for the @threlte/extras `GroundProjectedSkybox` dynamic-import bug we sidestep.) |
+| `StadiumModel.svelte` | Loads `static/3d/stadium.glb` (Awbmegames CC-BY low-poly football stadium) via `<GLTF>` from `@threlte/extras`. Y-rotated 90°, scaled 0.81, position offset y=-2.5. Hides bowl meshes on load via name-substring filter (default: `['stadium', 'cube']`) — the `Object001-006` floodlight/press-box meshes stay visible as ambience. |
+| `FieldSurface.svelte` | The painted markings only — Colts blue endzone, neutral white opp endzone, 19 yard-line decals (every 5yd, midfield thicker), 2 goal-line decals at ±40 X, perimeter outline (4 sidelines + end lines forming the 100×53 rectangle). No grass plane — the HDRI ground is the visible surface. |
+| `BallMarker.svelte` | Brown football geometry + soft glow disc. Eases toward `targetBallX` along the field's long axis with a mild bob. Honors `prefers-reduced-motion` (snaps with no bob). |
+| `LightTowers.svelte` | 4 corner stadium light rigs at `[±95, 0, ±75]` — pole (cylinder) + emissive lamp head (BoxGeometry, picked up by bloom) + `T.PointLight` at lamp height. Always-on for now; phase 2.5 will gate by `kickoff_utc` for evening/night-only games. |
+| `PostFX.svelte` | EffectComposer with `RenderPass → EffectPass(BloomEffect + ToneMappingEffect ACES_FILMIC)`. Drives `composer.render(delta)` via `useTask`. The parent `<Canvas autoRender={false}>` makes this the sole render driver. |
+
+**Static assets** (under `frontend-svelte/static/3d/`):
+- `stadium.glb` — Awbmegames Low Poly Football Stadium (CC-BY-4.0, Sketchfab, ~1.65 MB)
+- `env/stadium_01_2k.hdr` — Poly Haven Stadium 01 HDRI (CC0, ~6 MB)
+- `textures/grass-{color,normal,roughness}.jpg` — Poly Haven `leafy_grass` PBR set (CC0, ~13 MB total). Currently unused after phase 1.6 dropped the PBR grass plane in favor of the HDRI ground projection. Kept on disk as a fallback.
+
+**Props in (boundary contract):**
 ```typescript
-export let game: GameDayState;
-export let lastPlay: PlayEvent | null;
+export let game: GameDayState | null;
 export let theme: { primary: string; secondary: string } = { primary: "#002C5F", secondary: "#FFFFFF" };
 ```
+FootballField derives the rest defensively; never throws on bad input.
 
-Renders:
-- Pixel-art football field (50×100 yard sprite-on-plane or low-poly mesh)
-- Team logos at endzones (Colts horseshoe + opponent logo from ESPN team data)
-- Ball marker positioned per `game.possession` + ESPN's `yardLine` field
-- Floating scoreboard above the field with score, quarter, clock
-- Optional: animated ball trajectory on each new `lastPlay`
+The current implementation is photoreal-broadcast-style (HDRI-driven environment, PBR materials, post-processing), not pixel-art. See §11 "Field rendering subsystem" for the full rationale and roadmap.
 
 ---
 
@@ -540,3 +552,66 @@ ESPN provides playoff probability via `summary.predictor.homeTeam.playoffProbabi
 - **TTS line authoring** — pools per stakes tier are placeholder values. Run through curator + user authoring before preseason.
 - **Multi-game days** — Sunday with a 1pm and 4pm Colts game? Out of scope (Colts plays once a week).
 - **Postseason** — playoff games shift the stakes math entirely. Out of scope for v1; revisit if Colts make the playoffs.
+
+---
+
+## 11. Field rendering subsystem (frontend 3D)
+
+The `/gameday` 3D field went through four iteration cycles in a single session (2026-05-07). Initial Slice D shipped a pixel-art-style top-down field with an HTML scoreboard overlay; the photoreal broadcast rebuild followed when the user judged that result "very plain, boring, and other than the field, the entire screen is just black." This section captures the current architecture, the design decisions behind it, and the gotchas that survived.
+
+### 11.1 Phase ledger
+
+| Phase | Shipped | Outcome |
+|---|---|---|
+| **1a — Foundation** | HDRI sky + IBL, PBR `leafy_grass` plane, broadcast camera at `[0, 35, 70]`, sun + ambient lights | Black void around the field replaced by HDRI horizon. Field still bare. |
+| **1b — Stadium model** | Awbmegames stadium GLB wired in, bowl-hide via mesh-name substring (`['stadium']`), camera repositioned to `[0, 110, 110]` (above bowl) — the bowl shell was occluding inside-bowl camera positions | Stadium chrome visible (floodlights, press boxes), but field tiny in frame. |
+| **1.5 — Visual cleanup** | Hide list extended to `['stadium', 'cube']` killing soccer goals + bench prop cubes; PBR grass plane extended to 250×150 yd to blend out to HDRI horizon | Cohesive field with no model-vs-PBR seam. |
+| **1.6 — HDRI ground** | PBR grass plane removed entirely; HDRI lower hemisphere re-projected as 3D ground via `GroundedSkybox`; out-of-bounds perimeter lines added (4 sidelines + end lines at 100×53). Camera dropped back to a sideline broadcast angle. | The HDRI's broadcast-style mowed-stripe grass is the visible ground everywhere. |
+| **2 — Post-processing + light towers** | Added `postprocessing@6.35.4`. EffectComposer + Bloom + ACES tone mapping. 4 corner light towers (pole + emissive lamp head + PointLight). Canvas → `autoRender={false}` + `toneMapping={NoToneMapping}` so PostFX is the sole render driver. | Bloom-ready emissives in place; tone mapping moved into the post chain. |
+
+### 11.2 HDRI ground projection (the key visual technique)
+
+The HDRI is a real captured panorama of a stadium grass field at sunrise. Naively setting it as `scene.background` paints it as an infinitely-distant sky cube — visible at the horizon, but the camera looks at "nothing" beneath the field markings.
+
+`three/examples/jsm/objects/GroundedSkybox.js` (renamed from `GroundProjectedSkybox.js` at three r161+) takes the equirect map and constructs a sphere with the lower hemisphere flattened into a flat disc. The HDRI's ground content (lower half of the equirect) projects onto the disc; the upper half stays as a regular sky dome. From inside the sphere the camera sees real 3D ground continuous with the painted markings on top.
+
+Parameters in `SkyDome.svelte`:
+- `HEIGHT = 50` — vertical distance from sphere equator to the flat disc. Setting `position.y = HEIGHT` lands the disc at world y=0 (matches our field).
+- `RADIUS = 200` — sphere extent. Comfortably outside the 100×53 field and the model floodlights at ~104 yd.
+
+**Critical gotcha:** `@threlte/extras` exports a `GroundProjectedSkybox` wrapper, and its `<Environment groundProjection={{...}}>` prop nests the wrapper automatically — but that wrapper uses a `/* @vite-ignore */` runtime dynamic import for the underlying class, which fails in the browser ("Failed to resolve module specifier"). We bypass it by importing `RGBELoader` and `GroundedSkybox` directly via static imports in `SkyDome.svelte`. Vite bundles those normally.
+
+### 11.3 Post-processing pipeline
+
+`PostFX.svelte` builds an `EffectComposer` with `RenderPass(scene, camera) → EffectPass(camera, BloomEffect, ToneMappingEffect)`. `composer.render(delta)` is called from `useTask`.
+
+**Why autoRender=false on the parent Canvas:** Threlte's default render task and our `composer.render` would both target the canvas, double-rendering or fighting for the framebuffer. Disabling autoRender makes PostFX the sole driver.
+
+**Why `toneMapping={NoToneMapping}` on the renderer:** ACES Filmic is applied as a `ToneMappingEffect` at the end of the post chain. If the renderer also applies tone mapping, it stacks twice and crushes highlights.
+
+**Component ordering:** `<PostFX />` is placed last in `FieldScene.svelte`'s composition. Threlte's `useTask` queue runs in component-mount order; placing PostFX last means every other scene-state task (ball ease, etc.) updates the scene BEFORE the composer renders.
+
+**Bloom config:** `luminanceThreshold: 0.8` so only bright pixels (emissive lamp heads, sun glints on grass, future TD-celebration light flashes) bloom. Kernel `LARGE` for soft falloff.
+
+### 11.4 Stadium model integration
+
+The Awbmegames CC-BY GLB (`static/3d/stadium.glb`) is a soccer/international stadium — its native long axis is Z (~123 units), our football long axis is X (100 yd). The integration in `FieldScene.svelte`:
+```svelte
+<StadiumModel rotation={[0, Math.PI / 2, 0]} scale={0.81} position={[0, -2.5, 0]} />
+```
+Rotation aligns long axes. Scale 0.81 makes the model's painted field span match our 100-yd X. Y-offset of -2.5 sits the model's painted field surface just under our perimeter outline.
+
+**Mesh-name quirk:** Sketchfab's GLB exporter strips spaces from mesh names. Runtime names are `Football_Stadium_Color_0`, `Cube004_Color_0`, etc. — NOT "Football Stadium". The `hideMeshes` substring filter in `StadiumModel.svelte` accounts for this. Default catches `Football_Stadium*` (the bowl shell + secondary stadium piece) and `Cube*` (soccer goals + 2 bench-prop boxes). The `Object001-006` meshes — likely floodlights / press-box towers — stay visible as ambient stadium chrome.
+
+**onLoad event signature:** `<GLTF on:load={...}>` uses Threlte's `createRawEventDispatcher`, which passes the gltf object directly to the handler — NOT wrapped in `CustomEvent.detail`. Use `function onLoad(gltf) { gltf.scene.traverse(...) }`, not `event.detail.scene`.
+
+### 11.5 Roadmap (deferred)
+
+- **Phase 2.5:** GodRaysEffect from one anchor light tower; weather-reactive HDRI swap (clear / overcast / rain / snow); procedural drifting clouds (`@takram/three-clouds` or sprite-based); sun-arc time-of-day shadow direction; conditional `kickoff_utc` gating so light towers only fire on evening/night games.
+- **Phase 3:** `yomotsu/camera-controls` for cinematic dynamics — slow orbit during pregame and between plays, snap-to-broadcast on `gameday_play` arrival, dolly-in to scoring endzone on `gameday_celebration` (sequence_key keyed on `play.scoring_team`). Reduced-motion fallback skips dynamics.
+- **Phase 4:** painted yard numbers (5/10/15/.../50/.../15/10/5) via `<Text>` from `@threlte/extras`; hash marks; midfield Colts logo as a texture decal; confetti/firework instanced particles for celebrations (color-tinted, gravity-driven, wired to `lastCelebration.sequence_key`); drive-direction arrow on `state.possession` change; HTML down/distance HUD overlay extension on `+page.svelte`.
+
+### 11.6 Dependencies + version pins
+
+- `@threlte/core@^7.3.0`, `@threlte/extras@^8.11.0`, `three@^0.163.0` — installed from prior phases.
+- `postprocessing@^6.35.4` — pinned to this minor because the latest (`6.39.x`) requires `three >= 0.168.0`. Upgrading three is a separate scope decision.

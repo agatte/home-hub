@@ -212,6 +212,7 @@ Key additions beyond current:
 - **`src/routes/music/+page.svelte`** — Taste profile, mode→playlist mapping, discovery feed. Glass card grid.
 - **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, mode→scene overrides, morning/wind-down routine config, TTS test. Glass card grid.
 - **`src/lib/backgrounds/`** — Mode scenes: `PixelScene` (gaming), `ParallaxScene` (working, sprite layers + weather/time sky), `AuroraScene` (relax), `MoonScene` (sleeping, Threlte), `GenerativeCanvas` (fallback). `layer-config.js` per-mode PNG defs.
+- **`src/lib/components/footballfield/`** — `/gameday` 3D scene. `FieldScene` composes `BroadcastCamera` + `SkyDome` (HDRI + `GroundedSkybox`) + `StadiumModel` (Awbmegames GLB, name-substring mesh-hide) + `FieldSurface` (markings only) + `BallMarker` + `LightTowers` + `PostFX` (Bloom+ACES, `postprocessing@6.35.4`). Parent `<Canvas autoRender={false} toneMapping={NoToneMapping}>`. Spec: `docs/GAMEDAY_SPEC.md` §11.
 - **`src/lib/components/ModeBackground.svelte`** — Routes `$automation.mode` to the appropriate scene.
 - **`src/lib/components/{SceneBrowser,WeatherCard}.svelte`** — Scene browser (tabbed) and NWS weather widget.
 - **`src/lib/theme.js`** — MODE_CONFIG, LIGHT_COLOR_PRESETS, LIGHT_CT_PRESETS, SCENE_CATEGORIES, VIBE_COLORS.
