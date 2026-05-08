@@ -45,30 +45,15 @@
   // @threlte/extras' GLTF uses createRawEventDispatcher — the handler
   // receives the gltf object directly (not wrapped in CustomEvent.detail).
   function onLoad(gltf) {
-    if (!gltf?.scene) {
-      // eslint-disable-next-line no-console
-      console.warn('[StadiumModel] load fired with no scene', gltf)
-      return
-    }
+    if (!gltf?.scene) return
     const targets = hideMeshes.map((s) => s.toLowerCase())
-    let hidden = 0
-    let total = 0
-    const names = []
     gltf.scene.traverse((obj) => {
       if (!obj.isMesh) return
-      total += 1
-      names.push(obj.name || '(unnamed)')
       const name = (obj.name || '').toLowerCase()
       if (targets.some((t) => name.includes(t))) {
         obj.visible = false
-        hidden += 1
       }
     })
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[StadiumModel] ${hidden}/${total} meshes hidden. Mesh names: ` +
-        names.join(' | '),
-    )
   }
 </script>
 
