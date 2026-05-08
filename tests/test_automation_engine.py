@@ -878,6 +878,10 @@ class TestZonePostureOverlay:
         Regression: previously _apply_zone_overlay was watching-only, so
         a watching→working flip while reclined snapped L2 to working's
         bright ambient (~bri 173).
+
+        Working takes the readable-floor table (L2=35 at night) — terminal
+        text needs to be legible. Watching/relax/idle take the
+        watching-projector dim (L2=8 at night).
         """
         engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
         state = {
@@ -886,7 +890,7 @@ class TestZonePostureOverlay:
         }
         out = engine._apply_zone_overlay(state, "working", "night")
         assert out["1"]["bri"] == 25
-        assert out["2"]["bri"] == 8
+        assert out["2"]["bri"] == 35
 
     def test_bed_reclined_lowers_in_relax_and_idle(self, engine):
         """Reclined-lower applies across non-task modes."""

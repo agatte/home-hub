@@ -276,12 +276,77 @@ class TestApplyZoneOverlay:
         assert out["2"]["bri"] == 8
 
     def test_bed_reclined_works_across_modes(self):
-        # The rule is mode-agnostic except sleeping. Working at bed+reclined
-        # should still lower L1/L2.
+        # The rule fires for every non-sleeping mode. L1 ratios are mode-
+        # agnostic; L2 floors are mode-conditional — working keeps a
+        # readable floor for terminal text, everything else goes to the
+        # watching/projector dim.
         state = self._state(l1_bri=80, l2_bri=80)
-        out = apply_zone_overlay(state, "working", "night", "bed", "reclined")
-        assert out["1"]["bri"] == 25
-        assert out["2"]["bri"] == 8
+
+        # Working: L2 floor = 35 (readable but dim).
+        out_working = apply_zone_overlay(
+            state, "working", "night", "bed", "reclined",
+        )
+        assert out_working["1"]["bri"] == 25
+        assert out_working["2"]["bri"] == 35
+
+        # Relax: L2 floor = 8 (projector / no-screen dim).
+        out_relax = apply_zone_overlay(
+            state, "relax", "night", "bed", "reclined",
+        )
+        assert out_relax["1"]["bri"] == 25
+        assert out_relax["2"]["bri"] == 8
+
+        # Gaming, social, cooking, idle, gameday all take the watching floor too.
+        for non_working_mode in ("gaming", "social", "cooking", "idle", "gameday"):
+            out = apply_zone_overlay(
+                state, non_working_mode, "night", "bed", "reclined",
+            )
+            assert out["2"]["bri"] == 8, (
+                f"mode={non_working_mode} expected L2=8, got {out['2']['bri']}"
+            )
+
+    def test_bed_reclined_working_floors_per_period(self):
+        # Working+bed+reclined floors: 50 / 35 / 25 across evening / night /
+        # late_night. Repro of the 2026-05-08 scenario — Anthony in bed
+        # reclined at 12:46 AM with terminal foregrounded; system is in
+        # working mode; L2 must dim to 25 (not the working baseline 160,
+        # not the watching dim 5).
+        state = self._state(l1_bri=160, l2_bri=189)
+
+        out_evening = apply_zone_overlay(
+            state, "working", "evening", "bed", "reclined",
+        )
+        assert out_evening["2"]["bri"] == 50
+
+        out_night = apply_zone_overlay(
+            state, "working", "night", "bed", "reclined",
+        )
+        assert out_night["2"]["bri"] == 35
+
+        out_late = apply_zone_overlay(
+            state, "working", "late_night", "bed", "reclined",
+        )
+        assert out_late["2"]["bri"] == 25
+
+    def test_bed_reclined_watching_floors_unchanged(self):
+        # Regression guard: watching's existing 18 / 8 / 5 floors must
+        # not have shifted when adding the working-mode branch.
+        state = self._state(l1_bri=200, l2_bri=200)
+
+        out_evening = apply_zone_overlay(
+            state, "watching", "evening", "bed", "reclined",
+        )
+        assert out_evening["2"]["bri"] == 18
+
+        out_night = apply_zone_overlay(
+            state, "watching", "night", "bed", "reclined",
+        )
+        assert out_night["2"]["bri"] == 8
+
+        out_late = apply_zone_overlay(
+            state, "watching", "late_night", "bed", "reclined",
+        )
+        assert out_late["2"]["bri"] == 5
 
     def test_bed_reclined_skips_sleeping(self):
         state = self._state(l1_bri=80, l2_bri=80)
@@ -353,10 +418,12 @@ class TestApplyZoneOverlay:
         # branch fires; Branch 3's milder targets are never reached.
         state = self._state(l1_bri=100, l2_bri=180)
         out = apply_zone_overlay(state, "working", "night", "bed", "reclined")
-        # Branch 2 night: L1 = 25*1.0 = 25, L2 = 8 (much lower than
-        # Branch 3's night targets of 40 / 35).
+        # Branch 2 working+night: L1 = 25*1.0 = 25, L2 = 35 (working floor).
+        # Branch 3 night for working: L1 = 40, L2 = 35. L2 happens to
+        # match — what matters is L1 took the lower Branch 2 path (25 vs
+        # 40), proving Branch 2 fired first.
         assert out["1"]["bri"] == 25
-        assert out["2"]["bri"] == 8
+        assert out["2"]["bri"] == 35
 
     def test_bed_only_skipped_for_active_modes(self):
         # Brief bed visits during gaming/watching/social/cooking shouldn't

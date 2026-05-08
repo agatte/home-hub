@@ -846,8 +846,18 @@ class CameraService:
                 self._last_ambient_lux = ambient_lux
                 self._update_ema_lux(ambient_lux)
                 # Run zone + posture hysteresis — may commit new committed values.
-                self._apply_zone_hysteresis(frame_zone)
-                self._apply_posture_hysteresis(frame_posture)
+                # `present_observed` lets the hysteresis distinguish "user
+                # absent this frame" (don't refresh stale commits) from
+                # "user observed but candidate uncertain" (weak face / strong
+                # face without pose — prior commit still valid, refresh
+                # freshness so the lighting overlay honors it).
+                present_observed = status == "present"
+                self._apply_zone_hysteresis(
+                    frame_zone, present_observed=present_observed,
+                )
+                self._apply_posture_hysteresis(
+                    frame_posture, present_observed=present_observed,
+                )
 
                 # Compute the lux multiplier once — used by fusion factors,
                 # the ML logger below, and the WebSocket broadcast at the end.
@@ -994,7 +1004,12 @@ class CameraService:
         self._candidate_posture = None
         self._candidate_posture_since = None
 
-    def _apply_zone_hysteresis(self, candidate: Optional[str]) -> None:
+    def _apply_zone_hysteresis(
+        self,
+        candidate: Optional[str],
+        *,
+        present_observed: bool = False,
+    ) -> None:
         """Update ``self._last_zone`` via a sustained-candidate rule.
 
         - ``candidate is None`` (no detection this frame): clear any pending
@@ -1011,6 +1026,15 @@ class CameraService:
         if candidate is None:
             self._candidate_zone = None
             self._candidate_zone_since = None
+            # Weak-face frames (and strong-face-without-pose) emit candidate=None
+            # to prevent chair-back false positives from flipping the zone. When
+            # the camera still observes a person (status=present), the prior
+            # commit is semantically current — refresh the freshness timestamp
+            # so the lighting overlay keeps honoring it. Brief-absence frames
+            # (status=absent → present_observed=False) preserve but don't
+            # refresh, so a user who left for the night still goes stale.
+            if present_observed and self._last_zone is not None:
+                self._last_zone_at = now
             return
 
         if candidate == self._last_zone:
@@ -1046,7 +1070,12 @@ class CameraService:
             self._candidate_zone = None
             self._candidate_zone_since = None
 
-    def _apply_posture_hysteresis(self, candidate: Optional[str]) -> None:
+    def _apply_posture_hysteresis(
+        self,
+        candidate: Optional[str],
+        *,
+        present_observed: bool = False,
+    ) -> None:
         """Update ``self._last_posture`` via a sustained-candidate rule.
 
         Mirrors ``_apply_zone_hysteresis`` with one key difference: posture
@@ -1063,6 +1092,14 @@ class CameraService:
         now = datetime.now(timezone.utc)
 
         if candidate is None:
+            # Face path can't classify posture (no torso landmarks). When the
+            # camera observes a person but pose didn't fire this frame, the
+            # prior posture commit is still semantically current — refresh
+            # the freshness timestamp. Without this, dim-room sessions where
+            # pose fires only ~1-in-10 polls let posture freshness expire
+            # while the user is still reclined in bed.
+            if present_observed and self._last_posture is not None:
+                self._last_posture_at = now
             return
 
         if candidate == self._last_posture:

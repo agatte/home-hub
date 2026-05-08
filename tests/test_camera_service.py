@@ -307,6 +307,79 @@ class TestFreshnessRefreshOnConfirm:
 
         assert service._last_posture_at == old
 
+    def test_zone_weak_face_present_refreshes_timestamp(self):
+        """Weak-face frames emit zone=None to suppress chair-back zone-flips,
+        but the user is still observed-present — the prior commit is
+        semantically current and must refresh so the lighting overlay's
+        300s freshness gate keeps honoring it.
+
+        Repro of the bug observed 2026-05-08: bed+reclined committed at
+        04:38, dim-room weak-face dominated for the next 8 minutes,
+        commit went stale, overlay disengaged, L2 sat at working
+        baseline (189 bri) instead of the bed-reclined dim (5 bri).
+        """
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "bed"
+        service._last_zone_at = old
+
+        # Weak-face frame: zone=None but person observed.
+        service._apply_zone_hysteresis(None, present_observed=True)
+
+        assert service._last_zone_at is not None
+        assert service._last_zone_at > old
+        delta = (datetime.now(timezone.utc) - service._last_zone_at).total_seconds()
+        assert delta < 1.0
+        # Committed value must be untouched — the whole point of weak-face
+        # zone=None is "trust the prior commit, don't re-disambiguate."
+        assert service._last_zone == "bed"
+
+    def test_posture_face_only_present_refreshes_timestamp(self):
+        """Strong-face-without-pose and weak-face frames both emit
+        posture=None. Posture freshness must refresh while the user is
+        present so the bed+reclined overlay branch keeps firing in dim
+        rooms where pose detection is intermittent."""
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_posture = "reclined"
+        service._last_posture_at = old
+
+        service._apply_posture_hysteresis(None, present_observed=True)
+
+        assert service._last_posture_at is not None
+        assert service._last_posture_at > old
+        delta = (
+            datetime.now(timezone.utc) - service._last_posture_at
+        ).total_seconds()
+        assert delta < 1.0
+        assert service._last_posture == "reclined"
+
+    def test_zone_present_no_prior_commit_does_not_refresh(self):
+        """If we've never committed a zone, present_observed=True with
+        candidate=None has nothing to refresh against — leave _last_zone_at
+        as None. (Edge case: camera just turned on, weak-face on first frame.)"""
+        service = _make_service()
+        assert service._last_zone is None
+        assert service._last_zone_at is None
+
+        service._apply_zone_hysteresis(None, present_observed=True)
+
+        assert service._last_zone_at is None
+
+    def test_posture_present_no_prior_commit_does_not_refresh(self):
+        """Mirror of the zone case for posture."""
+        service = _make_service()
+        assert service._last_posture is None
+        assert service._last_posture_at is None
+
+        service._apply_posture_hysteresis(None, present_observed=True)
+
+        assert service._last_posture_at is None
+
     def test_zone_change_still_commits_with_fresh_timestamp(self):
         """Regression guard: the steady-state refresh must not break
         the existing transition-commit path."""

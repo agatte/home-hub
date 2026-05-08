@@ -376,6 +376,17 @@ BED_RECLINED_L2_WATCHING_BRI = {
     "night":      8,
     "late_night": 5,
 }
+# Working in bed reclined needs a higher floor than watching: the user
+# is actively reading terminal text, not letting the projector do all
+# the visual work. Still well below the working baseline (160 at
+# late_night) to stop blinding bedside-lamp glare. Mirrors
+# BED_ZONE_ONLY_L2_BRI levels — "sitting up reading on phone" and
+# "lying down with terminal" want similar dim-but-readable L2.
+BED_RECLINED_L2_WORKING_BRI = {
+    "evening":    50,
+    "night":      35,
+    "late_night": 25,
+}
 BED_RECLINED_L1_RATIO = {
     "evening":    1.8,   # default 45 when night=25
     "night":      1.0,
@@ -691,9 +702,17 @@ def apply_zone_overlay(
 
     # Branch 2 — reclined in bed: lower L1 and L2. Mode-agnostic
     # except for sleeping (already at ember-dim, no-op anyway).
+    # Working mode picks a higher L2 floor (terminal needs to be
+    # readable); every other mode (watching, relax, gaming, social,
+    # cooking, idle, gameday) takes the watching-projector floor.
     if zone == "bed" and posture == "reclined" and mode != "sleeping":
         ratio = BED_RECLINED_L1_RATIO.get(period)
-        l2_target = BED_RECLINED_L2_WATCHING_BRI.get(period)
+        l2_table = (
+            BED_RECLINED_L2_WORKING_BRI
+            if mode == "working"
+            else BED_RECLINED_L2_WATCHING_BRI
+        )
+        l2_target = l2_table.get(period)
         if ratio is None or l2_target is None:
             return state
         l1_target = max(1, min(254, int(bed_reclined_l1_night * ratio)))
