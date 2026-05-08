@@ -19,12 +19,14 @@
   export let reduceMotion = false
   reduceMotion;
 
-  // TEMP debug position — back to the known-rendering angle while
-  // we verify the bowl-hide actually fired. Once confirmed, lower
-  // this to [0, 30, 75] for the real broadcast view.
+  // Sideline broadcast camera. With StadiumModel hiding the bowl
+  // shell on load, the camera no longer has to fly above y=76 to
+  // clear the wall — the floodlights, press boxes, and signage
+  // remain visible at the edges of frame as floating ambience.
+  // pitch = atan2(30, 75) ≈ 21.8° — natural broadcast angle.
   const CAMERA_X = 0
-  const CAMERA_Y = 110
-  const CAMERA_Z = 110
+  const CAMERA_Y = 30
+  const CAMERA_Z = 75
   const CAMERA_PITCH = -Math.atan2(CAMERA_Y, CAMERA_Z)
 </script>
 
@@ -32,7 +34,7 @@
   makeDefault
   position={[CAMERA_X, CAMERA_Y, CAMERA_Z]}
   rotation={[CAMERA_PITCH, 0, 0]}
-  fov={45}
+  fov={50}
   near={0.5}
-  far={1000}
+  far={500}
 />
