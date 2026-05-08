@@ -119,9 +119,9 @@ class AsyncScheduler:
         ``last_run`` is stamped synchronously before dispatch so the
         per-minute dedup check in ``run_loop`` sees the new timestamp on
         the next tick. The callback itself runs as an independent
-        ``asyncio.Task`` — a long-running callback (e.g., ``winddown_routine``'s
-        30-min retry sleep, ``sunrise_ramp``'s 20-min ramp) cannot block the
-        tick loop and starve the other 7 scheduled tasks. ``last_status`` /
+        ``asyncio.Task`` — a long-running callback (e.g., ``sunrise_ramp``'s
+        20-min ramp) cannot block the tick loop and starve the other
+        scheduled tasks. ``last_status`` /
         ``last_error`` are stamped inside ``_run_callback`` when the callback
         completes — surfaced via ``/health.scheduler_tasks`` for the runbook.
 

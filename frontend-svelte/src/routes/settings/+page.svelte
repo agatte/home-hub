@@ -97,8 +97,6 @@
   let watchingPosture = null
   /** @type {any} */
   let routineConfig = null
-  /** @type {any} */
-  let winddownConfig = null
   /** @type {string | null} */
   let saving = null
 
@@ -184,23 +182,6 @@
           volume: morning.volume ?? 40,
         }
       }
-      const winddown = routines.find((/** @type {any} */ r) => r.name === 'winddown_routine')
-      if (winddown) {
-        const [wh, wm] = winddown.time.split(':').map(Number)
-        winddownConfig = {
-          hour: wh,
-          minute: wm,
-          enabled: winddown.enabled,
-          volume: winddown.volume ?? 20,
-          activate_candlelight: winddown.activate_candlelight ?? true,
-          weekdays_only: winddown.weekdays_only ?? false,
-        }
-      } else {
-        winddownConfig = {
-          hour: 21, minute: 0, enabled: false,
-          volume: 20, activate_candlelight: true, weekdays_only: false,
-        }
-      }
     } catch {}
   })
 
@@ -247,14 +228,6 @@
     saving = null
   }
 
-  /** @param {Record<string, any>} updates */
-  async function saveWinddownConfig(updates) {
-    winddownConfig = { ...winddownConfig, ...updates }
-    saving = 'winddown'
-    try { await apiPut('/api/routines/winddown/config', winddownConfig) } catch {}
-    saving = null
-  }
-
   async function testTTS() {
     saving = 'tts'
     try {
@@ -263,12 +236,6 @@
         volume: 10,
       })
     } catch {}
-    saving = null
-  }
-
-  async function testWinddown() {
-    saving = 'winddown-test'
-    try { await apiPost('/api/routines/winddown/test', {}) } catch {}
     saving = null
   }
 
@@ -284,13 +251,6 @@
     const target = /** @type {HTMLInputElement} */ (e.target)
     const [h, m] = target.value.split(':').map(Number)
     saveRoutineConfig({ hour: h, minute: m })
-  }
-
-  /** @param {Event} e */
-  function onWinddownTimeChange(e) {
-    const target = /** @type {HTMLInputElement} */ (e.target)
-    const [h, m] = target.value.split(':').map(Number)
-    saveWinddownConfig({ hour: h, minute: m })
   }
 
   async function toggleCamera() {
@@ -919,92 +879,6 @@
               onChange={(v) => saveRoutineConfig({ volume: v })}
             />
           </div>
-        </div>
-      </div>
-    {/if}
-  </section>
-
-  <!-- Evening Wind-Down -->
-  <section class="widget">
-    <h2 class="widget-title">Evening Wind-Down</h2>
-    {#if winddownConfig}
-      <div class="settings-card">
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Enabled</span>
-            <span class="setting-hint">Dim lights, lower volume, candlelight</span>
-          </div>
-          <button
-            class="toggle-btn"
-            class:toggle-on={winddownConfig.enabled}
-            on:click={() => saveWinddownConfig({ enabled: !winddownConfig.enabled })}
-          >
-            {winddownConfig.enabled ? 'ON' : 'OFF'}
-          </button>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Time</span>
-          </div>
-          <input
-            type="time"
-            class="setting-time"
-            value={`${pad(winddownConfig.hour)}:${pad(winddownConfig.minute)}`}
-            on:change={onWinddownTimeChange}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Volume</span>
-            <span class="setting-hint">Sonos volume during wind-down</span>
-          </div>
-          <div class="setting-slider-wrap">
-            <Slider
-              value={winddownConfig.volume}
-              min={5}
-              max={50}
-              onChange={(v) => saveWinddownConfig({ volume: v })}
-            />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Candlelight</span>
-            <span class="setting-hint">Activate Hue candlelight effect</span>
-          </div>
-          <button
-            class="toggle-btn"
-            class:toggle-on={winddownConfig.activate_candlelight}
-            on:click={() => saveWinddownConfig({ activate_candlelight: !winddownConfig.activate_candlelight })}
-          >
-            {winddownConfig.activate_candlelight ? 'ON' : 'OFF'}
-          </button>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Weekdays Only</span>
-          </div>
-          <button
-            class="toggle-btn"
-            class:toggle-on={winddownConfig.weekdays_only}
-            on:click={() => saveWinddownConfig({ weekdays_only: !winddownConfig.weekdays_only })}
-          >
-            {winddownConfig.weekdays_only ? 'ON' : 'OFF'}
-          </button>
-        </div>
-
-        <div class="action-row">
-          <button
-            class="action-btn"
-            on:click={testWinddown}
-            disabled={saving === 'winddown-test'}
-          >
-            {saving === 'winddown-test' ? 'Running...' : 'Test Wind-Down'}
-          </button>
         </div>
       </div>
     {/if}

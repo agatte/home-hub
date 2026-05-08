@@ -192,8 +192,8 @@ class TestTaskStatusFields:
     async def test_execute_task_does_not_block_on_long_callback(self):
         """A long-running callback must not block the scheduler tick loop.
 
-        Regression for the 2026-05-07 winddown wedge: a 30-min retry sleep
-        inside ``winddown_routine.run`` ran inline under
+        Regression for the 2026-05-07 wedge: a long retry sleep inside a
+        scheduled callback's ``run`` ran inline under
         ``await self._execute_task(...)`` and froze every other scheduled
         task. After the fix, the callback dispatches as a background
         ``asyncio.Task`` and ``_execute_task`` returns immediately.

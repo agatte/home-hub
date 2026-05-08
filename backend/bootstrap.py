@@ -333,6 +333,17 @@ async def lifespan(app: FastAPI):
     automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
     automation.register_on_mode_change(ml_logger.on_mode_change)
 
+    # "Good night" TTS on every entry into sleeping mode. Sleeping is
+    # manual-only today (no auto-trigger exists in code), so no source
+    # filter is needed — every transition into sleeping should announce.
+    # If an auto-trigger is ever rebuilt, gate this on `source` to skip
+    # the autonomous path.
+    async def _sleeping_tts(new_mode: str, **_kwargs) -> None:
+        if new_mode == "sleeping":
+            asyncio.create_task(tts.speak("Good night.", volume=10))
+
+    automation.register_on_mode_change(_sleeping_tts)
+
     # Apply persisted watching-posture tuning (settings-page sliders for the
     # projector-safe caps + reclined L1 night ambient).
     posture_cfg = {**WATCHING_POSTURE_DEFAULTS, **(saved_watching_posture or {})}
@@ -458,36 +469,6 @@ async def lifespan(app: FastAPI):
         weekdays=[0, 1, 2, 3, 4],  # Monday-Friday
         callback=morning.execute,
         enabled=morning_enabled,
-    ))
-
-    # Evening wind-down routine
-    from backend.api.routes.routines import WINDDOWN_CONFIG_KEY
-    from backend.services.winddown_routine import WinddownRoutineService
-
-    winddown_config = await load_setting(WINDDOWN_CONFIG_KEY)
-    winddown = WinddownRoutineService(
-        automation_engine=automation,
-        sonos_service=sonos,
-        tts_service=tts,
-        volume=winddown_config.get("volume", 20),
-        activate_candlelight=winddown_config.get("activate_candlelight", True),
-        weekdays_only=winddown_config.get("weekdays_only", False),
-        skip_if_active=winddown_config.get("skip_if_active", True),
-    )
-    app.state.winddown_routine = winddown
-
-    winddown_weekdays = (
-        [0, 1, 2, 3, 4]
-        if winddown_config.get("weekdays_only", False)
-        else [0, 1, 2, 3, 4, 5, 6]
-    )
-    scheduler.add_task(ScheduledTask(
-        name="winddown_routine",
-        hour=winddown_config.get("hour", 21),
-        minute=winddown_config.get("minute", 0),
-        weekdays=winddown_weekdays,
-        callback=winddown.execute,
-        enabled=winddown_config.get("enabled", False),
     ))
 
     # Nightly ML retrain at 4:00 AM
@@ -713,7 +694,6 @@ async def lifespan(app: FastAPI):
                 app.state.camera_service = camera_service
                 automation.register_on_mode_change(camera_service.on_mode_change)
                 automation.set_camera_service(camera_service)
-                winddown.set_camera_service(camera_service)
                 event_logger.set_camera_service(camera_service)
                 tasks.append(asyncio.create_task(camera_service.poll_loop()))
                 app_logger.info("Camera presence detection started")

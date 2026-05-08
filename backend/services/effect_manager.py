@@ -77,7 +77,7 @@ class EffectManager:
         the same scope preserve the brightness base on the bridge. When
         `desired` is None we always call stop_effect_all (even if our tracker
         agrees none is running) to handle effects activated out-of-band by
-        the scenes API, presence/winddown services, or left across a restart.
+        the scenes API, other services, or left across a restart.
 
         A 0.5s guard separates stop and start so the two commands don't race.
         """

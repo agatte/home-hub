@@ -166,9 +166,8 @@ class TransitLightingService:
 
         # Use the override-aware mode so a manual relax / working / gaming /
         # watching override still lets transit fire when Anthony leaves the
-        # bedroom (e.g. winddown sets relax at 22:00 — kitchen still needs
-        # transit lighting). sleeping / cooking / social overrides naturally
-        # fall outside TRIGGER_MODES and continue to block.
+        # bedroom. sleeping / cooking / social overrides naturally fall
+        # outside TRIGGER_MODES and continue to block.
         mode = getattr(self._automation, "current_mode", "idle")
 
         # Camera may be disabled (opt-in); bail if no camera signal available.

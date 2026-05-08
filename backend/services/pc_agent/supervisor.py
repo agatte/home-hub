@@ -9,6 +9,7 @@ Agents managed:
   - activity_detector: process-based mode detection (psutil + Win32 idle API)
   - ambient_monitor: mic-based social detection (PyAudio + optional YAMNet)
   - screen_sync_agent: screen color capture for bias lighting (mss)
+  - sleep_watcher: suspends Windows 60min after sleeping mode (Windows-only)
 
 Usage:
     python -m backend.services.pc_agent.supervisor --server http://192.168.1.210:8000
@@ -62,6 +63,7 @@ for _child_name in (
     "home_hub.pc_agent",
     "home_hub.ambient",
     "home_hub.screen_sync_agent",
+    "home_hub.sleep_watcher",
 ):
     _child = logging.getLogger(_child_name)
     _child.setLevel(logging.INFO)
@@ -149,6 +151,7 @@ class AgentSupervisor:
         self._register_activity_detector()
         self._register_ambient_monitor(classifier, shadow)
         self._register_screen_sync()
+        self._register_sleep_watcher()
 
     # ── Agent registration ────────────────────────────────────────────
 
@@ -193,6 +196,23 @@ class AgentSupervisor:
             logger.info("Registered: screen_sync")
         except ImportError as e:
             logger.warning("Cannot register screen_sync: %s", e)
+
+    def _register_sleep_watcher(self) -> None:
+        # Windows-only — suspending the PC is meaningless on the Latitude /
+        # any non-Windows host that might run this supervisor for testing.
+        if sys.platform != "win32":
+            logger.info("Skipping sleep_watcher (non-Windows platform)")
+            return
+        try:
+            from backend.services.pc_agent.sleep_watcher import run_agent
+            self._agents["sleep_watcher"] = AgentState(
+                name="sleep_watcher",
+                target=run_agent,
+                kwargs={"server_url": self._server_url},
+            )
+            logger.info("Registered: sleep_watcher")
+        except ImportError as e:
+            logger.warning("Cannot register sleep_watcher: %s", e)
 
     # ── Thread lifecycle ──────────────────────────────────────────────
 

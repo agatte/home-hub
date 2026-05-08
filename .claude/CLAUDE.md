@@ -107,7 +107,7 @@ Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md`
 
 ### Ambient verification loop
 
-`/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — hourly anomaly sweep + dated one-shot decisions. Writes per-fire markdown blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Auto-starts via `home-hub-loop.cmd`.
+`/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — hourly anomaly sweep + dated one-shot decisions. Writes per-fire markdown blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire `PushNotification` (Windows toast + phone push if Remote Control connected); ok/skipped/specialist-self-writing blocks stay silent. Auto-starts via `home-hub-loop.cmd`.
 
 Parallel `/watcher-loop` (separate session) polls the digests every 600s. Warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (per-anomaly playbook in `~/.claude/runbooks/homehub-watcher.md`); root-cause diagnosis appended inline. Investigation-only — never mutates state.
 
@@ -136,7 +136,7 @@ Browser / Phone (PWA)
    │   └── MusicBandit ────────────> Thompson sampling playlist selection
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
-   ├── Scheduler ──────────────────> morning routine, evening wind-down
+   ├── Scheduler ──────────────────> morning routine + nightly maintenance
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed
    ├── PiholeService (httpx) ──────> Pi-hole v6 API (stats, DNS, blocklists)
@@ -187,9 +187,8 @@ Key additions beyond current:
 - **`weather_service.py`** — NWS API, 5-min cache. Returns temp/feels_like/description/humidity/wind/icon/sunrise/sunset. Severe alerts polled every 2 min — descriptions override stale observations so storms surface immediately. No API key.
 - **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
 - **`screen_sync.py`** — mss capture → dominant color → bedroom lamp. EMA smoothed, ~2.5s. Auto-starts in watching/gaming. Per-mode caps in `MODE_MAX_BRIGHTNESS`; zone/posture overrides via `MODE_ZONE_MAX_BRIGHTNESS` (3-tuple wins). `apply_color(zone=, posture=)` from route handler.
-- **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning + wind-down routines.
+- **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning routine + nightly ML retrain / journal / fusion-tuning / retention sweep.
 - **`morning_routine.py`** — Fetches weather (via shared WeatherService) + commute (Google Maps), generates TTS, plays on Sonos.
-- **`winddown_routine.py`** — Evening relax at 22:00 weekdays: candlelight + dims + lowers volume + TTS. `_ACTIVE_MODES = {gaming, watching, social}` *delays* via `skip_if_active` — working is intentionally excluded so late-night dev doesn't block it.
 - **`library_import_service.py`** — Parses Apple Music/iTunes XML; extracts artist play counts + genre distribution.
 - **`recommendation_service.py`** — Last.fm `artist.getSimilar` discovery. 30-day DB cache, mode-specific seeds with cross-mode dedup.
 - **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
@@ -207,7 +206,7 @@ Key additions beyond current:
 - **`src/routes/+layout.svelte`** — App shell: ModeBackground + ModeOverlay + FloatingNav + NowPlayingChip + ErrorToast. No sidebar.
 - **`src/routes/+page.svelte`** — Home: SonosCard strip + QuickActions + widget grid (Mode, Weather, Lights, Scenes, Routines) + MusicSuggestionToast.
 - **`src/routes/music/+page.svelte`** — Taste profile, mode→playlist mapping, discovery feed. Glass card grid.
-- **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, mode→scene overrides, morning/wind-down routine config, TTS test. Glass card grid.
+- **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, mode→scene overrides, morning routine config, TTS test. Glass card grid.
 - **`src/lib/backgrounds/`** — Mode scenes: `PixelScene` (gaming), `ParallaxScene` (working, sprite layers + weather/time sky), `AuroraScene` (relax), `MoonScene` (sleeping, Threlte), `GenerativeCanvas` (fallback). `layer-config.js` per-mode PNG defs.
 - **`src/lib/components/footballfield/`** — `/gameday` 3D scene. `FieldScene` composes `BroadcastCamera` + `SkyDome` (HDRI + `GroundedSkybox`) + `StadiumModel` (Awbmegames GLB, name-substring mesh-hide) + `FieldSurface` (markings only) + `BallMarker` + `LightTowers` + `PostFX` (Bloom+ACES, `postprocessing@6.35.4`). Parent `<Canvas autoRender={false} toneMapping={NoToneMapping}>`. Spec: `docs/GAMEDAY_SPEC.md` §11.
 - **`src/lib/components/ModeBackground.svelte`** — Routes `$automation.mode` to the appropriate scene.
@@ -258,7 +257,7 @@ All messages: JSON with `type` + `data` fields.
 | Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides, DND (POST/DELETE/GET `/dnd`) |
 | Sonos | `/api/sonos` | Transport (play/pause/next/prev), volume, TTS, favorites |
 | Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
-| Routines | `/api/routines` | Morning + winddown config, toggle, test |
+| Routines | `/api/routines` | Morning routine config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
 | Guest | `/api/guest` | `GET /wifi` (WIFI: QR from `.env`); `GET/POST /scene/{name}` over 6 safelist scenes (15s cooldown, party→social/others→relax); `POST /scene/{name}/reset`; `GET/POST /vibe/{name}` (Sonos favorite, 15s cooldown, overrides social); `POST /effect/{name}` (candle/sparkle/stop, 3s cooldown); `POST /brightness/{up\|down}` (±10% mult, mode-ceiling-clamped, stamps `_manual_light_overrides`); `POST /handback`; `POST /toast` (≤120 char TTS + sparkle, 60s cooldown). Vibe map: `app_settings["guest_vibe_playlists"]`. `/guest/*` is a layout-reset visitor mini-app via `GuestBottomNav`. |
@@ -296,7 +295,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **New automation mode.** Add per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES` under `day`/`evening`/`night` (+ `late_night` if needed). Each light should differ (spatial depth) — avoid `_uniform()`. Engine checks `mode_scene_overrides` DB table first. Mode brightness multipliers apply on top.
 
-**App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Known keys: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
+**App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Known keys: `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
 
 **Source attribution on write endpoints.** Write routes that log to `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` should pull caller identity via `source_from_request(request, fallback="...")` from `backend.api.auth`. The Alexa lambda sets `X-Source: alexa:<intent>`; absent header → route's existing default (`api:<ip>`, `rest`, `manual`, `preset`/`custom`/`bridge`).
 
@@ -313,7 +312,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 | `social` | Manual override only (YAMNet `speech_multiple` gate abandoned 2026-05-09 — structurally unreachable; replacement direction deferred) | "Velvet Speakeasy" static: L1 dusty rose, L2 cognac amber, L3/L4 matched burnt-orange. Saturation does the work, no effect. 1s snap |
 | `relax` | Manual override | "Moss & Candlelight": L1/L2 warm ember/honey, L3/L4 moss/sage (pendants stay static). Late-night "Moss & Ember": deeper ember + hunter-green. opal day / candle eve / fire night — candle/fire scoped to L1/L2 only |
 | `cooking` | Manual override | L3+L4 paired peak 3500K (accurate food colors), L1 warm, L2 dim. 1s snap |
-| `sleeping` | 22:30 + 15min idle (psutil) | Dim initial (bri=20 ember) BEFORE stopping the active effect to prevent 100% pop, then fade. Manual: 24s fade off. Auto: 10-min stepwise. Persistent override — no 4h timeout. Pauses media |
+| `sleeping` | Manual only | "Good night" TTS on entry. Dim initial (bri=20 ember) BEFORE stopping the active effect to prevent 100% pop, then fade. Manual: 24s fade off. Persistent override — no 4h timeout. Pauses media. PC sleep watcher (Windows desktop) suspends 60min after entry; cancels if mode leaves sleeping. |
 | `idle` | No process detected, OR Win32 idle >10min, OR camera absent ≥30s | Falls through to time-based rules |
 
 **Mode priority:** `report_activity` guards against lower-priority cross-source displacement of a fresh higher-priority mode; same-source updates always pass. `SOURCE_STALE_SECONDS=300` — an owning source that hasn't reported in 5 min yields to lower-priority reports (prevents stale-lock).
@@ -332,11 +331,11 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Polling is sole post-write arbiter. Mid-drag slider commands use `transitiontime=1`; release flush uses default 0.4s.
 
-**Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (winddown, late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry in `run_loop`.
+**Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry in `run_loop`.
 
 **Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
 
-**Late-night autopilot cascade:** (1) **22:00 weekdays** — `winddown_routine` overrides to `relax` + lowers Sonos + TTS; delayed if in gaming/watching/social. (2) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools. (3) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` late-night-rescue auto-applies `relax` after winddown's 4h expires. **Attendance vetoes:** push-to-relax pathways skip when `is_at_desk_fresh()` (camera zone=desk fresh) OR `is_recent_process_working()` (PC-agent reported working <10min ago) is True; winddown still plays TTS + drops volume under veto. `working` has its own `late_night` state for past-23:00 dev.
+**Late-night autopilot cascade:** (1) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools (`LATE_NIGHT_PROCESS_WEIGHT_FACTOR`). (2) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` late-night-rescue auto-applies `relax`. **Attendance vetoes:** the rescue skips when `is_at_desk_fresh()` (camera zone=desk fresh) OR `is_recent_process_working()` (PC-agent reported working <10min ago) is True. `working` has its own `late_night` state for past-23:00 dev. Manual `sleeping` mode triggers a "Good night" TTS via the bootstrap `_sleeping_tts` callback and arms the PC sleep watcher (Windows desktop suspends after 60min in sleeping).
 
 ---
 
@@ -442,7 +441,6 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Key | Content |
 |-----|---------|
 | `morning_routine_config` | `{hour, minute, enabled, volume}` |
-| `winddown_routine_config` | `{hour, minute, enabled, volume, candlelight, weekdays_only}` |
 | `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ..., late_night_start_hour}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
 | `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — projector-in-bed sliders, live-patched via `PUT /api/automation/watching-posture` |

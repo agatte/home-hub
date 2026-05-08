@@ -1,11 +1,11 @@
 """Tests for TransitLightingService — activate / deactivate state machine
 under the override-aware mode check.
 
-The regression these tests guard against: winddown sets a manual relax
-override at 22:00, which used to block transit lighting from firing for
-the rest of the night because the activate path returned early on any
-manual_override. Fix uses the effective (override-aware) mode and only
-blocks when that mode falls outside TRIGGER_MODES.
+The regression these tests guard against: a manual relax override (e.g.
+selected from the dashboard) used to block transit lighting from firing
+because the activate path returned early on any manual_override. Fix uses
+the effective (override-aware) mode and only blocks when that mode falls
+outside TRIGGER_MODES.
 """
 
 from datetime import datetime
@@ -118,8 +118,8 @@ class TestActivateGuards:
         assert set(auto.transit_calls[0]["states"].keys()) == {"1", "3", "4"}
 
     async def test_activates_when_override_mode_is_relax(self):
-        # The regression scenario: winddown set relax override; user walks to
-        # kitchen. Pre-fix this never fired. Post-fix it does.
+        # The regression scenario: a manual relax override is active and the
+        # user walks to the kitchen. Pre-fix this never fired. Post-fix it does.
         svc, auto, _ = _make_service(
             mode="working", override=True, override_mode="relax",
         )

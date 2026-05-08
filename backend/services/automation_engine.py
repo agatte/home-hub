@@ -63,12 +63,12 @@ ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working", "social"))
 
 # User-respect cooldown — when the user clears an override via the dashboard
 # (api:* source), suppress autonomous mode-pushes for this window so "auto"
-# actually means auto. Calendar routines (winddown_routine) and explicit user
-# actions (api:*, rule_suggestion_accept:*) bypass.
+# actually means auto. Explicit user actions (api:*, rule_suggestion_accept:*)
+# bypass.
 USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
 
 # Process-attendance veto window for autonomous relax pushes (late-night
-# rescue + winddown). Camera-zone freshness is the primary "user is here"
+# rescue). Camera-zone freshness is the primary "user is here"
 # signal, but the camera blips in dark rooms / pose-only conditions and the
 # 5-min freshness window can lapse. The PC agent reporting `working` is an
 # independent attendance signal — if it's been < this window, treat the user
@@ -80,9 +80,9 @@ RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
 
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user
-# choice. Calendar events (winddown_routine), user-API actions (api:*),
-# and rule-suggestion accepts (rule_suggestion_accept:*) are deliberately
-# absent: those represent intent or scheduled actions, not sensor reactivity.
+# choice. User-API actions (api:*) and rule-suggestion accepts
+# (rule_suggestion_accept:*) are deliberately absent: those represent
+# direct user intent, not sensor reactivity.
 AUTONOMOUS_PUSH_SOURCES = frozenset({
     "late_night_rescue",
     "zone_posture_rule",
@@ -98,13 +98,12 @@ AUTONOMOUS_PUSH_SOURCES = frozenset({
 # that light so automation reconcile skips it. Picking a new mode normally
 # wipes those stamps so the user gets the new mode's full default state — but
 # only when the user themselves chose the new mode. Autonomous mode-setters
-# (calendar routines, late-night rescue, fusion, predictor, zone+posture rule)
-# should respect manual brightness; the user's stated rule is "manual sticks
-# until I change it." Plus timeout_4h on clear_override: the override expiring
-# isn't a user action, so per-light stamps shouldn't get wiped along with it
-# (their own 4h expiry runs independently in run_loop).
+# (late-night rescue, fusion, predictor, zone+posture rule) should respect
+# manual brightness; the user's stated rule is "manual sticks until I change
+# it." Plus timeout_4h on clear_override: the override expiring isn't a user
+# action, so per-light stamps shouldn't get wiped along with it (their own
+# 4h expiry runs independently in run_loop).
 PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
-    "winddown_routine",
     "late_night_rescue",
     "behavioral_predictor",
     "fusion_can_override",
@@ -298,9 +297,9 @@ class AutomationEngine:
         self._last_mode_source_report_at: dict[str, datetime] = {}
 
         # Last time the PC agent reported mode=working. Independent of camera
-        # signal — used by late-night rescue + winddown as a parallel veto so
-        # a transient camera blip doesn't strand the user in relax while
-        # they're actively at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
+        # signal — used by late-night rescue as a parallel veto so a transient
+        # camera blip doesn't strand the user in relax while they're actively
+        # at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
         self._last_process_working_at: Optional[datetime] = None
 
         # Per-light state tracking for deduplication
@@ -681,9 +680,9 @@ class AutomationEngine:
         """True iff the camera is enabled with a fresh ``zone == 'desk'`` reading.
 
         Used by autonomous mode-setters (late-night rescue, behavioral
-        predictor, fusion override, winddown routine) to defer to active
-        desk presence. If the camera sees Anthony at the desk, the system
-        should not push him into ``relax`` against his apparent activity.
+        predictor, fusion override) to defer to active desk presence. If the
+        camera sees Anthony at the desk, the system should not push him into
+        ``relax`` against his apparent activity.
         """
         camera = self._camera_service
         if camera is None or not getattr(camera, "enabled", False):
@@ -699,9 +698,9 @@ class AutomationEngine:
         Camera zone is the primary attendance signal but is brittle in dark
         rooms / pose-only conditions. The PC agent (psutil-driven, reports
         every 5s when active) is an independent attendance signal — used as
-        a parallel veto by autonomous relax pushes (late-night rescue,
-        winddown). 10-minute default tolerates idle thinking gaps while
-        staying conservative against "user left for the night."
+        a parallel veto by autonomous relax pushes (late-night rescue).
+        10-minute default tolerates idle thinking gaps while staying
+        conservative against "user left for the night."
         """
         if self._last_process_working_at is None:
             return False
@@ -886,10 +885,10 @@ class AutomationEngine:
         # caused a mode change. Source freshness tracks liveness, not edges.
         self._last_mode_source_report_at[source] = now
 
-        # Stamp process-working liveness for the late-night rescue / winddown
-        # veto. Updated on every confirming report, not just on mode edges,
-        # so a steady stream of process-working heartbeats keeps the veto
-        # alive even when the engine has demoted current_mode to idle.
+        # Stamp process-working liveness for the late-night rescue veto.
+        # Updated on every confirming report, not just on mode edges, so a
+        # steady stream of process-working heartbeats keeps the veto alive
+        # even when the engine has demoted current_mode to idle.
         if source == "process" and mode == "working":
             self._last_process_working_at = now
 
@@ -953,10 +952,9 @@ class AutomationEngine:
         Args:
             mode: Target activity mode.
             source: Caller identifier for telemetry. API route passes
-                ``api:<remote_ip>``; internal triggers (winddown,
-                late_night_rescue, fusion, zone_posture_rule, etc.) pass
-                their own short label so journalctl shows who flipped the
-                override and from where.
+                ``api:<remote_ip>``; internal triggers (late_night_rescue,
+                fusion, zone_posture_rule, etc.) pass their own short label
+                so journalctl shows who flipped the override and from where.
         """
         # DND blocks autonomous override pushes (late_night_rescue, fusion,
         # behavioral_predictor, zone_posture_rule, internal). User-initiated
@@ -971,9 +969,9 @@ class AutomationEngine:
 
         # User-respect cooldown — if the user just cleared an override via
         # the dashboard, block autonomous-source pushes for the cooldown
-        # window so "auto" actually means auto. Calendar events
-        # (winddown_routine) and user-initiated actions (api:*,
-        # rule_suggestion_accept:*) bypass — they aren't sensor reactivity.
+        # window so "auto" actually means auto. User-initiated actions
+        # (api:*, rule_suggestion_accept:*) bypass — they aren't sensor
+        # reactivity.
         if (
             source in AUTONOMOUS_PUSH_SOURCES
             and self._user_cleared_override_at is not None
@@ -1003,7 +1001,7 @@ class AutomationEngine:
         self._last_activity_change = self._override_time
 
         # Only wipe per-light manual brightness/color when the user picked
-        # this mode. Autonomous sources (winddown, late-night rescue, fusion,
+        # this mode. Autonomous sources (late-night rescue, fusion,
         # predictor, zone+posture rule) preserve them — see
         # PRESERVE_PER_LIGHT_OVERRIDE_SOURCES.
         if source not in PRESERVE_PER_LIGHT_OVERRIDE_SOURCES:
@@ -2123,14 +2121,14 @@ class AutomationEngine:
 
                 # Late-night rescue — after late_night_start_hour, prefer relax
                 # over "still working" or idle when no Sonos media is playing.
-                # Complements winddown (which expires at 4h) and handles the
-                # 02:00+ edge when someone's still at the desk. Guarded so real
-                # gaming/watching/social/sleeping are respected, music playback
-                # counts as intentional activity, and a fresh camera 'at desk'
-                # reading means the user is actively present and shouldn't be
-                # pushed into relax. DND suppresses this — set_manual_override
-                # would block the call anyway, but skipping early avoids the
-                # log noise + the Sonos polling round-trip.
+                # Catches the 02:00+ edge when someone's still at the desk.
+                # Guarded so real gaming/watching/social/sleeping are respected,
+                # music playback counts as intentional activity, and a fresh
+                # camera 'at desk' reading means the user is actively present
+                # and shouldn't be pushed into relax. DND suppresses this —
+                # set_manual_override would block the call anyway, but
+                # skipping early avoids the log noise + the Sonos polling
+                # round-trip.
                 if (
                     not self._manual_override
                     and not self.is_dnd_active()

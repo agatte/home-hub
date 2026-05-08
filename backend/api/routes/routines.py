@@ -1,5 +1,5 @@
 """
-Scheduled routine endpoints — morning routine, evening wind-down, and future automations.
+Scheduled routine endpoints — morning routine and future automations.
 """
 import logging
 from datetime import datetime, timezone
@@ -18,7 +18,6 @@ logger = logging.getLogger("home_hub.routines")
 router = APIRouter(prefix="/api/routines", tags=["routines"])
 
 MORNING_CONFIG_KEY = "morning_routine_config"
-WINDDOWN_CONFIG_KEY = "winddown_routine_config"
 
 
 # ---------------------------------------------------------------------------
@@ -70,18 +69,6 @@ class RoutineConfig(BaseModel):
     volume: int = Field(default=40, ge=0, le=100)
 
 
-class WinddownConfig(BaseModel):
-    """Configuration for the evening wind-down routine."""
-
-    hour: int = Field(default=21, ge=0, le=23)
-    minute: int = Field(default=0, ge=0, le=59)
-    enabled: bool = Field(default=False)
-    volume: int = Field(default=20, ge=0, le=100)
-    activate_candlelight: bool = Field(default=True)
-    weekdays_only: bool = Field(default=False)
-    skip_if_active: bool = Field(default=True)
-
-
 @router.get("")
 async def list_routines(request: Request) -> dict:
     """List all scheduled routines with their status."""
@@ -91,17 +78,10 @@ async def list_routines(request: Request) -> dict:
 
     tasks = scheduler.get_tasks()
 
-    # Attach config details to routine tasks
     morning = getattr(request.app.state, "morning_routine", None)
-    winddown = getattr(request.app.state, "winddown_routine", None)
     for task in tasks:
         if task["name"] == "morning_routine" and morning:
             task["volume"] = morning._morning_volume
-        elif task["name"] == "winddown_routine" and winddown:
-            task["volume"] = winddown._volume
-            task["activate_candlelight"] = winddown._activate_candlelight
-            task["weekdays_only"] = winddown._weekdays_only
-            task["skip_if_active"] = winddown._skip_if_active
 
     return {"routines": tasks}
 
@@ -185,65 +165,3 @@ async def toggle_morning_routine(request: Request) -> dict:
         return {"status": "ok", "enabled": True}
 
 
-# ---------------------------------------------------------------------------
-# Evening Wind-Down
-# ---------------------------------------------------------------------------
-
-@router.post("/winddown/test", dependencies=[Depends(require_api_key)])
-async def test_winddown(request: Request) -> dict:
-    """Trigger the evening wind-down routine immediately for testing."""
-    winddown = getattr(request.app.state, "winddown_routine", None)
-    if not winddown:
-        raise HTTPException(
-            status_code=503,
-            detail="Wind-down routine service not initialized",
-        )
-
-    success = await winddown.execute(force=True)
-    return {
-        "status": "ok" if success else "partial_failure",
-        "message": "Wind-down executed" if success else "Wind-down had errors",
-    }
-
-
-@router.put("/winddown/config", dependencies=[Depends(require_api_key)])
-async def update_winddown_config(config: WinddownConfig, request: Request) -> dict:
-    """Update evening wind-down schedule and settings."""
-    scheduler = getattr(request.app.state, "scheduler", None)
-    winddown = getattr(request.app.state, "winddown_routine", None)
-
-    if not scheduler or not winddown:
-        raise HTTPException(
-            status_code=503,
-            detail="Scheduler or wind-down routine not initialized",
-        )
-
-    from backend.services.scheduler import ScheduledTask
-
-    weekdays = [0, 1, 2, 3, 4] if config.weekdays_only else [0, 1, 2, 3, 4, 5, 6]
-
-    task = ScheduledTask(
-        name="winddown_routine",
-        hour=config.hour,
-        minute=config.minute,
-        weekdays=weekdays,
-        callback=winddown.execute,
-        enabled=config.enabled,
-    )
-    scheduler.add_task(task)
-
-    # Update service settings in-memory
-    winddown._volume = config.volume
-    winddown._activate_candlelight = config.activate_candlelight
-    winddown._weekdays_only = config.weekdays_only
-    winddown._skip_if_active = config.skip_if_active
-
-    # Persist to database
-    await save_setting(WINDDOWN_CONFIG_KEY, config.model_dump())
-
-    logger.info(
-        f"Wind-down updated: {config.hour:02d}:{config.minute:02d}, "
-        f"enabled={config.enabled}, volume={config.volume}"
-    )
-
-    return {"status": "ok", "config": config.model_dump()}

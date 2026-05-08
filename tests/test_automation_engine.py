@@ -269,8 +269,8 @@ class TestUserClearCooldown:
     engine should suppress autonomous-source set_manual_override calls
     for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS so the choice actually sticks.
 
-    Calendar events (winddown_routine), user-initiated API calls (api:*),
-    and rule-suggestion accepts (rule_suggestion_accept:*) bypass.
+    User-initiated API calls (api:*) and rule-suggestion accepts
+    (rule_suggestion_accept:*) bypass.
     """
 
     @pytest.fixture
@@ -320,13 +320,6 @@ class TestUserClearCooldown:
         await engine.set_manual_override("relax", source="behavioral_predictor")
         assert engine.manual_override is False
 
-    async def test_cooldown_does_not_block_winddown_routine(self, engine):
-        # Calendar events bypass — wind-down at 22:00 should still fire even
-        # if the user cleared an override 5 min earlier.
-        await engine.clear_override(source="api:1.2.3.4")
-        await engine.set_manual_override("relax", source="winddown_routine")
-        assert engine.manual_override is True
-
     async def test_cooldown_does_not_block_user_api_set(self, engine):
         # User picks a different mode via the dashboard — bypass the cooldown
         # they just armed.
@@ -362,13 +355,13 @@ class TestUserClearCooldown:
 
 class TestPerLightOverridePreserve:
     """Per-light manual brightness/color overrides should survive autonomous
-    mode pushes (winddown, late-night rescue, fusion, predictor, zone+posture
-    rule) but get wiped when the user themselves picks a new mode.
+    mode pushes (late-night rescue, fusion, predictor, zone+posture rule)
+    but get wiped when the user themselves picks a new mode.
 
     The user's invariant: "manual brightness sticks until I change it." Before
     this gate, every set_manual_override unconditionally cleared
-    _manual_light_overrides, so e.g. winddown_routine at 22:00 would erase a
-    manually-set kitchen brightness from earlier in the day.
+    _manual_light_overrides, so e.g. a late-night autonomous push would erase
+    a manually-set kitchen brightness from earlier in the day.
     """
 
     @pytest.fixture
@@ -378,13 +371,6 @@ class TestPerLightOverridePreserve:
             hue_v2=mock_hue_v2,
             ws_manager=mock_ws,
         )
-
-    async def test_winddown_routine_preserves_per_light(self, engine):
-        engine.mark_light_manual("3")
-        engine.mark_light_manual("4")
-        await engine.set_manual_override("relax", source="winddown_routine")
-        assert "3" in engine.manual_light_overrides
-        assert "4" in engine.manual_light_overrides
 
     async def test_late_night_rescue_preserves_per_light(self, engine):
         engine.mark_light_manual("3")
