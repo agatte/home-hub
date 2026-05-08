@@ -21,6 +21,7 @@
   import BroadcastCamera from './BroadcastCamera.svelte'
   import FieldSurface from './FieldSurface.svelte'
   import SkyDome from './SkyDome.svelte'
+  import StadiumModel from './StadiumModel.svelte'
 
   /** @type {{ primary: string, secondary: string }} */
   export let theme
@@ -87,6 +88,22 @@
   than crushed.
 -->
 <T.AmbientLight intensity={0.15} color={0xffffff} />
+
+<!--
+  Stadium bowl. Awbmegames Low Poly Football Stadium (CC-BY-4.0,
+  Sketchfab). Model's native long axis is Z, ~123 units; our field's
+  long axis is X, 100 yards. We Y-rotate 90° to align long axes,
+  scale 0.81 so the model's painted field matches our 100-yard X
+  span, and lower by 2.5 so the model's painted field surface sits
+  just under our PBR FieldSurface (model field is ~11 yards wider
+  along Z than ours, so its sideline area peeks out as the natural
+  out-of-bounds surface around our painted field).
+-->
+<StadiumModel
+  rotation={[0, Math.PI / 2, 0]}
+  scale={0.81}
+  position={[0, -2.5, 0]}
+/>
 
 <!-- Playing field, endzones, yard lines, goal lines (PBR grass). -->
 <FieldSurface {theme} opacity={fieldOpacity} />
