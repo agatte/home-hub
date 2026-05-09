@@ -1335,6 +1335,131 @@ class TestClearTransitOverrideRespectsManualOverride:
 
 
 # ---------------------------------------------------------------------------
+# Transit override + kitchen-pair atomicity. Regression guard for the
+# 2026-05-09 21:44 ET Check J warn: 21 solo-L3 writes / zero L4 writes over
+# 11 min while L4 had a manual brightness stamp. Two intertwined bugs:
+#   (1) _prune_expired_transit_overrides removed _transit_light_overrides
+#       entries on deadline expiry but left _last_applied_per_light populated
+#       with transit values, so the next reconcile dedup-skipped on stale data.
+#   (2) apply_transit_override wrote to L3 and L4 even when one was manually
+#       stamped; the next _apply_per_light filter then re-protected only the
+#       stamped one, splitting the kitchen pair.
+# ---------------------------------------------------------------------------
+
+
+class TestTransitOverrideKitchenPair:
+    """Atomicity invariants on the transit-override entry/exit paths."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    async def test_prune_expired_pops_dedup_cache(self, engine):
+        # Simulate a transit activation that has since expired: deadlines in
+        # the past + dedup cache still seeded with transit-state values.
+        past = datetime.now(tz=TZ) - timedelta(seconds=1)
+        engine._transit_light_overrides = {"1": past, "3": past, "4": past}
+        kitchen_state = {"on": True, "bri": 80, "ct": 360}
+        living_state = {"on": True, "bri": 120, "ct": 360}
+        engine._last_applied_per_light = {
+            "1": living_state.copy(),
+            "3": kitchen_state.copy(),
+            "4": kitchen_state.copy(),
+        }
+
+        engine._prune_expired_transit_overrides()
+
+        # Both dicts must be empty for the pruned lights — leaving stale dedup
+        # entries causes the next reconcile to dedup-skip writes the cache
+        # disagrees with the bridge on.
+        assert engine._transit_light_overrides == {}
+        assert engine._last_applied_per_light == {}
+
+    async def test_prune_keeps_unexpired(self, engine):
+        # Mixed deadlines: L3 expired, L4 still active — only L3's cache
+        # entry should be popped.
+        past = datetime.now(tz=TZ) - timedelta(seconds=1)
+        future = datetime.now(tz=TZ) + timedelta(minutes=5)
+        engine._transit_light_overrides = {"3": past, "4": future}
+        kitchen_state = {"on": True, "bri": 80, "ct": 360}
+        engine._last_applied_per_light = {
+            "3": kitchen_state.copy(),
+            "4": kitchen_state.copy(),
+        }
+
+        engine._prune_expired_transit_overrides()
+
+        assert "3" not in engine._transit_light_overrides
+        assert "4" in engine._transit_light_overrides
+        assert "3" not in engine._last_applied_per_light
+        assert engine._last_applied_per_light["4"] == kitchen_state
+
+    async def test_apply_skips_kitchen_pair_when_l4_manual(self, engine, mock_hue):
+        # L4 manually stamped (e.g., user pinned bri=114 earlier). Transit
+        # navigation should NOT split the pendants by writing only L3.
+        engine.mark_light_manual("4")
+        l3_before = mock_hue._lights["3"].copy()
+        l4_before = mock_hue._lights["4"].copy()
+
+        # Standard navigation states (mirrors TransitLightingService output).
+        states = {
+            "1": {"on": True, "bri": 120, "ct": 360},
+            "3": {"on": True, "bri": 80, "ct": 360},
+            "4": {"on": True, "bri": 80, "ct": 360},
+        }
+        await engine.apply_transit_override(states, duration_seconds=600, transition_time=5)
+
+        # L1 went through — bridge updated, override + cache seeded.
+        assert mock_hue._lights["1"]["bri"] == 120
+        assert "1" in engine._transit_light_overrides
+        assert engine._last_applied_per_light["1"] == {"on": True, "bri": 120, "ct": 360}
+
+        # L3 + L4 untouched — no bridge writes, no override seed, no cache seed.
+        assert mock_hue._lights["3"] == l3_before
+        assert mock_hue._lights["4"] == l4_before
+        assert "3" not in engine._transit_light_overrides
+        assert "4" not in engine._transit_light_overrides
+        assert "3" not in engine._last_applied_per_light
+        assert "4" not in engine._last_applied_per_light
+
+    async def test_apply_skips_kitchen_pair_when_l3_manual(self, engine, mock_hue):
+        # Symmetric: L3 stamped instead of L4. Same behavior.
+        engine.mark_light_manual("3")
+        l3_before = mock_hue._lights["3"].copy()
+        l4_before = mock_hue._lights["4"].copy()
+
+        states = {
+            "1": {"on": True, "bri": 120, "ct": 360},
+            "3": {"on": True, "bri": 80, "ct": 360},
+            "4": {"on": True, "bri": 80, "ct": 360},
+        }
+        await engine.apply_transit_override(states, duration_seconds=600, transition_time=5)
+
+        assert mock_hue._lights["3"] == l3_before
+        assert mock_hue._lights["4"] == l4_before
+        assert "3" not in engine._transit_light_overrides
+        assert "4" not in engine._transit_light_overrides
+
+    async def test_apply_proceeds_when_neither_kitchen_manual(self, engine, mock_hue):
+        # Sanity: kitchen-pair guard does not fire when neither L3 nor L4 is
+        # manually stamped — happy path stays intact.
+        states = {
+            "1": {"on": True, "bri": 120, "ct": 360},
+            "3": {"on": True, "bri": 80, "ct": 360},
+            "4": {"on": True, "bri": 80, "ct": 360},
+        }
+        await engine.apply_transit_override(states, duration_seconds=600, transition_time=5)
+
+        assert mock_hue._lights["1"]["bri"] == 120
+        assert mock_hue._lights["3"]["bri"] == 80
+        assert mock_hue._lights["4"]["bri"] == 80
+        assert set(engine._transit_light_overrides.keys()) == {"1", "3", "4"}
+        assert set(engine._last_applied_per_light.keys()) == {"1", "3", "4"}
+
+
+# ---------------------------------------------------------------------------
 # is_recent_process_working — process-attendance veto for late-night rescue.
 # Camera zone is brittle in dark rooms / pose-only conditions; a fresh PC-
 # agent working report is an independent attendance signal. Regression

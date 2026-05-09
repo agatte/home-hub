@@ -1393,6 +1393,11 @@ class AutomationEngine:
         ]
         for lid in expired:
             del self._transit_light_overrides[lid]
+            # Mirrors clear_transit_override's pop. Without it, the dedup
+            # cache retains transit values after deadline expiry and the
+            # next reconcile dedup-skips on stale data (kitchen-pair drift
+            # 2026-05-09; memory project_transit_lighting_cache_pop_churn).
+            self._last_applied_per_light.pop(lid, None)
         if expired:
             logger.info(
                 "Transit overrides auto-expired for lights %s",
@@ -1421,6 +1426,35 @@ class AutomationEngine:
         """
         if not self._hue or not self._hue.connected:
             return
+
+        # Kitchen-pair atomicity: L3 + L4 must move as a unit in functional
+        # modes. If the user has manually set one (e.g., L4 at bri=114),
+        # transit-overriding only the unstamped one splits the pendants —
+        # writes go to L3 directly here, but the next _apply_per_light cycle
+        # re-protects L4 (manual stamp) and not L3, leaving them mismatched.
+        # Skip the pair entirely when either is manual; L1 still applies.
+        # Symptom that motivated this guard: 21 solo-L3 writes / 11 min split
+        # on 2026-05-09. Memory: project_transit_lighting_cache_pop_churn.md.
+        if "3" in states and "4" in states:
+            kitchen_manual = (
+                "3" in self._manual_light_overrides
+                or "4" in self._manual_light_overrides
+            )
+            if kitchen_manual:
+                stamped = next(
+                    lid for lid in ("3", "4")
+                    if lid in self._manual_light_overrides
+                )
+                logger.info(
+                    "Transit skipped kitchen pair (L3/L4) — manual override on light %s",
+                    stamped,
+                )
+                states = {
+                    lid: s for lid, s in states.items() if lid not in ("3", "4")
+                }
+                if not states:
+                    return
+
         deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
         tasks = []
         for light_id, state in states.items():
