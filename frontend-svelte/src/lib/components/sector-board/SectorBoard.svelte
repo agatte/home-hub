@@ -1,11 +1,14 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
+  import { modeColor, modeColorSoft } from '$lib/theme.js'
   import { sectorBoard } from '$lib/stores/sectorBoard.js'
-  import { SECTORS, sectorBounds, inputBubblePosition, sectorPath } from './sectors.js'
+  import { pulseLinks, initPulseLinks } from '$lib/stores/pulseLinks.js'
+  import { SECTORS, SECTOR_INDEX, sectorBounds, inputBubblePosition, subBubblePositions, sectorPath } from './sectors.js'
   import InputWedge from './InputWedge.svelte'
   import LightWedge from './LightWedge.svelte'
   import ModeNucleusV2 from './ModeNucleusV2.svelte'
   import OverrideBadge from './OverrideBadge.svelte'
+  import PulseLink from './PulseLink.svelte'
   import SectorBoardMobile from './SectorBoardMobile.svelte'
 
   // Canvas sizing — bound to the host container via ResizeObserver.
@@ -36,6 +39,8 @@
     isMobile = mobileMedia.matches
     const mqHandler = (e) => { isMobile = e.matches }
     mobileMedia.addEventListener('change', mqHandler)
+    // Wire the pulse-link correlation engine. Idempotent.
+    initPulseLinks()
     return () => {
       mobileMedia?.removeEventListener('change', mqHandler)
     }
@@ -68,6 +73,34 @@
     pos: inputBubblePosition(i, cx, cy, R_INPUT),
     bounds: sectorBounds(i),
   }))
+
+  // Lights wedge sub-bubble positions, indexed by light_id, for the pulse
+  // layer to look up actuation targets without re-walking the lights array.
+  $: lightPosById = (() => {
+    const lights = $sectorBoard.sectors.lights?.lights || []
+    const positions = subBubblePositions(SECTOR_INDEX.lights, cx, cy, R_INPUT, R_SUB, lights.length)
+    /** @type {Record<string, {x:number,y:number}>} */
+    const out = {}
+    lights.forEach((l, i) => {
+      if (positions[i]) out[l.light_id] = positions[i]
+    })
+    return out
+  })()
+
+  /**
+   * Color for a pulse originating from a given sector. Voters: their voted
+   * mode color so a "process committed → light changed" pulse reads as
+   * the same hue as the process wedge. Context: mode-soft tint of the
+   * fused mode for cohesion.
+   * @param {string} sectorId
+   */
+  function pulseColor(sectorId) {
+    const sector = $sectorBoard.sectors[sectorId]
+    const fused = $sectorBoard.mode.current
+    if (!sector) return modeColorSoft(fused, 0.8)
+    if (sector.kind === 'voter' && sector.hasData) return modeColor(sector.mode)
+    return modeColorSoft(fused, 0.8)
+  }
 </script>
 
 <div bind:this={container} class="board-host">
@@ -138,6 +171,19 @@
         {cy}
         radius={nucleusRadius}
       />
+
+      <!-- Pulse links: rendered last so the traveling dot is always visible
+           when crossing the nucleus or sub-bubbles. -->
+      {#each $pulseLinks as pulse (pulse.id)}
+        {#if lightPosById[pulse.toLightId]}
+          <PulseLink
+            from={sectorPositions[SECTOR_INDEX[pulse.fromInputId]]?.pos || { x: cx, y: cy }}
+            through={{ x: cx, y: cy }}
+            to={lightPosById[pulse.toLightId]}
+            color={pulseColor(pulse.fromInputId)}
+          />
+        {/if}
+      {/each}
     </svg>
   {/if}
 </div>
