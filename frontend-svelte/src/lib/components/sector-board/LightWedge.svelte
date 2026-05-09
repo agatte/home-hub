@@ -31,22 +31,30 @@
   <!-- Each light as a colored bubble within the wedge -->
   {#each lights as light, i (light.light_id)}
     {#if lightPositions[i]}
-      <g transform="translate({lightPositions[i].x}, {lightPositions[i].y})" class="light-cell" class:light-off={!light.on} class:light-unreachable={!light.reachable}>
-        {#key `${light.bri}-${light.hue}-${light.sat}-${light.on}`}
-          <circle r="11" class="light-pulse" style="--light-color: {lightStateToCSS(light)};" />
-        {/key}
-        <circle
-          r="14"
-          fill={lightStateToCSS(light)}
-          class="light-bulb"
-        />
-        <text class="light-name" text-anchor="middle" y="28">{light.name}</text>
+      <g transform="translate({lightPositions[i].x}, {lightPositions[i].y})">
+        <g
+          class="light-cell"
+          class:light-off={!light.on}
+          class:light-unreachable={!light.reachable}
+          style="animation-delay: {(i * 2.1) % 9}s; animation-duration: {12 + ((i * 3) % 5)}s;"
+        >
+          {#key `${light.bri}-${light.hue}-${light.sat}-${light.on}`}
+            <circle r="11" class="light-pulse" style="--light-color: {lightStateToCSS(light)};" />
+          {/key}
+          <circle
+            r="14"
+            fill={lightStateToCSS(light)}
+            class="light-bulb"
+          />
+          <text class="light-name" text-anchor="middle" y="28">{light.name}</text>
+        </g>
       </g>
     {/if}
   {/each}
 
   <!-- Input bubble (the wedge label) — same shape as InputWedge for consistency -->
-  <g transform="translate({position.x}, {position.y})" class="input-bubble">
+  <g transform="translate({position.x}, {position.y})">
+    <g class="input-bubble">
     <circle r={bubbleRadius + 4} class="input-halo" />
     <circle r={bubbleRadius} class="input-disc" />
 
@@ -58,10 +66,37 @@
 
     <text class="input-label" text-anchor="middle" y="14">{sectorMeta.label.toUpperCase()}</text>
     <text class="input-sub" text-anchor="middle" y="26">{lights.length} fixtures</text>
+    </g>
   </g>
 </g>
 
 <style>
+  .input-bubble {
+    animation: input-drift 17s ease-in-out infinite;
+    transform-origin: center;
+    transform-box: fill-box;
+  }
+  @keyframes input-drift {
+    0%   { transform: translate(0, 0); }
+    25%  { transform: translate(4px, -3px); }
+    50%  { transform: translate(-3px, -5px); }
+    75%  { transform: translate(-5px, 3px); }
+    100% { transform: translate(0, 0); }
+  }
+
+  .light-cell {
+    animation: light-drift 13s ease-in-out infinite;
+    transform-origin: center;
+    transform-box: fill-box;
+  }
+  @keyframes light-drift {
+    0%   { transform: translate(0, 0) scale(1); }
+    25%  { transform: translate(7px, -5px) scale(1.04); }
+    50%  { transform: translate(-4px, -8px) scale(0.97); }
+    75%  { transform: translate(-7px, 4px) scale(1.02); }
+    100% { transform: translate(0, 0) scale(1); }
+  }
+
   .input-disc {
     fill: rgba(255, 220, 130, 0.55);
     filter: drop-shadow(0 0 12px rgba(255, 220, 130, 0.4));

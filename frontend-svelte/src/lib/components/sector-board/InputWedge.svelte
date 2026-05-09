@@ -74,13 +74,20 @@
         impact={factor.impact}
         stale={factor.stale}
         color={tint}
-        wigglePhase={(index * 0.7 + i * 0.4) % 6}
+        wigglePhase={(index * 1.7 + i * 2.3) % 11}
+        wiggleCycle={9 + ((index * 3 + i * 5) % 7)}
       />
     {/if}
   {/each}
 
-  <!-- Input bubble + label -->
-  <g transform="translate({position.x}, {position.y})" class="input-bubble">
+  <!-- Input bubble + label. Outer <g> handles deterministic position;
+       inner <g> hosts a slow drift so the input feels alive without
+       detaching from its sub-bubble cluster. -->
+  <g transform="translate({position.x}, {position.y})">
+    <g
+      class="input-bubble"
+      style="animation-delay: {(index * 1.3) % 9}s; animation-duration: {15 + (index * 2) % 6}s;"
+    >
     <!-- Pulse ring (subtle, no key-driven remount in 2.A) -->
     <circle r={bubbleRadius + 4} class="input-halo" stroke={tint} />
 
@@ -104,6 +111,7 @@
     {#if weightPct !== null}
       <text class="input-weight" text-anchor="middle" y="26">{weightPct}%</text>
     {/if}
+    </g>
   </g>
 </g>
 
@@ -113,6 +121,22 @@
   }
   .wedge.no-data {
     opacity: 0.45;
+  }
+
+  .input-bubble {
+    /* Slow ambient drift — small enough that the wedge label still reads
+       attached to its position, large enough to feel alive. */
+    animation: input-drift 17s ease-in-out infinite;
+    transform-origin: center;
+    transform-box: fill-box;
+  }
+
+  @keyframes input-drift {
+    0%   { transform: translate(0, 0); }
+    25%  { transform: translate(4px, -3px); }
+    50%  { transform: translate(-3px, -5px); }
+    75%  { transform: translate(-5px, 3px); }
+    100% { transform: translate(0, 0); }
   }
 
   .input-disc {

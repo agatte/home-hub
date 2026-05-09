@@ -16,6 +16,9 @@
   /** Per-bubble wiggle phase so siblings don't move in lockstep. */
   /** @type {number} */
   export let wigglePhase = 0
+  /** Per-bubble cycle duration jitter (in seconds) so siblings don't share period. */
+  /** @type {number} */
+  export let wiggleCycle = 11
 
   // Bubble size derives from impact — heavier sub-signals read bigger.
   $: radius = 9 + Math.max(0, Math.min(1, impact)) * 5
@@ -32,7 +35,7 @@
   <g
     class="sub-bubble"
     class:stale
-    style="--bubble-color: {color}; animation-delay: {wigglePhase}s;"
+    style="--bubble-color: {color}; animation-delay: {wigglePhase}s; animation-duration: {wiggleCycle}s;"
   >
     <circle
       r={radius}
@@ -60,19 +63,23 @@
 
 <style>
   .sub-bubble {
-    /* Gentle wiggle layered on top of the parent's positioning translate. */
-    animation: sub-wiggle 6s ease-in-out infinite;
+    /* Wandering drift layered on top of the parent's positioning translate.
+       5-keypoint orbital path with subtle scale breath for life. */
+    animation: sub-wiggle 11s ease-in-out infinite;
+    transform-origin: center;
+    transform-box: fill-box;
   }
   .sub-bubble.stale {
     opacity: 0.5;
-    animation-duration: 9s;
   }
 
   @keyframes sub-wiggle {
-    0%, 100% { transform: translate(0, 0); }
-    25%      { transform: translate(2px, -2px); }
-    50%      { transform: translate(-1px, 2px); }
-    75%      { transform: translate(-2px, -1px); }
+    0%   { transform: translate(0, 0) scale(1.00); }
+    20%  { transform: translate(9px, -7px) scale(1.04); }
+    40%  { transform: translate(-5px, -11px) scale(0.97); }
+    60%  { transform: translate(-10px, 5px) scale(1.03); }
+    80%  { transform: translate(6px, 9px) scale(0.98); }
+    100% { transform: translate(0, 0) scale(1.00); }
   }
 
   .sub-display {
