@@ -51,11 +51,12 @@
   $: cx = width / 2
   $: cy = height / 2
   $: nucleusRadius = Math.max(70, Math.round(minDim * 0.13))
-  // Input bubbles sit at ~32% of the half-min-dim, leaving inner space for
-  // the nucleus and outer space for sub-bubbles + labels.
-  $: R_INPUT = Math.max(150, Math.round(minDim * 0.32))
-  // Sub-bubbles slightly outside input bubbles.
-  $: R_SUB = R_INPUT + Math.round(minDim * 0.08)
+  // Input bubbles sit between the nucleus and the canvas edge. Capped so a
+  // wide kiosk doesn't push them so far out that sub-bubbles fall off-screen.
+  $: R_INPUT = Math.max(150, Math.min(210, Math.round(minDim * 0.26)))
+  // Sub-bubbles sit beyond the input bubble's outer edge with enough slack
+  // for the max input radius (58) + max sub radius (22) + drift wiggle.
+  $: R_SUB = R_INPUT + 110
   // Inner / outer wedge edge radii — used for boundary rendering only.
   $: rInner = nucleusRadius + 18
   $: rOuter = Math.round(minDim * 0.46)
@@ -145,10 +146,13 @@
   .board-host {
     position: relative;
     width: 100%;
-    /* Aspect ratio that keeps the board feeling roomy without being a portrait
-       column on wide screens. */
-    aspect-ratio: 1.25 / 1;
-    min-height: 480px;
+    /* Slightly taller than wide so sectors near 12 and 6 o'clock have
+       enough vertical room for their sub-bubble fan-outs. Capped so the
+       layout doesn't run away on a 1280-wide kiosk. */
+    aspect-ratio: 1 / 1.05;
+    min-height: 600px;
+    max-height: 820px;
+    margin: 0 auto;
     background: rgba(20, 20, 32, 0.55);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--radius-md, 14px);
