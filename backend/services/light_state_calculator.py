@@ -144,7 +144,10 @@ _LIGHT_OFF = {"on": False}
 EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     "relax": {
         "day":        {"effect": "opal",   "lights": None},
-        "evening":    {"effect": "candle", "lights": ["1", "2"]},
+        # Evening previously fired candle on L1+L2; removed 2026-05-09 because
+        # the effect locked color values and persisted through mode changes,
+        # masking other lighting decisions. Static palette is enough.
+        "evening":    None,
         "night":      {"effect": "fire",   "lights": ["1", "2"]},
         "late_night": {"effect": "fire",   "lights": ["1", "2"]},
     },
@@ -304,6 +307,10 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         },
     },
     # ── Relax ─────────────────────────────────────────────────────────
+    # The "Moss & Candlelight" / "Moss & Ember" palette names below survive
+    # as colour descriptions, not capability promises. Candle flicker was
+    # removed from the relax-evening EFFECT_AUTO_MAP entry on 2026-05-09;
+    # fire on night/late_night remains the only animated candle analog.
     "relax": {
         "day": {
             "1": {"on": True, "bri": 95, "hue": 7500,  "sat": 200},

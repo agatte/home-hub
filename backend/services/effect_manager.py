@@ -23,7 +23,9 @@ logger = logging.getLogger("home_hub.automation.effects")
 
 WEATHER_EFFECT_MAP: dict[str, str] = {
     "thunderstorm": "sparkle",
-    "rain": "candle",
+    # Rain previously triggered candle as a weather overlay; removed
+    # 2026-05-09 because candle was locking color state and bleeding into
+    # other modes. Rainy weather no longer fires an automatic overlay.
     "snow": "opal",
 }
 
