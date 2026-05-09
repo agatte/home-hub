@@ -28,6 +28,7 @@ from backend.api.routes.scenes import router as scenes_router
 from backend.api.routes.sonos import router as sonos_router
 from backend.api.routes.plants import router as plants_router
 from backend.api.routes.bar import router as bar_router
+from backend.api.routes.analytics import router as analytics_router
 from backend.api.routes.events import router as events_router
 from backend.api.routes.gameday import router as gameday_router
 from backend.api.routes.guest import router as guest_router
@@ -138,6 +139,7 @@ app.include_router(plants_router)
 app.include_router(bar_router)
 app.include_router(routines_router)
 app.include_router(events_router)
+app.include_router(analytics_router)
 app.include_router(gameday_router)
 app.include_router(guest_router)
 app.include_router(journal_router)

@@ -6,6 +6,7 @@
   import { enableDND, clearDND } from '$lib/stores/init.js'
   import { apiGet, apiPut, apiPost, apiDelete } from '$lib/api.js'
   import Slider from '$lib/components/Slider.svelte'
+  import LearnedRulesCard from '$lib/components/LearnedRulesCard.svelte'
 
   const DND_DURATIONS = [
     { label: '1h',  minutes: 60  },
@@ -993,6 +994,9 @@
     </div>
   </section>
   {/if}
+
+  <!-- Learned Rules — moved from /analytics: it's a control surface, not analytics -->
+  <LearnedRulesCard />
 
   <!-- Quick Actions -->
   <section class="widget">

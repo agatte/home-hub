@@ -24,6 +24,12 @@
 
   // Icon sits above center; label inside disc below center.
   $: iconSize = node?.stale ? 18 : 22
+
+  // Weight as percentage — only when the lane is actively contributing.
+  // Staleness and no-data already convey "not pulling weight" visually.
+  $: weightPct = node?.hasData && !node?.stale && typeof node?.weight === 'number'
+    ? Math.round(node.weight * 100)
+    : null
 </script>
 
 <g
@@ -62,6 +68,9 @@
 
   <!-- Label inside the disc, below the icon -->
   <text y="14" text-anchor="middle" class="label">{node.label.toUpperCase()}</text>
+  {#if weightPct !== null}
+    <text y="28" text-anchor="middle" class="weight">{weightPct}%</text>
+  {/if}
   {#if !node.hasData}
     <text y={radius + 16} text-anchor="middle" class="no-data-tag">NO DATA</text>
   {/if}
@@ -132,6 +141,14 @@
   }
   .lane.no-data .label {
     fill: rgba(255, 255, 255, 0.55);
+  }
+
+  .weight {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    fill: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
   }
 
   .no-data-tag {
