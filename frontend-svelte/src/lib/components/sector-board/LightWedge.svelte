@@ -21,7 +21,26 @@
   export let position
 
   $: lights = sectorData?.lights || []
-  $: bubbleRadius = 40
+
+  // Wedge label disc scales with the lights-cluster impact (% lit × avg bri).
+  const MIN_BUBBLE_R = 32
+  const MAX_BUBBLE_R = 58
+  $: impactScore = Math.max(0, Math.min(1, sectorData?.impactScore ?? 0.4))
+  $: bubbleRadius = MIN_BUBBLE_R + (MAX_BUBBLE_R - MIN_BUBBLE_R) * impactScore
+  $: iconSize = Math.round(bubbleRadius * 0.55)
+  $: labelFontSize = Math.round(10 + bubbleRadius * 0.08)
+  $: subFontSize = Math.round(8 + bubbleRadius * 0.04)
+  $: labelY = Math.round(bubbleRadius * 0.3)
+
+  /**
+   * Per-bulb radius — on/off + brightness drives size.
+   * Min 14 (off), max 24 (full bri); off lights are clearly smaller.
+   */
+  function bulbRadius(light) {
+    if (!light?.on) return 14
+    const briFraction = Math.max(0, Math.min(1, (light.bri ?? 0) / 254))
+    return 16 + briFraction * 8
+  }
 
   // Position each light bubble within the sector wedge.
   $: lightPositions = subBubblePositions(index, cx, cy, R_input, R_sub, lights.length)
@@ -39,14 +58,14 @@
           style="animation-delay: {(i * 2.1) % 9}s; animation-duration: {12 + ((i * 3) % 5)}s;"
         >
           {#key `${light.bri}-${light.hue}-${light.sat}-${light.on}`}
-            <circle r="11" class="light-pulse" style="--light-color: {lightStateToCSS(light)};" />
+            <circle r={bulbRadius(light) - 3} class="light-pulse" style="--light-color: {lightStateToCSS(light)};" />
           {/key}
           <circle
-            r="14"
+            r={bulbRadius(light)}
             fill={lightStateToCSS(light)}
             class="light-bulb"
           />
-          <text class="light-name" text-anchor="middle" y="28">{light.name}</text>
+          <text class="light-name" text-anchor="middle" y={bulbRadius(light) + 14}>{light.name}</text>
         </g>
       </g>
     {/if}
@@ -58,14 +77,14 @@
     <circle r={bubbleRadius + 4} class="input-halo" />
     <circle r={bubbleRadius} class="input-disc" />
 
-    <foreignObject x={-12} y={-bubbleRadius / 2 - 4} width="24" height="24" class="icon-host">
+    <foreignObject x={-iconSize / 2} y={-bubbleRadius / 2 - iconSize / 2 + 2} width={iconSize} height={iconSize} class="icon-host">
       <div xmlns="http://www.w3.org/1999/xhtml" class="icon-wrap">
-        <Lightbulb size={22} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
+        <Lightbulb size={iconSize} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
       </div>
     </foreignObject>
 
-    <text class="input-label" text-anchor="middle" y="14">{sectorMeta.label.toUpperCase()}</text>
-    <text class="input-sub" text-anchor="middle" y="26">{lights.length} fixtures</text>
+    <text class="input-label" text-anchor="middle" y={labelY} style="font-size: {labelFontSize}px">{sectorMeta.label.toUpperCase()}</text>
+    <text class="input-sub" text-anchor="middle" y={labelY + labelFontSize + 2} style="font-size: {subFontSize}px">{lights.length} fixtures</text>
     </g>
   </g>
 </g>
@@ -156,11 +175,12 @@
   }
   .light-name {
     font-family: var(--font-body, 'Source Sans 3', sans-serif);
-    font-size: 10px;
-    fill: rgba(255, 255, 255, 0.72);
+    font-size: 12px;
+    font-weight: 500;
+    fill: rgba(255, 255, 255, 0.85);
     paint-order: stroke;
-    stroke: rgba(0, 0, 0, 0.7);
-    stroke-width: 2.5;
+    stroke: rgba(0, 0, 0, 0.8);
+    stroke-width: 3;
     stroke-linejoin: round;
   }
 

@@ -21,7 +21,10 @@
   export let wiggleCycle = 11
 
   // Bubble size derives from impact — heavier sub-signals read bigger.
-  $: radius = 9 + Math.max(0, Math.min(1, impact)) * 5
+  // Min 14px so the small dots are still legible; max 22px so a heavy
+  // sub-signal (vscode foreground at impact=1.0) reads as substantial
+  // without crowding sibling pips.
+  $: radius = 14 + Math.max(0, Math.min(1, impact)) * 8
 
   $: fillAlpha = stale ? 0.15 : 0.4 + impact * 0.4
 </script>
@@ -84,23 +87,23 @@
 
   .sub-display {
     font-family: var(--font-body, 'Source Sans 3', sans-serif);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
-    fill: rgba(255, 255, 255, 0.85);
+    fill: rgba(255, 255, 255, 0.92);
     paint-order: stroke;
-    stroke: rgba(0, 0, 0, 0.7);
-    stroke-width: 2.5;
+    stroke: rgba(0, 0, 0, 0.8);
+    stroke-width: 3;
     stroke-linejoin: round;
   }
   .sub-label {
     font-family: var(--font-body, 'Source Sans 3', sans-serif);
-    font-size: 9px;
-    fill: rgba(255, 255, 255, 0.4);
+    font-size: 10px;
+    fill: rgba(255, 255, 255, 0.5);
     text-transform: uppercase;
     letter-spacing: 0.6px;
     paint-order: stroke;
-    stroke: rgba(0, 0, 0, 0.7);
-    stroke-width: 2.5;
+    stroke: rgba(0, 0, 0, 0.8);
+    stroke-width: 3;
     stroke-linejoin: round;
   }
 </style>

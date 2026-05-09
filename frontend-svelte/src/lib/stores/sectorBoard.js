@@ -34,16 +34,23 @@ function voterSector(id, fusion) {
   const sig = fusion?.signals?.[VOTER_BACKEND_KEY[id]] || null
   const hasData = !!(sig && sig.mode)
   const factors = Array.isArray(sig?.factors) ? sig.factors.slice(0, 4) : []
+  // Voter impact = its fusion weight, with a floor so the bubble is still
+  // visible/readable when the lane is silent. Stale signals decay further.
+  const weight = sig?.weight ?? 0
+  let impactScore = 0.2 // baseline so never-zero
+  if (hasData) impactScore = Math.max(0.25, weight)
+  if (sig?.stale) impactScore = Math.min(impactScore, 0.25)
   return {
     id,
     kind: 'voter',
     hasData,
     mode: hasData ? sig.mode : null,
-    weight: sig?.weight ?? 0,
+    weight,
     confidence: sig?.confidence ?? 0,
     agrees: !!sig?.agrees,
     stale: !!sig?.stale,
     lastUpdate: sig?.last_update || null,
+    impactScore,
     factors: factors.map((f) => ({
       key: f.key,
       label: f.label || f.key,
@@ -83,6 +90,14 @@ function timeSector(fusion) {
     impact: 0.4,
     stale: false,
   })
+  // Time impact peaks during evening/night/late_night transition windows
+  // (when lighting decisions get most active) and dips mid-day.
+  const periodLower = (period || '').toLowerCase().replace(/_/g, ' ')
+  let impactScore = 0.4
+  if (/late.?night/.test(periodLower)) impactScore = 0.85
+  else if (periodLower === 'night') impactScore = 0.7
+  else if (periodLower === 'evening') impactScore = 0.6
+  else if (periodLower === 'morning') impactScore = 0.55
   return {
     id: 'time',
     kind: 'context',
@@ -92,6 +107,7 @@ function timeSector(fusion) {
     confidence: 0,
     agrees: false,
     stale: false,
+    impactScore,
     factors,
   }
 }
@@ -116,6 +132,16 @@ function weatherSector(weather) {
       stale: false,
     })
   }
+  // Weather impact peaks when condition triggers an effect overlay
+  // (rain → candle, thunderstorm → sparkle, snow → opal) — those modes
+  // observably change the lighting. Clear weather is mostly silent.
+  const desc = (weather?.description || '').toLowerCase()
+  let impactScore = 0.25
+  if (/thunder|storm/.test(desc)) impactScore = 0.95
+  else if (/rain|shower/.test(desc)) impactScore = 0.8
+  else if (/snow|sleet|hail/.test(desc)) impactScore = 0.7
+  else if (/fog|mist|haze/.test(desc)) impactScore = 0.55
+  else if (/cloud|overcast/.test(desc)) impactScore = 0.45
   return {
     id: 'weather',
     kind: 'context',
@@ -125,6 +151,7 @@ function weatherSector(weather) {
     confidence: 0,
     agrees: false,
     stale: false,
+    impactScore,
     factors,
   }
 }
@@ -158,6 +185,10 @@ function sonosSector(sonos) {
       stale: false,
     })
   }
+  // Sonos impact peaks when actively playing — playing suppresses TTS,
+  // drives autoplay-on-mode-change, holds the mode-change callback. When
+  // stopped, Sonos is observationally silent in the apartment.
+  const impactScore = playing ? 0.9 : 0.3
   return {
     id: 'sonos',
     kind: 'context',
@@ -167,6 +198,7 @@ function sonosSector(sonos) {
     confidence: 0,
     agrees: false,
     stale: false,
+    impactScore,
     factors,
   }
 }
@@ -178,6 +210,17 @@ function lightsSector(lights) {
       if (!isNaN(ai) && !isNaN(bi)) return ai - bi
       return (a.name || '').localeCompare(b.name || '')
     })
+  // Lights impact = fraction lit, weighted by mean brightness. A dim
+  // candle scene reads as "low impact" vs a bright working scene at peak.
+  const onLights = list.filter((l) => l.on)
+  let impactScore = 0.3
+  if (list.length) {
+    const onFraction = onLights.length / list.length
+    const avgBri = onLights.length
+      ? onLights.reduce((acc, l) => acc + (l.bri ?? 0), 0) / onLights.length / 254
+      : 0
+    impactScore = Math.max(0.3, 0.45 * onFraction + 0.55 * avgBri)
+  }
   return {
     id: 'lights',
     kind: 'output',
@@ -187,6 +230,7 @@ function lightsSector(lights) {
     confidence: 0,
     agrees: false,
     stale: false,
+    impactScore,
     factors: [], // lights are rendered specially via LightWedge
     lights: list,
   }

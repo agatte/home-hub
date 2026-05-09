@@ -42,8 +42,21 @@
     if (sectorMeta?.kind === 'voter') return modeColor(laneMode)
     return modeColorSoft(fusedMode, 0.45) // context bubbles tint with the current mode for visual cohesion
   })()
-  $: bubbleRadius = sectorData?.stale ? 32 : 40
+  // Disc radius scales with impactScore (computed in sectorBoard.js).
+  // Range 32–58 keeps even the smallest disc visually substantial (label
+  // and icon both read clearly) while letting a high-impact wedge — Sonos
+  // playing, weather storming, process voting at 0.45 — visibly dominate.
+  const MIN_BUBBLE_R = 32
+  const MAX_BUBBLE_R = 58
+  $: impactScore = Math.max(0, Math.min(1, sectorData?.impactScore ?? 0.4))
+  $: bubbleRadius = MIN_BUBBLE_R + (MAX_BUBBLE_R - MIN_BUBBLE_R) * impactScore
   $: IconCmp = ICON_MAP[sectorMeta?.icon] || Cpu
+  // Icon scales with the disc so tiny bubbles don't have giant icons.
+  $: iconSize = Math.round(bubbleRadius * 0.55)
+  // Label/weight font sizes scale with the disc.
+  $: labelFontSize = Math.round(10 + bubbleRadius * 0.08)
+  $: weightFontSize = Math.round(9 + bubbleRadius * 0.06)
+  $: labelY = Math.round(bubbleRadius * 0.3)
 
   $: subPositions = subBubblePositions(
     index, cx, cy, R_input, R_sub, sectorData?.factors?.length || 0,
@@ -95,21 +108,22 @@
 
     <!-- Icon glyph centered in the upper half -->
     <foreignObject
-      x={-12}
-      y={-bubbleRadius / 2 - 4}
-      width="24"
-      height="24"
+      x={-iconSize / 2}
+      y={-bubbleRadius / 2 - iconSize / 2 + 2}
+      width={iconSize}
+      height={iconSize}
       class="icon-host"
     >
       <div xmlns="http://www.w3.org/1999/xhtml" class="icon-wrap">
-        <svelte:component this={IconCmp} size={22} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
+        <svelte:component this={IconCmp} size={iconSize} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
       </div>
     </foreignObject>
 
-    <!-- Label inside the disc, lower half -->
-    <text class="input-label" text-anchor="middle" y="14">{sectorMeta.label.toUpperCase()}</text>
+    <!-- Label inside the disc, lower half. Font scales gently with the disc
+         so a 58px wedge feels weighty and a 32px one stays readable. -->
+    <text class="input-label" text-anchor="middle" y={labelY} style="font-size: {labelFontSize}px">{sectorMeta.label.toUpperCase()}</text>
     {#if weightPct !== null}
-      <text class="input-weight" text-anchor="middle" y="26">{weightPct}%</text>
+      <text class="input-weight" text-anchor="middle" y={labelY + labelFontSize + 2} style="font-size: {weightFontSize}px">{weightPct}%</text>
     {/if}
     </g>
   </g>
