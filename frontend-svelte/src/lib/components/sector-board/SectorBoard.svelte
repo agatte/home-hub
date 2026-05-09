@@ -3,7 +3,8 @@
   import { modeColor, modeColorSoft } from '$lib/theme.js'
   import { sectorBoard } from '$lib/stores/sectorBoard.js'
   import { pulseLinks, initPulseLinks } from '$lib/stores/pulseLinks.js'
-  import { SECTORS, SECTOR_INDEX, sectorBounds, inputBubblePosition, subBubblePositions, sectorPath } from './sectors.js'
+  import { narratorHighlights, loadNarratorHighlights } from '$lib/stores/narratorHighlights.js'
+  import { SECTORS, SECTOR_INDEX, sectorBounds, inputBubblePosition, subBubblePositions, sectorPath, sectorMidAngle } from './sectors.js'
   import InputWedge from './InputWedge.svelte'
   import LightWedge from './LightWedge.svelte'
   import ModeNucleusV2 from './ModeNucleusV2.svelte'
@@ -41,6 +42,8 @@
     mobileMedia.addEventListener('change', mqHandler)
     // Wire the pulse-link correlation engine. Idempotent.
     initPulseLinks()
+    // Fetch the narrator's highlights JSON so wedges can decorate.
+    loadNarratorHighlights()
     return () => {
       mobileMedia?.removeEventListener('change', mqHandler)
     }
@@ -149,6 +152,9 @@
             R_input={R_INPUT}
             R_sub={R_SUB}
             position={sp.pos}
+            isHeadline={$narratorHighlights.headline_input === sp.meta.id}
+            isAnomaly={$narratorHighlights.anomaly_inputs?.includes(sp.meta.id) ?? false}
+            headlineReason={$narratorHighlights.headline_input === sp.meta.id ? $narratorHighlights.headline_reason : ''}
           />
         {/if}
       {/each}

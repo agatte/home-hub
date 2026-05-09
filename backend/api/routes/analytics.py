@@ -11,6 +11,7 @@ narrative). The same convention as ``backend/api/routes/journal.py``.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -105,6 +106,53 @@ async def latest_daily() -> dict:
             }
 
     return {"date": None, "markdown": "", "is_today": False}
+
+
+@router.get("/digest/highlights")
+async def latest_highlights() -> dict:
+    """
+    Return the structured highlights JSON sidecar for the most recent
+    narrative — used by the SectorBoard to decorate the headline_input wedge
+    with a "today's story" ring and tag.
+
+    Mirrors the prefer-yesterday-then-today fallback of `/digest/daily`.
+    Returns an empty default `{}` when no sidecar exists yet so the
+    frontend can render the page without a 404.
+    """
+    today = datetime.now(tz=TZ).date()
+    yesterday = today - timedelta(days=1)
+
+    for candidate in (yesterday, today):
+        path = DIGEST_DIR / f"{candidate.isoformat()}.highlights.json"
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.warning("Malformed highlights JSON at %s: %s", path, e)
+                continue
+            return {"date": candidate.isoformat(), "highlights": payload}
+
+    if DIGEST_DIR.exists():
+        candidates = sorted(DIGEST_DIR.glob("*.highlights.json"), reverse=True)
+        if candidates:
+            path = candidates[0]
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.warning("Malformed highlights JSON at %s: %s", path, e)
+                payload = None
+            if payload is not None:
+                stem = path.stem.replace(".highlights", "")
+                try:
+                    d = datetime.strptime(stem, "%Y-%m-%d").date()
+                except ValueError:
+                    d = None
+                return {
+                    "date": d.isoformat() if d else None,
+                    "highlights": payload,
+                }
+
+    return {"date": None, "highlights": {}}
 
 
 @router.get("/digest/{entry_date}")

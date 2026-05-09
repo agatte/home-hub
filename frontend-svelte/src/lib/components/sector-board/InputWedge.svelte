@@ -2,7 +2,7 @@
   import { Cpu, Video, Mic, Clock, Sun, Cloud, Music, Lightbulb } from 'lucide-svelte'
   import { modeColor, modeColorSoft } from '$lib/theme.js'
   import SubBubble from './SubBubble.svelte'
-  import { subBubblePositions } from './sectors.js'
+  import { subBubblePositions, sectorMidAngle } from './sectors.js'
 
   /** Shape from sectorBoard.js — see voterSector / contextSector etc. */
   /** @type {{id: string, label: string, icon: string, kind: string}} */
@@ -24,6 +24,15 @@
   export let R_sub
   /** @type {{x: number, y: number}} */
   export let position
+  /** Whether this wedge is the agent-narrator's "today's story" input. */
+  /** @type {boolean} */
+  export let isHeadline = false
+  /** Whether this wedge is in the agent-narrator's anomaly list. */
+  /** @type {boolean} */
+  export let isAnomaly = false
+  /** One-line reason from the agent for the headline (only shown when isHeadline). */
+  /** @type {string} */
+  export let headlineReason = ''
 
   const ICON_MAP = {
     cpu: Cpu, video: Video, mic: Mic, clock: Clock,
@@ -62,6 +71,12 @@
     index, cx, cy, R_input, R_sub, sectorData?.factors?.length || 0,
   )
 
+  // Outward-radial direction for the headline pill placement.
+  $: outwardAngle = sectorMidAngle(index)
+  $: pillDistance = bubbleRadius + 22
+  $: pillX = position.x + Math.cos(outwardAngle) * pillDistance
+  $: pillY = position.y + Math.sin(outwardAngle) * pillDistance
+
   // Weight readout (voters only, when actively voting).
   $: weightPct = sectorMeta?.kind === 'voter' && sectorData?.hasData && !sectorData?.stale
     ? Math.round((sectorData.weight ?? 0) * 100)
@@ -75,6 +90,8 @@
   class:voter={sectorMeta?.kind === 'voter'}
   class:context={sectorMeta?.kind === 'context'}
   class:agrees={sectorData?.agrees}
+  class:headline={isHeadline}
+  class:anomaly={isAnomaly}
 >
   <!-- Sub-bubbles drawn first so the input bubble overlaps them -->
   {#each (sectorData?.factors || []) as factor, i (factor.key)}
@@ -101,6 +118,16 @@
       class="input-bubble"
       style="animation-delay: {(index * 1.3) % 9}s; animation-duration: {15 + (index * 2) % 6}s;"
     >
+    <!-- Anomaly warning halo (drawn behind everything else) -->
+    {#if isAnomaly}
+      <circle r={bubbleRadius + 12} class="anomaly-halo" />
+    {/if}
+
+    <!-- Headline "today's story" gold ring -->
+    {#if isHeadline}
+      <circle r={bubbleRadius + 10} class="headline-ring" />
+    {/if}
+
     <!-- Pulse ring (subtle, no key-driven remount in 2.A) -->
     <circle r={bubbleRadius + 4} class="input-halo" stroke={tint} />
 
@@ -125,6 +152,19 @@
     {#if weightPct !== null}
       <text class="input-weight" text-anchor="middle" y={labelY + labelFontSize + 2} style="font-size: {weightFontSize}px">{weightPct}%</text>
     {/if}
+
+    <!-- "TODAY'S STORY" pill at outward radial direction, only on the
+         narrator-flagged headline wedge. Positioned relative to the input
+         bubble center so it drifts together. -->
+    {#if isHeadline}
+      <g class="headline-pill" transform="translate({Math.cos(outwardAngle) * pillDistance}, {Math.sin(outwardAngle) * pillDistance})">
+        <rect x="-66" y="-11" width="132" height="22" rx="11" class="pill-bg" />
+        <text x="0" y="4" text-anchor="middle" class="pill-text">★ TODAY'S STORY</text>
+        {#if headlineReason}
+          <title>{headlineReason}</title>
+        {/if}
+      </g>
+    {/if}
     </g>
   </g>
 </g>
@@ -143,6 +183,54 @@
     animation: input-drift 17s ease-in-out infinite;
     transform-origin: center;
     transform-box: fill-box;
+  }
+
+  /* Narrator decoration: gold ring around the day's headline input. */
+  .headline-ring {
+    fill: none;
+    stroke: rgba(255, 200, 80, 0.85);
+    stroke-width: 2;
+    stroke-dasharray: 4 5;
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: headline-pulse 4s ease-in-out infinite;
+    filter: drop-shadow(0 0 8px rgba(255, 200, 80, 0.55));
+  }
+  @keyframes headline-pulse {
+    0%, 100% { stroke-opacity: 0.55; transform: scale(1); }
+    50%      { stroke-opacity: 0.95; transform: scale(1.04); }
+  }
+
+  /* Narrator decoration: amber warning halo for anomaly inputs. */
+  .anomaly-halo {
+    fill: none;
+    stroke: rgba(255, 140, 80, 0.5);
+    stroke-width: 1.4;
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: anomaly-pulse 3.5s ease-in-out infinite;
+  }
+  @keyframes anomaly-pulse {
+    0%, 100% { stroke-opacity: 0.35; transform: scale(1); }
+    50%      { stroke-opacity: 0.7;  transform: scale(1.12); }
+  }
+
+  /* "TODAY'S STORY" pill at outward radial direction. */
+  .headline-pill {
+    pointer-events: auto;
+  }
+  .pill-bg {
+    fill: rgba(20, 20, 32, 0.85);
+    stroke: rgba(255, 200, 80, 0.85);
+    stroke-width: 1.4;
+    filter: drop-shadow(0 0 6px rgba(255, 200, 80, 0.5));
+  }
+  .pill-text {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 11px;
+    letter-spacing: 1.6px;
+    fill: rgba(255, 220, 140, 0.95);
+    pointer-events: none;
   }
 
   @keyframes input-drift {
