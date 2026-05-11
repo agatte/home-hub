@@ -484,6 +484,60 @@ async def activate_guest_effect(name: str, request: Request) -> dict:
     }
 
 
+async def _apply_brightness_steps(
+    request: Request, steps: int
+) -> tuple[list[dict], int]:
+    """Apply N ±10% brightness steps to every on-light in one shot.
+
+    Positive = brighter, negative = dimmer. Compounds the same per-step
+    transformation as `/brightness/up`/`/brightness/down` (multiplicative
+    with the GUEST_BRIGHTNESS_MIN_STEP perceptibility floor) so a 3-step
+    batch lands at the same place 3 sequential up taps would.
+
+    Stamps manual overrides identically. Returns `(updated, ceiling)`.
+    Raises 503 if the Hue bridge isn't connected.
+    """
+    hue = request.app.state.hue
+    if not hue.connected:
+        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+
+    automation = getattr(request.app.state, "automation", None)
+    mode_mult = 1.0
+    if automation:
+        mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
+    ceiling = max(1, min(254, int(254 * mode_mult)))
+
+    sign = 1 if steps > 0 else -1
+    n_steps = abs(steps)
+    multiplicative_delta = GUEST_BRIGHTNESS_STEP - 1.0  # 0.10
+
+    lights = await hue.get_all_lights()
+    updated: list[dict] = []
+    for light in lights:
+        if not light.get("on") or "bri" not in light:
+            continue
+        current = light["bri"]
+        # Compound N times rather than `current * 1.10**N` so the
+        # GUEST_BRIGHTNESS_MIN_STEP floor still kicks in at each step —
+        # ensures perceptibility at low bri even on multi-step jumps.
+        for _ in range(n_steps):
+            delta = max(GUEST_BRIGHTNESS_MIN_STEP, round(current * multiplicative_delta))
+            current = max(1, min(ceiling, current + sign * delta))
+        if current == light["bri"]:
+            continue
+        light_id = light["light_id"]
+        await hue.set_light(light_id, {"bri": current})
+        # Stamp manual override so the engine's next 60s tick doesn't
+        # revert the tweak. The guest's existing override (set when they
+        # picked the scene) keeps the mode pinned; this stamp keeps the
+        # specific bri value pinned.
+        if automation:
+            automation.mark_light_manual(light_id)
+        updated.append({"id": light_id, "bri": current})
+
+    return updated, ceiling
+
+
 @router.post("/brightness/{direction}", dependencies=[Depends(require_api_key)])
 async def adjust_guest_brightness(direction: str, request: Request) -> dict:
     """Bump every on-light's brightness ±10%, clamped to the mode ceiling.
@@ -513,41 +567,8 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
             )
         _last_guest_brightness_at = now
 
-    hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
-
-    automation = getattr(request.app.state, "automation", None)
-    mode_mult = 1.0
-    if automation:
-        mode_mult = automation._mode_brightness.get(automation.current_mode, 1.0)
-    ceiling = max(1, min(254, int(254 * mode_mult)))
-
     sign = 1 if direction == "up" else -1
-    multiplicative_delta = GUEST_BRIGHTNESS_STEP - 1.0  # 0.10
-
-    lights = await hue.get_all_lights()
-    updated: list[dict] = []
-    for light in lights:
-        if not light.get("on") or "bri" not in light:
-            continue
-        current = light["bri"]
-        # Floor the step at GUEST_BRIGHTNESS_MIN_STEP so a tap is always
-        # visible. Pure 10% on bri=40 = 4 units — invisible against an
-        # already-lit room. floor=20 ensures every tap is a real change.
-        delta = max(GUEST_BRIGHTNESS_MIN_STEP, round(current * multiplicative_delta))
-        new_bri = max(1, min(ceiling, current + sign * delta))
-        if new_bri == current:
-            continue
-        light_id = light["light_id"]
-        await hue.set_light(light_id, {"bri": new_bri})
-        # Stamp manual override so the engine's next 60s tick doesn't
-        # revert the tweak. The guest's existing override (set when they
-        # picked the scene) keeps the mode pinned; this stamp keeps the
-        # specific bri value pinned.
-        if automation:
-            automation.mark_light_manual(light_id)
-        updated.append({"id": light_id, "bri": new_bri})
+    updated, ceiling = await _apply_brightness_steps(request, sign)
 
     logger.info(
         "Guest brightness %s on %d lights (ceiling=%d) from %s",
@@ -559,6 +580,62 @@ async def adjust_guest_brightness(direction: str, request: Request) -> dict:
     return {
         "status": "ok",
         "direction": direction,
+        "updated": updated,
+        "ceiling": ceiling,
+    }
+
+
+# Card-fill drag on /guest/vibe can span multiple levels in a single
+# gesture; sequential up/down calls would chain 6 × 800ms = ~5s for a
+# −3→+3 swing. This endpoint applies the whole delta in one POST. Same
+# cooldown as up/down so spamming the gesture is still rate-limited.
+GUEST_BRIGHTNESS_STEP_CAP = 6
+
+
+@router.post("/brightness/step/{delta}", dependencies=[Depends(require_api_key)])
+async def step_guest_brightness(delta: int, request: Request) -> dict:
+    """Apply N ±10% brightness steps in one shot (delta ∈ -6..+6).
+
+    Powers the /guest/vibe card-fill drag: frontend tracks its own level
+    state and posts the resulting `target − current` on release. Same
+    cooldown + same per-step semantics as `/brightness/up`/`/down`, so
+    a multi-step batch lands where N sequential taps would.
+    """
+    global _last_guest_brightness_at
+
+    if not -GUEST_BRIGHTNESS_STEP_CAP <= delta <= GUEST_BRIGHTNESS_STEP_CAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Delta must be in -{GUEST_BRIGHTNESS_STEP_CAP}..+{GUEST_BRIGHTNESS_STEP_CAP}",
+        )
+
+    async with _guest_brightness_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_brightness_at
+        if elapsed < GUEST_BRIGHTNESS_COOLDOWN_SECONDS:
+            retry_after = max(1, int(GUEST_BRIGHTNESS_COOLDOWN_SECONDS - elapsed) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail="Slow down a sec",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_brightness_at = now
+
+    if delta == 0:
+        return {"status": "ok", "delta": 0, "updated": [], "ceiling": None}
+
+    updated, ceiling = await _apply_brightness_steps(request, delta)
+
+    logger.info(
+        "Guest brightness step %+d on %d lights (ceiling=%d) from %s",
+        delta,
+        len(updated),
+        ceiling,
+        request.client.host if request.client else "unknown",
+    )
+    return {
+        "status": "ok",
+        "delta": delta,
         "updated": updated,
         "ceiling": ceiling,
     }

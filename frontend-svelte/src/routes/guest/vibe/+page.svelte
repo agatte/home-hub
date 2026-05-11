@@ -255,16 +255,90 @@
     }
   }
 
-  async function bumpBrightness(direction) {
+  // Brightness drag — visitor pulls the fill toward "dimmer" (left) or
+  // "brighter" (right). Fill width = level mapped onto a 0..100% axis
+  // (50% = level 0, 0% = -3, 100% = +3). The level system is unchanged;
+  // we just swapped the +/- rocker for a single card-fill drag so it
+  // visually rhymes with the home-dashboard light cards.
+  //
+  // While dragging, `dragLevel` overrides `brightnessLevel` so the fill
+  // tracks the finger. On release we compute `target - current` and post
+  // it as a single batch step — server applies the whole delta in one shot
+  // (avoids chaining 6× 800ms-throttled up/down calls for a full swing).
+
+  /** @type {HTMLDivElement | undefined} */
+  let brightnessCardEl
+  let brightnessDragging = false
+  /** @type {number | null} */
+  let brightnessDragPointerId = null
+  /** @type {number | null} */
+  let dragLevel = null
+  let brightnessDragStartX = 0
+  let brightnessDidDrag = false
+
+  $: displayBrightnessLevel = dragLevel ?? brightnessLevel
+  $: brightnessFillPct = ((displayBrightnessLevel + BRIGHTNESS_LEVEL_CAP) / (BRIGHTNESS_LEVEL_CAP * 2)) * 100
+
+  function levelFromClientX(clientX) {
+    if (!brightnessCardEl) return brightnessLevel
+    const rect = brightnessCardEl.getBoundingClientRect()
+    if (rect.width <= 0) return brightnessLevel
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+    const raw = pct * (BRIGHTNESS_LEVEL_CAP * 2) - BRIGHTNESS_LEVEL_CAP
+    return Math.max(-BRIGHTNESS_LEVEL_CAP, Math.min(BRIGHTNESS_LEVEL_CAP, Math.round(raw)))
+  }
+
+  /** @param {PointerEvent} e */
+  function onBrightnessPointerDown(e) {
+    if (tuningBusy || !activeScene) return
+    if (!brightnessCardEl) return
+    if (e.pointerType !== 'mouse') e.preventDefault()
+    brightnessCardEl.setPointerCapture(e.pointerId)
+    brightnessDragPointerId = e.pointerId
+    brightnessDragging = true
+    brightnessDidDrag = false
+    brightnessDragStartX = e.clientX
+    dragLevel = levelFromClientX(e.clientX)
+  }
+
+  /** @param {PointerEvent} e */
+  function onBrightnessPointerMove(e) {
+    if (!brightnessDragging || e.pointerId !== brightnessDragPointerId) return
+    if (!brightnessDidDrag && Math.abs(e.clientX - brightnessDragStartX) < 4) return
+    brightnessDidDrag = true
+    dragLevel = levelFromClientX(e.clientX)
+  }
+
+  /** @param {PointerEvent} e */
+  async function onBrightnessPointerEnd(e) {
+    if (!brightnessDragging || e.pointerId !== brightnessDragPointerId) return
+    try { brightnessCardEl?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    const target = dragLevel
+    const wasDrag = brightnessDidDrag
+    brightnessDragging = false
+    brightnessDragPointerId = null
+    brightnessDidDrag = false
+    if (!wasDrag || target == null || target === brightnessLevel) {
+      dragLevel = null
+      return
+    }
+    await commitBrightnessLevel(target)
+    dragLevel = null
+  }
+
+  async function commitBrightnessLevel(target) {
     if (tuningBusy) return
+    const delta = target - brightnessLevel
+    if (delta === 0) return
     const now = Date.now()
-    if (now - lastBrightnessAt < BRIGHTNESS_THROTTLE_MS) return
+    if (now - lastBrightnessAt < BRIGHTNESS_THROTTLE_MS) {
+      showToast('Slow down a sec')
+      return
+    }
     lastBrightnessAt = now
-    if (direction === 'up' && brightnessLevel >= BRIGHTNESS_LEVEL_CAP) return
-    if (direction === 'down' && brightnessLevel <= -BRIGHTNESS_LEVEL_CAP) return
     tuningBusy = true
     try {
-      const res = await fetch(`/api/guest/brightness/${direction}`, { method: 'POST' })
+      const res = await fetch(`/api/guest/brightness/step/${delta}`, { method: 'POST' })
       if (res.status === 429) {
         showToast('Slow down a sec')
         return
@@ -274,13 +348,11 @@
         return
       }
       const body = await res.json().catch(() => ({}))
-      // Empty `updated` means every on-light was already at the ceiling
-      // (or floor) — don't lie about UI state. Toast the limit instead.
       if (Array.isArray(body.updated) && body.updated.length === 0) {
-        showToast(direction === 'up' ? 'Already at max' : 'Already at min')
+        showToast(delta > 0 ? 'Already at max' : 'Already at min')
         return
       }
-      brightnessLevel += direction === 'up' ? 1 : -1
+      brightnessLevel = target
       persistTuningState()
     } catch {
       showToast(`Couldn't reach the server`)
@@ -597,26 +669,32 @@
         </button>
       </div>
 
-      <div class="tune-row">
+      <div class="tune-row tune-row-stack">
         <span class="tune-label">Brightness</span>
-        <div class="brightness-rocker">
-          <button
-            type="button"
-            class="rocker-btn"
-            on:click={() => bumpBrightness('down')}
-            disabled={tuningBusy || brightnessLevel <= -BRIGHTNESS_LEVEL_CAP}
-            aria-label="Dimmer"
-          >−</button>
-          <span class="rocker-readout">
-            {brightnessLevel === 0 ? '·' : brightnessLevel > 0 ? `+${brightnessLevel}` : `${brightnessLevel}`}
-          </span>
-          <button
-            type="button"
-            class="rocker-btn"
-            on:click={() => bumpBrightness('up')}
-            disabled={tuningBusy || brightnessLevel >= BRIGHTNESS_LEVEL_CAP}
-            aria-label="Brighter"
-          >+</button>
+        <div
+          class="brightness-card"
+          class:dragging={brightnessDragging}
+          class:disabled={tuningBusy}
+          style="--fill-pct: {brightnessFillPct}%;"
+          bind:this={brightnessCardEl}
+          on:pointerdown={onBrightnessPointerDown}
+          on:pointermove={onBrightnessPointerMove}
+          on:pointerup={onBrightnessPointerEnd}
+          on:pointercancel={onBrightnessPointerEnd}
+          role="slider"
+          aria-label="Scene brightness"
+          aria-valuemin={-BRIGHTNESS_LEVEL_CAP}
+          aria-valuemax={BRIGHTNESS_LEVEL_CAP}
+          aria-valuenow={displayBrightnessLevel}
+        >
+          <div class="brightness-fill" aria-hidden="true"></div>
+          <div class="brightness-card-content">
+            <span class="brightness-card-label">Dimmer</span>
+            <span class="brightness-card-readout">
+              {displayBrightnessLevel === 0 ? '·' : displayBrightnessLevel > 0 ? `+${displayBrightnessLevel}` : `${displayBrightnessLevel}`}
+            </span>
+            <span class="brightness-card-label brightness-card-label-right">Brighter</span>
+          </div>
         </div>
       </div>
 
@@ -1254,38 +1332,71 @@
     min-width: 80px;
   }
 
-  .brightness-rocker {
+  .tune-row-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .tune-row-stack .tune-label { min-width: 0; }
+
+  .brightness-card {
+    position: relative;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    min-height: 56px;
+    cursor: ew-resize;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    transition: border-color 0.2s, opacity 0.2s;
+  }
+  .brightness-card.disabled { cursor: not-allowed; opacity: 0.5; }
+  .brightness-card:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.4);
+    outline-offset: 2px;
+  }
+  .brightness-fill {
+    position: absolute;
+    inset: 0;
+    width: var(--fill-pct, 50%);
+    background: linear-gradient(
+      to right,
+      rgba(170, 110, 240, 0.35) 0%,
+      rgba(170, 110, 240, 0.35) 35%,
+      transparent 100%
+    );
+    pointer-events: none;
+    transition: width 0.2s ease;
+  }
+  .brightness-card.dragging .brightness-fill { transition: width 0.06s linear; }
+  .brightness-card-content {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
-    gap: 4px;
-    margin-left: auto;
-    padding: 4px 6px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 12px;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    height: 100%;
   }
-  .rocker-btn {
-    appearance: none;
-    width: 36px;
-    height: 36px;
-    background: transparent;
-    border: 0;
-    color: #fff;
-    font-size: 18px;
-    font-weight: 500;
-    cursor: pointer;
-    border-radius: 8px;
-    transition: background 0.15s;
+  .brightness-card-label {
+    font-family: var(--font-body);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(245, 243, 238, 0.55);
   }
-  .rocker-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
-  .rocker-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-  .rocker-readout {
+  .brightness-card-label-right { text-align: right; }
+  .brightness-card-readout {
     font-family: var(--font-display);
-    font-size: 16px;
-    color: rgba(245, 243, 238, 0.85);
-    min-width: 32px;
-    text-align: center;
+    font-size: 22px;
+    color: rgba(245, 243, 238, 0.95);
     letter-spacing: 0.04em;
+    min-width: 40px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
 
   .toggle-pill {
