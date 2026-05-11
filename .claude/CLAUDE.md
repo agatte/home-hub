@@ -107,7 +107,7 @@ Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md`
 
 ### Ambient verification loop
 
-`/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — hourly anomaly sweep + dated one-shot decisions. Writes per-fire markdown blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire `PushNotification` (Windows toast + phone push if Remote Control connected); ok/skipped/specialist-self-writing blocks stay silent. Auto-starts via `home-hub-loop.cmd`.
+`/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — hourly anomaly sweep + dated one-shot decisions. Writes per-fire markdown blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire a system-tray balloon via `~/.claude/scripts/notify.ps1` (NotifyIcon, ~8s lifetime — modern toast API silently drops on this box); ok/skipped/specialist-self-writing blocks stay silent. Auto-starts via `home-hub-loop.cmd` (kills any prior `--name homehub-loop` claude.exe before launching, so skill edits take effect on relaunch).
 
 Parallel `/watcher-loop` (separate session) polls the digests every 600s. Warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (per-anomaly playbook in `~/.claude/runbooks/homehub-watcher.md`); root-cause diagnosis appended inline. Investigation-only — never mutates state.
 
@@ -310,7 +310,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 | `working` | Terminals + IDEs (powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains, wezterm, alacritty) | ct-mode clean whites, desk-dominant. IES 1:3 monitor-ambient contrast. Night: L2 130/2700K + L1 60/2270K + kitchen OFF |
 | `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` lifts L2; `zone=bed + reclined` evening/night drops L1/L2; `zone=bed + upright` is mid-bright. Numeric vectors in `automation_engine.py` |
 | `social` | Manual override only (YAMNet `speech_multiple` gate abandoned 2026-05-09 — structurally unreachable; replacement direction deferred) | "Velvet Speakeasy" static: L1 dusty rose, L2 cognac amber, L3/L4 matched burnt-orange. Saturation does the work, no effect. 1s snap |
-| `relax` | Manual override | "Moss & Candlelight": L1/L2 warm ember/honey, L3/L4 moss/sage (pendants stay static). Late-night "Moss & Ember": deeper ember + hunter-green. opal day / candle eve / fire night — candle/fire scoped to L1/L2 only |
+| `relax` | Manual override | "Moss & Candlelight": L1/L2 warm ember/honey, L3/L4 moss/sage (pendants stay static). Late-night "Moss & Ember": deeper ember + hunter-green. opal day / **none eve** / fire night+late_night — fire scoped to L1/L2 only. Candle removed from auto-map 2026-05-09 (locked color state, persisted through mode changes). |
 | `cooking` | Manual override | L3+L4 paired peak 3500K (accurate food colors), L1 warm, L2 dim. 1s snap |
 | `sleeping` | Manual only | "Good night" TTS on entry. Dim initial (bri=20 ember) BEFORE stopping the active effect to prevent 100% pop, then fade. Manual: 24s fade off. Persistent override — no 4h timeout. Pauses media. PC sleep watcher (Windows desktop) suspends 60min after entry; cancels if mode leaves sleeping. |
 | `idle` | No process detected, OR Win32 idle >10min, OR camera absent ≥30s | Falls through to time-based rules |
@@ -343,11 +343,11 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `sparkle` (bright flashes), `prism` (slow color cycle), `glisten` (shimmer), `opal` (soft pastel). Activate via `POST /api/scenes/effects/{name}` (all lights) or `.../effects/{name}/light/{id}` (single). **Effects flatten per-light HSB** to the effect's own color base — custom-palette scenes must use `effect: None`.
 
-**EFFECT_AUTO_MAP** entries `{"effect": name, "lights": [...] | None}` — `lights=None` = all, list scopes to v1 IDs. Mappings: relax → opal day / candle eve / fire night+late_night (candle/fire scoped to L1/L2 so moss pendants stay static); watching → glisten eve/night; social, gaming, working, cooking → none.
+**EFFECT_AUTO_MAP** entries `{"effect": name, "lights": [...] | None}` — `lights=None` = all, list scopes to v1 IDs. Mappings: relax → opal day / **none eve** / fire night+late_night (fire scoped to L1/L2 so moss pendants stay static); watching → glisten eve/night; social, gaming, working, cooking → none. Candle removed from auto-map 2026-05-09 (locked color values, persisted through mode changes); manual candle still callable via scene browser / guest UI / MCP.
 
 **Time periods:** `_get_time_period()` returns `day`/`evening`/`night`/`late_night`. `late_night` runs from `DaySchedule.late_night_start_hour` (default 23) until `wake_hour`. Only relax defines a `late_night` state; other modes fall back to `night`.
 
-**Weather effect fallback:** When a mode has no auto-effect, weather overlays one — rain→candle, thunderstorm→sparkle, snow→opal (evening/night only, sparkle any time). Same-effect cycles skipped to preserve the bridge's brightness base.
+**Weather effect fallback:** When a mode has no auto-effect, weather overlays one — thunderstorm→sparkle, snow→opal (evening/night only, sparkle any time). Same-effect cycles skipped to preserve the bridge's brightness base. Rain→candle removed 2026-05-09.
 
 ---
 
