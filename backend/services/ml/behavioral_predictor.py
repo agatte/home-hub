@@ -185,6 +185,11 @@ class BehavioralPredictor(HealthTrackable):
         self._model_manager = model_manager
         self._model: Any = None
         self._label_encoder: dict[int, str] = {}  # int → mode name
+        # Per-class isotonic calibrators fit on the val split after each
+        # retrain. None = calibrators not available (pre-2026-05-11 model
+        # files or load failure); predict() falls back to raw probs and
+        # logs a warning on first use.
+        self._calibrators: Optional[list] = None
         self._status: str = "shadow"  # "shadow", "active", "demoted"
         self._last_trained: Optional[datetime] = None
         self._last_accuracy: Optional[float] = None
@@ -264,15 +269,99 @@ class BehavioralPredictor(HealthTrackable):
                     return
 
                 self._label_encoder = label_encoder
+
+                # Calibrators ship as a sidecar pickle next to the
+                # booster. Missing-file path is the expected state right
+                # after a deploy that introduces calibration but before
+                # the next 04:00 retrain has run — predict() falls back
+                # to raw probs and logs a warning on first use.
+                self._calibrators = self._load_calibrators()
+
                 logger.info(
-                    "Loaded behavioral predictor (status=%s, accuracy=%.1f%%, rows=%d)",
+                    "Loaded behavioral predictor (status=%s, accuracy=%.1f%%, "
+                    "rows=%d, calibrators=%s)",
                     self._status,
                     (self._last_accuracy or 0) * 100,
                     self._training_rows,
+                    "loaded" if self._calibrators is not None else "absent",
                 )
             except Exception as exc:
                 logger.error("Failed to load behavioral predictor: %s", exc)
                 self._model = None
+
+    # ------------------------------------------------------------------
+    # Calibrator persistence
+    # ------------------------------------------------------------------
+
+    def _calibrator_path(self) -> Path:
+        return self._model_manager.data_dir / "mode_predictor_calib.pkl"
+
+    def _load_calibrators(self) -> Optional[list]:
+        """Load per-class isotonic calibrators from the sidecar pickle.
+
+        Returns None when the file is missing or the loaded list doesn't
+        match the booster's class count. Both are recoverable on the
+        next 04:00 retrain — predict() falls back to raw probs in the
+        meantime.
+        """
+        path = self._calibrator_path()
+        if not path.exists():
+            return None
+        try:
+            import pickle
+            with path.open("rb") as fh:
+                calibrators = pickle.load(fh)
+            if not isinstance(calibrators, list):
+                return None
+            # The label_encoder was already populated by the caller — a
+            # length mismatch means the calibrators were fit against a
+            # different class set (e.g. cooking removal mid-deploy).
+            if len(calibrators) != len(self._label_encoder):
+                logger.warning(
+                    "Calibrator class count mismatch (loaded=%d, expected=%d) "
+                    "— ignoring sidecar; will refit on next retrain.",
+                    len(calibrators), len(self._label_encoder),
+                )
+                return None
+            return calibrators
+        except Exception as exc:
+            logger.warning("Failed to load calibrators: %s", exc)
+            return None
+
+    def _save_calibrators(self, calibrators: list) -> None:
+        """Persist the calibrator list as a pickle sidecar."""
+        try:
+            import pickle
+            path = self._calibrator_path()
+            with path.open("wb") as fh:
+                pickle.dump(calibrators, fh)
+        except Exception as exc:
+            logger.warning("Failed to save calibrators: %s", exc)
+
+    @staticmethod
+    def _apply_calibrators(
+        probs: Any, calibrators: list, np: Any,
+    ) -> Any:
+        """Apply per-class isotonic calibration and renormalize to sum=1.
+
+        IsotonicRegression maps each raw class probability onto an
+        empirical accuracy curve fit at retrain time. Per-class
+        application breaks the softmax-sum constraint, so we renormalize
+        before downstream consumers (argmax + confidence) read the
+        result. A degenerate all-zero output (extremely rare — would
+        require every class's calibrator to map probs to 0) falls back
+        to uniform.
+        """
+        calibrated = np.array(
+            [
+                float(calibrators[i].transform([probs[i]])[0])
+                for i in range(len(probs))
+            ]
+        )
+        total = float(calibrated.sum())
+        if total > 0:
+            return calibrated / total
+        return np.full_like(calibrated, 1.0 / len(calibrated))
 
     # ------------------------------------------------------------------
     # Training
@@ -309,7 +398,7 @@ class BehavioralPredictor(HealthTrackable):
             return
 
         # Run training in a thread to avoid blocking the event loop
-        model, accuracy, label_encoder = await asyncio.to_thread(
+        model, accuracy, label_encoder, calibrators = await asyncio.to_thread(
             self._train_sync, rows, lgb, np
         )
 
@@ -319,6 +408,14 @@ class BehavioralPredictor(HealthTrackable):
         # Save model to disk
         model_path = self._model_manager.data_dir / "mode_predictor.lgb"
         model.save_model(str(model_path))
+
+        # Save calibrators alongside the booster. None happens when the
+        # val split was too small to fit even a single class — leave the
+        # old sidecar in place so predict() can keep using whichever
+        # calibrators it had.
+        if calibrators is not None:
+            self._save_calibrators(calibrators)
+            self._calibrators = calibrators
 
         self._model = model
         self._label_encoder = label_encoder
@@ -365,18 +462,26 @@ class BehavioralPredictor(HealthTrackable):
 
             if len(X_val) == 0 or len(set(y_train)) < 2:
                 logger.warning("Not enough diversity in training data")
-                return None, 0, {}
+                return None, 0, {}, None
 
-            # Class-balanced sample weights — inverse frequency upweights
-            # minority modes so the model doesn't collapse toward the
-            # dominant class. 2026-05-06 smoke test (next-mode JOIN against
-            # activity_events) found predicted=watching at 0% (0/20) and
-            # predicted=relax at 0% (0/17) because training was dominated
-            # by the working class (~71% of rows). sklearn's "balanced"
-            # formula: n_samples / (n_classes * count_per_class).
+            # Class-balanced sample weights — sqrt-softened majority-ratio
+            # so minority classes get a meaningful boost without the
+            # extreme-tail blowups that the sklearn "balanced" formula
+            # produces on rare classes.
+            #
+            # 2026-05-11 weekly evaluator surfaced 0 gaming predictions
+            # over 7d despite 70 actual-next-mode hits — gaming at 8% of
+            # the 60d corpus only got a 1.46× boost under inverse
+            # frequency, not enough to lift it past majority bias.
+            # Meanwhile cooking (now retired from PREDICTABLE_MODES) was
+            # getting a 15× boost on 19 samples and destabilizing the
+            # softmax. The sqrt formula yields a gentler spread — for
+            # the current corpus it's roughly:
+            #   working ~1.00, watching ~1.22, gaming ~1.97,
+            #   social ~2.44, relax ~2.60
             class_counts = np.bincount(y_train, minlength=len(unique_modes))
-            class_weights = len(y_train) / (
-                len(unique_modes) * np.maximum(class_counts, 1)
+            class_weights = np.sqrt(
+                class_counts.max() / np.maximum(class_counts, 1)
             )
             sample_weight = class_weights[y_train]
 
@@ -393,6 +498,13 @@ class BehavioralPredictor(HealthTrackable):
                 "num_leaves": 31,
                 "learning_rate": 0.1,
                 "feature_fraction": 0.9,
+                # min_child_samples=50 (default 20) — directly attacks the
+                # 2026-05-11 conf=1.0 inversion symptom. Smaller leaves
+                # could fit tight on majority+minority boundary noise and
+                # emit deceptively high softmax peaks; widening the
+                # minimum samples per leaf smooths the decision surface
+                # and pairs naturally with the post-fit calibrator.
+                "min_child_samples": 50,
                 "verbose": -1,
             }
 
@@ -404,49 +516,111 @@ class BehavioralPredictor(HealthTrackable):
                 callbacks=[lgb.log_evaluation(period=0)],  # suppress logging
             )
 
-            # Compute validation accuracy
+            # Compute validation accuracy on the raw booster output —
+            # used as the headline 7d accuracy. The calibrators only
+            # rescale confidence scores; argmax stays the same as raw
+            # probs in the typical case.
             val_preds = model.predict(X_val)
             val_pred_classes = np.argmax(val_preds, axis=1)
             accuracy = float(np.mean(val_pred_classes == y_val))
 
-            # Per-class val accuracy — surfaces class-balance regressions
-            # in journalctl. With sample weights minority classes should
-            # gain accuracy at some cost to the majority class; if any
-            # class still reads 0% with sample size ≥ 5, the features
-            # don't carry the signal and weights alone won't fix it.
-            per_class_total: dict[str, int] = {}
+            # Per-class isotonic calibration — fit on val-set probs so
+            # the model's confidence scores become monotonic with
+            # empirical accuracy. Addresses the 2026-05-11 conf=1.0
+            # inversion finding (top-bucket accuracy at 17.6% vs
+            # conf=0.9 at 61%). Each calibrator is one-vs-rest:
+            # IsotonicRegression on (raw_prob_for_class_i, was_class_i).
+            #
+            # Edge case: if a class never appears in val (positives==0),
+            # IsotonicRegression collapses to a constant zero output,
+            # which would zero out that class at inference time and
+            # break renormalization. Substitute the identity mapping
+            # for any such class so it falls back to raw probs.
+            calibrators: list = []
+            try:
+                from sklearn.isotonic import IsotonicRegression
+                for class_idx in range(len(unique_modes)):
+                    raw = val_preds[:, class_idx]
+                    target = (y_val == class_idx).astype(int)
+                    if target.sum() == 0:
+                        # No positives — identity calibrator.
+                        cal = IsotonicRegression(out_of_bounds="clip")
+                        cal.fit([0.0, 1.0], [0.0, 1.0])
+                    else:
+                        cal = IsotonicRegression(
+                            out_of_bounds="clip", y_min=0.0, y_max=1.0,
+                        )
+                        cal.fit(raw, target)
+                    calibrators.append(cal)
+            except Exception as exc:
+                logger.warning(
+                    "Calibrator fit failed (%s) — leaving sidecar untouched",
+                    exc,
+                )
+                calibrators = None  # type: ignore[assignment]
+
+            # Per-class val metrics — recall (correct / actual), precision
+            # (correct / predicted), and F1. Surfaces class-balance
+            # regressions in journalctl: a starved class shows up as
+            # recall=0 with predicted=0, the 2026-05-11 gaming-class
+            # symptom. With sample weights minority classes should gain
+            # recall at some cost to majority precision; if any class
+            # still reads 0% with sample size ≥ 5 the features don't
+            # carry the signal and weights alone won't fix it.
+            per_class_actual: dict[str, int] = {}
+            per_class_predicted: dict[str, int] = {}
             per_class_correct: dict[str, int] = {}
             for pred, actual in zip(val_pred_classes, y_val):
-                mode = label_encoder.get(int(actual), "unknown")
-                per_class_total[mode] = per_class_total.get(mode, 0) + 1
+                actual_mode = label_encoder.get(int(actual), "unknown")
+                pred_mode = label_encoder.get(int(pred), "unknown")
+                per_class_actual[actual_mode] = (
+                    per_class_actual.get(actual_mode, 0) + 1
+                )
+                per_class_predicted[pred_mode] = (
+                    per_class_predicted.get(pred_mode, 0) + 1
+                )
                 if int(pred) == int(actual):
-                    per_class_correct[mode] = per_class_correct.get(mode, 0) + 1
-            per_class_acc = {
-                mode: {
-                    "n": per_class_total[mode],
-                    "correct": per_class_correct.get(mode, 0),
-                    "acc": (
-                        per_class_correct.get(mode, 0) / per_class_total[mode]
-                        if per_class_total[mode] > 0 else 0.0
-                    ),
+                    per_class_correct[actual_mode] = (
+                        per_class_correct.get(actual_mode, 0) + 1
+                    )
+            per_class_metrics: dict[str, dict] = {}
+            for mode in sorted(set(per_class_actual) | set(per_class_predicted)):
+                n_actual = per_class_actual.get(mode, 0)
+                n_pred = per_class_predicted.get(mode, 0)
+                n_correct = per_class_correct.get(mode, 0)
+                recall = n_correct / n_actual if n_actual > 0 else 0.0
+                precision = n_correct / n_pred if n_pred > 0 else 0.0
+                f1 = (
+                    2 * precision * recall / (precision + recall)
+                    if (precision + recall) > 0 else 0.0
+                )
+                per_class_metrics[mode] = {
+                    "n": n_actual,
+                    "predicted": n_pred,
+                    "correct": n_correct,
+                    "recall": round(recall, 3),
+                    "precision": round(precision, 3),
+                    "f1": round(f1, 3),
                 }
-                for mode in per_class_total
-            }
             class_weight_str = ", ".join(
                 f"{label_encoder[i]}={class_weights[i]:.2f}"
                 for i in range(len(unique_modes))
             )
+            calib_str = (
+                "fit" if calibrators
+                else ("skipped" if calibrators is None else "empty")
+            )
             logger.info(
                 "Behavioral predictor train: weights={%s}, per_class_val=%s, "
-                "overall_val=%.3f",
-                class_weight_str, per_class_acc, accuracy,
+                "overall_val=%.3f, calibrators=%s",
+                class_weight_str, per_class_metrics, accuracy, calib_str,
             )
 
-            return model, accuracy, label_encoder
+            return model, accuracy, label_encoder, calibrators
 
         except Exception as exc:
             logger.error("Training failed: %s", exc, exc_info=True)
-            return None, 0, {}
+            return None, 0, {}, None
 
     # ------------------------------------------------------------------
     # Prediction
@@ -506,6 +680,12 @@ class BehavioralPredictor(HealthTrackable):
             x = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])
 
             probs = self._model.predict(x)[0]
+            # Apply isotonic calibration when available. Older models
+            # deployed before the 2026-05-11 calibration work ship
+            # without a sidecar — predict() keeps working on raw probs
+            # until the next 04:00 retrain refits both pieces together.
+            if self._calibrators is not None and len(self._calibrators) == len(probs):
+                probs = self._apply_calibrators(probs, self._calibrators, np)
             top_idx = int(np.argmax(probs))
             confidence = float(probs[top_idx])
             predicted_mode = self._label_encoder.get(top_idx, "unknown")

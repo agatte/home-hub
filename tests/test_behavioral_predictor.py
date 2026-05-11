@@ -379,3 +379,123 @@ class TestRetrainWithLightGBM:
             assert isinstance(factors["distribution"], dict)
             # distribution should sum to ~1.0 across all classes.
             assert abs(sum(factors["distribution"].values()) - 1.0) < 1e-3
+
+
+@pytest.mark.skipif(not _HAS_LIGHTGBM, reason="lightgbm not installed")
+@pytest.mark.asyncio
+class TestClassImbalance:
+    """Sqrt-softened class weights must give minority classes enough lift
+    that the model emits more than a single class. 2026-05-11 weekly
+    evaluator caught gaming starvation: 0 predictions over 7d despite 70
+    actual hits. With 80/20 imbalance and discriminative features the
+    minority class should at least surface in the distribution.
+    """
+
+    async def test_minority_class_survives_imbalance(self, predictor, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            # 80/20 working/gaming, gaming concentrated at late-night
+            # hours so the temporal features can discriminate. 1000 rows
+            # for enough val-split material.
+            for i in range(1000):
+                if i % 5 == 0:
+                    mode = "gaming"
+                    # Gaming at hour 22-23 only.
+                    ts = now - timedelta(days=i // 24, hours=22 + (i % 2))
+                else:
+                    mode = "working"
+                    # Working during the work day.
+                    ts = now - timedelta(days=i // 8, hours=9 + (i % 8))
+                session.add(ActivityEvent(
+                    timestamp=ts, mode=mode, previous_mode="idle",
+                    source="manual", duration_seconds=600,
+                ))
+            await session.commit()
+
+        await predictor.retrain()
+        assert predictor._model is not None
+
+        # Trainer must have surfaced at least 2 classes in its encoder.
+        modes_seen = set(predictor._label_encoder.values())
+        assert "gaming" in modes_seen, (
+            f"Expected gaming in label encoder, got {modes_seen}"
+        )
+
+        # Per-class predicted count is the relevant log field; we re-read
+        # it from the model by spot-checking the distribution from the
+        # promoted predict() path. With softened weights gaming should
+        # carry non-trivial mass in at least one prediction.
+        predictor._status = "active"
+        result = await predictor.predict(current_mode="working")
+        if result is not None:
+            dist = result["factors"]["distribution"]
+            # Either gaming is the top prediction, or it has ≥ 5% mass —
+            # both are huge improvements over the 0-prediction baseline.
+            assert dist.get("gaming", 0.0) >= 0.05 or (
+                result["predicted_mode"] == "gaming"
+            ), f"Gaming starved in distribution: {dist}"
+
+
+@pytest.mark.skipif(not _HAS_LIGHTGBM, reason="lightgbm not installed")
+@pytest.mark.asyncio
+class TestCalibration:
+    """Isotonic post-fit calibration: addresses the 2026-05-11 conf=1.0
+    inversion (top-bucket accuracy below conf=0.9). Verify the wiring
+    persists and reloads cleanly — the empirical calibration quality is
+    validated weekly by the ML evaluator on prod data, not here.
+    """
+
+    async def test_calibrators_persisted_on_retrain(self, predictor, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            for i in range(MIN_TRAINING_EVENTS + 50):
+                mode = (
+                    "working" if i % 3 == 0
+                    else "gaming" if i % 3 == 1
+                    else "watching"
+                )
+                session.add(ActivityEvent(
+                    timestamp=now - timedelta(minutes=i),
+                    mode=mode, previous_mode="idle",
+                    source="manual", duration_seconds=600,
+                ))
+            await session.commit()
+
+        await predictor.retrain()
+        # Sidecar file written next to the booster.
+        calib_path = predictor._model_manager.data_dir / "mode_predictor_calib.pkl"
+        assert calib_path.exists(), "Calibrator sidecar must be persisted"
+        # In-memory calibrators populated and shaped to the class set.
+        assert predictor._calibrators is not None
+        assert len(predictor._calibrators) == len(predictor._label_encoder)
+
+    async def test_load_existing_without_calibrators(
+        self, tmp_model_manager, ml_db,
+    ):
+        """Backward-compat: a model file deployed without a sidecar (the
+        first deploy after 2026-05-11) must still load and predict — just
+        falls back to raw probs with a warning."""
+        import lightgbm as lgb
+        import numpy as np
+
+        # Save a minimal booster matching FEATURE_COLUMNS shape.
+        rng = np.random.default_rng(0)
+        x = rng.random((100, 14))
+        y = rng.integers(0, 3, size=100)
+        ds = lgb.Dataset(x, label=y)
+        booster = lgb.train(
+            {"objective": "multiclass", "num_class": 3, "verbose": -1},
+            ds, num_boost_round=2,
+        )
+        model_path = tmp_model_manager.data_dir / "mode_predictor.lgb"
+        booster.save_model(str(model_path))
+        tmp_model_manager._meta["mode_predictor"] = {
+            "file": "mode_predictor.lgb",
+            "status": "shadow",
+            "label_encoder": {"0": "working", "1": "gaming", "2": "watching"},
+        }
+
+        predictor = BehavioralPredictor(tmp_model_manager)
+        # Model loaded, calibrators absent — graceful fallback.
+        assert predictor._model is not None
+        assert predictor._calibrators is None

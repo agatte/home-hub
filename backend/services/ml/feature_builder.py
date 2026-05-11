@@ -17,7 +17,15 @@ logger = logging.getLogger("home_hub.ml")
 
 # Modes the behavioral predictor targets (excluding idle which is
 # the "no detection" states the predictor tries to fill).
-PREDICTABLE_MODES = ("gaming", "working", "watching", "relax", "social", "cooking")
+#
+# `cooking` was retired from the target set on 2026-05-11. Over the
+# trailing 60d window it was 19 / ~1700 filtered rows (1.1%), which gave
+# it an inverse-frequency sample weight of ~15× — extreme enough to
+# overfit on a handful of cooking-shaped leaves and pollute the softmax
+# at conf=1.0. The predictor returning `None` (sub-threshold) for
+# cooking-shaped inputs is the right behavior given there's no
+# learnable signal at that volume.
+PREDICTABLE_MODES = ("gaming", "working", "watching", "relax", "social")
 
 
 def _to_utc(dt: datetime) -> datetime:
