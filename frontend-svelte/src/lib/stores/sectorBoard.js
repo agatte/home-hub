@@ -246,7 +246,12 @@ export const sectorBoard = derived(
     const fusion = $pipeline?.current?.fusion || null
     const output = $pipeline?.current?.output || null
 
-    const fusedMode = fusion?.fused_mode || output?.mode || $automation?.mode || 'idle'
+    // The nucleus shows the apartment's *current actual mode* — what the
+    // engine is doing, not what fusion would vote for. The two diverge
+    // briefly at boot (fusion evaluates from signals; automation can be
+    // ahead via WS mode_update) and during overrides. Voter wedges still
+    // independently surface their own votes via `sector.mode`.
+    const fusedMode = $automation?.mode || output?.mode || fusion?.fused_mode || 'idle'
     const fusedConfidence = fusion?.fused_confidence ?? 0
     const overrideActive = !!$automation?.manual_override
     const dndActive = !!$automation?.dnd?.enabled

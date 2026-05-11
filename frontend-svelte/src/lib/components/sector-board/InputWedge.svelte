@@ -71,11 +71,13 @@
     index, cx, cy, R_input, R_sub, sectorData?.factors?.length || 0,
   )
 
-  // Outward-radial direction for the headline pill placement.
+  // Inward-radial direction for the headline pill placement. The outward
+  // side hosts the sub-bubble cluster, so the pill would overlap them; the
+  // inward donut between the input bubble and the nucleus is empty space.
   $: outwardAngle = sectorMidAngle(index)
   $: pillDistance = bubbleRadius + 22
-  $: pillX = position.x + Math.cos(outwardAngle) * pillDistance
-  $: pillY = position.y + Math.sin(outwardAngle) * pillDistance
+  $: pillX = position.x - Math.cos(outwardAngle) * pillDistance
+  $: pillY = position.y - Math.sin(outwardAngle) * pillDistance
 
   // Weight readout (voters only, when actively voting).
   $: weightPct = sectorMeta?.kind === 'voter' && sectorData?.hasData && !sectorData?.stale
@@ -153,11 +155,12 @@
       <text class="input-weight" text-anchor="middle" y={labelY + labelFontSize + 2} style="font-size: {weightFontSize}px">{weightPct}%</text>
     {/if}
 
-    <!-- "TODAY'S STORY" pill at outward radial direction, only on the
-         narrator-flagged headline wedge. Positioned relative to the input
-         bubble center so it drifts together. -->
+    <!-- "TODAY'S STORY" pill at inward radial direction (toward the
+         nucleus, in the empty donut), only on the narrator-flagged
+         headline wedge. Positioned relative to the input bubble center
+         so it drifts together. -->
     {#if isHeadline}
-      <g class="headline-pill" transform="translate({Math.cos(outwardAngle) * pillDistance}, {Math.sin(outwardAngle) * pillDistance})">
+      <g class="headline-pill" transform="translate({-Math.cos(outwardAngle) * pillDistance}, {-Math.sin(outwardAngle) * pillDistance})">
         <rect x="-66" y="-11" width="132" height="22" rx="11" class="pill-bg" />
         <text x="0" y="4" text-anchor="middle" class="pill-text">★ TODAY'S STORY</text>
         {#if headlineReason}
