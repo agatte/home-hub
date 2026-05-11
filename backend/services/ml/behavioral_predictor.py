@@ -832,6 +832,7 @@ class BehavioralPredictor(HealthTrackable):
             "min_events": MIN_TRAINING_EVENTS,
             "auto_apply_threshold": AUTO_APPLY_THRESHOLD,
             "suggest_threshold": SUGGEST_THRESHOLD,
+            "feature_importance": self.get_feature_importances(),
         }
 
     def health(self) -> dict:
