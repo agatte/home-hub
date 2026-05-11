@@ -1846,7 +1846,7 @@ class AutomationEngine:
                     hue_before=prev.get("hue"), hue_after=state.get("hue"),
                     sat_before=prev.get("sat"), sat_after=state.get("sat"),
                     ct_before=prev.get("ct"), ct_after=state.get("ct"),
-                    mode_at_time=self._current_mode,
+                    mode_at_time=self.current_mode,
                     trigger="automation",
                 )
 
@@ -1909,7 +1909,7 @@ class AutomationEngine:
                         hue_before=prev.get("hue"), hue_after=new.get("hue"),
                         sat_before=prev.get("sat"), sat_after=new.get("sat"),
                         ct_before=prev.get("ct"), ct_after=new.get("ct"),
-                        mode_at_time=self._current_mode,
+                        mode_at_time=self.current_mode,
                         trigger="automation",
                     )
 

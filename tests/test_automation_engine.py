@@ -1335,6 +1335,79 @@ class TestClearTransitOverrideRespectsManualOverride:
 
 
 # ---------------------------------------------------------------------------
+# Log-tag uses override-aware mode. Regression for the 2026-05-11 entry #17
+# false positive: light_adjustments rows stamped `mode_at_time=working` while
+# carrying relax-palette HSB during a relax override. Bridge writes were
+# correct (transit-revert uses `self.current_mode` at line 1500); only the
+# DB log tag was wrong because `_apply_uniform` + `_apply_per_light` used
+# `self._current_mode` (raw detected) instead of `self.current_mode`
+# (override-aware property). Same footgun as the 4/26 incident captured in
+# feedback_current_mode_field_footgun.md.
+# ---------------------------------------------------------------------------
+
+
+class TestLogAdjustmentTagsUseOverrideMode:
+    """`log_light_adjustment(mode_at_time=...)` must match the override-aware
+    `current_mode` property — i.e. mirror what was actually applied to the
+    bridge — not the raw `_current_mode` detector field."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    async def test_per_light_log_uses_override_mode_when_override_active(self, engine):
+        from unittest.mock import AsyncMock
+
+        await engine.report_activity("working", source="pc_agent")
+        await engine.set_manual_override("relax")
+        assert engine.current_mode == "relax"
+        assert engine._current_mode == "working"
+
+        engine._event_logger = AsyncMock()
+        engine._event_logger.log_light_adjustment = AsyncMock()
+
+        # Two differing states so the uniform short-circuit at line 1875
+        # doesn't fire — we want to exercise the per-light log path.
+        await engine._apply_per_light({
+            "1": {"on": True, "bri": 100, "hue": 20000, "sat": 100},
+            "2": {"on": True, "bri": 80, "hue": 8000, "sat": 200},
+        })
+
+        calls = engine._event_logger.log_light_adjustment.await_args_list
+        assert len(calls) == 2, f"expected 2 log calls, got {len(calls)}"
+        for call in calls:
+            assert call.kwargs["mode_at_time"] == "relax", (
+                f"log tag should be the override mode 'relax', "
+                f"got {call.kwargs['mode_at_time']!r}"
+            )
+
+    async def test_uniform_log_uses_override_mode_when_override_active(self, engine):
+        from unittest.mock import AsyncMock
+
+        await engine.report_activity("working", source="pc_agent")
+        await engine.set_manual_override("relax")
+        assert engine.current_mode == "relax"
+        assert engine._current_mode == "working"
+
+        engine._event_logger = AsyncMock()
+        engine._event_logger.log_light_adjustment = AsyncMock()
+
+        await engine._apply_uniform(
+            {"on": True, "bri": 100, "hue": 20000, "sat": 100},
+        )
+
+        calls = engine._event_logger.log_light_adjustment.await_args_list
+        assert len(calls) >= 1, "expected at least one log call"
+        for call in calls:
+            assert call.kwargs["mode_at_time"] == "relax", (
+                f"log tag should be the override mode 'relax', "
+                f"got {call.kwargs['mode_at_time']!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Transit override + kitchen-pair atomicity. Regression guard for the
 # 2026-05-09 21:44 ET Check J warn: 21 solo-L3 writes / zero L4 writes over
 # 11 min while L4 had a manual brightness stamp. Two intertwined bugs:
