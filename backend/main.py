@@ -45,6 +45,18 @@ from backend.api.routes.pihole_proxy import router as pihole_proxy_router
 from backend.bootstrap import lifespan
 from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
+# Sentry init runs before app construction so the FastAPI auto-integration
+# patches request handling. dsn=None disables ingestion silently — safe in
+# dev where SENTRY_DSN is unset.
+import sentry_sdk  # noqa: E402
+
+sentry_sdk.init(
+    dsn=settings.SENTRY_DSN,
+    environment=settings.APP_ENV,
+    traces_sample_rate=0.0,
+    send_default_pii=False,
+)
+
 FRONTEND_DIST = PROJECT_ROOT / settings.FRONTEND_BUILD
 from backend.schemas.ws import (
     LightCommand,

@@ -52,3 +52,4 @@ slowapi>=0.1.9
 
 # Observability
 python-json-logger>=3.0.0    # Structured JSON logs for file handler
+sentry-sdk[fastapi]>=2.18.0  # Error reporting + FastAPI request-context auto-tagging

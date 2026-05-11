@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     # transit-revert. Override lives 4h, refractory matches.
     ZONE_POSTURE_RULE_APPLY: bool = True
 
+    # Sentry error reporting — DSN from sentry.io project. When unset,
+    # sentry_sdk.init() is called with dsn=None which silently disables
+    # ingestion (no events sent). Free tier = 10k events/month.
+    SENTRY_DSN: Optional[str] = None
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5
