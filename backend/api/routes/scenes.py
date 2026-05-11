@@ -40,6 +40,8 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
 
     # ===================== FUNCTIONAL =====================
 
+    # L5 ("Bedroom Lamp Right", clear housing, desk-side) added 2026-05-11.
+    # Phase A placeholder across all scenes: L5 = L2. Phase C curator pass.
     "deep_focus": {
         # 4000K — alert without the D65 cool cast that flattens the warm-wood
         # + cream textile palette. 200K (~5000K) read as harsh blue-white in
@@ -52,6 +54,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 254, "ct": 250},
             "3": {"on": True, "bri": 254, "ct": 250},
             "4": {"on": True, "bri": 254, "ct": 250},
+            "5": {"on": True, "bri": 254, "ct": 250},
         },
     },
     "night_work": {
@@ -63,6 +66,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 80, "ct": 370},
             "3": _OFF,
             "4": _OFF,
+            "5": {"on": True, "bri": 80, "ct": 370},
         },
     },
     "morning_energize": {
@@ -77,6 +81,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 254, "ct": 220},
             "3": {"on": True, "bri": 254, "ct": 220},
             "4": {"on": True, "bri": 254, "ct": 220},
+            "5": {"on": True, "bri": 254, "ct": 220},
         },
     },
     "wind_down": {
@@ -88,6 +93,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 40, "ct": 454},
             "3": {"on": True, "bri": 40, "ct": 454},
             "4": {"on": True, "bri": 40, "ct": 454},
+            "5": {"on": True, "bri": 40, "ct": 454},
         },
     },
 
@@ -103,6 +109,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 160, "hue": 5000, "sat": 180},
             "3": {"on": True, "bri": 120, "hue": 8500, "sat": 200},
             "4": {"on": True, "bri": 100, "hue": 6000, "sat": 254},
+            "5": {"on": True, "bri": 160, "hue": 5000, "sat": 180},
         },
     },
     "ember": {
@@ -119,6 +126,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 100, "hue": 6500, "sat": 230},
             "3": {"on": True, "bri": 80, "hue": 22000, "sat": 100},
             "4": {"on": True, "bri": 80, "hue": 22000, "sat": 100},
+            "5": {"on": True, "bri": 100, "hue": 6500, "sat": 230},
         },
     },
     "candlelit": {
@@ -130,6 +138,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 50, "ct": 500},
             "3": {"on": True, "bri": 50, "ct": 500},
             "4": {"on": True, "bri": 50, "ct": 500},
+            "5": {"on": True, "bri": 50, "ct": 500},
         },
     },
 
@@ -150,6 +159,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 70, "hue": 46000, "sat": 200},
             "3": {"on": True, "bri": 60, "hue": 22000, "sat": 140},
             "4": {"on": True, "bri": 60, "hue": 22000, "sat": 140},
+            "5": {"on": True, "bri": 70, "hue": 46000, "sat": 200},
         },
     },
     "midnight": {
@@ -165,6 +175,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 50, "hue": 44000, "sat": 200},
             "3": {"on": True, "bri": 30, "hue": 22000, "sat": 160},
             "4": {"on": True, "bri": 30, "hue": 22000, "sat": 160},
+            "5": {"on": True, "bri": 50, "hue": 44000, "sat": 200},
         },
     },
     "blood_moon": {
@@ -179,6 +190,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 60, "hue": 4000, "sat": 230},
             "3": {"on": True, "bri": 40, "hue": 22000, "sat": 140},
             "4": {"on": True, "bri": 40, "hue": 22000, "sat": 140},
+            "5": {"on": True, "bri": 60, "hue": 4000, "sat": 230},
         },
     },
 
@@ -197,6 +209,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 170, "hue": 46920, "sat": 160},
             "3": {"on": True, "bri": 150, "hue": 52000, "sat": 160},
             "4": {"on": True, "bri": 150, "hue": 52000, "sat": 160},
+            "5": {"on": True, "bri": 170, "hue": 46920, "sat": 160},
         },
     },
     "arcade": {
@@ -210,6 +223,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 170, "hue": 52000, "sat": 170},
             "3": {"on": True, "bri": 150, "hue": 46000, "sat": 170},
             "4": {"on": True, "bri": 150, "hue": 46000, "sat": 170},
+            "5": {"on": True, "bri": 170, "hue": 52000, "sat": 170},
         },
     },
     "miami_vice": {
@@ -225,6 +239,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 190, "hue": 5000, "sat": 200},
             "3": {"on": True, "bri": 170, "hue": 39000, "sat": 150},
             "4": {"on": True, "bri": 170, "hue": 39000, "sat": 150},
+            "5": {"on": True, "bri": 190, "hue": 5000, "sat": 200},
         },
     },
 
@@ -240,6 +255,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 210, "hue": 44000, "sat": 200},
             "3": {"on": True, "bri": 180, "hue": 22000, "sat": 200},
             "4": {"on": True, "bri": 180, "hue": 22000, "sat": 200},
+            "5": {"on": True, "bri": 210, "hue": 44000, "sat": 200},
         },
     },
     "sunset_strip": {
@@ -255,6 +271,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 210, "hue": 4500, "sat": 220},
             "3": {"on": True, "bri": 170, "hue": 60000, "sat": 140},
             "4": {"on": True, "bri": 170, "hue": 60000, "sat": 140},
+            "5": {"on": True, "bri": 210, "hue": 4500, "sat": 220},
         },
     },
     "deep_ocean": {
@@ -266,6 +283,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 120, "hue": 38000, "sat": 200},
             "3": {"on": True, "bri": 80, "hue": 44000, "sat": 220},
             "4": {"on": True, "bri": 60, "hue": 30000, "sat": 180},
+            "5": {"on": True, "bri": 120, "hue": 38000, "sat": 200},
         },
     },
     "cherry_blossom": {
@@ -277,6 +295,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 160, "ct": 300},
             "3": {"on": True, "bri": 140, "hue": 52000, "sat": 100},
             "4": {"on": True, "bri": 120, "hue": 60000, "sat": 160},
+            "5": {"on": True, "bri": 160, "ct": 300},
         },
     },
 
@@ -291,6 +310,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 30, "ct": 400},
             "3": _OFF,
             "4": _OFF,
+            "5": {"on": True, "bri": 30, "ct": 400},
         },
     },
     "game_time": {
@@ -305,6 +325,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 120, "hue": 46920, "sat": 160},
             "3": {"on": True, "bri": 100, "hue": 52000, "sat": 160},
             "4": {"on": True, "bri": 100, "hue": 52000, "sat": 160},
+            "5": {"on": True, "bri": 120, "hue": 46920, "sat": 160},
         },
     },
 
@@ -323,6 +344,7 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 240, "hue": 4500, "sat": 200},
             "3": {"on": True, "bri": 200, "hue": 22000, "sat": 140},
             "4": {"on": True, "bri": 200, "hue": 22000, "sat": 140},
+            "5": {"on": True, "bri": 240, "hue": 4500, "sat": 200},
         },
     },
 }

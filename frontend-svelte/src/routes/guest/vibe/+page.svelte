@@ -21,8 +21,8 @@
   }
   $: modeIcon = MODE_ICONS[$automation.mode] ?? Sparkles
 
-  // Stable order matching the apartment's L1..L4 layout.
-  $: orderedLights = ['1', '2', '3', '4'].map((id) => $lights[id]).filter(Boolean)
+  // Stable order matching the apartment's L1..L5 layout.
+  $: orderedLights = ['1', '2', '5', '3', '4'].map((id) => $lights[id]).filter(Boolean)
 
   /** @type {Array<{name: string, display_name: string, lights: Record<string, any>}>} */
   let scenes = []
@@ -679,7 +679,7 @@
             disabled={sceneCooldownActive || !!activatingScene}
           >
             <div class="scene-preview">
-              {#each ['1', '2', '3', '4'] as lid}
+              {#each ['1', '2', '5', '3', '4'] as lid}
                 <div
                   class="scene-preview-dot"
                   style="background: {lightStateToCSS(scene.lights[lid])}"

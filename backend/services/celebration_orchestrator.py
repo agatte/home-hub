@@ -100,8 +100,13 @@ _WHITE_SAT = 0
 # celebration values differed from steady-state gameday lighting.
 # Kitchen pair (L3 ≡ L4) preserved by both lights referencing
 # `_BASELINE_KITCHEN` (bri/hue/sat all matched).
+# L5 added 2026-05-11 — desk-side clear-housing lamp. Phase A places L5
+# as a mirror of L2 in every celebration step (same pulses, same fade
+# target). Phase C lighting-curator pass will distinguish L5 — clear
+# housing makes the bulb itself visible, so saturated Colts blue at
+# peak reads sharper from L5 than from L2's fabric-shade diffusion.
 _BASELINE_L1 = {"on": True, "bri": 150, "hue": _COLTS_BLUE_HUE, "sat": 185}
-_BASELINE_FILL = {"on": True, "bri": 200, "hue": 8000, "sat": 130}  # L2 warm amber
+_BASELINE_FILL = {"on": True, "bri": 200, "hue": 8000, "sat": 130}  # L2 + L5 warm amber
 _BASELINE_KITCHEN = {"on": True, "bri": 140, "hue": 8000, "sat": 130}  # L3 + L4 kitchen pair
 
 
@@ -130,37 +135,45 @@ def _baseline_step(light_id: str, delay_ms: int, base: dict,
 
 # ----- Touchdown: ~6s. Rotation L1→L2→L3+L4 (kitchen pair fires together)
 #       at 350ms each, then 3s sustained alternating blue/white, fade home.
+# L5 mirrors L2 on every beat — Phase A placeholder; Phase C curator pass.
 _TD_STEPS: list[LightStep] = [
     # Rotation phase: 350ms beats. L3 + L4 fire on the same beat (kitchen pair).
     _pulse("1", 0, blue=True),
     _pulse("2", 350, blue=False),
+    _pulse("5", 350, blue=False),  # L5 mirrors L2 placeholder
     _pulse("3", 700, blue=True),
     _pulse("4", 700, blue=True),  # kitchen pair beat
     # Sustained multi-pulse: alternate blue ↔ white across all 4 every 400ms
     # for 2.4s.
     _pulse("1", 1200, blue=False),
     _pulse("2", 1200, blue=True),
+    _pulse("5", 1200, blue=True),
     _pulse("3", 1200, blue=False),
     _pulse("4", 1200, blue=False),  # kitchen pair
     _pulse("1", 1600, blue=True),
     _pulse("2", 1600, blue=False),
+    _pulse("5", 1600, blue=False),
     _pulse("3", 1600, blue=True),
     _pulse("4", 1600, blue=True),
     _pulse("1", 2000, blue=False),
     _pulse("2", 2000, blue=True),
+    _pulse("5", 2000, blue=True),
     _pulse("3", 2000, blue=False),
     _pulse("4", 2000, blue=False),
     _pulse("1", 2400, blue=True),
     _pulse("2", 2400, blue=False),
+    _pulse("5", 2400, blue=False),
     _pulse("3", 2400, blue=True),
     _pulse("4", 2400, blue=True),
     _pulse("1", 2800, blue=False),
     _pulse("2", 2800, blue=True),
+    _pulse("5", 2800, blue=True),
     _pulse("3", 2800, blue=False),
     _pulse("4", 2800, blue=False),
     # Fade home to gameday baseline. transitiontime=20 (=2.0s).
     _baseline_step("1", 3500, _BASELINE_L1, transition=20),
     _baseline_step("2", 3500, _BASELINE_FILL, transition=20),
+    _baseline_step("5", 3500, _BASELINE_FILL, transition=20),
     _baseline_step("3", 3500, _BASELINE_KITCHEN, transition=20),
     _baseline_step("4", 3500, _BASELINE_KITCHEN, transition=20),
 ]
@@ -169,14 +182,17 @@ _TD_STEPS: list[LightStep] = [
 _FG_STEPS: list[LightStep] = [
     _pulse("1", 0, blue=True),
     _pulse("2", 0, blue=True),
+    _pulse("5", 0, blue=True),  # L5 mirrors L2 placeholder
     _pulse("3", 0, blue=True),
     _pulse("4", 0, blue=True),
     _pulse("1", 500, blue=False),
     _pulse("2", 500, blue=False),
+    _pulse("5", 500, blue=False),
     _pulse("3", 500, blue=False),
     _pulse("4", 500, blue=False),
     _baseline_step("1", 1500, _BASELINE_L1, transition=10),
     _baseline_step("2", 1500, _BASELINE_FILL, transition=10),
+    _baseline_step("5", 1500, _BASELINE_FILL, transition=10),
     _baseline_step("3", 1500, _BASELINE_KITCHEN, transition=10),
     _baseline_step("4", 1500, _BASELINE_KITCHEN, transition=10),
 ]
@@ -190,11 +206,13 @@ _KICKOFF_STEPS: list[LightStep] = [
     # Wave: each pulse fades in over ~100ms (transition=1).
     _pulse("1", 0, blue=True),
     _pulse("2", 150, blue=True),
+    _pulse("5", 150, blue=True),  # L5 mirrors L2 placeholder
     _pulse("3", 300, blue=True),
     _pulse("4", 300, blue=True),  # kitchen pair beat
     # Settle to gameday baseline. transitiontime=10 (=1.0s).
     _baseline_step("1", 700, _BASELINE_L1, transition=10),
     _baseline_step("2", 700, _BASELINE_FILL, transition=10),
+    _baseline_step("5", 700, _BASELINE_FILL, transition=10),
     _baseline_step("3", 700, _BASELINE_KITCHEN, transition=10),
     _baseline_step("4", 700, _BASELINE_KITCHEN, transition=10),
 ]
@@ -203,26 +221,32 @@ _KICKOFF_STEPS: list[LightStep] = [
 _EOG_WIN_STEPS: list[LightStep] = [
     _pulse("1", 0, blue=True, bri=254),
     _pulse("2", 0, blue=False, bri=254),
+    _pulse("5", 0, blue=False, bri=254),  # L5 mirrors L2 placeholder
     _pulse("3", 0, blue=True, bri=254),
     _pulse("4", 0, blue=True, bri=254),
     _pulse("1", 600, blue=False, bri=254),
     _pulse("2", 600, blue=True, bri=254),
+    _pulse("5", 600, blue=True, bri=254),
     _pulse("3", 600, blue=False, bri=254),
     _pulse("4", 600, blue=False, bri=254),
     _pulse("1", 1200, blue=True, bri=254),
     _pulse("2", 1200, blue=False, bri=254),
+    _pulse("5", 1200, blue=False, bri=254),
     _pulse("3", 1200, blue=True, bri=254),
     _pulse("4", 1200, blue=True, bri=254),
     _pulse("1", 1800, blue=False, bri=254),
     _pulse("2", 1800, blue=True, bri=254),
+    _pulse("5", 1800, blue=True, bri=254),
     _pulse("3", 1800, blue=False, bri=254),
     _pulse("4", 1800, blue=False, bri=254),
     _pulse("1", 2400, blue=True, bri=254),
     _pulse("2", 2400, blue=False, bri=254),
+    _pulse("5", 2400, blue=False, bri=254),
     _pulse("3", 2400, blue=True, bri=254),
     _pulse("4", 2400, blue=True, bri=254),
     _baseline_step("1", 4000, _BASELINE_L1, transition=30),
     _baseline_step("2", 4000, _BASELINE_FILL, transition=30),
+    _baseline_step("5", 4000, _BASELINE_FILL, transition=30),
     _baseline_step("3", 4000, _BASELINE_KITCHEN, transition=30),
     _baseline_step("4", 4000, _BASELINE_KITCHEN, transition=30),
 ]
@@ -235,6 +259,10 @@ _EOG_LOSS_STEPS: list[LightStep] = [
               state={"on": True, "bri": 100, "hue": _COLTS_BLUE_HUE,
                      "sat": 180, "transitiontime": 30}),
     LightStep(light_id="2", delay_ms=0,
+              state={"on": True, "bri": 80, "hue": 8000,
+                     "sat": 120, "transitiontime": 30}),
+    # L5 mirrors L2 placeholder — Phase A; Phase C curator pass.
+    LightStep(light_id="5", delay_ms=0,
               state={"on": True, "bri": 80, "hue": 8000,
                      "sat": 120, "transitiontime": 30}),
     LightStep(light_id="3", delay_ms=0,

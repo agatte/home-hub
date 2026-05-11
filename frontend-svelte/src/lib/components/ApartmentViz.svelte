@@ -13,7 +13,7 @@
    *   |          |               *1 |
    *   | BEDROOM  |   LIVING ROOM    |
    *   |          |                  |
-   *   |    *2    |                  |
+   *   |  *2  *5  |                  |
    *   +----+-----+------+---------+
    *   |    |             |         |
    *   |BATH|   KITCHEN   |         |
@@ -22,13 +22,15 @@
    *   +----+-------------+---------+
    *
    *  Light 1: Living room lamp (top-right corner)
-   *  Light 2: Bedroom Lamp (bottom-center of bedroom)
+   *  Light 2: Bedroom Lamp Left (desk side, fabric shade)
    *  Light 3: Kitchen front (above island)
    *  Light 4: Kitchen back (below island)
+   *  Light 5: Bedroom Lamp Right (desk side, clear housing — added 2026-05-11)
    */
 
   const LIGHT_POSITIONS = {
-    '2': { x: 88,  y: 105 },   // Bedroom lamp — bottom-center of bedroom
+    '2': { x: 70,  y: 105 },   // Bedroom Lamp Left — desk side
+    '5': { x: 110, y: 105 },   // Bedroom Lamp Right — desk side, clear housing
     '1': { x: 335, y: 42 },    // Living room lamp — top-right area (inset from wall)
     '3': { x: 195, y: 195 },   // Kitchen front — left of island
     '4': { x: 280, y: 195 },   // Kitchen back — right of island

@@ -185,9 +185,10 @@ from backend.services.effect_manager import (  # noqa: E402
 # Light ID → room mapping for readability
 LIGHT_IDS = {
     "living_room": "1",
-    "bedroom": "2",
+    "bedroom_lamp_left": "2",
     "kitchen_front": "3",
     "kitchen_back": "4",
+    "bedroom_lamp_right": "5",
 }
 
 # Mode priority — higher index wins when multiple sources report.
