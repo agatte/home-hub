@@ -150,11 +150,13 @@ class ScheduleConfig:
 # back-compat with callers that imported them from this module.
 from backend.services.light_state_calculator import (  # noqa: E402
     ACTIVITY_LIGHT_STATES,
+    ALL_LIGHT_IDS,
     BED_RECLINED_L1_NIGHT_DEFAULT,
     BED_RECLINED_L1_RATIO,
     BED_RECLINED_L2_WATCHING_BRI,
     DEFAULT_MODE_BRIGHTNESS,
     EFFECT_AUTO_MAP,
+    LIGHT_IDS,
     LUX_CURVE,
     LUX_MODES,
     LUX_MULT_EPSILON,
@@ -181,15 +183,6 @@ from backend.services.effect_manager import (  # noqa: E402
     WEATHER_SKIP_MODES,
 )
 
-
-# Light ID → room mapping for readability
-LIGHT_IDS = {
-    "living_room": "1",
-    "bedroom_lamp_left": "2",
-    "kitchen_front": "3",
-    "kitchen_back": "4",
-    "bedroom_lamp_right": "5",
-}
 
 # Mode priority — higher index wins when multiple sources report.
 # Enforced universally by the priority guard in report_activity().
@@ -1811,7 +1804,7 @@ class AutomationEngine:
         # Detect format: per-light dicts have string keys like "1", "2"
         is_per_light = all(
             isinstance(v, dict) for v in state.values()
-        ) and any(k in ("1", "2", "3", "4") for k in state.keys())
+        ) and any(k in ALL_LIGHT_IDS for k in state.keys())
 
         if is_per_light:
             await self._apply_per_light(state, transitiontime)
@@ -1828,24 +1821,24 @@ class AutomationEngine:
         # If any lights have manual or transit overrides, fall through to the
         # per-light path so the filter can skip the protected lights.
         if self._manual_light_overrides or self._transit_light_overrides:
-            per_light = {lid: state for lid in ("1", "2", "3", "4")}
+            per_light = {lid: state for lid in ALL_LIGHT_IDS}
             await self._apply_per_light(per_light, transitiontime)
             return
 
         # Convert to per-light for dedup tracking
-        per_light = {lid: state for lid in ("1", "2", "3", "4")}
+        per_light = {lid: state for lid in ALL_LIGHT_IDS}
         if per_light == self._last_applied_per_light:
             return
 
-        prev_snapshot = {lid: (self._last_applied_per_light.get(lid) or {}).copy() for lid in ("1", "2", "3", "4")}
-        self._last_applied_per_light = {lid: state.copy() for lid in ("1", "2", "3", "4")}
+        prev_snapshot = {lid: (self._last_applied_per_light.get(lid) or {}).copy() for lid in ALL_LIGHT_IDS}
+        self._last_applied_per_light = {lid: state.copy() for lid in ALL_LIGHT_IDS}
         cmd = {**state}
         if transitiontime is not None:
             cmd["transitiontime"] = transitiontime
         await self._hue.set_all_lights(cmd)
         logger.info(f"Applied uniform state: bri={state.get('bri')}, hue={state.get('hue')}")
         if self._event_logger:
-            for lid in ("1", "2", "3", "4"):
+            for lid in ALL_LIGHT_IDS:
                 prev = prev_snapshot.get(lid, {})
                 await self._event_logger.log_light_adjustment(
                     light_id=lid,
@@ -1959,7 +1952,7 @@ class AutomationEngine:
             return
 
         drifted: dict[str, dict] = {}
-        for lid in ("1", "2", "3", "4"):
+        for lid in ALL_LIGHT_IDS:
             ls = base.get(lid, {})
             if not ls or not ls.get("on", True):
                 drifted[lid] = ls

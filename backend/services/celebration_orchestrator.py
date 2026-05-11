@@ -83,7 +83,7 @@ class CelebrationSequence:
 # Colts blue (hue 47000) and white (sat 0). Saturation calibrated by the
 # lighting curator: 215 instead of 254 for the pulse helper, matching the
 # gaming-retune precedent (sat=240 → 180-200) so the room's cream/wood
-# textile palette doesn't read as a saturated cave when all 4 lights pulse
+# textile palette doesn't read as a saturated cave when every light pulses
 # at peak together. Single-light sustained accents (the L1 baseline) can
 # absorb a stronger saturation, but the celebration pulse is the primary
 # anti-pattern surface. Hue aligned with light_state_calculator gameday
@@ -133,8 +133,9 @@ def _baseline_step(light_id: str, delay_ms: int, base: dict,
     return LightStep(light_id=light_id, delay_ms=delay_ms, state=state)
 
 
-# ----- Touchdown: ~6s. Rotation L1→L2→L3+L4 (kitchen pair fires together)
-#       at 350ms each, then 3s sustained alternating blue/white, fade home.
+# ----- Touchdown: ~6s. Rotation L1→L2/L5→L3+L4 (kitchen pair fires together,
+#       L5 mirrors L2 on the same beat) at 350ms each, then 3s sustained
+#       alternating blue/white across all five lights, fade home.
 # L5 mirrors L2 on every beat — Phase A placeholder; Phase C curator pass.
 _TD_STEPS: list[LightStep] = [
     # Rotation phase: 350ms beats. L3 + L4 fire on the same beat (kitchen pair).
@@ -143,8 +144,8 @@ _TD_STEPS: list[LightStep] = [
     _pulse("5", 350, blue=False),  # L5 mirrors L2 placeholder
     _pulse("3", 700, blue=True),
     _pulse("4", 700, blue=True),  # kitchen pair beat
-    # Sustained multi-pulse: alternate blue ↔ white across all 4 every 400ms
-    # for 2.4s.
+    # Sustained multi-pulse: alternate blue ↔ white across all five lights
+    # every 400ms for 2.4s.
     _pulse("1", 1200, blue=False),
     _pulse("2", 1200, blue=True),
     _pulse("5", 1200, blue=True),

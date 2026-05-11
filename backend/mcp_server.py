@@ -117,7 +117,7 @@ async def set_light(
     Set the state of a single Hue light.
 
     Args:
-        light_id: Light ID (e.g. "1", "2", "3", "4")
+        light_id: Light ID ("1"–"5" — see LIGHT_IDS in light_state_calculator)
         on: True to turn on, False to turn off
         bri: Brightness 1-254
         hue: Color hue 0-65535

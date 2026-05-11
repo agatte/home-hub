@@ -49,7 +49,7 @@ mode on      celebration     (TD/FG)              (wind-down)
 #### Touchdown
 
 - **Trigger**: ESPN play event with `scoringPlay=true` AND `scoringType.abbreviation='TD'` for the Colts side.
-- **Lights**: 5–8 second custom sequence. Specifics TBD by user during Phase B authoring; placeholder pattern: blue/white pulse rotation across L1→L2→L3→L4 (350ms each), then 3s sustained sparkle-style multi-pulse on all 4 lights, then fade to gameday baseline. Free choice per event (Decision 1.3b) — final values land in `CelebrationOrchestrator.SEQUENCES["touchdown"]`.
+- **Lights**: 5–8 second custom sequence. Specifics TBD; placeholder pattern: blue/white pulse rotation across L1→L2/L5→L3+L4 (350ms each, L5 mirrors L2 on the same beat as a Phase A placeholder), then 3s sustained sparkle-style multi-pulse across all five lights, then fade to gameday baseline. L5 (Bedroom Lamp Right, installed 2026-05-11) is currently mirrored — Phase C curator review will differentiate it from L2 once the clear-housing visual character is exercised. Free choice per event (Decision 1.3b) — final values land in `CelebrationOrchestrator.SEQUENCES["touchdown"]`.
 - **TTS**: One randomized line from the TD pool (3–5 variations). ESPN play description parsed for player name where format permits ("Jonathan Taylor 5 yard run for a TOUCHDOWN" → line variant: `"{player} in for six!"`). Duck Sonos to ~10 vol, play TTS, restore to prior volume.
 - **Cooldown**: 8 seconds between any two celebration sequences (prevents stomping).
 

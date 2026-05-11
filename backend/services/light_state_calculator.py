@@ -31,6 +31,28 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 
 # ---------------------------------------------------------------------------
+# Fixture inventory — single source of truth for "every light in the apartment"
+# ---------------------------------------------------------------------------
+
+# Light ID → human-readable room mapping. Adding a new fixture is a
+# single-edit change here; both this module and automation_engine.py
+# derive their iteration tuples from this dict.
+LIGHT_IDS: dict[str, str] = {
+    "living_room": "1",
+    "bedroom_lamp_left": "2",
+    "kitchen_front": "3",
+    "kitchen_back": "4",
+    "bedroom_lamp_right": "5",
+}
+
+# Canonical tuple of every fixture ID. Use this anywhere operational
+# code needs to iterate over "all lights" so a 5→6 expansion is a
+# single LIGHT_IDS edit rather than a tree-wide audit of hardcoded
+# tuples.
+ALL_LIGHT_IDS: tuple[str, ...] = tuple(LIGHT_IDS.values())
+
+
+# ---------------------------------------------------------------------------
 # Mode brightness multipliers
 # ---------------------------------------------------------------------------
 
@@ -502,8 +524,8 @@ def lerp_light_state(
                 result[key] = sb[key]
         return result
 
-    is_per_light_a = any(k in ("1", "2", "3", "4") for k in state_a)
-    is_per_light_b = any(k in ("1", "2", "3", "4") for k in state_b)
+    is_per_light_a = any(k in ALL_LIGHT_IDS for k in state_a)
+    is_per_light_b = any(k in ALL_LIGHT_IDS for k in state_b)
 
     if is_per_light_a and is_per_light_b:
         return {
@@ -599,7 +621,7 @@ def resolve_activity_state(
 def _is_per_light_dict(state: dict[str, Any]) -> bool:
     """True if ``state`` is the per-light shape (keys are light IDs)."""
     return all(isinstance(v, dict) for v in state.values()) and any(
-        k in ("1", "2", "3", "4") for k in state.keys()
+        k in ALL_LIGHT_IDS for k in state.keys()
     )
 
 

@@ -32,8 +32,9 @@ _OFF = {"on": False}
 # split-complementary, triadic. Brightness + saturation vary per light
 # to create depth. Effects paired only when they enhance the scene.
 #
-# Lights: L1=living room corner, L2=bedroom desk lamp,
-#         L3=kitchen front, L4=kitchen back
+# Lights: L1=living room corner, L2=bedroom desk lamp left,
+#         L3=kitchen front, L4=kitchen back,
+#         L5=bedroom desk lamp right (clear housing, added 2026-05-11)
 # ------------------------------------------------------------------
 
 SCENE_PRESETS: dict[str, dict[str, Any]] = {

@@ -8,6 +8,10 @@
   // with linkedIds=['4'] so every command fans out to both lights, hide the
   // L4 card, and override the name to "Kitchen". Reachability rolls up:
   // either bulb offline → the fused card shows offline.
+  //
+  // L1 (living room), L2 (bedroom lamp left), L5 (bedroom lamp right, added
+  // 2026-05-11) each render as their own card — no pair-fusion rule applies
+  // outside the kitchen.
   $: lightList = Object.values($lights)
     .filter((l) => l.light_id !== '4')
     .sort((a, b) => Number(a.light_id) - Number(b.light_id))
