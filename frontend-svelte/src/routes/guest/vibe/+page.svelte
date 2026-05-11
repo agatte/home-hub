@@ -326,6 +326,20 @@
     dragLevel = null
   }
 
+  /** @param {KeyboardEvent} e */
+  function onBrightnessKeydown(e) {
+    if (tuningBusy || !activeScene) return
+    let delta = 0
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') delta = 1
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') delta = -1
+    else if (e.key === 'Home') { commitBrightnessLevel(-BRIGHTNESS_LEVEL_CAP); e.preventDefault(); return }
+    else if (e.key === 'End') { commitBrightnessLevel(BRIGHTNESS_LEVEL_CAP); e.preventDefault(); return }
+    else return
+    e.preventDefault()
+    const target = Math.max(-BRIGHTNESS_LEVEL_CAP, Math.min(BRIGHTNESS_LEVEL_CAP, brightnessLevel + delta))
+    commitBrightnessLevel(target)
+  }
+
   async function commitBrightnessLevel(target) {
     if (tuningBusy) return
     const delta = target - brightnessLevel
@@ -681,11 +695,14 @@
           on:pointermove={onBrightnessPointerMove}
           on:pointerup={onBrightnessPointerEnd}
           on:pointercancel={onBrightnessPointerEnd}
+          on:keydown={onBrightnessKeydown}
           role="slider"
           aria-label="Scene brightness"
           aria-valuemin={-BRIGHTNESS_LEVEL_CAP}
           aria-valuemax={BRIGHTNESS_LEVEL_CAP}
           aria-valuenow={displayBrightnessLevel}
+          aria-disabled={tuningBusy || !activeScene}
+          tabindex={tuningBusy || !activeScene ? -1 : 0}
         >
           <div class="brightness-fill" aria-hidden="true"></div>
           <div class="brightness-card-content">

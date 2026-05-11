@@ -256,7 +256,7 @@
   aria-label="{nameOverride ?? light.name} brightness"
   aria-valuemin="1"
   aria-valuemax="254"
-  aria-valuenow={light.on ? displayBri : 0}
+  aria-valuenow={light.on ? displayBri : 1}
   aria-disabled={!light.reachable}
   tabindex={light.reachable ? 0 : -1}
 >

@@ -538,57 +538,15 @@ async def _apply_brightness_steps(
     return updated, ceiling
 
 
-@router.post("/brightness/{direction}", dependencies=[Depends(require_api_key)])
-async def adjust_guest_brightness(direction: str, request: Request) -> dict:
-    """Bump every on-light's brightness ±10%, clamped to the mode ceiling.
-
-    `direction` ∈ {up, down}. Multiplicative — each tap is `bri × 1.10` or
-    `bri / 1.10`. Ceiling = `min(254, floor(254 × mode_multiplier))` where
-    multiplier comes from `mode_brightness_config[current_mode]` (default 1.0).
-    Off-lights are skipped — guests don't get to turn lights ON via this knob.
-    """
-    global _last_guest_brightness_at
-
-    if direction not in {"up", "down"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Direction must be 'up' or 'down'",
-        )
-
-    async with _guest_brightness_lock:
-        now = time.monotonic()
-        elapsed = now - _last_guest_brightness_at
-        if elapsed < GUEST_BRIGHTNESS_COOLDOWN_SECONDS:
-            retry_after = max(1, int(GUEST_BRIGHTNESS_COOLDOWN_SECONDS - elapsed) + 1)
-            raise HTTPException(
-                status_code=429,
-                detail="Slow down a sec",
-                headers={"Retry-After": str(retry_after)},
-            )
-        _last_guest_brightness_at = now
-
-    sign = 1 if direction == "up" else -1
-    updated, ceiling = await _apply_brightness_steps(request, sign)
-
-    logger.info(
-        "Guest brightness %s on %d lights (ceiling=%d) from %s",
-        direction,
-        len(updated),
-        ceiling,
-        request.client.host if request.client else "unknown",
-    )
-    return {
-        "status": "ok",
-        "direction": direction,
-        "updated": updated,
-        "ceiling": ceiling,
-    }
-
-
 # Card-fill drag on /guest/vibe can span multiple levels in a single
 # gesture; sequential up/down calls would chain 6 × 800ms = ~5s for a
 # −3→+3 swing. This endpoint applies the whole delta in one POST. Same
 # cooldown as up/down so spamming the gesture is still rate-limited.
+#
+# Registered BEFORE the wildcard `/brightness/{direction}` route because
+# FastAPI/Starlette is first-match-wins on path segments: a parameterized
+# segment is greedy and `direction="step"` would otherwise consume every
+# /brightness/step/* path before this handler sees it.
 GUEST_BRIGHTNESS_STEP_CAP = 6
 
 
@@ -636,6 +594,53 @@ async def step_guest_brightness(delta: int, request: Request) -> dict:
     return {
         "status": "ok",
         "delta": delta,
+        "updated": updated,
+        "ceiling": ceiling,
+    }
+
+
+@router.post("/brightness/{direction}", dependencies=[Depends(require_api_key)])
+async def adjust_guest_brightness(direction: str, request: Request) -> dict:
+    """Bump every on-light's brightness ±10%, clamped to the mode ceiling.
+
+    `direction` ∈ {up, down}. Multiplicative — each tap is `bri × 1.10` or
+    `bri / 1.10`. Ceiling = `min(254, floor(254 × mode_multiplier))` where
+    multiplier comes from `mode_brightness_config[current_mode]` (default 1.0).
+    Off-lights are skipped — guests don't get to turn lights ON via this knob.
+    """
+    global _last_guest_brightness_at
+
+    if direction not in {"up", "down"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Direction must be 'up' or 'down'",
+        )
+
+    async with _guest_brightness_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_brightness_at
+        if elapsed < GUEST_BRIGHTNESS_COOLDOWN_SECONDS:
+            retry_after = max(1, int(GUEST_BRIGHTNESS_COOLDOWN_SECONDS - elapsed) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail="Slow down a sec",
+                headers={"Retry-After": str(retry_after)},
+            )
+        _last_guest_brightness_at = now
+
+    sign = 1 if direction == "up" else -1
+    updated, ceiling = await _apply_brightness_steps(request, sign)
+
+    logger.info(
+        "Guest brightness %s on %d lights (ceiling=%d) from %s",
+        direction,
+        len(updated),
+        ceiling,
+        request.client.host if request.client else "unknown",
+    )
+    return {
+        "status": "ok",
+        "direction": direction,
         "updated": updated,
         "ceiling": ceiling,
     }
