@@ -361,6 +361,18 @@ class BehavioralPredictor(HealthTrackable):
         total = float(calibrated.sum())
         if total > 0:
             return calibrated / total
+        # Degenerate: every class's calibrator mapped to 0. In practice
+        # blocked by the identity-fallback branch in _train_sync (no
+        # class is allowed to fit with zero positives), but log here so
+        # any path that does land here is visible in journalctl rather
+        # than silently returning a meaningless uniform.
+        logger.warning(
+            "Calibrator output degenerate (all classes mapped to 0) — "
+            "falling back to uniform distribution across %d classes. "
+            "Next 04:00 retrain should refit; investigate sidecar if "
+            "this persists.",
+            len(calibrated),
+        )
         return np.full_like(calibrated, 1.0 / len(calibrated))
 
     # ------------------------------------------------------------------
