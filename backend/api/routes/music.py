@@ -7,6 +7,7 @@ from backend.api.auth import require_api_key
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
 from backend.rate_limit import limiter
+from backend.services.didl_lite import build_track_didl_lite
 from backend.services.music_mapper import SUPPORTED_MODES, VALID_VIBES
 from backend.services.sonos_service import is_allowed_play_uri
 
@@ -243,7 +244,12 @@ async def submit_feedback(rec_id: int, request: Request) -> dict:
 
 @router.post("/preview", dependencies=[Depends(require_api_key)])
 async def play_preview(request: Request) -> dict:
-    """Play a 30-second iTunes preview on Sonos."""
+    """Play a 30-second iTunes preview on Sonos.
+
+    Optional metadata fields (``track``, ``artist``, ``album``, ``artwork_url``)
+    populate Sonos's Now Playing card via a DIDL-Lite envelope — without them,
+    plain HTTP streams show blank metadata.
+    """
     body = await request.json()
     preview_url = body.get("preview_url")
     if not preview_url:
@@ -263,5 +269,15 @@ async def play_preview(request: Request) -> dict:
     if not sonos.connected:
         raise HTTPException(status_code=503, detail="Sonos not connected")
 
-    success = await sonos.play_uri(preview_url)
+    # Build the DIDL-Lite envelope from any metadata the caller supplied.
+    # Empty string when no track/title — sonos_service.play_uri falls back
+    # to SoCo's default behavior in that case.
+    meta = build_track_didl_lite(
+        title=str(body.get("track") or "").strip(),
+        artist=str(body.get("artist") or "").strip() or None,
+        album=str(body.get("album") or "").strip() or None,
+        album_art_uri=str(body.get("artwork_url") or "").strip() or None,
+    )
+
+    success = await sonos.play_uri(preview_url, meta=meta or None)
     return {"status": "ok" if success else "error"}

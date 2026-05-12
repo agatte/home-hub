@@ -36,7 +36,7 @@
   async function handlePreview() {
     if (!rec.preview_url) return
     previewing = true
-    await onPreview(rec.preview_url)
+    await onPreview(rec.preview_url, rec)
     setTimeout(() => { previewing = false }, 3000)
   }
 

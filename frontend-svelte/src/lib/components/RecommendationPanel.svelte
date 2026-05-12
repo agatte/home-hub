@@ -66,10 +66,17 @@
     }
   }
 
-  /** @param {string} previewUrl */
-  async function handlePreview(previewUrl) {
+  /** @param {string} previewUrl @param {any} [rec] */
+  async function handlePreview(previewUrl, rec) {
     try {
-      await apiPost('/api/music/preview', { preview_url: previewUrl })
+      const body = { preview_url: previewUrl }
+      if (rec) {
+        if (rec.track_name) body.track = rec.track_name
+        if (rec.artist_name) body.artist = rec.artist_name
+        if (rec.album_name) body.album = rec.album_name
+        if (rec.artwork_url) body.artwork_url = rec.artwork_url
+      }
+      await apiPost('/api/music/preview', body)
     } catch {
       /* ignore */
     }

@@ -275,13 +275,23 @@ class SonosService:
             logger.error(f"Sonos previous error: {e}")
             return False
 
-    async def play_uri(self, uri: str, volume: Optional[int] = None) -> bool:
+    async def play_uri(
+        self,
+        uri: str,
+        volume: Optional[int] = None,
+        meta: Optional[str] = None,
+    ) -> bool:
         """
         Play an audio file or stream from a URI.
 
         Args:
             uri: HTTP URL of the audio file to play.
             volume: If set, volume is applied atomically before playback starts.
+            meta: Optional DIDL-Lite XML envelope. Sonos sources Now Playing's
+                title/artist/album/album-art from this — without it, plain HTTP
+                streams (iTunes previews, self-hosted MP3s) show empty Now
+                Playing. Build via ``backend.services.didl_lite.build_track_didl_lite``.
+                Empty string or None falls through to SoCo's default behavior.
 
         URIs are validated against ``_ALLOWED_PLAY_URI_PATTERNS`` —
         the route handler at /api/music/preview should also gate via
@@ -297,13 +307,16 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            def _play(device, uri, vol):
+            def _play(device, uri, vol, meta_xml):
                 if vol is not None:
                     device.volume = max(0, min(100, vol))
                     logger.info(f"Sonos volume set to {vol} before play_uri")
                 logger.info(f"Sonos actual volume now: {device.volume}")
-                device.play_uri(uri)
-            await self._safe_call(_play, self._device, uri, volume)
+                if meta_xml:
+                    device.play_uri(uri, meta=meta_xml)
+                else:
+                    device.play_uri(uri)
+            await self._safe_call(_play, self._device, uri, volume, meta)
             return True
         except Exception as e:
             logger.error(f"Sonos play_uri error: {e}")
