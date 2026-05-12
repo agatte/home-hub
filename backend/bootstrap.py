@@ -277,6 +277,7 @@ async def lifespan(app: FastAPI):
     ambient_sound = AmbientSoundService(
         ws_manager=ws_manager,
         weather_service=weather_service,
+        sonos=sonos,
     )
     await ambient_sound.load_from_db()
     ambient_sound.scan_sounds()
@@ -319,6 +320,7 @@ async def lifespan(app: FastAPI):
     # / weather suggestions during a DND window — wired post-construction
     # because both services need to exist before the link is established.
     music_mapper.set_automation(automation)
+    ambient_sound.set_automation(automation)
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
@@ -695,6 +697,7 @@ async def lifespan(app: FastAPI):
                 automation.register_on_mode_change(camera_service.on_mode_change)
                 automation.set_camera_service(camera_service)
                 event_logger.set_camera_service(camera_service)
+                ambient_sound.set_camera_service(camera_service)
                 tasks.append(asyncio.create_task(camera_service.poll_loop()))
                 app_logger.info("Camera presence detection started")
             else:

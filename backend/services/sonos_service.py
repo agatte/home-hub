@@ -213,6 +213,46 @@ class SonosService:
             logger.error(f"Sonos volume error: {e}")
             return False
 
+    async def ramp_volume(
+        self,
+        target: int,
+        steps: int = 6,
+        interval: float = 1.0,
+    ) -> bool:
+        """Gradually change Sonos volume from current level to target.
+
+        Args:
+            target:   Destination volume 0-100.
+            steps:    Number of intermediate writes (minimum 1).
+            interval: Seconds between writes.
+        Returns:
+            True if the ramp completed; False on Sonos error.
+        """
+        if not self._connected or not self._device:
+            return False
+        try:
+            status = await self.get_status()
+            current = int(status.get("volume", target))
+        except Exception as e:
+            logger.error("ramp_volume: could not read current volume: %s", e)
+            return False
+        if current == target:
+            return True
+        steps = max(1, steps)
+        step_size = (target - current) / steps
+        try:
+            for i in range(1, steps + 1):
+                next_vol = max(0, min(100, round(current + step_size * i)))
+                await self.set_volume(next_vol)
+                if i < steps:
+                    await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("ramp_volume error: %s", e)
+            return False
+        return True
+
     async def next_track(self) -> bool:
         """Skip to next track."""
         if not self._connected or not self._device:
