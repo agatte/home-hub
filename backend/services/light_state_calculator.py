@@ -290,13 +290,14 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 160, "ct": 400},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            # L5 late_night: tuned down 2026-05-12 after live use — Phase C
-            # pass-3 value (bri=120, ct=440) was photo-validated but in
-            # actual practice the clear housing still read bright. bri 120→100
-            # and ct 440→454 (matches L1's late_night ct exactly) — L5 now
-            # sits slightly below L1's bri=90 anchor to compensate for the
-            # clear-housing perceived-brightness amplification.
-            "5": {"on": True, "bri": 100, "ct": 454},
+            # L5 late_night: iterative tune-by-feel after Phase C pass-3.
+            # 120/440 → 100/454 (first tune, still bright) → 70/470 (this).
+            # Clear housing's visible filament reads as ambient warmth even
+            # at very low bri, so we can drop further than fabric-shade L2
+            # without losing presence. Lands clearly below L1's 90-anchor
+            # so L5 reads as "on but soft" rather than "second functional
+            # source." L2 at bri=160 carries the actual desk-task read.
+            "5": {"on": True, "bri": 70, "ct": 470},
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
