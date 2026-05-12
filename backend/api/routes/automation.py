@@ -23,9 +23,14 @@ from backend.api.schemas.automation import (
     ManualOverride,
     MicCalibrationResult,
     ModeBrightnessConfig,
+    ModeVolumeCurvesConfig,
     RegionColor,
     ScreenColorReport,
     TimeScheduleConfig,
+)
+from backend.services.mode_volume_service import (
+    MODE_VOLUME_CURVES_KEY,
+    ModeVolumeService,
 )
 from backend.services.automation_engine import (
     SCREEN_SYNC_MODES,
@@ -497,6 +502,36 @@ async def update_mode_brightness(
 
     logger.info(f"Mode brightness updated: {brightness}")
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Mode volume curves (GH#17 — per-mode Sonos volume targets + fade)
+# ---------------------------------------------------------------------------
+
+@router.get("/mode-volume")
+async def get_mode_volume() -> dict:
+    """Return the merged per-mode volume curves (defaults + persisted overrides)."""
+    persisted = await load_setting(MODE_VOLUME_CURVES_KEY)
+    return ModeVolumeService.merged_config(persisted)
+
+
+@router.put("/mode-volume", dependencies=[Depends(require_api_key)])
+async def update_mode_volume(
+    config: ModeVolumeCurvesConfig, request: Request
+) -> dict:
+    """Update per-mode Sonos volume curves.
+
+    Partial updates supported — any mode set to None is left at its
+    previous persisted value (or the default if no persisted value exists).
+    """
+    src = source_from_request(request, fallback="api:automation")
+    incoming = config.model_dump(exclude_none=True)
+    existing = await load_setting(MODE_VOLUME_CURVES_KEY) or {}
+    # Merge: incoming overrides existing per-mode, but preserves other modes.
+    merged: dict[str, dict[str, int]] = {**existing, **incoming}
+    await save_setting(MODE_VOLUME_CURVES_KEY, merged)
+    logger.info("Mode volume curves updated by %s: %s", src, list(incoming.keys()))
+    return {"status": "ok", "config": merged}
 
 
 # ---------------------------------------------------------------------------

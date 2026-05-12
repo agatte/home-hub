@@ -29,6 +29,7 @@ from backend.services.fauxmo_service import FauxmoService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
+from backend.services.mode_volume_service import ModeVolumeService
 from backend.services.morning_routine import MorningRoutineService
 from backend.services.music_mapper import MusicMapper
 from backend.services.recommendation_service import RecommendationService
@@ -335,6 +336,12 @@ async def lifespan(app: FastAPI):
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
     automation.register_on_mode_change(ml_logger.on_mode_change)
+
+    # Per-mode Sonos volume curves (GH#17). Fades the speaker to a mode-shaped
+    # target on transition. Pure-policy split: see mode_volume_policy.py.
+    mode_volume = ModeVolumeService(sonos, automation, tts_service=tts)
+    automation.register_on_mode_change(mode_volume.on_mode_change)
+    app.state.mode_volume = mode_volume
 
     # "Good night" TTS on every entry into sleeping mode. Sleeping is
     # manual-only today (no auto-trigger exists in code), so no source

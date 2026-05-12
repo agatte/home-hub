@@ -295,7 +295,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **New automation mode.** Add per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES` under `day`/`evening`/`night` (+ `late_night` if needed). Each light should differ (spatial depth) — avoid `_uniform()`. Engine checks `mode_scene_overrides` DB table first. Mode brightness multipliers apply on top.
 
-**App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Known keys: `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
+**App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Known keys: `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
 
 **Source attribution on write endpoints.** Write routes that log to `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` should pull caller identity via `source_from_request(request, fallback="...")` from `backend.api.auth`. The Alexa lambda sets `X-Source: alexa:<intent>`; absent header → route's existing default (`api:<ip>`, `rest`, `manual`, `preset`/`custom`/`bridge`).
 
@@ -443,6 +443,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `morning_routine_config` | `{hour, minute, enabled, volume}` |
 | `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ..., late_night_start_hour}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
+| `mode_volume_curves` | `{mode: {day, evening, night, fade_duration_s}}` — per-mode Sonos targets, smooth fade on mode change. `ModeVolumeService` callback. Sleeping forced 0; DND suppresses. PUT `/api/automation/mode-volume` |
 | `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — projector-in-bed sliders, live-patched via `PUT /api/automation/watching-posture` |
 | `camera_enabled` | `{enabled: bool}` — opt-in toggle for the camera service |
 | `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |

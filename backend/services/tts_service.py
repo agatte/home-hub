@@ -40,7 +40,19 @@ class TTSService:
         self._voice = voice
         self._default_volume = default_volume
         self._server_port = server_port
+        self._speaking = False
         self._tts_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def is_speaking(self) -> bool:
+        """True between TTS start and finally-block volume/playback restore.
+
+        Mode-change callbacks that touch Sonos volume (e.g. ModeVolumeService)
+        consult this to defer their ramp — TTS's duck-and-resume snapshots
+        ``original_volume``, so a mid-TTS volume write would be clobbered on
+        restore.
+        """
+        return self._speaking
 
     async def speak(
         self,
@@ -71,6 +83,7 @@ class TTSService:
         snapshot = None
         original_volume: Optional[int] = None
         success = False
+        self._speaking = True
 
         try:
             # Generate MP3
@@ -124,6 +137,7 @@ class TTSService:
                     logger.error(f"TTS restore playback failed: {exc}")
             if mp3_path is not None:
                 asyncio.create_task(self._cleanup_file(mp3_path, delay=60))
+            self._speaking = False
 
     async def _generate_audio(self, text: str) -> Optional[Path]:
         """

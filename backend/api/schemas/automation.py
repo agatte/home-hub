@@ -169,6 +169,32 @@ class ModeBrightnessConfig(BaseModel):
     social: float = Field(default=1.0, ge=0.3, le=1.5)
 
 
+class ModeVolumeCurve(BaseModel):
+    """A single per-mode Sonos volume curve."""
+
+    day: int = Field(..., ge=0, le=100)
+    evening: int = Field(..., ge=0, le=100)
+    night: int = Field(..., ge=0, le=100)
+    fade_duration_s: int = Field(..., ge=1, le=30)
+
+
+class ModeVolumeCurvesConfig(BaseModel):
+    """Per-mode Sonos volume targets + fade durations for GH#17.
+
+    All modes optional — PUT bodies can supply a partial dict to update
+    individual modes; missing modes fall back to ``MODE_VOLUME_DEFAULTS``.
+    """
+
+    gaming: Optional[ModeVolumeCurve] = None
+    working: Optional[ModeVolumeCurve] = None
+    watching: Optional[ModeVolumeCurve] = None
+    relax: Optional[ModeVolumeCurve] = None
+    social: Optional[ModeVolumeCurve] = None
+    cooking: Optional[ModeVolumeCurve] = None
+    sleeping: Optional[ModeVolumeCurve] = None
+    gameday: Optional[ModeVolumeCurve] = None
+
+
 class RegionColor(BaseModel):
     """One region's RGB sample (left or right half of the screen)."""
 

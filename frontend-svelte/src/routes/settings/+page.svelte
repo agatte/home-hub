@@ -76,6 +76,13 @@
     social: 'Social',
   }
 
+  // Mode list for the per-mode volume curves card. Sleeping is hidden
+  // (forced to 0 by policy); gameday added since volume there matters.
+  const VOLUME_MODE_LABELS = {
+    ...MODE_LABELS,
+    gameday: 'Game Day',
+  }
+
   const RAMP_OPTIONS = [30, 60, 90, 120]
 
   /** @type {any} */
@@ -94,6 +101,8 @@
   let scheduleDay = 'weekday'
   /** @type {any} */
   let modeBrightness = null
+  /** @type {Record<string, {day: number, evening: number, night: number, fade_duration_s: number}> | null} */
+  let modeVolume = null
   /** @type {{reclined_sync_cap: number, reclined_l1_night: number, upright_sync_cap: number} | null} */
   let watchingPosture = null
   /** @type {any} */
@@ -166,6 +175,7 @@
     try { autoConfig = await apiGet('/api/automation/config') } catch {}
     try { scheduleConfig = await apiGet('/api/automation/schedule') } catch {}
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
+    try { modeVolume = await apiGet('/api/automation/mode-volume') } catch {}
     try { watchingPosture = await apiGet('/api/automation/watching-posture') } catch {}
     // Camera status is loaded globally in init.js and updated via WebSocket
     loadPiholeData()
@@ -210,6 +220,15 @@
     modeBrightness = { ...modeBrightness, ...updates }
     saving = 'brightness'
     try { await apiPut('/api/automation/mode-brightness', modeBrightness) } catch {}
+    saving = null
+  }
+
+  /** @param {string} mode @param {Partial<{day: number, evening: number, night: number, fade_duration_s: number}>} updates */
+  async function saveModeVolume(mode, updates) {
+    if (!modeVolume) return
+    modeVolume = { ...modeVolume, [mode]: { ...modeVolume[mode], ...updates } }
+    saving = 'volume'
+    try { await apiPut('/api/automation/mode-volume', { [mode]: modeVolume[mode] }) } catch {}
     saving = null
   }
 
@@ -728,6 +747,55 @@
               />
             </div>
           </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
+
+  <!-- Mode Volume Curves (GH#17) -->
+  <section class="widget">
+    <h2 class="widget-title">Mode Volume Curves</h2>
+    <p class="widget-hint">
+      Per-mode Sonos volume targets with smooth fades on mode change. Time-of-day modifier
+      tunes day/evening/night separately. Sleeping is forced to 0; DND suppresses fade.
+    </p>
+    {#if modeVolume}
+      <div class="settings-card">
+        {#each Object.entries(VOLUME_MODE_LABELS) as [mode, label] (mode)}
+          {#if modeVolume[mode]}
+            <div class="mode-volume-row">
+              <div class="mode-volume-label">{label}</div>
+              <div class="mode-volume-controls">
+                {#each ['day', 'evening', 'night'] as period (period)}
+                  <div class="mode-volume-period">
+                    <span class="setting-hint">{period}</span>
+                    <span class="mode-volume-value">{modeVolume[mode][period]}</span>
+                    <Slider
+                      value={modeVolume[mode][period]}
+                      min={0}
+                      max={60}
+                      onChange={(v) => saveModeVolume(mode, { [period]: v })}
+                    />
+                  </div>
+                {/each}
+                <div class="mode-volume-fade">
+                  <span class="setting-hint">fade</span>
+                  <input
+                    type="number"
+                    class="setting-number"
+                    min="1"
+                    max="30"
+                    value={modeVolume[mode].fade_duration_s}
+                    on:change={(e) => {
+                      const v = Number(/** @type {HTMLInputElement} */ (e.currentTarget).value)
+                      if (Number.isFinite(v)) saveModeVolume(mode, { fade_duration_s: v })
+                    }}
+                  />
+                  <span class="setting-hint">s</span>
+                </div>
+              </div>
+            </div>
+          {/if}
         {/each}
       </div>
     {/if}
@@ -1283,5 +1351,86 @@
     background: rgba(140, 100, 200, 0.22);
     border-color: rgba(140, 100, 200, 0.55);
     color: var(--text-primary);
+  }
+
+  .mode-volume-row {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
+  }
+
+  .mode-volume-row + .mode-volume-row {
+    border-top: 1px solid var(--border);
+  }
+
+  .mode-volume-label {
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .mode-volume-controls {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr) 90px;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .mode-volume-period {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .mode-volume-period .setting-hint {
+    flex-shrink: 0;
+    width: 50px;
+    text-transform: capitalize;
+  }
+
+  .mode-volume-value {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text-primary);
+    width: 22px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .mode-volume-fade {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+
+  .setting-number {
+    width: 56px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    text-align: center;
+    outline: none;
+    color-scheme: dark;
+  }
+
+  .setting-number:focus {
+    border-color: var(--accent);
+  }
+
+  @media (max-width: 720px) {
+    .mode-volume-row {
+      grid-template-columns: 1fr;
+    }
+    .mode-volume-controls {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
