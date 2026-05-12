@@ -72,9 +72,9 @@ async def test_gaming_caps_differ_per_light():
     l5_bri = hue.last_for("5")["bri"]
 
     assert l2_bri > l5_bri, f"L2 should outshine L5 on bright frames (L2={l2_bri}, L5={l5_bri})"
-    # L2 clamps to 240, L5 clamps to 160 (per MODE_MAX_BRIGHTNESS).
+    # L2 clamps to 240, L5 clamps to 110 (per MODE_MAX_BRIGHTNESS).
     assert l2_bri <= 240
-    assert l5_bri <= 160
+    assert l5_bri <= 110
 
 
 @pytest.mark.asyncio
@@ -131,3 +131,27 @@ async def test_target_lights_exposes_both():
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
     assert sync.target_light == "2"
     assert sync.target_lights == ["2", "5"]
+
+
+@pytest.mark.asyncio
+async def test_per_light_sat_boost():
+    """L2 gets +20% sat boost; L5 stays neutral. Same RGB → different sat output."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    # Feed identical strongly-saturated red to both lights; both EMA states
+    # start at 0 so the first frame is `alpha * target` for each axis.
+    await sync.apply_color("2", 220, 40, 40, mode="gaming")
+    await sync.apply_color("5", 220, 40, 40, mode="gaming")
+
+    l2_state = hue.last_for("2")
+    l5_state = hue.last_for("5")
+
+    # Both should be in HSB mode with the same hue (red is red).
+    assert abs(l2_state["hue"] - l5_state["hue"]) < 100, (
+        f"hue should match for same RGB: L2={l2_state['hue']} L5={l5_state['hue']}"
+    )
+    # L2's sat should be higher than L5's because of the +20% boost.
+    assert l2_state["sat"] > l5_state["sat"], (
+        f"L2 should be more saturated than L5 (L2={l2_state['sat']}, L5={l5_state['sat']})"
+    )

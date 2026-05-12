@@ -37,9 +37,12 @@ logger = logging.getLogger("home_hub.screen_sync")
 MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
     ("gaming",   "2"): 240,
     ("watching", "2"):  80,
-    ("gaming",   "5"): 160,   # tuned down from 180 — clear-housing was popping
-                              # on bright frames next to L2's diffused shade
-    ("watching", "5"):  60,
+    ("gaming",   "5"): 110,   # Clear seeded-glass housing reads ~2× brighter
+                              # than L2's fabric shade at the same numeric bri.
+                              # Capped at L5's gaming-night static baseline so
+                              # screen sync treats it as peripheral accent, not
+                              # a second screen-mirror.
+    ("watching", "5"):  50,
 }
 DEFAULT_MAX_BRIGHTNESS = 80
 MIN_BRIGHTNESS = 15
@@ -48,8 +51,20 @@ MIN_BRIGHTNESS = 15
 # dark scenes; watching allows dim bias lighting.
 MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
     ("gaming", "2"): 130,    # Sits at L2's gaming evening/night baseline (140/150).
-    ("gaming", "5"):  80,    # Sits at L5's gaming late_night baseline (80).
+    ("gaming", "5"):  40,    # Lower than L5's static baseline so dark scenes
+                             # can actually dim L5's visible bulb instead of
+                             # holding it bright on a black frame.
 }
+
+# Per-light saturation boost. RGB→HSB conversion applies this multiplier to
+# saturation; L2's fabric shade washes punch out, so +20% restores vibrancy.
+# L5's clear glass shows the bulb's color directly with no diffusion, so any
+# boost reads as oversaturated next to L2 — leave it at neutral (1.0).
+PER_LIGHT_SAT_BOOST: dict[str, float] = {
+    "2": 1.2,
+    "5": 1.0,
+}
+DEFAULT_SAT_BOOST = 1.2
 
 # Zone- and posture-aware brightness overrides, keyed by light_id so each
 # lamp can have its own projector-safe cap when reclining in bed.
@@ -194,7 +209,8 @@ class ScreenSyncService:
             return
         max_bri = self.get_cap(mode, light_id, zone, posture)
         min_bri = MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
-        h, s, br = self._rgb_to_hue_hsb((r, g, b), max_bri, min_bri)
+        sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
+        h, s, br = self._rgb_to_hue_hsb((r, g, b), max_bri, min_bri, sat_boost)
         sh, ss, sb = self._smooth(light_id, h, s, br)
         await self._hue.set_light(light_id, {
             "on": True,
@@ -209,13 +225,19 @@ class ScreenSyncService:
     def _rgb_to_hue_hsb(
         self, rgb: tuple[int, int, int], max_brightness: int,
         min_brightness: int = MIN_BRIGHTNESS,
+        sat_boost: float = DEFAULT_SAT_BOOST,
     ) -> tuple[float, float, float]:
-        """Convert RGB (0-255) to Hue bridge HSB values, clamped to brightness range."""
+        """Convert RGB (0-255) to Hue bridge HSB values, clamped to brightness range.
+
+        ``sat_boost`` is per-light: L2's fabric shade benefits from +20%
+        vibrancy compensation, L5's clear glass needs neutral (1.0) to avoid
+        looking oversaturated next to L2.
+        """
         r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
         h, s, v = colorsys.rgb_to_hsv(r, g, b)
 
         hue_val = h * 65535
-        sat_val = min(254, s * 254 * 1.2)  # boost saturation for vibrancy
+        sat_val = min(254, s * 254 * sat_boost)
         bri_val = max(min_brightness, min(max_brightness, v * 254))
 
         return (hue_val, sat_val, bri_val)
