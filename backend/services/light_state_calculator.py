@@ -315,12 +315,24 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # sage accent palette and pulled the kitchen into a too-loud focal
     # point. Lower sat lets olive breathe; lower bri keeps it ambient,
     # not center-stage. L1 (dusty rose) and L2 (cognac amber) unchanged.
+    # NOTE 2026-05-12: L1 social `bri=140, hue=58500, sat=160` reads as violet
+    # wall-flood from the hallway angle (curator pass 2 surfaced this from
+    # socialBothLampsLookingIntoBedroom.jpeg — analogous to weirdOldMode.JPEG
+    # anti-pattern). L1 retune is queued as a separate follow-up; L5 change
+    # below is the only social edit shipped now.
     "social": {
         "1": {"on": True, "bri": 140, "hue": 58500, "sat": 160},
         "2": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},
         "3": {"on": True, "bri": 55,  "hue": 4000,  "sat": 210},
         "4": {"on": True, "bri": 55,  "hue": 4000,  "sat": 210},
-        "5": {"on": True, "bri": 120, "hue": 6500,  "sat": 200},
+        # L5 Phase C pass-2 2026-05-12: lighter cognac (hue 7500 vs L2's 6500)
+        # and lower sat (185 vs L2's 200) — seeded glass amplifies sat, so
+        # stepping back gives same perceived warmth without overpowering L2's
+        # soft fabric wash. Bri 140 > L2's 120 compensates for fixture
+        # perceived-output gap; the seated photo already showed L5 reading
+        # slightly brighter at equal bri, so 140 there exaggerates that
+        # deliberately into a foreground-vs-background pair.
+        "5": {"on": True, "bri": 140, "hue": 7500,  "sat": 185},
     },
     # ── Gameday ──────────────────────────────────────────────────────
     # PLACEHOLDER values — slice B's CelebrationOrchestrator authoring

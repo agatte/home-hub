@@ -110,7 +110,11 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 160, "hue": 5000, "sat": 180},
             "3": {"on": True, "bri": 120, "hue": 8500, "sat": 200},
             "4": {"on": True, "bri": 100, "hue": 6000, "sat": 254},
-            "5": {"on": True, "bri": 160, "hue": 5000, "sat": 180},
+            # L5 Phase C pass-2 2026-05-12: bri lift to 180 compensates for
+            # clear-housing perceived-output gap vs L2 fabric; deeper amber
+            # (hue 4500 < L2's 5000) for warmer/golden tone through seeded
+            # glass; sat 170 < L2's 180 — seeded glass amplifies sat.
+            "5": {"on": True, "bri": 180, "hue": 4500, "sat": 170},
         },
     },
     "ember": {
@@ -127,7 +131,13 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 100, "hue": 6500, "sat": 230},
             "3": {"on": True, "bri": 80, "hue": 22000, "sat": 100},
             "4": {"on": True, "bri": 80, "hue": 22000, "sat": 100},
-            "5": {"on": True, "bri": 100, "hue": 6500, "sat": 230},
+            # L5 Phase C pass-2 2026-05-12: fire effect dominates color (per
+            # Rule 6), so bri stays at 100 (clear housing reads brighter than
+            # L2 fabric at equal bri — equalizes the two fire sources). Hue
+            # 6500→6000 (deeper amber seed for pre-effect transition window).
+            # Sat 230→220: seeded glass pops sat, step back so L5 doesn't
+            # outshine L2 during the brief transition before fire engages.
+            "5": {"on": True, "bri": 100, "hue": 6000, "sat": 220},
         },
     },
     "candlelit": {
@@ -191,7 +201,11 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 60, "hue": 4000, "sat": 230},
             "3": {"on": True, "bri": 40, "hue": 22000, "sat": 140},
             "4": {"on": True, "bri": 40, "hue": 22000, "sat": 140},
-            "5": {"on": True, "bri": 60, "hue": 4000, "sat": 230},
+            # L5 Phase C pass-2 2026-05-12: bri 60→80 (clear housing needs
+            # headroom to match L2's perceived output at fabric-diffused 60).
+            # Hue 4000→3500 deepens the harvest-amber register. Sat 230→220:
+            # seeded glass amplifies sat, step back to equalize vs L2.
+            "5": {"on": True, "bri": 80, "hue": 3500, "sat": 220},
         },
     },
 
@@ -256,7 +270,13 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 210, "hue": 44000, "sat": 200},
             "3": {"on": True, "bri": 180, "hue": 22000, "sat": 200},
             "4": {"on": True, "bri": 180, "hue": 22000, "sat": 200},
-            "5": {"on": True, "bri": 210, "hue": 44000, "sat": 200},
+            # L5 Phase C pass-2 2026-05-12: bri 210→180 (clear housing reads
+            # brighter than L2 fabric at equal bri — step back to equalize
+            # perceived output). Hue stays at 44000 (photo confirmed it's in
+            # the right teal-blue band; no shift needed). Sat 200→185:
+            # seeded glass amplifies cool saturation, minor reduction
+            # prevents L5 reading colder/harder than L2.
+            "5": {"on": True, "bri": 180, "hue": 44000, "sat": 185},
         },
     },
     "sunset_strip": {
@@ -272,7 +292,12 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 210, "hue": 4500, "sat": 220},
             "3": {"on": True, "bri": 170, "hue": 60000, "sat": 140},
             "4": {"on": True, "bri": 170, "hue": 60000, "sat": 140},
-            "5": {"on": True, "bri": 210, "hue": 4500, "sat": 220},
+            # L5 Phase C pass-2 2026-05-12: bri 210→190 creates subtle
+            # two-anchor depth at the desk (L5 as deeper/dimmer left ember
+            # vs L2's brighter amber). Hue 4500→4000 deepens toward
+            # sunset-orange. Sat 220→210: seeded glass amplifies sat, minor
+            # reduction equalizes perceived saturation vs L2 fabric.
+            "5": {"on": True, "bri": 190, "hue": 4000, "sat": 210},
         },
     },
     "deep_ocean": {
