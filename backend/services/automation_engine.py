@@ -2243,18 +2243,27 @@ class AutomationEngine:
                     if not prediction.get("shadow"):
                         confidence = prediction["confidence"]
                         if confidence >= 0.95:
-                            # Auto-apply at high confidence — unless camera
-                            # sees Anthony at the desk, in which case defer
-                            # to active presence and log the veto for audit.
+                            # Auto-apply at high confidence — unless the user
+                            # is demonstrably present (camera at desk OR PC
+                            # agent reported working within the last 10min),
+                            # in which case defer to active presence and log
+                            # the veto for audit. Parallel-veto pattern mirrors
+                            # late_night_rescue (commit 0dcb245).
+                            veto_reason: str | None = None
                             if self.is_at_desk_fresh():
+                                veto_reason = "camera_at_desk"
+                            elif self.is_recent_process_working():
+                                veto_reason = "process_working_recent"
+
+                            if veto_reason is not None:
                                 logger.debug(
-                                    "Predictor suppressed (camera at desk): "
-                                    "%s @ %.2f",
+                                    "Predictor suppressed (%s): %s @ %.2f",
+                                    veto_reason,
                                     prediction["predicted_mode"], confidence,
                                 )
                                 if ml_logger:
                                     factors = dict(prediction.get("factors") or {})
-                                    factors["vetoed_by"] = "camera_at_desk"
+                                    factors["vetoed_by"] = veto_reason
                                     await ml_logger.log_decision(
                                         predicted_mode=prediction["predicted_mode"],
                                         confidence=confidence,
@@ -2379,6 +2388,9 @@ class AutomationEngine:
                             fc >= 0.95
                             and not self._manual_override
                             and self._current_mode in ("idle",)
+                            and fm != self._current_mode
+                            and not self.is_at_desk_fresh()
+                            and not self.is_recent_process_working()
                         ):
                             logger.info(
                                 "Fusion auto-apply: %s (%.0f%% confidence)",

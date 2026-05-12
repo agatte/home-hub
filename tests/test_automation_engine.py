@@ -4,6 +4,7 @@ Tests for the automation engine — mode priority, overrides, time periods.
 These test the pure logic of the AutomationEngine without touching any real
 hardware. Hue, Sonos, and WebSocket are all mocked.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -14,8 +15,10 @@ from backend.services.automation_engine import (
     MODE_PRIORITY,
     AutomationEngine,
     DaySchedule,
-    _get_time_period_static,
     _resolve_activity_state,
+)
+from backend.services.light_state_calculator import (
+    get_time_period_static as _get_time_period_static,
 )
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
@@ -995,10 +998,19 @@ class TestWatchingPostureRuntimeTuning:
 class _FakeEnabledCamera:
     """Camera stub with the ``enabled`` flag the helper checks."""
 
-    def __init__(self, zone=None, enabled=True, zone_committed_at=None):
+    def __init__(
+        self,
+        zone=None,
+        enabled=True,
+        zone_committed_at=None,
+        posture=None,
+        posture_committed_at=None,
+    ):
         self.zone = zone
         self.enabled = enabled
         self.zone_committed_at = zone_committed_at
+        self.posture = posture
+        self.posture_committed_at = posture_committed_at
 
 
 class TestIsAtDeskFresh:
@@ -1656,4 +1668,130 @@ class TestLateNightRescueProcessVeto:
         engine._last_process_working_at = datetime.now(tz=TZ) - timedelta(minutes=20)
         assert engine.is_at_desk_fresh() is False
         assert engine.is_recent_process_working() is False
+
+
+# ---------------------------------------------------------------------------
+# fusion_auto_apply no-op guard (regression for 2026-05-12 idle-lock)
+# ---------------------------------------------------------------------------
+
+class _StubFusion:
+    """Minimal fusion stub: returns a fixed compute_fusion() result.
+
+    The real ConfidenceFusion class has report_signal() side effects and an
+    internal state machine; the run_loop only invokes compute_fusion(), so
+    that's the only method we need.
+    """
+
+    def __init__(self, fused_mode: str, fused_confidence: float):
+        self._fm = fused_mode
+        self._fc = fused_confidence
+
+    def compute_fusion(self):
+        return {
+            "fused_mode": self._fm,
+            "fused_confidence": self._fc,
+            "agreement": 0.9,
+            "signals": {},
+            "can_override": False,
+        }
+
+    def report_signal(self, *args, **kwargs):
+        return None
+
+
+async def _drive_one_tick(engine: AutomationEngine) -> None:
+    """Run exactly one iteration of ``run_loop`` and exit cleanly.
+
+    Patches ``asyncio.sleep`` inside the engine module so the end-of-tick
+    60s sleep raises ``CancelledError``; ``run_loop`` catches that and
+    breaks. Our test scenarios never reach sleeping-mode-specific sleeps
+    (lines 1570/1742/1748/1768/1775), so patching the module-level sleep
+    is safe.
+    """
+
+    async def fake_sleep(_seconds):
+        raise asyncio.CancelledError
+
+    with patch(
+        "backend.services.automation_engine.asyncio.sleep",
+        side_effect=fake_sleep,
+    ):
+        await engine.run_loop()
+
+
+class TestFusionAutoApplyNoOp:
+    """Regression coverage for the 2026-05-12 idle-lock incident.
+
+    Bug: ``fusion_auto_apply`` (automation_engine.py:2378) fired with
+    ``fm=idle, fc=0.96, _current_mode=idle`` at 14:10 UTC and set a 4h
+    manual override to ``idle`` — the same mode that was already in
+    place. The override then rejected 116 minutes of organic PC-agent
+    activity reports via the ``_manual_override`` guard at line 895.
+
+    Fix: add ``fm != self._current_mode`` to the elif condition (matches
+    the sibling ``fusion_can_override`` branch's no-op guard at 2330).
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+        # No camera + no process-working stamp → both attendance vetoes
+        # return False, so they don't mask the no-op guard's behavior.
+        eng._camera_service = None
+        eng._last_process_working_at = None
+        return eng
+
+    async def test_skips_when_predicted_equals_current(self, engine):
+        engine._current_mode = "idle"
+        engine._manual_override = False
+        engine._confidence_fusion = _StubFusion("idle", 0.96)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        assert engine._override_mode is None
+
+    async def test_fires_when_predicted_differs_from_current(self, engine):
+        # Positive case: with fm != current, the branch SHOULD fire so the
+        # no-op guard doesn't accidentally widen into a regression on
+        # legitimate auto-apply.
+        engine._current_mode = "idle"
+        engine._manual_override = False
+        engine._confidence_fusion = _StubFusion("working", 0.96)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is True
+        assert engine._override_mode == "working"
+
+    async def test_camera_at_desk_blocks_even_when_modes_differ(self, engine):
+        # Defense-in-depth guard #1: camera-at-desk veto.
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=recent,
+        )
+        engine._current_mode = "idle"
+        engine._manual_override = False
+        engine._confidence_fusion = _StubFusion("working", 0.96)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+
+    async def test_recent_process_working_blocks_even_when_modes_differ(
+        self, engine,
+    ):
+        # Defense-in-depth guard #2: process-attendance veto.
+        engine._last_process_working_at = (
+            datetime.now(tz=TZ) - timedelta(seconds=60)
+        )
+        engine._current_mode = "idle"
+        engine._manual_override = False
+        engine._confidence_fusion = _StubFusion("watching", 0.96)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
 
