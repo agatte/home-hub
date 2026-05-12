@@ -79,14 +79,20 @@ DEFAULT_SAT_BOOST = 1.2
 #
 # When enabled, the RGB→HSB conversion scales the brightness target by
 # the Rec.601 luma (`Y = 0.299R + 0.587G + 0.114B`) divided by the HSV
-# value, with reference luma = 0.40. Effect: yellow/green get dampened
-# (~45% / ~68% scale); red/blue stay full-bri (clamped to 1.0). Net
-# result: visible-bulb output reads approximately hue-independent.
+# value, with reference luma below. Reference 0.25 is aggressive — pure
+# white scales to 25% of HSV value, green to 43%, yellow to 28%, cyan to
+# 36%, magenta to 60%; pure blue and dark red stay full-bri (clamped to
+# 1.0). Live observation at ref=0.40 still felt hot on bright-teal scenes
+# because cyan's chroma_luma (0.701) put its scale at 0.57 — still bright
+# enough to cap. Dropped to 0.25 to push high-luma hues firmly into the
+# sub-cap dim band.
 PER_LIGHT_LUMA_COMP: dict[str, bool] = {
     "5": True,
 }
 DEFAULT_LUMA_COMP = False
-_LUMA_REFERENCE = 0.40  # midpoint between red (0.299) and green (0.587)
+_LUMA_REFERENCE = 0.25  # tightened from 0.40 — pushes cyan/green/yellow
+                        # below the L5 cap so the cap stops dominating
+                        # the high-luma side; deep blue still rides cap.
 
 # Zone- and posture-aware brightness overrides, keyed by light_id so each
 # lamp can have its own projector-safe cap when reclining in bed.

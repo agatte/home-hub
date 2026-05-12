@@ -179,11 +179,13 @@ async def test_l5_luma_comp_dampens_yellow_more_than_blue():
         await sync2.apply_color("5", 0, 0, 80, mode="gaming")
     blue_bri = hue2.last_for("5")["bri"]
 
-    # Both within the L5 [25, 60] gaming band.
-    assert 25 <= yellow_bri <= 60
-    assert 25 <= blue_bri <= 60
-    # Yellow should be at least ~30% dimmer than blue (perceptual comp).
-    assert yellow_bri < blue_bri * 0.75, (
+    # Both should land near or within the L5 [25, 60] gaming band — allow
+    # one bri unit of slack for EMA asymptotic convergence + int-cast.
+    assert 24 <= yellow_bri <= 60
+    assert 24 <= blue_bri <= 60
+    # At ref=0.25 yellow scales hard (~28% of HSV value); blue is unaffected
+    # (clamped to 1.0). Expect yellow ≤ ~half of blue at this input level.
+    assert yellow_bri < blue_bri * 0.55, (
         f"luma comp not damping yellow enough: yellow={yellow_bri} blue={blue_bri}"
     )
 
