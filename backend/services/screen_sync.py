@@ -37,7 +37,8 @@ logger = logging.getLogger("home_hub.screen_sync")
 MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
     ("gaming",   "2"): 240,
     ("watching", "2"):  80,
-    ("gaming",   "5"): 180,   # matches L5's gaming day baseline
+    ("gaming",   "5"): 160,   # tuned down from 180 — clear-housing was popping
+                              # on bright frames next to L2's diffused shade
     ("watching", "5"):  60,
 }
 DEFAULT_MAX_BRIGHTNESS = 80

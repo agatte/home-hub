@@ -72,9 +72,9 @@ async def test_gaming_caps_differ_per_light():
     l5_bri = hue.last_for("5")["bri"]
 
     assert l2_bri > l5_bri, f"L2 should outshine L5 on bright frames (L2={l2_bri}, L5={l5_bri})"
-    # L2 clamps to 240, L5 clamps to 180 (per MODE_MAX_BRIGHTNESS).
+    # L2 clamps to 240, L5 clamps to 160 (per MODE_MAX_BRIGHTNESS).
     assert l2_bri <= 240
-    assert l5_bri <= 180
+    assert l5_bri <= 160
 
 
 @pytest.mark.asyncio
