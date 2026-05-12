@@ -774,6 +774,7 @@
                       value={modeVolume[mode][period]}
                       min={0}
                       max={60}
+                      liveUpdate={false}
                       onChange={(v) => saveModeVolume(mode, { [period]: v })}
                     />
                   </div>
