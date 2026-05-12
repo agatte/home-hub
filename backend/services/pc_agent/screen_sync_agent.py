@@ -59,7 +59,7 @@ PID_FILE = LOG_DIR / "screen_sync_agent.pid"
 # still letting real color changes break through.
 _STICKY_DISTANCE: float = 60.0       # Euclidean RGB distance — centers within this are "same color"
 _STICKY_SCORE_MARGIN: float = 0.08   # new best must beat prior by this delta to switch
-_STICKY_STALENESS_SEC: float = 30.0  # treat as fresh start after this long idle
+_STICKY_STALENESS_SEC: float = 10.0  # dropped from 30s — fresher resets after scene cuts
 
 
 class StickyClusterPicker:
@@ -122,7 +122,9 @@ class StickyClusterPicker:
         if chosen is None and prior is not None:
             distances = [float(np.linalg.norm(c - prior)) for c in kmeans.cluster_centers_]
             nearest_idx = int(np.argmin(distances))
-            if distances[nearest_idx] < _STICKY_DISTANCE * 2:
+            # Tightened from `* 2` (120 RGB units) to bare distance (60) — wider
+            # window held stale warm colors when scenes dropped to gray.
+            if distances[nearest_idx] < _STICKY_DISTANCE:
                 chosen = kmeans.cluster_centers_[nearest_idx]
 
         if chosen is None:

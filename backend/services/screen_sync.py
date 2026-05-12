@@ -37,11 +37,10 @@ logger = logging.getLogger("home_hub.screen_sync")
 MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
     ("gaming",   "2"): 240,
     ("watching", "2"):  80,
-    ("gaming",   "5"): 110,   # Clear seeded-glass housing reads ~2× brighter
+    ("gaming",   "5"):  90,   # Clear seeded-glass housing reads ~2× brighter
                               # than L2's fabric shade at the same numeric bri.
-                              # Capped at L5's gaming-night static baseline so
-                              # screen sync treats it as peripheral accent, not
-                              # a second screen-mirror.
+                              # Tightened past L5's gaming-night baseline because
+                              # peripheral accent role still felt too hot at 110.
     ("watching", "5"):  50,
 }
 DEFAULT_MAX_BRIGHTNESS = 80
@@ -104,8 +103,11 @@ class ScreenSyncService:
         # (automation_engine, telemetry) that still read a single id.
         self._target_light = self._targets[0]
 
-        # Smoothing — per-light EMA state.
-        self._smoothing_alpha: float = 0.3
+        # Smoothing — per-light EMA state. α=0.4 absorbs 40% of each new
+        # target per frame; with 2.5s captures, ~75% convergence after 5s
+        # (3 frames). Higher reacts faster to scene cuts but lets per-frame
+        # picker noise through more.
+        self._smoothing_alpha: float = 0.4
         self._last_hue: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_sat: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_bri: dict[str, float] = {lid: 0.0 for lid in self._targets}
@@ -342,7 +344,7 @@ except ImportError:
 # Same rationale as the desktop agent.
 _STICKY_DISTANCE: float = 60.0
 _STICKY_SCORE_MARGIN: float = 0.08
-_STICKY_STALENESS_SEC: float = 30.0
+_STICKY_STALENESS_SEC: float = 10.0  # dropped from 30s — fresher resets after scene cuts
 
 
 class _LoopbackPicker:
@@ -412,7 +414,9 @@ def _pick_dominant(pixels, picker: "_LoopbackPicker") -> Optional[tuple[int, int
     if chosen is None and prior is not None:
         distances = [float(np.linalg.norm(c - prior)) for c in kmeans.cluster_centers_]
         nearest_idx = int(np.argmin(distances))
-        if distances[nearest_idx] < _STICKY_DISTANCE * 2:
+        # Tightened from `* 2` (120 RGB units) to bare distance (60) — wider
+        # window held stale warm colors when scenes dropped to gray.
+        if distances[nearest_idx] < _STICKY_DISTANCE:
             chosen = kmeans.cluster_centers_[nearest_idx]
 
     if chosen is None:
