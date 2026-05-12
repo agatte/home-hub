@@ -6,7 +6,7 @@ from the right half. These tests verify the three properties that make
 that independence real:
 
   - per-light EMA smoothing state (L2 and L5 don't share `_last_hue`)
-  - per-(mode, light_id) brightness caps (gaming L2=240, gaming L5=70)
+  - per-(mode, light_id) brightness caps (gaming L2=240, gaming L5=60)
   - unknown light ids are silently dropped (defense for typo'd payloads)
 """
 import pytest
@@ -72,9 +72,9 @@ async def test_gaming_caps_differ_per_light():
     l5_bri = hue.last_for("5")["bri"]
 
     assert l2_bri > l5_bri, f"L2 should outshine L5 on bright frames (L2={l2_bri}, L5={l5_bri})"
-    # L2 clamps to 240, L5 clamps to 70 (per MODE_MAX_BRIGHTNESS).
+    # L2 clamps to 240, L5 clamps to 60 (per MODE_MAX_BRIGHTNESS).
     assert l2_bri <= 240
-    assert l5_bri <= 70
+    assert l5_bri <= 60
 
 
 @pytest.mark.asyncio
@@ -154,4 +154,60 @@ async def test_per_light_sat_boost():
     # L2's sat should be higher than L5's because of the +20% boost.
     assert l2_state["sat"] > l5_state["sat"], (
         f"L2 should be more saturated than L5 (L2={l2_state['sat']}, L5={l5_state['sat']})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_l5_luma_comp_dampens_yellow_more_than_blue():
+    """L5's perceptual-luminance comp scales high-luma hues (yellow/green) down
+    more than low-luma hues (blue/red). Tested at moderate-bright inputs
+    where the comp visibly differentiates before the L5 cap clamps both."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    # Moderate-bright yellow (80,80,0) — v=0.314 chroma_luma~0.886, with
+    # comp the target lands below the cap so the damping is visible.
+    for _ in range(20):
+        await sync.apply_color("5", 80, 80, 0, mode="gaming")
+    yellow_bri = hue.last_for("5")["bri"]
+
+    # Same channel intensity, pure blue (0,0,80) — chroma_luma~0.114, scale
+    # clamped to 1.0 → target hits the cap.
+    hue2 = _FakeHue()
+    sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
+    for _ in range(20):
+        await sync2.apply_color("5", 0, 0, 80, mode="gaming")
+    blue_bri = hue2.last_for("5")["bri"]
+
+    # Both within the L5 [25, 60] gaming band.
+    assert 25 <= yellow_bri <= 60
+    assert 25 <= blue_bri <= 60
+    # Yellow should be at least ~30% dimmer than blue (perceptual comp).
+    assert yellow_bri < blue_bri * 0.75, (
+        f"luma comp not damping yellow enough: yellow={yellow_bri} blue={blue_bri}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_l2_no_luma_comp():
+    """L2 is NOT luma-compensated — yellow and blue settle at similar bri
+    (modulo HSV value differences, which are the same for fully-saturated
+    primaries at max channel = 255)."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    for _ in range(20):
+        await sync.apply_color("2", 255, 255, 0, mode="gaming")
+    yellow_bri = hue.last_for("2")["bri"]
+
+    hue2 = _FakeHue()
+    sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
+    for _ in range(20):
+        await sync2.apply_color("2", 0, 0, 255, mode="gaming")
+    blue_bri = hue2.last_for("2")["bri"]
+
+    # Without luma comp, both fully-saturated primaries hit the same HSV v=1.0
+    # and settle at the same L2 cap (240).
+    assert abs(yellow_bri - blue_bri) <= 5, (
+        f"L2 should not luma-compensate: yellow={yellow_bri} blue={blue_bri}"
     )
