@@ -37,10 +37,12 @@ logger = logging.getLogger("home_hub.screen_sync")
 MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
     ("gaming",   "2"): 240,
     ("watching", "2"):  80,
-    ("gaming",   "5"):  90,   # Clear seeded-glass housing reads ~2× brighter
+    ("gaming",   "5"):  70,   # Clear seeded-glass housing reads ~2× brighter
                               # than L2's fabric shade at the same numeric bri.
-                              # Tightened past L5's gaming-night baseline because
-                              # peripheral accent role still felt too hot at 110.
+                              # Tightened below L5's gaming-late_night baseline
+                              # (80) because peripheral accent through the
+                              # visible bulb still felt hot at 90 on bright
+                              # screen moments — third iteration from 180→160→110→90→70.
     ("watching", "5"):  50,
 }
 DEFAULT_MAX_BRIGHTNESS = 80

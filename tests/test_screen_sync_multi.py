@@ -6,7 +6,7 @@ from the right half. These tests verify the three properties that make
 that independence real:
 
   - per-light EMA smoothing state (L2 and L5 don't share `_last_hue`)
-  - per-(mode, light_id) brightness caps (gaming L2=240, gaming L5=90)
+  - per-(mode, light_id) brightness caps (gaming L2=240, gaming L5=70)
   - unknown light ids are silently dropped (defense for typo'd payloads)
 """
 import pytest
@@ -72,9 +72,9 @@ async def test_gaming_caps_differ_per_light():
     l5_bri = hue.last_for("5")["bri"]
 
     assert l2_bri > l5_bri, f"L2 should outshine L5 on bright frames (L2={l2_bri}, L5={l5_bri})"
-    # L2 clamps to 240, L5 clamps to 90 (per MODE_MAX_BRIGHTNESS).
+    # L2 clamps to 240, L5 clamps to 70 (per MODE_MAX_BRIGHTNESS).
     assert l2_bri <= 240
-    assert l5_bri <= 90
+    assert l5_bri <= 70
 
 
 @pytest.mark.asyncio
