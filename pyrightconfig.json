@@ -1,0 +1,22 @@
+{
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv",
+    "venv",
+    "frontend-svelte",
+    "data",
+    "logs"
+  ],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "standard",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportOptionalMemberAccess": true,
+  "reportPrivateImportUsage": "warning",
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning"
+}
