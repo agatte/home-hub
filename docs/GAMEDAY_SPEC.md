@@ -335,7 +335,7 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 ## 7. Open questions / refinements
 
 - **ESPN play description parser quality** — ✓ **answered 2026-05-07.** Slice A's real-fixture test against `tests/fixtures/espn_colts_2025_summary.json` (Colts vs Dolphins 2025-09-07) confirmed both ESPN response formats parse cleanly: canonical `scoringPlays[]` full names ("Daniel Jones 1 Yd Rush", "Michael Pittman Jr. 27 Yd pass from Daniel Jones") AND abbreviated `drives.previous[].plays[]` initials ("D.Jones", "S.Shrader"). The parser tries TD-pass → TD-rush → abbreviated regexes in order; FGs try full-name → abbreviated. Tests cover both paths.
-- **Light sequence values** — ✓ initial values shipped + curator-reviewed. Slice B agent authored placeholder Colts-blue/white pulse sequences for TD/FG/kickoff/end-of-game; lighting-curator caught + we applied an over-saturation fix (`_COLTS_BLUE_SAT` 254 → 215) before merge. **Iterative authoring still pending** — user iterates with the curator on real palettes during preseason.
+- **Light sequence values** — ✓ initial values shipped + curator-reviewed. Slice B agent authored placeholder Colts-blue/white pulse sequences for TD/FG/kickoff/end-of-game; lighting-curator caught + we applied an over-saturation fix (`_COLTS_BLUE_SAT` 254 → 215) before merge. Iterative palette authoring with the curator during preseason is tracked in [#5](https://github.com/agatte/home-hub/issues/5).
 - **Pre-game / commercial behavior in v2** — still deferred. Pre-game ambient mode (continuous Colts-tinted lighting before kickoff) and commercial-break behavior (lights restore to mode default + Sonos resume on commercials) are out of scope for v1. Revisit post-preseason.
 - **Preseason 2026-08-15 first test** — pending. 2026 schedule typically publishes May–June; check ESPN once published. The synthetic `/api/gameday/test/{event}` endpoint exercises the full pipeline (play_event → orchestrator → lights + TTS + WS) so we have confidence in the wiring; the preseason game is for tuning palette/timings/TTS lines against reality.
 - **Celebration EventLogger gap** — ✓ closed 2026-05-07 (commit `34fc550`). `CelebrationOrchestrator._run_light_steps` now mirrors every successful `set_light` to `log_light_adjustment` with `trigger=f"celebration:{sequence_key}"`. Query celebrations via `WHERE trigger LIKE 'celebration:%'`; journalctl is now corroboration, not primary.
@@ -419,13 +419,13 @@ Final clamp `[5, 50]`.
 
 **WPA plumbing**: GameDayService extracts per-play win probability from ESPN's `summary.winprobability[]` array and attaches Colts-perspective WPA to each emitted PlayEvent. Sign-flips when Colts are away. Returns `None` gracefully when ESPN's WP model hasn't yet indexed the play (10s polling cadence vs ESPN's WP-lag).
 
-**Late-night gotcha**: at 22:00–05:59 Indy local, even big plays cap at vol 18. Synthetic test endpoint hits the all-fallback path (no WPA, no game state) so an after-hours smoke test will get vol 18 — that's the policy working correctly, not a bug.
+**Late-night gotcha**: at 22:00–05:59 Indy local, even big plays cap at vol 18. Synthetic test endpoint hits the all-fallback path (no WPA, no game state) so an after-hours smoke test will get vol 18 — that's the policy working correctly, not a bug. Volume constant calibration against real-game feedback is tracked in [#7](https://github.com/agatte/home-hub/issues/7).
 
 ---
 
 ## 10. Pre-game ambient mode (v2 design)
 
-**Status:** spec only. Implementation deferred to a separate Plan agent + ship cycle before preseason 2026-08-15.
+**Status:** spec only. Implementation tracked in [#9](https://github.com/agatte/home-hub/issues/9); target before preseason 2026-08-15.
 
 The pre-game window is the hour leading up to kickoff. The current architecture has the apartment doing whatever it was doing (working, idle, etc) right up until the T-30 auto-flip lands the gameday baseline. v2 fills that hour with anticipation: lighting starts shifting earlier, and audio reads the season's stakes the same way `compute_celebration_volume` reads each play's stakes.
 
@@ -442,7 +442,7 @@ The pre-game window is the hour leading up to kickoff. The current architecture 
 
 **Palette intent:** the "build" — Colts blue clearly present in the room, but with enough warm fill that the apartment doesn't feel like a sports bar yet. The in-game gameday baseline (already in `light_state_calculator.py:280-304`) is the destination; pre-game is a slightly less saturated, slightly cooler-temperature warmup. Kitchen pair invariant (L3 ≡ L4) held in every time-of-day variant.
 
-**Schema parallel:** add a new top-level key `"pregameday"` to `ACTIVITY_LIGHT_STATES` with the same `day` / `evening` / `night` / `late_night` sub-structure already used by `gameday`. Each variant has 4 light entries. Real values land via lighting-curator iteration before preseason — placeholder structure matches gameday's saturation/brightness shape, dialed back ~15-20% on saturation and brightness.
+**Schema parallel:** add a new top-level key `"pregameday"` to `ACTIVITY_LIGHT_STATES` with the same `day` / `evening` / `night` / `late_night` sub-structure already used by `gameday`. Each variant has 4 light entries. Placeholder structure matches gameday's saturation/brightness shape, dialed back ~15-20% on saturation and brightness. Lighting-curator iteration for real values before preseason is tracked in [#8](https://github.com/agatte/home-hub/issues/8).
 
 **Curator iteration knob:** the saturation cap (currently `_COLTS_BLUE_SAT=215` for celebration pulses) provides a precedent. Pre-game L1 likely lands around `sat=170-185` (between mode-baseline warmth and gameday's full Colts-blue commit).
 
@@ -481,7 +481,7 @@ def compute_pregame_audio(
 | **Locked playoff seed** | `playoff_probability >= 0.95` AND `season_week >= 15` | line from "victory-lap" pool | True (mellow playlist) |
 | **Standard / early season** | preseason OR `season_week <= 7` OR no special tier | line from "standard" pool | False (lights + TTS only) |
 
-**TTS line pools** (authored later via curator + user iteration):
+**TTS line pools** (authoring tracked in [#6](https://github.com/agatte/home-hub/issues/6); placeholder values below):
 - "standard": `["Colts kick off in 30 minutes against the {opponent}.", "Game day. Colts and {opponent} in 30."]`
 - "big-stakes": `["Colts and {opponent} in 30 minutes — big implications today.", ...]`
 - "clutch": `["This is a must-win, Colts and {opponent} in half an hour.", ...]`
@@ -606,6 +606,8 @@ Rotation aligns long axes. Scale 0.81 makes the model's painted field span match
 **onLoad event signature:** `<GLTF on:load={...}>` uses Threlte's `createRawEventDispatcher`, which passes the gltf object directly to the handler — NOT wrapped in `CustomEvent.detail`. Use `function onLoad(gltf) { gltf.scene.traverse(...) }`, not `event.detail.scene`.
 
 ### 11.5 Roadmap (deferred)
+
+Aesthetic tuning and rendering enhancements tracked in [#10](https://github.com/agatte/home-hub/issues/10).
 
 - **Phase 2.5:** GodRaysEffect from one anchor light tower; weather-reactive HDRI swap (clear / overcast / rain / snow); procedural drifting clouds (`@takram/three-clouds` or sprite-based); sun-arc time-of-day shadow direction; conditional `kickoff_utc` gating so light towers only fire on evening/night games.
 - **Phase 3:** `yomotsu/camera-controls` for cinematic dynamics — slow orbit during pregame and between plays, snap-to-broadcast on `gameday_play` arrival, dolly-in to scoring endzone on `gameday_celebration` (sequence_key keyed on `play.scoring_team`). Reduced-motion fallback skips dynamics.

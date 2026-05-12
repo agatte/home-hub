@@ -4,6 +4,8 @@
 >
 > **Last updated:** 2026-05-03
 
+> 📌 **Active backlog now lives at https://github.com/agatte/home-hub/issues.** This doc remains the ideation pool — items here graduate to issues once concrete. Concrete trackable items from #1-#21 below were migrated to issues #14-#25 (Phase 5 milestone) on 2026-05-12; their entries are kept as long-form context but no longer the source of truth for "what's next."
+
 ---
 
 ## Completed (April 2026)
@@ -89,27 +91,19 @@ Phase 4 (Game Day, July–August) timeline stands. Phase 5: **Custom Alexa Skill
 
 ### 1. Dashboard "Replay" / Time Machine
 
-**Status:** API ready, UI deferred. The 6 endpoints under `/api/events/` (aggregation, filtering, pagination, mode timeline) ship today via `event_query_service.py`. What remains is the frontend: horizontal timeline with color-coded mode blocks, time-scrubber, expandable per-light detail, weekly/monthly heatmaps.
-
-Scrub through any day to see what the apartment looked like at any point — mode, light states, music playing. All event data already logged — pure frontend visualization on top of the existing API.
-
-**Touches:** New route (`/timeline`), new Svelte components (heatmap, time-scrubber, per-light row).
+→ Tracked in [#14](https://github.com/agatte/home-hub/issues/14).
 
 ---
 
 ### 2. Contextual Quick Actions (Macro Engine)
 
-Orchestrate multi-step sequences with configurable delays. Example "Cooking": kitchen lights bright → cooking playlist → volume 18 → kitchen-timer TTS pings every 5 min. Macro builder UI in Settings — no code for new macros.
-
-**Touches:** New `MacroEngine` service, new DB table (`macros`), Settings page builder UI
+→ Tracked in [#16](https://github.com/agatte/home-hub/issues/16).
 
 ---
 
 ### 3. Sleep Analytics Dashboard
 
-Dedicated sleep insights page: bedtime consistency, fade duration, overnight overrides, morning routine timing, "sleep score" trend charts. The 3D moon scene could encode last night's data. All data already in event tables.
-
-**Touches:** New route (`/sleep`), `event_query_service.py`, new Svelte components
+→ Tracked in [#25](https://github.com/agatte/home-hub/issues/25).
 
 ---
 
@@ -123,17 +117,13 @@ Dedicated sleep insights page: bedtime consistency, fade duration, overnight ove
 
 ### 5. Sonos Volume Curves Per Mode
 
-Per-mode volume targets (gaming: 25, working: 12, relax: 18, sleeping: 0). Mode transitions smoothly adjust volume alongside lighting. Pairs with existing mode brightness multipliers.
-
-**Touches:** `music_mapper.py`, new `mode_volume_config` in `app_settings`, Settings UI
+→ Tracked in [#17](https://github.com/agatte/home-hub/issues/17).
 
 ---
 
 ### 6. Dashboard Screensaver Mode
 
-After 60s idle auto-hide, cycle through ambient info: clock, weather, next routine, now playing art. Smart clock overlay on top of the mode backgrounds.
-
-**Touches:** New `ScreensaverOverlay.svelte` component, `activity.js` store integration
+→ Tracked in [#15](https://github.com/agatte/home-hub/issues/15).
 
 ---
 
@@ -141,9 +131,7 @@ After 60s idle auto-hide, cycle through ambient info: clock, weather, next routi
 
 ### 7. Mood Drift Detection
 
-Track the *derivative* of lighting preferences — if manual overrides consistently trend warmer/dimmer over a week, detect a seasonal mood shift and proactively adjust baselines. Operates on multi-day override patterns, not per-event EMA.
-
-**Touches:** `lighting_learner.py`, new drift analysis module
+→ Tracked in [#22](https://github.com/agatte/home-hub/issues/22).
 
 ---
 
@@ -157,9 +145,7 @@ Extend MusicBandit arms to include (mode, day_of_week, weather) context. "Rainy 
 
 ### 9. Anomaly-Triggered Automation Pause
 
-Use YAMNet's doorbell/alarm/glass-break classifications to auto-pause mode transitions for 5 minutes when anomalous sounds are detected. Prevents awkward automation during unusual situations.
-
-**Touches:** `audio_classifier.py` (new callback), `automation_engine.py`
+→ Tracked in [#20](https://github.com/agatte/home-hub/issues/20).
 
 ---
 
@@ -175,9 +161,7 @@ Fuse sleeping mode times + camera presence (restless vs. still) + ambient audio 
 
 ### 11. Adaptive Transition Choreography
 
-Stagger light transitions room-to-room on mode change. Morning: bedroom → living room. Evening: reverse. Purely a timing layer with `asyncio.sleep()` offsets between `set_light()` calls.
-
-**Touches:** `automation_engine.py` (transition sequencer), new config in `app_settings`
+→ Tracked in [#23](https://github.com/agatte/home-hub/issues/23).
 
 ---
 
@@ -212,17 +196,13 @@ What started as a thin "WiFi QR + Welcome page" grew into a full visitor surface
 
 ### 13. Power Outage Recovery
 
-Detect cold boot (uptime < 5min + no clean shutdown event), restore exact pre-outage state from event log — mode, light colors, music. Outage > 30min falls through to normal time-based.
-
-**Touches:** `main.py` (startup check), `event_query_service.py`
+→ Tracked in [#19](https://github.com/agatte/home-hub/issues/19).
 
 ---
 
 ### 14. Seasonal Lighting Profiles
 
-Day-of-year sine wave modifier on color temperature and hue ranges. Winter: cooler whites, blue accents. Summer: warmer tones, golden hour emphasis. Imperceptible day-to-day, noticeable season-to-season.
-
-**Touches:** `automation_engine.py` (seasonal modifier function)
+→ Tracked in [#18](https://github.com/agatte/home-hub/issues/18).
 
 ---
 
@@ -236,25 +216,13 @@ Always-visible 22px strip at the kiosk bottom. `GET /api/vitals` aggregator (`ba
 
 ### 16. Override Reason Classifier with Soft Counterfactuals
 
-Train a lightweight sequence classifier on the 90s of sensor state leading up to every manual override (time-of-day, prior 3 modes, weather, last playback, camera presence, ambient audio). Model output: a cluster label for *why* the user overrode — "too bright for evening screen time", "relax-mode picked wrong music for my mood", "winddown too early while guests present".
-
-On the NEXT occurrence of a matching reason-cluster context, do **not** auto-apply — surface a soft counterfactual toast: *"Last Tuesday at 9pm raining, you switched working → relax. Try that now, or stay working?"*
-
-**Distinct from #7 Mood Drift Detection:** Mood Drift tracks the multi-day *derivative* of preferences. This tracks the *reason* for single overrides and drives surgical interventions, not seasonal baselines.
-
-**Touches:** new `override_reason_classifier.py`, `ml_logger.py`, `ModeSuggestionToast.svelte`, `confidence_fusion.py` (new signal lane)
+→ Tracked in [#21](https://github.com/agatte/home-hub/issues/21).
 
 ---
 
 ### 17. Per-User Transition-Curve Preference Learning
 
-Learn not just WHICH mode but HOW each mode should transition: bri-first-then-color vs. crossfade vs. snap, at what speed, personalized by time and mode. Data source: mid-transition manual light adjustments already captured in `light_adjustments`. If the user consistently nudges brightness up during a 4s crossfade (keeps wanting it brighter sooner), the model learns to lead with brightness next time.
-
-Autonomously updates `MODE_TRANSITION_TIME` and transition *order* per (mode, time-of-day) bucket. Graceful degradation: falls back to hardcoded defaults when N < 20 transitions observed.
-
-**Why novel:** Every existing ML feature personalizes the destination *state* (what color, what mode, what playlist). This personalizes the *trajectory*.
-
-**Touches:** new `transition_curve_learner.py`, `automation_engine.py` (pre-`_apply_state` hook), new `transition_preferences` column
+→ Tracked in [#24](https://github.com/agatte/home-hub/issues/24).
 
 ---
 

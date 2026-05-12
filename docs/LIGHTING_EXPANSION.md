@@ -85,9 +85,9 @@ Makes the apartment visibly non-generic.
 
 ### Tier 1 — Budget foothold (~$220)
 Fill the biggest functional gaps without rewiring anything.
-- **Hue OmniGlow 3m** — $140 — top of kitchen cabinets, uplight wash against the industrial ductwork
-- **IKEA Skydrag under-cabinet Zigbee strip** — $35–60 — kitchen task light (paired with OmniGlow as the kitchen completion kit)
-- **Hue Motion Sensor** — $45 — enables motion-triggered hallway lighting without code
+- **Hue OmniGlow 3m** — $140 — top of kitchen cabinets, uplight wash against the industrial ductwork — tracked in [#11](https://github.com/agatte/home-hub/issues/11)
+- **IKEA Skydrag under-cabinet Zigbee strip** — $35–60 — kitchen task light (paired with OmniGlow as the kitchen completion kit) — tracked in [#12](https://github.com/agatte/home-hub/issues/12)
+- **Hue Motion Sensor** — $45 — enables motion-triggered hallway lighting without code — tracked in [#13](https://github.com/agatte/home-hub/issues/13)
 
 **Biggest bang:** OmniGlow + Skydrag together complete the kitchen — uplight ductwork above + task light below. The OmniGlow transforms the kitchen's visual identity at night; it's also the first wishlist item that integrates directly with an existing mode (add a `cooking` uplight state and the kitchen lights up automatically the moment you tap the cooking tile).
 
