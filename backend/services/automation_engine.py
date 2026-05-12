@@ -156,10 +156,6 @@ from backend.services.light_state_calculator import (  # noqa: E402
     BED_RECLINED_L2_WATCHING_BRI,
     DEFAULT_MODE_BRIGHTNESS,
     EFFECT_AUTO_MAP,
-    LIGHT_IDS,
-    LUX_CURVE,
-    LUX_MODES,
-    LUX_MULT_EPSILON,
     LUX_STALE_SECONDS,
     MODE_TRANSITION_TIME,
     WINDDOWN_RAMP_MINUTES,
@@ -171,7 +167,6 @@ from backend.services.light_state_calculator import (  # noqa: E402
     apply_zone_overlay as _calc_apply_zone_overlay,
     classify_weather as _classify_weather_pure,
     get_time_period as _calc_get_time_period,
-    get_time_period_static as _get_time_period_static,
     lerp_light_state as _lerp_light_state,
     lux_to_multiplier,
     morning_ramp as _morning_ramp,
@@ -179,7 +174,6 @@ from backend.services.light_state_calculator import (  # noqa: E402
 )
 from backend.services.effect_manager import (  # noqa: E402
     EffectManager,
-    WEATHER_EFFECT_MAP,
     WEATHER_SKIP_MODES,
 )
 
@@ -399,7 +393,9 @@ class AutomationEngine:
 
     @property
     def current_mode(self) -> str:
-        return self._override_mode if self._manual_override else self._current_mode
+        if self._manual_override:
+            return self._override_mode or self._current_mode
+        return self._current_mode
 
     @property
     def mode_source(self) -> str:
@@ -1477,6 +1473,7 @@ class AutomationEngine:
             light_ids: lights to clear. If None, clears all active transit overrides.
             transition_time: deciseconds for the revert (30 = 3s — fast-but-not-jarring).
         """
+        _ = transition_time  # API-compat shim — revert uses mode-default transition speed
         if not self._transit_light_overrides:
             return
         if light_ids is None:
@@ -2066,8 +2063,11 @@ class AutomationEngine:
                     _, ramp_start_hour, ramp_duration = rule
                     minutes_since_start = (hour - ramp_start_hour) * 60 + minute
                     state = _morning_ramp(minutes_since_start, ramp_duration)
-                else:
+                elif isinstance(rule, dict):
                     state = rule
+                else:
+                    logger.warning("Unknown rule shape in time-based rules: %r", rule)
+                    return
                 state = self._weather_adjust(state)
                 await self._apply_state(state)
                 return
