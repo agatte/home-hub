@@ -1,10 +1,10 @@
-# Agent Fleet Strategy + Multi-Agent Coding Workflow
+# Claude Code Tooling Layer — Strategy, Fleet, and Reference
 
-**Captured 2026-05-06. Last fleet review 2026-05-08.** A menu of agents that could ship for this project (small to big), the research findings on multi-agent coding workflows that informed the menu, and a concrete playbook for using a parallel agent fleet to ship a large feature like Game Day.
+**Captured 2026-05-06. Last full tooling review 2026-05-11.** This document is the canonical reference for everything in the Claude Code tooling layer for this project — agent fleet, hooks, skills, MCP servers, LSP plugins, data files, and runbook integration. It also contains research findings on multi-agent coding workflows and a concrete playbook for using a parallel agent fleet to ship a large feature like Game Day.
 
-This is a durable strategy document, not a plan-of-record. Shipping any individual agent listed here is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
+This is a durable strategy document, not a plan-of-record. Shipping any individual agent or tool is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
 
-## Current fleet at a glance (14 agents)
+## Current fleet at a glance (29 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
@@ -13,25 +13,39 @@ This is a durable strategy document, not a plan-of-record. Shipping any individu
 | `deploy-verifier` | core | shipped | auto (`/deploy-home` step 7) |
 | `lighting-curator` | 1 | shipped | hook-gated (pre-commit) + manual |
 | `lighting-shopper` | 1 | shipped | manual |
-| `doc-drift-checker` | 1 | shipped | manual |
+| `doc-drift-checker` | 1 | shipped | manual + monthly runbook entry 14 |
 | `doc-curator` | 1 | shipped | manual + monthly runbook entry 15 |
 | `roadmap-advisor` | 1 | shipped | manual (ad-hoc when picking next slice) |
 | `backup-verifier` | 1 | shipped | manual (after backup-worthy surface change or strategy bootstrap) |
 | `pr-review-backend` | 1 | shipped | hook-nudged (pre-push) |
 | `pr-review-frontend` | 1 | shipped | hook-nudged (pre-push) |
+| `analytics-narrator` | 1 | shipped | manual (ad-hoc daily glance, writes `data/analytics/daily/`) |
 | `ml-model-evaluator` | 2 | shipped | auto (weekly Mon 10:00 ET, runbook entry #1) |
+| `predictor-promotion-advisor` | 2 | shipped | manual via `/promotion-decision` skill |
+| `override-rate-tracker` | 2 | shipped | auto (weekly Sun 16:00 ET, runbook entry #7) |
+| `fusion-lane-auditor` | 2 | shipped | auto (weekly Mon 11:00 ET, runbook entry #23) |
+| `rule-engine-misfire-auditor` | 2 | shipped | auto (weekly Fri 08:00 ET, runbook entry #24) |
+| `ml-feature-importance-watcher` | 2 | shipped | manual (on-demand, feature drift) |
+| `test-coverage-prospector` | 2 | shipped | manual (on-demand, post-diff) |
+| `dependency-hygiene` | 2 | shipped | manual (monthly, on-demand) |
+| `performance-regression-hunter` | 2 | shipped | auto (weekly Tue 09:00 ET, runbook entry #25) |
+| `refactor-proposer` | 2 | shipped | manual (quarterly, on-demand) |
+| `error-pattern-watcher` | 2 | shipped | auto (weekly Thu 09:00 ET, runbook entry #26) |
+| `frontend-a11y-auditor` | 2 | shipped | manual (on-demand, requires dev server at localhost:8000) |
+| `dead-code-finder` | 2 | shipped | manual (quarterly) |
+| `flag-triager` | 2 | shipped | manual (on-demand when flag queue is overgrown) |
 | `gameday-preflight` | 3 | shipped | auto (preseason + weekly Sun NFL) + manual T-90 |
 | `gameday-postmortem` | 3 | shipped | auto (loop pre-fire detector) + manual on test fires |
 
-Tier-4 orchestration is implicit (main session plays lead). Tier-3 runtime specialists beyond the gameday pair (music librarian, routine advisor, dependency hygiene) remain unshipped — see Part 1.
+Tier-4 orchestration is implicit (main session plays lead). Tier-3 runtime specialists (music librarian, routine scheduler advisor) remain unshipped — see Part 1.
 
 ---
 
 ## Verification note
 
-Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. As of capture date the available skills are: `/api-audit`, `/deploy-home`, `/home-hub-dev`, `/ui-audit`, `/project-spec`, `/checkback-loop`, `/watcher-loop` (project-specific) plus `/loop`, `/schedule`, `/simplify`, `/init`, `/review`, `/security-review`, `/update-config`, `/keybindings-help`, `/fewer-permission-prompts`, `/claude-api`, `/frontend-design`, `/ui-ux-pro-max` (user-global).
+Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Project-specific skills (all under `~/.claude/skills/`): `/api-audit`, `/deploy-home`, `/home-hub-dev`, `/ui-audit`, `/project-spec`, `/checkback-loop`, `/watcher-loop` (original seven); `/ml-status`, `/promotion-decision`, `/override-rate-check` (Round 1 — ML autonomy); `/health-snapshot`, `/why-this-mode`, `/last-fail`, `/grep-journal`, `/digest-today` (Round 2 — dev velocity); `/flag`, `/flag-sync`, `/flag-list` (Round 3 — flag-capture workflow); `/lsp-verify` (LSP marketplace patch drift check + auto-reapply). User-global skills available in all projects: `/loop`, `/schedule`, `/simplify`, `/init`, `/review`, `/security-review`, `/update-config`, `/keybindings-help`, `/fewer-permission-prompts`, `/claude-api`, `/frontend-design`, `/ui-ux-pro-max`.
 
-Canonical multi-agent path on this machine: **git worktrees + manual coordination**, OR the **experimental Agent Teams** behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Treat any reference elsewhere to a `/batch` skill as aspirational, not actionable.
+Canonical multi-agent path on this machine: **git worktrees + manual coordination**, OR the **experimental Agent Teams** behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (enabled in `~/.claude/settings.json`). Treat any reference elsewhere to a `/batch` skill as aspirational, not actionable.
 
 ---
 
@@ -57,15 +71,19 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 
 ### Tier 2 — Ship when relevant (medium value, medium complexity)
 
-**Test coverage prospector.** For newly-changed code paths, suggests tests OR scaffolds them (using existing patterns from `tests/test_api_*.py`). Most useful on async/IO-heavy backend services where TDD is awkward. **Effort:** medium.
+**Test coverage prospector.** **Shipped 2026-05-11. ✓** For newly-changed code paths, suggests tests OR scaffolds them (using existing patterns from `tests/test_api_*.py`). Most useful on async/IO-heavy backend services where TDD is awkward. On-demand spawn.
 
-**Performance regression hunter.** Periodically benchmarks `/health`, `/api/automation/status`, `/api/lights`, the WS broadcast latency. Flags p95 regressions over a configurable threshold. **Effort:** medium — needs a baseline-storage scheme.
+**Performance regression hunter.** **Shipped 2026-05-11. ✓** Weekly Tue 09:00 ET (runbook entry #25). Benchmarks `/health`, `/api/automation/status`, `/api/lights`, `/api/learning/predictor`, + WS RTT. Trends stored in `~/.claude/data/perf_trends.jsonl`. Flags p95 regressions over configured thresholds.
 
-**ML model evaluator.** **Shipped 2026-05-07. ✓** Owns offline accuracy evaluation on `ml_decisions` shadow rows across all 5 lanes (predictor, audio classifier, lighting learner, music bandit, camera lux). Surfaces drift, suggests retrain cadence, replaces the per-lane runbook check-backs (predictor validation, audio classifier checkpoints) with one consolidated weekly digest. Wired to runbook entry #1 — first scheduled fire 2026-05-11 10:00 ET. Read-only; findings advisory. **Effort:** medium (paid).
+**ML model evaluator.** **Shipped 2026-05-07. ✓** Owns offline accuracy evaluation on `ml_decisions` shadow rows across all 5 lanes (predictor, audio classifier, lighting learner, music bandit, camera lux). Surfaces drift, suggests retrain cadence, replaces the per-lane runbook check-backs (predictor validation, audio classifier checkpoints) with one consolidated weekly digest. Wired to runbook entry #1 — first scheduled fire 2026-05-11 10:00 ET. Read-only; findings advisory.
 
-**Frontend a11y auditor.** Playwright + axe on the SvelteKit pages. The existing `/ui-audit` is screenshot-only; a11y is a separate surface. **Effort:** small once the existing `/ui-audit` runner is reused.
+**Frontend a11y auditor.** **Shipped 2026-05-11. ✓** Playwright + axe-core (CDN inject) on 6 SvelteKit routes. Requires local dev server at localhost:8000. On-demand spawn.
 
-**Refactor proposer.** Looks at files edited 3+ times in a sliding window, suggests consolidation/extraction. Catches slow drift toward unmaintainable modules (`automation_engine.py` is now 2500+ lines). **Effort:** medium.
+**Refactor proposer.** **Shipped 2026-05-11. ✓** Quarterly / on-demand. Analyzes git log + LOC + concerns. `automation_engine.py` (2500+ lines) is the obvious first target.
+
+**Error pattern watcher.** **Shipped 2026-05-11. ✓** Weekly Thu 09:00 ET (runbook entry #26). Clusters across `tool_failures.jsonl` + `subagent_audit.log` + digest dir + journalctl by fingerprint.
+
+**Dead code finder.** **Shipped 2026-05-11. ✓** Quarterly. Pyright unused-symbol + grep cross-check. False-positive filter for route handlers, MCP tools, mode-change callbacks, ScheduledTask handlers, `__all__` exports.
 
 ### Tier 3 — Future / aspirational
 
@@ -74,8 +92,6 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 **Music librarian.** Owns mode→playlist mapping refresh, vibe tag updates, taste profile rebuild on new XML imports.
 
 **Routine scheduler advisor.** Analyzes past mode-transition + Sonos data; proposes schedule tweaks ("Fridays you hit relax 2h earlier — should winddown move?").
-
-**Dependency hygiene.** Pinned-version audit + security-advisory scan + breaking-change notes for proposed upgrades.
 
 ### Tier 4 — Meta / orchestration
 
@@ -192,24 +208,38 @@ Tier 1 specialists pay off (curator, deploy-verifier). The fleet pattern pays of
 
 ---
 
-## Part 5 — Fleet usage playbook (when each agent fires, 2026-05-08)
+## Part 5 — Fleet usage playbook (when each agent fires, 2026-05-11)
 
-The fleet is 14 agents. Most fire automatically — the manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit, a `lighting-shopper` for product research, `doc-drift-checker` / `doc-curator` / `roadmap-advisor` for ad-hoc audits and planning, `backup-verifier` after irreplaceable-state changes, the PR reviewers when the pre-push hook denies).
+The fleet is 29 agents. Most fire automatically — the manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit, a `lighting-shopper` for product research, `doc-drift-checker` / `doc-curator` / `roadmap-advisor` for ad-hoc audits and planning, `backup-verifier` after irreplaceable-state changes, the PR reviewers when the pre-push hook denies, on-demand ML and dev-velocity agents, and `flag-triager` when the flag queue is overgrown).
 
 ### Trigger map
 
 | Agent | Trigger | Cadence | Output sink |
 |---|---|---|---|
-| `homehub-verifier` | `/checkback-loop` dispatches | hourly anomaly sweep + dated entries (1, 3-11) | digest block in `~/.claude/runbooks/digests/YYYY-MM-DD.md` |
+| `homehub-verifier` | `/checkback-loop` dispatches | hourly anomaly sweep + dated entries | digest block in `~/.claude/runbooks/digests/YYYY-MM-DD.md` |
 | `homehub-investigator` | `/watcher-loop` polls digests | always-on, ~30s polling for un-diagnosed warns | inline `**Diagnosis (HH:MM):**` subsection appended to the warn block |
 | `ml-model-evaluator` | runbook entry #1 | weekly Mon 10:00 ET | digest block (agent writes its own) |
+| `override-rate-tracker` | runbook entry #7 | weekly Sun 16:00 ET | digest block (agent writes its own) |
+| `fusion-lane-auditor` | runbook entry #23 | weekly Mon 11:00 ET | digest block (agent writes its own) |
+| `rule-engine-misfire-auditor` | runbook entry #24 | weekly Fri 08:00 ET | digest block (agent writes its own) |
+| `performance-regression-hunter` | runbook entry #25 | weekly Tue 09:00 ET | digest block; trends to `~/.claude/data/perf_trends.jsonl` |
+| `error-pattern-watcher` | runbook entry #26 | weekly Thu 09:00 ET | digest block (agent writes its own) |
 | `deploy-verifier` | `/deploy-home` skill step 7 | post-deploy, automatic | inline conversation report (no digest) |
 | `lighting-curator` | PreToolUse hook on `git commit` | per-commit when staged diff matches lighting files + design identifiers | blocks commit unless `[curator-reviewed]` token in message |
 | `gameday-preflight` | runbook entry #12 (preseason T-7) + entry #13 (weekly Sun Aug-Jan) + manual T-90 game morning | once preseason + every Sunday in NFL season + ad-hoc | digest block (agent writes its own) |
 | `gameday-postmortem` | loop pre-fire detector on `gameday:auto` close (per `homehub-checkbacks.md` § Pre-fire detectors) + manual for test fires | within ~1h of every real game close (auto), ad-hoc otherwise | appends to today's digest |
 | `pr-review-backend` | manual spawn before push (often via the deny message from the pre-push hook) | per-push when diff contains Python under `backend/`, `tests/`, `scripts/` | inline conversation report + writes `<git-dir>/.pr-review-backend-ok` containing HEAD SHA on PASS |
 | `pr-review-frontend` | manual spawn before push | per-push when diff contains SvelteKit changes under `frontend-svelte/` | inline report + writes `<git-dir>/.pr-review-frontend-ok` containing HEAD SHA on PASS |
-| `doc-drift-checker` | manual spawn (recommended after shipping a new agent / route / env var / app_setting key) | ad-hoc | inline drift report — never mutates docs |
+| `predictor-promotion-advisor` | manual via `/promotion-decision` skill | on-demand (when override-rate gate passes) | inline PROMOTE/WAIT/DEMOTE verdict |
+| `ml-feature-importance-watcher` | manual | on-demand (feature drift detection) | inline trend report |
+| `test-coverage-prospector` | manual | on-demand (post-diff) | inline proposed test scaffolds |
+| `dependency-hygiene` | manual | monthly, on-demand | inline CVE + version audit report |
+| `refactor-proposer` | manual | quarterly, on-demand | inline refactor proposals (first target: `automation_engine.py`) |
+| `frontend-a11y-auditor` | manual | on-demand (requires dev server at localhost:8000) | inline axe-core findings per route |
+| `dead-code-finder` | manual | quarterly | inline unused-symbol report |
+| `flag-triager` | manual | on-demand when flag queue is overgrown | inline label normalization + dedup + priority report |
+| `analytics-narrator` | manual | ad-hoc daily glance | writes `data/analytics/daily/YYYY-MM-DD.md`; default target is yesterday |
+| `doc-drift-checker` | manual spawn (recommended after shipping a new agent / route / env var / app_setting key) | monthly first-Mon runbook entry 14 + ad-hoc | inline drift report — never mutates docs |
 | `doc-curator` | manual spawn (recommended monthly third-Mon per runbook entry 15, or after a large feature ships) | monthly + ad-hoc | inline structured Edit-ready proposals — never mutates docs |
 | `roadmap-advisor` | manual spawn (when planning the week, picking the next slice, "what should I work on today" moments) | ad-hoc | inline categorized backlog menu — 1-2 items per category, optional direction hint |
 | `backup-verifier` | manual spawn (after a deploy that changed irreplaceable state, when adding a new backup-worthy surface, or to bootstrap the backup-strategy runbook) | ad-hoc | inline gap report; first-run-without-strategy emits critical-surface enumeration + bootstrap recommendation — never mutates state |
@@ -227,6 +257,19 @@ T+30…+90  Loop's next tick runs the detector SQL, spawns gameday-postmortem
 T+30…+120 Watcher loop notices the postmortem block; if STATUS: warn, spawns homehub-investigator
 next day Curator review on any subsequent SEQUENCES tweak (advisory section K) before commit
 ```
+
+### Hooks reference (all 8 hooks, project-scoped at `home-hub/.claude/hooks/`, wired in `.claude/settings.json`)
+
+| Hook file | Event | Matcher | What it does |
+|---|---|---|---|
+| `session_start_homehub.py` | SessionStart | — | Injects mode/source/override + anomaly-only fields via `additionalContext`. Extended (Round 3): also injects `flags_pending=<n>` + `oldest=<n>d` when queue has ≥3 pending or oldest >7 days. Healthy systems stay terse. |
+| `pre_commit_lighting_curator.py` | PreToolUse | Bash | Blocks `git commit` touching lighting files + design identifiers unless message contains `[curator-reviewed]`. See Pre-commit gate below. |
+| `pre_push_pr_review.py` | PreToolUse | Bash | Blocks `git push` of Python/SvelteKit diffs unless PASS markers exist. See Pre-push gate below. |
+| `post_edit_ruff.py` | PostToolUse | Edit\|Write | Runs `python -m ruff check --fix` on edited `backend/**/*.py`. No frontend lint hook. |
+| `post_edit_env_validate.py` | PostToolUse | Edit\|Write | Filters to `.env*` files. Validates required keys (APP_ENV, LOCAL_IP, HUE_BRIDGE_IP, HUE_USERNAME, TIMEZONE), empty values, FRONTEND_BUILD path existence, smart-quote substitution. Prints `[env]` inline. |
+| `post_git_push.py` | PostToolUse | Bash | After a real `git push`, nudges `/deploy-home`. |
+| `post_tool_failure.py` | PostToolUse | — (all tools) | Logs tool call failures to `~/.claude/data/tool_failures.jsonl`. 10s dedup window. Idempotent. |
+| `subagent_stop_audit.py` | SubagentStop | — | Logs every subagent completion to `~/.claude/data/subagent_audit.log` with a `ZERO_OUTPUT` flag for empty completions. |
 
 ### Pre-commit gate (lighting changes)
 
@@ -253,6 +296,84 @@ The runbook's queue runs year-round. NFL-season-specific entries (#13 weekly Sun
 
 ---
 
+## Part 6 — Full tooling layer reference (2026-05-11)
+
+### MCP servers (project `.mcp.json`)
+
+Five MCP servers load when Claude Code opens this project. All five must be approved on first session start.
+
+| Name | Command | Purpose |
+|---|---|---|
+| `home-hub` | `python -m backend.mcp_server` | Custom REST-API wrapper — the primary tool surface for live-system queries. Tools: `get_live_state`, `get_state_history`, `get_health`, `get_lights`, `set_light`, `get_weather`, `get_automation_status`, `set_mode`, `get_schedule`, `get_mode_brightness`, `get_scenes`, `activate_scene`, `get_effects`, `activate_effect`, `get_sonos_status`, `sonos_play`, `sonos_pause`, `sonos_volume`, `get_sonos_favorites`, `get_mode_playlists`, `get_routines`, `get_pihole_stats`, `query_db`. Requires backend running at `HOME_HUB_URL`. |
+| `sqlite-home-hub` | `mcp-server-sqlite.exe --db-path data\home_hub.db` | Direct SQLite access (PyPI `mcp-server-sqlite`, Anthropic-maintained). Fallback when backend is down. Full exe path: `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\mcp-server-sqlite.exe`. |
+| `sentry` | `npx -y @sentry/mcp-server@latest` | Sentry issue/event browser (home-hub.sentry.io org). Requires one-time `npx @sentry/mcp-server@latest auth login` in a terminal before first load; token caches at `~/.sentry/`. SDK already wired in `backend/main.py` (commit `8bd4b82`). Free tier: 10k events/month, traces off. |
+| `git-home-hub` | `mcp-server-git.exe --repository C:\Users\antho\Desktop\home-hub` | Read-only git ops on the home-hub repo (PyPI `mcp-server-git` v2026.1.14). Full exe path: `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\mcp-server-git.exe`. |
+| `time` | `mcp-server-time.exe --local-timezone America/Indiana/Indianapolis` | Current time + timezone conversions, timezone-aware (PyPI `mcp-server-time` v2026.1.26). Full exe path: `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\mcp-server-time.exe`. |
+
+User-global MCPs available in all projects (claude.ai integrations, not in `.mcp.json`): GitHub MCP, Playwright MCP, Notion MCP, Gmail/Calendar/Drive.
+
+### LSP servers (`~/.claude/settings.json` `enabledPlugins`)
+
+Two LSP plugins are enabled in the global settings. Both required a one-time `marketplace.json` patch (see `project_lsp_marketplace_patch_2026_05_11.md`) because Windows `uv_spawn` cannot execute `.cmd` shims (Node 22 BatBadBut) or find pip-installed `.exe` files that aren't on PATH.
+
+| Plugin | Binary | Notes |
+|---|---|---|
+| `pyright-lsp@claude-plugins-official` | `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\pyright-langserver.exe --stdio` | Python type-checking (v1.1.409). `pyrightconfig.json` at repo root: `typeCheckingMode: standard`, excludes `venv/` + `frontend-svelte/`. Prereq: `pip install pyright`. |
+| `typescript-lsp@claude-plugins-official` | `node C:\Users\antho\AppData\Roaming\npm\node_modules\typescript-language-server\lib\cli.mjs --stdio` | TS/JS type-checking. Invoked via `node` + `cli.mjs` directly to bypass `.cmd` shim restriction. Prereq: `npm install -g typescript-language-server typescript`. |
+
+**Maintenance note:** Both patches live in `~/.claude/plugins/marketplaces/claude-plugins-official/.claude-plugin/marketplace.json`, which Anthropic auto-updates under `"autoUpdatesChannel": "latest"`. Drift is detected + auto-reapplied by an idempotent Python script at `~/.claude/scripts/reapply_lsp_patches.py`, invoked either on-demand via `/lsp-verify` or automatically by runbook entry 27 (monthly second-Mon 11:00 ET). Script exit codes: 0=patches in place, 1=reapplied successfully, 2=unrecoverable error.
+
+### Plugins (`~/.claude/settings.json` `enabledPlugins`)
+
+| Plugin | Source | Purpose |
+|---|---|---|
+| `playwright@claude-plugins-official` | official marketplace | Browser automation (used by `frontend-a11y-auditor`) |
+| `frontend-design@claude-plugins-official` | official marketplace | Frontend design tooling |
+| `ui-ux-pro-max@ui-ux-pro-max-skill` | custom marketplace (`nextlevelbuilder/ui-ux-pro-max-skill`, auto-update on) | UI/UX review |
+| `pyright-lsp@claude-plugins-official` | official marketplace | Python LSP (see above) |
+| `typescript-lsp@claude-plugins-official` | official marketplace | TypeScript LSP (see above) |
+
+### Data files (`~/.claude/data/`, cross-project)
+
+| File | Created by | Contents |
+|---|---|---|
+| `tool_failures.jsonl` | `post_tool_failure.py` hook (PostToolUse all-tools) | Failed tool calls with 10s dedup. Consumed by `error-pattern-watcher`. |
+| `subagent_audit.log` | `subagent_stop_audit.py` hook (SubagentStop) | Every subagent completion + `ZERO_OUTPUT` flag for empty completions. Consumed by `error-pattern-watcher`. |
+| `perf_trends.jsonl` | `performance-regression-hunter` agent | Route + WS benchmark results accumulated over time. Enables week-over-week trend comparison. |
+| `flags.jsonl` | `/flag` skill | Append-only capture queue for follow-up items. Row shape: `{id, title, body, labels, repo, source, status, ts, gh_issue_url}`. Drained via `/flag-sync`; browsed via `/flag-list`. |
+
+### Flag-capture workflow
+
+The flag workflow (Round 3, 2026-05-11) solves topic-drift loss: when Claude surfaces an unrelated issue mid-task, it proactively offers to capture it via `/flag`. User confirms → row appended to `~/.claude/data/flags.jsonl` with `status=pending`. Batch-file to GitHub (`agatte/home-hub`) later via `/flag-sync` (interactive per-flag: file / dismiss / skip / quit). Browse queue via `/flag-list`. The `flag-triager` agent handles overgrown queues with label normalization + dedup (Jaccard ≥ 0.5 pairing).
+
+The `session_start_homehub.py` hook injects `flags_pending=<n>` (and `oldest=<n>d`) into `additionalContext` when the queue has ≥3 pending or something has been sitting >7 days, so the next session opens with a terse reminder.
+
+Drain reminders fire at four mid-session moments: after capturing another flag when total pending ≥ 3; when the user mentions a domain with pending flags in that label; at natural session-end signals ("done for today", "ship it") with pending count > 0; after `git push` / `/deploy-home` sequences with pending ≥ 5.
+
+### Runbook cadence map
+
+Entries in `~/.claude/runbooks/homehub-checkbacks.md` that dispatch specialist agents (vs. inline `homehub-verifier` recipes):
+
+| Entry | Cadence | Agent dispatched |
+|---|---|---|
+| #0 (hourly anomaly sweep) | every ~60 min | `homehub-verifier` (inline recipe) |
+| #1 (ML model evaluator) | weekly Mon 10:00 ET | `ml-model-evaluator` |
+| #7 (override-rate trend) | weekly Sun 16:00 ET | `override-rate-tracker` |
+| #12 (preseason readiness) | once, 2026-08-08 | `gameday-preflight` |
+| #13 (weekly game-day preflight) | weekly Sun 09:00 ET (Aug-Jan) | `gameday-preflight` |
+| #14 (doc drift audit) | monthly first-Mon 11:00 ET | `doc-drift-checker` |
+| #15 (doc curator audit) | monthly third-Mon 11:00 ET | `doc-curator` |
+| #27 (LSP marketplace verify) | monthly second-Mon 11:00 ET | `~/.claude/scripts/reapply_lsp_patches.py` (loop runs directly, not via agent) |
+| #23 (fusion-lane auditor) | weekly Mon 11:00 ET | `fusion-lane-auditor` |
+| #24 (rule-engine misfire auditor) | weekly Fri 08:00 ET | `rule-engine-misfire-auditor` |
+| #25 (performance-regression hunter) | weekly Tue 09:00 ET | `performance-regression-hunter` |
+| #26 (error-pattern watcher) | weekly Thu 09:00 ET | `error-pattern-watcher` |
+| Pre-fire detector (gameday auto-close) | every loop tick (SQL check) | `gameday-postmortem` |
+
+All other entries dispatch to `homehub-verifier` with an inline recipe. `homehub-watcher.md` has matching diagnostic procedures for entries #7, #23, #24, #25, #26.
+
+---
+
 ## Recommended next move
 
 The Tier 1 thesis is validated. The lighting curator (shipped 2026-05-06) caught a real Slice B anti-pattern during the fleet run. Per-commit feedback loop works. The fleet pattern itself is now battle-tested for this codebase.
@@ -261,7 +382,7 @@ Forward-looking candidates, in priority order:
 
 1. ✓ **Game Day Phase C integration shipped 2026-05-07** — `gameday` added to FloatingNav, theme.js MODE_CONFIG, Alexa HOMEHUB_MODE slot + lambda VALID_MODES. Voice end-to-end verified ("set relax mode" → `activity_events.source=alexa:SetModeIntent`). The verification surfaced a latent source-attribution bug in `set_manual_override` (engine hardcoded `source="manual"` instead of threading the route's `caller`), fixed in commit `31a1edf`. Documented in memory `project_override_caller_telemetry.md`.
 2. ✓ **β EventLogger wiring + agent fleet automation pass shipped 2026-05-07** — celebrations now write to `light_adjustments` with `trigger="celebration:<key>"` (commit `34fc550`); `gameday-preflight` + `gameday-postmortem` registered as spawnable; runbook entries #12 #13 + Pre-fire detector wired; lighting-curator hook elevated to required-ack via `[curator-reviewed]` token. Full trigger map in Part 5 above.
-3. **ML model evaluator** — wired, awaiting first fire 2026-05-11 10:00 ET (runbook entry #1). Recommendation flips from "ship it" to "evaluate the first weekly digest's per-lane output, then decide whether to re-add the predictor lane to fusion or retarget the audio gate." Memory: `project_ml_evaluator.md`, `project_step5_predictor_validation.md`.
-4. **α: Lighting palette + TTS line iteration for SEQUENCES** — Slice B placeholders still in place. User-driven authoring with curator review (now required-ack via the elevated hook + curator's section K celebration rules) on each diff before preseason 2026-08-15. Not an agent task per se; iterative collaboration.
-5. **γ: Pre-game ambient mode design** — was Game Day v2 deferred. Continuous Colts-tinted lighting earlier than T-30 (or extended baseline behavior). Spec session needed before implementation; revisit post-preseason once real-game data informs whether the pre-game ambient adds value.
+3. ✓ **ML autonomy + dev-velocity tooling rounds shipped 2026-05-11** — 15 new agents, 11 new skills, 3 new hooks, 4 new MCP servers, 2 LSPs, 5 plugins, 4 data files, 7 new runbook entries. See Part 6 above for the full reference.
+4. **Lighting palette + TTS line iteration for SEQUENCES** — Slice B placeholders still in place. User-driven authoring with curator review (now required-ack via the elevated hook + curator's section K celebration rules) on each diff before preseason 2026-08-15. Not an agent task per se; iterative collaboration.
+5. **Pre-game ambient mode design** — was Game Day v2 deferred. Continuous Colts-tinted lighting earlier than T-30 (or extended baseline behavior). Spec session needed before implementation; revisit post-preseason once real-game data informs whether the pre-game ambient adds value.
 6. **Memory hygiene auditor** (Tier 1) — defer. Quarterly cadence is too slow; `doc-drift-checker` (shipped 2026-05-07) covers structural drift, `doc-curator` (shipped 2026-05-07) covers long-form prose drift, and the Aug 1 remote agent runs the broad audit quarterly.
