@@ -192,12 +192,12 @@ EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
 
 ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # L5 ("Bedroom Lamp Right", clear housing, desk-side) added 2026-05-11.
-    # Phase A placeholder: L5 = L2 across every mode × period. Phase C
-    # (lighting-curator design pass) replaces these mirrors with values
-    # that exploit the clear housing's visible-bulb aesthetic — saturated
-    # peripheral accents in gaming, fire-effect host in relax night, etc.
-    # Until then L5 reads identically to L2, which is acceptable but
-    # wastes the fixture purchase.
+    # Phase A landed L5 = L2 mirror placeholder; Phase C (curator design pass,
+    # 2026-05-11) ships distinct L5 values across gaming/watching/relax to
+    # exploit the clear-housing aesthetic — bulb visible, sat reads sharper,
+    # warm-whites more "candle-y." Modes where L5 still mirrors L2 (working,
+    # cooking, gameday, social, watching-day) are either curator-approved
+    # mirror (matched task pair) or out-of-scope for Phase C.
     # ── Gaming ────────────────────────────────────────────────────────
     # Retuned 2026-05-05: blue palette (hue 46920–50000) is intentional and
     # maps onto the room's existing teal accents, but saturation 220–240
@@ -206,26 +206,31 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # weight. Added an explicit late_night state that warms toward relax-
     # adjacent values for past-23:00 sessions.
     "gaming": {
+        # L5 Phase C 2026-05-11: hue shifts toward room's teal accent (~48000)
+        # vs L2's Colts-blue (46920) — L1 lamp base + monstera pot teal benefit
+        # when L5 echoes them. Bri stepped back (peripheral vs L2 screen-adjacent
+        # primary). Sat lowered because seeded glass pops sat more than fabric —
+        # sat=200 produced aggressive bleed in bedroomLampRightGamingDay.jpeg.
         "day": {
             "1": {"on": True, "bri": 130, "hue": 47000, "sat": 180},
             "2": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
             "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
             "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
-            "5": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
+            "5": {"on": True, "bri": 180, "hue": 48500, "sat": 160},
         },
         "evening": {
             "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 190},
             "2": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
             "3": {"on": True, "bri": 22,  "hue": 50000, "sat": 190},
             "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 190},
-            "5": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
+            "5": {"on": True, "bri": 120, "hue": 48000, "sat": 170},
         },
         "night": {
             "1": {"on": True, "bri": 55,  "hue": 47000, "sat": 200},
             "2": {"on": True, "bri": 140, "hue": 46920, "sat": 200},
             "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 200},
             "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 200},
-            "5": {"on": True, "bri": 140, "hue": 46920, "sat": 200},
+            "5": {"on": True, "bri": 110, "hue": 48000, "sat": 175},
         },
         # Late-night gaming — warmer accent, less saturation, dimmed overall.
         # L1 shifts toward muted teal, L2 (desk dominant) keeps the blue but
@@ -235,7 +240,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 110, "hue": 46920, "sat": 170},
             "3": {"on": True, "bri": 18,  "hue": 50000, "sat": 180},
             "4": {"on": True, "bri": 18,  "hue": 50000, "sat": 180},
-            "5": {"on": True, "bri": 110, "hue": 46920, "sat": 170},
+            "5": {"on": True, "bri": 80,  "hue": 47500, "sat": 150},
         },
     },
     # ── Working ───────────────────────────────────────────────────────
@@ -284,19 +289,24 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 30,  "ct": 333},
             "5": {"on": True, "bri": 70,  "ct": 333},
         },
+        # L5 Phase C 2026-05-11: dimmer + warmer than L2 in watching evening/
+        # night. Seated user-perspective photo shows L5 in line-of-sight peripheral
+        # vision when projector is on — at L2-matched bri the visible bulb would
+        # glare. Pulled bri below the projector-safe floor, ct pushed warmer to
+        # blend into ambient darkness without competing with the screen.
         "evening": {
             "1": {"on": True, "bri": 65,  "ct": 400},
             "2": {"on": True, "bri": 40,  "ct": 400},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            "5": {"on": True, "bri": 40,  "ct": 400},
+            "5": {"on": True, "bri": 20,  "ct": 454},
         },
         "night": {
             "1": {"on": True, "bri": 60,  "ct": 454},
             "2": {"on": True, "bri": 30,  "ct": 454},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            "5": {"on": True, "bri": 30,  "ct": 454},
+            "5": {"on": True, "bri": 15,  "ct": 500},
         },
     },
     # ── Social ────────────────────────────────────────────────────────
@@ -366,19 +376,29 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 85, "hue": 8000,  "sat": 190},
         },
+        # L5 Phase C 2026-05-11: raised above L2 mirror so it registers as a
+        # genuine second accent — bedroomL2andL5TogetherSittingAtDesk.jpeg
+        # showed L5 at bri=55 as a "barely-perceptible spark" while L2
+        # dominated. Hue 6000 (deeper amber) vs L2's 6500 creates variation
+        # without clash. Sat 210 < L2's 220 because seeded glass pops sat.
         "evening": {
             "1": {"on": True, "bri": 70, "hue": 6000,  "sat": 230},
             "2": {"on": True, "bri": 55, "hue": 6500,  "sat": 220},
             "3": {"on": True, "bri": 15, "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 15, "hue": 20000, "sat": 100},
-            "5": {"on": True, "bri": 55, "hue": 6500,  "sat": 220},
+            "5": {"on": True, "bri": 75, "hue": 6000,  "sat": 210},
         },
+        # L5 Phase C 2026-05-11: brighter seed for the fire-effect host. Fire is
+        # scoped to L1+L2+L5 (per EFFECT_AUTO_MAP), so L5 at higher bri makes
+        # it the left-anchor of a two-point flicker that frames the monitor.
+        # Hue 4000 (deeper than L2's 4500) and sat 240 < L2's 254 — distinct
+        # left ember vs L2's right ember without identical-twin clone effect.
         "night": {
             "1": {"on": True, "bri": 38, "hue": 5000,  "sat": 254},
             "2": {"on": True, "bri": 28, "hue": 4500,  "sat": 254},
             "3": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},
-            "5": {"on": True, "bri": 28, "hue": 4500,  "sat": 254},
+            "5": {"on": True, "bri": 38, "hue": 4000,  "sat": 240},
         },
         # Late-night relax — retuned 2026-05-05. L1/L2 sat254 at bri 28/22
         # produced oppressive cave-burgundy. Sat dropped to 240 (still
