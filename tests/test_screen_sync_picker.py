@@ -1,16 +1,18 @@
 """
 Tests for the sticky-cluster dominant-color picker.
 
-The k-means picker in ``screen_sync_agent`` and ``screen_sync`` used to
-re-choose the "best" cluster each frame from scratch. When two clusters
-scored near-ties, the chosen color cycled on every capture (reported as
-"L2 cycling through colors during League"). These tests verify the sticky
-behavior that replaced it:
+The k-means picker in ``screen_sync_agent`` used to re-choose the "best"
+cluster each frame from scratch. When two clusters scored near-ties, the
+chosen color cycled on every capture (reported as "L2 cycling through
+colors during League"). These tests verify the sticky behavior that
+replaced it, now structured as a per-region ``StickyClusterPicker`` class
+so left/right region pickers don't share state:
 
   - a stable scene with two near-tied saturated clusters doesn't flip.
   - a genuine color change still breaks through when the new best beats
     the prior winner by more than ``_STICKY_SCORE_MARGIN``.
   - a dark scene holds the prior color instead of snapping to near-black.
+  - two picker instances do not share each other's prior.
 """
 
 import numpy as np
@@ -51,25 +53,17 @@ def _pixels_mixing(rgb_a: tuple[int, int, int], rgb_b: tuple[int, int, int],
     return np.clip(np.vstack([a, b]) + noise, 0, 255)
 
 
-def _reset_sticky_state() -> None:
-    agent._last_center = None
-    agent._last_picked_at = 0.0
-
-
-class TestStickyPicker:
-    def setup_method(self) -> None:
-        _reset_sticky_state()
-
+class TestStickyClusterPicker:
     def test_near_tied_clusters_do_not_flip(self) -> None:
         """Two saturated colors at similar scores should pick one and stick."""
         red = (220, 40, 40)
         blue = (40, 40, 220)
 
-        pixels = _pixels_mixing(red, blue)
-        first = agent._pick_dominant_kmeans(pixels)
+        picker = agent.StickyClusterPicker()
+        first = picker.pick(_pixels_mixing(red, blue))
 
         # 10 more frames of the same mixed scene — output should not cycle.
-        picks = [agent._pick_dominant_kmeans(_pixels_mixing(red, blue)) for _ in range(10)]
+        picks = [picker.pick(_pixels_mixing(red, blue)) for _ in range(10)]
 
         # All picks should stay close (in RGB Euclidean space) to the first.
         for pick in picks:
@@ -83,13 +77,11 @@ class TestStickyPicker:
         red = (220, 40, 40)
         blue = (40, 40, 220)
 
-        # Establish prior: pure red scene.
-        red_pixels = _pixels_mixing(red, red, n_each=200)
-        agent._pick_dominant_kmeans(red_pixels)
+        picker = agent.StickyClusterPicker()
+        picker.pick(_pixels_mixing(red, red, n_each=200))
 
         # Now feed a pure blue scene — score gap is huge, should switch.
-        blue_pixels = _pixels_mixing(blue, blue, n_each=200)
-        pick = agent._pick_dominant_kmeans(blue_pixels)
+        pick = picker.pick(_pixels_mixing(blue, blue, n_each=200))
 
         # Closer to blue than to red.
         dist_to_blue = np.linalg.norm(np.array(pick) - np.array(blue))
@@ -99,13 +91,13 @@ class TestStickyPicker:
     def test_dark_scene_holds_prior_instead_of_black(self) -> None:
         """When no saturated cluster exists, prefer prior over the darkest cluster."""
         orange = (230, 120, 40)
-        orange_pixels = _pixels_mixing(orange, orange, n_each=200)
-        prior_pick = agent._pick_dominant_kmeans(orange_pixels)
+        picker = agent.StickyClusterPicker()
+        prior_pick = picker.pick(_pixels_mixing(orange, orange, n_each=200))
 
         # Dark scene: all near-black, no cluster passes saturation gate.
         rng = np.random.default_rng(1)
         dark = rng.integers(0, 25, size=(400, 3)).astype(np.float32)
-        pick = agent._pick_dominant_kmeans(dark)
+        pick = picker.pick(dark)
 
         # Pick should stay near the prior orange, not collapse to near-black.
         # (Dark fallback only applies when no saturated candidate exists AND
@@ -123,16 +115,44 @@ class TestStickyPicker:
     def test_staleness_resets_prior(self) -> None:
         """After the staleness window, the picker should treat state as fresh."""
         red = (220, 40, 40)
-        red_pixels = _pixels_mixing(red, red, n_each=200)
-        agent._pick_dominant_kmeans(red_pixels)
-        assert agent._last_center is not None
+        picker = agent.StickyClusterPicker()
+        picker.pick(_pixels_mixing(red, red, n_each=200))
+        assert picker.last_center is not None
 
         # Fast-forward: pretend the prior pick happened long ago.
-        agent._last_picked_at -= agent._STICKY_STALENESS_SEC + 1
+        picker.last_picked_at -= agent._STICKY_STALENESS_SEC + 1
 
         blue = (40, 40, 220)
-        blue_pixels = _pixels_mixing(blue, blue, n_each=200)
-        pick = agent._pick_dominant_kmeans(blue_pixels)
+        pick = picker.pick(_pixels_mixing(blue, blue, n_each=200))
 
         # With staleness triggered, should pick blue freely (no prior bias).
         assert pick[2] > pick[0], f"stuck on stale prior: pick={pick}"
+
+    def test_two_pickers_keep_independent_state(self) -> None:
+        """Left/right region pickers must not contaminate each other's prior.
+
+        Dual-region screen sync runs one picker per half of the screen. If
+        they shared module-level state, a red-dominant left half would force
+        the right half's blue-dominant scene to bias toward red.
+        """
+        red = (220, 40, 40)
+        blue = (40, 40, 220)
+
+        left = agent.StickyClusterPicker()
+        right = agent.StickyClusterPicker()
+
+        # Establish independent priors.
+        left_pick = left.pick(_pixels_mixing(red, red, n_each=200))
+        right_pick = right.pick(_pixels_mixing(blue, blue, n_each=200))
+
+        # left stays red-leaning, right stays blue-leaning.
+        assert left_pick[0] > left_pick[2], f"left wrong: {left_pick}"
+        assert right_pick[2] > right_pick[0], f"right wrong: {right_pick}"
+
+        # Now feed a near-tied red+blue scene to both. Each should sticky-bias
+        # toward its own prior — left stays warm, right stays cool — without
+        # the two regions converging on the same color.
+        l2 = left.pick(_pixels_mixing(red, blue))
+        r2 = right.pick(_pixels_mixing(red, blue))
+        assert l2[0] > l2[2], f"left lost its prior: {l2}"
+        assert r2[2] > r2[0], f"right lost its prior: {r2}"

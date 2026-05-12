@@ -23,6 +23,7 @@ from backend.api.schemas.automation import (
     ManualOverride,
     MicCalibrationResult,
     ModeBrightnessConfig,
+    RegionColor,
     ScreenColorReport,
     TimeScheduleConfig,
 )
@@ -38,6 +39,14 @@ SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
 DND_STATE_KEY = "dnd_state"
 OVERRIDE_STATE_KEY = "override_state"
+
+# Screen-sync region → Hue light id. Left half drives L2 (fabric-shade
+# bedroom lamp, screen-adjacent); right half drives L5 (clear-housing
+# bedroom lamp). Unknown region names are ignored at dispatch.
+SCREEN_SYNC_REGION_TO_LIGHT: dict[str, str] = {
+    "left": "2",
+    "right": "5",
+}
 
 # Settings-page defaults for the watching-posture tuning knobs. The values
 # here mirror the hardcoded fall-back in screen_sync.py and automation_engine
@@ -219,9 +228,15 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     Receive a screen color sample from the desktop pc_agent or laptop loopback.
 
     The current automation mode gates application: colors only reach the
-    bedroom lamp if the mode is in SCREEN_SYNC_MODES (gaming, watching).
+    bedroom lamps if the mode is in SCREEN_SYNC_MODES (gaming, watching).
     Off-mode colors are accepted (so the agent doesn't error) but dropped
-    silently — the response distinguishes via the `applied` field.
+    silently — the response distinguishes via the ``applied`` field.
+
+    Two payload shapes:
+      - Legacy ``{r, g, b, source}`` — applied to L2 only.
+      - Dual-region ``{regions: {"left": {...}, "right": {...}}, source}`` —
+        ``left`` → L2, ``right`` → L5. Each lamp dispatches independently
+        with its own EMA smoothing and brightness cap.
     """
     engine = getattr(request.app.state, "automation", None)
     sync = getattr(request.app.state, "screen_sync", None)
@@ -231,12 +246,20 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
-    # Don't trample a manually-set bedroom lamp. If the user has dragged L2's
-    # slider during watching/gaming, mark_light_manual stamped it; the same
-    # "manual sticks" rule that protects automation reconcile should pause
-    # screen-sync writes until the override is released (mode change / 4h).
-    if sync.target_light in engine.manual_light_overrides:
-        return {"status": "ok", "applied": False, "reason": "manual_override"}
+    # Build the per-light dispatch map. Dual-region payload wins; legacy
+    # single-color falls through to the primary target (L2). An empty payload
+    # is accepted (no error) but returns applied=False so the agent stays dumb.
+    targets: dict[str, RegionColor] = {}
+    if report.regions:
+        for name, rc in report.regions.items():
+            light_id = SCREEN_SYNC_REGION_TO_LIGHT.get(name)
+            if light_id is not None:
+                targets[light_id] = rc
+    elif report.r is not None and report.g is not None and report.b is not None:
+        targets[sync.target_light] = RegionColor(r=report.r, g=report.g, b=report.b)
+
+    if not targets:
+        return {"status": "ok", "applied": False, "reason": "empty_payload"}
 
     # Pull zone + posture from the camera service so the sync cap can differ
     # between watching-at-desk (brighter bias), watching-in-bed-reclined
@@ -245,16 +268,33 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     zone = getattr(camera, "zone", None) if camera else None
     posture = getattr(camera, "posture", None) if camera else None
 
-    await sync.apply_color(
-        report.r,
-        report.g,
-        report.b,
-        mode=engine.current_mode,
-        source=report.source,
-        zone=zone,
-        posture=posture,
-    )
-    return {"status": "ok", "applied": True}
+    # Per-light manual-override gate. If the user dragged L2's slider while
+    # screen-sync is running, we pause writes for that lamp but the other can
+    # still react — independent override semantics match the independent
+    # smoothing state in ScreenSyncService.
+    applied: list[str] = []
+    skipped: list[str] = []
+    for light_id, rc in targets.items():
+        if light_id in engine.manual_light_overrides:
+            skipped.append(light_id)
+            continue
+        await sync.apply_color(
+            light_id,
+            rc.r,
+            rc.g,
+            rc.b,
+            mode=engine.current_mode,
+            source=report.source,
+            zone=zone,
+            posture=posture,
+        )
+        applied.append(light_id)
+
+    response: dict = {"status": "ok", "applied": bool(applied), "lights": applied}
+    if skipped:
+        response["skipped"] = skipped
+        response["reason"] = "manual_override"
+    return response
 
 
 @router.get("/screen-sync/status")

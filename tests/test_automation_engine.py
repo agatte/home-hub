@@ -919,16 +919,19 @@ class TestZonePostureOverlay:
 # ---------------------------------------------------------------------------
 
 class TestScreenSyncPostureCap:
-    """The MODE_ZONE_MAX_BRIGHTNESS lookup honors posture when available."""
+    """MODE_ZONE_MAX_BRIGHTNESS entries are keyed by light id."""
 
-    def test_exact_posture_match_wins(self):
+    def test_exact_posture_match_wins_per_light(self):
         from backend.services.screen_sync import MODE_ZONE_MAX_BRIGHTNESS
-        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "reclined")] == 25
-        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "upright")] == 60
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "reclined", "2")] == 25
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "upright",  "2")] == 60
+        # L5 caps are stepped down because the clear housing reads brighter.
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "reclined", "5")] == 20
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "bed", "upright",  "5")] == 50
 
     def test_desk_entry_preserved(self):
         from backend.services.screen_sync import MODE_ZONE_MAX_BRIGHTNESS
-        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk")] == 180
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk", "2")] == 180
 
 
 # ---------------------------------------------------------------------------
@@ -944,23 +947,25 @@ class TestWatchingPostureRuntimeTuning:
 
     def test_screen_sync_cap_override_wins(self, mock_hue):
         from backend.services.screen_sync import ScreenSyncService
-        sync = ScreenSyncService(mock_hue)
-        # Default from hardcoded dict.
-        assert sync.get_cap("watching", "bed", "reclined") == 25
-        # Override — settings slider dropped it to 10.
+        sync = ScreenSyncService(mock_hue, target_light_ids=["2", "5"])
+        # Default from hardcoded dict (L2 reclined cap = 25).
+        assert sync.get_cap("watching", "2", "bed", "reclined") == 25
+        # Override — settings slider dropped L2's reclined cap to 10.
         sync.set_cap_override("watching", "bed", "reclined", 10)
-        assert sync.get_cap("watching", "bed", "reclined") == 10
+        assert sync.get_cap("watching", "2", "bed", "reclined") == 10
+        # L5's parallel entry is untouched.
+        assert sync.get_cap("watching", "5", "bed", "reclined") == 20
         # Sibling entries untouched.
-        assert sync.get_cap("watching", "bed", "upright") == 60
-        assert sync.get_cap("watching", "desk", "upright") == 180
+        assert sync.get_cap("watching", "2", "bed", "upright") == 60
+        assert sync.get_cap("watching", "2", "desk", "upright") == 180
 
     def test_screen_sync_cap_fallback_order(self, mock_hue):
         from backend.services.screen_sync import ScreenSyncService
-        sync = ScreenSyncService(mock_hue)
-        # Posture missing — falls back to (mode, zone).
-        assert sync.get_cap("watching", "desk", None) == 180
-        # Mode-only fallback.
-        assert sync.get_cap("working", None, None) > 0
+        sync = ScreenSyncService(mock_hue, target_light_ids=["2", "5"])
+        # Posture missing — falls back to (mode, zone, light_id).
+        assert sync.get_cap("watching", "2", "desk", None) == 180
+        # Mode-only fallback (L2 working has no entry → default).
+        assert sync.get_cap("working", "2", None, None) > 0
 
     def test_engine_l1_override_scales_reclined_night(self, engine):
         engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
