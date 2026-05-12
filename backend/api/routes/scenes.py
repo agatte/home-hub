@@ -457,6 +457,14 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
     hue_v2 = getattr(request.app.state, "hue_v2", None)
     ws_manager = request.app.state.ws_manager
 
+    # Stamp every light a scene touches as manually-overridden so the next
+    # automation reconcile (60s cadence) doesn't roll the scene back to the
+    # current mode's ACTIVITY_LIGHT_STATES values. Mirrors the existing
+    # behavior in lights.py PUT — both endpoints write user-intent state
+    # to the bridge, so both should preserve through reconcile until the
+    # user explicitly hands control back (tap "auto", change mode, etc.).
+    automation = getattr(request.app.state, "automation", None)
+
     # Check curated preset
     if scene_id in SCENE_PRESETS:
         if not hue.connected:
@@ -472,6 +480,10 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
         # Then apply paired effect if the scene has one
         await _activate_effect_if_needed(hue_v2, preset.get("effect"))
+
+        if automation:
+            for lid in preset["lights"]:
+                automation.mark_light_manual(str(lid))
 
         await asyncio.sleep(0.3)
         lights = await hue.get_all_lights()
@@ -506,6 +518,10 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                 await _activate_per_light(hue, light_states)
                 await _activate_effect_if_needed(hue_v2, effect)
 
+                if automation:
+                    for lid in light_states:
+                        automation.mark_light_manual(str(lid))
+
                 await asyncio.sleep(0.3)
                 lights = await hue.get_all_lights()
                 for light in lights:
@@ -538,6 +554,16 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
     await asyncio.sleep(0.5)
     lights = await hue.get_all_lights()
+    # Bridge scenes don't expose a per-light manifest through our path, so
+    # stamp every light the bridge currently reports — over-marking is
+    # acceptable here (bridge scenes are whole-apartment vibes; a user tap
+    # on "auto" releases). Lights that the scene didn't touch already
+    # have whatever state automation set; reconcile would only no-op them.
+    if automation:
+        for light in lights:
+            lid = light.get("light_id") if isinstance(light, dict) else None
+            if lid is not None:
+                automation.mark_light_manual(str(lid))
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
