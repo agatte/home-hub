@@ -290,8 +290,13 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 160, "ct": 400},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            # L5 late_night: photo-validated by workingBothLampsLateNight.JPEG.
-            "5": {"on": True, "bri": 120, "ct": 440},
+            # L5 late_night: tuned down 2026-05-12 after live use — Phase C
+            # pass-3 value (bri=120, ct=440) was photo-validated but in
+            # actual practice the clear housing still read bright. bri 120→100
+            # and ct 440→454 (matches L1's late_night ct exactly) — L5 now
+            # sits slightly below L1's bri=90 anchor to compensate for the
+            # clear-housing perceived-brightness amplification.
+            "5": {"on": True, "bri": 100, "ct": 454},
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
