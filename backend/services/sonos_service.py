@@ -3,6 +3,7 @@ Sonos speaker service — wraps SoCo for local UPnP control.
 """
 import asyncio
 import logging
+import random
 import re
 import time
 from typing import Any, Optional
@@ -438,6 +439,26 @@ class SonosService:
 
         return results
 
+    def _shuffle_and_play(self, device) -> None:
+        """Set SHUFFLE play mode and start at a random queue index.
+
+        Belt-and-suspenders for "always shuffle on play": SoCo's ``SHUFFLE``
+        play_mode randomizes advancement, but the underlying renderer may
+        still play queue position 0 first — picking a random start index
+        guarantees the first track varies between replays. ``SHUFFLE`` =
+        shuffle + repeat-all per SoCo's enum, so playlists also loop.
+
+        Called as a sync function via ``_safe_call`` so the network writes
+        run on the SoCo thread the rest of the service uses.
+        """
+        try:
+            queue_size = int(getattr(device, "queue_size", 0))
+        except Exception:
+            queue_size = 0
+        device.play_mode = "SHUFFLE"
+        start = random.randint(0, queue_size - 1) if queue_size > 1 else 0
+        device.play_from_queue(start)
+
     async def play_favorite(self, title: str) -> bool:
         """
         Play a Sonos favorite or playlist by title.
@@ -447,6 +468,10 @@ class SonosService:
         raw SoCo DidlObject so SoCo can build the DIDL metadata internally.
         Non-queueable favorites (radio streams) fall back to play_uri with
         explicit metadata.
+
+        Playback always starts in ``SHUFFLE`` mode at a random queue index —
+        re-selecting a favorite picks a fresh track each time, and guests
+        cycling through vibe tiles don't get stuck on the first few songs.
 
         Args:
             title: The favorite's display name (case-insensitive match).
@@ -467,7 +492,7 @@ class SonosService:
                     try:
                         await self._safe_call(self._device.clear_queue)
                         await self._safe_call(self._device.add_to_queue, pl)
-                        await self._safe_call(self._device.play_from_queue, 0)
+                        await self._safe_call(self._shuffle_and_play, self._device)
                     except Exception as e:
                         logger.warning(
                             "Queue play failed mid-sequence for '%s': %s — retrying",
@@ -475,14 +500,14 @@ class SonosService:
                         )
                         try:
                             await self._safe_call(self._device.add_to_queue, pl)
-                            await self._safe_call(self._device.play_from_queue, 0)
+                            await self._safe_call(self._shuffle_and_play, self._device)
                         except Exception as e2:
                             logger.error(
                                 "Queue recovery also failed for '%s': %s",
                                 pl.title, e2,
                             )
                             return False
-                    logger.info(f"Playing Sonos playlist: {pl.title}")
+                    logger.info(f"Playing Sonos playlist: {pl.title} (shuffled)")
                     return True
         except Exception as e:
             logger.error(f"Error searching Sonos playlists: {e}")
@@ -513,8 +538,8 @@ class SonosService:
                 try:
                     await self._safe_call(self._device.clear_queue)
                     await self._safe_call(self._device.add_to_queue, ref)
-                    await self._safe_call(self._device.play_from_queue, 0)
-                    logger.info(f"Playing Sonos favorite via queue: {fav_obj.title}")
+                    await self._safe_call(self._shuffle_and_play, self._device)
+                    logger.info(f"Playing Sonos favorite via queue: {fav_obj.title} (shuffled)")
                     return True
                 except Exception as e:
                     logger.error(
