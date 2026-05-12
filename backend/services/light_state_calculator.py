@@ -244,27 +244,43 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         },
     },
     # ── Working ───────────────────────────────────────────────────────
+    # L5 Phase C pass-3 (2026-05-12) — workingBothLampsLateNight.JPEG showed
+    # that at L5=L2 mirror values, L5's clear housing reads COOLER and
+    # BRIGHTER than L2's fabric shade despite identical bri/ct (transparent
+    # enclosure emits raw bulb output; fabric diffuses + holds it). Net
+    # effect was "two different temperature sources fighting" not "flat-lit
+    # twin." Gradient corrects by warming + dimming L5 to pull it toward L2's
+    # apparent warmth — creates a deliberate ambient step-back instead of
+    # accidental brightness incoherence. Pattern: L1 fill ≈ L5 ambient
+    # step-back < L2 dominant.
     "working": {
         "day": {
             "1": {"on": True, "bri": 180, "ct": 233},
             "2": {"on": True, "bri": 254, "ct": 210},
             "3": {"on": True, "bri": 140, "ct": 250},
             "4": {"on": True, "bri": 140, "ct": 250},
-            "5": {"on": True, "bri": 254, "ct": 210},
+            # L5 day: bri step-back from 254, ct=233 matches L1 to avoid a
+            # dual-CT fight in the desk zone (L2 at ct=210 is the daytime
+            # exception; L1+L5 anchor at 233 for coherence).
+            "5": {"on": True, "bri": 220, "ct": 233},
         },
         "evening": {
             "1": {"on": True, "bri": 100, "ct": 370},
             "2": {"on": True, "bri": 180, "ct": 333},
             "3": {"on": True, "bri": 60,  "ct": 400},
             "4": {"on": True, "bri": 60,  "ct": 400},
-            "5": {"on": True, "bri": 180, "ct": 333},
+            # L5 evening: dim + warm step-back (fixture physics already
+            # push L5 cooler at mirror values; correction reverses it).
+            "5": {"on": True, "bri": 140, "ct": 370},
         },
         "night": {
             "1": {"on": True, "bri": 60,  "ct": 440},
             "2": {"on": True, "bri": 130, "ct": 370},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            "5": {"on": True, "bri": 130, "ct": 370},
+            # L5 night: depth gradient — L2 stays dominant desk read,
+            # L5 sits in ambient layer alongside L1.
+            "5": {"on": True, "bri": 100, "ct": 400},
         },
         # Distinct from night: warmer and slightly brighter so 1am+ desk
         # work stays readable without falling back to relax-dim. Kitchen
@@ -274,7 +290,8 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "2": {"on": True, "bri": 160, "ct": 400},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            "5": {"on": True, "bri": 160, "ct": 400},
+            # L5 late_night: photo-validated by workingBothLampsLateNight.JPEG.
+            "5": {"on": True, "bri": 120, "ct": 440},
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
