@@ -673,7 +673,7 @@ async def lifespan(app: FastAPI):
     # legitimate downtime isn't flagged stale.
     heartbeats.register("event_logger_retry", 30.0)
     if hue.connected:
-        heartbeats.register("hue", 1.0)
+        heartbeats.register("hue", 0.5)
     if sonos.connected:
         heartbeats.register("sonos", 2.0)
     heartbeats.register("automation", 60.0)
