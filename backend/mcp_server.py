@@ -469,6 +469,31 @@ async def query_db(sql: str) -> list[dict]:
     it. Results are capped at 1000 rows; the caller can re-query with a
     tighter WHERE / LIMIT if needed.
 
+    Hot event-table schemas (column names matter — guessing produces
+    OperationalError noise in Sentry):
+
+      activity_events       id, timestamp, mode, previous_mode, source,
+                            duration_seconds, zone, posture, audio_class, lux
+      light_adjustments     id, timestamp, light_id, light_name,
+                            bri_before, bri_after, hue_before, hue_after,
+                            sat_before, sat_after, ct_before, ct_after,
+                            mode_at_time, trigger
+                            (NO on/off column — on/off lives implicit in bri)
+      sonos_playback_events id, timestamp, event_type, favorite_title,
+                            mode_at_time, volume, triggered_by, weather_class
+      scene_activations     id, timestamp, scene_id, scene_name, source,
+                            mode_at_time
+      ml_decisions          id, timestamp, source, mode_suggested, confidence,
+                            won, weight, signal_details (JSON)
+      ml_metrics            id, timestamp, source, metric_name, metric_value
+      learned_rules         id, day_of_week, hour, dominant_mode, support,
+                            confidence, enabled, created_at, last_applied_at
+
+    Timestamps are UTC ISO8601; use ``datetime(timestamp,'localtime')`` to
+    render. ``light_adjustments.trigger`` values: "ws" / "rest" / "scene" /
+    "automation" / "all_lights" / "transit" / "celebration:<key>". Full
+    schemas in backend/models.py.
+
     Args:
         sql: A SELECT query, e.g. "SELECT * FROM mode_playlists"
 
