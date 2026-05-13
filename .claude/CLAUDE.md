@@ -9,20 +9,9 @@
 
 ## Project Overview
 
-Home Hub is an always-on personal command center built for one apartment and one person. It controls Philips Hue lights and a Sonos Era 100 speaker from a single, visually striking dashboard running on a dedicated laptop display. The system detects what you're doing, adjusts lighting and music to match, and learns patterns over time until it can run on full autopilot.
+Home Hub is an always-on personal command center for one apartment. Philips Hue + Sonos Era 100, mode-aware animated dashboard (1080p dedicated Latitude), full-autopilot learning, Alexa voice control, Colts Game Day celebrations. **Core focus:** Lights and music seamlessly. Everything else builds on that.
 
-The dashboard is a living interface with bold, mode-aware themed backgrounds — a retro pixel art landscape during gaming, a scrolling pixel city during working, flowing aurora borealis for relax, a 3D moon scene while sleeping, and gradient blobs with particles as a fallback. It shows everything at a glance: current mode, light colors, now playing, weather, upcoming routines. It's also the home screen for other personal projects (plant app, bar app) via animated widget cards.
-
-**Core focus:** Lights and music working seamlessly. Everything else builds on that.
-
-### Goals
-- **Always-on command center** — 24/7 on a dedicated foldable laptop (1080p landscape), also works cleanly on mobile
-- **Invisible automation** — Detects activity, adjusts lights and music, manages routines without manual input
-- **Full autopilot learning** — Observes interactions, starts with simple rules, evolves toward autonomous decision-making
-- **Bold, living UI** — Animated backgrounds that change with mode and time of day
-- **Voice control** — Alexa via Fauxmo (7 WeMos) + Custom Skill (`command center` via Lambda+Tunnel)
-- **Game day magic** — Colts games: synchronized lights, TTS celebrations, live scoreboard, pixel art field
-- **Personal, not generic** — Every rule, mode, animation, and routine tuned for one person's apartment
+Full vision and goals: `docs/PROJECT_SPEC.md` § "Vision" + "Goals".
 
 ---
 
@@ -93,8 +82,13 @@ python -m backend.mcp_server
 
 ### Hooks (`.claude/settings.json` + `.claude/hooks/`)
 
+8 hooks live in `.claude/settings.json` — full reference in `docs/AGENT_STRATEGY.md` Part 6. The non-obvious ones:
+
 - **PostToolUse Edit/Write** (`post_edit_ruff.py`) — `backend/**/*.py` → `python -m ruff check --fix` (ruff via module, not on PATH). No frontend lint hook (`frontend-svelte` has no ESLint).
+- **PostToolUse Edit/Write** (`post_edit_env_validate.py`) — `.env*` only: required keys + empty-value + FRONTEND_BUILD path + smart-quote check.
+- **PostToolUse all-tools** (`post_tool_failure.py`) — logs failures to `~/.claude/data/tool_failures.jsonl`; consumed by `error-pattern-watcher`.
 - **SessionStart** (`session_start_homehub.py`) — injects mode/source/override + anomaly-only fields via `additionalContext`. Healthy systems stay terse.
+- **SubagentStop** (`subagent_stop_audit.py`) — logs every subagent completion to `~/.claude/data/subagent_audit.log`.
 - **PostToolUse Bash** (`post_git_push.py`) — after a real `git push`, nudges `/deploy-home`.
 - **PreToolUse Bash** (`pre_commit_lighting_curator.py`) — blocks `git commit` touching `light_state_calculator.py` / `scenes.py` / `celebration_orchestrator.py` + a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, `SEQUENCES`, …) unless the message contains `[curator-reviewed]`. Override: spawn `lighting-curator`, address, re-commit.
 - **PreToolUse Bash** (`pre_push_pr_review.py`) — blocks `git push` of Python/SvelteKit diffs unless PASS markers (`<git-dir>/.pr-review-{backend,frontend}-ok` = HEAD SHA) exist. Bypass: `SKIP_PR_REVIEW=1`. Docs/config-only pushes skip.
@@ -103,7 +97,7 @@ python -m backend.mcp_server
 
 Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
 
-Subagents (`~/.claude/agents/`) — full trigger map in `docs/AGENT_STRATEGY.md` Part 5. Active fleet: `homehub-verifier`, `deploy-verifier`, `lighting-curator`, `lighting-shopper`, `gameday-preflight`, `gameday-postmortem`, `ml-model-evaluator`, `homehub-investigator`, `pr-review-backend`, `pr-review-frontend`, `doc-drift-checker`, `doc-curator`, `roadmap-advisor`, `backup-verifier`.
+Subagents (`~/.claude/agents/`, 28 total) — fleet table + trigger map in `docs/AGENT_STRATEGY.md` Parts 1 + 5. Single canonical source — don't re-enumerate here.
 
 ### Ambient verification loop
 
@@ -127,13 +121,13 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, AmbientMonitor, MLLogger, CameraService, BarApp
+   │   └── mode-change callbacks ──> MusicMapper, AmbientMonitor, MLLogger, ModeVolumeService, CameraService, BarApp
    ├── ML Services (shipped) ──────> see docs/ML_SPEC.md
    │   ├── AudioClassifier ────────> YAMNet audio scene classification
    │   ├── BehavioralPredictor ────> LightGBM mode prediction
    │   ├── LightingLearner ────────> adaptive per-light preferences
    │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax)
-   │   └── MusicBandit ────────────> Thompson sampling playlist selection
+   │   └── MusicBandit ────────────> Thompson sampling playlist selection, context-aware (mode × period × weather_class)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
    ├── Scheduler ──────────────────> morning routine + nightly maintenance
@@ -158,82 +152,37 @@ Key additions beyond current:
 - **Database migration** — SQLite → PostgreSQL (Supabase) as event volume grows
 - See `docs/PROJECT_SPEC.md` for full target architecture diagram
 
-### Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Backend | Python 3.8+, FastAPI, uvicorn, async/await |
-| Database | SQLite via aiosqlite + SQLAlchemy 2.0 async ORM |
-| Frontend | SvelteKit 2 + Svelte 4, Threlte 7 (Three.js), Vite 5, Svelte writable stores |
-| Hue v1 | phue2 library (imports as `from phue import Bridge`) |
-| Hue v2 | CLIP API via httpx (self-signed cert, `verify=False`) |
-| Sonos | SoCo library (UPnP, zero-auth, SSDP discovery) |
-| TTS | edge-tts (Microsoft neural voices), gTTS fallback |
-| Screen Sync | mss (screen capture), RGB→HSB conversion |
-| PC Agent | psutil (process detection), PyAudio (ambient noise) |
-| Config | pydantic-settings, python-dotenv |
-| Timezone | America/Indiana/Indianapolis |
+Tech stack: `docs/PROJECT_SPEC.md` § "Tech Stack". Import quirks / gotchas: see § "Technical Limitations" below.
 
 ---
 
 ## Backend Service Guide
 
-- **`backend/main.py`** — App lifespan initializes all services, registers routes, starts background tasks (Hue polling, Sonos polling, automation loop, scheduler). WebSocket at `/ws`.
-- **`hue_service.py`** — v1/phue2: basic light control + 1s polling. Broadcasts changes via WebSocket.
-- **`hue_v2_service.py`** — CLIP API v2/httpx: native bridge scenes and dynamic effects. Maintains v1↔v2 UUID mapping cache.
-- **`sonos_service.py`** — SoCo wrapper: playback control, favorites, duck-and-resume snapshot.
-- **`tts_service.py`** — edge-tts → MP3 → Sonos play_uri. Duck-and-resume wraps playback.
-- **`automation_engine.py`** — 60s background loop. Time rules + activity reports → per-light state (per-light variation, not uniform). Supports CT + HSB. Drives effects via `EFFECT_AUTO_MAP` + weather overlays. `mode_scene_overrides` consulted before hardcoded states. `register_on_mode_change` callbacks. Manual overrides have 4h auto-timeout (sleeping exempt). Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0). `report_activity` force-resends the per-light dedup cache only on real mode changes; same-source heartbeats ride the cache. Late-night rescue + zone+posture rule + attendance vetoes live here. `_evaluate_zone_posture_rule` env-gated by `ZONE_POSTURE_RULE_APPLY`.
-- **`weather_service.py`** — NWS API, 5-min cache. Returns temp/feels_like/description/humidity/wind/icon/sunrise/sunset. Severe alerts polled every 2 min — descriptions override stale observations so storms surface immediately. No API key.
-- **`music_mapper.py`** — Maps activity modes to Sonos favorites (persisted to SQLite). On mode change: auto-plays if idle, broadcasts `music_suggestion` if busy. Registered as mode-change callback.
-- **`screen_sync.py`** — mss capture → dominant color → bedroom lamp. EMA smoothed, ~2.5s. Auto-starts in watching/gaming. Per-mode caps in `MODE_MAX_BRIGHTNESS`; zone/posture overrides via `MODE_ZONE_MAX_BRIGHTNESS` (3-tuple wins). `apply_color(zone=, posture=)` from route handler.
-- **`scheduler.py`** — Async cron scheduler (no external deps). Drives morning routine + nightly ML retrain / journal / fusion-tuning / retention sweep.
-- **`morning_routine.py`** — Fetches weather (via shared WeatherService) + commute (Google Maps), generates TTS, plays on Sonos.
-- **`library_import_service.py`** — Parses Apple Music/iTunes XML; extracts artist play counts + genre distribution.
-- **`recommendation_service.py`** — Last.fm `artist.getSimilar` discovery. 30-day DB cache, mode-specific seeds with cross-mode dedup.
-- **`pihole_service.py`** — Pi-hole v6 API client with session-based auth. Stats (60s cache), DNS host CRUD, blocklist CRUD. Auto-re-authenticates on 401.
-- **`camera_service.py`** — MediaPipe face+pose on the Latitude webcam, opt-in via `camera_enabled`. 2s polls @ 640×480 — **re-run lux calibration after any resolution change**. Face (BlazeFace) first; pose fallback declares present when ≥3 torso landmarks pass visibility. `detection_source` ∈ {face, pose, None}. ~30s absence → `report_activity(idle, "camera")`. **Zone** (`desk`/`bed`) + **posture** (`upright`/`reclined`) on `/api/camera/status`, hysteresis-gated. `_apply_zone_overlay`: `desk+watching` lifts L2; `bed+reclined` evening+ lowers L1/L2 (any mode except sleeping). Screen-sync cap keyed by `(mode, zone, posture)`. EMA lux (α=0.3) → `_apply_lux_multiplier` for working/relax/gaming/watching vs calibrated baseline. Pauses during sleeping. `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle.
-- **`transit_lighting_service.py`** — Brightens nav path (L1 + L3/L4) on camera absence + non-stationary zone in functional modes. Per-light overrides via `apply_transit_override` (reconcile-skipped). Reverts on re-presence ≥2s, 10-min timeout, or mode exit. Invisible UX.
-- **`pc_agent/activity_detector.py`** — psutil 5s → POST `/api/automation/activity`. `GAME_PROCESSES` excludes `javaw.exe` (JetBrains/Gradle false positives). Media is foreground-gated.
-- **`pc_agent/ambient_monitor.py`** — Blue Yeti RMS + YAMNet. RMS produces only "idle" edge + heartbeat. YAMNet runs in shadow for analytics; `silence→quiet` and `game_audio→watching` gates are live, the `speech_multiple→social` gate was abandoned 2026-05-09 (structurally unreachable). Social-mode is manual-override only. Never records audio.
+Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "Additional Services". Non-obvious footguns only:
+
+- **`sonos_service.py`** — Favorites always shuffled with random start via `_shuffle_and_play`.
+- **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (set false to shadow-log only). Late-night rescue + zone+posture rule + both attendance vetoes live in `run_loop`. Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0).
+- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping.
+- **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains/Gradle false positives). Media is foreground-gated.
+- **`pc_agent/ambient_monitor.py`** — `speech_multiple→social` gate abandoned 2026-05-09 (max observed score 0.088 across 838k rows; structurally unreachable). Social is manual-override only. Never records audio.
 
 ---
 
 ## Frontend
 
-- **`src/lib/stores/{lights,sonos,automation,music,connection,activity}.js`** — Svelte writable stores. WebSocket dispatches into them. `activity.js` tracks user idle state (60s timeout for auto-hide).
-- **`src/lib/ws.js`** — Shared WebSocket client + reconnect logic. Dispatches messages into the stores.
-- **`src/routes/+layout.svelte`** — App shell: ModeBackground + ModeOverlay + FloatingNav + NowPlayingChip + ErrorToast. No sidebar.
-- **`src/routes/+page.svelte`** — Home: SonosCard strip + QuickActions + widget grid (Mode, Weather, Lights, Scenes, Routines) + MusicSuggestionToast.
-- **`src/routes/music/+page.svelte`** — Taste profile, mode→playlist mapping, discovery feed. Glass card grid.
-- **`src/routes/settings/+page.svelte`** — Device status, automation config, light schedule, mode brightness sliders, mode→scene overrides, morning routine config, TTS test. Glass card grid.
-- **`src/lib/backgrounds/`** — Mode scenes: `PixelScene` (gaming), `ParallaxScene` (working, sprite layers + weather/time sky), `AuroraScene` (relax), `MoonScene` (sleeping, Threlte), `GenerativeCanvas` (fallback). `layer-config.js` per-mode PNG defs.
-- **`src/lib/components/footballfield/`** — `/gameday` 3D scene. `FieldScene` composes `BroadcastCamera` + `SkyDome` (HDRI + `GroundedSkybox`) + `StadiumModel` (Awbmegames GLB, name-substring mesh-hide) + `FieldSurface` (markings only) + `BallMarker` + `LightTowers` + `PostFX` (Bloom+ACES, `postprocessing@6.35.4`). Parent `<Canvas autoRender={false} toneMapping={NoToneMapping}>`. Spec: `docs/GAMEDAY_SPEC.md` §11.
-- **`src/lib/components/ModeBackground.svelte`** — Routes `$automation.mode` to the appropriate scene.
-- **`src/lib/components/{SceneBrowser,WeatherCard}.svelte`** — Scene browser (tabbed) and NWS weather widget.
-- **`src/lib/theme.js`** — MODE_CONFIG, LIGHT_COLOR_PRESETS, LIGHT_CT_PRESETS, SCENE_CATEGORIES, VIBE_COLORS.
-- Typography: Bebas Neue (display/mode) + Source Sans 3 (body). Lucide SVG icons.
-- Built frontend served by FastAPI via `/{path:path}` catch-all (must come after all API routes).
+Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Backgrounds". Key layout: `src/lib/stores/` (WS → stores), `src/lib/ws.js` (reconnect), `src/lib/backgrounds/` (mode scenes), `src/routes/` (4 pages + hidden `/journal` + `/guest/*`). Typography: Bebas Neue (display) + Source Sans 3 (body). Lucide SVG icons.
+
+**Gotcha — Game Day 3D field:** `<Canvas autoRender={false} toneMapping={NoToneMapping}>` is required; see `docs/GAMEDAY_SPEC.md` §11 + memory `project_gameday_3d_field_gotchas.md`. `postprocessing@6.35.4` peer dep must stay pinned.
+
+**Gotcha — catch-all order:** Built frontend is served via `/{path:path}`; this must be registered in `main.py` AFTER all `/api/` routes or the API is shadowed.
 
 ---
 
 ## WebSocket Protocol
 
-**Endpoint:** `ws://host:8000/ws`
-All messages: JSON with `type` + `data` fields.
+**Endpoint:** `ws://host:8000/ws`. Full message-type reference: `docs/PROJECT_SPEC.md` § "WebSocket Protocol".
 
-### Server → Client
-
-| Type | Trigger | Data |
-|------|---------|------|
-| `connection_status` | On connect | `{hue: bool, sonos: bool, build_id: str}` |
-| `mode_update` | On connect + mode change | `{mode, source, manual_override}` |
-| `light_update` | Polling detects change | `{light_id, name, on, bri, hue, sat, reachable}` |
-| `sonos_update` | Polling detects change | `{state, track, artist, album, art_url, volume, mute}` |
-| `music_auto_played` | Auto-play triggered | `{mode, title}` |
-| `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
-
-`build_id` is the short git SHA from backend startup. Frontend stashes the first per session; mismatch on later `connection_status` triggers `window.location.reload()` — that's how the kiosk auto-refreshes after deploy restarts.
+**build_id kiosk-reload:** `connection_status` carries the short git SHA. Frontend stashes the first per session; mismatch on reconnect triggers `window.location.reload()` — that's how the kiosk auto-refreshes after a deploy restart.
 
 ### Client → Server
 
@@ -256,7 +205,7 @@ All messages: JSON with `type` + `data` fields.
 | Weather | `/api/weather` | Current conditions (5-min cache, NWS), alerts |
 | Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides, DND (POST/DELETE/GET `/dnd`) |
 | Sonos | `/api/sonos` | Transport (play/pause/next/prev), volume, TTS, favorites |
-| Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback |
+| Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback, iTunes preview playback (`POST /preview` with DIDL-Lite metadata), bandit arm landscape (`GET /bandit-status`) |
 | Routines | `/api/routines` | Morning routine config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
@@ -351,22 +300,9 @@ Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `spa
 
 ---
 
-## Database Schema (Current Tables)
+## Database Schema
 
-| Table | Purpose |
-|-------|---------|
-| `app_settings` | Key-value JSON config store (key, value, updated_at) |
-| `scenes` | User-created light presets (name, light_states JSON) |
-| `mode_playlists` | Mode → Sonos favorite mapping (mode, favorite_title, vibe_tags, auto_play, priority) |
-| `music_artists` | Library import data (name, genres, play_count, similar_artists) |
-| `taste_profile` | Aggregated music profile singleton (genre_distribution, top_artists, mode_genre_map) |
-| `recommendations` | Music recommendations (artist, track, preview_url, source_mode, status) |
-| `recommendation_feedback` | Like/dismiss actions on recommendations |
-| `mode_scene_overrides` | Mode+time → Hue scene mapping (mode, time_period, scene_id, scene_source, scene_name) |
-
-**Event tables (Phase 3, live):** `activity_events`, `light_adjustments`, `sonos_playback_events`, `scene_activations`, `learned_rules`. See `docs/PROJECT_SPEC.md` for full schema.
-
-**Data retention:** 90-day rolling window; older data aggregated into weekly summaries.
+Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Data retention: 90-day rolling window.
 
 ---
 
@@ -429,6 +365,9 @@ ZONE_POSTURE_RULE_APPLY=true   # Zone+posture→relax actuation. Default True (l
 HOME_HUB_API_KEY=<urlsafe random>  # Write-endpoint gate. Unset → 503. Localhost + RFC1918 LAN auto-bypass.
 HOME_HUB_SKILL_TOKEN=<urlsafe random>  # Tunnel-origin auth (Alexa Skill), paired with API_KEY.
 TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs).
+
+# Observability
+SENTRY_DSN=                    # Optional — Sentry DSN from home-hub.sentry.io. Unset disables ingestion.
 
 # Guest WiFi (surfaces QR on home dashboard + /guest)
 GUEST_WIFI_SSID=               # Empty = "not configured"
@@ -494,11 +433,5 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 - **1080p landscape primary** — Animated backgrounds designed for this. Must degrade gracefully on mobile.
 - **Android tablet blank page** — Known issue, deferred.
 
-## Non-Goals
-
-- Not a multi-user platform (no auth, no user accounts)
-- Not a generic smart home hub (Hue + Sonos only, by design)
-- Not replacing Home Assistant or HomeKit
-- Not a general sports tracker (Game Day is Colts-specific)
-- Not a music streaming service (Sonos/Apple Music handle playback; Home Hub orchestrates)
+Non-goals + scope discussion: `docs/PROJECT_SPEC.md`.
 

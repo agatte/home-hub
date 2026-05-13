@@ -115,7 +115,9 @@ Phase 4 (Game Day, July–August) timeline stands. Phase 5: **Custom Alexa Skill
 
 ---
 
-### 5. Sonos Volume Curves Per Mode
+### 5. Sonos Volume Curves Per Mode — shipped 2026-05-12
+
+`ModeVolumeService` fades the speaker to a per-mode Sonos volume target on mode transitions. Registered as a mode-change callback in `bootstrap.py` alongside `MusicMapper`. Config persisted to `app_settings["mode_volume_curves"]` as `{mode: {day, evening, night, fade_duration_s}}`; defaults in `mode_volume_policy.py`. Endpoints: `GET /api/automation/mode-volume` (read merged config) + `PUT /api/automation/mode-volume` (update). TTS mid-speak defers the ramp 5s and retries once (TTS duck-and-resume snapshots volume; a concurrent ramp would be clobbered). Silent transport states (`STOPPED`, `NO_MEDIA_PRESENT`) skip the ramp — no point fading silence.
 
 → Tracked in [#17](https://github.com/agatte/home-hub/issues/17).
 
@@ -135,11 +137,13 @@ Phase 4 (Game Day, July–August) timeline stands. Phase 5: **Custom Alexa Skill
 
 ---
 
-### 8. Contextual Music Memory
+### 8. Contextual Music Memory — shipped 2026-05-12 (Phase B, weather dimension)
 
-Extend MusicBandit arms to include (mode, day_of_week, weather) context. "Rainy Friday relax" maps to different playlists than "sunny Saturday relax." Hierarchical priors from parent mode+period arms for cold start.
+MusicBandit arm key extended to `(mode, time_period, weather_class, title)` — "thunderstorm relax evening" maps to different priors than "clear relax evening." Weather classes: thunderstorm / rain / snow / clouds / golden_hour / clear / any (sentinel). Legacy 3-tuple arms migrate to 4-tuple on load (idempotent). New weather-specific arms warm-start from the corresponding `any` arm's accumulated priors so they don't begin at a flat Beta(1,1). `sonos_playback_events` gains a `weather_class` column (Phase B) so the nightly retrain can rebuild weather-aware arms from 90 days of history.
 
-**Touches:** `music_bandit.py` (expand arm key), `weather_service.py` integration
+Note: `day_of_week` was not included in Phase B — the arm key uses `time_period` (morning/day/evening/night) rather than a full day-of-week dimension. If day-of-week proves necessary, that would be a Phase C expansion.
+
+**Touches:** `music_bandit.py`, `music_mapper.py`, `weather_service.py` integration (live via `bootstrap.py` threading `weather_service` into `MusicMapper`).
 
 ---
 

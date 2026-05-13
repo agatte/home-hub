@@ -13,11 +13,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.services.automation_engine import (
+from backend.services.automation_engine import AutomationEngine
+from backend.services.light_state_calculator import (
     LUX_CURVE,
     LUX_MODES,
     LUX_STALE_SECONDS,
-    AutomationEngine,
     lux_to_multiplier,
 )
 

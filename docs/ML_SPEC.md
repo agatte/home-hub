@@ -565,20 +565,26 @@ preference to choose between playlists mapped to each mode. It doesn't learn
 from the user's actual play/skip behavior.
 
 **Solution:** Multi-armed bandit with Thompson sampling. Each (mode, time_period,
-favorite_title) is an "arm." Plays and accepted suggestions are rewards; skips
+weather_class, favorite_title) is an "arm." Plays and accepted suggestions are rewards; skips
 and dismissed suggestions are penalties. The bandit explores naturally while
 exploiting known preferences.
 
+Phase B (2026-05-12): `weather_class` added as the third dimension of the arm key so the
+bandit learns context-aware playlist preferences (e.g. "thunderstorm relax evening" vs "clear
+relax evening"). Legacy 3-tuple arms (`mode|period|title`) auto-migrate to 4-tuple
+(`mode|period|any|title`) on load — idempotent, no history is lost. New weather-specific arms
+warm-start from the corresponding `any` arm's accumulated priors.
+
 | Attribute | Value |
 |-----------|-------|
-| **Input** | `sonos_playback_events` (event_type, favorite_title, mode_at_time, triggered_by), `mode_playlists` (mode-to-favorite mappings with vibe tags) |
+| **Input** | `sonos_playback_events` (event_type, favorite_title, mode_at_time, triggered_by, weather_class), `mode_playlists` (mode-to-favorite mappings with vibe tags) |
 | **Algorithm** | Thompson sampling with Beta distribution priors. Each arm has parameters (alpha, beta). Reward increments alpha; penalty increments beta. Sample from Beta(alpha, beta) to rank arms. |
 | **Inference frequency** | On every mode change that triggers auto-play |
 | **Integration point** | Replace `_TIME_VIBE_PREFERENCE` heuristic in `MusicMapper.pick_playlist()` |
 | **CPU cost** | <1ms (sampling from Beta distributions) |
 | **RAM** | <1KB (Beta parameters per arm) |
-| **Cold start** | Start with informative priors from existing vibe preferences: Beta(3,1) for the currently-preferred vibe, Beta(1,1) for others. The bandit explores from there. |
-| **Storage** | `data/models/music_bandit.json` — dict of `{(mode, period, title): [alpha, beta]}` |
+| **Cold start** | Beta(3,1) for vibes matching the time-of-day heuristic, Beta(1,1) for all others. New weather-specific arms inherit the corresponding `any` arm's priors (warm-start). |
+| **Storage** | `data/models/music_bandit.json` — dict of `{"{mode}|{period}|{weather}|{title}": [alpha, beta]}`. Legacy 3-pipe keys auto-migrate to 4-pipe on load. |
 
 **Reward/penalty mapping:**
 
@@ -1376,7 +1382,7 @@ down 30% from baseline.
 
 **Implemented (April 14, 2026):**
 - ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
-- ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others. Rewards from play/skip behavior in `sonos_playback_events`. Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`. Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate.
+- ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, weather_class, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others; weather-specific arms warm-start from the matching `any` arm's priors. Rewards from play/skip behavior in `sonos_playback_events` (with `weather_class` column captured at log time). Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`, `GET /api/music/bandit-status` (Phase B, top arms grouped by mode × weather). Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate. Phase B (2026-05-12): weather_class added; legacy 3-tuple arms auto-migrate.
 - ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `silence` ≥70% for 60s → exit social/quiet, `game_audio` ≥75% → watching. The `speech_multiple` ≥80% for 30s → social gate was abandoned 2026-05-09 (structurally unreachable in production; the score is still emitted into `all_scores` for analytics — see §3.1). Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
 - ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. Captures one frame every 2s, downsampled to 320×240, runs face detection (~5ms CPU). 7 consecutive absent frames (~14s) triggers `away` mode — 40× faster than 10-minute idle timer. Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera source priority: `away` does not override process-detected gaming/working/watching; `idle` (present) does not downgrade higher-priority modes. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
 - ✓ **Adaptive Lux Brightness (shipped April 18, 2026)** — Same camera frames feed a per-poll grayscale mean (`ambient_lux`), EMA-smoothed (α=0.3, 2s poll → ~20s to 95% response), that drives a piecewise-linear brightness multiplier for `working` and `relax` modes only. `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records steady-state `baseline_lux` (typical value 80–150). The multiplier curve is anchored at the calibrated baseline: `(baseline−50 → 1.15×, baseline → 1.00×, baseline+90 → 0.85×)`, clamped outside. Integrated into `AutomationEngine._apply_lux_multiplier` between `_apply_brightness_multiplier` and `_weather_adjust`, skipping mode-scene-override paths and functional modes. Kitchen-pair and post-sunset CT rules preserved (multiplier is scalar, only affects `bri`). 39 unit tests under `tests/test_lux_multiplier.py`.

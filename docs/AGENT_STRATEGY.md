@@ -4,7 +4,7 @@
 
 This is a durable strategy document, not a plan-of-record. Shipping any individual agent or tool is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
 
-## Current fleet at a glance (29 agents)
+## Current fleet at a glance (28 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
@@ -210,7 +210,7 @@ Tier 1 specialists pay off (curator, deploy-verifier). The fleet pattern pays of
 
 ## Part 5 — Fleet usage playbook (when each agent fires, 2026-05-11)
 
-The fleet is 29 agents. Most fire automatically — the manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit, a `lighting-shopper` for product research, `doc-drift-checker` / `doc-curator` / `roadmap-advisor` for ad-hoc audits and planning, `backup-verifier` after irreplaceable-state changes, the PR reviewers when the pre-push hook denies, on-demand ML and dev-velocity agents, and `flag-triager` when the flag queue is overgrown).
+The fleet is 28 agents. Most fire automatically — the manual spawns left are deliberate one-shot specialist calls (a focused `homehub-verifier` recipe, a manual `gameday-postmortem` on a test fire, a `lighting-curator` review before a non-token commit, a `lighting-shopper` for product research, `doc-drift-checker` / `doc-curator` / `roadmap-advisor` for ad-hoc audits and planning, `backup-verifier` after irreplaceable-state changes, the PR reviewers when the pre-push hook denies, on-demand ML and dev-velocity agents, and `flag-triager` when the flag queue is overgrown).
 
 ### Trigger map
 

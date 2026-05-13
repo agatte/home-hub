@@ -468,12 +468,14 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | artist | String(200) | Nullable |
 | track | String(300) | Nullable |
 | favorite_title | String(200) | Nullable — which favorite was playing |
-| trigger | String(20) | auto_play, manual, alexa, suggestion_accepted |
+| event_type | String(30) | play, pause, skip, volume, auto_play, suggestion |
+| triggered_by | String(30) | manual, auto, suggestion_accepted |
 | mode_at_time | String(50) | Active mode when playback started |
 | started_at | DateTime | UTC |
 | ended_at | DateTime | UTC, nullable |
 | duration_seconds | Integer | Computed on end |
 | skipped | Boolean | Was track skipped before finishing |
+| weather_class | String(20) | Nullable — Phase B (2026-05-12). Weather class at log time (thunderstorm/rain/snow/clouds/golden_hour/clear/any). Used by bandit nightly retrain to rebuild weather-aware arms. None on pre-migration rows |
 
 ### Additional Live Tables (Phase 3 + ML)
 
@@ -649,6 +651,8 @@ All messages are JSON with `type` + `data` fields.
 | PUT | `/api/automation/schedule` | Update schedule |
 | GET | `/api/automation/mode-brightness` | Per-mode brightness multipliers |
 | PUT | `/api/automation/mode-brightness` | Update multipliers |
+| GET | `/api/automation/mode-volume` | Per-mode Sonos volume curves (defaults + persisted overrides) |
+| PUT | `/api/automation/mode-volume` | Update per-mode volume curves (`{mode: {day, evening, night, fade_duration_s}}`) |
 | POST | `/api/automation/activity` | Report activity (`{mode, source}`) |
 | POST | `/api/automation/override` | Manual mode override |
 
@@ -681,6 +685,7 @@ All messages are JSON with `type` + `data` fields.
 | GET | `/api/music/recommendations?mode=` | Get pending recommendations |
 | POST | `/api/music/recommendations/generate?mode=` | Generate new recs |
 | POST | `/api/music/recommendations/{id}/feedback` | Like/dismiss (`{action}`) |
+| GET | `/api/music/bandit-status` | Music bandit arm landscape — arm counts + top picks grouped by `(mode, weather_class)` (Phase B, 2026-05-12) |
 
 #### Weather — `/api/weather/`
 
@@ -1602,7 +1607,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 
 - Remaining mode backgrounds (social/club, watching/drive-in) + improved art assets (transparent layers, wider tiles)
 - Custom Alexa Skill (full voice control)
-- Apple Music API integration ($99/year)
+- Apple Music API integration ($99/year) — catalog browsing (search by genre/mood, dynamic playlists). Phase A (DIDL-Lite Now Playing metadata for HTTP streams), Phase A.5 (always-shuffle + random queue start via `play_favorite`), and Phase B (weather-aware bandit arm key `(mode, period, weather_class, title)` with legacy 3-tuple migration + warm-start) all shipped 2026-05-12
 - Bar app widget integration
 - Seasonal lighting adjustments
 - Guest mode polish (mini-app shipped 2026-05-02 — bottom nav + WiFi/Bar/Plants/Vibe pages, 6 party scenes with live color previews, 3 music vibe tiles via Sonos favorites; remaining: Pi-hole DNS for `guest.homehub.local`, settings UI for `guest_vibe_playlists` mapping, optionally a free-text "tell the host" channel)
@@ -1611,7 +1616,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 
 - **Hue bridge self-signed SSL** — httpx calls require `verify=False`. Cannot be changed.
 - **Sonos UPnP** — No authentication, but also no encryption. LAN-only by design.
-- **SoCo Apple Music support** — Can play individual tracks by URI (v0.26.0+), but cannot browse the Apple Music catalog. Browsing requires the $99/year Apple Music API.
+- **SoCo Apple Music support** — Can play individual tracks and queue cloud favorites via `add_to_queue` (v0.26.0+). Apple Music *shortcut* favorites (artist/station containers) have no static URI and cannot be queued via SoCo — those are flagged in the mode→playlist mapper UI. Cannot browse the Apple Music catalog; that requires the $99/year Apple Music API. Now Playing metadata for plain HTTP streams (iTunes previews, TTS MP3s) is populated via DIDL-Lite envelope (shipped Phase A, 2026-05-12).
 - **Fauxmo device limits** — Each virtual device is simple on/off. Complex commands (set brightness to 50%) require the custom Alexa skill.
 - **SQLite concurrency** — Single-writer. Fine for one user, but event logging at high frequency (every light poll) may need batching or a write queue.
 - **Screen sync requires mss** — Only works on Windows. If the server moves to a headless Linux device, screen sync breaks.
