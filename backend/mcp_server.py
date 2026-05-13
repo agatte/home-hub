@@ -483,16 +483,17 @@ async def query_db(sql: str) -> list[dict]:
                             mode_at_time, volume, triggered_by, weather_class
       scene_activations     id, timestamp, scene_id, scene_name, source,
                             mode_at_time
-      ml_decisions          id, timestamp, source, mode_suggested, confidence,
-                            won, weight, signal_details (JSON)
-      ml_metrics            id, timestamp, source, metric_name, metric_value
-      learned_rules         id, day_of_week, hour, dominant_mode, support,
-                            confidence, enabled, created_at, last_applied_at
+      ml_decisions          id, timestamp, predicted_mode, actual_mode,
+                            applied, confidence, decision_source, factors (JSON)
+      ml_metrics            id, date, metric_name, value, extra (JSON)
+                            (date is a Date, not DateTime — no time component)
+      learned_rules         id, day_of_week, hour, predicted_mode, confidence,
+                            sample_count, enabled, created_at, updated_at
 
     Timestamps are UTC ISO8601; use ``datetime(timestamp,'localtime')`` to
-    render. ``light_adjustments.trigger`` values: "ws" / "rest" / "scene" /
-    "automation" / "all_lights" / "transit" / "celebration:<key>". Full
-    schemas in backend/models.py.
+    render (does not apply to ml_metrics.date). ``light_adjustments.trigger``
+    values: "ws" / "rest" / "scene" / "automation" / "all_lights" /
+    "transit" / "celebration:<key>". Full schemas in backend/models.py.
 
     Args:
         sql: A SELECT query, e.g. "SELECT * FROM mode_playlists"
