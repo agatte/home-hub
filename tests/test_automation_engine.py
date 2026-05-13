@@ -605,6 +605,49 @@ class TestZonePostureRule:
         assert engine.manual_override is True
         assert engine.override_mode == "relax"
 
+    async def test_recent_process_working_vetoes_fire(self, engine):
+        """Process attendance veto: PC reported `working` <10 min ago means
+        the user is at the desk, not actually settling in. Dwell met but
+        the fire is suppressed, the dwell timer resets, the refractory
+        stamp is NOT burned (so the rule can fire fresh once attendance
+        clears + 120s of pure bed-reclined elapse). Closes the 2026-05-12
+        21:34 incident where the rule mis-fired while user was at PC.
+
+        Note: is_recent_process_working() uses wall-clock datetime.now(),
+        not the ``now`` arg passed into the rule. So _last_process_working_at
+        must be anchored to real time, not the EVENING fixture.
+        """
+        engine._last_process_working_at = (
+            datetime.now(tz=TZ) - timedelta(minutes=5)
+        )
+        assert engine.is_recent_process_working() is True
+
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+
+        # No fire, no ml_decisions row, no override.
+        assert engine._ml_logger.calls == []
+        assert engine.manual_override is False
+        # Dwell reset — a fresh window is required after attendance clears.
+        assert engine._zone_posture_reclined_since is None
+        # Refractory stamp NOT burned — the rule isn't locked out for 4h
+        # on a vetoed fire (feedback_rule_refractory_burn_pattern.md).
+        assert engine._zone_posture_last_fired_at is None
+
+    async def test_stale_process_working_does_not_veto(self, engine):
+        """Process working >10 min ago is stale — veto stands down and
+        the rule fires normally. Regression guard: the veto is conditional
+        on a fresh attendance signal, not a blanket suppression."""
+        engine._last_process_working_at = (
+            datetime.now(tz=TZ) - timedelta(minutes=30)
+        )
+        assert engine.is_recent_process_working() is False
+
+        await self._tick(engine, self.EVENING, dwell_offset_seconds=301)
+
+        assert len(engine._ml_logger.calls) == 1
+        assert engine._ml_logger.calls[0]["predicted_mode"] == "relax"
+        assert engine.override_mode == "relax"
+
     async def test_shadow_mode_when_apply_flag_false(self, engine):
         """settings.ZONE_POSTURE_RULE_APPLY=False → log only, no actuation.
 
@@ -1547,6 +1590,67 @@ class TestTransitOverrideKitchenPair:
         assert mock_hue._lights["4"]["bri"] == 80
         assert set(engine._transit_light_overrides.keys()) == {"1", "3", "4"}
         assert set(engine._last_applied_per_light.keys()) == {"1", "3", "4"}
+
+    async def test_apply_logs_to_light_adjustments_with_transit_trigger(
+        self, engine, mock_hue,
+    ):
+        """Transit writes must land in light_adjustments with trigger='transit'.
+
+        Regression guard for the 2026-05-12 incident: 107 transit on/off
+        cycles in 30 min produced ZERO rows in light_adjustments because
+        apply_transit_override skipped the event_logger call. Made the
+        kitchen flicker invisible to analytics and DB queries.
+        """
+        from unittest.mock import AsyncMock
+
+        engine._event_logger = AsyncMock()
+        engine._event_logger.log_light_adjustment = AsyncMock()
+
+        states = {
+            "1": {"on": True, "bri": 120, "ct": 360},
+            "3": {"on": True, "bri": 80, "ct": 360},
+            "4": {"on": True, "bri": 80, "ct": 360},
+        }
+        await engine.apply_transit_override(
+            states, duration_seconds=600, transition_time=5,
+        )
+
+        calls = engine._event_logger.log_light_adjustment.await_args_list
+        assert len(calls) == 3, (
+            f"expected 3 log calls (one per light), got {len(calls)}"
+        )
+        for call in calls:
+            assert call.kwargs["trigger"] == "transit"
+            assert call.kwargs["light_id"] in ("1", "3", "4")
+            # mode_at_time mirrors what was actually applied (override-aware
+            # current_mode property, not the raw _current_mode field).
+            assert call.kwargs["mode_at_time"] == engine.current_mode
+
+    async def test_apply_skipped_kitchen_does_not_log_kitchen_rows(
+        self, engine, mock_hue,
+    ):
+        """When the kitchen-pair guard skips L3+L4 (manual stamp), only L1
+        gets a log row. The skipped pair shouldn't show up in light_adjustments
+        either — they weren't actually written to the bridge."""
+        from unittest.mock import AsyncMock
+
+        engine.mark_light_manual("4")
+        engine._event_logger = AsyncMock()
+        engine._event_logger.log_light_adjustment = AsyncMock()
+
+        states = {
+            "1": {"on": True, "bri": 120, "ct": 360},
+            "3": {"on": True, "bri": 80, "ct": 360},
+            "4": {"on": True, "bri": 80, "ct": 360},
+        }
+        await engine.apply_transit_override(
+            states, duration_seconds=600, transition_time=5,
+        )
+
+        calls = engine._event_logger.log_light_adjustment.await_args_list
+        light_ids = [c.kwargs["light_id"] for c in calls]
+        assert light_ids == ["1"]
+        assert calls[0].kwargs["trigger"] == "transit"
 
 
 # ---------------------------------------------------------------------------

@@ -237,6 +237,20 @@ class TransitLightingService:
         if mode not in TRIGGER_MODES:
             self._record_block(f"mode={mode} (not in trigger set)")
             return
+
+        # Watching + reclined: user is consuming content, not navigating —
+        # even if zone is null/uncommitted. Closes the 2026-05-12 incident
+        # where the camera's zone decommitted mid-watching-session and
+        # transit fired 107× / 30min on face-detection flutter
+        # (confidence ~0.30 bouncing across the trust threshold). The
+        # STATIONARY_ZONES gate below only fires when zone is committed
+        # as "bed"; this gate catches the same intent via posture when
+        # the zone signal isn't reliable.
+        posture = cam_status.get("posture")
+        if mode == "watching" and posture == "reclined":
+            self._record_block("watching+reclined (user not navigating)")
+            return
+
         # Last committed zone is "bed" → he's reclined in the bedroom. Camera
         # absences in this state are usually detection flicker (face/pose
         # tossing under blankets in low light), not navigation. Block before

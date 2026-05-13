@@ -60,12 +60,14 @@ class _FakeCamera:
         enabled: bool = True,
         last_detection: str = "absent",
         zone: Optional[str] = None,
+        posture: Optional[str] = None,
         detection_source: Optional[str] = "pose",
         confidence: float = 0.95,
     ) -> None:
         self.enabled = enabled
         self.last_detection = last_detection
         self.zone = zone
+        self.posture = posture
         # Defaults represent "strong presence" so tests that set
         # last_detection="present" without specifying source/confidence
         # match the pre-2026-05-05 semantics where any present counted.
@@ -77,6 +79,7 @@ class _FakeCamera:
             "enabled": self.enabled,
             "last_detection": self.last_detection,
             "zone": self.zone,
+            "posture": self.posture,
             "detection_source": self.detection_source,
             "confidence": self.confidence,
         }
@@ -84,12 +87,13 @@ class _FakeCamera:
 
 def _make_service(mode="working", override=False, override_mode=None,
                   cam_detection="absent", cam_enabled=True,
-                  cam_zone=None, cam_detection_source="pose",
-                  cam_confidence=0.95):
+                  cam_zone=None, cam_posture=None,
+                  cam_detection_source="pose", cam_confidence=0.95):
     auto = _FakeAutomation(mode=mode, manual_override=override, override_mode=override_mode)
     cam = _FakeCamera(
         enabled=cam_enabled, last_detection=cam_detection, zone=cam_zone,
-        detection_source=cam_detection_source, confidence=cam_confidence,
+        posture=cam_posture, detection_source=cam_detection_source,
+        confidence=cam_confidence,
     )
     return TransitLightingService(auto, cam), auto, cam
 
@@ -290,6 +294,73 @@ class TestStationaryZoneGate:
         await svc._check()
         assert svc._strong_absent_streak == 1
         assert svc.active is False
+
+
+class TestWatchingReclinedGate:
+    """Posture-based gate that catches the 2026-05-12 incident pattern:
+    user reclined while watching content, camera's zone signal lapsed to
+    null, and STATIONARY_ZONES couldn't fire its gate. Result was 107
+    transit fires in 30 min on face-confidence flutter. Posture is a more
+    durable signal than zone when the user is sitting still, so this
+    gate covers the case where zone is uncommitted but posture says
+    "definitely not navigating."
+    """
+
+    async def test_blocks_watching_reclined_with_null_zone(self):
+        # The exact incident shape: mode=watching, posture=reclined,
+        # zone=null (zone commit lapsed). Pre-fix would fire transit.
+        # Post-fix blocks at the posture gate.
+        svc, auto, _ = _make_service(
+            mode="watching", cam_zone=None, cam_posture="reclined",
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.transit_calls == []
+
+    async def test_blocks_watching_reclined_with_bed_zone(self):
+        # Belt-and-suspenders: watching+reclined+bed should also block
+        # (STATIONARY_ZONES already handles bed; this confirms no
+        # interaction breaks it).
+        svc, auto, _ = _make_service(
+            mode="watching", cam_zone="bed", cam_posture="reclined",
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.transit_calls == []
+
+    async def test_watching_upright_can_still_fire(self):
+        # Watching mode + upright posture (sat up, walking around mid-show)
+        # → user IS navigating. Transit should fire normally.
+        svc, auto, _ = _make_service(
+            mode="watching", cam_zone=None, cam_posture="upright",
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
+
+    async def test_working_reclined_can_still_fire(self):
+        # Not watching → the watching+reclined gate doesn't engage. If
+        # the user is reclined in working mode (rare — maybe a couch
+        # laptop session) and the camera loses them, transit should
+        # behave as before.
+        svc, auto, _ = _make_service(
+            mode="working", cam_zone=None, cam_posture="reclined",
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
+
+    async def test_watching_no_posture_signal_can_still_fire(self):
+        # Camera reports posture=None (signal lost). Don't block on a
+        # missing signal — fall through to the existing gates. This
+        # tests the gate is conditional on posture EQUALING "reclined",
+        # not just on watching mode.
+        svc, auto, _ = _make_service(
+            mode="watching", cam_zone=None, cam_posture=None,
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
 
 
 class TestFlapSuppression:

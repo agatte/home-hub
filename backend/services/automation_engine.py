@@ -1447,7 +1447,15 @@ class AutomationEngine:
 
         deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
         tasks = []
+        # Capture before-state for event logging — same pattern as
+        # _apply_per_light. Without this, transit writes were invisible to
+        # light_adjustments queries (2026-05-12 incident: 107 transit cycles
+        # in 30 min produced zero rows in the analytics surface).
+        pre_values: dict[str, dict] = {}
         for light_id, state in states.items():
+            pre_values[light_id] = (
+                self._last_applied_per_light.get(light_id) or {}
+            ).copy()
             cmd = {**state, "transitiontime": transition_time}
             tasks.append(self._hue.set_light(light_id, cmd))
             self._transit_light_overrides[light_id] = deadline
@@ -1461,6 +1469,22 @@ class AutomationEngine:
             list(states.keys()),
             deadline.strftime("%H:%M:%S"),
         )
+        # Log each transit write to light_adjustments with trigger='transit'
+        # so analytics / DB queries see the kitchen on/off cycle that was
+        # previously invisible. Logged after the bridge writes so a failed
+        # write doesn't pollute the table.
+        if self._event_logger:
+            for light_id, state in states.items():
+                prev = pre_values.get(light_id, {})
+                await self._event_logger.log_light_adjustment(
+                    light_id=light_id,
+                    bri_before=prev.get("bri"), bri_after=state.get("bri"),
+                    hue_before=prev.get("hue"), hue_after=state.get("hue"),
+                    sat_before=prev.get("sat"), sat_after=state.get("sat"),
+                    ct_before=prev.get("ct"), ct_after=state.get("ct"),
+                    mode_at_time=self.current_mode,
+                    trigger="transit",
+                )
 
     async def clear_transit_override(
         self,
@@ -2575,6 +2599,27 @@ class AutomationEngine:
             else ZONE_POSTURE_RULE_DWELL_SECONDS
         )
         if elapsed < dwell_required:
+            return
+
+        # Gate 6: attendance vetoes — even with dwell met, fresh camera-at-desk
+        # OR a recent process=working report means the user isn't actually
+        # settling in (they're lying back on the bed momentarily while still
+        # on the PC). Reset the dwell so a fresh 120s of bed+reclined-with-no-
+        # other-activity is required after attendance clears. Same pair of
+        # vetoes that gate late_night_rescue + winddown_push since 2026-05-07
+        # (commit 0dcb245). Checked here BEFORE the refractory stamp burn —
+        # per feedback_rule_refractory_burn_pattern.md, silent-rejection
+        # conditions must run before the stamp or the rule locks itself out
+        # for 4h on a no-op.
+        at_desk = self.is_at_desk_fresh()
+        process_working = self.is_recent_process_working()
+        if at_desk or process_working:
+            logger.debug(
+                "Zone+posture rule vetoed at fire-time: at_desk_fresh=%s "
+                "recent_process_working=%s — dwell reset",
+                at_desk, process_working,
+            )
+            self._zone_posture_reclined_since = None
             return
 
         # Dwell met — fire (live) or shadow-log.
