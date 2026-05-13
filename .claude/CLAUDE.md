@@ -116,7 +116,7 @@ Browser / Phone (PWA)
         |  WebSocket + REST
         v
    FastAPI Backend (port 8000, async)
-   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 1s polling)
+   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling)
    ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
@@ -165,6 +165,7 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 - **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping.
 - **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains/Gradle false positives). Media is foreground-gated.
 - **`pc_agent/ambient_monitor.py`** — `speech_multiple→social` gate abandoned 2026-05-09 (max observed score 0.088 across 838k rows; structurally unreachable). Social is manual-override only. Never records audio.
+- **`websocket_manager.py`** — `broadcast` fan-outs via `asyncio.gather` with a 2s per-client `wait_for`. A stalled client (mobile on bad wifi, paused tab) now disconnects itself instead of holding the loop; expect `Client disconnected` log lines in those cases rather than "broadcasts stopped firing."
 
 ---
 
@@ -175,6 +176,8 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 **Gotcha — Game Day 3D field:** `<Canvas autoRender={false} toneMapping={NoToneMapping}>` is required; see `docs/GAMEDAY_SPEC.md` §11 + memory `project_gameday_3d_field_gotchas.md`. `postprocessing@6.35.4` peer dep must stay pinned.
 
 **Gotcha — catch-all order:** Built frontend is served via `/{path:path}`; this must be registered in `main.py` AFTER all `/api/` routes or the API is shadowed.
+
+**Gotcha — scene RAF + debounced derived:** Background scenes (`scene-utils.js` `createAnimationLoop` + bespoke handlers in `GenerativeCanvas` / `ParallaxScene`) pause on `document.visibilitychange` and resume on visible. `MoonScene` (Threlte `useTask`) is exempt — sleeping mode only. `stores/_debounce.js` exports `debounced(stores, fn, ms=150)` mirroring `derived`'s shape with a trailing-debounce; `constellationWithContext` + `sectorBoard` use it. `GenerativeCanvas`'s lights subscription is also 200ms-debounced + palette-capped at 8 — slider drags no longer trigger per-tick HSL recompute.
 
 ---
 
@@ -278,7 +281,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Effect reconciliation:** `_reconcile_effect` runs AFTER `_apply_state` so brightness is at target before the old effect stops (otherwise pops to 100%). 0.5s guard between stop+start.
 
-**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Polling is sole post-write arbiter. Mid-drag slider commands use `transitiontime=1`; release flush uses default 0.4s.
+**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop ticks every 0.5s and is the sole post-write arbiter; a 3s max-age clamp force-clears any deadline pushed further than that (unreachable bulb that ack'd the write but never transitioned). Mid-drag slider commands use `transitiontime=1`; release flush uses default 0.4s.
 
 **Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry in `run_loop`.
 

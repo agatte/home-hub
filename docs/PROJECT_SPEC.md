@@ -26,7 +26,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 ### Lighting
 
-- Full Philips Hue control via dual APIs (v1/phue2 for basic control + 1s polling, CLIP v2 for native scenes and dynamic effects)
+- Full Philips Hue control via dual APIs (v1/phue2 for basic control + 0.5s polling, CLIP v2 for native scenes and dynamic effects)
 - **Color temperature (CT/mirek) support** — first-class parameter alongside HSB for precise Kelvin control (2000K–6500K)
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
 - Activity-driven modes: gaming, working, watching, relax, cooking, social — each with per-light state definitions
@@ -37,7 +37,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching cinematic (3s), cooking quick (1s), sleeping gradual (5s) via MODE_TRANSITION_TIME
 - **Scene drift** — subtle random perturbation (±15 bri, ±1500 hue) every 30min during long sessions with 10s imperceptible transitions. **Relax-only**: drift is aesthetic variation and would make paired lights in functional modes look randomly unequal, so it's gated to relax.
 - **Effect reconciliation** — `_reconcile_effect` helper applies state FIRST, then stops/starts v2 effects with a 0.5s bridge-processing guard. Order matters: stopping an effect before the new brightness target is on the bridge produces a brightness pop to 100% (the old mode-switch "flash" bug).
-- **Polling in-flight window** — `hue_service` tracks per-light deadlines; the 1s polling loop skips broadcasting `light_update` for a light that was just written until its transition + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition reads.
+- **Polling in-flight window** — `hue_service` tracks per-light deadlines; the 0.5s polling loop skips broadcasting `light_update` for a light that was just written until its transition + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition reads. A 3s max-age clamp inside the poll loop force-clears any deadline that ends up further in the future than that — covers the "bridge ack'd the write but the bulb is unreachable so it never transitioned" case, which otherwise would mute polling on that light until the natural deadline expired.
 - **Mode → scene overrides** — any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, checked before hardcoded ACTIVITY_LIGHT_STATES
 - **20 curated scenes** across 7 categories (functional, cozy, moody, vibrant, nature, entertainment, social) using color harmony theory — each scene defines per-light states with varied hue, saturation, and brightness for depth
 - **Custom scene CRUD** — user-created scenes persisted to SQLite with category and optional paired effect
@@ -98,6 +98,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
   - **Other modes**: `GenerativeCanvas.svelte` — three-layer system (gradient mesh blobs + flow-field particles + geometric overlay) as fallback
 - All scenes react to music (Sonos playing = faster motion, brighter effects)
 - `ModeBackground.svelte` routes the active mode to its scene component; only one scene renders at a time
+- **Scene RAF loops pause on `document.visibilitychange`** — `scene-utils.js` `createAnimationLoop` (Aurora, Pixel, City) + bespoke handlers in `GenerativeCanvas.svelte` and `ParallaxScene.svelte` cancel their `requestAnimationFrame` when the tab is hidden / kiosk screen blanks, and re-prime on resume so `dt` doesn't jump. `MoonScene` (Threlte `useTask`) is the one exception — only mounts in sleeping mode where the kiosk is dark anyway
 - **No sidebar** — floating glassmorphic bottom pill bar (Home, Music, Analytics, Settings) + mode overlay (Bebas Neue 36px all-caps mode name with character-stagger animation) + Now Playing chip
 - **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
 - **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
@@ -198,7 +199,7 @@ Browser / Phone (PWA)
         |  WebSocket + REST
         v
    FastAPI Backend (port 8000, async)
-   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 1s polling)
+   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling)
    ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL

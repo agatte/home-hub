@@ -87,7 +87,7 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
         |  WebSocket + REST
         v
    FastAPI Backend (port 8000)
-   ├── HueService (v1/phue2) ──────► Hue Bridge  (basic control, 1s polling)
+   ├── HueService (v1/phue2) ──────► Hue Bridge  (basic control, 0.5s polling)
    ├── HueV2Service (CLIP API) ─────► Hue Bridge  (native scenes + dynamic effects)
    ├── SonosService (SoCo) ─────────► Sonos Era 100  (UPnP, zero-auth)
    ├── TTSService ──► edge-tts MP3 ──► Sonos fetches from LAN IP
