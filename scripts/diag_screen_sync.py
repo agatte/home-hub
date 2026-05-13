@@ -1,7 +1,8 @@
 """One-shot diagnostic for the screen-sync agent. Shows which monitor it's
 capturing and what RGB it would POST right now (mirrored to all target lamps)."""
-from backend.services.pc_agent.screen_sync_agent import capture_dominant_color
 import mss
+
+from backend.services.pc_agent.screen_sync_agent import capture_dominant_color
 
 with mss.mss() as sct:
     print(f"Monitors detected: {len(sct.monitors) - 1}")

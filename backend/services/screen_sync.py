@@ -8,10 +8,13 @@ Hue lights. The mode gate (gaming / watching only) lives in the route
 handler — by the time `apply_color` is called, the gate has already passed.
 
 Multi-light support: the service manages N target lights with independent
-per-light EMA state and per-light brightness caps. Dual-region screen sync
-maps the left half of the screen to L2 and the right half to L5; each lamp
-smooths and clamps independently so the clear-housing L5 doesn't blow out
-next to the diffused-shade L2.
+per-light EMA state and per-light brightness caps. Mirror dispatch (route
+handler) sends the same RGB to every target lamp (currently L2 + L5); per-
+light caps, sat boost, and luma compensation differentiate the on-bridge
+state so the clear-housing L5 doesn't blow out next to the diffused-shade
+L2 even with identical input. (Dual-region — L2 ← left half, L5 ← right —
+was tried and abandoned 2026-05-12 night for eye strain at close viewing
+distance; see lighting-curator INDEX for the documented anti-pattern.)
 
 `LaptopLoopbackCapture` is an opt-in escape hatch for the rare case of
 plugging the laptop into a TV. It runs the same screen capture loop but
