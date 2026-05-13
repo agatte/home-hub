@@ -43,7 +43,7 @@ from backend.api.routes.camera import router as camera_router
 from backend.api.routes.debug import router as debug_router
 from backend.api.routes.pihole_proxy import router as pihole_proxy_router
 from backend.bootstrap import lifespan
-from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
+from backend.config import DATA_DIR, PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 
 # Sentry init runs before app construction so the FastAPI auto-integration
 # patches request handling. dsn=None disables ingestion silently — safe in
@@ -136,6 +136,16 @@ async def request_id_middleware(request, call_next):
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 TTS_DIR.mkdir(parents=True, exist_ok=True)
 (STATIC_DIR / "ambient").mkdir(parents=True, exist_ok=True)
+# Long-form user-curated ambient MP3s live in data/ambient/ (gitignored).
+# Mount under a distinct URL so the service can resolve files to the right
+# prefix without filename collisions on the wire. check_dir=False makes the
+# mount idempotent when the dir doesn't yet exist (fresh checkout).
+(DATA_DIR / "ambient").mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/static/ambient-long",
+    StaticFiles(directory=str(DATA_DIR / "ambient"), check_dir=False),
+    name="ambient-long",
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Routes

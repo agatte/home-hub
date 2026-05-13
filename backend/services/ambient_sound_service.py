@@ -20,11 +20,23 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from backend.config import STATIC_DIR
+from backend.config import DATA_DIR, STATIC_DIR
 
 logger = logging.getLogger("home_hub.ambient")
 
-AMBIENT_DIR = STATIC_DIR / "ambient"
+# Short-loop fallbacks (committed to the repo): backend/static/ambient/
+# Long-form user-curated MP3s (gitignored): data/ambient/
+#
+# Scan order = priority — same-name files in DATA dir override committed ones.
+# Filenames containing WEATHER_SOUND_MAP keywords (rain, thunderstorm, snow,
+# wind) auto-trigger on matching weather, so a long-form "rain.mp3" replaces
+# the 2-min loop seamlessly.
+SHORT_AMBIENT_DIR = STATIC_DIR / "ambient"
+LONG_AMBIENT_DIR = DATA_DIR / "ambient"
+SCAN_DIRS: tuple[tuple[Path, str], ...] = (
+    (LONG_AMBIENT_DIR, "/static/ambient-long"),  # user-curated, wins on collision
+    (SHORT_AMBIENT_DIR, "/static/ambient"),      # short fallbacks, committed
+)
 AUDIO_EXTENSIONS = frozenset((".mp3", ".ogg", ".wav", ".webm"))
 AMBIENT_CONFIG_KEY = "ambient_config"
 
@@ -93,6 +105,10 @@ class AmbientSoundService:
         self._sonos_away_volume: int = 28     # Sonos level when user is away
 
         # Available sounds (populated by scan_sounds)
+        # _sound_index maps filename → {url_prefix, abs_path, label, source_dir}
+        # _available_sounds is the legacy [{filename, label}] list rebuilt
+        # from _sound_index for backwards-compatible state payloads.
+        self._sound_index: dict[str, dict[str, str]] = {}
         self._available_sounds: list[dict[str, str]] = []
 
     # ------------------------------------------------------------------
@@ -132,18 +148,65 @@ class AmbientSoundService:
         self._automation = automation
 
     def scan_sounds(self) -> list[dict[str, str]]:
-        """Scan static/ambient/ for audio files. Returns [{filename, label}]."""
-        AMBIENT_DIR.mkdir(parents=True, exist_ok=True)
-        sounds = []
-        for path in sorted(AMBIENT_DIR.iterdir()):
-            if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
-                sounds.append({
-                    "filename": path.name,
+        """Scan both ambient dirs for audio files. Returns [{filename, label}].
+
+        Walks SCAN_DIRS in priority order (data/ambient/ first); same-name
+        files in a later directory are shadowed and logged at debug. Missing
+        directories are skipped silently (data/ambient/ is gitignored and may
+        not exist on a fresh checkout).
+        """
+        # Ensure the short-fallback dir exists (matches legacy mkdir behavior).
+        SHORT_AMBIENT_DIR.mkdir(parents=True, exist_ok=True)
+
+        index: dict[str, dict[str, str]] = {}
+        for scan_dir, url_prefix in SCAN_DIRS:
+            if not scan_dir.is_dir():
+                continue
+            for path in sorted(scan_dir.iterdir()):
+                if not (path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS):
+                    continue
+                if path.name in index:
+                    logger.debug(
+                        "Ambient scan: %s in %s shadowed by %s",
+                        path.name, scan_dir, index[path.name]["source_dir"],
+                    )
+                    continue
+                index[path.name] = {
+                    "url_prefix": url_prefix,
+                    "abs_path": str(path),
                     "label": _label_from_filename(path.name),
-                })
-        self._available_sounds = sounds
-        logger.info("Scanned %d ambient sound files", len(sounds))
-        return sounds
+                    "source_dir": str(scan_dir),
+                }
+
+        self._sound_index = index
+        self._available_sounds = [
+            {"filename": filename, "label": entry["label"]}
+            for filename, entry in index.items()
+        ]
+        long_count = sum(
+            1 for e in index.values() if e["url_prefix"] == "/static/ambient-long"
+        )
+        logger.info(
+            "Scanned %d ambient sound files (%d long-form, %d short)",
+            len(index), long_count, len(index) - long_count,
+        )
+        return self._available_sounds
+
+    def _url_for(self, filename: str, *, absolute: bool = False) -> Optional[str]:
+        """Resolve a filename to its URL.
+
+        absolute=True returns ``http://{LOCAL_IP}:8000{prefix}/{filename}``
+        for Sonos. absolute=False returns just ``{prefix}/{filename}`` for
+        browser-side broadcast. Returns None if the filename isn't indexed.
+        """
+        entry = self._sound_index.get(filename)
+        if entry is None:
+            return None
+        prefix = entry["url_prefix"]
+        if absolute:
+            from backend.config import settings
+            return f"http://{settings.LOCAL_IP}:8000{prefix}/{filename}"
+        return f"{prefix}/{filename}"
 
     # ------------------------------------------------------------------
     # State
@@ -154,6 +217,10 @@ class AmbientSoundService:
         return {
             "playing": self._playing,
             "sound": self._current_sound,
+            "sound_url": (
+                self._url_for(self._current_sound)
+                if self._current_sound else None
+            ),
             "sound_label": (
                 _label_from_filename(self._current_sound)
                 if self._current_sound else None
@@ -323,8 +390,8 @@ class AmbientSoundService:
     # ------------------------------------------------------------------
 
     def _file_exists(self, filename: str) -> bool:
-        """Check if a sound file exists in the ambient directory."""
-        return any(s["filename"] == filename for s in self._available_sounds)
+        """Check if a sound file is indexed (present in either scan dir)."""
+        return filename in self._sound_index
 
     async def _broadcast_state(self) -> None:
         """Broadcast current state via WebSocket."""
@@ -370,11 +437,13 @@ class AmbientSoundService:
             )
             return
 
-        from backend.config import settings
-        uri = (
-            f"http://{settings.LOCAL_IP}:8000"
-            f"/static/ambient/{self._current_sound}"
-        )
+        uri = self._url_for(self._current_sound, absolute=True)
+        if not uri:
+            logger.warning(
+                "Sonos ambient: %s no longer indexed, aborting",
+                self._current_sound,
+            )
+            return
         success = await self._sonos.play_uri(uri, volume=self._sonos_present_volume)
         if not success:
             logger.warning("Sonos ambient: play_uri failed for %s", uri)

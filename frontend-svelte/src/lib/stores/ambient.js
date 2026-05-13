@@ -4,6 +4,7 @@ import { writable } from 'svelte/store'
  * @typedef {Object} AmbientState
  * @property {boolean} playing
  * @property {string|null} sound - filename
+ * @property {string|null} [sound_url] - server-resolved URL (handles /static/ambient vs /static/ambient-long)
  * @property {string|null} sound_label
  * @property {number} volume - 0.0-1.0
  * @property {string} source - "manual"|"mode"|"weather"

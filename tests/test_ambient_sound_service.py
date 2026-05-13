@@ -1,0 +1,193 @@
+"""
+Tests for AmbientSoundService two-directory scan + URL resolution.
+
+Covers the long-form / short-fallback override pattern introduced when
+``data/ambient/`` joined ``backend/static/ambient/`` as a scan target.
+The service walks SCAN_DIRS in priority order (data/ first), shadowing
+same-name files in lower-priority dirs and resolving URLs to the right
+prefix per-file.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+from backend.services import ambient_sound_service as svc
+
+
+def _make_service(monkeypatch, tmp_path):
+    """Build a service with SCAN_DIRS pointing at tmp dirs.
+
+    After this returns the test can reach the dirs via
+    ``svc.LONG_AMBIENT_DIR`` / ``svc.SHORT_AMBIENT_DIR``.
+    """
+    long_dir = tmp_path / "data" / "ambient"
+    short_dir = tmp_path / "backend" / "static" / "ambient"
+    long_dir.mkdir(parents=True)
+    short_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        svc,
+        "SCAN_DIRS",
+        ((long_dir, "/static/ambient-long"), (short_dir, "/static/ambient")),
+    )
+    monkeypatch.setattr(svc, "SHORT_AMBIENT_DIR", short_dir)
+    monkeypatch.setattr(svc, "LONG_AMBIENT_DIR", long_dir)
+
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
+    weather = MagicMock()
+    sonos = MagicMock()
+    sonos.connected = False  # avoid sonos paths in these tests
+    return svc.AmbientSoundService(ws_manager=ws, weather_service=weather, sonos=sonos)
+
+
+def _touch_mp3(directory: Path, name: str) -> Path:
+    """Create an empty .mp3 file in the directory."""
+    p = directory / name
+    p.write_bytes(b"")
+    return p
+
+
+def test_empty_long_dir_falls_back_to_short(monkeypatch, tmp_path):
+    """data/ambient/ empty → service serves only the short fallbacks."""
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "fireplace.mp3")
+
+    sounds = service.scan_sounds()
+
+    assert {s["filename"] for s in sounds} == {"rain.mp3", "fireplace.mp3"}
+    assert service._url_for("rain.mp3") == "/static/ambient/rain.mp3"
+    assert service._url_for("fireplace.mp3") == "/static/ambient/fireplace.mp3"
+
+
+def test_long_dir_file_uses_long_url_prefix(monkeypatch, tmp_path):
+    """data/ambient/forest.mp3 → URL points to /static/ambient-long/."""
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.LONG_AMBIENT_DIR, "forest-8h.mp3")
+
+    sounds = service.scan_sounds()
+
+    assert [s["filename"] for s in sounds] == ["forest-8h.mp3"]
+    assert service._url_for("forest-8h.mp3") == "/static/ambient-long/forest-8h.mp3"
+
+
+def test_collision_long_wins_and_logs_debug(monkeypatch, tmp_path, caplog):
+    """Same filename in both dirs → data/ wins, short version logged as shadowed."""
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.LONG_AMBIENT_DIR, "rain.mp3")
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+
+    with caplog.at_level("DEBUG", logger="home_hub.ambient"):
+        service.scan_sounds()
+
+    # rain.mp3 appears once, resolved to the long-form URL
+    assert service._url_for("rain.mp3") == "/static/ambient-long/rain.mp3"
+    # The short version was shadowed and logged
+    shadow_msgs = [r.message for r in caplog.records if "shadowed by" in r.message]
+    assert shadow_msgs, "expected a 'shadowed by' debug log for the short rain.mp3"
+
+
+def test_url_for_absolute_uses_local_ip(monkeypatch, tmp_path):
+    """absolute=True returns http://LOCAL_IP:8000{prefix}/{name} for Sonos."""
+    from backend.config import settings as cfg_settings
+
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.LONG_AMBIENT_DIR, "rain.mp3")
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "fireplace.mp3")
+    service.scan_sounds()
+
+    abs_long = service._url_for("rain.mp3", absolute=True)
+    abs_short = service._url_for("fireplace.mp3", absolute=True)
+
+    expected_long = f"http://{cfg_settings.LOCAL_IP}:8000/static/ambient-long/rain.mp3"
+    expected_short = f"http://{cfg_settings.LOCAL_IP}:8000/static/ambient/fireplace.mp3"
+    assert abs_long == expected_long
+    assert abs_short == expected_short
+
+
+def test_url_for_unknown_filename_returns_none(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    service.scan_sounds()
+
+    assert service._url_for("not-there.mp3") is None
+    assert service._url_for("not-there.mp3", absolute=True) is None
+
+
+def test_missing_long_dir_is_silently_skipped(monkeypatch, tmp_path):
+    """Fresh checkout with no data/ambient/ dir → service boots clean."""
+    service = _make_service(monkeypatch, tmp_path)
+    # Remove the long dir entirely; only short remains.
+    svc.LONG_AMBIENT_DIR.rmdir()
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "wind.mp3")
+
+    sounds = service.scan_sounds()
+
+    assert [s["filename"] for s in sounds] == ["wind.mp3"]
+    assert service._url_for("wind.mp3") == "/static/ambient/wind.mp3"
+
+
+def test_non_audio_files_ignored(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    (svc.SHORT_AMBIENT_DIR / "README.txt").write_text("hands-off")
+    (svc.SHORT_AMBIENT_DIR / "cover.jpg").write_bytes(b"")
+
+    sounds = service.scan_sounds()
+
+    assert [s["filename"] for s in sounds] == ["rain.mp3"]
+
+
+def test_check_weather_prefers_long_form_rain(monkeypatch, tmp_path):
+    """Weather=rain + both rain.mp3 in long and short → long-form picked."""
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.LONG_AMBIENT_DIR, "rain.mp3")
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    service.scan_sounds()
+
+    service._weather_service.get_cached = MagicMock(
+        return_value={"description": "light rain"}
+    )
+
+    match = service._check_weather()
+
+    assert match == "rain.mp3"
+    # And the URL resolves to the long-form prefix
+    assert service._url_for(match) == "/static/ambient-long/rain.mp3"
+
+
+def test_check_weather_no_match_returns_none(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "fireplace.mp3")  # no rain.mp3 anywhere
+    service.scan_sounds()
+
+    service._weather_service.get_cached = MagicMock(
+        return_value={"description": "rain shower"}
+    )
+
+    assert service._check_weather() is None
+
+
+def test_state_payload_includes_sound_url(monkeypatch, tmp_path):
+    """get_state() exposes sound_url so the frontend picks the right prefix."""
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.LONG_AMBIENT_DIR, "rain.mp3")
+    service.scan_sounds()
+    service._current_sound = "rain.mp3"
+    service._playing = True
+
+    state = service.get_state()
+
+    assert state["sound"] == "rain.mp3"
+    assert state["sound_url"] == "/static/ambient-long/rain.mp3"
+
+
+def test_state_payload_sound_url_none_when_no_sound(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    service.scan_sounds()
+
+    state = service.get_state()
+
+    assert state["sound"] is None
+    assert state["sound_url"] is None

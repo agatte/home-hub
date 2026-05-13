@@ -52,7 +52,12 @@ export function initAmbientAudio() {
     if (!state) return
 
     const a = ensureAudio()
-    const targetSrc = state.sound ? `/static/ambient/${state.sound}` : ''
+    // Server-resolved URL handles short fallbacks (/static/ambient/) vs
+    // long-form user files (/static/ambient-long/). Fall back to the legacy
+    // path if the server hasn't been updated yet.
+    const targetSrc = state.sound
+      ? (state.sound_url || `/static/ambient/${state.sound}`)
+      : ''
 
     // Update volume always
     a.volume = state.volume
