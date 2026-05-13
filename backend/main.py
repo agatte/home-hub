@@ -48,10 +48,16 @@ from backend.config import DATA_DIR, PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 # Sentry init runs before app construction so the FastAPI auto-integration
 # patches request handling. dsn=None disables ingestion silently — safe in
 # dev where SENTRY_DSN is unset.
+#
+# Gate ingestion on APP_ENV == "production" so dev pytest runs (which
+# intentionally raise RuntimeError("speaker offline") in TTS tests, etc.)
+# don't burn the 10k/month free-tier quota with test-mock noise that looks
+# like real prod issues in the dashboard. If the dev .env happens to have
+# SENTRY_DSN set (config drift), this guard still silences it.
 import sentry_sdk  # noqa: E402
 
 sentry_sdk.init(
-    dsn=settings.SENTRY_DSN,
+    dsn=settings.SENTRY_DSN if settings.APP_ENV == "production" else None,
     environment=settings.APP_ENV,
     traces_sample_rate=0.0,
     send_default_pii=False,
