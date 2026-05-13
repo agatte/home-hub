@@ -225,7 +225,7 @@ class SonosService:
             err = str(e)
             if "701" in err and "Transition not available" in err:
                 return True
-            logger.error(f"Sonos pause error: {e}")
+            logger.error("Sonos pause error: %s", e)
             return False
 
     async def set_volume(self, volume: int) -> bool:
