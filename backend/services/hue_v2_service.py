@@ -241,6 +241,22 @@ class HueV2Service:
             resp.raise_for_status()
             logger.info(f"Set effect '{effect}' on light {v1_light_id}")
             return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                # Hue bridge rate-limits aggressive bursts (~10 req/s); a
+                # fan-out scene that hits set_effect_all on multiple lights
+                # can clip into this. Transient — the next bridge poll
+                # cycle reaches steady state. Not actionable, don't burn
+                # Sentry events.
+                logger.warning(
+                    "Hue bridge rate-limited setting effect '%s' on light %s (429)",
+                    effect, v1_light_id,
+                )
+                return False
+            logger.error(
+                f"Error setting effect '{effect}' on light {v1_light_id}: {e}"
+            )
+            return False
         except Exception as e:
             logger.error(
                 f"Error setting effect '{effect}' on light {v1_light_id}: {e}"
