@@ -93,6 +93,12 @@ class AmbientSoundService:
         self._sonos_loop_task: Optional[asyncio.Task] = None
         self._sonos_absent_since: Optional[float] = None   # monotonic time
         self._sonos_present_since: Optional[float] = None  # monotonic time
+        # Strong references for fire-and-forget Sonos start/pause tasks.
+        # asyncio.create_task only weak-refs the task; without holding a
+        # strong ref the GC can drop a still-running task, firing the
+        # "Task was destroyed but it is pending!" warning (the HOME-HUB-P
+        # class of bug). Discard callback prevents unbounded growth.
+        self._pending_sonos_tasks: set[asyncio.Task] = set()
 
         # Config (loaded from DB)
         self._mode_sounds: dict[str, str] = {}
@@ -255,7 +261,9 @@ class AmbientSoundService:
         await self._save_config()
         logger.info("Ambient play: %s (source=%s)", filename, source)
         if self._sonos and not self._sonos_ambient_active:
-            asyncio.create_task(self._start_sonos_ambient())
+            task = asyncio.create_task(self._start_sonos_ambient())
+            self._pending_sonos_tasks.add(task)
+            task.add_done_callback(self._pending_sonos_tasks.discard)
         return {"status": "ok"}
 
     async def pause(self) -> dict[str, Any]:
@@ -471,7 +479,9 @@ class AmbientSoundService:
         self._sonos_absent_since = None
         self._sonos_present_since = None
         if self._sonos and getattr(self._sonos, "connected", False):
-            asyncio.create_task(self._sonos.pause())
+            task = asyncio.create_task(self._sonos.pause())
+            self._pending_sonos_tasks.add(task)
+            task.add_done_callback(self._pending_sonos_tasks.discard)
         logger.info("Sonos ambient stopped")
 
     async def _sonos_ambient_loop(self) -> None:

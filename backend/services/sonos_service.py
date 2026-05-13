@@ -216,6 +216,15 @@ class SonosService:
         except CircuitBreakerOpen:
             return False
         except Exception as e:
+            # UPnP 701 ("Transition not available") on pause means the
+            # player is already not playing. Pause is idempotent — the
+            # desired state IS the current state, so treat as success
+            # instead of logging an ERROR Sentry event. The SoCo error
+            # message format is stable: ``UPnP Error 701 received:
+            # Transition not available from <ip>``.
+            err = str(e)
+            if "701" in err and "Transition not available" in err:
+                return True
             logger.error(f"Sonos pause error: {e}")
             return False
 
