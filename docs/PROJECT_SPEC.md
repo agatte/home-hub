@@ -26,7 +26,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 ### Lighting
 
-- Full Philips Hue control via dual APIs (v1/phue2 for basic control + 0.5s polling, CLIP v2 for native scenes and dynamic effects)
+- Full Philips Hue control via dual APIs (v1/phue2 for basic control + 0.5s polling, CLIP v2 for native scenes, dynamic effects, and server-sent EventStream push). v2 EventStream delivers on/brightness changes from the Hue app + wall dimmers in ~150ms; while the stream is healthy, v1 polling demotes to 5s and covers color/CT plus bridge reachability.
 - **Color temperature (CT/mirek) support** — first-class parameter alongside HSB for precise Kelvin control (2000K–6500K)
 - Time-based automation: wake, daytime, evening, night periods with separate weekday/weekend schedules
 - Activity-driven modes: gaming, working, watching, relax, cooking, social — each with per-light state definitions
@@ -37,7 +37,8 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Mode-specific transition speeds** — gaming snaps (0.5s), relax fades gently (4s), watching cinematic (3s), cooking quick (1s), sleeping gradual (5s) via MODE_TRANSITION_TIME
 - **Scene drift** — subtle random perturbation (±15 bri, ±1500 hue) every 30min during long sessions with 10s imperceptible transitions. **Relax-only**: drift is aesthetic variation and would make paired lights in functional modes look randomly unequal, so it's gated to relax.
 - **Effect reconciliation** — `_reconcile_effect` helper applies state FIRST, then stops/starts v2 effects with a 0.5s bridge-processing guard. Order matters: stopping an effect before the new brightness target is on the bridge produces a brightness pop to 100% (the old mode-switch "flash" bug).
-- **Polling in-flight window** — `hue_service` tracks per-light deadlines; the 0.5s polling loop skips broadcasting `light_update` for a light that was just written until its transition + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition reads. A 3s max-age clamp inside the poll loop force-clears any deadline that ends up further in the future than that — covers the "bridge ack'd the write but the bulb is unreachable so it never transitioned" case, which otherwise would mute polling on that light until the natural deadline expired.
+- **Polling in-flight window** — `hue_service` tracks per-light deadlines; the polling loop skips broadcasting `light_update` for a light that was just written until its transition + 0.5s buffer elapses. Prevents the UI from bouncing back to stale mid-transition reads. A 3s max-age clamp inside the poll loop force-clears any deadline that ends up further in the future than that — covers the "bridge ack'd the write but the bulb is unreachable so it never transitioned" case, which otherwise would mute polling on that light until the natural deadline expired. The same inflight check is honored by the v2 EventStream dispatcher so a stream echo from the user's own slider drag doesn't snap the UI back mid-drag.
+- **v2 EventStream push** — `HueV2Service.event_stream_loop` subscribes to `/eventstream/clip/v2` (a separate `httpx.AsyncClient` with `read=None` timeout) and dispatches `type=="light"` events back through the existing `light_update` WebSocket path. Merges `on` + `bri` (scaled from v2's 0-100 float to v1's 1-254 int) into the v1 cached dict so the frontend store needs zero changes; color (CIE xy) and CT changes are intentionally NOT translated because the codebase has no gamut-aware xy→hue/sat converter. Color/CT ride the 5s v1 polling fallback. Reconnect loop with 1s→30s exponential backoff handles the bridge's ~24h SSE drops + firmware reboots. Gated on `hue_v2.connected` + non-empty `_v2_to_v1` at boot; otherwise the task isn't spawned and the system runs Phase 1 behavior (0.5s polling).
 - **Mode → scene overrides** — any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, checked before hardcoded ACTIVITY_LIGHT_STATES
 - **20 curated scenes** across 7 categories (functional, cozy, moody, vibrant, nature, entertainment, social) using color harmony theory — each scene defines per-light states with varied hue, saturation, and brightness for depth
 - **Custom scene CRUD** — user-created scenes persisted to SQLite with category and optional paired effect
@@ -199,8 +200,8 @@ Browser / Phone (PWA)
         |  WebSocket + REST
         v
    FastAPI Backend (port 8000, async)
-   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling)
-   ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects)
+   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling; 5s when v2 stream active)
+   ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects, SSE EventStream push)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
@@ -800,7 +801,7 @@ WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `
 ### Service Interfaces
 
 #### HueService
-Controls lights via phue2 (v1 API). Polls bridge every 1s, broadcasts changes via WebSocket.
+Controls lights via phue2 (v1 API). Polls bridge every 0.5s (or 5s when the v2 EventStream is delivering pushes), broadcasts changes via WebSocket.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -813,11 +814,11 @@ Controls lights via phue2 (v1 API). Polls bridge every 1s, broadcasts changes vi
 | `poll_state_loop` | `(ws_manager) → None` | Background polling coroutine |
 
 #### HueV2Service
-Native scenes and effects via CLIP API v2. Maintains v1↔v2 UUID mapping cache.
+Native scenes, dynamic effects, and EventStream push via CLIP API v2. Maintains v1↔v2 UUID mapping cache. Uses two `httpx.AsyncClient` instances: one for REST (`/clip/v2/resource/*`, 10s timeout) and a second for SSE (`/eventstream/clip/v2`, no read timeout).
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
-| `connect` | `() → None` | Initialize, build ID mapping |
+| `connect` | `() → None` | Initialize both clients, build ID mapping |
 | `get_scenes` | `() → list[dict]` | List bridge scenes |
 | `activate_scene` | `(scene_id: str) → bool` | Activate by UUID |
 | `set_effect` | `(v1_light_id: str, effect: str) → bool` | Apply to one light |
@@ -825,6 +826,7 @@ Native scenes and effects via CLIP API v2. Maintains v1↔v2 UUID mapping cache.
 | `stop_effect` | `(v1_light_id: str) → bool` | Stop on one light |
 | `stop_effect_all` | `() → bool` | Stop all effects |
 | `v1_to_v2_id` | `(v1_id: str) → Optional[str]` | ID conversion |
+| `event_stream_loop` | `(ws_manager, hue_v1_service) → None` | SSE consumer — broadcasts on/bri changes via `light_update` at ~150ms latency, ignores color/ct events (v1 polling covers them) |
 
 #### SonosService
 UPnP control via SoCo. Polls every 2s, broadcasts changes.

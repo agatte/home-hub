@@ -116,8 +116,8 @@ Browser / Phone (PWA)
         |  WebSocket + REST
         v
    FastAPI Backend (port 8000, async)
-   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling)
-   ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects)
+   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling; 5s when v2 stream active)
+   ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects, SSE EventStream push)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
@@ -166,6 +166,7 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 - **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains/Gradle false positives). Media is foreground-gated.
 - **`pc_agent/ambient_monitor.py`** — `speech_multiple→social` gate abandoned 2026-05-09 (max observed score 0.088 across 838k rows; structurally unreachable). Social is manual-override only. Never records audio.
 - **`websocket_manager.py`** — `broadcast` fan-outs via `asyncio.gather` with a 2s per-client `wait_for`. A stalled client (mobile on bad wifi, paused tab) now disconnects itself instead of holding the loop; expect `Client disconnected` log lines in those cases rather than "broadcasts stopped firing."
+- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`; uses a second `_stream_client` (read timeout disabled). Broadcasts on/bri pushes via the existing `light_update` channel; intentionally drops color (CIE xy) + ct events because there's no gamut-aware converter to v1's hue/sat. Color/ct ride the v1 5s fallback. 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s cadence whenever the stream isn't healthy. Diagnose stream state via the `hue_v2_stream` heartbeat in `/health` (stale window 10s).
 
 ---
 
@@ -281,7 +282,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Effect reconciliation:** `_reconcile_effect` runs AFTER `_apply_state` so brightness is at target before the old effect stops (otherwise pops to 100%). 0.5s guard between stop+start.
 
-**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop ticks every 0.5s and is the sole post-write arbiter; a 3s max-age clamp force-clears any deadline pushed further than that (unreachable bulb that ack'd the write but never transitioned). Mid-drag slider commands use `transitiontime=1`; release flush uses default 0.4s.
+**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop ticks every 0.5s (demotes to 5s when v2 EventStream is active — see `HueV2Service.event_stream_loop`); a 3s max-age clamp force-clears any deadline pushed further than that (unreachable bulb that ack'd the write but never transitioned). The v2 stream dispatcher honors the same inflight window so a stream echo from your own slider drag doesn't snap the UI back mid-drag. Mid-drag slider commands use `transitiontime=1`; release flush uses default 0.4s.
 
 **Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry in `run_loop`.
 
