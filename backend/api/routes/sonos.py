@@ -6,25 +6,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from backend.api._guards import _check_sonos_available
 from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.sonos import SonosStatus, TTSRequest, VolumeRequest
 from backend.rate_limit import limiter
 
 router = APIRouter(prefix="/api/sonos", tags=["sonos"])
-
-
-def _check_sonos_available(sonos) -> None:
-    """Raise 503 if the Sonos service isn't currently reachable.
-
-    Mirrors ``lights._check_hue_available``: distinguishes initial-
-    discovery failure (``not connected``) from mid-session breaker
-    open (``temporarily unavailable``). Both surface as HTTP 503 so
-    clients know to retry rather than treating it as a hard error.
-    """
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
-    if sonos.breaker_open:
-        raise HTTPException(status_code=503, detail="Sonos temporarily unavailable")
 
 
 async def _log_manual_sonos(

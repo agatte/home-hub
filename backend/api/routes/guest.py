@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from backend.api._guards import _check_hue_available
 from backend.api.auth import require_api_key
 from backend.api.routes.scenes import (
     SCENE_PRESETS,
@@ -232,8 +233,7 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
     preset = SCENE_PRESETS[preset_id]
 
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     hue_v2 = getattr(request.app.state, "hue_v2", None)
     ws_manager = request.app.state.ws_manager
@@ -294,8 +294,7 @@ async def reset_guest_scene(name: str, request: Request) -> dict:
     preset = SCENE_PRESETS[preset_id]
 
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     hue_v2 = getattr(request.app.state, "hue_v2", None)
     ws_manager = request.app.state.ws_manager
@@ -495,11 +494,10 @@ async def _apply_brightness_steps(
     batch lands at the same place 3 sequential up taps would.
 
     Stamps manual overrides identically. Returns `(updated, ceiling)`.
-    Raises 503 if the Hue bridge isn't connected.
+    Raises 503 if the Hue bridge isn't reachable (not-connected OR breaker open).
     """
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     automation = getattr(request.app.state, "automation", None)
     mode_mult = 1.0

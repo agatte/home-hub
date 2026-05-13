@@ -3,6 +3,7 @@ Music discovery and mode-playlist mapping endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
+from backend.api._guards import _check_sonos_available
 from backend.api.auth import require_api_key
 from backend.api.schemas.music import ModePlaylistAdd, ModePlaylistEntry
 from backend.config import DATA_DIR
@@ -266,8 +267,7 @@ async def play_preview(request: Request) -> dict:
         )
 
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     # Build the DIDL-Lite envelope from any metadata the caller supplied.
     # Empty string when no track/title — sonos_service.play_uri falls back

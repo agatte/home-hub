@@ -3,6 +3,7 @@ Hue light control endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.api._guards import _check_hue_available
 from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.lights import LightResponse, LightState
 
@@ -12,22 +13,6 @@ router = APIRouter(prefix="/api/lights", tags=["lights"])
 # 10% per tap, floor of 20 units so taps stay perceptible at low bri.
 _BRIGHTNESS_STEP = 1.10
 _BRIGHTNESS_MIN_STEP = 20
-
-
-def _check_hue_available(hue) -> None:
-    """Raise 503 if the Hue service isn't currently reachable.
-
-    Two distinct unavailability states deserve distinct detail strings
-    so post-mortem log readers can tell them apart:
-      - ``not connected``: initial bridge discovery/auth never succeeded
-      - ``temporarily unavailable``: breaker is fast-failing because the
-        bridge socket died mid-session; cooldown is still elapsing
-    Both surface as HTTP 503 so clients know the request is retry-worthy.
-    """
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
-    if hue.breaker_open:
-        raise HTTPException(status_code=503, detail="Hue bridge temporarily unavailable")
 
 
 @router.get("", response_model=list[LightResponse])

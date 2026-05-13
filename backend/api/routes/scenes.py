@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.api._guards import _check_hue_available
 from backend.api.auth import require_api_key, source_from_request
 from backend.api.schemas.lights import CustomSceneCreate
 from backend.database import async_session
@@ -492,8 +493,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
 
     # Check curated preset
     if scene_id in SCENE_PRESETS:
-        if not hue.connected:
-            raise HTTPException(status_code=503, detail="Hue bridge not connected")
+        _check_hue_available(hue)
 
         preset = SCENE_PRESETS[scene_id]
 
@@ -866,8 +866,7 @@ async def try_scene(scene_id: str, request: Request) -> dict:
     hue = request.app.state.hue
     ws_manager = request.app.state.ws_manager
 
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     # Cancel any existing trial
     if _try_it_state["task"] and not _try_it_state["task"].done():
