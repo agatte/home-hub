@@ -131,6 +131,12 @@ class HueService:
                 })
 
             return lights
+        except CircuitBreakerOpen:
+            # Breaker is fast-failing while the bridge is unreachable. It
+            # self-narrates open/close transitions at WARNING; downstream
+            # poll-loop callers don't add information by re-logging here,
+            # and at 0.5s cadence the ERROR-level repeat floods Sentry.
+            return []
         except Exception as e:
             logger.error(f"Error getting lights: {e}")
             return []
@@ -209,6 +215,8 @@ class HueService:
                 time.monotonic() + transition_seconds + INFLIGHT_BUFFER_SECONDS
             )
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Error setting light {light_id}: {e}")
             return False

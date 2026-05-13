@@ -171,6 +171,11 @@ class SonosService:
                 "volume": volume,
                 "mute": mute,
             }
+        except CircuitBreakerOpen:
+            # Breaker self-narrates state transitions; the 2s poll loop
+            # would otherwise log ERROR every cycle while the breaker is
+            # open, flooding Sentry on any sustained Sonos outage.
+            return {"state": "error", "error": "circuit breaker open"}
         except Exception as e:
             logger.error(f"Error getting Sonos status: {e}")
             return {"state": "error", "error": str(e)}
@@ -182,6 +187,8 @@ class SonosService:
         try:
             await self._safe_call(self._device.play)
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Sonos play error: {e}")
             return False
@@ -193,6 +200,8 @@ class SonosService:
         try:
             await self._safe_call(self._device.pause)
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Sonos pause error: {e}")
             return False
@@ -210,6 +219,8 @@ class SonosService:
             vol = max(0, min(100, volume))
             await self._safe_call(setattr, self._device, "volume", vol)
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Sonos volume error: {e}")
             return False
@@ -261,6 +272,8 @@ class SonosService:
         try:
             await self._safe_call(self._device.next)
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Sonos next error: {e}")
             return False
@@ -272,6 +285,8 @@ class SonosService:
         try:
             await self._safe_call(self._device.previous)
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Sonos previous error: {e}")
             return False
@@ -319,6 +334,8 @@ class SonosService:
                     device.play_uri(uri)
             await self._safe_call(_play, self._device, uri, volume, meta)
             return True
+        except CircuitBreakerOpen:
+            return False
         except Exception as e:
             logger.error(f"Sonos play_uri error: {e}")
             return False
@@ -352,6 +369,8 @@ class SonosService:
             volume = snapshot.get("volume")
             if volume is not None:
                 await self.set_volume(volume)
+        except CircuitBreakerOpen:
+            return
         except Exception as e:
             logger.error(f"Error restoring playback: {e}")
 
@@ -379,6 +398,8 @@ class SonosService:
                     "source": "favorite",
                 })
                 raw_objects.append(fav)
+        except CircuitBreakerOpen:
+            return self._favorites_cache or []
         except Exception as e:
             logger.error(f"Error getting Sonos favorites: {e}")
             return self._favorites_cache or []
@@ -401,6 +422,8 @@ class SonosService:
             self._playlists_cache = list(playlists)
             self._playlists_cache_time = now
             return self._playlists_cache
+        except CircuitBreakerOpen:
+            return self._playlists_cache or []
         except Exception as e:
             logger.error(f"Error getting Sonos playlists: {e}")
             return self._playlists_cache or []
