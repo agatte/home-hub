@@ -35,12 +35,14 @@ class TestInit:
         assert bandit._total_selections == 0
 
     def test_loads_persisted_file(self, tmp_path):
+        """Phase B: legacy 3-pipe keys auto-migrate to 4-pipe on load.
+        See ``test_music_bandit_weather.py`` for the migration-specific tests."""
         (tmp_path / "music_bandit.json").write_text(json.dumps({
-            "arms": {"working|day|Lo-Fi": [3.0, 1.0]},
+            "arms": {"working|day|any|Lo-Fi": [3.0, 1.0]},
             "total_selections": 10,
         }))
         b = MusicBandit(model_manager=None, data_dir=tmp_path)
-        assert b._arms == {"working|day|Lo-Fi": [3.0, 1.0]}
+        assert b._arms == {"working|day|any|Lo-Fi": [3.0, 1.0]}
         assert b._total_selections == 10
 
 
@@ -60,48 +62,47 @@ class TestSelect:
         assert bandit._total_selections == 1
 
     def test_creates_arm_for_new_candidate(self, bandit):
+        """Phase B: keys are 4-tuple ``mode|period|weather|title``.
+        Default ``weather=any`` when caller doesn't supply context."""
         candidates = [{"favorite_title": "Lo-Fi", "vibe": "chill"}]
         bandit.select("working", "day", candidates, preferred_vibes=["chill"])
-        # Arm now exists with PRIOR_PREFERRED.
-        key = "working|day|Lo-Fi"
+        key = "working|day|any|Lo-Fi"
         assert key in bandit._arms
         assert bandit._arms[key] == [PRIOR_PREFERRED[0], PRIOR_PREFERRED[1]]
 
 
 class TestRecordReward:
-    def test_positive_reward_increments_alpha(self, bandit, tmp_path):
+    def test_positive_reward_increments_alpha(self, bandit):
         bandit.record_reward("working", "day", "Lo-Fi", REWARD_KEEP_PLAYING)
-        key = "working|day|Lo-Fi"
-        # New arm starts at PRIOR_DEFAULT then gets the reward.
+        key = "working|day|any|Lo-Fi"
         assert bandit._arms[key][0] == PRIOR_DEFAULT[0] + REWARD_KEEP_PLAYING
         assert bandit._arms[key][1] == PRIOR_DEFAULT[1]
 
     def test_negative_reward_increments_beta(self, bandit):
         bandit.record_reward("working", "day", "Lo-Fi", -1.0)
-        key = "working|day|Lo-Fi"
+        key = "working|day|any|Lo-Fi"
         assert bandit._arms[key][0] == PRIOR_DEFAULT[0]
         assert bandit._arms[key][1] == PRIOR_DEFAULT[1] + 1.0
 
     def test_persists_to_disk(self, bandit, tmp_path):
         bandit.record_reward("working", "day", "Lo-Fi", 1.0)
-        # File should exist with the new arm.
         on_disk = json.loads((tmp_path / "music_bandit.json").read_text())
-        assert "working|day|Lo-Fi" in on_disk["arms"]
+        assert "working|day|any|Lo-Fi" in on_disk["arms"]
 
 
 class TestGetStatus:
     def test_shape(self, bandit):
+        """Phase B: top_arms nests as {mode: {weather_class: [...]}}."""
         bandit._arms = {
-            "working|day|Lo-Fi": [3.0, 1.0],
-            "working|day|Jazz": [1.0, 1.0],
-            "relax|night|Ambient": [5.0, 1.0],
+            "working|day|any|Lo-Fi": [3.0, 1.0],
+            "working|day|any|Jazz": [1.0, 1.0],
+            "relax|night|any|Ambient": [5.0, 1.0],
         }
         status = bandit.get_status()
         assert status["arm_count"] == 3
-        assert "working" in status["arms_per_mode"]
         assert status["arms_per_mode"]["working"] == 2
-        # Top arms within each mode sorted by mean descending.
-        assert status["top_arms"]["working"][0]["title"] == "Lo-Fi"
+        # Top arms now grouped by (mode, weather_class).
+        assert status["top_arms"]["working"]["any"][0]["title"] == "Lo-Fi"
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,14 @@ async def _run_migrations(conn) -> None:
         if col not in ae_cols:
             await conn.execute(text(f"ALTER TABLE activity_events ADD COLUMN {col} {ddl_type}"))
 
+    # Phase B (2026-05-12): weather class on sonos_playback_events so the
+    # music bandit's nightly retrain produces weather-aware arms across
+    # 90 days of history. Captured at log time in event_logger.log_sonos_event.
+    result = await conn.execute(text("PRAGMA table_info(sonos_playback_events)"))
+    spe_cols = {row[1] for row in result.fetchall()}
+    if "weather_class" not in spe_cols:
+        await conn.execute(text("ALTER TABLE sonos_playback_events ADD COLUMN weather_class TEXT"))
+
     # ML decision and metrics tables (Phase 3: ML foundation)
     result = await conn.execute(
         text("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_decisions'")

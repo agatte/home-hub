@@ -69,11 +69,16 @@ class MusicMapper:
         ws_manager,
         event_logger=None,
         music_bandit=None,
+        weather_service=None,
     ) -> None:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
         self._event_logger = event_logger
         self._music_bandit = music_bandit
+        # Phase B (2026-05-12): weather context for the bandit's 4-tuple
+        # arm key. Optional — when None the bandit falls back to its
+        # WEATHER_ANY sentinel and behaves like Phase A's 3-tuple shape.
+        self._weather_service = weather_service
         # Cache: mode -> list[{id, favorite_title, vibe, auto_play, priority}]
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
         # Tracks the most recent mode requested — used to skip stale auto-plays
@@ -86,6 +91,23 @@ class MusicMapper:
     def set_automation(self, automation) -> None:
         """Inject the automation engine reference (called from bootstrap)."""
         self._automation = automation
+
+    def _current_weather_class(self) -> str:
+        """Return the bandit-shape weather class for the current observation.
+
+        Falls back to ``WEATHER_ANY`` when no weather_service is wired or
+        no observation has been cached yet. Sync (no awaitable) so it can
+        be called from ``pick_playlist``.
+        """
+        from backend.services.weather_class import WEATHER_ANY, classify_for_bandit
+        if not self._weather_service:
+            return WEATHER_ANY
+        try:
+            weather = self._weather_service.get_cached()
+        except Exception as e:
+            logger.debug("weather_service.get_cached() failed: %s", e)
+            return WEATHER_ANY
+        return classify_for_bandit(weather)
 
     async def load_from_db(self) -> None:
         """Load all mode-playlist mappings from the database into cache."""
@@ -144,6 +166,7 @@ class MusicMapper:
                 period=period,
                 candidates=entries,
                 preferred_vibes=preference,
+                weather=self._current_weather_class(),
             )
             if pick:
                 return pick
@@ -348,6 +371,7 @@ class MusicMapper:
                             favorite_title=title,
                             mode_at_time=mode,
                             triggered_by="auto",
+                            weather_class=self._current_weather_class(),
                         )
                     return {"action": "auto_played", "title": title, "vibe": vibe}
                 logger.warning(f"Failed to auto-play '{title}' for mode '{mode}'")
@@ -373,6 +397,7 @@ class MusicMapper:
                         favorite_title=title,
                         mode_at_time=mode,
                         triggered_by="auto",
+                        weather_class=self._current_weather_class(),
                     )
                 return {"action": "suggested", "title": title, "vibe": vibe}
 
@@ -466,6 +491,7 @@ class MusicMapper:
                 favorite_title=title,
                 mode_at_time=mode,
                 triggered_by="weather",
+                weather_class=self._current_weather_class(),
             )
         return {"action": "weather_suggested", "title": title, "vibe": vibe}
 

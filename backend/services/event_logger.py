@@ -294,8 +294,15 @@ class EventLogger:
         mode_at_time: Optional[str],
         volume: Optional[int] = None,
         triggered_by: str = "manual",
+        weather_class: Optional[str] = None,
     ) -> None:
-        """Record a Sonos playback event."""
+        """Record a Sonos playback event.
+
+        ``weather_class`` (Phase B, 2026-05-12) is captured at log time so
+        the music bandit's nightly retrain can rebuild weather-aware arms
+        across 90 days of history. Callers that don't supply it leave the
+        column NULL; retrain treats NULL rows as WEATHER_ANY.
+        """
         async def _write(session) -> None:
             session.add(SonosPlaybackEvent(
                 event_type=event_type,
@@ -303,6 +310,7 @@ class EventLogger:
                 mode_at_time=mode_at_time,
                 volume=volume,
                 triggered_by=triggered_by,
+                weather_class=weather_class,
             ))
 
         await self._write("sonos", _write)

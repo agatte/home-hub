@@ -220,6 +220,11 @@ class SonosPlaybackEvent(Base):
     volume: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # triggered_by: "manual", "auto", "suggestion_accepted"
     triggered_by: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
+    # Phase B (2026-05-12): weather class at event-log time so the bandit's
+    # nightly retrain can rebuild weather-aware arms across 90d of history.
+    # One of: "thunderstorm" / "rain" / "snow" / "clouds" / "golden_hour" /
+    # "clear" / "any" (sentinel) / None (pre-migration legacy rows).
+    weather_class: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
 
 class SceneActivation(Base):

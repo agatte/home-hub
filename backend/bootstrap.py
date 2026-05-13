@@ -263,11 +263,14 @@ async def lifespan(app: FastAPI):
     app.state.rule_engine = rule_engine
 
     # Music mapper — takes music_bandit via constructor (was back-filled).
+    # Phase B (2026-05-12): weather_service threaded in so the bandit picks
+    # context-aware playlists per (mode, period, weather_class, title) arm key.
     music_mapper = MusicMapper(
         sonos_service=sonos,
         ws_manager=ws_manager,
         event_logger=event_logger,
         music_bandit=music_bandit,
+        weather_service=weather_service,
     )
     await music_mapper.load_from_db()
     app.state.music_mapper = music_mapper

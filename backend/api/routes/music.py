@@ -281,3 +281,17 @@ async def play_preview(request: Request) -> dict:
 
     success = await sonos.play_uri(preview_url, meta=meta or None)
     return {"status": "ok" if success else "error"}
+
+
+@router.get("/bandit-status")
+async def get_bandit_status(request: Request) -> dict:
+    """Return the music bandit's arm landscape (Phase B visibility).
+
+    Phase B groups arms by ``(mode, weather_class)`` so the top picks per
+    mode can be inspected across weather classes — useful for MCP debugging
+    and verifying context-aware selection without a full matrix UI.
+    """
+    bandit = getattr(request.app.state, "music_bandit", None)
+    if bandit is None:
+        return {"arm_count": 0, "total_selections": 0, "top_arms": {}}
+    return bandit.get_status()
