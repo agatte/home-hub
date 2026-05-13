@@ -1,11 +1,15 @@
 """
-Philips Hue CLIP API v2 service — native scenes and dynamic effects.
+Philips Hue CLIP API v2 service — native scenes, dynamic effects, and the
+server-sent EventStream that pushes external light changes (Hue app, wall
+dimmer, motion sensor) to the dashboard in ~150ms instead of waiting for
+the next v1 poll cycle.
 
 Complements the v1 HueService (phue2) with direct HTTPS calls to the bridge's
 CLIP v2 API. This enables native scene activation (visible to Alexa) and
 dynamic light effects (candlelight, fireplace, sparkle, etc.).
 """
 import asyncio
+import json
 import logging
 import time
 from typing import Any, Optional
@@ -13,6 +17,12 @@ from typing import Any, Optional
 import httpx
 
 logger = logging.getLogger("home_hub.hue_v2")
+
+# EventStream reconnect backoff bounds. 1s initial avoids hammering a
+# briefly-flapping bridge; 30s cap keeps the recovery window tight after
+# a firmware reboot or ~24h SSE drop.
+_STREAM_BACKOFF_INITIAL_SECONDS = 1.0
+_STREAM_BACKOFF_MAX_SECONDS = 30.0
 
 # Dynamic effects supported by Hue v2 API
 AVAILABLE_EFFECTS = [
@@ -38,6 +48,11 @@ class HueV2Service:
         self._username = username
         self._base_url = f"https://{bridge_ip}/clip/v2/resource"
         self._client: Optional[httpx.AsyncClient] = None
+        # Separate client for the EventStream. The REST client's base_url
+        # points at /clip/v2/resource, but the SSE endpoint lives at
+        # /eventstream/clip/v2 (one path level up). The stream client also
+        # disables read timeout so a quiet stream isn't killed.
+        self._stream_client: Optional[httpx.AsyncClient] = None
         self._connected = False
         # Maps v1 light IDs ("1", "2") to v2 UUIDs and vice versa
         self._v1_to_v2: dict[str, str] = {}
@@ -46,15 +61,23 @@ class HueV2Service:
         self._scene_cache: list[dict[str, Any]] = []
         self._scene_cache_time: float = 0
         self._scene_cache_ttl: float = 300  # 5 minutes
+        # Heartbeat registry — injected via set_heartbeat_registry (same
+        # pattern HueService uses). Ticked on every received stream frame
+        # under the "hue_v2_stream" key so /health can surface silence.
+        self._heartbeat = None
 
     @property
     def connected(self) -> bool:
         """Whether the v2 API connection is active."""
         return self._connected
 
+    def set_heartbeat_registry(self, registry) -> None:
+        """Inject the heartbeat registry (called from lifespan)."""
+        self._heartbeat = registry
+
     async def connect(self) -> None:
         """
-        Initialize the HTTPS client and build the v1↔v2 ID mapping.
+        Initialize the HTTPS clients and build the v1↔v2 ID mapping.
 
         The bridge uses a self-signed certificate, so SSL verification is
         disabled. The v1 API username works as the v2 API key.
@@ -65,6 +88,14 @@ class HueV2Service:
                 headers={"hue-application-key": self._username},
                 verify=False,
                 timeout=10.0,
+            )
+            self._stream_client = httpx.AsyncClient(
+                base_url=f"https://{self._bridge_ip}",
+                headers={"hue-application-key": self._username},
+                verify=False,
+                # No read timeout — SSE connections are long-lived and the
+                # bridge can go minutes between events.
+                timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
             )
             # Test connectivity and build ID map
             await self._build_id_map()
@@ -277,8 +308,180 @@ class HueV2Service:
     # ------------------------------------------------------------------
 
     async def close(self) -> None:
-        """Close the HTTPS client."""
+        """Close both HTTPS clients (REST + EventStream)."""
         if self._client:
             await self._client.aclose()
             self._client = None
-            self._connected = False
+        if self._stream_client:
+            await self._stream_client.aclose()
+            self._stream_client = None
+        self._connected = False
+
+    # ------------------------------------------------------------------
+    # EventStream — push-based external-change visibility (Phase 3)
+    # ------------------------------------------------------------------
+
+    async def event_stream_loop(self, ws_manager, hue_v1_service) -> None:
+        """
+        SSE consumer for the bridge's v2 EventStream.
+
+        Pushes external light changes (Hue app slider, wall dimmer, motion
+        sensor) to the dashboard via the existing `light_update` WebSocket
+        broadcast, in ~150ms vs. the v1 polling floor of 0.5s.
+
+        Scope: brightness + on/off only. v2 events deliver color as
+        `color.xy` (CIE 1931) and we don't have a gamut-aware converter
+        to v1's hue/sat (0-65535 / 0-254); color and CT changes fall
+        through to the v1 polling fallback at 5s cadence.
+
+        Once the first event arrives, signals HueService to demote its
+        own polling to 5s (still acts as bridge-reachability heartbeat
+        and color/ct catch-up).
+        """
+        if not self._stream_client:
+            logger.warning("v2 event stream: no stream client, aborting")
+            return
+
+        backoff = _STREAM_BACKOFF_INITIAL_SECONDS
+
+        while True:
+            try:
+                async with self._stream_client.stream(
+                    "GET",
+                    "/eventstream/clip/v2",
+                    headers={"Accept": "text/event-stream"},
+                ) as response:
+                    response.raise_for_status()
+                    logger.info("v2 event stream connected")
+                    backoff = _STREAM_BACKOFF_INITIAL_SECONDS
+
+                    async for line in response.aiter_lines():
+                        if not line or line.startswith(":"):
+                            # Heartbeat comment or keepalive blank — skip.
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:"):].strip()
+                        if not payload:
+                            continue
+
+                        try:
+                            events = json.loads(payload)
+                        except json.JSONDecodeError:
+                            logger.debug("v2 stream: malformed JSON payload")
+                            continue
+
+                        if self._heartbeat is not None:
+                            self._heartbeat.tick("hue_v2_stream")
+
+                        await self._dispatch_stream_events(
+                            events, ws_manager, hue_v1_service
+                        )
+
+            except asyncio.CancelledError:
+                logger.info("v2 event stream stopped (cancelled)")
+                raise
+            except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError) as e:
+                logger.warning(
+                    "v2 event stream closed (%s), backoff %.1fs",
+                    type(e).__name__, backoff,
+                )
+            except Exception:
+                logger.exception(
+                    "v2 event stream unexpected error, backoff %.1fs", backoff
+                )
+
+            # Signal v1 polling to resume tight cadence while the stream
+            # is down. Re-arms on the next successful event below.
+            try:
+                hue_v1_service.set_v2_stream_active(False)
+            except AttributeError:
+                pass  # Older HueService without the flag; fail-soft.
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _STREAM_BACKOFF_MAX_SECONDS)
+
+    async def _dispatch_stream_events(
+        self,
+        events: list,
+        ws_manager,
+        hue_v1_service,
+    ) -> None:
+        """
+        Translate one v2 SSE batch into v1-shaped `light_update` broadcasts.
+
+        Each batch is a JSON array; each object has a `type` and `data` list
+        (Hue spec: top-level wraps a batch of resource updates). We walk the
+        embedded `data` arrays and only act on `type=="light"` entries.
+        """
+        first_event_this_batch = True
+
+        for envelope in events:
+            for update in envelope.get("data", []):
+                if update.get("type") != "light":
+                    continue
+
+                v2_id = update.get("id")
+                if not v2_id:
+                    continue
+                v1_id = self._v2_to_v1.get(v2_id)
+                if not v1_id:
+                    logger.debug("v2 stream: no v1 mapping for %s", v2_id)
+                    continue
+
+                prev = hue_v1_service._last_states.get(v1_id)
+                if prev is None:
+                    # v1 polling hasn't filled the cache yet — let polling
+                    # catch up; broadcasting a half-known dict would race.
+                    logger.debug(
+                        "v2 stream: skipping %s (v1 cache not populated yet)", v1_id
+                    )
+                    continue
+
+                # Respect the inflight window — we just wrote this bulb,
+                # the bridge event is mid-transition and would snap the UI
+                # back to a stale value before the user releases the slider.
+                now = time.monotonic()
+                if now < hue_v1_service._inflight_until.get(v1_id, 0.0):
+                    continue
+
+                merged = dict(prev)
+                changed = False
+
+                on_field = update.get("on")
+                if isinstance(on_field, dict) and "on" in on_field:
+                    new_on = bool(on_field["on"])
+                    if merged.get("on") != new_on:
+                        merged["on"] = new_on
+                        changed = True
+
+                dimming = update.get("dimming")
+                if isinstance(dimming, dict) and "brightness" in dimming:
+                    # v2 brightness is 0-100 float. brightness==0 means the
+                    # light is OFF; that state lives on the `on` field, don't
+                    # write bri=0 (v1 range is 1-254).
+                    brightness = dimming["brightness"]
+                    if brightness and brightness > 0:
+                        new_bri = max(1, min(254, int(round(brightness / 100 * 253 + 1))))
+                        if merged.get("bri") != new_bri:
+                            merged["bri"] = new_bri
+                            changed = True
+
+                if not changed:
+                    continue
+
+                # Update the v1 cache so the next poll diff doesn't
+                # re-broadcast the same merged state we just pushed.
+                hue_v1_service._last_states[v1_id] = merged
+                await ws_manager.broadcast("light_update", merged)
+
+                if first_event_this_batch:
+                    # First confirmed light-update from the stream — demote
+                    # v1 polling to safety-net cadence. The flag is sticky
+                    # for the life of the stream; the outer loop clears it
+                    # before going into backoff on disconnect.
+                    try:
+                        hue_v1_service.set_v2_stream_active(True)
+                    except AttributeError:
+                        pass
+                    first_event_this_batch = False

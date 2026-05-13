@@ -663,6 +663,7 @@ async def lifespan(app: FastAPI):
     # iteration; /health reads heartbeats.snapshot() to flag stale tasks.
     event_logger.set_heartbeat_registry(heartbeats)
     hue.set_heartbeat_registry(heartbeats)
+    hue_v2.set_heartbeat_registry(heartbeats)
     sonos.set_heartbeat_registry(heartbeats)
     automation.set_heartbeat_registry(heartbeats)
     scheduler.set_heartbeat_registry(heartbeats)
@@ -674,6 +675,11 @@ async def lifespan(app: FastAPI):
     heartbeats.register("event_logger_retry", 30.0)
     if hue.connected:
         heartbeats.register("hue", 0.5)
+    if hue_v2.connected and hue_v2._v2_to_v1:
+        # SSE delivers events on physical light changes (sub-second cadence
+        # during a slider drag, otherwise minutes-quiet). 10s stale window
+        # is loose enough to avoid false-positive warns on idle homes.
+        heartbeats.register("hue_v2_stream", 10.0)
     if sonos.connected:
         heartbeats.register("sonos", 2.0)
     heartbeats.register("automation", 60.0)
@@ -686,6 +692,20 @@ async def lifespan(app: FastAPI):
 
     if hue.connected:
         tasks.append(asyncio.create_task(hue.poll_state_loop(ws_manager)))
+
+    # v2 EventStream — pushes external light changes (Hue app, wall dimmer)
+    # at ~150ms latency instead of waiting for the next 0.5s v1 poll. The
+    # stream loop is fail-soft: if the bridge SSE drops, v1 polling
+    # automatically returns to 0.5s cadence (via set_v2_stream_active).
+    if hue_v2.connected and hue_v2._v2_to_v1:
+        tasks.append(asyncio.create_task(
+            hue_v2.event_stream_loop(ws_manager, hue)
+        ))
+    else:
+        app_logger.info(
+            "v2 EventStream not spawned (hue_v2.connected=%s, mapped=%d)",
+            hue_v2.connected, len(hue_v2._v2_to_v1),
+        )
 
     if sonos.connected:
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))

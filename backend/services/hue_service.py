@@ -38,6 +38,11 @@ class HueService:
         # the UI back to stale values.
         self._inflight_until: dict[str, float] = {}
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+        # When the v2 EventStream is delivering push updates, the polling
+        # loop slows to 5s (still covers color/ct + bridge reachability).
+        # When the stream disconnects, this flips back to False and the
+        # loop returns to 0.5s cadence within the current cycle.
+        self._v2_stream_active = False
         # Bridge calls go through this breaker so a slow / unresponsive
         # bridge can't wedge the polling loop or REST handlers indefinitely.
         # 3 consecutive failures opens it; 30s cooldown before half-open
@@ -49,6 +54,17 @@ class HueService:
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_v2_stream_active(self, active: bool) -> None:
+        """
+        Toggle the v2-stream-active flag.
+
+        Called by `HueV2Service.event_stream_loop`: True once the stream
+        has delivered its first light update, False when it disconnects or
+        goes into reconnect backoff. The polling loop reads this on every
+        cycle to choose its sleep interval.
+        """
+        self._v2_stream_active = active
 
     @property
     def breaker(self) -> CircuitBreaker:
@@ -290,7 +306,10 @@ class HueService:
                         self._last_states[lid] = light
                         await ws_manager.broadcast("light_update", light)
 
-                await asyncio.sleep(0.5)
+                # Cadence depends on whether the v2 EventStream is healthy.
+                # Stream covers on/brightness push; we still need v1 polling
+                # for color/ct + bridge reachability, but at a much lower rate.
+                await asyncio.sleep(5.0 if self._v2_stream_active else 0.5)
             except asyncio.CancelledError:
                 logger.info("Hue polling stopped")
                 break
