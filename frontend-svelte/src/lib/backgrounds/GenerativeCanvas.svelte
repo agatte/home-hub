@@ -441,10 +441,14 @@
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
     if (motionQuery.matches) {
       // Render a single static frame so the canvas isn't a black rectangle,
-      // then stay stopped.
+      // then stay stopped. Cancel the rAF that `animate` queued on its way
+      // through — otherwise we leave an orphan handle that the visibility
+      // listener might try to resume.
       running = true
       animate(performance.now())
       running = false
+      cancelAnimationFrame(animationId)
+      animationId = 0
       return
     }
 

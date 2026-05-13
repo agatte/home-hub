@@ -109,23 +109,26 @@
     else startLoop()
   }
 
-  let reduceMotion = false
-
   onMount(async () => {
     scrollOffsets = layers.map(() => 0)
     updateSkyGradient()
     await fetchWeather()
     weatherTimer = setInterval(fetchWeather, 600_000)
 
+    // Listener add/remove stay symmetric across mount/destroy. On
+    // reduced-motion devices `startLoop` is skipped so the handler is
+    // wired but never has anything to pause — harmless and avoids the
+    // fragility of a state-dependent removal.
+    document.addEventListener('visibilitychange', handleVisibility)
+
     // Skip the rAF loop entirely when prefers-reduced-motion is set —
     // the CSS rule already pins background-position, and there's no point
     // burning cycles writing to a property the browser will override.
-    reduceMotion =
+    const reduceMotion =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     if (reduceMotion) return
 
-    document.addEventListener('visibilitychange', handleVisibility)
     startLoop()
   })
 
@@ -133,9 +136,7 @@
     stopLoop()
     unsub()
     if (weatherTimer) clearInterval(weatherTimer)
-    if (!reduceMotion) {
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
+    document.removeEventListener('visibilitychange', handleVisibility)
   })
 </script>
 
