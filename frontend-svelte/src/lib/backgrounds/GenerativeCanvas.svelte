@@ -59,8 +59,20 @@
     }
   })
 
-  const unsubLights = lights.subscribe(($lights) => {
-    const onLights = Object.values($lights).filter((l) => l.on && l.reachable)
+  // Trailing-debounce the palette recompute. `lights` updates can arrive
+  // many times per second during slider drags or external Hue events; the
+  // canvas reads colorPalette per-particle per-frame and visually can't
+  // distinguish more than a few entries (modulo over particle.color).
+  // PALETTE_CAP keeps the array small; LIGHTS_DEBOUNCE_MS coalesces bursts.
+  const PALETTE_CAP = 8
+  const LIGHTS_DEBOUNCE_MS = 200
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let lightsDebounceTimer = null
+
+  function recomputePalette($lights) {
+    const onLights = Object.values($lights)
+      .filter((l) => l.on && l.reachable)
+      .slice(0, PALETTE_CAP)
     if (onLights.length === 0) {
       colorPalette = [
         { h: 0, s: 0, l: 0.45 },
@@ -70,6 +82,14 @@
     } else {
       colorPalette = onLights.map((l) => hueToHSL(l.hue, l.sat, l.bri))
     }
+  }
+
+  const unsubLights = lights.subscribe(($lights) => {
+    if (lightsDebounceTimer) clearTimeout(lightsDebounceTimer)
+    lightsDebounceTimer = setTimeout(() => {
+      lightsDebounceTimer = null
+      recomputePalette($lights)
+    }, LIGHTS_DEBOUNCE_MS)
   })
 
   const unsubSonos = sonos.subscribe(($sonos) => {
@@ -346,7 +366,10 @@
   }
 
   // ── Main animation loop ───────────────────────────────────────────
+  let running = false
+
   function animate(timestamp) {
+    if (!running) return
     animationId = requestAnimationFrame(animate)
 
     const elapsed = timestamp - lastFrameTime
@@ -393,23 +416,49 @@
 
   function handleResize() { initCanvas() }
 
+  function startLoop() {
+    if (running) return
+    running = true
+    lastFrameTime = performance.now()
+    animationId = requestAnimationFrame(animate)
+  }
+
+  function stopLoop() {
+    running = false
+    cancelAnimationFrame(animationId)
+  }
+
+  function handleVisibility() {
+    if (document.hidden) stopLoop()
+    else startLoop()
+  }
+
   onMount(() => {
     initCanvas()
-    animationId = requestAnimationFrame(animate)
     window.addEventListener('resize', handleResize)
+    document.addEventListener('visibilitychange', handleVisibility)
 
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
     if (motionQuery.matches) {
-      cancelAnimationFrame(animationId)
+      // Render a single static frame so the canvas isn't a black rectangle,
+      // then stay stopped.
+      running = true
+      animate(performance.now())
+      running = false
+      return
     }
+
+    startLoop()
   })
 
   onDestroy(() => {
-    cancelAnimationFrame(animationId)
+    stopLoop()
     window.removeEventListener('resize', handleResize)
+    document.removeEventListener('visibilitychange', handleVisibility)
     unsubMode()
     unsubLights()
     unsubSonos()
+    if (lightsDebounceTimer) clearTimeout(lightsDebounceTimer)
   })
 </script>
 

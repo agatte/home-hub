@@ -17,6 +17,7 @@ import { pipeline } from './pipeline.js'
 import { automation } from './automation.js'
 import { sonos } from './sonos.js'
 import { weather } from './weather.js'
+import { debounced } from './_debounce.js'
 
 // Inner-ring lane order — matches backend SIGNAL_SOURCES. The behavioral
 // lane was removed 2026-04-27 after the LightGBM predictor collapsed to a
@@ -234,10 +235,13 @@ export const constellation = derived(pipeline, ($p) => {
 
 /**
  * Full graph including the outer-ring context bubbles. Rebuilds whenever
- * any of the upstream stores change — context updates frequently (sonos,
- * override) so we don't memoize by timestamp here.
+ * any of the upstream stores change — context updates frequently (sonos
+ * play/track-change, override toggles), so the full graph build can fire
+ * many times per second. 150ms trailing debounce coalesces bursts; the
+ * visual update rate of the constellation is bounded by human perception
+ * anyway (~7Hz max).
  */
-export const constellationWithContext = derived(
+export const constellationWithContext = debounced(
   [pipeline, automation, sonos, weather],
   ([$pipeline, $automation, $sonos, $weather]) => snapshotToGraph(
     $pipeline.current,
@@ -248,4 +252,5 @@ export const constellationWithContext = derived(
       weather: $weather,
     },
   ),
+  150,
 )

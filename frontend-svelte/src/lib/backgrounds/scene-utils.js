@@ -26,12 +26,17 @@ export function initSceneCanvas(canvas) {
  * Honours prefers-reduced-motion: when set, the loop renders one frame so the
  * scene isn't a black rectangle, then stops. Pure-CSS gates can't do that for
  * canvas-based scenes — they just freeze whatever was last drawn.
+ *
+ * Also pauses when the document is hidden (tab backgrounded, kiosk screen
+ * blanked) and resumes on visibility. Without this the loop keeps churning
+ * the GPU while no one's watching.
  * @param {(time: number, dt: number) => void} onFrame
  */
 export function createAnimationLoop(onFrame) {
   let animId = 0
   let lastFrame = 0
   let time = 0
+  let running = false
 
   // matchMedia is unavailable during SSR — guard the access.
   const reduceMotion =
@@ -46,6 +51,7 @@ export function createAnimationLoop(onFrame) {
   }
 
   function tick(ts) {
+    if (!running) return
     animId = requestAnimationFrame(tick)
     const elapsed = ts - lastFrame
     if (elapsed < FRAME_INTERVAL) return
@@ -54,8 +60,37 @@ export function createAnimationLoop(onFrame) {
     onFrame(time, elapsed * 0.001)
   }
 
-  animId = requestAnimationFrame(tick)
-  return () => cancelAnimationFrame(animId)
+  function start() {
+    if (running) return
+    running = true
+    // Re-prime lastFrame so the first post-resume tick doesn't see a
+    // multi-second elapsed jump (would advance `time` discontinuously).
+    lastFrame = performance.now()
+    animId = requestAnimationFrame(tick)
+  }
+
+  function stop() {
+    running = false
+    cancelAnimationFrame(animId)
+  }
+
+  function onVisibilityChange() {
+    if (typeof document === 'undefined') return
+    if (document.hidden) stop()
+    else start()
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  }
+
+  start()
+  return () => {
+    stop()
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }
 }
 
 /**

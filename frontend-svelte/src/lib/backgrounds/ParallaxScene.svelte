@@ -61,7 +61,10 @@
     }
   }
 
+  let running = false
+
   function animate(ts) {
+    if (!running) return
     animId = requestAnimationFrame(animate)
     // 60fps throttle — skip frames between intervals.
     if (ts - lastFrame < FRAME_INTERVAL_MS) return
@@ -88,6 +91,26 @@
     }
   }
 
+  function startLoop() {
+    if (running) return
+    running = true
+    lastFrame = 0
+    lastTime = 0
+    animId = requestAnimationFrame(animate)
+  }
+
+  function stopLoop() {
+    running = false
+    cancelAnimationFrame(animId)
+  }
+
+  function handleVisibility() {
+    if (document.hidden) stopLoop()
+    else startLoop()
+  }
+
+  let reduceMotion = false
+
   onMount(async () => {
     scrollOffsets = layers.map(() => 0)
     updateSkyGradient()
@@ -97,18 +120,22 @@
     // Skip the rAF loop entirely when prefers-reduced-motion is set —
     // the CSS rule already pins background-position, and there's no point
     // burning cycles writing to a property the browser will override.
-    const reduceMotion =
+    reduceMotion =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    if (!reduceMotion) {
-      animId = requestAnimationFrame(animate)
-    }
+    if (reduceMotion) return
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    startLoop()
   })
 
   onDestroy(() => {
-    cancelAnimationFrame(animId)
+    stopLoop()
     unsub()
     if (weatherTimer) clearInterval(weatherTimer)
+    if (!reduceMotion) {
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   })
 </script>
 

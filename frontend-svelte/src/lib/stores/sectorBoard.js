@@ -6,13 +6,12 @@
 // for time/weather/sonos are derived locally from existing Svelte stores.
 // Light sub-bubbles come from the lights store.
 
-import { derived } from 'svelte/store'
-
 import { pipeline } from './pipeline.js'
 import { automation } from './automation.js'
 import { sonos as sonosStore } from './sonos.js'
 import { weather as weatherStore } from './weather.js'
 import { lights as lightsStore } from './lights.js'
+import { debounced } from './_debounce.js'
 
 const VOTER_KEYS = ['process', 'camera', 'audio', 'rules']
 // pipeline payload uses backend-canonical keys for voters; we map for our id space.
@@ -239,8 +238,13 @@ function lightsSector(lights) {
 /**
  * Master derived store — re-shapes pipeline + ambient stores into the
  * eight-sector model the SectorBoard expects.
+ *
+ * Trailing-debounced (150ms): five input stores including `lights`, which
+ * fires many updates during a slider drag. `lightsSector` re-sorts the
+ * entire lights array on every recompute — debouncing collapses a burst
+ * of slider events into one rebuild.
  */
-export const sectorBoard = derived(
+export const sectorBoard = debounced(
   [pipeline, automation, sonosStore, weatherStore, lightsStore],
   ([$pipeline, $automation, $sonos, $weather, $lights]) => {
     const fusion = $pipeline?.current?.fusion || null
@@ -276,4 +280,5 @@ export const sectorBoard = derived(
       },
     }
   },
+  150,
 )
