@@ -48,6 +48,31 @@ MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
 DEFAULT_MAX_BRIGHTNESS = 80
 MIN_BRIGHTNESS = 15
 
+# Time-period-specific overrides of MODE_MAX_BRIGHTNESS. When a `(mode, period,
+# light_id)` key is present, it wins over the flat `(mode, light_id)` lookup.
+# Day values fall through to the flat table (the caps above are tuned against
+# bright daylight ambient). Evening/night/late_night drop progressively to
+# stay proportional to the dimming room — see the
+# gamingEveningBothLamps.JPEG anti-pattern photo in the curator INDEX for
+# what time-period-unaware caps look like in practice.
+MODE_MAX_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
+    # L2 (fabric shade) — curator-proposed ratios ~1.2× the per-period static
+    # baseline (150/140/110) give the sync headroom to pop on bright content
+    # without becoming the room's dominant visual element.
+    ("gaming", "evening",    "2"): 185,
+    ("gaming", "night",      "2"): 170,
+    ("gaming", "late_night", "2"): 130,
+    # L5 (clear seeded glass) — continues today's downward iteration trajectory
+    # since the user's complaint thread was specifically about L5's
+    # visible-bulb brightness on high-luma frames at evening ambient. Caps
+    # stay below the per-period static baselines (120/110/80) on the
+    # assumption that the visible-bulb perceptual punch already counts the
+    # static value, so sync can't justify exceeding it.
+    ("gaming", "evening",    "5"):  50,
+    ("gaming", "night",      "5"):  35,
+    ("gaming", "late_night", "5"):  25,
+}
+
 # Per-(mode, light_id) minimum brightness. Gaming stays visible even on
 # dark scenes; watching allows dim bias lighting.
 MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
@@ -57,6 +82,15 @@ MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
                              # holding it bright on a black frame. Paired with
                              # the perceptual luma compensation, this widens
                              # L5's usable dynamic range without raising the cap.
+}
+
+# Time-period overrides for floors — same pattern as the cap override table.
+# Only late_night L2 is shipped today: the L2 cap collapses to 130 at
+# late_night (matching the existing floor), so without a matching floor drop
+# the dynamic range becomes a single point. 110 lets late-night dark scenes
+# actually dim L2 toward its late_night static baseline.
+MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
+    ("gaming", "late_night", "2"): 110,
 }
 
 # Per-light saturation boost. RGB→HSB conversion applies this multiplier to
@@ -170,13 +204,19 @@ class ScreenSyncService:
         light_id: str,
         zone: Optional[str],
         posture: Optional[str],
+        period: Optional[str] = None,
     ) -> int:
         """Resolve the screen-sync cap for the given context.
 
         Lookup order: runtime override 4-tuple → MODE_ZONE_MAX_BRIGHTNESS
         4-tuple (mode, zone, posture, light_id) → MODE_ZONE_MAX_BRIGHTNESS
-        3-tuple (mode, zone, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)]
+        3-tuple (mode, zone, light_id) → MODE_MAX_BRIGHTNESS_PERIOD
+        (mode, period, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)]
         → default.
+
+        Zone/posture overrides take precedence over the time-period table
+        because they reflect specific physical setups (projector-in-bed) that
+        should hard-cap regardless of time of day.
         """
         if zone is not None and posture is not None:
             override = self._cap_overrides.get((mode, zone, posture, light_id))
@@ -189,7 +229,25 @@ class ScreenSyncService:
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, light_id))
             if cap is not None:
                 return cap
+        if period is not None:
+            cap = MODE_MAX_BRIGHTNESS_PERIOD.get((mode, period, light_id))
+            if cap is not None:
+                return cap
         return MODE_MAX_BRIGHTNESS.get((mode, light_id), DEFAULT_MAX_BRIGHTNESS)
+
+    def _get_floor(
+        self, mode: str, light_id: str, period: Optional[str],
+    ) -> int:
+        """Resolve the brightness floor for the given context.
+
+        Lookup order: MODE_MIN_BRIGHTNESS_PERIOD (mode, period, light_id) →
+        MODE_MIN_BRIGHTNESS (mode, light_id) → MIN_BRIGHTNESS default.
+        """
+        if period is not None:
+            floor = MODE_MIN_BRIGHTNESS_PERIOD.get((mode, period, light_id))
+            if floor is not None:
+                return floor
+        return MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
 
     @property
     def last_color_at(self) -> Optional[datetime]:
@@ -223,6 +281,7 @@ class ScreenSyncService:
         source: str = "desktop",
         zone: Optional[str] = None,
         posture: Optional[str] = None,
+        period: Optional[str] = None,
     ) -> None:
         """
         Apply an RGB color to one of the managed bedroom lamps.
@@ -235,11 +294,16 @@ class ScreenSyncService:
             source: "desktop" or "laptop" — recorded for status reporting only.
             zone: Optional camera-detected zone ("desk" | "bed").
             posture: Optional camera-detected posture ("upright" | "reclined").
+            period: Optional time period ("day" | "evening" | "night" |
+                "late_night"). When provided, ``MODE_MAX_BRIGHTNESS_PERIOD``
+                and ``MODE_MIN_BRIGHTNESS_PERIOD`` are checked before the
+                time-agnostic fallbacks so the lamp's bri envelope tracks
+                the room's ambient.
         """
         if light_id not in self._targets:
             return
-        max_bri = self.get_cap(mode, light_id, zone, posture)
-        min_bri = MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
+        max_bri = self.get_cap(mode, light_id, zone, posture, period)
+        min_bri = self._get_floor(mode, light_id, period)
         sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
         luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)
         h, s, br = self._rgb_to_hue_hsb(

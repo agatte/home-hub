@@ -191,6 +191,50 @@ async def test_l5_luma_comp_dampens_yellow_more_than_blue():
 
 
 @pytest.mark.asyncio
+async def test_period_keyed_caps_take_precedence():
+    """When a `period` is passed, MODE_MAX_BRIGHTNESS_PERIOD wins over the
+    time-agnostic table. Gaming evening L5 cap = 50 (vs day 60)."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    # Saturate pure deep-blue (low-luma → no comp damping). Day cap=60.
+    for _ in range(20):
+        await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
+    day_bri = hue.last_for("5")["bri"]
+
+    # Evening cap=50.
+    hue2 = _FakeHue()
+    sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
+    for _ in range(20):
+        await sync2.apply_color("5", 0, 0, 255, mode="gaming", period="evening")
+    evening_bri = hue2.last_for("5")["bri"]
+
+    assert day_bri > evening_bri, (
+        f"evening cap should be tighter than day (day={day_bri} evening={evening_bri})"
+    )
+    # Within their respective per-period caps.
+    assert day_bri <= 60
+    assert evening_bri <= 50
+
+
+@pytest.mark.asyncio
+async def test_late_night_floor_drop_for_l2():
+    """L2's late_night floor drops to 110 so dark scenes can dim past the
+    default 130 floor (which equals the late_night cap, collapsing range)."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    # Pure black input — bri target should hit the floor.
+    for _ in range(30):
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="late_night")
+    bri = hue.last_for("2")["bri"]
+
+    # Floor at late_night should be 110, not 130. Allow 1 unit slack for EMA
+    # asymptotic convergence + int-cast.
+    assert 108 <= bri <= 112, f"expected floor near 110, got {bri}"
+
+
+@pytest.mark.asyncio
 async def test_l2_no_luma_comp():
     """L2 is NOT luma-compensated — yellow and blue settle at similar bri
     (modulo HSV value differences, which are the same for fully-saturated

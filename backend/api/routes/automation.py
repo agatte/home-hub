@@ -273,6 +273,10 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     zone = getattr(camera, "zone", None) if camera else None
     posture = getattr(camera, "posture", None) if camera else None
 
+    # Time period drives the per-period cap/floor envelope so the lamps
+    # dim alongside the room as evening rolls into night.
+    period = engine._get_time_period()
+
     # Per-light manual-override gate. If the user dragged L2's slider while
     # screen-sync is running, we pause writes for that lamp but the other can
     # still react — independent override semantics match the independent
@@ -292,6 +296,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             source=report.source,
             zone=zone,
             posture=posture,
+            period=period,
         )
         applied.append(light_id)
 

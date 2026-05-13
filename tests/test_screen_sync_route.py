@@ -29,6 +29,15 @@ class _FakeHue:
         return [lid for lid, _ in self.calls]
 
 
+def _fake_engine(current_mode: str, manual_light_overrides=None, period: str = "day"):
+    """Minimal fake automation engine — just the attributes the route reads."""
+    return SimpleNamespace(
+        current_mode=current_mode,
+        manual_light_overrides=manual_light_overrides or set(),
+        _get_time_period=lambda: period,
+    )
+
+
 def _make_request(engine, sync, camera=None):
     """Build the minimal request shape the handler reads."""
     state = SimpleNamespace(
@@ -44,7 +53,7 @@ def _make_request(engine, sync, camera=None):
 async def test_dual_region_dispatches_to_both_lights():
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = SimpleNamespace(current_mode="gaming", manual_light_overrides=set())
+    engine = _fake_engine("gaming")
     req = _make_request(engine, sync)
 
     report = ScreenColorReport(
@@ -64,7 +73,7 @@ async def test_dual_region_dispatches_to_both_lights():
 async def test_legacy_payload_writes_only_l2():
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = SimpleNamespace(current_mode="gaming", manual_light_overrides=set())
+    engine = _fake_engine("gaming")
     req = _make_request(engine, sync)
 
     report = ScreenColorReport(r=220, g=40, b=40)
@@ -80,7 +89,7 @@ async def test_manual_override_on_one_light_skips_only_that_one():
     """L2 stamped → skip L2 but still apply L5."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = SimpleNamespace(current_mode="gaming", manual_light_overrides={"2"})
+    engine = _fake_engine("gaming", manual_light_overrides={"2"})
     req = _make_request(engine, sync)
 
     report = ScreenColorReport(
@@ -102,7 +111,7 @@ async def test_off_mode_drops_silently():
     """Working mode is not in SCREEN_SYNC_MODES → applied=False, no hue writes."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = SimpleNamespace(current_mode="working", manual_light_overrides=set())
+    engine = _fake_engine("working")
     req = _make_request(engine, sync)
 
     report = ScreenColorReport(
@@ -122,7 +131,7 @@ async def test_empty_payload_returns_empty_reason():
     """No regions and no r/g/b → applied=False, reason=empty_payload."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = SimpleNamespace(current_mode="gaming", manual_light_overrides=set())
+    engine = _fake_engine("gaming")
     req = _make_request(engine, sync)
 
     report = ScreenColorReport()
