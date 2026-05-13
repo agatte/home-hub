@@ -1,13 +1,19 @@
 """
 WebSocket connection manager — broadcasts state changes to all connected clients.
 """
+import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import WebSocket
 
 logger = logging.getLogger("home_hub.websocket")
+
+# Per-client send timeout. A stalled client (mobile on bad wifi, paused tab)
+# used to hold the whole broadcast loop on its TCP send. Beyond this budget
+# we drop the client rather than starve everyone else.
+SEND_TIMEOUT_SECONDS = 2.0
 
 
 class WebSocketManager:
@@ -29,7 +35,10 @@ class WebSocketManager:
 
     async def broadcast(self, message_type: str, data: Any) -> None:
         """
-        Broadcast a message to all connected clients.
+        Broadcast a message to all connected clients in parallel.
+
+        A slow client only stalls its own send (bounded by SEND_TIMEOUT_SECONDS);
+        all other clients receive the message without head-of-line blocking.
 
         Args:
             message_type: Event type (e.g., "light_update", "sonos_update").
@@ -39,16 +48,21 @@ class WebSocketManager:
             return
 
         payload = json.dumps({"type": message_type, "data": data})
-        disconnected: list[WebSocket] = []
+        targets = list(self._connections)
 
-        for ws in self._connections:
+        async def _send_one(ws: WebSocket) -> Optional[WebSocket]:
             try:
-                await ws.send_text(payload)
+                await asyncio.wait_for(ws.send_text(payload), timeout=SEND_TIMEOUT_SECONDS)
+                return None
             except Exception:
-                disconnected.append(ws)
+                return ws
 
-        for ws in disconnected:
-            self.disconnect(ws)
+        results = await asyncio.gather(
+            *(_send_one(ws) for ws in targets), return_exceptions=False
+        )
+        for failed in results:
+            if failed is not None:
+                self.disconnect(failed)
 
     @property
     def connection_count(self) -> int:

@@ -12,7 +12,9 @@ already exposes for a denser, kiosk-glanceable readout.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Request
@@ -28,6 +30,14 @@ _MEMORY_WARN, _MEMORY_ERROR = 85, 95
 _DISK_WARN, _DISK_ERROR = 80, 90
 _CPU_TEMP_WARN, _CPU_TEMP_ERROR = 70, 85  # Celsius
 _FUSION_WARN, _FUSION_ERROR = 0.6, 0.3    # confidence (lower = worse)
+
+# Pi-hole summary is the only awaited sub-call in this route. Cap it so a
+# slow / unresponsive Pi-hole can't stretch the whole vitals response, and
+# memo the last good answer briefly to absorb multi-tab fan-out (every open
+# dashboard polls /api/vitals every 30s).
+_PIHOLE_TIMEOUT_SECONDS = 1.5
+_PIHOLE_CACHE_TTL_SECONDS = 10.0
+_pihole_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 
 
 def _classify_high(value: float, warn: float, error: float) -> str:
@@ -157,25 +167,41 @@ async def get_vitals(request: Request) -> dict[str, Any]:
                 "status": "warn",
             }
 
-    # Pi-hole
+    # Pi-hole — bounded sub-call with short cache. Slow Pi-hole used to
+    # stretch the whole vitals response (no timeout), making the polling
+    # UI feel laggy every 30s.
     pihole = getattr(app.state, "pihole_service", None)
     if pihole is not None:
-        try:
-            summary = await pihole.get_summary()
-            if summary:
-                metrics["pihole"] = {
-                    "blocked": int(summary.get("blocked", 0)),
-                    "percent_blocked": float(
-                        summary.get("percent_blocked", 0.0)
-                    ),
-                    "active_clients": int(summary.get("active_clients", 0)),
-                    "status": "ok",
-                }
-            else:
+        now_ts = time.monotonic()
+        cached = _pihole_cache["data"]
+        if cached is not None and now_ts - _pihole_cache["ts"] < _PIHOLE_CACHE_TTL_SECONDS:
+            metrics["pihole"] = cached
+        else:
+            try:
+                summary = await asyncio.wait_for(
+                    pihole.get_summary(), timeout=_PIHOLE_TIMEOUT_SECONDS
+                )
+                if summary:
+                    metrics["pihole"] = {
+                        "blocked": int(summary.get("blocked", 0)),
+                        "percent_blocked": float(
+                            summary.get("percent_blocked", 0.0)
+                        ),
+                        "active_clients": int(summary.get("active_clients", 0)),
+                        "status": "ok",
+                    }
+                    _pihole_cache["data"] = metrics["pihole"]
+                    _pihole_cache["ts"] = now_ts
+                else:
+                    metrics["pihole"] = {"status": "error"}
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "vitals: pihole summary timed out after %.1fs", _PIHOLE_TIMEOUT_SECONDS
+                )
+                metrics["pihole"] = {"status": "warn"}
+            except Exception as e:
+                logger.warning("vitals: pihole summary failed: %s", e)
                 metrics["pihole"] = {"status": "error"}
-        except Exception as e:
-            logger.warning("vitals: pihole summary failed: %s", e)
-            metrics["pihole"] = {"status": "error"}
 
     # System metrics (psutil)
     metrics.update(_read_psutil_metrics())

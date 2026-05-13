@@ -182,6 +182,9 @@ class HueService:
 
             # Mark light in-flight so the polling loop doesn't broadcast
             # mid-transition bridge reads (which would bounce the UI back).
+            # Only armed on successful bridge ack — exceptions short-circuit
+            # to the except path below, leaving polling free to surface
+            # external changes immediately.
             if "transitiontime" in command:
                 transition_seconds = command["transitiontime"] / 10.0
             else:
@@ -269,8 +272,17 @@ class HueService:
 
                     # Skip lights that were just written: their bridge state
                     # is mid-transition and would bounce the UI to a stale value.
-                    if now < self._inflight_until.get(lid, 0.0):
-                        continue
+                    # Max-age clamp: if a deadline is somehow >3s in the future
+                    # (bridge accepted a write but the bulb never transitioned —
+                    # e.g., unreachable bulb), force-clear it. Otherwise external
+                    # changes on that light would be invisible until the stale
+                    # deadline naturally expired.
+                    deadline = self._inflight_until.get(lid, 0.0)
+                    if now < deadline:
+                        if deadline - now > 3.0:
+                            self._inflight_until.pop(lid, None)
+                        else:
+                            continue
 
                     prev = self._last_states.get(lid)
 
@@ -278,7 +290,7 @@ class HueService:
                         self._last_states[lid] = light
                         await ws_manager.broadcast("light_update", light)
 
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
             except asyncio.CancelledError:
                 logger.info("Hue polling stopped")
                 break
