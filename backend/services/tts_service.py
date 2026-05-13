@@ -42,6 +42,12 @@ class TTSService:
         self._server_port = server_port
         self._speaking = False
         self._tts_dir.mkdir(parents=True, exist_ok=True)
+        # Strong references for fire-and-forget cleanup tasks. The event
+        # loop only weak-refs tasks created via asyncio.create_task; without
+        # a strong ref the GC can drop a still-sleeping cleanup task,
+        # firing the asyncio "Task was destroyed but it is pending!" warning
+        # (and leaking the MP3 file on disk).
+        self._cleanup_tasks: set[asyncio.Task] = set()
 
     @property
     def is_speaking(self) -> bool:
@@ -136,7 +142,9 @@ class TTSService:
                 except Exception as exc:
                     logger.error(f"TTS restore playback failed: {exc}")
             if mp3_path is not None:
-                asyncio.create_task(self._cleanup_file(mp3_path, delay=60))
+                task = asyncio.create_task(self._cleanup_file(mp3_path, delay=60))
+                self._cleanup_tasks.add(task)
+                task.add_done_callback(self._cleanup_tasks.discard)
             self._speaking = False
 
     async def _generate_audio(self, text: str) -> Optional[Path]:
