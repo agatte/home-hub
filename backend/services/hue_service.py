@@ -71,6 +71,21 @@ class HueService:
         """Expose the breaker so /health can snapshot its state."""
         return self._breaker
 
+    @property
+    def breaker_open(self) -> bool:
+        """True when the breaker is fast-failing — distinct from ``connected``.
+
+        ``connected`` reflects whether initial discovery/auth completed;
+        ``breaker_open`` reflects whether subsequent bridge calls are
+        currently being short-circuited because the bridge stopped
+        responding mid-session. Route handlers should check both so a
+        breaker-open state surfaces as HTTP 503 rather than 500.
+
+        Half-open returns False — the next call probes and may succeed,
+        so 503ing would deny clients the natural recovery path.
+        """
+        return self._breaker.state == CircuitBreaker.OPEN
+
     async def _safe_call(self, fn, *args, **kwargs):
         """Run a sync bridge call in a thread under the circuit breaker."""
         return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)

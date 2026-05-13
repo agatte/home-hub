@@ -13,6 +13,19 @@ from backend.rate_limit import limiter
 router = APIRouter(prefix="/api/sonos", tags=["sonos"])
 
 
+def _check_sonos_available(sonos) -> None:
+    """Raise 503 if the Sonos service isn't currently reachable.
+
+    Mirrors ``lights._check_hue_available``: distinguishes initial-
+    discovery failure (``not connected``) from mid-session breaker
+    open (``temporarily unavailable``). Both surface as HTTP 503 so
+    clients know to retry rather than treating it as a hard error.
+    """
+    _check_sonos_available(sonos)
+    if sonos.breaker_open:
+        raise HTTPException(status_code=503, detail="Sonos temporarily unavailable")
+
+
 async def _log_manual_sonos(
     request: Request,
     event_type: str,
@@ -37,8 +50,7 @@ async def _log_manual_sonos(
 async def get_sonos_status(request: Request) -> dict:
     """Get current Sonos playback status (track, artist, volume, etc.)."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
     return await sonos.get_status()
 
 
@@ -46,8 +58,7 @@ async def get_sonos_status(request: Request) -> dict:
 async def sonos_play(request: Request) -> dict:
     """Resume Sonos playback."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
     success = await sonos.play()
     if success:
         await _log_manual_sonos(request, "play")
@@ -63,8 +74,7 @@ async def sonos_smart_play(request: Request) -> dict:
     Fauxmo so "Alexa, turn on music" always does something.
     """
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     # Try resume first — if there's a track loaded, just hit play
     status = await sonos.get_status()
@@ -90,8 +100,7 @@ async def sonos_smart_play(request: Request) -> dict:
 async def sonos_pause(request: Request) -> dict:
     """Pause Sonos playback."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
     success = await sonos.pause()
     if success:
         await _log_manual_sonos(request, "pause")
@@ -102,8 +111,7 @@ async def sonos_pause(request: Request) -> dict:
 async def sonos_next(request: Request) -> dict:
     """Skip to next track."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
     success = await sonos.next_track()
     if success:
         await _log_manual_sonos(request, "skip")
@@ -114,8 +122,7 @@ async def sonos_next(request: Request) -> dict:
 async def sonos_previous(request: Request) -> dict:
     """Go to previous track."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
     success = await sonos.previous_track()
     if success:
         await _log_manual_sonos(request, "skip")
@@ -126,8 +133,7 @@ async def sonos_previous(request: Request) -> dict:
 async def set_sonos_volume(body: VolumeRequest, request: Request) -> dict:
     """Set Sonos volume (0-100)."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
     success = await sonos.set_volume(body.volume)
     if success:
         await _log_manual_sonos(request, "volume", volume=body.volume)
@@ -151,8 +157,7 @@ async def adjust_sonos_volume(direction: str, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Direction must be 'up' or 'down'")
 
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     status = await sonos.get_status()
     current = int(status.get("volume", 0))
@@ -183,8 +188,7 @@ async def speak_text(body: TTSRequest, request: Request) -> dict:
     """
     tts = request.app.state.tts
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     success = await tts.speak(text=body.text, volume=body.volume)
     return {
@@ -209,8 +213,7 @@ class MusicMappingEntry(BaseModel):
 async def get_favorites(request: Request) -> dict:
     """List all Sonos favorites (playlists, stations, etc.)."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     favorites = await sonos.get_favorites()
     return {"favorites": favorites}
@@ -220,8 +223,7 @@ async def get_favorites(request: Request) -> dict:
 async def refresh_favorites(request: Request) -> dict:
     """Clear the favorites cache so the next fetch picks up new additions."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     sonos.invalidate_favorites_cache()
     favorites = await sonos.get_favorites()
@@ -232,8 +234,7 @@ async def refresh_favorites(request: Request) -> dict:
 async def play_favorite(title: str, request: Request) -> dict:
     """Play a Sonos favorite by title."""
     sonos = request.app.state.sonos
-    if not sonos.connected:
-        raise HTTPException(status_code=503, detail="Sonos not connected")
+    _check_sonos_available(sonos)
 
     success = await sonos.play_favorite(title)
     if not success:

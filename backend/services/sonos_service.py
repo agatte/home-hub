@@ -85,6 +85,19 @@ class SonosService:
         """Expose the breaker so /health can snapshot its state."""
         return self._breaker
 
+    @property
+    def breaker_open(self) -> bool:
+        """True when the breaker is fast-failing — distinct from ``connected``.
+
+        Mirror of ``HueService.breaker_open``; see that property for the
+        full rationale. Route handlers should 503 on this so clients can
+        distinguish "speaker temporarily unavailable" (retry-worthy) from
+        "speaker errored on the request" (don't retry).
+
+        Half-open returns False — the next call probes and may succeed.
+        """
+        return self._breaker.state == CircuitBreaker.OPEN
+
     async def _safe_call(self, fn, *args, **kwargs):
         """Run a sync SoCo call in a thread under the circuit breaker."""
         return await self._breaker.call(asyncio.to_thread, fn, *args, **kwargs)

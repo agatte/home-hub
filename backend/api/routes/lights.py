@@ -14,12 +14,27 @@ _BRIGHTNESS_STEP = 1.10
 _BRIGHTNESS_MIN_STEP = 20
 
 
+def _check_hue_available(hue) -> None:
+    """Raise 503 if the Hue service isn't currently reachable.
+
+    Two distinct unavailability states deserve distinct detail strings
+    so post-mortem log readers can tell them apart:
+      - ``not connected``: initial bridge discovery/auth never succeeded
+      - ``temporarily unavailable``: breaker is fast-failing because the
+        bridge socket died mid-session; cooldown is still elapsing
+    Both surface as HTTP 503 so clients know the request is retry-worthy.
+    """
+    if not hue.connected:
+        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    if hue.breaker_open:
+        raise HTTPException(status_code=503, detail="Hue bridge temporarily unavailable")
+
+
 @router.get("", response_model=list[LightResponse])
 async def get_all_lights(request: Request) -> list[dict]:
     """Get the current state of all Hue lights."""
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
     return await hue.get_all_lights()
 
 
@@ -27,8 +42,7 @@ async def get_all_lights(request: Request) -> list[dict]:
 async def get_light(light_id: str, request: Request) -> dict:
     """Get the current state of a single light."""
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     light = await hue.get_light(light_id)
     if not light:
@@ -74,8 +88,7 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     Any combination of on, bri, hue, sat can be provided.
     """
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     state_dict = state.model_dump(exclude_none=True)
     if not state_dict:
@@ -117,8 +130,7 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Direction must be 'up' or 'down'")
 
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     automation = getattr(request.app.state, "automation", None)
     mode_mult = 1.0
@@ -163,8 +175,7 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
 async def set_all_lights(state: LightState, request: Request) -> dict:
     """Set the same state on all lights (used for scenes)."""
     hue = request.app.state.hue
-    if not hue.connected:
-        raise HTTPException(status_code=503, detail="Hue bridge not connected")
+    _check_hue_available(hue)
 
     state_dict = state.model_dump(exclude_none=True)
     if not state_dict:
