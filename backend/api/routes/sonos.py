@@ -21,7 +21,8 @@ def _check_sonos_available(sonos) -> None:
     open (``temporarily unavailable``). Both surface as HTTP 503 so
     clients know to retry rather than treating it as a hard error.
     """
-    _check_sonos_available(sonos)
+    if not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
     if sonos.breaker_open:
         raise HTTPException(status_code=503, detail="Sonos temporarily unavailable")
 
