@@ -2,7 +2,7 @@
 Pydantic models for the automation system.
 """
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -195,36 +195,18 @@ class ModeVolumeCurvesConfig(BaseModel):
     gameday: Optional[ModeVolumeCurve] = None
 
 
-class RegionColor(BaseModel):
-    """One region's RGB sample (left or right half of the screen)."""
+class ScreenColorReport(BaseModel):
+    """RGB color reported by a screen sync source.
+
+    Mirrored to every target lamp managed by ScreenSyncService (currently
+    L2 + L5). Per-light EMA, brightness caps, and luma compensation are
+    applied independently after dispatch — the lamps still differ in their
+    final output even though the input color is shared.
+    """
 
     r: int = Field(..., ge=0, le=255, description="Red channel 0-255")
     g: int = Field(..., ge=0, le=255, description="Green channel 0-255")
     b: int = Field(..., ge=0, le=255, description="Blue channel 0-255")
-
-
-class ScreenColorReport(BaseModel):
-    """RGB color(s) reported by a screen sync source.
-
-    Two shapes accepted:
-      - Legacy single-color: top-level r/g/b/source — applied to L2 only.
-      - Dual-region: ``regions={"left": {...}, "right": {...}}`` — left maps
-        to L2, right to L5. Extra region keys are ignored.
-
-    Validation requires either the legacy r/g/b triple or a non-empty regions
-    dict; an empty payload returns ``{applied: False, reason: "empty_payload"}``
-    rather than raising.
-    """
-
-    # Legacy single-color shape (back-compat with old PC agent builds).
-    r: Optional[int] = Field(default=None, ge=0, le=255, description="Red channel 0-255")
-    g: Optional[int] = Field(default=None, ge=0, le=255, description="Green channel 0-255")
-    b: Optional[int] = Field(default=None, ge=0, le=255, description="Blue channel 0-255")
-    # Dual-region shape.
-    regions: Optional[Dict[str, RegionColor]] = Field(
-        default=None,
-        description="Map of region name → RGB sample. 'left' → L2, 'right' → L5.",
-    )
     source: str = Field(
         default="desktop",
         description="Reporting source — 'desktop' or 'laptop'",

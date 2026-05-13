@@ -5,14 +5,15 @@ The k-means picker in ``screen_sync_agent`` used to re-choose the "best"
 cluster each frame from scratch. When two clusters scored near-ties, the
 chosen color cycled on every capture (reported as "L2 cycling through
 colors during League"). These tests verify the sticky behavior that
-replaced it, now structured as a per-region ``StickyClusterPicker`` class
-so left/right region pickers don't share state:
+replaced it (``StickyClusterPicker`` class) plus the vibrancy bias
+(n_clusters=8, sat gate 0.15) that makes a small saturated minority
+inside a mostly-gray frame win over the gray majority:
 
   - a stable scene with two near-tied saturated clusters doesn't flip.
   - a genuine color change still breaks through when the new best beats
     the prior winner by more than ``_STICKY_SCORE_MARGIN``.
   - a dark scene holds the prior color instead of snapping to near-black.
-  - two picker instances do not share each other's prior.
+  - a small saturated region wins over a gray majority background.
 """
 
 import numpy as np
@@ -128,31 +129,28 @@ class TestStickyClusterPicker:
         # With staleness triggered, should pick blue freely (no prior bias).
         assert pick[2] > pick[0], f"stuck on stale prior: pick={pick}"
 
-    def test_two_pickers_keep_independent_state(self) -> None:
-        """Left/right region pickers must not contaminate each other's prior.
-
-        Dual-region screen sync runs one picker per half of the screen. If
-        they shared module-level state, a red-dominant left half would force
-        the right half's blue-dominant scene to bias toward red.
-        """
+    def test_small_saturated_region_wins_over_gray_majority(self) -> None:
+        """A small saturated minority (~20% of pixels) should win over a
+        large gray majority. Verifies n_clusters=8 + sat gate 0.15 lets the
+        small cluster get its own centroid instead of being absorbed into
+        the dominant gray centroid by k-means."""
+        rng = np.random.default_rng(7)
+        gray = (80, 80, 80)
         red = (220, 40, 40)
-        blue = (40, 40, 220)
 
-        left = agent.StickyClusterPicker()
-        right = agent.StickyClusterPicker()
+        # 800 gray pixels, 200 red pixels — gray is 4× the size.
+        gray_pixels = np.tile(np.array(gray, dtype=np.float32), (800, 1))
+        red_pixels = np.tile(np.array(red, dtype=np.float32), (200, 1))
+        noise = rng.normal(0, 3, size=(1000, 3)).astype(np.float32)
+        pixels = np.clip(np.vstack([gray_pixels, red_pixels]) + noise, 0, 255)
 
-        # Establish independent priors.
-        left_pick = left.pick(_pixels_mixing(red, red, n_each=200))
-        right_pick = right.pick(_pixels_mixing(blue, blue, n_each=200))
+        picker = agent.StickyClusterPicker()
+        pick = picker.pick(pixels)
 
-        # left stays red-leaning, right stays blue-leaning.
-        assert left_pick[0] > left_pick[2], f"left wrong: {left_pick}"
-        assert right_pick[2] > right_pick[0], f"right wrong: {right_pick}"
-
-        # Now feed a near-tied red+blue scene to both. Each should sticky-bias
-        # toward its own prior — left stays warm, right stays cool — without
-        # the two regions converging on the same color.
-        l2 = left.pick(_pixels_mixing(red, blue))
-        r2 = right.pick(_pixels_mixing(red, blue))
-        assert l2[0] > l2[2], f"left lost its prior: {l2}"
-        assert r2[2] > r2[0], f"right lost its prior: {r2}"
+        # Pick must be the saturated red, not the gray majority.
+        dist_to_red = np.linalg.norm(np.array(pick) - np.array(red))
+        dist_to_gray = np.linalg.norm(np.array(pick) - np.array(gray))
+        assert dist_to_red < dist_to_gray, (
+            f"vibrancy bias failed: pick={pick} closer to gray ({dist_to_gray:.0f}) "
+            f"than to red ({dist_to_red:.0f})"
+        )

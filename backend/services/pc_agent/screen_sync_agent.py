@@ -1,15 +1,16 @@
 """
 Screen Sync Agent — standalone desktop process.
 
-Runs on the user's desktop. Captures dominant colors for the left and right
-halves of the primary screen every 2.5 seconds and POSTs them to the Home
-Hub backend on the laptop. The backend gates application by current
-automation mode (only gaming / watching modes apply); this agent stays
-dumb and always sends.
+Runs on the user's desktop. Captures the dominant color of the primary
+screen every 2.5 seconds and POSTs it to the Home Hub backend on the laptop.
+The backend gates application by current automation mode (only gaming /
+watching modes apply); this agent stays dumb and always sends.
 
-Dual-region split: the backend maps the ``left`` region to L2 (bedroom
-lamp left, fabric shade) and ``right`` to L5 (bedroom lamp right, clear
-housing) so each lamp reflects its side of the screen independently.
+Mirror mode: a single color sampled from the whole-screen center crop is
+POSTed and the backend mirrors it to every screen-sync target lamp (L2 +
+L5). Dual-region was tried first (left half → L2, right half → L5) but
+abandoned because the disagreement created eye strain at close viewing
+distance — see the lighting-curator INDEX for the documented anti-pattern.
 
 Usage:
     python -m backend.services.pc_agent.screen_sync_agent
@@ -53,21 +54,24 @@ PID_FILE = LOG_DIR / "screen_sync_agent.pid"
 
 # Sticky-cluster tuning. K-means reassigns cluster labels each fit, so two
 # near-tied clusters can trade the "best" slot frame-to-frame and produce
-# cycling output even though the scene is stable. Each StickyClusterPicker
-# instance remembers its prior winner and biases toward any current cluster
-# close to it; that keeps the chosen color pinned through busy scenes while
-# still letting real color changes break through.
+# cycling output even though the scene is stable. The picker remembers its
+# prior winner and biases toward any current cluster close to it; that keeps
+# the chosen color pinned through busy scenes while still letting real color
+# changes break through.
 _STICKY_DISTANCE: float = 60.0       # Euclidean RGB distance — centers within this are "same color"
 _STICKY_SCORE_MARGIN: float = 0.08   # new best must beat prior by this delta to switch
-_STICKY_STALENESS_SEC: float = 10.0  # dropped from 30s — fresher resets after scene cuts
+_STICKY_STALENESS_SEC: float = 10.0  # treat as fresh start after this long idle
 
 
 class StickyClusterPicker:
-    """Per-region sticky-cluster dominant-color picker.
+    """Sticky-cluster dominant-color picker, vibrancy-biased.
 
-    One instance per region (left, right). Holds the prior winner so its
-    stability bias doesn't get clobbered when the other region's color
-    snaps to something new on the same frame.
+    K-means clusters the sampled pixels into 8 groups (8 instead of 5 so a
+    small saturated minority — game UI accent, status-bar pip, particle
+    effect — gets its own centroid instead of being absorbed into a gray
+    centroid by the dominant background). The most-saturated cluster that
+    passes the saturation/brightness gate wins, with sticky bias holding
+    the prior winner through near-tied scenes.
     """
 
     def __init__(self) -> None:
@@ -90,14 +94,20 @@ class StickyClusterPicker:
         if prior is not None and now - self.last_picked_at > _STICKY_STALENESS_SEC:
             prior = None
 
-        kmeans = MiniBatchKMeans(n_clusters=5, batch_size=100, n_init=1)  # type: ignore[arg-type]
+        # 8 clusters preserves small saturated regions inside a mostly-gray
+        # frame — at 5 clusters a small accent gets merged into the dominant
+        # gray centroid and the picker has no saturated candidate to score.
+        kmeans = MiniBatchKMeans(n_clusters=8, batch_size=100, n_init=1)  # type: ignore[arg-type]
         kmeans.fit(pixels)
 
         scored: list[tuple[float, Any]] = []
         for center in kmeans.cluster_centers_:
             r, g, b = center / 255.0
             _h, s, v = colorsys.rgb_to_hsv(r, g, b)
-            if s > 0.2 and 0.15 < v < 0.85:
+            # Permissive gate (0.15 sat, 0.12-0.88 v) lets muted-but-still-
+            # colored clusters into scoring. Pure-gray (s≈0) and black/white
+            # extremes still get filtered out.
+            if s > 0.15 and 0.12 < v < 0.88:
                 score = s * 0.7 + (1.0 - abs(v - 0.5)) * 0.3
                 scored.append((score, center))
 
@@ -137,19 +147,10 @@ class StickyClusterPicker:
         return (int(chosen[0]), int(chosen[1]), int(chosen[2]))
 
 
-# Per-region picker registry — populated on demand. Two regions (left, right)
-# at steady state, but the registry is open so a future quadrant or
-# top/bottom split doesn't need an agent-side schema change.
-_REGION_PICKERS: dict[str, StickyClusterPicker] = {}
-
-
-def _picker_for(region: str) -> StickyClusterPicker:
-    """Get or create the StickyClusterPicker for a region."""
-    picker = _REGION_PICKERS.get(region)
-    if picker is None:
-        picker = StickyClusterPicker()
-        _REGION_PICKERS[region] = picker
-    return picker
+# Module-level singleton picker (was a per-region dict under the abandoned
+# dual-region scheme). One picker is enough now that the full screen is
+# sampled as a single region.
+_PICKER = StickyClusterPicker()
 
 
 def _pick_dominant_average(pixels: "np.ndarray") -> tuple[int, int, int]:
@@ -190,17 +191,14 @@ def _acquire_singleton_lock() -> bool:
         return False
 
 
-def capture_dominant_colors() -> dict[str, tuple[int, int, int]]:
+def capture_dominant_color() -> Optional[tuple[int, int, int]]:
     """
-    Capture the primary screen and extract dominant colors for left and right halves.
+    Capture the primary screen and extract the dominant color.
 
-    Grabs the full screen, downsamples each region to ~50×30 pixels, runs the
-    sticky-k-means picker independently per region. Each region samples
-    [20%-48%] (left) and [52%-80%] (right) horizontally, [20%-80%] vertically.
-    The 4% middle dead zone keeps centered UI chrome (taskbars, HUDs) from
-    pulling both lamps to the same color.
-
-    Returns a dict mapping region name → RGB triple. Empty if capture failed.
+    Grabs the full screen, downsamples the center 60% region (skip 20% on
+    every edge to ignore taskbar / window chrome / corner UI), runs the
+    sticky-k-means picker. Returns a single RGB triple, or None if the
+    capture failed.
     """
     try:
         with mss.mss() as sct:
@@ -211,45 +209,34 @@ def capture_dominant_colors() -> dict[str, tuple[int, int, int]]:
             height = screenshot.height
             raw = screenshot.rgb
 
-            # Downsample to ~50x30 per region.
+            # ~50×30 sample grid across the center crop — enough points for
+            # k-means to find clusters without burning CPU.
             step_x = max(1, width // 50)
             step_y = max(1, height // 30)
 
-            # 4% dead zone down the middle.
-            x_left_start  = int(width * 0.20)
-            x_left_end    = int(width * 0.48)
-            x_right_start = int(width * 0.52)
-            x_right_end   = int(width * 0.80)
+            x_start = int(width * 0.20)
+            x_end   = int(width * 0.80)
             y_start = int(height * 0.20)
             y_end   = int(height * 0.80)
 
-            def _collect(x_start: int, x_end: int) -> list[tuple[int, int, int]]:
-                out: list[tuple[int, int, int]] = []
-                for y in range(y_start, y_end, step_y):
-                    for x in range(x_start, x_end, step_x):
-                        idx = (y * width + x) * 3
-                        if idx + 2 < len(raw):
-                            out.append((raw[idx], raw[idx + 1], raw[idx + 2]))
-                return out
+            pixels: list[tuple[int, int, int]] = []
+            for y in range(y_start, y_end, step_y):
+                for x in range(x_start, x_end, step_x):
+                    idx = (y * width + x) * 3
+                    if idx + 2 < len(raw):
+                        pixels.append((raw[idx], raw[idx + 1], raw[idx + 2]))
 
-            regions: dict[str, tuple[int, int, int]] = {}
-            for name, (xs, xe) in (
-                ("left",  (x_left_start,  x_left_end)),
-                ("right", (x_right_start, x_right_end)),
-            ):
-                pixels = _collect(xs, xe)
-                if not pixels:
-                    continue
-                pixel_array = np.array(pixels, dtype=np.float32)
-                if _HAS_KMEANS and len(pixels) >= 5:
-                    regions[name] = _picker_for(name).pick(pixel_array)
-                else:
-                    regions[name] = _pick_dominant_average(pixel_array)
-            return regions
+            if not pixels:
+                return None
+
+            pixel_array = np.array(pixels, dtype=np.float32)
+            if _HAS_KMEANS and len(pixels) >= 8:
+                return _PICKER.pick(pixel_array)
+            return _pick_dominant_average(pixel_array)
 
     except Exception as e:
         logger.error(f"Screen capture error: {e}")
-        return {}
+        return None
 
 
 def run_agent(
@@ -274,14 +261,13 @@ def run_agent(
     try:
         while not _stop.is_set():
             try:
-                regions = capture_dominant_colors()
-                if regions:
-                    body: dict[str, object] = {
+                rgb = capture_dominant_color()
+                if rgb is not None:
+                    body = {
                         "source": "desktop",
-                        "regions": {
-                            name: {"r": rgb[0], "g": rgb[1], "b": rgb[2]}
-                            for name, rgb in regions.items()
-                        },
+                        "r": rgb[0],
+                        "g": rgb[1],
+                        "b": rgb[2],
                     }
                     try:
                         resp = client.post(endpoint, json=body)

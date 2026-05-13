@@ -1,20 +1,16 @@
 """
 Tests for the /api/automation/screen-color route handler dispatch logic.
 
-The handler maps payload regions to lights, gates on mode, and skips lights
-that have a manual slider override stamped. These tests verify all three
-shapes:
-
-  - dual-region payload writes both L2 and L5
-  - legacy ``{r, g, b}`` payload writes only L2 (the primary target)
-  - a manual override on one light skips that one, but the other still applies
+Mirror semantics: a single ``{r, g, b}`` payload writes to every lamp in
+``sync.target_lights``. Per-light EMA + caps still differentiate output;
+this test file covers the dispatch surface only.
 """
 from types import SimpleNamespace
 
 import pytest
 
 from backend.api.routes.automation import receive_screen_color
-from backend.api.schemas.automation import RegionColor, ScreenColorReport
+from backend.api.schemas.automation import ScreenColorReport
 from backend.services.screen_sync import ScreenSyncService
 
 
@@ -50,27 +46,8 @@ def _make_request(engine, sync, camera=None):
 
 
 @pytest.mark.asyncio
-async def test_dual_region_dispatches_to_both_lights():
-    hue = _FakeHue()
-    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = _fake_engine("gaming")
-    req = _make_request(engine, sync)
-
-    report = ScreenColorReport(
-        regions={
-            "left":  RegionColor(r=220, g=40, b=40),
-            "right": RegionColor(r=40, g=40, b=220),
-        }
-    )
-    result = await receive_screen_color(report, req)  # type: ignore[arg-type]
-
-    assert result["applied"] is True
-    assert set(result["lights"]) == {"2", "5"}
-    assert set(hue.lights_touched()) == {"2", "5"}
-
-
-@pytest.mark.asyncio
-async def test_legacy_payload_writes_only_l2():
+async def test_single_color_mirrors_to_all_target_lights():
+    """One {r, g, b} payload fans out to every lamp the service manages."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
     engine = _fake_engine("gaming")
@@ -80,24 +57,26 @@ async def test_legacy_payload_writes_only_l2():
     result = await receive_screen_color(report, req)  # type: ignore[arg-type]
 
     assert result["applied"] is True
-    assert result["lights"] == ["2"]
-    assert hue.lights_touched() == ["2"]
+    assert set(result["lights"]) == {"2", "5"}
+    assert set(hue.lights_touched()) == {"2", "5"}
+    # Both writes carry the same hue (red) — different bri/sat is fine because
+    # of per-light caps + luma comp; here we just confirm the input mirrored.
+    l2_hue = next(state["hue"] for lid, state in hue.calls if lid == "2")
+    l5_hue = next(state["hue"] for lid, state in hue.calls if lid == "5")
+    assert abs(l2_hue - l5_hue) < 100, (
+        f"mirrored writes should carry the same hue (L2={l2_hue} L5={l5_hue})"
+    )
 
 
 @pytest.mark.asyncio
 async def test_manual_override_on_one_light_skips_only_that_one():
-    """L2 stamped → skip L2 but still apply L5."""
+    """L2 stamped → skip L2 but L5 still mirrors the screen color."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
     engine = _fake_engine("gaming", manual_light_overrides={"2"})
     req = _make_request(engine, sync)
 
-    report = ScreenColorReport(
-        regions={
-            "left":  RegionColor(r=220, g=40, b=40),
-            "right": RegionColor(r=40, g=40, b=220),
-        }
-    )
+    report = ScreenColorReport(r=220, g=40, b=40)
     result = await receive_screen_color(report, req)  # type: ignore[arg-type]
 
     assert result["applied"] is True
@@ -114,12 +93,7 @@ async def test_off_mode_drops_silently():
     engine = _fake_engine("working")
     req = _make_request(engine, sync)
 
-    report = ScreenColorReport(
-        regions={
-            "left":  RegionColor(r=220, g=40, b=40),
-            "right": RegionColor(r=40, g=40, b=220),
-        }
-    )
+    report = ScreenColorReport(r=220, g=40, b=40)
     result = await receive_screen_color(report, req)  # type: ignore[arg-type]
 
     assert result["applied"] is False
@@ -127,16 +101,16 @@ async def test_off_mode_drops_silently():
 
 
 @pytest.mark.asyncio
-async def test_empty_payload_returns_empty_reason():
-    """No regions and no r/g/b → applied=False, reason=empty_payload."""
+async def test_all_lights_overridden_returns_skip_list():
+    """If every target lamp is stamped, applied=False with both in skipped."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = _fake_engine("gaming")
+    engine = _fake_engine("gaming", manual_light_overrides={"2", "5"})
     req = _make_request(engine, sync)
 
-    report = ScreenColorReport()
+    report = ScreenColorReport(r=220, g=40, b=40)
     result = await receive_screen_color(report, req)  # type: ignore[arg-type]
 
     assert result["applied"] is False
-    assert result["reason"] == "empty_payload"
+    assert set(result["skipped"]) == {"2", "5"}
     assert hue.calls == []
