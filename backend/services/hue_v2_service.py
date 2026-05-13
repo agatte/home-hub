@@ -12,9 +12,13 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
+
+if TYPE_CHECKING:
+    from backend.services.hue_service import HueService
+    from backend.services.websocket_manager import WebSocketManager
 
 logger = logging.getLogger("home_hub.hue_v2")
 
@@ -71,7 +75,7 @@ class HueV2Service:
         """Whether the v2 API connection is active."""
         return self._connected
 
-    def set_heartbeat_registry(self, registry) -> None:
+    def set_heartbeat_registry(self, registry: Any) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
 
@@ -321,7 +325,11 @@ class HueV2Service:
     # EventStream — push-based external-change visibility (Phase 3)
     # ------------------------------------------------------------------
 
-    async def event_stream_loop(self, ws_manager, hue_v1_service) -> None:
+    async def event_stream_loop(
+        self,
+        ws_manager: "WebSocketManager",
+        hue_v1_service: "HueService",
+    ) -> None:
         """
         SSE consumer for the bridge's v2 EventStream.
 
@@ -404,8 +412,8 @@ class HueV2Service:
     async def _dispatch_stream_events(
         self,
         events: list,
-        ws_manager,
-        hue_v1_service,
+        ws_manager: "WebSocketManager",
+        hue_v1_service: "HueService",
     ) -> None:
         """
         Translate one v2 SSE batch into v1-shaped `light_update` broadcasts.

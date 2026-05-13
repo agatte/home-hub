@@ -309,6 +309,14 @@ class HueService:
                 # Cadence depends on whether the v2 EventStream is healthy.
                 # Stream covers on/brightness push; we still need v1 polling
                 # for color/ct + bridge reachability, but at a much lower rate.
+                #
+                # INTENTIONAL: 5s color-lag tradeoff. The v2 stream delivers
+                # color as CIE xy and we don't have a gamut-aware converter
+                # to v1's hue/sat (0-65535 / 0-254), so color/ct changes
+                # ride on this polling path. Don't "fix" this back to 0.5s
+                # unconditionally — it negates the v2 push benefit. If the
+                # color lag becomes user-visible, the right move is to add
+                # the xy→hue/sat conversion, not to drop this branch.
                 await asyncio.sleep(5.0 if self._v2_stream_active else 0.5)
             except asyncio.CancelledError:
                 logger.info("Hue polling stopped")
