@@ -346,14 +346,18 @@ async def lifespan(app: FastAPI):
     automation.register_on_mode_change(mode_volume.on_mode_change)
     app.state.mode_volume = mode_volume
 
-    # "Good night" TTS on every entry into sleeping mode. Sleeping is
-    # manual-only today (no auto-trigger exists in code), so no source
-    # filter is needed — every transition into sleeping should announce.
-    # If an auto-trigger is ever rebuilt, gate this on `source` to skip
-    # the autonomous path.
+    # "Good night" TTS on entry into sleeping mode. Suppressed when the
+    # watching_sleep_guard fires (Anthony's already asleep — speaking
+    # "Good night" at 03:00 would wake him up). The callback fan-out
+    # only passes `mode`, so we read the source off the engine itself —
+    # set_manual_override stamps `_override_source` BEFORE firing
+    # callbacks, so `automation.override_source` is current.
     async def _sleeping_tts(new_mode: str, **_kwargs) -> None:
-        if new_mode == "sleeping":
-            asyncio.create_task(tts.speak("Good night.", volume=10))
+        if new_mode != "sleeping":
+            return
+        if automation.override_source == "watching_sleep_guard":
+            return
+        asyncio.create_task(tts.speak("Good night.", volume=10))
 
     automation.register_on_mode_change(_sleeping_tts)
 

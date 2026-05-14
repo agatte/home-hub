@@ -61,6 +61,28 @@ ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
 ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working", "social"))
 
 
+# ---------------------------------------------------------------------------
+# Watching-sleep guard rule
+# ---------------------------------------------------------------------------
+# Catches the "fell asleep with YouTube on the projector" case the
+# late_night_rescue can't reach (rescue is gated to working/idle and skips
+# while a video player is foregrounded). Fires watching → sleeping after a
+# sustained late-night dwell with the camera observing bed+reclined.
+#
+# Reference incident (2026-05-13 → 2026-05-14): manual `watching` set at
+# 22:26 from the bed, YouTube ran on the projector all night, mode held
+# `watching` for 7h 39m. Lights stayed on the bed-watching cycle the whole
+# time. No existing rule could catch it because a real video player was
+# foregrounded — process detector kept reporting watching, late_night_rescue
+# correctly stayed out.
+WATCHING_SLEEP_GUARD_DWELL_SECONDS = 90 * 60  # 90 minutes
+# Minimum age of a manual `watching` override before the guard may supersede
+# it. Mirrors the social-supersede pattern in zone_posture_rule — fresh user
+# intent (just set watching, sat down) is protected; sustained watching that
+# pre-dates the late-night window by >90min is fair game.
+WATCHING_SLEEP_GUARD_OVERRIDE_MIN_AGE_SECONDS = 90 * 60
+
+
 # User-respect cooldown — when the user clears an override via the dashboard
 # (api:* source), suppress autonomous mode-pushes for this window so "auto"
 # actually means auto. Explicit user actions (api:*, rule_suggestion_accept:*)
@@ -86,6 +108,7 @@ RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
 AUTONOMOUS_PUSH_SOURCES = frozenset({
     "late_night_rescue",
     "zone_posture_rule",
+    "watching_sleep_guard",
     "behavioral_predictor",
     "fusion_can_override",
     "fusion_auto_apply",
@@ -109,6 +132,7 @@ PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "fusion_can_override",
     "fusion_auto_apply",
     "zone_posture_rule",
+    "watching_sleep_guard",
     "timeout_4h",
 })
 
@@ -350,6 +374,12 @@ class AutomationEngine:
         # shadow cadence tracks what live cadence would look like.
         self._zone_posture_reclined_since: Optional[datetime] = None
         self._zone_posture_last_fired_at: Optional[datetime] = None
+        # Watching-sleep guard rule state. Same dwell+stamp shape as the
+        # zone+posture rule above. `_watching_sleep_dwell_since` is the
+        # entry timestamp into (watching ∧ bed ∧ reclined ∧ late_night);
+        # cleared whenever any of those four conditions break.
+        self._watching_sleep_dwell_since: Optional[datetime] = None
+        self._watching_sleep_guard_last_fired_at: Optional[datetime] = None
         # User-respect cooldown stamp — set when the user clears an override
         # via api:* (dashboard "auto" button). While within the cooldown,
         # set_manual_override blocks autonomous-source pushes (rescue, rule,
@@ -1191,12 +1221,15 @@ class AutomationEngine:
     async def _persist_override_state(self) -> None:
         """Write current manual-override state to app_settings.
 
-        Persists `_manual_override`, `_override_mode`, `_override_time`, and
-        the zone+posture rule's `_zone_posture_last_fired_at` stamp so a
-        backend restart (deploys, crashes) doesn't drop the user's active
-        mode and re-derive it from raw sensors. Without this, deploying
-        while in `relax` would briefly flip to whatever the PC agent is
-        reporting until the rule re-fires after its 120s dwell.
+        Persists `_manual_override`, `_override_mode`, `_override_time`,
+        and both autonomous-rule refractory stamps
+        (`_zone_posture_last_fired_at`, `_watching_sleep_guard_last_fired_at`)
+        so a backend restart (deploys, crashes) doesn't drop the user's
+        active mode and re-derive it from raw sensors. Without this,
+        deploying while in `relax` would briefly flip to whatever the PC
+        agent is reporting until the rule re-fires after its dwell, and
+        a deploy mid-watching-sleep window would risk a double-fire on
+        the same night.
         """
         from backend.api.routes.automation import OVERRIDE_STATE_KEY
         from backend.api.routes.routines import save_setting
@@ -1212,6 +1245,11 @@ class AutomationEngine:
             "zone_posture_last_fired_utc": (
                 self._zone_posture_last_fired_at.astimezone(timezone.utc).isoformat()
                 if self._zone_posture_last_fired_at is not None else None
+            ),
+            "watching_sleep_guard_last_fired_utc": (
+                self._watching_sleep_guard_last_fired_at
+                .astimezone(timezone.utc).isoformat()
+                if self._watching_sleep_guard_last_fired_at is not None else None
             ),
             "user_cleared_override_at_utc": (
                 self._user_cleared_override_at.astimezone(timezone.utc).isoformat()
@@ -1254,6 +1292,19 @@ class AutomationEngine:
             except (TypeError, ValueError):
                 logger.warning(
                     "Invalid zone_posture stamp on load: %r", stamp_str,
+                )
+
+        # Same restore for the watching-sleep guard refractory stamp so a
+        # deploy mid-window doesn't double-fire.
+        wsg_str = saved.get("watching_sleep_guard_last_fired_utc")
+        if wsg_str:
+            try:
+                self._watching_sleep_guard_last_fired_at = (
+                    datetime.fromisoformat(wsg_str).astimezone(TZ)
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid watching_sleep_guard stamp on load: %r", wsg_str,
                 )
 
         # Restore user-clear cooldown stamp so a deploy/restart mid-cooldown
@@ -2463,6 +2514,12 @@ class AutomationEngine:
                 # tick's own manual_override gates.
                 await self._evaluate_zone_posture_rule(now)
 
+                # Watching → sleeping guard. Catches "fell asleep with
+                # YouTube on the projector" — the case late_night_rescue
+                # can't reach because watching ≠ working/idle. Same
+                # camera-state safety as zone+posture above.
+                await self._evaluate_watching_sleep_guard(now)
+
                 # Periodic pipeline broadcast — keeps the pipeline view fresh
                 # even when no mode changes occur (e.g., time period transitions)
                 await self._broadcast_pipeline()
@@ -2666,6 +2723,140 @@ class AutomationEngine:
                 decision_source="zone_posture_rule",
                 factors=factors,
                 applied=should_apply,
+            )
+
+    async def _evaluate_watching_sleep_guard(self, now: datetime) -> None:
+        """Watching → sleeping guard rule.
+
+        Catches the "fell asleep with YouTube on the projector" case the
+        existing late_night_rescue can't reach (rescue is gated to
+        working/idle and skips while a video player is foregrounded).
+        Fires when ``mode == watching`` AND the camera observes
+        ``zone == bed`` AND ``posture == reclined`` for
+        ``WATCHING_SLEEP_GUARD_DWELL_SECONDS`` continuously inside the
+        ``late_night`` time period. Always live (no shadow gate) — this
+        is a comfort/safety rule, not an experimental classifier.
+
+        Gate ordering follows the same silent-rejection-before-stamp-burn
+        pattern as ``_evaluate_zone_posture_rule`` (per
+        ``feedback_rule_refractory_burn_pattern.md``): every condition
+        that can suppress a fire is checked before the refractory stamp
+        is committed, so a no-op tick can never lock the rule out for 4h.
+        """
+        camera = self._camera_service
+        if camera is None:
+            return
+
+        # Gate 0: DND suppresses the dwell timer. set_manual_override would
+        # block the actuation anyway, but resetting the dwell here keeps the
+        # "fresh dwell required after DND" semantic.
+        if self.is_dnd_active():
+            self._watching_sleep_dwell_since = None
+            return
+
+        # Gate 1: refractory — if we already fired within the override
+        # timeout, suppress. Reset the dwell so a fresh window is required
+        # after expiry. Mirrors zone_posture gate 2.
+        if self._watching_sleep_guard_last_fired_at and (
+            (now - self._watching_sleep_guard_last_fired_at).total_seconds()
+            < self._override_timeout_hours * 3600
+        ):
+            self._watching_sleep_dwell_since = None
+            return
+
+        # Gate 2: user-clear cooldown. set_manual_override silently rejects
+        # autonomous sources during this window; without an early reset here
+        # the rule would burn its 4h refractory on a fire that was thrown
+        # away (the 2026-05-05 zone_posture incident pattern). Drop the
+        # dwell so a fresh window is required after the cooldown.
+        if self._user_cleared_override_at is not None:
+            elapsed = (
+                (now - self._user_cleared_override_at).total_seconds()
+            )
+            if elapsed < USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS:
+                self._watching_sleep_dwell_since = None
+                return
+
+        # Gate 3: time-of-day. Only fire inside the late_night period
+        # (23:00–wake_hour, weekday/weekend-aware). Outside the window,
+        # reset dwell — falling asleep at 21:00 watching a movie isn't
+        # the case we're trying to catch.
+        if self._get_time_period() != "late_night":
+            self._watching_sleep_dwell_since = None
+            return
+
+        # Gate 4: effective mode must be watching. With manual_override
+        # active that means override_mode; otherwise the detected current
+        # mode. Anything else resets dwell.
+        effective_mode = (
+            self._override_mode if self._manual_override else self._current_mode
+        )
+        if effective_mode != "watching":
+            self._watching_sleep_dwell_since = None
+            return
+
+        # Gate 5: stale-override supersedure. If the user just tapped
+        # watching from the dashboard, give them at least the dwell window
+        # before we override. Beyond that the override is presumed to be
+        # "they fell asleep with it set." Mirrors the
+        # ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS pattern.
+        if self._manual_override and self._override_time is not None:
+            override_age = (now - self._override_time).total_seconds()
+            if override_age < WATCHING_SLEEP_GUARD_OVERRIDE_MIN_AGE_SECONDS:
+                self._watching_sleep_dwell_since = None
+                return
+
+        # Gate 6: core condition — committed zone + posture. Both null
+        # (camera disabled or pose not committed) is treated as "not
+        # confidently in bed reclined" and resets dwell.
+        zone = camera.zone
+        posture = camera.posture
+        if zone != "bed" or posture != "reclined":
+            self._watching_sleep_dwell_since = None
+            return
+
+        # All gates pass — accumulate dwell.
+        if self._watching_sleep_dwell_since is None:
+            self._watching_sleep_dwell_since = now
+            return
+        elapsed = (now - self._watching_sleep_dwell_since).total_seconds()
+        if elapsed < WATCHING_SLEEP_GUARD_DWELL_SECONDS:
+            return
+
+        # Dwell met — commit refractory stamp BEFORE the await on
+        # set_manual_override, same reasoning as the zone+posture rule:
+        # if the override raises, the stamp prevents re-fire on every tick.
+        self._watching_sleep_guard_last_fired_at = now
+        self._watching_sleep_dwell_since = None
+        await self._persist_override_state()
+
+        factors = {
+            "zone": zone,
+            "posture": posture,
+            "current_mode": self._current_mode,
+            "effective_mode": effective_mode,
+            "dwell_seconds": int(elapsed),
+            "dwell_required": WATCHING_SLEEP_GUARD_DWELL_SECONDS,
+            "hour": now.hour,
+        }
+
+        logger.info(
+            "Watching-sleep guard firing: bed+reclined held %.0fmin "
+            "in late_night while watching → sleeping",
+            elapsed / 60,
+        )
+        await self.set_manual_override(
+            "sleeping", source="watching_sleep_guard",
+        )
+
+        ml_logger = getattr(self, "_ml_logger", None)
+        if ml_logger:
+            await ml_logger.log_decision(
+                predicted_mode="sleeping",
+                confidence=1.0,
+                decision_source="watching_sleep_guard",
+                factors=factors,
+                applied=True,
             )
 
     async def _check_external_off(self) -> bool:

@@ -1904,3 +1904,248 @@ class TestFusionAutoApplyNoOp:
 
         assert engine.manual_override is False
 
+
+# ---------------------------------------------------------------------------
+# Watching → sleeping guard rule
+# ---------------------------------------------------------------------------
+
+class TestWatchingSleepGuard:
+    """Auto-flip watching → sleeping after sustained late-night bed dwell.
+
+    Catches the "fell asleep with YouTube on the projector" case the
+    late_night_rescue can't reach (it's gated to working/idle and skips
+    while a video player is foregrounded). Reference incident:
+    2026-05-13 → 2026-05-14, watching held 7h 39m overnight.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+        eng._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        eng._current_mode = "watching"
+        eng._ml_logger = _FakeMLLogger()
+        return eng
+
+    # 02:00 weekday — solidly inside the late_night window (23:00 → wake_hour 5).
+    LATE_NIGHT = datetime(2026, 5, 14, 2, 0, tzinfo=TZ)
+    # 21:00 weekday — evening, not late_night yet.
+    EVENING = datetime(2026, 5, 14, 21, 0, tzinfo=TZ)
+    DWELL_OFFSET_FIRES = 91 * 60   # one minute past the 90-min dwell
+    DWELL_OFFSET_PARTIAL = 60 * 60  # 60 min — under the 90-min threshold
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_actuates_after_dwell(self, mock_dt, engine):
+        """All gates pass + dwell met → flips to sleeping with the right
+        source label."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
+        assert engine.override_source == "watching_sleep_guard"
+        # Stamp burned for refractory.
+        assert engine._watching_sleep_guard_last_fired_at == self.LATE_NIGHT
+        # Dwell reset after fire.
+        assert engine._watching_sleep_dwell_since is None
+        # Observability row — same shape as zone_posture_rule emits, so the
+        # rule-engine-misfire-auditor and /api/learning queries can see fires.
+        assert len(engine._ml_logger.calls) == 1
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "watching_sleep_guard"
+        assert call["predicted_mode"] == "sleeping"
+        assert call["applied"] is True
+        assert call["factors"]["zone"] == "bed"
+        assert call["factors"]["posture"] == "reclined"
+        assert call["factors"]["dwell_seconds"] >= self.DWELL_OFFSET_FIRES
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_dnd_blocks_and_resets_dwell(self, mock_dt, engine):
+        """DND silence → no fire, dwell reset, refractory NOT burned."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+        # DND active for the next hour.
+        engine._dnd_enabled = True
+        engine._dnd_expiry = self.LATE_NIGHT + timedelta(hours=1)
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+        # CRITICAL: stamp NOT burned (per
+        # feedback_rule_refractory_burn_pattern.md — silent rejection
+        # must not lock the rule out for 4h).
+        assert engine._watching_sleep_guard_last_fired_at is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_user_clear_cooldown_blocks_and_does_not_burn(
+        self, mock_dt, engine,
+    ):
+        """User just tapped 'auto' → autonomous push silently blocked.
+        Dwell reset and stamp NOT burned, so the rule re-arms cleanly
+        once the cooldown expires."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+        # User cleared override 5 minutes ago — well inside the 30-min
+        # cooldown window.
+        engine._user_cleared_override_at = (
+            self.LATE_NIGHT - timedelta(minutes=5)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+        assert engine._watching_sleep_guard_last_fired_at is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_refractory_blocks_refire(self, mock_dt, engine):
+        """Recent fire (within override_timeout_hours) suppresses re-fire."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        # Fired 1h ago — well under the 4h refractory.
+        engine._watching_sleep_guard_last_fired_at = (
+            self.LATE_NIGHT - timedelta(hours=1)
+        )
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        # Stamp held — no second fire.
+        assert engine.manual_override is False
+        # Dwell reset by gate 1.
+        assert engine._watching_sleep_dwell_since is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_outside_late_night_does_not_trigger(self, mock_dt, engine):
+        """21:00 evening — late_night gate fails, dwell reset, no fire.
+
+        We only catch the 'asleep with YouTube on' case in the late-night
+        window; a 9pm movie marathon is a normal use of watching mode."""
+        mock_dt.now.return_value = self.EVENING
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.EVENING - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.EVENING)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_fresh_watching_override_is_protected(self, mock_dt, engine):
+        """Manual watching override younger than the supersede min-age =
+        fresh user intent. Don't override what they just set."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        await engine.set_manual_override("watching", source="api:test")
+        # Override is 30 min old — under the 90-min supersede threshold.
+        engine._override_time = self.LATE_NIGHT - timedelta(minutes=30)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        # Still on watching — guard didn't supersede.
+        assert engine.override_mode == "watching"
+        assert engine._watching_sleep_dwell_since is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_stale_watching_override_can_be_superseded(
+        self, mock_dt, engine,
+    ):
+        """Watching override ≥90 min old + dwell met → guard fires.
+
+        The reference incident: Anthony tapped watching at 22:26 and fell
+        asleep — the override was hours old by 02:00."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        await engine.set_manual_override("watching", source="api:test")
+        # Override is 4 hours old — well past the 90-min gate.
+        engine._override_time = self.LATE_NIGHT - timedelta(hours=4)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.override_mode == "sleeping"
+        assert engine.override_source == "watching_sleep_guard"
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_zone_not_bed_does_not_trigger(self, mock_dt, engine):
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._camera_service = _FakeCamera(zone="desk", posture="reclined")
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_dwell_not_met_does_not_fire(self, mock_dt, engine):
+        """Under the 90-min threshold: don't fire, but DON'T reset the
+        dwell either — let it keep accumulating."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_PARTIAL)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        # Timer is still set — accumulating toward the threshold.
+        assert engine._watching_sleep_dwell_since is not None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_dwell_starts_on_first_qualifying_tick(
+        self, mock_dt, engine,
+    ):
+        """First tick with all conditions met seeds the dwell timer."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        # No prior dwell.
+        assert engine._watching_sleep_dwell_since is None
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine._watching_sleep_dwell_since == self.LATE_NIGHT
+        assert engine.manual_override is False
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_mode_not_watching_does_not_trigger(self, mock_dt, engine):
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._current_mode = "working"
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+
