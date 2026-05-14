@@ -7,11 +7,20 @@ full behavioral feature vectors for the behavioral predictor.
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, text
 
+from backend.config import settings
 from backend.database import async_session
 from backend.models import ActivityEvent, LightAdjustment
+
+# Apartment-local zone for temporal feature extraction. Hour/day-of-week/
+# time-period buckets are user-facing semantics that must follow the wall
+# clock through DST transitions — Indianapolis has its own DST rules so
+# `timezone.utc` math silently shifts every "hour" feature by 1 twice a
+# year (mis-windowing training data; tracked as #30).
+_LOCAL_TZ = ZoneInfo(settings.TIMEZONE)
 
 logger = logging.getLogger("home_hub.ml")
 
@@ -44,8 +53,18 @@ def _to_utc(dt: datetime) -> datetime:
     return dt
 
 
+def _to_local(dt: datetime) -> datetime:
+    """Convert a timestamp to apartment-local time (``config.TIMEZONE``).
+
+    Naive datetimes are treated as UTC (the SQLite read-back contract
+    enforced by :func:`_to_utc`). Returns a tz-aware datetime in
+    ``_LOCAL_TZ`` — DST-correct on both transition boundaries.
+    """
+    return _to_utc(dt).astimezone(_LOCAL_TZ)
+
+
 def get_time_period(timestamp: datetime) -> str:
-    """Determine time period from a timestamp.
+    """Determine time period from a timestamp (apartment-local clock).
 
     Uses the same boundaries as ``_get_time_period_static`` in the
     automation engine (hardcoded defaults):
@@ -55,12 +74,13 @@ def get_time_period(timestamp: datetime) -> str:
     - ``night``:   21:00 - 07:59
 
     Args:
-        timestamp: A timezone-aware or naive datetime.
+        timestamp: A timezone-aware or naive datetime. Naive values are
+            treated as UTC.
 
     Returns:
         One of ``"day"``, ``"evening"``, ``"night"``.
     """
-    hour = timestamp.hour
+    hour = _to_local(timestamp).hour
     if 8 <= hour < 18:
         return "day"
     elif 18 <= hour < 21:
@@ -69,12 +89,8 @@ def get_time_period(timestamp: datetime) -> str:
 
 
 def get_season(timestamp: datetime) -> str:
-    """Derive season from month (Northern Hemisphere).
-
-    Returns:
-        One of ``"winter"``, ``"spring"``, ``"summer"``, ``"fall"``.
-    """
-    month = timestamp.month
+    """Derive season from month (Northern Hemisphere, apartment-local)."""
+    month = _to_local(timestamp).month
     if month in (12, 1, 2):
         return "winter"
     elif month in (3, 4, 5):
@@ -85,7 +101,7 @@ def get_season(timestamp: datetime) -> str:
 
 
 def get_temporal_features(timestamp: datetime) -> dict:
-    """Build a temporal feature dict from a timestamp.
+    """Build a temporal feature dict from a timestamp (apartment-local).
 
     Features produced:
         - ``hour``: 0-23
@@ -95,17 +111,22 @@ def get_temporal_features(timestamp: datetime) -> dict:
         - ``season``: winter / spring / summer / fall
         - ``time_period``: day / evening / night
 
+    All values are computed in apartment-local time so DST transitions
+    don't shift "hour" by 1 across the boundary.
+
     Args:
-        timestamp: A datetime (aware or naive).
+        timestamp: A datetime (aware or naive). Naive values are treated
+            as UTC.
 
     Returns:
         Dict of temporal features.
     """
+    local = _to_local(timestamp)
     return {
-        "hour": timestamp.hour,
-        "minute_bucket": timestamp.minute // 15,
-        "day_of_week": timestamp.weekday(),
-        "is_weekend": timestamp.weekday() >= 5,
+        "hour": local.hour,
+        "minute_bucket": local.minute // 15,
+        "day_of_week": local.weekday(),
+        "is_weekend": local.weekday() >= 5,
         "season": get_season(timestamp),
         "time_period": get_time_period(timestamp),
     }
@@ -201,10 +222,14 @@ async def build_training_data(days: int = 60) -> list[dict]:
     for ev in events:
         ev.timestamp = _to_utc(ev.timestamp)
 
-    # Pre-compute per-day "wake time" (first non-idle event each day)
+    # Pre-compute per-day "wake time" (first non-idle event each day).
+    # Day boundary follows the apartment-local calendar so "today" lines
+    # up with the user's wall clock — UTC day_keys split the day at
+    # ~19:00 local (EST) / ~20:00 local (EDT), which lumps evening events
+    # into the next "day" and creates a 1-hour shift across DST.
     wake_times: dict[str, datetime] = {}
     for ev in events:
-        day_key = ev.timestamp.strftime("%Y-%m-%d")
+        day_key = _to_local(ev.timestamp).strftime("%Y-%m-%d")
         if day_key not in wake_times and ev.mode != "idle":
             wake_times[day_key] = ev.timestamp
 
@@ -230,7 +255,7 @@ async def build_training_data(days: int = 60) -> list[dict]:
         if i > 0 and events[i - 1].duration_seconds:
             prev_duration = events[i - 1].duration_seconds
 
-        day_key = ts.strftime("%Y-%m-%d")
+        day_key = _to_local(ts).strftime("%Y-%m-%d")
         wake = wake_times.get(day_key)
         minutes_since_wake = (
             (ts - wake).total_seconds() / 60 if wake and ts > wake else 0
@@ -238,7 +263,7 @@ async def build_training_data(days: int = 60) -> list[dict]:
 
         transitions_today = sum(
             1 for e in events[:i]
-            if e.timestamp.strftime("%Y-%m-%d") == day_key
+            if _to_local(e.timestamp).strftime("%Y-%m-%d") == day_key
         )
 
         features.update({
@@ -349,7 +374,12 @@ async def build_runtime_features(
     column; cost at the 60s automation cadence is negligible.
     """
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Local midnight, expressed as UTC for the indexed timestamp query.
+    # UTC midnight would slice "today" at ~19:00 local (EST) / ~20:00 local
+    # (EDT), dropping morning events from "transitions_today".
+    today_start = now.astimezone(_LOCAL_TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    ).astimezone(timezone.utc)
     week_ago = now - timedelta(days=7)
 
     async with async_session() as session:

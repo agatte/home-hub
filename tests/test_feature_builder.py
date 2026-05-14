@@ -9,6 +9,12 @@ import pytest
 from backend.models import ActivityEvent
 from backend.services.ml import feature_builder as fb
 
+# Inputs to time-bucketing helpers are interpreted on the apartment-local
+# clock. Constructing test datetimes in `_LOCAL_TZ` keeps the boundary
+# assertions readable and removes the implicit UTC→local conversion the
+# old tests glossed over.
+LOCAL = fb._LOCAL_TZ
+
 
 class TestGetTimePeriod:
     """Boundary checks against the day/evening/night cutoffs."""
@@ -25,7 +31,7 @@ class TestGetTimePeriod:
         (23, "night"),
     ])
     def test_boundaries(self, hour, expected):
-        ts = datetime(2026, 4, 24, hour, 30, tzinfo=timezone.utc)
+        ts = datetime(2026, 4, 24, hour, 30, tzinfo=LOCAL)
         assert fb.get_time_period(ts) == expected
 
 
@@ -37,13 +43,13 @@ class TestGetSeason:
         (9, "fall"), (10, "fall"), (11, "fall"),
     ])
     def test_each_month(self, month, expected):
-        ts = datetime(2026, month, 15, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, month, 15, 12, 0, tzinfo=LOCAL)
         assert fb.get_season(ts) == expected
 
 
 class TestGetTemporalFeatures:
     def test_shape_and_values(self):
-        ts = datetime(2026, 4, 24, 14, 37, tzinfo=timezone.utc)  # Friday
+        ts = datetime(2026, 4, 24, 14, 37, tzinfo=LOCAL)  # Friday
         features = fb.get_temporal_features(ts)
         assert features["hour"] == 14
         assert features["minute_bucket"] == 2  # 37 // 15 = 2
@@ -53,8 +59,49 @@ class TestGetTemporalFeatures:
         assert features["time_period"] == "day"
 
     def test_weekend_flag(self):
-        sat = datetime(2026, 4, 25, 10, 0, tzinfo=timezone.utc)
+        sat = datetime(2026, 4, 25, 10, 0, tzinfo=LOCAL)
         assert fb.get_temporal_features(sat)["is_weekend"] is True
+
+
+class TestDSTBoundary:
+    """Temporal features must track the apartment wall clock, not UTC.
+
+    Indianapolis has its own DST rules; before #30 the helpers read
+    ``.hour`` straight off UTC-tagged timestamps and labeled them with
+    local-time semantics. That shifted every "hour" feature by 4-5
+    hours year-round and by an extra hour at each DST transition,
+    creating a discontinuity in the training set.
+    """
+
+    def test_utc_input_converted_to_local_hour(self):
+        # 23:00 UTC during EDT (UTC-4) = 19:00 local — evening.
+        # The pre-fix code returned "night" because it bucketed 23 directly.
+        ts = datetime(2026, 7, 1, 23, 0, tzinfo=timezone.utc)
+        assert fb.get_time_period(ts) == "evening"
+
+    def test_utc_input_converted_to_local_hour_winter(self):
+        # 23:00 UTC during EST (UTC-5) = 18:00 local — still evening.
+        ts = datetime(2026, 1, 15, 23, 0, tzinfo=timezone.utc)
+        assert fb.get_time_period(ts) == "evening"
+
+    def test_dst_spring_forward_shifts_offset_not_label(self):
+        # 14:00 UTC the day before spring-forward (UTC-5 EST) = 09:00 local.
+        # 14:00 UTC the day of spring-forward (UTC-4 EDT)     = 10:00 local.
+        # Both still bucket to "day"; the regression is that the local
+        # hour feature must actually shift across the boundary instead
+        # of staying pinned to UTC.
+        before = datetime(2026, 3, 7, 14, 0, tzinfo=timezone.utc)
+        after = datetime(2026, 3, 8, 14, 0, tzinfo=timezone.utc)
+        assert fb.get_temporal_features(before)["hour"] == 9
+        assert fb.get_temporal_features(after)["hour"] == 10
+        assert fb.get_time_period(before) == "day"
+        assert fb.get_time_period(after) == "day"
+
+    def test_naive_utc_input_still_treated_as_utc(self):
+        # SQLite returns naive datetimes; the helpers must coerce them
+        # to UTC before converting, not assume they're already local.
+        naive = datetime(2026, 7, 1, 23, 0)  # naive == UTC by contract
+        assert fb.get_time_period(naive) == "evening"
 
 
 class TestBuildCurrentFeatures:
@@ -161,13 +208,16 @@ class TestBuildRuntimeFeatures:
         assert features["previous_mode"] == fb.MODE_ENCODING["working"]
 
     async def test_history_populates_features(self, ml_db):
-        # Anchor every "today" event off today_start, not off `now` —
-        # `now - 20m` ran before today_start in the post-midnight UTC
-        # window (00:00–00:20) and silently dropped one transition.
-        # Using fractions of (now - today_start) keeps every event
-        # strictly inside today regardless of wall-clock hour.
+        # Anchor every "today" event off today_start (apartment-local
+        # midnight, expressed as UTC), not off `now` — `now - 20m` ran
+        # before today_start in the post-midnight window and silently
+        # dropped one transition. The local-midnight anchor matches
+        # `build_runtime_features` after #30, so events seeded here line
+        # up with the function's "today" filter regardless of DST.
         now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = now.astimezone(fb._LOCAL_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        ).astimezone(timezone.utc)
         elapsed = now - today_start
         async with ml_db() as session:
             # First non-idle event of "today" — wake.
