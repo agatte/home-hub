@@ -95,6 +95,7 @@ def _stub_request():
 
     class _Hue:
         connected = True
+        breaker_open = False  # _check_hue_available reads this
 
         async def get_all_lights(self):
             # Return two lights, both on, so adjust_guest_brightness has work.
