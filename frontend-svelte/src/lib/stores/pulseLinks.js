@@ -12,7 +12,7 @@ import { writable } from 'svelte/store'
 import { lights as lightsStore } from './lights.js'
 import { sectorBoard } from './sectorBoard.js'
 
-/** @typedef {{id: string, fromInputId: string, toLightId: string, color: string, startedAt: number}} Pulse */
+/** @typedef {{id: string, fromInputId: string, toLightId: string, startedAt: number}} Pulse */
 
 /** @type {import('svelte/store').Writable<Pulse[]>} */
 export const pulseLinks = writable([])

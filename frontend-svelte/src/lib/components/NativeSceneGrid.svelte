@@ -18,10 +18,11 @@
       /** @type {Map<string, { id: string, name: string, ids: string[] }>} */
       const grouped = new Map()
       for (const scene of scenes) {
-        if (!grouped.has(scene.name)) {
+        const existing = grouped.get(scene.name)
+        if (!existing) {
           grouped.set(scene.name, { ...scene, ids: [scene.id] })
         } else {
-          grouped.get(scene.name).ids.push(scene.id)
+          existing.ids.push(scene.id)
         }
       }
       bridgeScenes = Array.from(grouped.values())

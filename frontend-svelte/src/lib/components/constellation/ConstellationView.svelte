@@ -257,9 +257,9 @@
           n.type === 'context' ? 42 :
           26 + (n.impact || 0.5) * 10
         )).strength(0.95))
-        .force('link', forceLink(simLinks).id((n) => n.id).distance((l) => (
+        .force('link', /** @type {any} */ (forceLink(simLinks).id(/** @param {any} n */ (n) => n.id)).distance(/** @param {any} l */ (l) => (
           laneDistance(l.weight)
-        )).strength((l) => 0.25 + 0.3 * (l.weight || 0)))
+        )).strength(/** @param {any} l */ (l) => 0.25 + 0.3 * (l.weight || 0)))
         .force('laneRing', forceRadial((n) => (
           n.type === 'lane' ? targetDistanceForLane(n) : 0
         ), cx, cy).strength((n) => n.type === 'lane' ? 0.6 : 0))

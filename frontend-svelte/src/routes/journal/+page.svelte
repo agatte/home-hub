@@ -25,7 +25,7 @@
         await selectDate(entries[0].date)
       }
     } catch (e) {
-      loadError = e?.message ?? 'Failed to load journal entries'
+      loadError = e instanceof Error ? e.message : 'Failed to load journal entries'
     }
   }
 
@@ -53,7 +53,7 @@
       await selectDate(activeDate)
       await loadEntries()
     } catch (e) {
-      loadError = e?.message ?? 'Regenerate failed'
+      loadError = e instanceof Error ? e.message : 'Regenerate failed'
     } finally {
       regenerating = false
     }
@@ -69,7 +69,7 @@
       await loadEntries()
       await selectDate(iso)
     } catch (e) {
-      loadError = e?.message ?? 'Generate failed'
+      loadError = e instanceof Error ? e.message : 'Generate failed'
     } finally {
       regenerating = false
     }

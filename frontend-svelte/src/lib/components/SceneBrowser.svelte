@@ -52,12 +52,14 @@
 
       // Deduplicate bridge scenes by name
       /** @type {Map<string, {id: string, name: string, ids: string[]}>} */
+      /** @type {Map<string, { id: string, name: string, ids: string[] }>} */
       const grouped = new Map()
       for (const s of all.filter((s) => s.source === 'bridge')) {
-        if (!grouped.has(s.name)) {
+        const existing = grouped.get(s.name)
+        if (!existing) {
           grouped.set(s.name, { ...s, ids: [s.id] })
         } else {
-          grouped.get(s.name).ids.push(s.id)
+          existing.ids.push(s.id)
         }
       }
       bridgeScenes = Array.from(grouped.values())

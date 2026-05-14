@@ -23,7 +23,7 @@
     try {
       await enableDND(dndDurationMinutes)
     } catch (e) {
-      dndError = e?.message ?? 'Failed to enable DND'
+      dndError = e instanceof Error ? e.message : 'Failed to enable DND'
     }
   }
 
@@ -32,7 +32,7 @@
     try {
       await clearDND()
     } catch (e) {
-      dndError = e?.message ?? 'Failed to clear DND'
+      dndError = e instanceof Error ? e.message : 'Failed to clear DND'
     }
   }
 
@@ -103,7 +103,7 @@
   let modeBrightness = null
   /** @type {Record<string, {day: number, evening: number, night: number, fade_duration_s: number}> | null} */
   let modeVolume = null
-  /** @type {{reclined_sync_cap: number, reclined_l1_night: number, upright_sync_cap: number} | null} */
+  /** @type {{reclined_sync_cap?: number, reclined_l1_night?: number, upright_sync_cap?: number} | null} */
   let watchingPosture = null
   /** @type {any} */
   let routineConfig = null
@@ -292,7 +292,7 @@
       calibrateResult = resp
       $cameraStore = await apiGet('/api/camera/status')
     } catch (err) {
-      calibrateResult = { status: 'error', detail: err?.message ?? 'failed' }
+      calibrateResult = { status: 'error', detail: err instanceof Error ? err.message : 'failed' }
     }
     saving = null
   }
@@ -511,8 +511,8 @@
             </div>
             <span class="setting-value">
               {$cameraStore.last_detection === 'present' ? 'Present' : $cameraStore.last_detection === 'absent' ? 'Absent' : 'Unknown'}
-              {#if $cameraStore.confidence > 0}
-                ({($cameraStore.confidence * 100).toFixed(0)}%)
+              {#if ($cameraStore.confidence ?? 0) > 0}
+                ({(($cameraStore.confidence ?? 0) * 100).toFixed(0)}%)
               {/if}
             </span>
           </div>

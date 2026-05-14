@@ -69,6 +69,7 @@
   /** @param {string} previewUrl @param {any} [rec] */
   async function handlePreview(previewUrl, rec) {
     try {
+      /** @type {Record<string, any>} */
       const body = { preview_url: previewUrl }
       if (rec) {
         if (rec.track_name) body.track = rec.track_name

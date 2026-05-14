@@ -20,7 +20,7 @@
       isToday = !!data?.is_today
     } catch (e) {
       // 404 is expected when no narrative has been generated yet — quiet fallback
-      const msg = e?.message ?? 'Failed to load narrative'
+      const msg = e instanceof Error ? e.message : 'Failed to load narrative'
       if (!String(msg).includes('404')) loadError = msg
     } finally {
       loading = false

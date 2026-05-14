@@ -4,8 +4,6 @@
   /** @type {{ mode: string|null, confidence: number, weight: number, stale: boolean, agrees: boolean, last_update: string } | null} */
   export let signal = null
   /** @type {string} */
-  export let fusedMode = 'idle'
-  /** @type {string} */
   export let mColor = '#4a6cf7'
 
   const SOURCE_META = {
@@ -48,7 +46,7 @@
   </div>
 
   {#if hasData}
-    <div class="card-mode">{signal.mode}</div>
+    <div class="card-mode">{signal?.mode}</div>
     <div class="bar-row">
       <div class="bar-track">
         <div
@@ -58,7 +56,7 @@
       </div>
       <span class="bar-pct">{confPct}%</span>
     </div>
-    <div class="card-weight">wt: {signal.weight?.toFixed(2) ?? '—'}</div>
+    <div class="card-weight">wt: {signal?.weight?.toFixed(2) ?? '—'}</div>
   {:else}
     <div class="no-data-label">No data</div>
   {/if}

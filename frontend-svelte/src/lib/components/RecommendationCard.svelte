@@ -6,7 +6,7 @@
   export let rec
   /** @type {(id: number, action: 'liked' | 'dismissed') => void} */
   export let onFeedback = () => {}
-  /** @type {(previewUrl: string) => Promise<void>} */
+  /** @type {(previewUrl: string, rec?: any) => Promise<void>} */
   export let onPreview = async () => {}
 
   let previewing = false

@@ -61,7 +61,7 @@
     height={iconSize}
     class="icon-host"
   >
-    <div xmlns="http://www.w3.org/1999/xhtml" class="icon-wrap">
+    <div class="icon-wrap">
       <svelte:component this={IconCmp} size={iconSize} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
     </div>
   </foreignObject>

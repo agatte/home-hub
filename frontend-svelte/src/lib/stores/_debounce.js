@@ -18,7 +18,7 @@ export function debounced(stores, fn, ms = 150) {
   const inputs = Array.isArray(stores) ? stores : [stores]
   const single = !Array.isArray(stores)
 
-  return readable(undefined, (set) => {
+  return readable(/** @type {T} */ (/** @type {unknown} */ (undefined)), (set) => {
     /** @type {ReturnType<typeof setTimeout> | null} */
     let timer = null
     let initialized = false

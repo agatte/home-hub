@@ -5,7 +5,7 @@
 
   /** @type {{id: string, label: string, icon: string, kind: string}} */
   export let sectorMeta
-  /** @type {{lights: Array<{light_id:string,name:string,on:boolean,bri:number,hue:number,sat:number,ct?:number,colormode?:string,reachable:boolean}>}} */
+  /** @type {{lights: Array<{light_id:string,name:string,on:boolean,bri:number,hue:number,sat:number,ct?:number,colormode?:string,reachable:boolean}>, impactScore?: number}} */
   export let sectorData
   /** @type {number} */
   export let index
@@ -78,7 +78,7 @@
     <circle r={bubbleRadius} class="input-disc" />
 
     <foreignObject x={-iconSize / 2} y={-bubbleRadius / 2 - iconSize / 2 + 2} width={iconSize} height={iconSize} class="icon-host">
-      <div xmlns="http://www.w3.org/1999/xhtml" class="icon-wrap">
+      <div class="icon-wrap">
         <Lightbulb size={iconSize} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
       </div>
     </foreignObject>

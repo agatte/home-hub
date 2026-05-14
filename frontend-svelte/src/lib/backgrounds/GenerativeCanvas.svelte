@@ -107,6 +107,7 @@
   function lerp(a, b, t) { return a + (b - a) * t }
 
   function lerpParams(a, b, t) {
+    /** @type {Record<string, any>} */
     const r = {}
     for (const key of Object.keys(b)) {
       if (typeof b[key] === 'number' && typeof a[key] === 'number') {
@@ -117,7 +118,7 @@
         r[key] = t > 0.5 ? b[key] : a[key] // snap strings at midpoint
       }
     }
-    return r
+    return /** @type {import('$lib/theme.js').GenerativeParams} */ (r)
   }
 
   /** Parse hex color to {r,g,b} 0-255 */
@@ -131,7 +132,9 @@
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = canvas.clientWidth * dpr
     canvas.height = canvas.clientHeight * dpr
-    ctx = canvas.getContext('2d')
+    const ctx2d = canvas.getContext('2d')
+    if (!ctx2d) return
+    ctx = ctx2d
     ctx.scale(dpr, dpr)
     cols = GRID_SIZE
     rows = Math.round((canvas.clientHeight / canvas.clientWidth) * GRID_SIZE)

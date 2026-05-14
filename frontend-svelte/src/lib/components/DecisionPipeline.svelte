@@ -118,7 +118,6 @@
           <PipelineInputCard
             source={key}
             signal={signals[key] || null}
-            {fusedMode}
             {mColor}
           />
         {/each}

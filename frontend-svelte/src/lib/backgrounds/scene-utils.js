@@ -16,6 +16,7 @@ export function initSceneCanvas(canvas) {
   canvas.width = w * dpr
   canvas.height = h * dpr
   const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('canvas 2d context unavailable')
   ctx.scale(dpr, dpr)
   return { ctx, w, h, dpr }
 }

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { Sprout, Droplets } from 'lucide-svelte'
 
-  /** @type {{ total?: number, needs_water?: number, overdue?: number, healthy?: number, next_watering?: any } | null} */
+  /** @type {{ total?: number, needs_water?: number, overdue?: number, healthy?: number, needs_attention?: number, next_watering?: any } | null} */
   let summary = null
   let loaded = false
   let unavailable = false

@@ -73,7 +73,7 @@
     </div>
 
     <div class="ambient-controls">
-      <select class="ambient-select" value={$ambient.sound || ''} on:change={(e) => selectSound(e.target.value)}>
+      <select class="ambient-select" value={$ambient.sound || ''} on:change={(e) => selectSound(/** @type {HTMLSelectElement} */ (e.currentTarget).value)}>
         <option value="">None</option>
         {#each $ambient.available_sounds as s}
           <option value={s.filename}>{s.label}</option>

@@ -24,6 +24,7 @@
 /**
  * @typedef {Object} ModeStyle
  * @property {string} label
+ * @property {string} [icon]    - Legacy emoji glyph (kept for backwards compatibility)
  * @property {string} lucide    - Lucide icon name
  * @property {string} color
  * @property {GenerativeParams} generative

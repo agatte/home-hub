@@ -54,7 +54,7 @@
         tryItTimer = setInterval(() => {
           tryItRemaining -= 1
           if (tryItRemaining <= 0) {
-            clearInterval(tryItTimer)
+            if (tryItTimer) clearInterval(tryItTimer)
             tryItTimer = null
             tryItActive = false
             tryItSceneName = ''

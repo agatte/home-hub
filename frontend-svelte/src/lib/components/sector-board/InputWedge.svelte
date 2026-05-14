@@ -7,7 +7,7 @@
   /** Shape from sectorBoard.js — see voterSector / contextSector etc. */
   /** @type {{id: string, label: string, icon: string, kind: string}} */
   export let sectorMeta
-  /** @type {{id: string, kind: string, hasData: boolean, mode: string|null, weight: number, agrees: boolean, stale: boolean, factors: Array<{key:string,label:string,display:string,impact:number,stale:boolean}>}} */
+  /** @type {{id: string, kind: string, hasData: boolean, mode: string|null, weight: number, agrees: boolean, stale: boolean, impactScore?: number, factors: Array<{key:string,label:string,display:string,impact:number,stale:boolean}>}} */
   export let sectorData
   /** sector index (0..7) */
   /** @type {number} */
@@ -143,7 +143,7 @@
       height={iconSize}
       class="icon-host"
     >
-      <div xmlns="http://www.w3.org/1999/xhtml" class="icon-wrap">
+      <div class="icon-wrap">
         <svelte:component this={IconCmp} size={iconSize} color="rgba(0, 0, 0, 0.78)" strokeWidth={2.2} />
       </div>
     </foreignObject>
