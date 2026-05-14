@@ -3,19 +3,23 @@ import { writable } from 'svelte/store'
 
 /** @typedef {{
  *   enabled: boolean,
- *   detection: boolean,
+ *   detection?: string,
  *   detection_source?: string,
  *   lux?: number,
  *   baseline_lux?: number,
  *   ambient_lux?: number,
  *   ema_lux?: number,
  *   multiplier?: number,
+ *   current_multiplier?: number,
  *   pose_available?: boolean,
  *   zone?: string,
  *   posture?: string,
  *   confidence?: number,
  *   last_detection?: string | null,
  *   calibrated?: boolean,
+ *   calibrating?: boolean,
+ *   paused?: boolean,
+ *   exposure_value?: number,
  *   [key: string]: any
  * }} CameraStatus */
 

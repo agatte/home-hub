@@ -51,7 +51,6 @@
       scenes = all.filter((s) => s.source === 'preset' || s.source === 'custom')
 
       // Deduplicate bridge scenes by name
-      /** @type {Map<string, {id: string, name: string, ids: string[]}>} */
       /** @type {Map<string, { id: string, name: string, ids: string[] }>} */
       const grouped = new Map()
       for (const s of all.filter((s) => s.source === 'bridge')) {
