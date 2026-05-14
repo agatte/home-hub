@@ -920,6 +920,38 @@ class AutomationEngine:
         self._last_activity = mode
         self._last_activity_change = now
 
+        # Priority-bypass for autonomous overrides: when an autonomous setter
+        # (fusion_auto_apply, late_night_rescue, behavioral_predictor, …)
+        # locked a low-priority mode and an organic detector now reports a
+        # higher-priority one, let the new signal displace the override
+        # instead of being silently consumed. Bug surfaced 2026-05-12: a
+        # fusion_auto_apply idle@1 lock swallowed 7 organic gaming@5 /
+        # working@2 / watching@3 reports across 116min until the user manually
+        # tapped "Auto". User-set overrides (manual / api:* / guest / alexa:* /
+        # rule_suggestion_accept:*) are NEVER auto-displaced — explicit user
+        # intent always wins.
+        if (
+            self._manual_override
+            and self._override_source in AUTONOMOUS_PUSH_SOURCES
+            and new_priority > MODE_PRIORITY.get(self._override_mode, 0)
+        ):
+            logger.info(
+                "Autonomous override displaced by priority: %s (p=%d, "
+                "source=%s) → %s (p=%d, source=%s)",
+                self._override_mode,
+                MODE_PRIORITY.get(self._override_mode, 0),
+                self._override_source,
+                mode, new_priority, source,
+            )
+            self._manual_override = False
+            self._override_mode = None
+            self._override_source = None
+            self._override_time = None
+            await self._persist_override_state()
+            # Fall through to normal mode-application path below — per-light
+            # overrides are preserved (no _clear_per_light_overrides) because
+            # this displacement is autonomous, mirroring clear_override's gate.
+
         # If manual override is active, update detected mode silently but
         # never clear the override — only the user or the 4h timeout should.
         if self._manual_override:

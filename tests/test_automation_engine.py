@@ -353,6 +353,77 @@ class TestUserClearCooldown:
 
 
 # ---------------------------------------------------------------------------
+# Priority-bypass — higher-priority detector signal displaces an autonomous
+# (but not user) override. Closes the 2026-05-12 fusion_auto_apply idle-lock
+# bug where 7 organic working/gaming/watching reports were swallowed by an
+# idle override for 116min until manual user intervention.
+# ---------------------------------------------------------------------------
+
+class TestAutonomousOverrideDisplacement:
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+
+    async def test_higher_priority_displaces_fusion_auto_apply(self, engine):
+        # 5/12 scenario: fusion locks idle@1; process reports gaming@5.
+        await engine.set_manual_override("idle", source="fusion_auto_apply")
+        assert engine.manual_override is True
+
+        await engine.report_activity("gaming", source="process")
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "gaming"
+        assert engine._override_source is None
+        assert engine._override_mode is None
+
+    async def test_higher_priority_displaces_late_night_rescue(self, engine):
+        # Rescue set relax (priority 0 — not in MODE_PRIORITY map);
+        # working@2 should displace.
+        await engine.set_manual_override("relax", source="late_night_rescue")
+        await engine.report_activity("working", source="process")
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "working"
+
+    async def test_user_override_is_never_displaced(self, engine):
+        # User explicitly chose relax via the dashboard — gaming process
+        # signal must not auto-clear it.
+        await engine.set_manual_override("relax", source="api:1.2.3.4")
+        await engine.report_activity("gaming", source="process")
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "relax"
+
+    async def test_lower_priority_preserves_autonomous_override(self, engine):
+        # fusion locked watching@3; working@2 should NOT displace.
+        await engine.set_manual_override("watching", source="fusion_auto_apply")
+        await engine.report_activity("working", source="process")
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "watching"
+
+    async def test_same_priority_preserves_autonomous_override(self, engine):
+        # watching@3 == cooking@3 — strict-greater means override stays.
+        await engine.set_manual_override("watching", source="fusion_auto_apply")
+        await engine.report_activity("cooking", source="process")
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "watching"
+
+    async def test_zone_posture_relax_displaced_by_gaming(self, engine):
+        # zone_posture_rule pinned relax; user returns and starts gaming.
+        await engine.set_manual_override("relax", source="zone_posture_rule")
+        await engine.report_activity("gaming", source="process")
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "gaming"
+
+
+# ---------------------------------------------------------------------------
 # Per-light manual override preservation across mode changes
 # ---------------------------------------------------------------------------
 
