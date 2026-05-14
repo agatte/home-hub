@@ -5,7 +5,7 @@ Authenticates via session-based auth (POST /api/auth) and polls summary stats.
 """
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 import httpx
 
@@ -84,7 +84,7 @@ class PiholeService:
 
     def _raise_unreachable(
         self, message: str, cause: Optional[BaseException],
-    ) -> None:
+    ) -> NoReturn:
         """Log the root cause once, then raise ``PiholeUnreachableError``.
 
         While Pi-hole stays down every poll would otherwise spam the log
