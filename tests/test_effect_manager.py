@@ -207,11 +207,12 @@ class TestGetDesiredEffect:
         mgr = EffectManager(hue_v2=_make_hue_v2())
         assert mgr.get_desired_effect("social", "evening") is None
 
-    def test_relax_evening_returns_candle(self):
+    def test_relax_evening_returns_none(self):
+        # Candle removed from EFFECT_AUTO_MAP relax-eve on 2026-05-09
+        # (color-lock + persist-through-mode-change footgun). Manual
+        # candle still callable via scene browser / guest UI / MCP.
         mgr = EffectManager(hue_v2=_make_hue_v2())
-        result = mgr.get_desired_effect("relax", "evening")
-        assert isinstance(result, dict)
-        assert result["effect"] == "candle"
+        assert mgr.get_desired_effect("relax", "evening") is None
 
     def test_late_night_falls_back_to_night_for_undefined_modes(self):
         # watching defines glisten for evening + night; late_night should
@@ -222,19 +223,21 @@ class TestGetDesiredEffect:
         assert late == night
 
     def test_weather_fallback_only_when_mode_has_no_auto_effect(self):
-        # working has no auto-effect; rain in evening should overlay candle
+        # working has no auto-effect; snow in evening should overlay opal.
+        # (rain→candle was retired 2026-05-09 alongside the candle
+        # EFFECT_AUTO_MAP cleanup; snow→opal is the kept eve/night mapping)
         mgr = EffectManager(
             hue_v2=_make_hue_v2(),
-            weather_service=_make_weather("Rain showers"),
+            weather_service=_make_weather("Light snow"),
         )
         result = mgr.get_desired_effect("working", "evening")
-        assert result == "candle"
+        assert result == "opal"
 
     def test_weather_fallback_skipped_during_day(self):
-        # rain → candle is evening/night/late_night only
+        # snow → opal is evening/night only — day returns None
         mgr = EffectManager(
             hue_v2=_make_hue_v2(),
-            weather_service=_make_weather("Rain showers"),
+            weather_service=_make_weather("Light snow"),
         )
         assert mgr.get_desired_effect("working", "day") is None
 
@@ -267,12 +270,13 @@ class TestGetWeatherEffect:
         )
         assert mgr.get_weather_effect() == "sparkle"
 
-    def test_rain_maps_candle(self):
+    def test_rain_returns_none(self):
+        # rain → candle retired 2026-05-09; only thunderstorm + snow remain
         mgr = EffectManager(
             hue_v2=_make_hue_v2(),
             weather_service=_make_weather("Light rain"),
         )
-        assert mgr.get_weather_effect() == "candle"
+        assert mgr.get_weather_effect() is None
 
     def test_snow_maps_opal(self):
         mgr = EffectManager(
@@ -301,7 +305,8 @@ class TestGetWeatherEffect:
 
 class TestModuleConstants:
     def test_weather_effect_map_keys(self):
-        assert set(WEATHER_EFFECT_MAP.keys()) == {"thunderstorm", "rain", "snow"}
+        # rain removed 2026-05-09 alongside the candle EFFECT_AUTO_MAP cleanup
+        assert set(WEATHER_EFFECT_MAP.keys()) == {"thunderstorm", "snow"}
 
     def test_weather_skip_modes_excludes_relax_and_watching(self):
         # relax and watching are the two modes whose lighting reads weather;
