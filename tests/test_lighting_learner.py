@@ -125,6 +125,67 @@ class TestRecalculate:
         assert 180 <= learned["bri"] <= 186
 
 
+@pytest.mark.asyncio
+class TestRecalculateKitchenPair:
+    async def test_pair_modes_pool_l3_only(self, learner, ml_db):
+        # Only L3 has adjustments in working/day. After recalc, L4 should
+        # carry the same EMA via kitchen-pair pooling.
+        async with ml_db() as session:
+            for i in range(MIN_ADJUSTMENTS + 2):
+                session.add(_make_adjustment(
+                    light_id="3", mode="working", bri_after=180 + i,
+                ))
+            await session.commit()
+
+        await learner.recalculate()
+
+        slot = learner._preferences.get("working:day", {})
+        assert "3" in slot
+        assert "4" in slot
+        assert slot["3"] == slot["4"]
+
+    async def test_pair_modes_pool_split_history(self, learner, ml_db):
+        # L3 and L4 each have 3 adjustments — below MIN_ADJUSTMENTS alone,
+        # but pooled they cross the threshold and both light IDs learn.
+        async with ml_db() as session:
+            for _ in range(3):
+                session.add(_make_adjustment(
+                    light_id="3", mode="gaming", bri_after=150,
+                ))
+            for _ in range(3):
+                session.add(_make_adjustment(
+                    light_id="4", mode="gaming", bri_after=150,
+                ))
+            await session.commit()
+
+        await learner.recalculate()
+
+        slot = learner._preferences.get("gaming:day", {})
+        assert "3" in slot
+        assert "4" in slot
+        assert slot["3"] == slot["4"]
+
+    async def test_relax_does_not_pool(self, learner, ml_db):
+        # In relax (not pair-enforced), divergent L3 vs L4 EMAs are allowed.
+        async with ml_db() as session:
+            for i in range(MIN_ADJUSTMENTS + 2):
+                session.add(_make_adjustment(
+                    light_id="3", mode="relax", bri_after=80 + i,
+                ))
+            for i in range(MIN_ADJUSTMENTS + 2):
+                session.add(_make_adjustment(
+                    light_id="4", mode="relax", bri_after=140 + i,
+                ))
+            await session.commit()
+
+        await learner.recalculate()
+
+        slot = learner._preferences.get("relax:day", {})
+        assert "3" in slot
+        assert "4" in slot
+        assert slot["3"]["bri"] != slot["4"]["bri"]
+
+
 class TestComputeEma:
     def test_known_input(self):
         adjustments = [

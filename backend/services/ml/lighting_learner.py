@@ -36,6 +36,14 @@ LEARNABLE_PROPERTIES = ("bri", "hue", "sat", "ct")
 # Only learn from user-initiated triggers (not automation or scenes).
 USER_TRIGGERS = ("ws", "rest", "all_lights")
 
+# Kitchen pair: L3 + L4 must learn identical values in pair-enforced modes
+# (CLAUDE.md kitchen-pair invariant). Pooling lives in `recalculate`; other
+# modes (relax/sleeping/idle/custom scenes) keep independent EMAs.
+PAIR_ENFORCED_MODES = frozenset({
+    "working", "gaming", "watching", "cooking", "social", "gameday",
+})
+KITCHEN_PAIR_IDS = ("3", "4")
+
 
 class LightingPreferenceLearner(HealthTrackable):
     """EMA-based per-light preference learning from manual adjustments.
@@ -146,6 +154,25 @@ class LightingPreferenceLearner(HealthTrackable):
                 period = get_time_period(adj.timestamp)
                 key = f"{adj.light_id}:{adj.mode_at_time}:{period}"
                 groups[key].append(adj)
+
+            # Kitchen-pair pooling: in pair-enforced modes, L3 and L4 share
+            # one adjustment stream so they learn identical EMAs. Without
+            # this, asymmetric history (2026-04-16 seed: L3=110 vs L4=90)
+            # propagates forever and silently desyncs the pendants.
+            processed_pairs: set[tuple[str, str]] = set()
+            for key in list(groups.keys()):
+                light_id, mode, period = key.split(":", 2)
+                if light_id not in KITCHEN_PAIR_IDS or mode not in PAIR_ENFORCED_MODES:
+                    continue
+                if (mode, period) in processed_pairs:
+                    continue
+                l3_key = f"3:{mode}:{period}"
+                l4_key = f"4:{mode}:{period}"
+                pooled = groups.get(l3_key, []) + groups.get(l4_key, [])
+                if pooled:
+                    groups[l3_key] = pooled
+                    groups[l4_key] = pooled
+                processed_pairs.add((mode, period))
 
             # Compute EMA for each group with enough data
             new_prefs: dict[str, dict[str, dict[str, Any]]] = {}
