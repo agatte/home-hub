@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.services.pihole_service import PiholeService, SUMMARY_CACHE_TTL
+from backend.services.pihole_service import (
+    PiholeService,
+    PiholeUnreachableError,
+    SUMMARY_CACHE_TTL,
+)
 
 
 def _make_service():
@@ -229,3 +233,186 @@ class TestConnected:
         svc = _make_service()
         svc._summary_cache = {"total_queries": 100}
         assert svc.connected is True
+
+
+# ---------------------------------------------------------------------------
+# Unreachable error surface (#28)
+# ---------------------------------------------------------------------------
+
+
+class TestUnreachableError:
+    """When Pi-hole is down, the service must raise a typed error so the
+    route can map to 503 instead of a chained 500 / generic 502.
+
+    Repeated polls while it stays down must log root cause once, not on
+    every retry — long outages used to flood journalctl + Sentry with
+    duplicate stacks.
+    """
+
+    async def test_reauth_failure_raises_typed_error(self):
+        svc = _make_service()
+        svc._sid = "old-sid"
+
+        unauthorized = MagicMock()
+        unauthorized.status_code = 401
+
+        # First request: stale 401. Re-auth client returns valid=False.
+        first_client = AsyncMock()
+        first_client.request = AsyncMock(return_value=unauthorized)
+        first_client.__aenter__ = AsyncMock(return_value=first_client)
+        first_client.__aexit__ = AsyncMock(return_value=False)
+
+        reauth_fail = _auth_response(valid=False)
+        reauth_client = _mock_client([reauth_fail])
+
+        call_count = 0
+        def client_factory(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return first_client if call_count == 1 else reauth_client
+
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            side_effect=client_factory,
+        ):
+            with pytest.raises(PiholeUnreachableError):
+                await svc._request("GET", "/api/stats/summary")
+
+    async def test_persistent_401_after_reauth_raises_typed_error(self):
+        svc = _make_service()
+        svc._sid = "old-sid"
+
+        unauthorized = MagicMock()
+        unauthorized.status_code = 401
+
+        # First request 401, re-auth succeeds, retry still 401 → bad key.
+        retry_client = AsyncMock()
+        retry_client.request = AsyncMock(
+            side_effect=[unauthorized, unauthorized],
+        )
+        retry_client.__aenter__ = AsyncMock(return_value=retry_client)
+        retry_client.__aexit__ = AsyncMock(return_value=False)
+        reauth_client = _mock_client([_auth_response(valid=True)])
+
+        call_count = 0
+        def client_factory(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return retry_client if call_count == 1 else reauth_client
+
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            side_effect=client_factory,
+        ):
+            with pytest.raises(PiholeUnreachableError):
+                await svc._request("GET", "/api/stats/summary")
+
+    async def test_network_error_raises_typed_error_with_cause(self):
+        svc = _make_service()
+        svc._sid = "test-sid"
+
+        fail_client = AsyncMock()
+        fail_client.request = AsyncMock(
+            side_effect=ConnectionError("network unreachable"),
+        )
+        fail_client.__aenter__ = AsyncMock(return_value=fail_client)
+        fail_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            return_value=fail_client,
+        ):
+            with pytest.raises(PiholeUnreachableError) as exc_info:
+                await svc._request("GET", "/api/stats/summary")
+        assert isinstance(exc_info.value.__cause__, ConnectionError)
+
+    async def test_root_cause_logged_once_across_repeat_failures(self, caplog):
+        """While Pi-hole stays down, only the first failure logs at ERROR;
+        subsequent failures drop to DEBUG so journalctl/Sentry don't fill
+        up with the same stack on every 60s poll."""
+        svc = _make_service()
+        svc._sid = "test-sid"
+
+        fail_client = AsyncMock()
+        fail_client.request = AsyncMock(
+            side_effect=ConnectionError("boom"),
+        )
+        fail_client.__aenter__ = AsyncMock(return_value=fail_client)
+        fail_client.__aexit__ = AsyncMock(return_value=False)
+
+        import logging as _logging
+        caplog.set_level(_logging.DEBUG, logger="home_hub.pihole")
+
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            return_value=fail_client,
+        ):
+            for _ in range(3):
+                with pytest.raises(PiholeUnreachableError):
+                    await svc._request("GET", "/api/stats/summary")
+
+        error_records = [
+            r for r in caplog.records
+            if r.levelno >= _logging.ERROR and "unreachable" in r.message.lower()
+        ]
+        debug_records = [
+            r for r in caplog.records
+            if r.levelno == _logging.DEBUG
+            and "still unreachable" in r.message.lower()
+        ]
+        assert len(error_records) == 1
+        assert len(debug_records) == 2
+
+    async def test_recovery_resets_log_suppression(self):
+        """After a successful request the flag flips back to False so the
+        *next* outage gets a fresh ERROR log instead of being swallowed."""
+        svc = _make_service()
+        svc._sid = "test-sid"
+        svc._unreachable_logged = True  # simulate prior failure
+
+        data_client = _mock_client([_ok_response({"queries": {"total": 1}})])
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            return_value=data_client,
+        ):
+            await svc._request("GET", "/api/stats/summary")
+        assert svc._unreachable_logged is False
+
+    async def test_get_summary_falls_back_to_stale_cache(self):
+        """The cache fallback survives the typed-error refactor — kiosk
+        vitals stay populated through transient outages."""
+        svc = _make_service()
+        svc._summary_cache = {"total_queries": 500, "stale": True}
+        svc._summary_cache_time = time.time() - SUMMARY_CACHE_TTL - 1
+        svc._sid = "test-sid"
+
+        fail_client = AsyncMock()
+        fail_client.request = AsyncMock(side_effect=ConnectionError("down"))
+        fail_client.__aenter__ = AsyncMock(return_value=fail_client)
+        fail_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            return_value=fail_client,
+        ):
+            result = await svc.get_summary()
+        assert result["stale"] is True
+
+    async def test_get_summary_propagates_when_no_cache(self):
+        """Without a cache to fall back on, propagate the typed error so
+        the /api/pihole/stats route can return 503."""
+        svc = _make_service()
+        svc._sid = "test-sid"
+        # No cache pre-populated.
+
+        fail_client = AsyncMock()
+        fail_client.request = AsyncMock(side_effect=ConnectionError("down"))
+        fail_client.__aenter__ = AsyncMock(return_value=fail_client)
+        fail_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "backend.services.pihole_service.httpx.AsyncClient",
+            return_value=fail_client,
+        ):
+            with pytest.raises(PiholeUnreachableError):
+                await svc.get_summary()

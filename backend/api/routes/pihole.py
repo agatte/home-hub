@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.api.auth import require_api_key
+from backend.services.pihole_service import PiholeUnreachableError
 
 logger = logging.getLogger("home_hub.pihole")
 
 router = APIRouter(prefix="/api/pihole", tags=["pihole"])
 
 NOT_CONFIGURED = "Pi-hole service not configured — set PIHOLE_API_URL and PIHOLE_API_KEY in .env"
+UNREACHABLE_DETAIL = "Pi-hole unreachable"
 
 
 def _get_service(request: Request):
@@ -22,6 +24,14 @@ def _get_service(request: Request):
     if not service:
         raise HTTPException(status_code=503, detail=NOT_CONFIGURED)
     return service
+
+
+def _unreachable(err: PiholeUnreachableError) -> HTTPException:
+    """Map a service-layer unreachable error to a 503 with cause detail."""
+    return HTTPException(
+        status_code=503,
+        detail=f"{UNREACHABLE_DETAIL}: {err}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +43,10 @@ def _get_service(request: Request):
 async def get_pihole_stats(request: Request) -> dict:
     """Get Pi-hole summary stats (60s cache)."""
     service = _get_service(request)
-    data = await service.get_summary()
+    try:
+        data = await service.get_summary()
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     if not data:
         raise HTTPException(status_code=502, detail="Pi-hole data unavailable")
     return {"status": "ok", "pihole": data}
@@ -43,7 +56,10 @@ async def get_pihole_stats(request: Request) -> dict:
 async def get_top_blocked(request: Request, count: int = 10) -> dict:
     """Get the most frequently blocked domains (120s cache)."""
     service = _get_service(request)
-    data = await service.get_top_blocked(count=count)
+    try:
+        data = await service.get_top_blocked(count=count)
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     if data is None:
         raise HTTPException(status_code=502, detail="Pi-hole data unavailable")
     return {"status": "ok", "top_blocked": data}
@@ -63,9 +79,10 @@ class DnsHostBody(BaseModel):
 async def get_dns_hosts(request: Request) -> dict:
     """List all custom local DNS records."""
     service = _get_service(request)
-    data = await service.get_dns_hosts()
-    if data is None:
-        raise HTTPException(status_code=502, detail="Pi-hole DNS data unavailable")
+    try:
+        data = await service.get_dns_hosts()
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     return {"status": "ok", "dns_hosts": data}
 
 
@@ -73,9 +90,10 @@ async def get_dns_hosts(request: Request) -> dict:
 async def add_dns_host(body: DnsHostBody, request: Request) -> dict:
     """Add a local DNS record."""
     service = _get_service(request)
-    ok = await service.add_dns_host(body.ip, body.hostname)
-    if not ok:
-        raise HTTPException(status_code=502, detail="Failed to add DNS record")
+    try:
+        await service.add_dns_host(body.ip, body.hostname)
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     return {"status": "ok"}
 
 
@@ -83,9 +101,10 @@ async def add_dns_host(body: DnsHostBody, request: Request) -> dict:
 async def delete_dns_host(ip: str, hostname: str, request: Request) -> dict:
     """Remove a local DNS record."""
     service = _get_service(request)
-    ok = await service.delete_dns_host(ip, hostname)
-    if not ok:
-        raise HTTPException(status_code=502, detail="Failed to delete DNS record")
+    try:
+        await service.delete_dns_host(ip, hostname)
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     return {"status": "ok"}
 
 
@@ -102,9 +121,10 @@ class BlocklistBody(BaseModel):
 async def get_blocklists(request: Request) -> dict:
     """List all configured adlists."""
     service = _get_service(request)
-    data = await service.get_blocklists()
-    if data is None:
-        raise HTTPException(status_code=502, detail="Pi-hole blocklist data unavailable")
+    try:
+        data = await service.get_blocklists()
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     return {"status": "ok", "lists": data}
 
 
@@ -112,9 +132,10 @@ async def get_blocklists(request: Request) -> dict:
 async def add_blocklist(body: BlocklistBody, request: Request) -> dict:
     """Add a blocklist URL."""
     service = _get_service(request)
-    ok = await service.add_blocklist(body.address)
-    if not ok:
-        raise HTTPException(status_code=502, detail="Failed to add blocklist")
+    try:
+        await service.add_blocklist(body.address)
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     return {"status": "ok"}
 
 
@@ -122,7 +143,8 @@ async def add_blocklist(body: BlocklistBody, request: Request) -> dict:
 async def delete_blocklist(address: str, request: Request) -> dict:
     """Remove a blocklist by URL."""
     service = _get_service(request)
-    ok = await service.delete_blocklist(unquote(address))
-    if not ok:
-        raise HTTPException(status_code=502, detail="Failed to delete blocklist")
+    try:
+        await service.delete_blocklist(unquote(address))
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
     return {"status": "ok"}

@@ -15,6 +15,15 @@ SUMMARY_CACHE_TTL = 60  # 1 minute
 TOP_BLOCKED_CACHE_TTL = 120  # 2 minutes
 
 
+class PiholeUnreachableError(Exception):
+    """Pi-hole is down, re-authentication failed, or the API key is wrong.
+
+    Distinct from "endpoint returned bad data" — callers should map this
+    to a 503 (upstream unavailable) rather than a 500/502. The original
+    exception (network error, HTTP error) is preserved as ``__cause__``.
+    """
+
+
 class PiholeService:
     """Cached Pi-hole v6 API client with session-based authentication."""
 
@@ -31,6 +40,11 @@ class PiholeService:
         # Top blocked cache
         self._top_blocked_cache: Optional[list[dict[str, Any]]] = None
         self._top_blocked_cache_time: float = 0
+
+        # Suppresses repeat ERROR-level logs while Pi-hole stays down.
+        # Reset on the next successful request so a real outage→recovery
+        # still leaves a clear pair of log lines.
+        self._unreachable_logged: bool = False
 
     @property
     def connected(self) -> bool:
@@ -68,17 +82,52 @@ class PiholeService:
             headers["X-FTL-CSRF"] = self._csrf
         return headers
 
+    def _raise_unreachable(
+        self, message: str, cause: Optional[BaseException],
+    ) -> None:
+        """Log the root cause once, then raise ``PiholeUnreachableError``.
+
+        While Pi-hole stays down every poll would otherwise spam the log
+        with the same stack. We log at error level only on the transition
+        from healthy → unreachable; subsequent failures log at debug
+        until the next successful request flips ``_unreachable_logged``
+        back to False.
+        """
+        if not self._unreachable_logged:
+            logger.error(
+                "Pi-hole unreachable: %s%s",
+                message,
+                f" ({cause!r})" if cause is not None else "",
+                exc_info=cause is not None,
+            )
+            self._unreachable_logged = True
+        else:
+            logger.debug("Pi-hole still unreachable: %s (%r)", message, cause)
+        err = PiholeUnreachableError(message)
+        if cause is not None:
+            raise err from cause
+        raise err
+
     async def _request(
         self,
         method: str,
         path: str,
         params: Optional[dict] = None,
         json_body: Optional[dict] = None,
-    ) -> Optional[dict]:
-        """Make an authenticated request with 401 retry."""
+    ) -> dict:
+        """Make an authenticated request with 401 retry.
+
+        Raises:
+            PiholeUnreachableError: re-authentication failed, the retried
+                request still returned 401 (bad credentials), or a
+                network-level failure occurred. The original cause is
+                attached via ``__cause__``.
+        """
         if not self._sid:
             if not await self._authenticate():
-                return None
+                self._raise_unreachable(
+                    "initial authentication failed", None,
+                )
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -90,11 +139,13 @@ class PiholeService:
                     json=json_body,
                 )
 
-                # Session expired — re-authenticate and retry once
+                # Session expired — re-authenticate and retry once.
                 if resp.status_code == 401:
                     logger.info("Pi-hole session expired, re-authenticating")
                     if not await self._authenticate():
-                        return None
+                        self._raise_unreachable(
+                            "re-authentication failed after 401", None,
+                        )
                     resp = await client.request(
                         method,
                         f"{self._api_url}{path}",
@@ -102,41 +153,64 @@ class PiholeService:
                         params=params,
                         json=json_body,
                     )
+                    # Persistent 401 after a successful re-auth means the
+                    # credentials are wrong for this endpoint — fail loud
+                    # rather than masking with raise_for_status's generic
+                    # HTTPStatusError chain.
+                    if resp.status_code == 401:
+                        self._raise_unreachable(
+                            "401 persisted after re-auth — check "
+                            "PIHOLE_API_KEY",
+                            None,
+                        )
 
                 resp.raise_for_status()
-                # Some endpoints return empty body (204)
+                # Success — reset the rate-limit flag so the next outage
+                # gets a fresh ERROR log instead of being swallowed.
+                self._unreachable_logged = False
+                # Some endpoints return empty body (204).
                 if resp.status_code == 204 or not resp.content:
                     return {}
                 return resp.json()
 
+        except PiholeUnreachableError:
+            raise
         except Exception as e:
-            logger.error("Pi-hole API %s %s failed: %s", method, path, e)
-            return None
+            self._raise_unreachable(f"{method} {path} failed", e)
+            return {}  # unreachable; satisfies type checker
 
-    async def _get(self, path: str, params: Optional[dict] = None) -> Optional[dict]:
-        """Make an authenticated GET request."""
+    async def _get(self, path: str, params: Optional[dict] = None) -> dict:
+        """Make an authenticated GET request.
+
+        Raises :class:`PiholeUnreachableError` on hard failure (see
+        :meth:`_request`). Returns the decoded JSON body on success.
+        """
         return await self._request("GET", path, params=params)
 
     async def get_summary(self) -> Optional[dict[str, Any]]:
         """
         Get Pi-hole summary stats.
 
-        Returns cached data if fresh (< 60s). Otherwise fetches from
-        the Pi-hole API.
+        Returns cached data if fresh (< 60s). On a fresh-fetch failure,
+        falls back to whatever stale cache exists. With no cache to
+        fall back on, propagates :class:`PiholeUnreachableError` so the
+        route can return 503.
 
         Returns:
             Dict with total_queries, blocked, percent_blocked,
-            domains_on_blocklist, status — or None on failure.
+            domains_on_blocklist, status — or stale cache on transient
+            failure.
         """
         now = time.time()
         if self._summary_cache and (now - self._summary_cache_time) < SUMMARY_CACHE_TTL:
             return self._summary_cache
 
-        data = await self._get("/api/stats/summary")
-        if data is None:
+        try:
+            data = await self._get("/api/stats/summary")
+        except PiholeUnreachableError:
             if self._summary_cache:
                 return self._summary_cache
-            return None
+            raise
 
         queries = data.get("queries", {})
         gravity = data.get("gravity", {})
@@ -168,10 +242,9 @@ class PiholeService:
         """
         Get the most frequently blocked domains.
 
-        Returns cached data if fresh (< 120s).
-
-        Returns:
-            List of dicts with domain and count — or None on failure.
+        Returns cached data if fresh (< 120s). Falls back to stale cache
+        on transient failure; propagates :class:`PiholeUnreachableError`
+        when there's no cache to serve.
         """
         now = time.time()
         if (
@@ -180,11 +253,12 @@ class PiholeService:
         ):
             return self._top_blocked_cache
 
-        data = await self._get("/api/stats/top_blocked", params={"count": count})
-        if data is None:
+        try:
+            data = await self._get("/api/stats/top_blocked", params={"count": count})
+        except PiholeUnreachableError:
             if self._top_blocked_cache:
                 return self._top_blocked_cache
-            return None
+            raise
 
         # Pi-hole v6 returns {"top_blocked": [{"domain": "...", "count": N}, ...]}
         raw = data.get("top_blocked", [])
@@ -204,14 +278,15 @@ class PiholeService:
     # Local DNS management
     # -----------------------------------------------------------------
 
-    async def get_dns_hosts(self) -> Optional[list[dict[str, str]]]:
-        """Get all custom local DNS records."""
+    async def get_dns_hosts(self) -> list[dict[str, str]]:
+        """Get all custom local DNS records.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        """
         data = await self._get("/api/config/dns/hosts")
-        if data is None:
-            return None
         # Pi-hole v6 returns {"config": {"dns": {"hosts": [...]}}}
         # or may return the list directly depending on version
-        hosts = data
+        hosts: Any = data
         if isinstance(data, dict):
             hosts = (
                 data.get("config", {}).get("dns", {}).get("hosts", [])
@@ -230,55 +305,64 @@ class PiholeService:
         return result
 
     async def add_dns_host(self, ip: str, hostname: str) -> bool:
-        """Add a local DNS record. Returns True on success."""
+        """Add a local DNS record.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        Returns True on a successful API call.
+        """
         encoded = f"{ip} {hostname}".replace(" ", "%20")
-        resp = await self._request("PUT", f"/api/config/dns/hosts/{encoded}")
-        if resp is not None:
-            logger.info("Pi-hole DNS added: %s → %s", hostname, ip)
-            return True
-        return False
+        await self._request("PUT", f"/api/config/dns/hosts/{encoded}")
+        logger.info("Pi-hole DNS added: %s → %s", hostname, ip)
+        return True
 
     async def delete_dns_host(self, ip: str, hostname: str) -> bool:
-        """Delete a local DNS record. Returns True on success."""
+        """Delete a local DNS record.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        Returns True on a successful API call.
+        """
         encoded = f"{ip} {hostname}".replace(" ", "%20")
-        resp = await self._request("DELETE", f"/api/config/dns/hosts/{encoded}")
-        if resp is not None:
-            logger.info("Pi-hole DNS removed: %s → %s", hostname, ip)
-            return True
-        return False
+        await self._request("DELETE", f"/api/config/dns/hosts/{encoded}")
+        logger.info("Pi-hole DNS removed: %s → %s", hostname, ip)
+        return True
 
     # -----------------------------------------------------------------
     # Blocklist management
     # -----------------------------------------------------------------
 
-    async def get_blocklists(self) -> Optional[list[dict[str, Any]]]:
-        """Get all configured adlists."""
+    async def get_blocklists(self) -> list[dict[str, Any]]:
+        """Get all configured adlists.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        """
         data = await self._get("/api/lists")
-        if data is None:
-            return None
         lists = data.get("lists", data) if isinstance(data, dict) else data
         if not isinstance(lists, list):
             return []
         return lists
 
     async def add_blocklist(self, address: str, enabled: bool = True) -> bool:
-        """Add a blocklist URL. Returns True on success."""
-        resp = await self._request(
+        """Add a blocklist URL.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        Returns True on a successful API call.
+        """
+        await self._request(
             "POST",
             "/api/lists",
             params={"type": "block"},
             json_body={"address": address, "enabled": enabled},
         )
-        if resp is not None:
-            logger.info("Pi-hole blocklist added: %s", address)
-            return True
-        return False
+        logger.info("Pi-hole blocklist added: %s", address)
+        return True
 
     async def delete_blocklist(self, address: str) -> bool:
-        """Remove a blocklist URL. Returns True on success."""
+        """Remove a blocklist URL.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        Returns True on a successful API call.
+        """
         encoded = address.replace("/", "%2F").replace(":", "%3A")
-        resp = await self._request("DELETE", f"/api/lists/{encoded}")
-        if resp is not None:
-            logger.info("Pi-hole blocklist removed: %s", address)
-            return True
-        return False
+        await self._request("DELETE", f"/api/lists/{encoded}")
+        logger.info("Pi-hole blocklist removed: %s", address)
+        return True
