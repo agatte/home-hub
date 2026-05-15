@@ -1582,7 +1582,7 @@ cleanup landed:
 
 ### Phase 4: Game Day (May 2026, ahead of schedule)
 
-Originally targeted July–August 2026. Phase A + Phase B both shipped in early May; preseason 2026-08-15 is now a tuning-and-validation window rather than a build window.
+Originally targeted July–August 2026. Phase A + Phase B both shipped in early May; preseason 2026-08-13 is now a tuning-and-validation window rather than a build window.
 
 - ✓ **Phase A complete (2026-05-06)** — spec, interface contracts, mockup placeholder. See `docs/GAMEDAY_SPEC.md`. v1 scope: TD + FG + kickoff + end-of-game. Pre-game ambient + commercial deferred to v2. Mode trigger: auto-flip 30 min pre-kickoff via ESPN schedule + manual override. Mode integration: first-class, priority 6 (top auto-detected slot).
 - ✓ **Phase B complete (2026-05-07)** — full worktree-fleet experiment validated end-to-end (see `docs/AGENT_STRATEGY.md` Part 4 for retrospective):
@@ -1593,7 +1593,7 @@ Originally targeted July–August 2026. Phase A + Phase B both shipped in early 
   - Integration: `bootstrap.py` wires both services + registers callbacks; `init.js` central WS dispatcher routes `gameday_state`/`gameday_play`/`gameday_celebration` into the store; `+page.svelte` imports the FootballField component.
   - **Dynamic celebration TTS volume** (Decision 1.8, also 2026-05-07): `celebration_volume_policy.py` is a pure function that scales Sonos volume by WPA (when ESPN's win-probability has indexed the play) or margin+time fallback, with apartment-context modifiers (sleeping/DND/late-night/camera-absent suppressions or caps) and silent on losing blowouts. WPA is sourced from ESPN's `summary.winprobability[]` array, sign-flipped for away games. See GAMEDAY_SPEC.md §9.
 - ✓ **Phase C complete (2026-05-07)** — `gameday` added to FloatingNav (Trophy icon between Music and Analytics), MODE_CONFIG entry in `theme.js` with Colts blue (#003594) + silver/gold generative palette, `HOMEHUB_MODE` Alexa slot + lambda `VALID_MODES` + disambiguation prompt. Synonyms: "game day", "colts", "colts game", "football", "football mode". Verified end-to-end via Alexa: "set relax mode" round-tripped to `activity_events` with `source=alexa:SetModeIntent` (the verification surfaced and led to fixing a latent source-attribution bug in `set_manual_override` — see commit `31a1edf`).
-- **Live preseason validation 2026-08-15** — first real Colts game. Synthetic test endpoint (`POST /api/gameday/test/{event}`) exercises the full pipeline today; preseason is for iterating on palette/TTS/timings against reality with the lighting-curator subagent.
+- **Live preseason validation 2026-08-13** — first real Colts game. Synthetic test endpoint (`POST /api/gameday/test/{event}`) exercises the full pipeline today; preseason is for iterating on palette/TTS/timings against reality with the lighting-curator subagent.
 
 ### Phase 4.5: Machine Learning (April-September 2026)
 

@@ -716,7 +716,7 @@ async def lifespan(app: FastAPI):
     # play + state-transition events and runs light + TTS celebration sequences.
     # Cooldown enforced internally (8s between any two sequences). Light
     # sequence values are placeholders; iterate with lighting-curator subagent
-    # before preseason 2026-08-15.
+    # before preseason 2026-08-13 (regular season opens Sunday 2026-09-13).
     from backend.services.celebration_orchestrator import CelebrationOrchestrator
     celebration = CelebrationOrchestrator(
         hue_service=hue,

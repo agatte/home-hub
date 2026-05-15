@@ -2,7 +2,7 @@
 
 > **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). **Phase C shipped 2026-05-07** — `gameday` exposed in FloatingNav, MODE_CONFIG theme entry, Alexa `HOMEHUB_MODE` slot + lambda `VALID_MODES`. Voice-end-to-end verified.
 >
-> Live preseason validation: 2026-08-15. Remaining work: SEQUENCES palette/TTS iteration with lighting-curator review.
+> Live preseason validation: 2026-08-13. Remaining work: SEQUENCES palette/TTS iteration with lighting-curator review.
 
 Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; a 3D Threlte football field on the SvelteKit page mirrors live game state. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 
@@ -337,7 +337,7 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 - **ESPN play description parser quality** — ✓ **answered 2026-05-07.** Slice A's real-fixture test against `tests/fixtures/espn_colts_2025_summary.json` (Colts vs Dolphins 2025-09-07) confirmed both ESPN response formats parse cleanly: canonical `scoringPlays[]` full names ("Daniel Jones 1 Yd Rush", "Michael Pittman Jr. 27 Yd pass from Daniel Jones") AND abbreviated `drives.previous[].plays[]` initials ("D.Jones", "S.Shrader"). The parser tries TD-pass → TD-rush → abbreviated regexes in order; FGs try full-name → abbreviated. Tests cover both paths.
 - **Light sequence values** — ✓ initial values shipped + curator-reviewed. Slice B agent authored placeholder Colts-blue/white pulse sequences for TD/FG/kickoff/end-of-game; lighting-curator caught + we applied an over-saturation fix (`_COLTS_BLUE_SAT` 254 → 215) before merge. Iterative palette authoring with the curator during preseason is tracked in [#5](https://github.com/agatte/home-hub/issues/5).
 - **Pre-game / commercial behavior in v2** — still deferred. Pre-game ambient mode (continuous Colts-tinted lighting before kickoff) and commercial-break behavior (lights restore to mode default + Sonos resume on commercials) are out of scope for v1. Revisit post-preseason.
-- **Preseason 2026-08-15 first test** — pending. 2026 schedule typically publishes May–June; check ESPN once published. The synthetic `/api/gameday/test/{event}` endpoint exercises the full pipeline (play_event → orchestrator → lights + TTS + WS) so we have confidence in the wiring; the preseason game is for tuning palette/timings/TTS lines against reality.
+- **Preseason 2026-08-13 first test** — pending. 2026 schedule typically publishes May–June; check ESPN once published. The synthetic `/api/gameday/test/{event}` endpoint exercises the full pipeline (play_event → orchestrator → lights + TTS + WS) so we have confidence in the wiring; the preseason game is for tuning palette/timings/TTS lines against reality.
 - **Celebration EventLogger gap** — ✓ closed 2026-05-07 (commit `34fc550`). `CelebrationOrchestrator._run_light_steps` now mirrors every successful `set_light` to `log_light_adjustment` with `trigger=f"celebration:{sequence_key}"`. Query celebrations via `WHERE trigger LIKE 'celebration:%'`; journalctl is now corroboration, not primary.
 - **Agent fleet wiring** — ✓ shipped 2026-05-07. `gameday-preflight` fires from runbook entry #12 (preseason T-7) and #13 (weekly Sunday Aug-Jan) with bye-week early-exit. `gameday-postmortem` auto-fires from the loop's pre-fire detector when a `gameday:auto` window closes (real games only; manual `set_mode` doesn't trip it). See `docs/AGENT_STRATEGY.md` Part 5 for the full T-7d → T+90 timeline.
 
@@ -425,7 +425,7 @@ Final clamp `[5, 50]`.
 
 ## 10. Pre-game ambient mode (v2 design)
 
-**Status:** spec only. Implementation tracked in [#9](https://github.com/agatte/home-hub/issues/9); target before preseason 2026-08-15.
+**Status:** spec only. Implementation tracked in [#9](https://github.com/agatte/home-hub/issues/9); target before preseason 2026-08-13.
 
 The pre-game window is the hour leading up to kickoff. The current architecture has the apartment doing whatever it was doing (working, idle, etc) right up until the T-30 auto-flip lands the gameday baseline. v2 fills that hour with anticipation: lighting starts shifting earlier, and audio reads the season's stakes the same way `compute_celebration_volume` reads each play's stakes.
 
@@ -538,11 +538,11 @@ ESPN provides playoff probability via `summary.predictor.homeTeam.playoffProbabi
 
 **Synthetic endpoint** for live exercising: `POST /api/gameday/test/pregame`. Body: `{"opponent": "Houston Texans", "stakes_tier": "big_stakes"}`. Triggers a real (non-mock-time) flip to pregameday for 30 seconds, fires the audio policy with the supplied stakes_tier, then auto-clears. Useful for "make the lights do the thing" without altering the real schedule.
 
-**Pre-preseason validation** (during dev, before 2026-08-15):
+**Pre-preseason validation** (during dev, before 2026-08-13):
 - Unit test coverage on `pregame_audio_policy.compute_pregame_audio` (target: 25+ tests).
 - Synthetic time injection test covering the T-60 → T-30 → T+30 lifecycle.
 - One manual fire of `POST /api/gameday/test/pregame` from the Latitude — apartment lights flip to pregameday, TTS plays, Sonos hype starts. Visual + audible verification.
-- Preseason 2026-08-15 is the first real-game validation. Note the postmortem digest entry should specifically note pre-game behavior (lighting palette feel + audio decision) for tuning.
+- Preseason 2026-08-13 is the first real-game validation. Note the postmortem digest entry should specifically note pre-game behavior (lighting palette feel + audio decision) for tuning.
 
 ### 10.7 Open questions / iteration
 

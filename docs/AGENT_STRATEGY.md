@@ -359,7 +359,8 @@ Entries in `~/.claude/runbooks/homehub-checkbacks.md` that dispatch specialist a
 | #0 (hourly anomaly sweep) | every ~60 min | `homehub-verifier` (inline recipe) |
 | #1 (ML model evaluator) | weekly Mon 10:00 ET | `ml-model-evaluator` |
 | #7 (override-rate trend) | weekly Sun 16:00 ET | `override-rate-tracker` |
-| #12 (preseason readiness) | once, 2026-08-08 | `gameday-preflight` |
+| #12 (preseason readiness) | once, 2026-08-06 | `gameday-preflight` |
+| #30 (regular-season Week 1 readiness) | once, 2026-09-11 | `gameday-preflight` |
 | #13 (weekly game-day preflight) | weekly Sun 09:00 ET (Aug-Jan) | `gameday-preflight` |
 | #14 (doc drift audit) | monthly first-Mon 11:00 ET | `doc-drift-checker` |
 | #15 (doc curator audit) | monthly third-Mon 11:00 ET | `doc-curator` |
@@ -383,6 +384,6 @@ Forward-looking candidates, in priority order:
 1. ✓ **Game Day Phase C integration shipped 2026-05-07** — `gameday` added to FloatingNav, theme.js MODE_CONFIG, Alexa HOMEHUB_MODE slot + lambda VALID_MODES. Voice end-to-end verified ("set relax mode" → `activity_events.source=alexa:SetModeIntent`). The verification surfaced a latent source-attribution bug in `set_manual_override` (engine hardcoded `source="manual"` instead of threading the route's `caller`), fixed in commit `31a1edf`. Documented in memory `project_override_caller_telemetry.md`.
 2. ✓ **β EventLogger wiring + agent fleet automation pass shipped 2026-05-07** — celebrations now write to `light_adjustments` with `trigger="celebration:<key>"` (commit `34fc550`); `gameday-preflight` + `gameday-postmortem` registered as spawnable; runbook entries #12 #13 + Pre-fire detector wired; lighting-curator hook elevated to required-ack via `[curator-reviewed]` token. Full trigger map in Part 5 above.
 3. ✓ **ML autonomy + dev-velocity tooling rounds shipped 2026-05-11** — 15 new agents, 11 new skills, 3 new hooks, 4 new MCP servers, 2 LSPs, 5 plugins, 4 data files, 7 new runbook entries. See Part 6 above for the full reference.
-4. **Lighting palette + TTS line iteration for SEQUENCES** — Slice B placeholders still in place. User-driven authoring with curator review (now required-ack via the elevated hook + curator's section K celebration rules) on each diff before preseason 2026-08-15. Not an agent task per se; iterative collaboration.
+4. **Lighting palette + TTS line iteration for SEQUENCES** — Slice B placeholders still in place. User-driven authoring with curator review (now required-ack via the elevated hook + curator's section K celebration rules) on each diff before preseason 2026-08-13. Not an agent task per se; iterative collaboration.
 5. **Pre-game ambient mode design** — was Game Day v2 deferred. Continuous Colts-tinted lighting earlier than T-30 (or extended baseline behavior). Spec session needed before implementation; revisit post-preseason once real-game data informs whether the pre-game ambient adds value.
 6. **Memory hygiene auditor** (Tier 1) — defer. Quarterly cadence is too slow; `doc-drift-checker` (shipped 2026-05-07) covers structural drift, `doc-curator` (shipped 2026-05-07) covers long-form prose drift, and the Aug 1 remote agent runs the broad audit quarterly.
