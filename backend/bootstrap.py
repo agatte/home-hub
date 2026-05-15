@@ -669,6 +669,34 @@ async def lifespan(app: FastAPI):
         enabled=True,
     ))
 
+    # Playoff-state refresh (GAMEDAY_SPEC §10.5) — Tuesday 06:00 ET. Pulls
+    # ESPN team schedule, derives record + season_week, persists to
+    # app_settings["gameday_playoff_state"] so the pregameday audio handler
+    # has real stakes inputs. Phase 4 ships with playoff_probability=None
+    # (graceful fallback to standard tier); future iteration backfills it
+    # from ESPN's predictor endpoint.
+    from backend.services.playoff_state_refresh import (
+        refresh_playoff_state,
+        REFRESH_HOUR_ET,
+        REFRESH_MINUTE_ET,
+        REFRESH_WEEKDAY,
+    )
+
+    async def playoff_state_refresh() -> None:
+        # routines.save_setting handles the DB write — passed as a callable
+        # so playoff_state_refresh stays DB-layer-agnostic for testing.
+        from backend.api.routes.routines import save_setting
+        await refresh_playoff_state(save_setting)
+
+    scheduler.add_task(ScheduledTask(
+        name="playoff_state_refresh",
+        hour=REFRESH_HOUR_ET,
+        minute=REFRESH_MINUTE_ET,
+        weekdays=[REFRESH_WEEKDAY],
+        callback=playoff_state_refresh,
+        enabled=True,
+    ))
+
     app.state.scheduler = scheduler
 
     # Game Day service (Phase B slice A) — ESPN polling + Colts game state
