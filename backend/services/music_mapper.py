@@ -21,7 +21,14 @@ logger = logging.getLogger("home_hub.music")
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
-SUPPORTED_MODES = ("gaming", "working", "watching", "social", "relax", "cooking")
+SUPPORTED_MODES = (
+    "gaming", "working", "watching", "social", "relax", "cooking",
+    # Pregameday is supported so users can add a hype playlist via
+    # POST /api/music/mode-playlists, but on_mode_change() short-circuits
+    # to enforce the silent T-60 build window — the row is read by the
+    # dispatch_pregame_audio() handler when pregameday→gameday transitions.
+    "pregameday",
+)
 VALID_VIBES = ("energetic", "mellow", "focus", "background", "hype")
 
 # Time-of-day → preferred vibe order (first match wins)
@@ -70,6 +77,7 @@ class MusicMapper:
         event_logger=None,
         music_bandit=None,
         weather_service=None,
+        tts_service=None,
     ) -> None:
         self._sonos = sonos_service
         self._ws_manager = ws_manager
@@ -79,6 +87,10 @@ class MusicMapper:
         # arm key. Optional — when None the bandit falls back to its
         # WEATHER_ANY sentinel and behaves like Phase A's 3-tuple shape.
         self._weather_service = weather_service
+        # GAMEDAY_SPEC §10.3 audio dispatch — TTS for the pregameday→gameday
+        # transition. Optional injection; when unset, dispatch_pregame_audio
+        # skips the TTS step and still fires Sonos hype if the decision asks.
+        self._tts_service = tts_service
         # Cache: mode -> list[{id, favorite_title, vibe, auto_play, priority}]
         self._cache: dict[str, list[dict]] = {m: [] for m in SUPPORTED_MODES}
         # Tracks the most recent mode requested — used to skip stale auto-plays
@@ -317,6 +329,14 @@ class MusicMapper:
             logger.debug("DND active — skipping music mode-change handling for %s", mode)
             return None
 
+        # Pregameday is the T-60 silent visual build — audio dispatch fires
+        # via the dedicated pregameday→gameday transition handler at T-30,
+        # NOT on entry to pregameday. Skip auto-play here even if a row
+        # exists (GAMEDAY_SPEC §10.3).
+        if mode == "pregameday":
+            logger.debug("pregameday entry — silent build, no auto-play")
+            return None
+
         self._last_requested_mode = mode
 
         entry = self.pick_playlist(mode)
@@ -408,6 +428,94 @@ class MusicMapper:
     async def on_mode_change_wrapper(self, mode: str) -> None:
         """Thin callback wrapper for AutomationEngine.register_on_mode_change."""
         await self.on_mode_change(mode)
+
+    async def dispatch_pregame_audio(self, decision) -> dict:
+        """Fire the pregameday→gameday audio (GAMEDAY_SPEC §10.3).
+
+        Called at the T-30 pregameday→gameday transition by bootstrap's
+        transition handler, AND by the synthetic test endpoint at
+        POST /api/gameday/test/pregame with a tier-name-derived decision.
+
+        Args:
+            decision: a PregameAudioDecision (from compute_pregame_audio or
+                decision_for_tier). Carries tts_line, sonos_hype_play,
+                optional sonos_vibe.
+
+        Returns:
+            Dict summarizing what fired: {tts_fired, sonos_fired, picked_title}.
+        """
+        result = {"tts_fired": False, "sonos_fired": False, "picked_title": None}
+
+        if decision.tts_line and self._tts_service:
+            try:
+                # ModeVolumeService handles per-mode volume curves; we don't
+                # double-tune here. Default speak() volume is fine — bridge
+                # cap + late-night cap apply via the volume curves separately.
+                await self._tts_service.speak(decision.tts_line)
+                result["tts_fired"] = True
+            except Exception:
+                logger.exception("pregame TTS dispatch failed")
+
+        if decision.sonos_hype_play:
+            # Brief gap so TTS doesn't get clipped by Sonos transport state
+            # change. ~2s matches the §10.3 spec ("Sonos starts after TTS
+            # finishes"). The TTS file plays via Sonos itself, so the gap
+            # gives transport time to settle into "stopped" before play_favorite.
+            await asyncio.sleep(2.0)
+            picked = self._pick_pregame_hype(decision.sonos_vibe)
+            if picked:
+                try:
+                    success = await asyncio.wait_for(
+                        self._sonos.play_favorite(picked["favorite_title"]),
+                        timeout=6.0,
+                    )
+                    if success:
+                        result["sonos_fired"] = True
+                        result["picked_title"] = picked["favorite_title"]
+                        logger.info(
+                            "pregame hype playing: title=%s vibe=%s tier=%s",
+                            picked["favorite_title"],
+                            picked.get("vibe"),
+                            decision.tier,
+                        )
+                        await self._ws_manager.broadcast("music_auto_played", {
+                            "mode": "gameday",
+                            "title": picked["favorite_title"],
+                            "vibe": picked.get("vibe"),
+                            "source": "pregame_audio",
+                        })
+                except asyncio.TimeoutError:
+                    logger.warning("pregame Sonos play_favorite timed out")
+                except Exception:
+                    logger.exception("pregame Sonos dispatch failed")
+            else:
+                logger.info(
+                    "pregame hype suppressed — no pregameday playlist mapped"
+                )
+
+        return result
+
+    def _pick_pregame_hype(self, sonos_vibe: Optional[str]) -> Optional[dict]:
+        """Pick the hype playlist entry for pregameday→gameday audio.
+
+        Reads from the pregameday mode_playlists rows. Vibe filtering:
+            - sonos_vibe="mellow" → prefer mellow/background vibes (victory-lap)
+            - sonos_vibe=None     → any entry (default hype)
+
+        Returns the entry dict {favorite_title, vibe, ...} or None.
+        """
+        entries = self._cache.get("pregameday", [])
+        if not entries:
+            return None
+        if sonos_vibe == "mellow":
+            mellow_picks = [
+                e for e in entries
+                if e.get("vibe") in ("mellow", "background")
+            ]
+            if mellow_picks:
+                return mellow_picks[0]
+        # Default: first entry (priority-ordered by _reload_mode).
+        return entries[0]
 
     async def on_weather_change(
         self, condition: str, mode: str,

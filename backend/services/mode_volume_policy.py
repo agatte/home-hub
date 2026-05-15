@@ -35,6 +35,11 @@ MODE_VOLUME_DEFAULTS: dict[str, dict[str, int]] = {
     "cooking":  {"day": 25, "evening": 22, "night": 20, "fade_duration_s": 4},
     "sleeping": {"day":  0, "evening":  0, "night":  0, "fade_duration_s": 3},
     "gameday":  {"day": 35, "evening": 35, "night": 30, "fade_duration_s": 4},
+    # Pregameday is the T-60 silent visual build (GAMEDAY_SPEC §10) — Sonos
+    # is intentionally muted/low during the build window. Audio fires at the
+    # T-30 pregameday→gameday flip via the dedicated transition handler.
+    # Values sit under gameday's: building, not peak.
+    "pregameday": {"day": 28, "evening": 26, "night": 22, "fade_duration_s": 3},
 }
 
 # Per-step interval defaults. A 5s fade across 5 steps yields ~1s/step writes —

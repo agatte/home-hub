@@ -271,6 +271,9 @@ async def lifespan(app: FastAPI):
         event_logger=event_logger,
         music_bandit=music_bandit,
         weather_service=weather_service,
+        # GAMEDAY_SPEC §10.3 — pregameday→gameday transition handler needs
+        # TTS access for the stakes-tier announcement at T-30.
+        tts_service=tts,
     )
     await music_mapper.load_from_db()
     app.state.music_mapper = music_mapper
@@ -360,6 +363,56 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(tts.speak("Good night.", volume=10))
 
     automation.register_on_mode_change(_sleeping_tts)
+
+    # Pregameday → gameday audio dispatch (GAMEDAY_SPEC §10.3). Fires at the
+    # T-30 flip when the engine transitions from pregameday into gameday.
+    # Closure-tracks the previous mode since callback fan-out only passes
+    # the new mode. Reads playoff stakes from app_settings (populated by
+    # the Tuesday playoff_state_refresh ScheduledTask in Phase 4) and
+    # dispatches TTS + (conditionally) Sonos hype via music_mapper.
+    _pregame_state = {"prev_mode": None}
+
+    async def _pregame_audio_dispatch(new_mode: str, **_kwargs) -> None:
+        prev = _pregame_state["prev_mode"]
+        _pregame_state["prev_mode"] = new_mode
+        if not (prev == "pregameday" and new_mode == "gameday"):
+            return
+        try:
+            from backend.services.pregame_audio_policy import compute_pregame_audio
+        except ImportError:
+            app_logger.exception("pregame_audio_policy import failed")
+            return
+
+        # Pull stakes + game context. Defensive: missing/stale state falls
+        # back to "standard" tier, which announces the kickoff but skips hype.
+        playoff_state = await load_setting("gameday_playoff_state") or {}
+        try:
+            game = app.state.gameday.current_state()
+        except Exception:
+            game = None
+        opponent = (game and game.opponent) or "the opponent"
+
+        # Apartment-context suppressions read off the engine in real time
+        # (sleeping mode + DND silence audio even for a fully-committed game).
+        decision = compute_pregame_audio(
+            opponent=opponent,
+            season_week=int(playoff_state.get("season_week") or 1),
+            is_preseason=bool(playoff_state.get("is_preseason") or False),
+            playoff_probability=playoff_state.get("playoff_probability"),
+            is_eliminated=bool(playoff_state.get("is_eliminated") or False),
+            division_gap_games=playoff_state.get("division_gap_games"),
+            sleeping_mode=(automation.current_mode == "sleeping"),
+            dnd_active=automation.is_dnd_active(),
+            line_index=int(playoff_state.get("season_week") or 0),
+        )
+        app_logger.info(
+            "pregame audio: tier=%s tts=%s sonos_hype=%s opponent=%s",
+            decision.tier, bool(decision.tts_line),
+            decision.sonos_hype_play, opponent,
+        )
+        asyncio.create_task(music_mapper.dispatch_pregame_audio(decision))
+
+    automation.register_on_mode_change(_pregame_audio_dispatch)
 
     # Apply persisted watching-posture tuning (settings-page sliders for the
     # projector-safe caps + reclined L1 night ambient).

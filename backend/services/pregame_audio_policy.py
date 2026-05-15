@@ -205,6 +205,68 @@ def _classify_tier(
     return TIER_STANDARD, _TTS_LINES_STANDARD, False, None
 
 
+def decision_for_tier(
+    tier: str,
+    opponent: str,
+    *,
+    line_index: int = 0,
+    sleeping_mode: bool = False,
+    dnd_active: bool = False,
+) -> PregameAudioDecision:
+    """Build a PregameAudioDecision for a given tier name directly.
+
+    Used by the synthetic test endpoint at `POST /api/gameday/test/pregame`
+    (GAMEDAY_SPEC §10.6) to exercise each tier's audio behavior without
+    constructing fake stakes inputs. Production code path is
+    `compute_pregame_audio` — it runs the stakes ladder for real games.
+
+    Hard suppressions (sleeping_mode, dnd_active) still apply — even a
+    "big_stakes" test fire stays silent if the user's asleep.
+
+    Raises ValueError on unknown tier names.
+    """
+    if sleeping_mode:
+        return PregameAudioDecision(
+            tier=TIER_SUPPRESSED, tts_line=None, sonos_hype_play=False,
+        )
+    if dnd_active:
+        return PregameAudioDecision(
+            tier=TIER_SUPPRESSED, tts_line=None, sonos_hype_play=False,
+        )
+
+    if tier == TIER_ELIMINATED:
+        return PregameAudioDecision(
+            tier=TIER_ELIMINATED, tts_line=None, sonos_hype_play=False,
+        )
+    if tier == TIER_PRESEASON:
+        line = _pick_line(_TTS_LINES_PRESEASON, line_index, opponent)
+        return PregameAudioDecision(
+            tier=TIER_PRESEASON, tts_line=line, sonos_hype_play=False,
+        )
+    if tier == TIER_VICTORY_LAP:
+        line = _pick_line(_TTS_LINES_VICTORY_LAP, line_index, opponent)
+        return PregameAudioDecision(
+            tier=TIER_VICTORY_LAP, tts_line=line,
+            sonos_hype_play=True, sonos_vibe="mellow",
+        )
+    if tier == TIER_CLUTCH:
+        line = _pick_line(_TTS_LINES_CLUTCH, line_index, opponent)
+        return PregameAudioDecision(
+            tier=TIER_CLUTCH, tts_line=line, sonos_hype_play=True,
+        )
+    if tier == TIER_BIG_STAKES:
+        line = _pick_line(_TTS_LINES_BIG_STAKES, line_index, opponent)
+        return PregameAudioDecision(
+            tier=TIER_BIG_STAKES, tts_line=line, sonos_hype_play=True,
+        )
+    if tier == TIER_STANDARD:
+        line = _pick_line(_TTS_LINES_STANDARD, line_index, opponent)
+        return PregameAudioDecision(
+            tier=TIER_STANDARD, tts_line=line, sonos_hype_play=False,
+        )
+    raise ValueError(f"Unknown tier: {tier!r}. Valid: {sorted(VALID_TIERS)}")
+
+
 def _pick_line(pool: tuple[str, ...], line_index: int, opponent: str) -> str:
     """Deterministic rotation through a pool with `{opponent}` substitution.
 

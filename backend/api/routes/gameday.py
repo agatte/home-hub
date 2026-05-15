@@ -106,8 +106,9 @@ async def test_event(event: str, request: Request) -> dict[str, Any]:
 async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, Any]:
     """Synthetic T-60 pregameday fire (GAMEDAY_SPEC §10.6).
 
-    Flips automation to pregameday for 30 seconds, then auto-clears. Phase 3
-    will additionally dispatch the audio policy with the supplied stakes_tier.
+    Flips automation to pregameday for 30 seconds, dispatches the audio
+    policy with the supplied stakes_tier (TTS + optional Sonos hype),
+    then auto-clears.
     """
     if body.stakes_tier not in _VALID_STAKES_TIERS:
         raise HTTPException(
@@ -116,7 +117,32 @@ async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, 
             f"Valid: {sorted(_VALID_STAKES_TIERS)}",
         )
     svc = _service(request)
-    return await svc.trigger_synthetic_pregame(
+    result = await svc.trigger_synthetic_pregame(
         opponent=body.opponent,
         stakes_tier=body.stakes_tier,
     )
+
+    # Audio dispatch — short-circuits the stakes ladder via tier_override path.
+    # Suppressions still apply (sleeping/DND) — the test endpoint inherits
+    # apartment-context silence the same way a real game would.
+    music_mapper = getattr(request.app.state, "music_mapper", None)
+    automation = getattr(request.app.state, "automation", None)
+    if music_mapper is not None:
+        from backend.services.pregame_audio_policy import decision_for_tier
+        sleeping = automation is not None and automation.current_mode == "sleeping"
+        dnd = automation is not None and automation.is_dnd_active()
+        decision = decision_for_tier(
+            tier=body.stakes_tier,
+            opponent=body.opponent,
+            sleeping_mode=sleeping,
+            dnd_active=dnd,
+        )
+        # Fire-and-forget — caller doesn't wait for TTS/Sonos to finish.
+        import asyncio
+        asyncio.create_task(music_mapper.dispatch_pregame_audio(decision))
+        result["audio"] = {
+            "tier": decision.tier,
+            "tts_queued": bool(decision.tts_line),
+            "sonos_hype_queued": decision.sonos_hype_play,
+        }
+    return result
