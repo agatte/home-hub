@@ -2027,6 +2027,10 @@ class TestWatchingSleepGuard:
         assert engine._watching_sleep_guard_last_fired_at == self.LATE_NIGHT
         # Dwell reset after fire.
         assert engine._watching_sleep_dwell_since is None
+        # Asleep stamp set during the confident bed+reclined observation
+        # — consumed downstream by `_is_likely_still_asleep` to gate the
+        # morning brightness ramp + watching mode's day transition.
+        assert engine._last_bed_reclined_during_watching_at == self.LATE_NIGHT
         # Observability row — same shape as zone_posture_rule emits, so the
         # rule-engine-misfire-auditor and /api/learning queries can see fires.
         assert len(engine._ml_logger.calls) == 1
@@ -2219,4 +2223,308 @@ class TestWatchingSleepGuard:
 
         assert engine.manual_override is False
         assert engine._watching_sleep_dwell_since is None
+
+    # ------------------------------------------------------------------
+    # Dark-room continuation — 2026-05-15 regression coverage.
+    #
+    # Reference incident: 2026-05-14 → 2026-05-15. Watching held 7h+,
+    # camera locked bed+reclined at 23:00 then lost pose detection past
+    # 00:00 as the room darkened. Committed zone/posture cleared to
+    # None for the rest of the night. Old strict gate 6 reset the dwell
+    # on every dark-room tick and the guard never fired.
+    #
+    # New policy: once dwell has started, None (commit-cleared by
+    # darkness) is tolerated; only active contradictions
+    # (zone="desk", posture="upright") reset.
+    # ------------------------------------------------------------------
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_dark_room_continuation_fires(self, mock_dt, engine):
+        """Dwell started under bed+reclined, then camera commits cleared
+        to None as the bedroom went dark — guard must still fire."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        # Dwell already 91 min in — past the 90-min threshold.
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+        # Camera has lost commits — the dark-bedroom scenario.
+        engine._camera_service = _FakeCamera(zone=None, posture=None)
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
+        assert engine.override_source == "watching_sleep_guard"
+        assert engine._watching_sleep_guard_last_fired_at == self.LATE_NIGHT
+        # Factors record what the camera *did* see at fire time so the
+        # rule-engine-misfire-auditor and journal can see the dark-room
+        # branch was taken (zone/posture both None).
+        call = engine._ml_logger.calls[0]
+        assert call["factors"]["zone"] is None
+        assert call["factors"]["posture"] is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_dark_room_continuation_started_with_lock(
+        self, mock_dt, engine,
+    ):
+        """Two-tick sequence: first tick locks bed+reclined and starts
+        dwell, second tick under camera blackout 91 min later still fires.
+        Closer to the real-world flow than the single-tick test above."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        # Tick 1 — 91 minutes ago, full lock.
+        start = self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        engine._camera_service = _FakeCamera(zone="bed", posture="reclined")
+        await engine._evaluate_watching_sleep_guard(start)
+        assert engine._watching_sleep_dwell_since == start
+        # Tick 2 — room darkened, both commits cleared.
+        engine._camera_service = _FakeCamera(zone=None, posture=None)
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.override_mode == "sleeping"
+        assert engine.override_source == "watching_sleep_guard"
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_initial_start_still_requires_full_lock(
+        self, mock_dt, engine,
+    ):
+        """No prior dwell + zone=None → don't start the dwell. The
+        tolerance only applies AFTER a confident bed+reclined lock has
+        already been observed; starting from cold needs the real signal
+        so we don't fire on someone unrelated."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._camera_service = _FakeCamera(zone=None, posture="reclined")
+        assert engine._watching_sleep_dwell_since is None
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_started_dwell_resets_on_zone_desk(self, mock_dt, engine):
+        """Once dwell is running, a confident zone="desk" commit means
+        the user moved — reset the dwell, don't keep counting."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+        engine._camera_service = _FakeCamera(zone="desk", posture="reclined")
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_started_dwell_resets_on_posture_upright(
+        self, mock_dt, engine,
+    ):
+        """User sat up in bed — posture="upright" is an active
+        contradiction and breaks the dwell, even with zone still bed."""
+        mock_dt.now.return_value = self.LATE_NIGHT
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._watching_sleep_dwell_since = (
+            self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
+        )
+        engine._camera_service = _FakeCamera(zone="bed", posture="upright")
+
+        await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
+
+        assert engine.manual_override is False
+        assert engine._watching_sleep_dwell_since is None
+
+
+# ---------------------------------------------------------------------------
+# Asleep gate (`_is_likely_still_asleep`) + morning-ramp suppression
+#
+# Defense-in-depth coverage for the 2026-05-15 wake-up incident. Even with
+# the watching_sleep_guard fix, both the morning brightness ramp (idle's
+# 80→196 climb 06:00–07:00) and watching mode's late_night→day transition
+# at 06:00 can wake the user if the guard ever fails to fire for any
+# secondary reason. The asleep stamp is updated whenever the guard
+# observes a confident bed+reclined lock during watching mode, and the
+# helper drives both brightness-escalation suppressions.
+# ---------------------------------------------------------------------------
+
+class TestIsLikelyStillAsleep:
+    """Unit coverage for the gate helper consumed by ramp + period gates."""
+
+    NOW = datetime(2026, 5, 15, 6, 30, tzinfo=TZ)
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+        eng._camera_service = None  # no camera = no desk-attendance veto
+        eng._last_process_working_at = None  # no recent PC working
+        return eng
+
+    def test_no_stamp_returns_false(self, engine):
+        """Cold start — no observation, no suppression."""
+        assert engine._last_bed_reclined_during_watching_at is None
+        assert engine._is_likely_still_asleep(self.NOW) is False
+
+    def test_fresh_stamp_returns_true(self, engine):
+        """Stamp set 30 min ago, no attendance signal → still asleep."""
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(minutes=30)
+        )
+        assert engine._is_likely_still_asleep(self.NOW) is True
+
+    def test_stale_stamp_failsafe(self, engine):
+        """Stamp >12h old → failsafe clears the gate regardless of
+        attendance. Covers "user left for the day without the camera
+        ever seeing them re-enter the desk zone."""
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(hours=13)
+        )
+        assert engine._is_likely_still_asleep(self.NOW) is False
+
+    def test_desk_attendance_releases_gate(self, engine):
+        """Camera sees user at the desk fresh → gate released even with
+        a recent asleep stamp. They're up."""
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=recent,
+        )
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(minutes=15)
+        )
+        assert engine._is_likely_still_asleep(self.NOW) is False
+
+    def test_process_working_releases_gate(self, engine):
+        """PC agent says user is working → release."""
+        engine._last_process_working_at = (
+            datetime.now(tz=TZ) - timedelta(seconds=60)
+        )
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(minutes=15)
+        )
+        assert engine._is_likely_still_asleep(self.NOW) is False
+
+
+class TestMorningRampAsleepGate:
+    """The morning_ramp inside `_apply_time_based` honors the asleep gate.
+
+    Captures the applied state via a patched `_apply_state` so we can
+    assert what the ramp branch produced without touching the real Hue
+    plumbing. Targets the 06:30 weekday window — solidly inside the
+    06:00–07:00 ramp_start_hour → ramp_end window.
+    """
+
+    NOW = datetime(2026, 5, 15, 6, 30, tzinfo=TZ)
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+        eng._camera_service = None
+        eng._last_process_working_at = None
+        return eng
+
+    @pytest.fixture
+    def captured_states(self):
+        """Stash for what _apply_state was called with."""
+        return []
+
+    async def _drive_with_capture(self, engine, captured, now):
+        async def _capture_apply_state(state, transitiontime=None):
+            captured.append(dict(state))
+
+        with patch("backend.services.automation_engine.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            engine._apply_state = _capture_apply_state  # type: ignore
+            await engine._apply_time_based()
+
+    async def test_ramp_runs_normally_without_stamp(
+        self, engine, captured_states,
+    ):
+        """No asleep stamp → morning ramp runs as before. At 06:30 with
+        ramp_start_hour=6 and 60-min duration, ramp progress is 50% —
+        bri should be in the middle of the curve, well above the
+        pre-ramp wake_brightness baseline."""
+        assert engine._last_bed_reclined_during_watching_at is None
+
+        await self._drive_with_capture(engine, captured_states, self.NOW)
+
+        assert len(captured_states) == 1
+        state = captured_states[0]
+        assert state["on"] is True
+        assert state["bri"] > 60  # clearly past the pre-ramp dim hold
+
+    async def test_ramp_suppressed_when_recently_in_bed(
+        self, engine, captured_states,
+    ):
+        """Stamp 30 min ago, no attendance → ramp suppressed, pre-ramp
+        dim held instead. The 2026-05-15 wake-up case: user asleep,
+        ramp would have climbed brightness — we hold the dim
+        wake_brightness state instead."""
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(minutes=30)
+        )
+
+        await self._drive_with_capture(engine, captured_states, self.NOW)
+
+        assert len(captured_states) == 1
+        state = captured_states[0]
+        # Pre-ramp dim shape from `_build_time_rules` (wake_hour → ramp
+        # band): wake_brightness=40 with warm hue 6000, sat 200.
+        assert state["on"] is True
+        assert state["bri"] == 40  # DaySchedule.wake_brightness default
+        assert state["hue"] == 6000
+        assert state["sat"] == 200
+
+    async def test_ramp_runs_when_desk_attendance_fresh(
+        self, engine, captured_states,
+    ):
+        """Stamp set BUT camera sees user at the desk → ramp runs.
+        Attendance veto wins — they're up even with a recent bed obs."""
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=recent,
+        )
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(minutes=30)
+        )
+
+        await self._drive_with_capture(engine, captured_states, self.NOW)
+
+        state = captured_states[0]
+        assert state["bri"] > 60
+
+    async def test_ramp_runs_when_process_working_recent(
+        self, engine, captured_states,
+    ):
+        """Stamp set BUT PC agent reports working recent → ramp runs."""
+        engine._last_process_working_at = (
+            datetime.now(tz=TZ) - timedelta(seconds=60)
+        )
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(minutes=30)
+        )
+
+        await self._drive_with_capture(engine, captured_states, self.NOW)
+
+        state = captured_states[0]
+        assert state["bri"] > 60
+
+    async def test_ramp_runs_when_stamp_stale_by_failsafe(
+        self, engine, captured_states,
+    ):
+        """Stamp >12h old → failsafe drops it, ramp runs."""
+        engine._last_bed_reclined_during_watching_at = (
+            self.NOW - timedelta(hours=13)
+        )
+
+        await self._drive_with_capture(engine, captured_states, self.NOW)
+
+        state = captured_states[0]
+        assert state["bri"] > 60
 

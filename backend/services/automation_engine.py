@@ -82,6 +82,15 @@ WATCHING_SLEEP_GUARD_DWELL_SECONDS = 90 * 60  # 90 minutes
 # pre-dates the late-night window by >90min is fair game.
 WATCHING_SLEEP_GUARD_OVERRIDE_MIN_AGE_SECONDS = 90 * 60
 
+# Failsafe expiry for the "user is likely still asleep" stamp. After this
+# many hours since the last bed+reclined observation (during watching mode),
+# the stamp is treated as stale and `_is_likely_still_asleep` returns False
+# even without an attendance signal. Catches the case where the user left
+# for the day without the camera ever seeing them re-enter the desk zone
+# (e.g., walked straight out the door). 12h covers a long night plus most
+# of a morning; anyone still in bed past that is on their own.
+ASLEEP_STAMP_FAILSAFE_HOURS = 12
+
 
 # User-respect cooldown — when the user clears an override via the dashboard
 # (api:* source), suppress autonomous mode-pushes for this window so "auto"
@@ -380,6 +389,18 @@ class AutomationEngine:
         # cleared whenever any of those four conditions break.
         self._watching_sleep_dwell_since: Optional[datetime] = None
         self._watching_sleep_guard_last_fired_at: Optional[datetime] = None
+        # "User is likely still asleep" stamp — set on any tick where the
+        # watching_sleep_guard sees a confident bed+reclined observation
+        # during watching mode. Consumed by `_is_likely_still_asleep`,
+        # which gates the morning brightness ramp (idle's curve climbing
+        # 80→196 between 06:00–07:00) and the watching-mode late_night→day
+        # period transition (the L2/L5 jump from bri≈20 to bri=91 at
+        # 06:00:06 on 2026-05-15). Reference incident: 2026-05-14 →
+        # 2026-05-15, watching held all night, both brightness paths
+        # combined to wake the user at ~06:30. Released by either
+        # attendance signal (camera zone=desk fresh, PC working recent)
+        # or the 12h failsafe.
+        self._last_bed_reclined_during_watching_at: Optional[datetime] = None
         # User-respect cooldown stamp — set when the user clears an override
         # via api:* (dashboard "auto" button). While within the cooldown,
         # set_manual_override blocks autonomous-source pushes (rescue, rule,
@@ -728,6 +749,36 @@ class AutomationEngine:
             datetime.now(tz=TZ) - self._last_process_working_at
         ).total_seconds()
         return age < window_seconds
+
+    def _is_likely_still_asleep(self, now: datetime) -> bool:
+        """True while the user appears to be asleep in bed.
+
+        Stamped by `_evaluate_watching_sleep_guard` on every tick that
+        observes a confident bed+reclined lock during watching mode.
+        Released by any attendance signal that the user is up (camera
+        sees them at the desk, or the PC agent says they're working) or
+        the 12h failsafe.
+
+        Consumed by `_apply_time_based` (morning_ramp suppression) and
+        `_apply_mode` (watching late_night→day suppression). Catches the
+        2026-05-15 wake-up: watching held all night, the dark-room guard
+        fix should have fired sleeping but defense-in-depth wants the
+        ramp itself to know "the user might still be asleep" too.
+        """
+        if self._last_bed_reclined_during_watching_at is None:
+            return False
+        age = (
+            now - self._last_bed_reclined_during_watching_at
+        ).total_seconds()
+        if age > ASLEEP_STAMP_FAILSAFE_HOURS * 3600:
+            return False
+        # Any attendance signal releases the gate. Both helpers already
+        # used as autonomous-push vetoes — same semantics here.
+        if self.is_at_desk_fresh():
+            return False
+        if self.is_recent_process_working():
+            return False
+        return True
 
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
@@ -1287,6 +1338,11 @@ class AutomationEngine:
                 self._user_cleared_override_at.astimezone(timezone.utc).isoformat()
                 if self._user_cleared_override_at is not None else None
             ),
+            "last_bed_reclined_during_watching_utc": (
+                self._last_bed_reclined_during_watching_at
+                .astimezone(timezone.utc).isoformat()
+                if self._last_bed_reclined_during_watching_at is not None else None
+            ),
         }
         try:
             await save_setting(OVERRIDE_STATE_KEY, payload)
@@ -1350,6 +1406,20 @@ class AutomationEngine:
             except (TypeError, ValueError):
                 logger.warning(
                     "Invalid user_cleared_override stamp on load: %r", clear_str,
+                )
+
+        # Restore the asleep-stamp so a deploy mid-night doesn't drop
+        # morning-ramp suppression. The 12h failsafe inside
+        # `_is_likely_still_asleep` self-clears stale stamps regardless.
+        asleep_str = saved.get("last_bed_reclined_during_watching_utc")
+        if asleep_str:
+            try:
+                self._last_bed_reclined_during_watching_at = (
+                    datetime.fromisoformat(asleep_str).astimezone(TZ)
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid asleep stamp on load: %r", asleep_str,
                 )
 
         if not saved.get("manual_override"):
@@ -1689,6 +1759,25 @@ class AutomationEngine:
 
         # Check for scene override (user-mapped Hue scene for this mode+time)
         period = self._get_time_period()
+        # Asleep-in-bed gate for watching mode: hold the night state past
+        # wake_hour when the user appears to still be asleep. The 2026-05-15
+        # incident saw watching mode's late_night→day transition jump L2/L5
+        # from bri≈20 to bri=91 at 06:00:06 while the user was still in bed.
+        # Scoped to watching only — no other mode has the "user fell asleep
+        # with this mode active" pathology that needs this guard.
+        # `_resolve_activity_state` for watching has no late_night key, so
+        # "night" is the explicit dim-but-not-late-night state we want.
+        if (
+            mode == "watching"
+            and period == "day"
+            and self._is_likely_still_asleep(datetime.now(tz=TZ))
+        ):
+            logger.info(
+                "Watching mode holding night state past wake_hour — "
+                "user likely still asleep (bed+reclined observed at %s)",
+                self._last_bed_reclined_during_watching_at,
+            )
+            period = "night"
         override_scene = self._scene_overrides.get(mode, {}).get(period)
         if override_scene and self._hue_v2 and self._hue_v2.connected:
             source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
@@ -2168,8 +2257,27 @@ class AutomationEngine:
             if start <= hour < end:
                 if isinstance(rule, tuple) and rule[0] == "morning_ramp":
                     _, ramp_start_hour, ramp_duration = rule
-                    minutes_since_start = (hour - ramp_start_hour) * 60 + minute
-                    state = _morning_ramp(minutes_since_start, ramp_duration)
+                    # Suppress the ramp if the user is likely still asleep.
+                    # Reference incident 2026-05-15: watching held all night,
+                    # PC went idle at 06:05, this ramp climbed bri 80→196
+                    # over 36min and woke the user. Hold the pre-ramp dim
+                    # state (same shape as the wake_hour → ramp_start_hour
+                    # rule from `_build_time_rules`) until attendance lands.
+                    if self._is_likely_still_asleep(now):
+                        state = {
+                            "on": True,
+                            "bri": schedule.wake_brightness,
+                            "hue": 6000,
+                            "sat": 200,
+                        }
+                        logger.info(
+                            "Morning ramp suppressed — user likely still asleep "
+                            "(bed+reclined observed at %s)",
+                            self._last_bed_reclined_during_watching_at,
+                        )
+                    else:
+                        minutes_since_start = (hour - ramp_start_hour) * 60 + minute
+                        state = _morning_ramp(minutes_since_start, ramp_duration)
                 elif isinstance(rule, dict):
                     state = rule
                 else:
@@ -2838,14 +2946,57 @@ class AutomationEngine:
                 self._watching_sleep_dwell_since = None
                 return
 
-        # Gate 6: core condition — committed zone + posture. Both null
-        # (camera disabled or pose not committed) is treated as "not
-        # confidently in bed reclined" and resets dwell.
+        # Gate 6: core condition — committed zone + posture, with
+        # dark-room continuation tolerance.
+        #
+        # Starting the dwell still requires a confident lock: zone="bed"
+        # AND posture="reclined." That's the only way to be sure the user
+        # is actually in bed and not at the desk reclined in their chair.
+        #
+        # But once dwell has started, darkness should not break it.
+        # 2026-05-14 incident: camera locked bed+reclined at 23:00, then
+        # lost pose detection as the room darkened past the projector's
+        # ambient light. After ABSENT_THRESHOLD frames of no commits,
+        # camera.zone / camera.posture cleared to None. The old strict
+        # check ("zone != 'bed' or posture != 'reclined'") then reset
+        # the dwell on every tick for the rest of the night, and the
+        # guard never fired — yet this is exactly the case it exists
+        # for. RGB pose detection is not IR-aware; sleeping people make
+        # rooms dark; the rule has to tolerate that without firing on
+        # someone who actually moved away.
+        #
+        # Continuation policy (only after dwell has started):
+        #   - zone None    (cleared by darkness)         → tolerated
+        #   - zone "bed"                                 → tolerated
+        #   - zone anything else (e.g. "desk")           → reset
+        #   - posture None (cleared by darkness)         → tolerated
+        #   - posture "reclined"                         → tolerated
+        #   - posture "upright"                          → reset
         zone = camera.zone
         posture = camera.posture
-        if zone != "bed" or posture != "reclined":
-            self._watching_sleep_dwell_since = None
-            return
+        dwell_started = self._watching_sleep_dwell_since is not None
+
+        if dwell_started:
+            # Reset only on active contradiction, not on staleness.
+            if (
+                (zone is not None and zone != "bed")
+                or (posture is not None and posture != "reclined")
+            ):
+                self._watching_sleep_dwell_since = None
+                return
+        else:
+            # Strict lock required to start the dwell.
+            if zone != "bed" or posture != "reclined":
+                return
+
+        # Stamp the "user is likely still asleep" marker on any tick that
+        # observes a confident bed+reclined (not on dark-room continuation
+        # ticks where zone/posture are None — those tolerate staleness but
+        # don't constitute a fresh observation). Consumed by
+        # `_is_likely_still_asleep` to gate the morning brightness ramp
+        # and watching mode's late_night→day transition.
+        if zone == "bed" and posture == "reclined":
+            self._last_bed_reclined_during_watching_at = now
 
         # All gates pass — accumulate dwell.
         if self._watching_sleep_dwell_since is None:
@@ -2865,6 +3016,7 @@ class AutomationEngine:
         factors = {
             "zone": zone,
             "posture": posture,
+            "ambient_lux": getattr(camera, "ema_lux", None),
             "current_mode": self._current_mode,
             "effective_mode": effective_mode,
             "dwell_seconds": int(elapsed),
