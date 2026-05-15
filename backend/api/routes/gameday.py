@@ -18,17 +18,7 @@ from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
 from backend.services.gameday_service import GameDayService
-from backend.services.pregame_audio_policy import (
-    TIER_ELIMINATED,
-    TIER_PRESEASON,
-    VALID_TIERS,
-)
-
-
-# /test/pregame accepts the same regular-season tier names the policy
-# module knows, plus the two specials that the policy reaches via
-# is_preseason/is_eliminated branches rather than direct tier classification.
-_VALID_STAKES_TIERS = VALID_TIERS | {TIER_PRESEASON, TIER_ELIMINATED}
+from backend.services.pregame_audio_policy import VALID_TIERS
 
 
 class TestPregameRequest(BaseModel):
@@ -109,11 +99,11 @@ async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, 
     policy with the supplied stakes_tier (TTS + optional Sonos hype),
     then auto-clears.
     """
-    if body.stakes_tier not in _VALID_STAKES_TIERS:
+    if body.stakes_tier not in VALID_TIERS:
         raise HTTPException(
             400,
             f"Unknown stakes_tier: {body.stakes_tier}. "
-            f"Valid: {sorted(_VALID_STAKES_TIERS)}",
+            f"Valid: {sorted(VALID_TIERS)}",
         )
     svc = _service(request)
     result = await svc.trigger_synthetic_pregame(

@@ -13,6 +13,7 @@ and the rule engine continues as the sole predictor.
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -735,11 +736,17 @@ class BehavioralPredictor(HealthTrackable):
         # so audits can `json_extract(factors, '$.features.audio_class_enc')`
         # — list-of-dicts truncated to 5 made the 5/05-retrain features
         # invisible to ml-model-evaluator and predictor-promotion-advisor.
-        feature_values = {
-            col: features[col]
-            for col in FEATURE_COLUMNS
-            if features.get(col) is not None
-        }
+        # NaN floats (e.g. lux when no fresh camera read) serialize as the
+        # literal `NaN`, which breaks sqlite json_valid() so json_extract
+        # returns null instead of the value. Coerce NaN → None.
+        feature_values: dict[str, Any] = {}
+        for col in FEATURE_COLUMNS:
+            value = features.get(col)
+            if value is None:
+                continue
+            if isinstance(value, float) and math.isnan(value):
+                continue
+            feature_values[col] = value
 
         result = {
             "predicted_mode": predicted_mode,

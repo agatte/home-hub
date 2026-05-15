@@ -361,6 +361,7 @@ OPENAI_API_KEY=                # Optional — TTS celebration line generator
 ESPN_POLL_INTERVAL=5           # ESPN polling cadence in seconds
 BIG_PLAY_YARD_THRESHOLD=20     # Yards for "big play" celebration trigger
 FIELD_GOAL_YARD_THRESHOLD=40   # Yards for "long field goal" celebration trigger
+MOMENTUM_WPA_THRESHOLD=0.15    # |WPA| swing that triggers a momentum celebration on non-scoring plays
 
 # ML rule
 ZONE_POSTURE_RULE_APPLY=true   # Zone+posture→relax actuation. Default True (live since 2026-04-27); set false to shadow-log only.
