@@ -254,12 +254,15 @@ class TestLightsAPI:
 
     def test_lights_have_expected_fields(self, client):
         resp = client.get("/api/lights")
+        if resp.status_code != 200:
+            pytest.skip(f"Hue bridge unreachable in this environment ({resp.status_code})")
         data = resp.json()
-        if data:  # Only check if lights are reachable
-            light = data[0]
-            assert "name" in light
-            assert "on" in light
-            assert "bri" in light
+        if not isinstance(data, list) or not data:
+            pytest.skip("Hue returned no lights")
+        light = data[0]
+        assert "name" in light
+        assert "on" in light
+        assert "bri" in light
 
 
 class TestCORS:

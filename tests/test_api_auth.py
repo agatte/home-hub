@@ -336,14 +336,16 @@ class TestSmokeWiring:
             app.dependency_overrides.pop(require_api_key, None)
 
     def test_reads_unaffected_by_dependency(self, client):
-        # Reads stay open: even with a forced-reject auth dep, GETs must
-        # succeed because they don't carry the dependency.
+        # Reads stay open: even with a forced-reject auth dep, GETs must not
+        # be rejected by it. The endpoint may still return 503 if the
+        # underlying device is unreachable (e.g. Hue bridge absent in CI) —
+        # that's a separate concern; we only care here that auth didn't bite.
         app.dependency_overrides[require_api_key] = self._stub_reject()
         try:
             resp = client.get("/health")
             assert resp.status_code == 200
             resp = client.get("/api/lights")
-            assert resp.status_code == 200
+            assert resp.status_code not in (401, 403)
         finally:
             app.dependency_overrides.pop(require_api_key, None)
 
