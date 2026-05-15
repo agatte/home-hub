@@ -289,6 +289,139 @@ class TestKickoff:
 
 
 # ---------------------------------------------------------------------------
+# Slice C+ score subtypes (2026-05-15)
+# ---------------------------------------------------------------------------
+
+def _event_with_type(play_type: str, scoring_team: str | None = "colts") -> PlayEvent:
+    return PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type=play_type,  # type: ignore[arg-type]
+        description=f"Synthetic {play_type}",
+        player=None,
+        kicker=None,
+        yards=None,
+        scoring_team=scoring_team,  # type: ignore[arg-type]
+    )
+
+
+class TestSafety:
+
+    async def test_safety_fires_lights_and_tts(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_event_with_type("safety"))
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "safety"
+        safety_steps = CelebrationOrchestrator.SEQUENCES["safety"].light_steps
+        assert hue.set_light.await_count == len(safety_steps)
+        tts.speak.assert_awaited_once()
+
+
+class TestExtraPointGood:
+
+    async def test_pat_fires_lights_no_tts(self):
+        """Extra point is silent by design — fires after every offensive TD."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_event_with_type("extra_point_good"))
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "extra_point_good"
+        pat_steps = CelebrationOrchestrator.SEQUENCES["extra_point_good"].light_steps
+        assert hue.set_light.await_count == len(pat_steps)
+        # No TTS — empty tts_lines list.
+        tts.speak.assert_not_awaited()
+
+
+class TestTwoPointConversion:
+
+    async def test_2pt_fires_lights_and_tts(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_event_with_type("two_point_conv"))
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "two_point_conv"
+        tts.speak.assert_awaited_once()
+
+
+class TestDefensiveTd:
+
+    async def test_pick_six_fires_defensive_td_sequence(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_event_with_type("defensive_td"))
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "defensive_td"
+        def_td_steps = CelebrationOrchestrator.SEQUENCES["defensive_td"].light_steps
+        assert hue.set_light.await_count == len(def_td_steps)
+        tts.speak.assert_awaited_once()
+
+    async def test_defensive_td_volume_above_offensive_td(self):
+        """defensive_td has base_volume=32 vs touchdown's 30. Pick-six is
+        the bigger emotional moment so it lands a touch louder."""
+        def_seq = CelebrationOrchestrator.SEQUENCES["defensive_td"]
+        td_seq = CelebrationOrchestrator.SEQUENCES["touchdown"]
+        assert def_seq.base_volume > td_seq.base_volume
+
+
+class TestOpponentSuppression:
+
+    async def test_opponent_touchdown_does_not_fire(self):
+        """Opponent scores must stay silent (spec §2.2)."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_event_with_type("touchdown", scoring_team="opp"))
+        ws.broadcast.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
+        tts.speak.assert_not_awaited()
+
+    async def test_opponent_defensive_td_does_not_fire(self):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        await orch.on_play_event(_event_with_type("defensive_td", scoring_team="opp"))
+        ws.broadcast.assert_not_awaited()
+        hue.set_light.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — WPA momentum dispatch
+# ---------------------------------------------------------------------------
+
+class TestMomentumDispatch:
+
+    async def test_momentum_fires_big_play_sequence_lights_only(self):
+        """Phase 2: momentum PlayType dispatches the big_play SEQUENCE.
+        Lights-only by design — no TTS even with apartment context healthy."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        # Momentum events have scoring_team=None (it's a non-scoring play).
+        evt = _event_with_type("momentum", scoring_team=None)
+        evt = PlayEvent(
+            timestamp=evt.timestamp,
+            play_type="momentum",
+            description="Pick! D.Buckner intercepts.",
+            player=None, kicker=None, yards=None,
+            scoring_team=None,
+            wpa=0.22,  # comfortably above threshold
+        )
+        await orch.on_play_event(evt)
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "big_play"
+        # Lights fire — every step in _BIG_PLAY_STEPS executed.
+        big_play_steps = CelebrationOrchestrator.SEQUENCES["big_play"].light_steps
+        assert hue.set_light.await_count == len(big_play_steps)
+        # No TTS — empty tts_lines list.
+        tts.speak.assert_not_awaited()
+
+    async def test_momentum_opponent_side_still_fires(self):
+        """A big WPA swing is the same emotional moment whether the
+        Colts or the opponent caused it — momentum is team-agnostic."""
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        evt = _event_with_type("momentum", scoring_team="opp")
+        await orch.on_play_event(evt)
+        # Suppression filter only applies to score subtypes (TD/FG/safety/etc).
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "big_play"
+
+
+# ---------------------------------------------------------------------------
 # Cooldown
 # ---------------------------------------------------------------------------
 

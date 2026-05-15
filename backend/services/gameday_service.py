@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -40,6 +41,13 @@ POST_GAME_CLEAR_MINUTES = 30
 
 GAMEDAY_AUTO_SOURCE = "gameday:auto"
 PREGAMEDAY_AUTO_SOURCE = "gameday:auto:pregame"
+
+# WPA momentum lane (Plan §Phase 2): threshold for surfacing a non-scoring
+# "big play" as a momentum PlayEvent. Matches `celebration_volume_policy._WPA_BIG`
+# so the system is internally consistent: a play that triggers a momentum
+# celebration is the same magnitude as a play that bumps celebration TTS
+# volume by +10. Env-overridable for post-real-game tuning.
+MOMENTUM_WPA_THRESHOLD = float(os.getenv("MOMENTUM_WPA_THRESHOLD", "0.15"))
 
 HTTP_TIMEOUT = 10.0
 HTTP_HEADERS = {"User-Agent": "HomeHub/1.0 (anthonygatte@gmail.com)"}
@@ -76,7 +84,21 @@ _FG_ABBREV_RE = re.compile(
 )
 
 
-PlayType = Literal["touchdown", "field_goal", "kickoff", "other"]
+PlayType = Literal[
+    "touchdown",
+    "field_goal",
+    "kickoff",
+    # Slice C+ score-type coverage (2026-05-15): rare-but-real scoring events
+    # that the original 4-event slice elided. Each maps to its own
+    # CelebrationSequence in celebration_orchestrator.SEQUENCES.
+    "safety",
+    "extra_point_good",
+    "two_point_conv",
+    "defensive_td",  # Covers pick-six and fumble-return TD (turnover-going-for-points).
+    # WPA momentum lane — emitted for non-scoring plays with |WPA| >= 0.15.
+    "momentum",
+    "other",
+]
 
 
 @dataclass
@@ -344,7 +366,11 @@ class GameDayService:
             return
 
         new_state = self._build_state(summary, active)
+        # IMPORTANT: scoring plays first — they call `self._known_play_ids.add(play_id)`
+        # which makes the momentum walk below skip the same play_id (a TD with WPA=0.30
+        # is already firing its full TD sequence; no generic momentum celebration on top).
         new_plays = self._extract_new_plays(summary)
+        new_momentum_plays = self._extract_new_momentum_plays(summary)
 
         # Status transitions.
         old_status = (
@@ -362,8 +388,18 @@ class GameDayService:
         if new_state.status == "final" and old_status != "final":
             self._schedule_post_game_clear()
 
-        # Emit play events (oldest first).
+        # Emit play events (oldest first). Scoring plays fire first so
+        # their celebrations are not gated behind any momentum 8s cooldown.
         for play in new_plays:
+            await self._fire_play_event(play)
+            try:
+                await self._ws_manager.broadcast("gameday_play", asdict(play))
+            except Exception:
+                logger.exception("ws broadcast gameday_play failed")
+
+        # Momentum plays second. The orchestrator's 8s cooldown coalesces
+        # bursts (consecutive big plays on a single drive) into one fire.
+        for play in new_momentum_plays:
             await self._fire_play_event(play)
             try:
                 await self._ws_manager.broadcast("gameday_play", asdict(play))
@@ -587,9 +623,84 @@ class GameDayService:
             if not play_id or play_id in self._known_play_ids:
                 continue
             play = self._parse_play(raw)
-            if play.play_type in ("touchdown", "field_goal"):
+            # Slice C+: emit every recognized score subtype. Defensive_td
+            # passes through even when scoring_team=="colts" (the Colts'
+            # defense scored, which IS a Colts score). Opponent scores
+            # land here too but are filtered downstream by the
+            # CelebrationOrchestrator's on_play_event Colts-only gate.
+            if play.play_type in (
+                "touchdown", "field_goal", "safety",
+                "extra_point_good", "two_point_conv", "defensive_td",
+            ):
                 play.wpa = self._compute_wpa(play_id, summary, colts_are_home)
                 out.append(play)
+                self._known_play_ids.add(play_id)
+
+        return out
+
+    def _extract_new_momentum_plays(self, summary: dict) -> list[PlayEvent]:
+        """Phase 2 — surface non-scoring plays with |WPA| >= threshold.
+
+        Walks ``drives.previous[].plays[]`` (and ``drives.current.plays[]``
+        when present — in-progress drive's plays land there before the
+        drive ends). For each play not already in ``_known_play_ids``:
+          • Compute WPA via the shared ``_compute_wpa`` (reads from the
+            same ``summary.winprobability`` array as scoring plays).
+          • If a scoring play with the same id already passed through
+            ``_extract_new_plays`` it was added to ``_known_play_ids``,
+            so we skip it here — no double-emission.
+          • If ``|wpa| >= MOMENTUM_WPA_THRESHOLD``, emit a momentum
+            PlayEvent (``play_type="momentum"``, lights-only celebration).
+
+        Latency caveat: ESPN's winprobability array lags 30-60s behind
+        real time, same as scoring plays. Momentum celebrations will
+        therefore fire ~1 minute after the actual play. Tolerable for
+        v1; documented in the Plan as out-of-scope to fix.
+        """
+        out: list[PlayEvent] = []
+        active = self._find_active_game() or {}
+        colts_are_home = bool(active.get("colts_are_home", False))
+
+        drives = summary.get("drives") or {}
+        all_drives: list[dict] = []
+        previous = drives.get("previous") or []
+        all_drives.extend(previous)
+        # `current` is the in-progress drive — its plays land in WP too.
+        current = drives.get("current")
+        if isinstance(current, dict):
+            all_drives.append(current)
+
+        for drive in all_drives:
+            for raw in (drive.get("plays") or []):
+                play_id = str(raw.get("id") or "")
+                if not play_id or play_id in self._known_play_ids:
+                    continue
+                wpa = self._compute_wpa(play_id, summary, colts_are_home)
+                if wpa is None or abs(wpa) < MOMENTUM_WPA_THRESHOLD:
+                    continue
+                # Build a minimal PlayEvent. We don't parse player/yards
+                # for momentum — the sequence is lights-only, the TV is
+                # carrying the play text. Description preserves the raw
+                # ESPN text for postmortem digest readability.
+                text = str(raw.get("text") or "")
+                wallclock_str = raw.get("wallclock")
+                if wallclock_str:
+                    timestamp = (
+                        _parse_espn_datetime(wallclock_str)
+                        or datetime.now(timezone.utc)
+                    )
+                else:
+                    timestamp = datetime.now(timezone.utc)
+                out.append(PlayEvent(
+                    timestamp=timestamp,
+                    play_type="momentum",
+                    description=text,
+                    player=None,
+                    kicker=None,
+                    yards=None,
+                    scoring_team=None,
+                    wpa=wpa,
+                ))
                 self._known_play_ids.add(play_id)
 
         return out
@@ -642,12 +753,40 @@ class GameDayService:
         scoring_type = (raw.get("scoringType") or {}).get("abbreviation") or ""
         play_type_text = (raw.get("type") or {}).get("text") or ""
 
-        # Determine play_type.
-        if "TD" in scoring_type.upper() or "TOUCHDOWN" in play_type_text.upper():
-            play_type: PlayType = "touchdown"
-        elif scoring_type.upper() == "FG" or "FIELD GOAL" in play_type_text.upper():
+        # Determine play_type. Order matters — check more-specific subtypes
+        # (defensive TD, safety, extra-point, 2pt-conv) BEFORE the broad
+        # touchdown match, otherwise a pick-six lands as a plain "touchdown".
+        text_upper = text.upper()
+        scoring_upper = scoring_type.upper()
+        play_type_upper = play_type_text.upper()
+        is_td = "TD" in scoring_upper or "TOUCHDOWN" in play_type_upper
+
+        if scoring_upper in ("SF", "SAFETY") or "SAFETY" in play_type_upper:
+            play_type: PlayType = "safety"
+        elif is_td and (
+            "INTERCEPT" in text_upper
+            or "FUMBLE" in text_upper
+            or "DEFENSIVE TOUCHDOWN" in play_type_upper
+        ):
+            # Pick-six and fumble-return TD. ESPN keeps scoringType="TD" for
+            # these, so the differentiator is the play text. If the offense
+            # was the Colts (we recovered our own fumble into the EZ — vanishingly
+            # rare on offense) the scoring_team logic below still resolves
+            # correctly; the celebration sequence is about emotional category.
+            play_type = "defensive_td"
+        elif is_td:
+            play_type = "touchdown"
+        elif scoring_upper in ("PAT", "XP") or (
+            "EXTRA POINT" in play_type_upper and ("GOOD" in text_upper or "MADE" in text_upper)
+        ):
+            play_type = "extra_point_good"
+        elif scoring_upper in ("2PT", "2-PT") or (
+            "TWO-POINT" in text_upper or "TWO POINT" in text_upper
+        ) and ("GOOD" in text_upper or "SUCCESSFUL" in text_upper or "CONVERTED" in text_upper):
+            play_type = "two_point_conv"
+        elif scoring_upper == "FG" or "FIELD GOAL" in play_type_upper:
             play_type = "field_goal"
-        elif "KICKOFF" in play_type_text.upper():
+        elif "KICKOFF" in play_type_upper:
             play_type = "kickoff"
         else:
             play_type = "other"

@@ -43,17 +43,33 @@ router = APIRouter(prefix="/api/gameday", tags=["gameday"])
 
 _VALID_TEST_EVENTS = {
     "touchdown", "field_goal", "kickoff", "end_of_game_win", "end_of_game_loss",
+    # Slice C+ score-type coverage (2026-05-15):
+    "safety", "extra_point_good", "two_point_conv", "defensive_td",
+    # Phase 2 WPA momentum lane:
+    "momentum",
 }
 
 # Map test event names to the PlayType enum values that GameDayService accepts.
 # `end_of_game_win` / `end_of_game_loss` aren't real PlayTypes; they synthesize
 # as "other" and Slice B's orchestrator will key off the description.
-_TEST_EVENT_TO_PLAY_TYPE: dict[str, Literal["touchdown", "field_goal", "kickoff", "other"]] = {
+_TEST_EVENT_TO_PLAY_TYPE: dict[
+    str,
+    Literal[
+        "touchdown", "field_goal", "kickoff",
+        "safety", "extra_point_good", "two_point_conv", "defensive_td",
+        "momentum", "other",
+    ],
+] = {
     "touchdown": "touchdown",
     "field_goal": "field_goal",
     "kickoff": "kickoff",
     "end_of_game_win": "other",
     "end_of_game_loss": "other",
+    "safety": "safety",
+    "extra_point_good": "extra_point_good",
+    "two_point_conv": "two_point_conv",
+    "defensive_td": "defensive_td",
+    "momentum": "momentum",
 }
 
 

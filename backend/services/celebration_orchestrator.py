@@ -274,6 +274,132 @@ _EOG_LOSS_STEPS: list[LightStep] = [
                      "sat": 120, "transitiontime": 30}),
 ]
 
+# ----- Safety: ~3s. 4-beat alternating-color flash across all 5 lights.
+# Rare scoring event (defense-driven 2 points + ball back); deserves a
+# distinctive cadence — sharp short pulses (vs TD's longer rotation) so
+# the apartment reads it as a *defensive* moment, not an offensive one.
+_SAFETY_STEPS: list[LightStep] = [
+    _pulse("1", 0, blue=False, bri=254),
+    _pulse("2", 0, blue=False, bri=254),
+    _pulse("5", 0, blue=False, bri=254),
+    _pulse("3", 0, blue=False, bri=254),
+    _pulse("4", 0, blue=False, bri=254),
+    _pulse("1", 400, blue=True, bri=254),
+    _pulse("2", 400, blue=True, bri=254),
+    _pulse("5", 400, blue=True, bri=254),
+    _pulse("3", 400, blue=True, bri=254),
+    _pulse("4", 400, blue=True, bri=254),
+    _pulse("1", 800, blue=False, bri=254),
+    _pulse("2", 800, blue=False, bri=254),
+    _pulse("5", 800, blue=False, bri=254),
+    _pulse("3", 800, blue=False, bri=254),
+    _pulse("4", 800, blue=False, bri=254),
+    _pulse("1", 1200, blue=True, bri=254),
+    _pulse("2", 1200, blue=True, bri=254),
+    _pulse("5", 1200, blue=True, bri=254),
+    _pulse("3", 1200, blue=True, bri=254),
+    _pulse("4", 1200, blue=True, bri=254),
+    _baseline_step("1", 2000, _BASELINE_L1, transition=20),
+    _baseline_step("2", 2000, _BASELINE_FILL, transition=20),
+    _baseline_step("5", 2000, _BASELINE_FILL, transition=20),
+    _baseline_step("3", 2000, _BASELINE_KITCHEN, transition=20),
+    _baseline_step("4", 2000, _BASELINE_KITCHEN, transition=20),
+]
+
+# ----- Extra point (PAT good): ~0.5s. Single brief L1-only pulse — fires
+# after every offensive TD, so this MUST be subtle. Just enough to ack
+# "yes the kick was good." Other 4 lights stay at baseline.
+_PAT_STEPS: list[LightStep] = [
+    _pulse("1", 0, blue=True, bri=220, transition=2),
+    _baseline_step("1", 500, _BASELINE_L1, transition=5),
+]
+
+# ----- Two-point conversion: ~2s. Bigger than PAT (deliberate gutsy call,
+# higher leverage), smaller than full TD. Two rotation beats + fade home.
+_2PT_STEPS: list[LightStep] = [
+    # Beat 1: alternating blue/white across the room.
+    _pulse("1", 0, blue=True, bri=254),
+    _pulse("2", 0, blue=False, bri=254),
+    _pulse("5", 0, blue=False, bri=254),
+    _pulse("3", 0, blue=True, bri=254),
+    _pulse("4", 0, blue=True, bri=254),
+    # Beat 2: flip the alternation.
+    _pulse("1", 600, blue=False, bri=254),
+    _pulse("2", 600, blue=True, bri=254),
+    _pulse("5", 600, blue=True, bri=254),
+    _pulse("3", 600, blue=False, bri=254),
+    _pulse("4", 600, blue=False, bri=254),
+    # Fade home.
+    _baseline_step("1", 1500, _BASELINE_L1, transition=10),
+    _baseline_step("2", 1500, _BASELINE_FILL, transition=10),
+    _baseline_step("5", 1500, _BASELINE_FILL, transition=10),
+    _baseline_step("3", 1500, _BASELINE_KITCHEN, transition=10),
+    _baseline_step("4", 1500, _BASELINE_KITCHEN, transition=10),
+]
+
+# ----- Defensive TD (pick-six / fumble-return TD): ~4s. Distinct flavor
+# vs offensive TD — turnover going for points is its own emotional
+# moment. Phase 1 stays all-blue (signals "defense") for 1.5s before
+# rotating blue/white (signals "and they scored"), then fades home.
+_DEFENSIVE_TD_STEPS: list[LightStep] = [
+    # Phase 1: all blue, sustained ~1.5s.
+    _pulse("1", 0, blue=True, bri=254),
+    _pulse("2", 0, blue=True, bri=254),
+    _pulse("5", 0, blue=True, bri=254),
+    _pulse("3", 0, blue=True, bri=254),
+    _pulse("4", 0, blue=True, bri=254),
+    # Phase 2: rotate to signal the score.
+    _pulse("1", 1500, blue=False, bri=254),
+    _pulse("2", 1500, blue=True, bri=254),
+    _pulse("5", 1500, blue=True, bri=254),
+    _pulse("3", 1500, blue=False, bri=254),
+    _pulse("4", 1500, blue=False, bri=254),
+    _pulse("1", 2000, blue=True, bri=254),
+    _pulse("2", 2000, blue=False, bri=254),
+    _pulse("5", 2000, blue=False, bri=254),
+    _pulse("3", 2000, blue=True, bri=254),
+    _pulse("4", 2000, blue=True, bri=254),
+    _pulse("1", 2500, blue=False, bri=254),
+    _pulse("2", 2500, blue=True, bri=254),
+    _pulse("5", 2500, blue=True, bri=254),
+    _pulse("3", 2500, blue=False, bri=254),
+    _pulse("4", 2500, blue=False, bri=254),
+    # Fade home.
+    _baseline_step("1", 3500, _BASELINE_L1, transition=20),
+    _baseline_step("2", 3500, _BASELINE_FILL, transition=20),
+    _baseline_step("5", 3500, _BASELINE_FILL, transition=20),
+    _baseline_step("3", 3500, _BASELINE_KITCHEN, transition=20),
+    _baseline_step("4", 3500, _BASELINE_KITCHEN, transition=20),
+]
+
+# ----- WPA momentum "big play": ~2s lights-only flash. Lights-only by
+# design — see Plan §10. Generic TTS for unknown play context would be
+# bland; announcer TV audio is already carrying the moment. Shorter
+# than the score celebrations so it can fire mid-drive without feeling
+# like a strobe. The 8s orchestrator cooldown caps real density.
+_BIG_PLAY_STEPS: list[LightStep] = [
+    # Single unified blue flash on all 5 lights.
+    _pulse("1", 0, blue=True, bri=254),
+    _pulse("2", 0, blue=True, bri=254),
+    _pulse("5", 0, blue=True, bri=254),
+    _pulse("3", 0, blue=True, bri=254),
+    _pulse("4", 0, blue=True, bri=254),
+    # White-tinge midpoint at 500ms. transition=3 (300ms) softens the
+    # mid-flash so back-to-back momentum fires (8s cooldown gap) read as
+    # punctuation rather than strobe. Curator advisory 2026-05-15.
+    _pulse("1", 500, blue=False, bri=200, transition=3),
+    _pulse("2", 500, blue=False, bri=200, transition=3),
+    _pulse("5", 500, blue=False, bri=200, transition=3),
+    _pulse("3", 500, blue=False, bri=200, transition=3),
+    _pulse("4", 500, blue=False, bri=200, transition=3),
+    # Fade home in 1.5s — back to gameday baseline before next play.
+    _baseline_step("1", 1200, _BASELINE_L1, transition=10),
+    _baseline_step("2", 1200, _BASELINE_FILL, transition=10),
+    _baseline_step("5", 1200, _BASELINE_FILL, transition=10),
+    _baseline_step("3", 1200, _BASELINE_KITCHEN, transition=10),
+    _baseline_step("4", 1200, _BASELINE_KITCHEN, transition=10),
+]
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator
@@ -341,6 +467,64 @@ class CelebrationOrchestrator:
             duration_seconds=6.0,
             base_volume=0,  # tts_lines empty — base_volume unused
         ),
+        # ── Slice C+ score-type coverage (2026-05-15) ─────────────────────
+        # Each of the 4 below maps to a new gameday_service.PlayType. TTS
+        # pools are placeholders — curator + user authoring pass tracked
+        # separately (sibling to GH #6).
+        "safety": CelebrationSequence(
+            light_steps=_SAFETY_STEPS,
+            tts_lines=[
+                "Safety! Colts get two and the ball!",
+                "Defense gets the safety!",
+                "Two points and the ball back — safety, Colts!",
+            ],
+            # 4.0s = max_delay_ms 2000 + transition 20*100ms (fade duration).
+            # Curator 2026-05-15: under-declared duration interrupts the
+            # fade-home transition mid-flight; aligned with TD/EOG pattern.
+            duration_seconds=4.0,
+            base_volume=30,
+        ),
+        "extra_point_good": CelebrationSequence(
+            light_steps=_PAT_STEPS,
+            # Silent by design — fires after every offensive TD, TTS twice
+            # per drive would be obnoxious. Lights-only ack.
+            tts_lines=[],
+            duration_seconds=0.5,
+            base_volume=0,
+        ),
+        "two_point_conv": CelebrationSequence(
+            light_steps=_2PT_STEPS,
+            tts_lines=[
+                "Two-point conversion is good!",
+                "And the two-point try is successful!",
+                "Colts get two — conversion is good!",
+            ],
+            duration_seconds=2.0,
+            base_volume=28,
+        ),
+        "defensive_td": CelebrationSequence(
+            light_steps=_DEFENSIVE_TD_STEPS,
+            tts_lines=[
+                "Pick-six! Defense takes it to the house!",
+                "Defense scores Colts!",
+                "Turnover, touchdown! Defense scores six!",
+                "And the Colts defense puts it in the end zone!",
+            ],
+            # 6.0s = max_delay_ms 3500 + transition 20*100ms (fade) + 0.5s
+            # buffer, matching the EOG-win pattern. Curator 2026-05-15.
+            duration_seconds=6.0,
+            base_volume=32,  # bigger emotional moment than offensive TD
+        ),
+        # ── WPA momentum lane (Phase 2 — non-scoring big plays) ──────────
+        # Lights-only. Fires when _extract_new_momentum_plays surfaces a
+        # play with |WPA| >= MOMENTUM_WPA_THRESHOLD that isn't already a
+        # scoring play. 8s orchestrator cooldown caps density.
+        "big_play": CelebrationSequence(
+            light_steps=_BIG_PLAY_STEPS,
+            tts_lines=[],  # silent by design — see _BIG_PLAY_STEPS comment
+            duration_seconds=2.0,
+            base_volume=0,
+        ),
     }
 
     COOLDOWN_SECONDS: float = 8.0
@@ -390,15 +574,34 @@ class CelebrationOrchestrator:
     # ------------------------------------------------------------------ Subscribers
 
     async def on_play_event(self, evt: PlayEvent) -> None:
-        """Subscriber for GameDayService play events."""
-        if evt.play_type == "touchdown":
-            key = "touchdown"
-        elif evt.play_type == "field_goal":
-            key = "field_goal"
-        elif evt.play_type == "kickoff":
-            key = "kickoff"
-        else:
-            # `other` — not a celebratable event.
+        """Subscriber for GameDayService play events.
+
+        Score celebrations fire for Colts side only (offensive TD / FG / 2PT /
+        PAT / safety / defensive TD). Opponent scores are silent by design —
+        spec §2.2 ("we don't TTS the other team's points"). Momentum plays
+        (Phase 2 WPA lane) are team-agnostic — a Colts INT is the same kind
+        of moment as a defensive sack, both go through `big_play`.
+        """
+        # Score subtypes — Colts-only.
+        if evt.scoring_team == "opp" and evt.play_type in (
+            "touchdown", "field_goal", "safety",
+            "extra_point_good", "two_point_conv", "defensive_td",
+        ):
+            return
+
+        play_type_to_sequence: dict[str, str] = {
+            "touchdown": "touchdown",
+            "field_goal": "field_goal",
+            "kickoff": "kickoff",
+            "safety": "safety",
+            "extra_point_good": "extra_point_good",
+            "two_point_conv": "two_point_conv",
+            "defensive_td": "defensive_td",
+            "momentum": "big_play",
+        }
+        key = play_type_to_sequence.get(evt.play_type)
+        if key is None:
+            # `other` and anything unmapped — not a celebratable event.
             return
 
         context = self._build_context(evt)

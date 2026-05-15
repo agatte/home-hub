@@ -180,6 +180,74 @@ def _fg_play(play_id: str, text: str = "S.Shrader 24 yard field goal is GOOD.") 
     }
 
 
+def _safety_play(play_id: str = "s1") -> dict:
+    """ESPN-shaped safety event. scoringType varies — sometimes SF, sometimes
+    nothing; relying on either abbreviation or text fallback."""
+    return {
+        "id": play_id,
+        "text": "Safety, tackled in end zone.",
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "SF"},
+        "type": {"text": "Safety"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 2},
+        "clock": {"displayValue": "0:42"},
+    }
+
+
+def _pat_play(play_id: str = "p1") -> dict:
+    return {
+        "id": play_id,
+        "text": "S.Shrader extra point is GOOD.",
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "PAT"},
+        "type": {"text": "Extra Point Good"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 2},
+        "clock": {"displayValue": "8:12"},
+    }
+
+
+def _2pt_play(play_id: str = "tp1") -> dict:
+    return {
+        "id": play_id,
+        "text": "Two-point conversion is GOOD.",
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "2PT"},
+        "type": {"text": "Two Point Conversion"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 4},
+        "clock": {"displayValue": "1:58"},
+    }
+
+
+def _pick_six_play(play_id: str = "ps1") -> dict:
+    """Pick-six: TD scoringType but text indicates an interception return."""
+    return {
+        "id": play_id,
+        "text": "J.Sanders 32 Yd interception return for TOUCHDOWN.",
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "TD"},
+        "type": {"text": "Defensive Touchdown"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 3},
+        "clock": {"displayValue": "12:04"},
+    }
+
+
+def _fumble_td_play(play_id: str = "ft1") -> dict:
+    return {
+        "id": play_id,
+        "text": "Fumble recovered by D.Buckner, 18 Yd return for TOUCHDOWN.",
+        "scoringPlay": True,
+        "scoringType": {"abbreviation": "TD"},
+        "type": {"text": "Defensive Touchdown"},
+        "team": {"id": COLTS_TEAM_ID},
+        "period": {"number": 2},
+        "clock": {"displayValue": "6:21"},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Schedule + state
 # ---------------------------------------------------------------------------
@@ -273,6 +341,53 @@ class TestPlayParser:
         })
         assert play.play_type == "touchdown"
         assert play.player is None  # regex didn't match — graceful fallback
+
+    # ------------------------------------------------- Slice C+ score subtypes
+
+    def test_safety_parsed_by_abbreviation(self):
+        svc = _make_service()
+        play = svc._parse_play(_safety_play())
+        assert play.play_type == "safety"
+        assert play.scoring_team == "colts"
+
+    def test_safety_parsed_by_text_when_abbrev_missing(self):
+        svc = _make_service()
+        raw = _safety_play()
+        raw["scoringType"] = {}  # ESPN sometimes omits abbreviation
+        play = svc._parse_play(raw)
+        assert play.play_type == "safety"
+
+    def test_extra_point_good_parsed(self):
+        svc = _make_service()
+        play = svc._parse_play(_pat_play())
+        assert play.play_type == "extra_point_good"
+
+    def test_two_point_conversion_parsed(self):
+        svc = _make_service()
+        play = svc._parse_play(_2pt_play())
+        assert play.play_type == "two_point_conv"
+
+    def test_pick_six_parsed_as_defensive_td(self):
+        svc = _make_service()
+        play = svc._parse_play(_pick_six_play())
+        assert play.play_type == "defensive_td"
+        assert play.scoring_team == "colts"
+
+    def test_fumble_return_td_parsed_as_defensive_td(self):
+        svc = _make_service()
+        play = svc._parse_play(_fumble_td_play())
+        assert play.play_type == "defensive_td"
+
+    def test_offensive_td_still_parses_as_touchdown(self):
+        """Defensive-TD branch must not steal offensive TDs.
+
+        Order-of-check matters in _parse_play — a vanilla rushing TD has
+        scoringType=TD but no 'interception' or 'fumble' in the text, so
+        it should land in the offensive 'touchdown' branch.
+        """
+        svc = _make_service()
+        play = svc._parse_play(_td_play("td_off", text="J.Taylor 12 Yd Rush"))
+        assert play.play_type == "touchdown"
 
     def test_real_fixture_finds_scoring_plays(self):
         """Validates parser against a real 2025 Colts summary response.
@@ -815,6 +930,139 @@ class TestWpa:
         # entry exists for this play. Result is computed but with the
         # away-side sign convention. Important: it does NOT raise.
         assert new_plays[0].wpa is not None
+
+
+# ---------------------------------------------------------------------------
+# WPA momentum extraction (Phase 2)
+# ---------------------------------------------------------------------------
+
+def _momentum_summary(*plays_with_wp: tuple[str, float]) -> dict:
+    """Build a minimal ESPN-shaped summary with synthetic plays + WP.
+
+    Each tuple is (play_id, home_wp_after). WPA is implicit: delta from
+    the previous entry's home_wp. First entry has prior=0.5 (coin flip).
+    """
+    plays = []
+    wp_entries = []
+    for pid, wp in plays_with_wp:
+        plays.append({
+            "id": pid,
+            "text": f"Synthetic play {pid}",
+            "type": {"text": ""},
+            "scoringType": {},
+        })
+        wp_entries.append({
+            "playId": pid,
+            "homeWinPercentage": wp,
+        })
+    return {
+        "drives": {"previous": [{"plays": plays}]},
+        "winprobability": wp_entries,
+    }
+
+
+class TestMomentumExtraction:
+    """Phase 2 WPA-driven momentum lane: non-scoring plays with
+    |WPA| >= MOMENTUM_WPA_THRESHOLD surface as PlayEvent(play_type="momentum")."""
+
+    def test_threshold_below_skips(self):
+        svc = _make_service()
+        # WP goes 0.5 → 0.62 → delta = 0.12. Below 0.15 threshold.
+        summary = _momentum_summary(("p1", 0.62))
+        out = svc._extract_new_momentum_plays(summary)
+        assert out == []
+
+    def test_threshold_at_fires(self):
+        svc = _make_service()
+        # WP delta exactly 0.15 (0.5 → 0.65). Magnitude meets threshold.
+        # Sign depends on whether Colts are home/away — _make_service has
+        # no active game so colts_are_home defaults to False, but the
+        # threshold check is on |WPA| so either sign qualifies.
+        summary = _momentum_summary(("p1", 0.65))
+        out = svc._extract_new_momentum_plays(summary)
+        assert len(out) == 1
+        assert out[0].play_type == "momentum"
+        assert abs(out[0].wpa) == pytest.approx(0.15, abs=1e-9)
+
+    def test_threshold_above_fires(self):
+        svc = _make_service()
+        # WP delta magnitude 0.20 (0.5 → 0.70).
+        summary = _momentum_summary(("p1", 0.70))
+        out = svc._extract_new_momentum_plays(summary)
+        assert len(out) == 1
+        assert abs(out[0].wpa) >= 0.15
+
+    def test_negative_magnitude_fires(self):
+        """Negative-direction WPA (Colts lose ground) is still a momentum
+        moment — magnitude alone clears the threshold. The room reacts to
+        BIG plays, not Colts-favorable plays."""
+        svc = _make_service()
+        # 0.5 → 0.25 home-WP delta = -0.25 home-side. Magnitude 0.25
+        # always >= threshold regardless of home/away sign convention.
+        summary = _momentum_summary(("p1", 0.25))
+        out = svc._extract_new_momentum_plays(summary)
+        assert len(out) == 1
+        assert abs(out[0].wpa) >= 0.15
+
+    def test_skips_play_already_in_known_ids(self):
+        """Scoring plays added themselves to _known_play_ids first.
+        Momentum walk must skip them to avoid double-firing."""
+        svc = _make_service()
+        svc._known_play_ids.add("p1")
+        summary = _momentum_summary(("p1", 0.80))
+        out = svc._extract_new_momentum_plays(summary)
+        assert out == []
+
+    def test_wpa_none_skipped(self):
+        svc = _make_service()
+        # WP array missing this play_id → _compute_wpa returns None.
+        summary = {
+            "drives": {"previous": [{"plays": [
+                {"id": "p1", "text": "play", "type": {}, "scoringType": {}},
+            ]}]},
+            "winprobability": [],  # empty
+        }
+        out = svc._extract_new_momentum_plays(summary)
+        assert out == []
+
+    def test_walks_current_drive_when_present(self):
+        """drives.current is the in-progress drive; its plays land in WP
+        before the drive ends. Momentum should fire from current too."""
+        svc = _make_service()
+        summary = {
+            "drives": {
+                "previous": [],
+                "current": {"plays": [
+                    {"id": "p1", "text": "in-drive big play",
+                     "type": {}, "scoringType": {}},
+                ]},
+            },
+            "winprobability": [
+                {"playId": "p1", "homeWinPercentage": 0.75},  # delta +0.25
+            ],
+        }
+        out = svc._extract_new_momentum_plays(summary)
+        assert len(out) == 1
+
+    def test_emits_minimal_play_event_fields(self):
+        """Momentum plays don't parse player/yards — lights-only celebration.
+        But fields should be coherent: type=momentum, scoring_team=None."""
+        svc = _make_service()
+        summary = _momentum_summary(("p1", 0.70))
+        out = svc._extract_new_momentum_plays(summary)
+        assert out[0].play_type == "momentum"
+        assert out[0].scoring_team is None
+        assert out[0].player is None
+        assert out[0].kicker is None
+        assert out[0].description == "Synthetic play p1"
+
+    def test_adds_to_known_play_ids_so_no_refire(self):
+        svc = _make_service()
+        summary = _momentum_summary(("p1", 0.70))
+        svc._extract_new_momentum_plays(summary)
+        # Second call same tick — should return empty (play_id in known set).
+        out = svc._extract_new_momentum_plays(summary)
+        assert out == []
 
 
 # ---------------------------------------------------------------------------
