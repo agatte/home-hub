@@ -18,11 +18,17 @@ from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
 from backend.services.gameday_service import GameDayService
+from backend.services.pregame_audio_policy import (
+    TIER_ELIMINATED,
+    TIER_PRESEASON,
+    VALID_TIERS,
+)
 
 
-_VALID_STAKES_TIERS = {
-    "standard", "big_stakes", "clutch", "victory_lap", "eliminated", "preseason",
-}
+# /test/pregame accepts the same regular-season tier names the policy
+# module knows, plus the two specials that the policy reaches via
+# is_preseason/is_eliminated branches rather than direct tier classification.
+_VALID_STAKES_TIERS = VALID_TIERS | {TIER_PRESEASON, TIER_ELIMINATED}
 
 
 class TestPregameRequest(BaseModel):
@@ -75,33 +81,10 @@ async def get_schedule(request: Request) -> list[dict[str, Any]]:
     return await svc.get_upcoming_schedule(limit=5)
 
 
-@router.post("/test/{event}", dependencies=[Depends(require_api_key)])
-async def test_event(event: str, request: Request) -> dict[str, Any]:
-    """Fire a synthetic PlayEvent through the play-event subscribers.
-
-    Used to tune CelebrationOrchestrator sequences without waiting for a
-    real game. Until Slice B subscribes, no listeners — this just logs and
-    returns ok. Auth-gated like all other write endpoints (localhost +
-    RFC1918 LAN bypass).
-    """
-    if event not in _VALID_TEST_EVENTS:
-        raise HTTPException(
-            400,
-            f"Unknown event: {event}. Valid: {sorted(_VALID_TEST_EVENTS)}",
-        )
-    svc = _service(request)
-    play_type = _TEST_EVENT_TO_PLAY_TYPE[event]
-    play = await svc.trigger_synthetic_play(play_type)
-    return {
-        "status": "ok",
-        "event": event,
-        "fired": {
-            "play_type": play.play_type,
-            "description": play.description,
-        },
-    }
-
-
+# IMPORTANT — /test/pregame MUST be registered BEFORE /test/{event}. FastAPI
+# resolves routes in registration order; the wildcard {event} swallows
+# `pregame` first and returns 400 before the dedicated handler runs.
+# Caught by deploy-verifier 2026-05-15 on first ship.
 @router.post("/test/pregame", dependencies=[Depends(require_api_key)])
 async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, Any]:
     """Synthetic T-60 pregameday fire (GAMEDAY_SPEC §10.6).
@@ -146,3 +129,30 @@ async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, 
             "sonos_hype_queued": decision.sonos_hype_play,
         }
     return result
+
+
+@router.post("/test/{event}", dependencies=[Depends(require_api_key)])
+async def test_event(event: str, request: Request) -> dict[str, Any]:
+    """Fire a synthetic PlayEvent through the play-event subscribers.
+
+    Used to tune CelebrationOrchestrator sequences without waiting for a
+    real game. Until Slice B subscribes, no listeners — this just logs and
+    returns ok. Auth-gated like all other write endpoints (localhost +
+    RFC1918 LAN bypass).
+    """
+    if event not in _VALID_TEST_EVENTS:
+        raise HTTPException(
+            400,
+            f"Unknown event: {event}. Valid: {sorted(_VALID_TEST_EVENTS)}",
+        )
+    svc = _service(request)
+    play_type = _TEST_EVENT_TO_PLAY_TYPE[event]
+    play = await svc.trigger_synthetic_play(play_type)
+    return {
+        "status": "ok",
+        "event": event,
+        "fired": {
+            "play_type": play.play_type,
+            "description": play.description,
+        },
+    }
