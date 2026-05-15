@@ -731,12 +731,15 @@ class BehavioralPredictor(HealthTrackable):
         # accuracy. compute_per_source_metrics excludes these.
         low_confidence = confidence < LOW_CONFIDENCE_TAG_THRESHOLD
 
-        # Build top contributing features for explainability
-        feature_rows = [
-            {"feature": col, "value": features[col]}
+        # Feature-vector echo for explainability. Keyed by FEATURE_COLUMNS
+        # so audits can `json_extract(factors, '$.features.audio_class_enc')`
+        # — list-of-dicts truncated to 5 made the 5/05-retrain features
+        # invisible to ml-model-evaluator and predictor-promotion-advisor.
+        feature_values = {
+            col: features[col]
             for col in FEATURE_COLUMNS
             if features.get(col) is not None
-        ]
+        }
 
         result = {
             "predicted_mode": predicted_mode,
@@ -744,11 +747,7 @@ class BehavioralPredictor(HealthTrackable):
             "source": "behavioral_predictor",
             "low_confidence": low_confidence,
             "factors": {
-                # ``features`` is a feature-vector echo for explainability;
-                # ``distribution`` is the full per-class softmax so we can
-                # diagnose single-class collapse and threshold tuning
-                # without re-running inference.
-                "features": feature_rows[:5],
+                "features": feature_values,
                 "distribution": distribution,
                 "low_confidence": low_confidence,
             },
