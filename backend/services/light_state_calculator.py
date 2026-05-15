@@ -66,6 +66,7 @@ DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
     "cooking": 1.0,
     "social": 1.0,
     "gameday": 1.0,
+    "pregameday": 1.0,
 }
 
 
@@ -83,6 +84,7 @@ MODE_TRANSITION_TIME: dict[str, int] = {
     "cooking":  10,   # 1s — kitchen lights up the moment you tap the tile
     "idle":     20,   # 2s
     "gameday":  10,   # 1s snap — celebration windows are time-sensitive
+    "pregameday": 40, # 4s slow build — anticipation, not a snap (GAMEDAY_SPEC §10.4)
 }
 
 
@@ -187,6 +189,11 @@ EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     # visual effects during plays (Decision 1.3a in docs/GAMEDAY_SPEC.md).
     # Auto-effect map stays None across periods.
     "gameday":  {"day": None, "evening": None, "night": None, "late_night": None},
+    # Pregameday — silent visual build (T-60 to T-30). No animated effects;
+    # static palette only. Weather can still overlay if the period defaults
+    # to None (e.g. thunderstorm→sparkle) — that's a feature, not a bug,
+    # since lightning-and-Colts-blue is on-brand.
+    "pregameday": {"day": None, "evening": None, "night": None, "late_night": None},
 }
 
 
@@ -396,6 +403,50 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 18,  "hue": 6000,  "sat": 180},
             "4": {"on": True, "bri": 18,  "hue": 6000,  "sat": 180},
             "5": {"on": True, "bri": 70,  "hue": 6000,  "sat": 200},
+        },
+    },
+    # ── Pregameday ────────────────────────────────────────────────────
+    # T-60 to T-30 silent visual build (GAMEDAY_SPEC §10.2). Sister
+    # palette to gameday, dialed back ~15-20% on saturation: Colts blue
+    # clearly present on L1 (hue 47000) but a notch less committed than
+    # gameday's _COLTS_BLUE_SAT=215 commitment; warm-amber fill on L2 +
+    # kitchen pair L3≡L4 a hair softer than gameday so the room reads as
+    # "building toward" rather than "fully arrived." Curator iteration
+    # on real values pre-preseason tracked at GH #8.
+    "pregameday": {
+        "day": {
+            "1": {"on": True, "bri": 140, "hue": 47000, "sat": 170},
+            "2": {"on": True, "bri": 180, "hue": 8500,  "sat": 105},
+            "3": {"on": True, "bri": 120, "hue": 8500,  "sat": 105},
+            "4": {"on": True, "bri": 120, "hue": 8500,  "sat": 105},
+            "5": {"on": True, "bri": 180, "hue": 8500,  "sat": 105},
+        },
+        "evening": {
+            "1": {"on": True, "bri": 100, "hue": 47000, "sat": 175},
+            "2": {"on": True, "bri": 130, "hue": 7500,  "sat": 135},
+            "3": {"on": True, "bri": 50,  "hue": 7500,  "sat": 135},
+            "4": {"on": True, "bri": 50,  "hue": 7500,  "sat": 135},
+            "5": {"on": True, "bri": 130, "hue": 7500,  "sat": 135},
+        },
+        "night": {
+            "1": {"on": True, "bri": 60,  "hue": 47000, "sat": 175},
+            "2": {"on": True, "bri": 85,  "hue": 6800,  "sat": 170},
+            "3": {"on": True, "bri": 25,  "hue": 6800,  "sat": 170},
+            "4": {"on": True, "bri": 25,  "hue": 6800,  "sat": 170},
+            "5": {"on": True, "bri": 85,  "hue": 6800,  "sat": 170},
+        },
+        # Late-night L5 bumped to bri=75 (vs L2's 60) per lighting-curator
+        # advisory 2026-05-15: L5 clear-housing fixture amplifies saturation
+        # at low brightness; matching L2's 60 lands in the "cave amber"
+        # caution zone. 75 is L2's night value — keeps the sister-pair feel
+        # without the seeded-glass pop becoming oppressive. Real-room photo
+        # verification pre-preseason owed (GH #8).
+        "late_night": {
+            "1": {"on": True, "bri": 42,  "hue": 47000, "sat": 175},
+            "2": {"on": True, "bri": 60,  "hue": 6300,  "sat": 170},
+            "3": {"on": True, "bri": 15,  "hue": 6300,  "sat": 150},
+            "4": {"on": True, "bri": 15,  "hue": 6300,  "sat": 150},
+            "5": {"on": True, "bri": 75,  "hue": 6300,  "sat": 170},
         },
     },
     # ── Relax ─────────────────────────────────────────────────────────

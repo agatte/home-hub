@@ -35,9 +35,11 @@ SCHEDULE_CACHE_TTL = 900       # 15 min — spec §4.1 polling cadence
 POLL_INTERVAL_LIVE = 10        # 10s during in-progress
 POLL_INTERVAL_IDLE = 60        # 60s during pregame/final/no-game
 PRE_KICKOFF_FLIP_MINUTES = 30
+PRE_GAME_AMBIENT_FLIP_MINUTES = 60  # T-60 silent visual build (GAMEDAY_SPEC §10.1)
 POST_GAME_CLEAR_MINUTES = 30
 
 GAMEDAY_AUTO_SOURCE = "gameday:auto"
+PREGAMEDAY_AUTO_SOURCE = "gameday:auto:pregame"
 
 HTTP_TIMEOUT = 10.0
 HTTP_HEADERS = {"User-Agent": "HomeHub/1.0 (anthonygatte@gmail.com)"}
@@ -153,6 +155,16 @@ class GameDayService:
         self._play_callbacks: list[PlayCallback] = []
         self._transition_callbacks: list[TransitionCallback] = []
 
+        # Synthetic time injection for tests (GAMEDAY_SPEC §10.6). When set,
+        # _now_utc() returns this instead of the real wall clock — lets tests
+        # exercise the T-60 → T-30 → T+30 lifecycle without sleeping or
+        # waiting for a real kickoff window. Always None in production.
+        self._now_override: Optional[datetime] = None
+
+    def _now_utc(self) -> datetime:
+        """Real wall clock, or the test override when set."""
+        return self._now_override or datetime.now(timezone.utc)
+
     # ------------------------------------------------------------------ Lifecycle
 
     @property
@@ -208,6 +220,54 @@ class GameDayService:
         upcoming.sort(key=lambda g: g["kickoff_utc"])
         return upcoming[:limit]
 
+    async def trigger_synthetic_pregame(
+        self,
+        opponent: str,
+        stakes_tier: str,
+        hold_seconds: int = 30,
+    ) -> dict[str, Any]:
+        """Synthetic T-60 pregameday fire for `POST /api/gameday/test/pregame`.
+
+        Flips automation to pregameday, holds for `hold_seconds`, then clears.
+        Phase 3 will extend this to also dispatch the audio policy with the
+        supplied stakes_tier — for Phase 1 the tier is logged + returned but
+        the audio path is not yet reachable.
+
+        GAMEDAY_SPEC §10.6 specifies the live-synthetic-fire pattern.
+        """
+        logger.info(
+            "synthetic pregameday fire: opponent=%s stakes_tier=%s hold=%ds",
+            opponent, stakes_tier, hold_seconds,
+        )
+        await self._automation.set_manual_override(
+            "pregameday", source=PREGAMEDAY_AUTO_SOURCE
+        )
+
+        async def _delayed_clear() -> None:
+            try:
+                await asyncio.sleep(hold_seconds)
+                # Only clear if our synthetic-fire override is still the
+                # active one (user may have manually changed mode mid-test).
+                override_source = getattr(self._automation, "override_source", None)
+                if override_source == PREGAMEDAY_AUTO_SOURCE:
+                    await self._automation.clear_override(
+                        source=PREGAMEDAY_AUTO_SOURCE
+                    )
+                    logger.info("synthetic pregameday cleared after %ds", hold_seconds)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("synthetic pregameday clear failed")
+
+        asyncio.create_task(_delayed_clear())
+        return {
+            "status": "ok",
+            "mode": "pregameday",
+            "opponent": opponent,
+            "stakes_tier": stakes_tier,
+            "hold_seconds": hold_seconds,
+        }
+
     async def trigger_synthetic_play(self, play_type: PlayType) -> PlayEvent:
         """Fire a synthetic PlayEvent through subscribers. Used by the test
         endpoint at POST /api/gameday/test/{event}. Until Slice B subscribes,
@@ -256,15 +316,23 @@ class GameDayService:
             await self._update_state(None)
             return
 
-        now_utc = datetime.now(timezone.utc)
+        now_utc = self._now_utc()
 
-        # T-30 pre-kickoff flip — only if game is still scheduled.
+        # Pre-kickoff flips — only if game is still scheduled. Two windows:
+        #   • T-60 → T-30 : pregameday (silent visual build, GAMEDAY_SPEC §10.1)
+        #   • T-30 → T+0  : gameday (in-game baseline + audio policy at the flip)
+        # _maybe_flip_gameday() takes priority — checked second so its
+        # set_manual_override displaces the pregameday override within the
+        # narrower window. Both are idempotent.
         if active["status"] == STATUS_SCHEDULED:
             minutes_to_kickoff = (
                 active["kickoff_utc"] - now_utc
             ).total_seconds() / 60.0
-            if 0 < minutes_to_kickoff <= PRE_KICKOFF_FLIP_MINUTES:
-                await self._maybe_flip_pregame()
+            if 0 < minutes_to_kickoff <= PRE_GAME_AMBIENT_FLIP_MINUTES:
+                if minutes_to_kickoff <= PRE_KICKOFF_FLIP_MINUTES:
+                    await self._maybe_flip_gameday()
+                else:
+                    await self._maybe_flip_pregame_ambient()
 
             # Pregame state — no live data yet, just emit a snapshot.
             await self._update_state(self._pregame_state(active))
@@ -650,10 +718,33 @@ class GameDayService:
 
     # ------------------------------------------------------------------ Mode flips
 
-    async def _maybe_flip_pregame(self) -> None:
+    async def _maybe_flip_pregame_ambient(self) -> None:
+        """Set automation override to pregameday at T-60 (GAMEDAY_SPEC §10.1).
+        Idempotent — re-flipping on every tick is harmless (set_manual_override
+        no-ops if already set) but we gate on current mode to keep journalctl
+        clean. Distinct override source so the post-game clear logic can tell
+        a user-touched override apart from this and the T-30 flip."""
+        try:
+            current = self._automation.current_mode
+        except Exception:
+            current = None
+        # If gameday is already up (e.g. user manually fired test/pregame
+        # right at T-30) don't downgrade — gameday is the destination.
+        if current in ("pregameday", "gameday"):
+            return
+        logger.info("T-60 reached — flipping automation to pregameday")
+        await self._automation.set_manual_override(
+            "pregameday", source=PREGAMEDAY_AUTO_SOURCE
+        )
+
+    async def _maybe_flip_gameday(self) -> None:
         """Set automation override to gameday at T-30. Idempotent — re-flipping
         on every tick is harmless (set_manual_override no-ops if already set)
-        but we gate on current mode anyway to keep journalctl clean."""
+        but we gate on current mode anyway to keep journalctl clean.
+
+        Renamed from _maybe_flip_pregame on 2026-05-15 (pregameday added) —
+        the old name implied 'flip at pregame', but the actual flip lands on
+        gameday. _maybe_flip_pregame_ambient now owns the T-60 pre-game flip."""
         try:
             current = self._automation.current_mode
         except Exception:

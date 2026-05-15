@@ -14,9 +14,21 @@ from dataclasses import asdict
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
 from backend.services.gameday_service import GameDayService
+
+
+_VALID_STAKES_TIERS = {
+    "standard", "big_stakes", "clutch", "victory_lap", "eliminated", "preseason",
+}
+
+
+class TestPregameRequest(BaseModel):
+    """Body for POST /api/gameday/test/pregame (GAMEDAY_SPEC §10.6)."""
+    opponent: str = Field(..., min_length=1, max_length=80)
+    stakes_tier: str = Field("standard", description="Stakes tier override for the audio policy")
 
 logger = logging.getLogger("home_hub.api.gameday")
 
@@ -88,3 +100,23 @@ async def test_event(event: str, request: Request) -> dict[str, Any]:
             "description": play.description,
         },
     }
+
+
+@router.post("/test/pregame", dependencies=[Depends(require_api_key)])
+async def test_pregame(body: TestPregameRequest, request: Request) -> dict[str, Any]:
+    """Synthetic T-60 pregameday fire (GAMEDAY_SPEC §10.6).
+
+    Flips automation to pregameday for 30 seconds, then auto-clears. Phase 3
+    will additionally dispatch the audio policy with the supplied stakes_tier.
+    """
+    if body.stakes_tier not in _VALID_STAKES_TIERS:
+        raise HTTPException(
+            400,
+            f"Unknown stakes_tier: {body.stakes_tier}. "
+            f"Valid: {sorted(_VALID_STAKES_TIERS)}",
+        )
+    svc = _service(request)
+    return await svc.trigger_synthetic_pregame(
+        opponent=body.opponent,
+        stakes_tier=body.stakes_tier,
+    )

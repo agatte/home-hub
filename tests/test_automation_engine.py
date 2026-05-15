@@ -51,9 +51,14 @@ class TestModePriority:
     def test_all_expected_modes_present(self):
         expected = {
             "sleeping", "idle", "working", "watching", "cooking",
-            "social", "gaming", "gameday",
+            "social", "gaming", "gameday", "pregameday",
         }
         assert set(MODE_PRIORITY.keys()) == expected
+
+    def test_pregameday_priority_matches_gameday(self):
+        """GAMEDAY_SPEC §10.1 — pregameday shares priority 6 with gameday so
+        same-source updates from gameday_service can flip between them."""
+        assert MODE_PRIORITY["pregameday"] == MODE_PRIORITY["gameday"]
 
 
 # ---------------------------------------------------------------------------

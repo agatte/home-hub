@@ -21,7 +21,9 @@ from backend.services.gameday_service import (
     COLTS_TEAM_ID,
     GAMEDAY_AUTO_SOURCE,
     POST_GAME_CLEAR_MINUTES,
+    PRE_GAME_AMBIENT_FLIP_MINUTES,
     PRE_KICKOFF_FLIP_MINUTES,
+    PREGAMEDAY_AUTO_SOURCE,
     SCHEDULE_CACHE_TTL,
     GameDayService,
     GameDayState,
@@ -452,6 +454,162 @@ class TestModeFlips:
         assert svc._post_game_clear_task is not None
         # Cleanup — cancel the task so it doesn't run after the test.
         svc._post_game_clear_task.cancel()
+
+    # ------------------------------------------------------------- pregameday
+    # T-60 pregameday flip — GAMEDAY_SPEC §10.1
+    # ----------------------------------------------------------------------
+
+    async def test_t60_ambient_flip_when_in_pregame_window(self):
+        automation = _make_automation_mock(current_mode="working")
+        svc = _make_service(automation=automation)
+        # Kickoff in 45 min — within T-60 window, outside T-30.
+        kickoff_in_45 = (
+            datetime.now(timezone.utc) + timedelta(minutes=45)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_45)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        automation.set_manual_override.assert_awaited_once_with(
+            "pregameday", source=PREGAMEDAY_AUTO_SOURCE,
+        )
+
+    async def test_t60_no_flip_when_kickoff_far_away(self):
+        automation = _make_automation_mock(current_mode="working")
+        svc = _make_service(automation=automation)
+        # 90 min out — outside even the T-60 window.
+        kickoff_in_90 = (
+            datetime.now(timezone.utc) + timedelta(minutes=90)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_90)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        automation.set_manual_override.assert_not_called()
+
+    async def test_t60_idempotent_when_already_pregameday(self):
+        automation = _make_automation_mock(current_mode="pregameday")
+        svc = _make_service(automation=automation)
+        kickoff_in_45 = (
+            datetime.now(timezone.utc) + timedelta(minutes=45)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_45)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        automation.set_manual_override.assert_not_called()
+
+    async def test_t60_does_not_downgrade_gameday(self):
+        """If we're somehow already in gameday during a T-60 window (e.g. user
+        manually fired it), pregameday must not displace gameday."""
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        kickoff_in_45 = (
+            datetime.now(timezone.utc) + timedelta(minutes=45)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_45)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        automation.set_manual_override.assert_not_called()
+
+    async def test_t30_window_takes_gameday_path_not_pregameday(self):
+        """Within T-30, the gameday flip wins — pregameday is for T-60..T-30."""
+        automation = _make_automation_mock(current_mode="working")
+        svc = _make_service(automation=automation)
+        kickoff_in_20 = (
+            datetime.now(timezone.utc) + timedelta(minutes=20)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_in_20)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            await svc._tick()
+        automation.set_manual_override.assert_awaited_once_with(
+            "gameday", source=GAMEDAY_AUTO_SOURCE,
+        )
+
+    async def test_now_override_drives_t60_then_t30_lifecycle(self):
+        """Synthetic time injection (GAMEDAY_SPEC §10.6) — exercise the
+        T-60 → T-30 lifecycle without sleeping."""
+        automation = _make_automation_mock(current_mode="working")
+        svc = _make_service(automation=automation)
+        # Kickoff at a real future time the schedule cache can parse.
+        kickoff = datetime.now(timezone.utc) + timedelta(minutes=200)
+        kickoff_iso = kickoff.strftime("%Y-%m-%dT%H:%MZ")
+        # We need TWO ticks — one inside T-60 window, one inside T-30 window.
+        # Schedule fetch is one request per refresh; cache TTL is 900s so the
+        # second tick hits cache. Provide two schedule fetches to be safe.
+        client = _mock_client([
+            {"events": [_schedule_event("401001", kickoff_iso)]},
+            {"events": [_schedule_event("401001", kickoff_iso)]},
+        ])
+        with patch("backend.services.gameday_service.httpx.AsyncClient", return_value=client):
+            await svc.connect()
+            # T-50 — should land pregameday.
+            svc._now_override = kickoff - timedelta(minutes=50)
+            await svc._tick()
+            automation.set_manual_override.assert_awaited_with(
+                "pregameday", source=PREGAMEDAY_AUTO_SOURCE,
+            )
+            # Now switch automation's current_mode to reflect the flip,
+            # then advance to T-20 — gameday should fire.
+            automation.current_mode = "pregameday"
+            svc._now_override = kickoff - timedelta(minutes=20)
+            await svc._tick()
+            automation.set_manual_override.assert_awaited_with(
+                "gameday", source=GAMEDAY_AUTO_SOURCE,
+            )
+
+    async def test_synthetic_pregame_fires_override_and_clears(self):
+        """trigger_synthetic_pregame sets the override + schedules a clear."""
+        automation = _make_automation_mock(current_mode="working")
+        # After flip, override_source is what _delayed_clear checks.
+        automation.override_source = PREGAMEDAY_AUTO_SOURCE
+        svc = _make_service(automation=automation)
+        result = await svc.trigger_synthetic_pregame(
+            opponent="Houston Texans",
+            stakes_tier="big_stakes",
+            hold_seconds=0,  # Don't wait in tests — clear immediately
+        )
+        # Override was set
+        automation.set_manual_override.assert_awaited_once_with(
+            "pregameday", source=PREGAMEDAY_AUTO_SOURCE,
+        )
+        assert result["mode"] == "pregameday"
+        assert result["opponent"] == "Houston Texans"
+        assert result["stakes_tier"] == "big_stakes"
+        # Yield to the event loop so the _delayed_clear task can run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # And the clear fires
+        automation.clear_override.assert_awaited_once_with(
+            source=PREGAMEDAY_AUTO_SOURCE,
+        )
+
+    async def test_synthetic_pregame_skips_clear_if_user_overrode(self):
+        """If override_source changed before hold expires, leave it alone."""
+        automation = _make_automation_mock(current_mode="pregameday")
+        automation.override_source = "api:192.168.1.30"  # user touched it
+        svc = _make_service(automation=automation)
+        await svc.trigger_synthetic_pregame(
+            opponent="Houston Texans",
+            stakes_tier="standard",
+            hold_seconds=0,
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # The set_manual_override fired for the initial flip, but clear must NOT
+        automation.clear_override.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -223,6 +223,12 @@ MODE_PRIORITY = {
     "social": 4,
     "gaming": 5,
     "gameday": 6,
+    # Pregameday shares priority 6 with gameday by design (GAMEDAY_SPEC §10.1).
+    # gameday_service flips pregameday→gameday at T-30 from the same source —
+    # same-source updates always pass the priority guard, so the flip lands
+    # without priority gymnastics. Any other source trying to displace
+    # pregameday must outrank 6 (impossible — pregameday/gameday is the top).
+    "pregameday": 6,
 }
 
 # Source-staleness cutoff for the priority guard. A current-mode source that
