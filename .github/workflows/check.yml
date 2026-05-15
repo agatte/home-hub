@@ -25,11 +25,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: |
-          pip install fastapi uvicorn[standard] websockets aiosqlite "sqlalchemy[asyncio]" \
-            pydantic-settings python-dotenv httpx aiofiles slowapi phue2 fauxmo soco \
-            python-json-logger edge-tts psutil mss python-multipart pytest pytest-asyncio \
-            numpy
+        run: pip install -r requirements-test.txt
 
       - name: Run tests
         run: python -m pytest tests/ -v
