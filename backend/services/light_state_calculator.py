@@ -1016,3 +1016,59 @@ def apply_weather_adjust(
             for lid, ls in state.items()
         }
     return adjust_single_light(state, condition)
+
+
+# ---------------------------------------------------------------------------
+# Functional-mode weather brightness — opposite sign from apply_weather_adjust
+# ---------------------------------------------------------------------------
+# Mood-mode weather_adjust DIMS lights on rain/clouds (gloomy mood). For
+# functional modes (gaming) the ambient daylight drop is the problem, not
+# the mood — desk lamps need MORE output when natural light fades. Day-only
+# because evening/night ambient is artificial and weather is irrelevant.
+# Composes multiplicatively on top of apply_lux_multiplier so the two
+# compensations stack mildly (rain near-baseline lux: ~1.03 × 1.15 ≈ 1.18).
+
+FUNCTIONAL_WEATHER_BRIGHTNESS_MODES = frozenset(("gaming",))
+
+FUNCTIONAL_WEATHER_BRIGHTNESS: dict[str, float] = {
+    "thunderstorm": 1.20,
+    "rain":         1.15,
+    "clouds":       1.10,
+    "snow":         1.05,
+}
+
+
+def apply_functional_weather_brightness(
+    state: dict[str, Any],
+    mode: str,
+    period: str,
+    condition: Optional[str],
+) -> dict[str, Any]:
+    """Brighten functional-mode lights on dim-ambient weather.
+
+    No-op outside ``FUNCTIONAL_WEATHER_BRIGHTNESS_MODES``, outside
+    ``period == "day"``, or when ``condition`` is None / unmapped.
+    """
+    if mode not in FUNCTIONAL_WEATHER_BRIGHTNESS_MODES:
+        return state
+    if period != "day":
+        return state
+    if condition is None:
+        return state
+    mult = FUNCTIONAL_WEATHER_BRIGHTNESS.get(condition)
+    if mult is None or mult == 1.0:
+        return state
+
+    if _is_per_light_dict(state):
+        result: dict[str, Any] = {}
+        for lid, ls in state.items():
+            ls_copy = ls.copy()
+            if ls_copy.get("on", True) and "bri" in ls_copy:
+                ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * mult)))
+            result[lid] = ls_copy
+        return result
+
+    result = state.copy()
+    if result.get("on", True) and "bri" in result:
+        result["bri"] = max(1, min(254, int(result["bri"] * mult)))
+    return result

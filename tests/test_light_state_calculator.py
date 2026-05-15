@@ -19,6 +19,7 @@ from backend.services.light_state_calculator import (
     LUX_MULT_EPSILON,
     TZ,
     apply_brightness_multiplier,
+    apply_functional_weather_brightness,
     apply_lux_multiplier,
     apply_weather_adjust,
     apply_zone_overlay,
@@ -532,3 +533,104 @@ class TestWeatherAdjust:
 
     def test_classify_unknown_returns_none(self):
         assert classify_weather("foggy with sprinkles", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# Functional-mode weather brightness — opposite sign from apply_weather_adjust
+# ---------------------------------------------------------------------------
+
+
+class TestFunctionalWeatherBrightness:
+
+    def test_non_gaming_mode_passes_through(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        for mode in ("working", "relax", "social", "watching", "cooking"):
+            out = apply_functional_weather_brightness(state, mode, "day", "rain")
+            assert out is state
+
+    def test_non_day_period_passes_through(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        for period in ("evening", "night", "late_night"):
+            out = apply_functional_weather_brightness(state, "gaming", period, "rain")
+            assert out is state
+
+    def test_none_condition_passes_through(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(state, "gaming", "day", None)
+        assert out is state
+
+    def test_unmapped_condition_passes_through(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(
+            state, "gaming", "day", "golden_hour",
+        )
+        assert out is state
+
+    def test_rain_brightens_gaming_day_by_fifteen_percent(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(state, "gaming", "day", "rain")
+        assert out["1"]["bri"] == 114  # int(100 * 1.15) = int(114.999…) = 114
+
+    def test_clouds_thunderstorm_snow_multipliers(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        assert apply_functional_weather_brightness(
+            state, "gaming", "day", "clouds",
+        )["1"]["bri"] == 110
+        assert apply_functional_weather_brightness(
+            state, "gaming", "day", "thunderstorm",
+        )["1"]["bri"] == 120
+        assert apply_functional_weather_brightness(
+            state, "gaming", "day", "snow",
+        )["1"]["bri"] == 105
+
+    def test_hue_and_sat_untouched(self):
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(state, "gaming", "day", "rain")
+        assert out["1"]["hue"] == 8000
+        assert out["1"]["sat"] == 100
+
+    def test_per_light_dict_all_brightened(self):
+        state = {
+            "1": {"on": True, "bri": 130, "hue": 47000, "sat": 180},
+            "2": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
+            "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
+            "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
+            "5": {"on": True, "bri": 180, "hue": 48500, "sat": 160},
+        }
+        out = apply_functional_weather_brightness(state, "gaming", "day", "rain")
+        assert out["1"]["bri"] == int(130 * 1.15)
+        assert out["2"]["bri"] == 254  # int(240 * 1.15) = 276 → clamped
+        assert out["3"]["bri"] == int(30 * 1.15)
+        assert out["4"]["bri"] == int(30 * 1.15)
+        assert out["5"]["bri"] == int(180 * 1.15)
+
+    def test_clamps_to_254(self):
+        state = {"1": {"on": True, "bri": 240, "hue": 46920, "sat": 180}}
+        out = apply_functional_weather_brightness(
+            state, "gaming", "day", "thunderstorm",
+        )
+        assert out["1"]["bri"] == 254  # 240 * 1.20 = 288 → clamped
+
+    def test_off_lights_pass_through(self):
+        state = {
+            "1": {"on": False},
+            "2": {"on": True, "bri": 100, "hue": 8000, "sat": 100},
+        }
+        out = apply_functional_weather_brightness(state, "gaming", "day", "rain")
+        assert out["1"] == {"on": False}
+        assert out["2"]["bri"] == 114
+
+    def test_composes_with_lux_multiplier(self):
+        # Mirrors the production pipeline order: lux first, then functional
+        # weather. Together they should produce a moderate combined boost.
+        state = {"1": {"on": True, "bri": 180, "hue": 48500, "sat": 160}}
+        after_lux, _ = apply_lux_multiplier(
+            state, "gaming", lux_reading=80.0, last_multiplier=1.0, baseline_lux=90.0,
+        )
+        # lux=80 with baseline=90 → effective=80 → between (40,1.20) and (90,1.00)
+        # frac = (80-40)/(90-40) = 0.8 → mult = 1.20 + 0.8*(1.00-1.20) = 1.04
+        assert after_lux["1"]["bri"] == int(180 * 1.04)
+        out = apply_functional_weather_brightness(
+            after_lux, "gaming", "day", "rain",
+        )
+        assert out["1"]["bri"] == int(int(180 * 1.04) * 1.15)

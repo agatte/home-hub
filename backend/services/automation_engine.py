@@ -195,6 +195,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     ZONE_POSTURE_FRESHNESS_SECONDS,
     adjust_single_light as _adjust_single_light_pure,
     apply_brightness_multiplier as _calc_apply_brightness_multiplier,
+    apply_functional_weather_brightness as _calc_apply_functional_weather_brightness,
     apply_lux_multiplier as _calc_apply_lux_multiplier,
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
@@ -1889,6 +1890,7 @@ class AutomationEngine:
 
             state = self._apply_brightness_multiplier(state, mode)
             state = self._apply_lux_multiplier(state, mode)
+            state = self._functional_weather_brightness(state, mode, period)
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
@@ -2140,7 +2142,8 @@ class AutomationEngine:
         self._last_drift_time = now
 
         # Get the base state and apply small random deltas
-        base = _resolve_activity_state(mode, self._get_time_period())
+        period = self._get_time_period()
+        base = _resolve_activity_state(mode, period)
         if not base:
             return
 
@@ -2163,6 +2166,7 @@ class AutomationEngine:
 
         drifted = self._apply_brightness_multiplier(drifted, mode)
         drifted = self._apply_lux_multiplier(drifted, mode)
+        drifted = self._functional_weather_brightness(drifted, mode, period)
         if mode not in WEATHER_SKIP_MODES:
             drifted = self._weather_adjust(drifted)
         self._last_applied_per_light = {}  # Force apply
@@ -2186,6 +2190,15 @@ class AutomationEngine:
     ) -> str | None:
         """Map weather description to a condition category (shim → calculator)."""
         return _classify_weather_pure(desc, weather)
+
+    def _functional_weather_brightness(
+        self, state: dict[str, Any], mode: str, period: str,
+    ) -> dict[str, Any]:
+        """Brighten functional-mode lights on dim weather (shim → calculator)."""
+        condition = self._get_current_weather_condition()
+        return _calc_apply_functional_weather_brightness(
+            state, mode, period, condition,
+        )
 
     def _get_desired_effect(
         self, mode: str,
