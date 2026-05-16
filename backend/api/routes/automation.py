@@ -73,6 +73,14 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
 
     await engine.report_activity(report.mode, report.source, factors=report.factors)
 
+    # Fan the report to the LoL champion service so a champion factor (set
+    # only when League's Live Client Data API returned 200) can drive the
+    # bedroom-lamp color. Service is gaming-mode-gated internally; non-LoL
+    # reports are a cheap no-op.
+    lol_service = getattr(request.app.state, "lol_champion_service", None)
+    if lol_service is not None:
+        await lol_service.on_activity_report(report)
+
     return {
         "status": "ok",
         "accepted_mode": report.mode,
@@ -252,14 +260,21 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
-    # Per-light manual-override gate. If the user dragged one lamp's slider
-    # during gaming/watching, that lamp is paused but the other still mirrors
-    # the screen color — matches the per-light EMA + cap independence.
+    # Per-light skip gate. A lamp may sit out a frame because the user
+    # dragged its slider (manual_light_overrides) or because the LoL
+    # champion service owns it mid-match.
+    lol_service = getattr(request.app.state, "lol_champion_service", None)
     applied: list[str] = []
     skipped: list[str] = []
+    skip_reasons: dict[str, str] = {}
     for light_id in sync.target_lights:
         if light_id in engine.manual_light_overrides:
             skipped.append(light_id)
+            skip_reasons[light_id] = "manual_override"
+            continue
+        if lol_service is not None and lol_service.is_owning(light_id):
+            skipped.append(light_id)
+            skip_reasons[light_id] = "lol_champion"
             continue
         await sync.apply_color(
             light_id,
@@ -277,7 +292,9 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     response: dict = {"status": "ok", "applied": bool(applied), "lights": applied}
     if skipped:
         response["skipped"] = skipped
-        response["reason"] = "manual_override"
+        response["skip_reasons"] = skip_reasons
+        # ``reason`` retained for back-compat; reports the first skip's reason.
+        response["reason"] = skip_reasons[skipped[0]]
     return response
 
 

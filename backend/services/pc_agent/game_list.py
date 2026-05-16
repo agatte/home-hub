@@ -5,6 +5,15 @@ Add game or media player process names to the appropriate set.
 Process names are case-insensitive during matching.
 """
 
+# League of Legends process binaries — subset of GAME_PROCESSES, used by
+# the activity detector to gate the localhost Live Client Data API poll
+# so non-LoL gaming sessions don't burn a per-tick HTTPS GET.
+LOL_PROCESSES: set[str] = {
+    "leagueclient.exe",
+    "leagueoflegends.exe",
+    "league of legends.exe",
+}
+
 # Game processes — any of these running = "gaming" mode
 # No Discord dependency: user uses in-game voice chat (League, etc.) with headset
 GAME_PROCESSES: set[str] = {

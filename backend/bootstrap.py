@@ -34,6 +34,7 @@ from backend.services.morning_routine import MorningRoutineService
 from backend.services.music_mapper import MusicMapper
 from backend.services.recommendation_service import RecommendationService
 from backend.services.scheduler import AsyncScheduler, ScheduledTask
+from backend.services.lol_champion_service import LoLChampionService
 from backend.services.screen_sync import LaptopLoopbackCapture, ScreenSyncService
 from backend.services.sonos_service import SonosService
 from backend.services.tts_service import TTSService
@@ -347,6 +348,13 @@ async def lifespan(app: FastAPI):
     automation.register_on_mode_change(music_mapper.on_mode_change_wrapper)
     automation.register_on_mode_change(ambient_sound.on_mode_change_wrapper)
     automation.register_on_mode_change(ml_logger.on_mode_change)
+
+    # League champion → bedroom-lamp color override. Service is gaming-mode-
+    # gated internally; the mode-change callback clears its state when the
+    # engine leaves gaming so screen-sync resumes on the bedroom lamps.
+    lol_champion = LoLChampionService(hue_service=hue, automation_engine=automation)
+    app.state.lol_champion_service = lol_champion
+    automation.register_on_mode_change(lol_champion.on_mode_change)
 
     # Per-mode Sonos volume curves (GH#17). Fades the speaker to a mode-shaped
     # target on transition. Pure-policy split: see mode_volume_policy.py.

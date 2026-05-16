@@ -29,6 +29,14 @@ from typing import Any, Optional
 
 import httpx
 
+from backend.services.color_utils import (
+    DEFAULT_LUMA_COMP,
+    DEFAULT_SAT_BOOST,
+    PER_LIGHT_LUMA_COMP,
+    PER_LIGHT_SAT_BOOST,
+    rgb_to_hue_hsb,
+)
+
 logger = logging.getLogger("home_hub.screen_sync")
 
 
@@ -96,40 +104,9 @@ MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
     ("gaming", "late_night", "2"): 110,
 }
 
-# Per-light saturation boost. RGB→HSB conversion applies this multiplier to
-# saturation; L2's fabric shade washes punch out, so +20% restores vibrancy.
-# L5's clear glass shows the bulb's color directly with no diffusion, so any
-# boost reads as oversaturated next to L2 — leave it at neutral (1.0).
-PER_LIGHT_SAT_BOOST: dict[str, float] = {
-    "2": 1.2,
-    "5": 1.0,
-}
-DEFAULT_SAT_BOOST = 1.2
-
-# Per-light perceptual-luminance compensation. The human eye is far more
-# sensitive to yellow-green (peak ~555nm) than to deep blue, so the same
-# HSV `value` reads very differently depending on hue: pure blue at v=1.0
-# perceives ~5× dimmer than pure yellow at v=1.0. Through L2's fabric
-# shade the difference washes out, but L5's clear glass exposes the bulb
-# color directly and the mismatch is very visible — bright-yellow at low
-# numerical bri reads brighter than saturated-blue at high numerical bri.
-#
-# When enabled, the RGB→HSB conversion scales the brightness target by
-# the Rec.601 luma (`Y = 0.299R + 0.587G + 0.114B`) divided by the HSV
-# value, with reference luma below. Reference 0.25 is aggressive — pure
-# white scales to 25% of HSV value, green to 43%, yellow to 28%, cyan to
-# 36%, magenta to 60%; pure blue and dark red stay full-bri (clamped to
-# 1.0). Live observation at ref=0.40 still felt hot on bright-teal scenes
-# because cyan's chroma_luma (0.701) put its scale at 0.57 — still bright
-# enough to cap. Dropped to 0.25 to push high-luma hues firmly into the
-# sub-cap dim band.
-PER_LIGHT_LUMA_COMP: dict[str, bool] = {
-    "5": True,
-}
-DEFAULT_LUMA_COMP = False
-_LUMA_REFERENCE = 0.25  # tightened from 0.40 — pushes cyan/green/yellow
-                        # below the L5 cap so the cap stops dominating
-                        # the high-luma side; deep blue still rides cap.
+# PER_LIGHT_SAT_BOOST, PER_LIGHT_LUMA_COMP, and the underlying conversion
+# now live in ``color_utils`` so the LoL champion color service shares the
+# same tuning. The imports at the top of this module pull them in.
 
 # Zone- and posture-aware brightness overrides, keyed by light_id so each
 # lamp can have its own projector-safe cap when reclining in bed.
@@ -309,7 +286,7 @@ class ScreenSyncService:
         min_bri = self._get_floor(mode, light_id, period)
         sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
         luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)
-        h, s, br = self._rgb_to_hue_hsb(
+        h, s, br = rgb_to_hue_hsb(
             (r, g, b), max_bri, min_bri, sat_boost, luma_comp
         )
         sh, ss, sb = self._smooth(light_id, h, s, br)
@@ -322,43 +299,6 @@ class ScreenSyncService:
         })
         self._last_color_at = datetime.now(timezone.utc)
         self._last_source = source
-
-    def _rgb_to_hue_hsb(
-        self, rgb: tuple[int, int, int], max_brightness: int,
-        min_brightness: int = MIN_BRIGHTNESS,
-        sat_boost: float = DEFAULT_SAT_BOOST,
-        luma_comp: bool = DEFAULT_LUMA_COMP,
-    ) -> tuple[float, float, float]:
-        """Convert RGB (0-255) to Hue bridge HSB values, clamped to brightness range.
-
-        ``sat_boost`` is per-light: L2's fabric shade benefits from +20%
-        vibrancy compensation, L5's clear glass needs neutral (1.0) to avoid
-        looking oversaturated next to L2.
-
-        ``luma_comp`` enables perceptual-luminance compensation. When True,
-        the brightness target is scaled by ``_LUMA_REFERENCE / chroma_luma``
-        (clamped to ≤1.0) so high-luma hues (yellow ~0.89, green ~0.59) are
-        dampened relative to low-luma hues (blue ~0.11, red ~0.30). This
-        makes visible-bulb output read approximately hue-independent — used
-        on L5 (clear glass) where the eye sees the bulb color directly and
-        the Rec.601 mismatch is most visible.
-        """
-        r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
-        h, s, v = colorsys.rgb_to_hsv(r, g, b)
-
-        hue_val = h * 65535
-        sat_val = min(254, s * 254 * sat_boost)
-
-        bri_target = v * 254
-        if luma_comp and v > 0.01:
-            luma = 0.299 * r + 0.587 * g + 0.114 * b
-            chroma_luma = luma / v  # hue-invariant: depends only on hue, not v
-            scale = min(1.0, _LUMA_REFERENCE / max(0.1, chroma_luma))
-            bri_target *= scale
-
-        bri_val = max(min_brightness, min(max_brightness, bri_target))
-
-        return (hue_val, sat_val, bri_val)
 
     def _smooth(
         self, light_id: str, h: float, s: float, b: float,

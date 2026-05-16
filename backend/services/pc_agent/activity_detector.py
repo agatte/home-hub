@@ -30,10 +30,20 @@ import psutil
 from backend.services.pc_agent.game_list import (
     BROWSER_PROCESSES,
     GAME_PROCESSES,
+    LOL_PROCESSES,
     MEDIA_PROCESSES,
     WATCHING_TITLE_KEYWORDS,
     WORK_PROCESSES,
 )
+
+# Riot Games' Live Client Data API runs locally when a League match is in
+# progress (champion select / loading screen returns 404). Self-signed cert
+# bound to 127.0.0.1; verify=False is bounded to this single localhost
+# endpoint. The 30s freshness window matches steady-in-match cadence —
+# champion doesn't change mid-game.
+LOL_LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/activeplayer"
+LOL_CHAMPION_CACHE_TTL_S = 30.0
+LOL_CHAMPION_HTTP_TIMEOUT_S = 1.0
 
 # ---------------------------------------------------------------------------
 # Logging — file + console (file captures errors even under pythonw.exe)
@@ -218,6 +228,10 @@ class ActivityDetector:
         # Hysteresis state — the candidate mode we'd report once the dwell expires.
         self._pending_mode: Optional[str] = None
         self._pending_since: Optional[float] = None
+        # LoL Live Client Data cache — avoids hammering the localhost API
+        # every 5s when the champion doesn't change mid-match.
+        self._lol_champion: Optional[str] = None
+        self._lol_champion_at: float = 0.0
 
     def _get_running_process_names(self) -> set[str]:
         """Get lowercase names of all running processes."""
@@ -473,6 +487,60 @@ class ActivityDetector:
         self._last_reported_mode = mode
         return changed
 
+    def _poll_lol_champion(self, running: set[str]) -> Optional[str]:
+        """Return the current League champion name, or None.
+
+        Gates on a LoL binary being present in ``running`` (cheap psutil
+        read happens once per tick upstream). Caches successful reads
+        for ``LOL_CHAMPION_CACHE_TTL_S`` so the localhost HTTPS GET runs
+        ~once every 30s rather than every 5s tick.
+
+        404 / ConnectError = champion select, loading screen, or game
+        not running. Treated as "no champion right now" — returns None.
+        """
+        if not (running & LOL_PROCESSES):
+            # League not running at all — flush cache so a fresh match
+            # doesn't reuse the prior champion.
+            if self._lol_champion is not None:
+                self._lol_champion = None
+                self._lol_champion_at = 0.0
+            return None
+
+        now = time.time()
+        if (
+            self._lol_champion is not None
+            and (now - self._lol_champion_at) < LOL_CHAMPION_CACHE_TTL_S
+        ):
+            return self._lol_champion
+
+        try:
+            resp = httpx.get(
+                LOL_LIVE_CLIENT_URL,
+                verify=False,
+                timeout=LOL_CHAMPION_HTTP_TIMEOUT_S,
+            )
+        except httpx.HTTPError:
+            return None
+
+        if resp.status_code != 200:
+            return None
+
+        try:
+            data = resp.json()
+        except ValueError:
+            return None
+
+        champion = data.get("championName") if isinstance(data, dict) else None
+        if not isinstance(champion, str) or not champion.strip():
+            return None
+
+        champion = champion.strip()
+        if champion != self._lol_champion:
+            logger.debug("LoL champion detected: %s", champion)
+        self._lol_champion = champion
+        self._lol_champion_at = now
+        return champion
+
     def build_factors(self) -> list[dict]:
         """Build sub-factor list describing what this lane is seeing.
 
@@ -546,7 +614,20 @@ class ActivityDetector:
                 "impact": 0.8 if browser_running else 0.2,
             })
 
-        return factors[:4]
+        # League champion factor — only present when a LoL match is in progress
+        # (Live Client Data API returns 200 with a championName). Drives the
+        # bedroom-lamp champion color override on the backend.
+        champion = self._poll_lol_champion(processes)
+        if champion:
+            factors.append({
+                "key": "champion",
+                "label": "Champion",
+                "value": champion,
+                "display": champion,
+                "impact": 1.0,
+            })
+
+        return factors[:5]
 
 
 def run_agent(
