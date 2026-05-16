@@ -1,4 +1,4 @@
-# Create or update the Task Scheduler task for the unified PC Agent Supervisor.
+﻿# Create or update the Task Scheduler task for the unified PC Agent Supervisor.
 # Replaces the three individual tasks (activity detector, ambient monitor,
 # screen sync) with a single supervisor process.
 #
@@ -11,7 +11,7 @@ $ProjectRoot = "C:\Users\antho\Desktop\home-hub"
 
 # Invoke system Python directly via a wrapper script that sets PYTHONPATH
 # to the venv's site-packages. Skipping venv\Scripts\pythonw.exe avoids
-# Python 3.13's venv launcher-subprocess pattern (1.5MB stub → 66MB real
+# Python 3.13's venv launcher-subprocess pattern (1.5MB stub -> 66MB real
 # interpreter) which produced a confusing duplicate pythonw.exe on every
 # launch.
 $Executable = "powershell.exe"
@@ -65,15 +65,15 @@ $loginTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $loginTrigger.Delay = "PT30S"
 
 # Trigger 2: 5-minute watchdog. Combined with MultipleInstances=IgnoreNew
-# below, this is a safe self-heal — Task Scheduler tries to launch every
+# below, this is a safe self-heal - Task Scheduler tries to launch every
 # 5 min; if the supervisor is already running it skips, if it died (or
 # was killed externally) it starts a fresh one.
 #
 # Why this is needed in addition to RestartCount=999 on failure: the
 # failure-restart only fires when Task Scheduler observed the task's
 # launcher exit with non-zero. External kills (e.g. a bash background
-# wrapper getting reaped with its Claude session — observed 2026-05-15
-# → 17h apartment stuck in idle) leave Task Scheduler unaware that
+# wrapper getting reaped with its Claude session - observed 2026-05-15
+# -> 17h apartment stuck in idle) leave Task Scheduler unaware that
 # anything should be running. The polling trigger catches that class.
 $watchdogTrigger = New-ScheduledTaskTrigger `
     -Once `
@@ -107,7 +107,7 @@ Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green
 Write-Host ""
 Write-Host "Key settings:" -ForegroundColor Cyan
 Write-Host "  - Trigger 1: At logon (30s delay)"
-Write-Host "  - Trigger 2: Watchdog — every 5 min, indefinitely"
+Write-Host "  - Trigger 2: Watchdog - every 5 min, indefinitely"
 Write-Host "  - Manages: activity_detector, ambient_monitor, screen_sync"
 Write-Host "  - Classifier: YAMNet (shadow mode)"
 Write-Host "  - StopIfGoingOnBatteries: False"
