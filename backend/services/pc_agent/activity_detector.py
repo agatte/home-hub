@@ -232,6 +232,11 @@ class ActivityDetector:
         # every 5s when the champion doesn't change mid-match.
         self._lol_champion: Optional[str] = None
         self._lol_champion_at: float = 0.0
+        # Reusable HTTPS client for the LoL Live Client endpoint. Lazy-allocated
+        # on first successful gate (LoL process present) so non-LoL sessions
+        # never pay the client construction cost. verify=False is bounded to
+        # 127.0.0.1:2999 — same pattern as the backend's Hue v2 client.
+        self._lol_http_client: Optional[httpx.Client] = None
 
     def _get_running_process_names(self) -> set[str]:
         """Get lowercase names of all running processes."""
@@ -513,12 +518,13 @@ class ActivityDetector:
         ):
             return self._lol_champion
 
-        try:
-            resp = httpx.get(
-                LOL_LIVE_CLIENT_URL,
+        if self._lol_http_client is None:
+            self._lol_http_client = httpx.Client(
                 verify=False,
                 timeout=LOL_CHAMPION_HTTP_TIMEOUT_S,
             )
+        try:
+            resp = self._lol_http_client.get(LOL_LIVE_CLIENT_URL)
         except httpx.HTTPError:
             return None
 
@@ -629,6 +635,20 @@ class ActivityDetector:
 
         return factors[:5]
 
+    def close(self) -> None:
+        """Release resources held by the detector (LoL HTTPS client).
+
+        Called from ``run_agent``'s teardown so the supervisor can shut
+        down the detector without leaking a TCP connection to the local
+        LoL Live Client endpoint.
+        """
+        if self._lol_http_client is not None:
+            try:
+                self._lol_http_client.close()
+            except Exception:
+                pass
+            self._lol_http_client = None
+
 
 def run_agent(
     server_url: str,
@@ -699,6 +719,7 @@ def run_agent(
                 backoff = min(backoff * 2, 60)
     finally:
         client.close()
+        detector.close()
 
 
 if __name__ == "__main__":

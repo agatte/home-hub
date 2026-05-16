@@ -29,7 +29,7 @@ to scope the effect off L2 + L5 (see
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from backend.services.color_utils import (
     DEFAULT_LUMA_COMP,
@@ -38,6 +38,11 @@ from backend.services.color_utils import (
     PER_LIGHT_SAT_BOOST,
     rgb_to_hue_hsb,
 )
+
+if TYPE_CHECKING:
+    from backend.api.schemas.automation import ActivityReport
+    from backend.services.automation_engine import AutomationEngine
+    from backend.services.hue_service import HueService
 
 logger = logging.getLogger("home_hub.lol_champion")
 
@@ -81,7 +86,11 @@ class LoLChampionService:
     and the ``AutomationEngine`` whose ``current_mode`` it reads.
     """
 
-    def __init__(self, hue_service, automation_engine) -> None:
+    def __init__(
+        self,
+        hue_service: "HueService",
+        automation_engine: "AutomationEngine",
+    ) -> None:
         self._hue = hue_service
         self._engine = automation_engine
         self._current_champion: Optional[str] = None
@@ -112,7 +121,7 @@ class LoLChampionService:
     # Activity / mode hooks
     # ------------------------------------------------------------------
 
-    async def on_activity_report(self, report) -> None:
+    async def on_activity_report(self, report: "ActivityReport") -> None:
         """Handle an inbound ``ActivityReport``.
 
         No-op unless the engine is in gaming mode and the report carries
@@ -232,7 +241,7 @@ class LoLChampionService:
             return "night"
 
 
-def _extract_champion(report) -> Optional[str]:
+def _extract_champion(report: "ActivityReport") -> Optional[str]:
     """Pull the ``champion`` factor's value off an ``ActivityReport``.
 
     Pydantic model — `report.factors` is ``Optional[list[dict]]`` per

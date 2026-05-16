@@ -396,6 +396,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `dnd_state` | `{enabled, until, source}` — Do Not Disturb persistence; `load_override_state()` restores at boot, `run_loop` auto-clears past `until` |
 | `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives restarts so a deploy mid-`relax` doesn't snap to `working`. Mirrors `dnd_state` pattern |
 | `ambient_config` | Browser-side ambient sound config (volume, mode→sound map, weather reactivity); also stores Sonos mirroring sub-keys: `sonos_enabled`, `sonos_present_volume` (default 12), `sonos_away_volume` (default 28); written via `/api/ambient/*` |
+| `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB palette driving bedroom-lamp color in `gaming` mode; consumed by `LoLChampionService`, seeded via `python -m scripts.seed_champion_colors` (idempotent re-seed) |
 
 ---
 
