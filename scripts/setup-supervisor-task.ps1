@@ -9,13 +9,23 @@
 $TaskName = "Home Hub Agent Supervisor"
 $ProjectRoot = "C:\Users\antho\Desktop\home-hub"
 
-# Invoke system Python directly via a wrapper script that sets PYTHONPATH
-# to the venv's site-packages. Skipping venv\Scripts\pythonw.exe avoids
-# Python 3.13's venv launcher-subprocess pattern (1.5MB stub -> 66MB real
-# interpreter) which produced a confusing duplicate pythonw.exe on every
-# launch.
-$Executable = "powershell.exe"
-$Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ProjectRoot\scripts\start-supervisor.ps1`""
+# Action chain at fire time:
+#   wscript.exe (windowless from process creation)
+#     -> start-supervisor-hidden.vbs (Run "...", 0, False -> hidden powershell)
+#       -> start-supervisor.ps1 (sets PYTHONPATH + workdir)
+#         -> C:\Python313\pythonw.exe -m backend.services.pc_agent.supervisor
+#
+# Why wscript + VBS instead of plain powershell.exe -WindowStyle Hidden:
+# the -WindowStyle flag only hides AFTER PowerShell creates its console
+# window, so each 5-min watchdog fire flashed a window briefly. wscript
+# never creates one, and its Run state 0 enforces hidden at CreateProcess
+# time on the powershell child too. No flash possible. Switched
+# 2026-05-16 after the watchdog landed.
+#
+# (System Python with PYTHONPATH set in the .ps1 still avoids Python 3.13's
+# venv launcher-subprocess duplicate-pythonw issue noted previously.)
+$Executable = "wscript.exe"
+$Arguments = "`"$ProjectRoot\scripts\start-supervisor-hidden.vbs`""
 
 # ── Remove old individual tasks ────────────────────────────────────────
 $OldTasks = @(
