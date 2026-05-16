@@ -2550,6 +2550,10 @@ class AutomationEngine:
                 rule_engine = getattr(self, "_rule_engine", None)
                 if rule_engine:
                     await rule_engine.check_rules(self._current_mode)
+                    # Auto-expire pending rule_suggestions older than 60min so
+                    # the Home banner doesn't outlive its usefulness. No-op
+                    # when nothing to expire (single indexed query per tick).
+                    await rule_engine.expire_stale_pending()
 
                 # Confidence fusion — compute and optionally act
                 fusion = getattr(self, "_confidence_fusion", None)

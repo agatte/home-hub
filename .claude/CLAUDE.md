@@ -418,7 +418,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Phase | Status | Focus |
 |-------|--------|-------|
 | 1–2 | ✓ | Core foundation + dashboard. See `docs/PROJECT_SPEC.md` |
-| 3: Intelligence & Voice | Voice ✓; rules pending | Fauxmo (7 WeMos) + Custom Skill (Lambda→Tunnel→:8002→:8000; see `alexa_skill/`). Rule engine next |
+| 3: Intelligence & Voice | ✓ | Fauxmo + Custom Skill (Lambda→Tunnel→:8002→:8000). Rule engine + persistent suggestion UX shipped (rule_suggestions table + Home banner + 60min auto-expire + Settings history) |
 | 4: Game Day | A+B+C ✓; preseason 2026-08-13, reg-season 2026-09-13 | See `docs/GAMEDAY_SPEC.md`. SEQUENCES iteration + preseason validation pending |
 | 5: Polish & Expand | Future | Apple Music API, full autopilot, bar app widget |
 

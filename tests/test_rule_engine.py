@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.models import ActivityEvent, Base, LearnedRule
+from backend.models import ActivityEvent, Base, LearnedRule, RuleSuggestion
 from backend.services.rule_engine_service import RuleEngineService
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
@@ -336,14 +336,51 @@ class TestRuleCRUD:
 # Suggestions
 # ---------------------------------------------------------------------------
 
+async def _seed_rule(session_factory, predicted_mode: str = "gaming") -> int:
+    """Insert a LearnedRule + return its id. Day/hour are arbitrary; FK only."""
+    async with session_factory() as session:
+        rule = LearnedRule(
+            day_of_week=0, hour=12, predicted_mode=predicted_mode,
+            confidence=0.85, sample_count=7,
+        )
+        session.add(rule)
+        await session.commit()
+        return rule.id
+
+
+async def _seed_pending(
+    session_factory, rule_id: int,
+    predicted_mode: str = "gaming",
+    fired_at: datetime | None = None,
+) -> int:
+    """Insert a pending RuleSuggestion + return its id."""
+    if fired_at is None:
+        fired_at = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        row = RuleSuggestion(
+            rule_id=rule_id, fired_at=fired_at, predicted_mode=predicted_mode,
+            confidence=0.85, sample_count=7, current_mode_at_fire="idle",
+            status="pending",
+        )
+        session.add(row)
+        await session.commit()
+        return row.id
+
+
 class TestSuggestions:
-    """Test accept/dismiss suggestion flow."""
+    """Test accept/dismiss suggestion flow (DB-backed)."""
 
     async def test_accept_returns_suggestion(self, db_and_service):
-        _, service, _, _ = db_and_service
-        service._last_suggestion = {"predicted_mode": "gaming", "rule_id": 1}
-        result = await service.accept_suggestion()
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        sug_id = await _seed_pending(session_factory, rule_id)
+        service._last_suggestion = {"suggestion_id": sug_id, "predicted_mode": "gaming"}
+
+        result = await service.accept_suggestion(remote="1.2.3.4")
+        assert result is not None
         assert result["predicted_mode"] == "gaming"
+        assert result["status"] == "accepted"
+        assert result["resolved_source"] == "user_accept:1.2.3.4"
         assert service.last_suggestion is None
 
     async def test_accept_none_when_empty(self, db_and_service):
@@ -351,13 +388,215 @@ class TestSuggestions:
         result = await service.accept_suggestion()
         assert result is None
 
+    async def test_accept_none_when_already_resolved(self, db_and_service):
+        """Second click loses the race (rowcount=0) → None (route maps to 410)."""
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        sug_id = await _seed_pending(session_factory, rule_id)
+
+        first = await service.accept_suggestion(remote="1.2.3.4")
+        assert first is not None
+        second = await service.accept_suggestion(remote="1.2.3.4")
+        assert second is None  # already accepted; no pending row to find
+
     async def test_dismiss_clears_and_broadcasts(self, db_and_service):
-        _, service, ws, _ = db_and_service
+        _, service, ws, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory, predicted_mode="relax")
+        await _seed_pending(session_factory, rule_id, predicted_mode="relax")
         service._last_suggestion = {"predicted_mode": "relax"}
-        await service.dismiss_suggestion()
+
+        result = await service.dismiss_suggestion(remote="1.2.3.4")
+        assert result is not None
+        assert result["status"] == "dismissed"
+        assert result["resolved_source"] == "user_dismiss:1.2.3.4"
         assert service.last_suggestion is None
         dismissed = [b for b in ws.broadcasts if b[0] == "mode_suggestion_dismissed"]
         assert len(dismissed) == 1
+
+    async def test_dismiss_broadcasts_even_on_noop(self, db_and_service):
+        """No pending row to dismiss — UI's optimistic dismiss should still settle."""
+        _, service, ws, _ = db_and_service
+        result = await service.dismiss_suggestion(remote="1.2.3.4")
+        assert result is None
+        dismissed = [b for b in ws.broadcasts if b[0] == "mode_suggestion_dismissed"]
+        assert len(dismissed) == 1
+
+
+class TestSuggestionPersistence:
+    """Test the rule_suggestions table-backed lifecycle."""
+
+    async def test_check_rules_inserts_pending_row(self, db_and_service):
+        _, service, ws, session_factory = db_and_service
+        now = datetime.now(TZ)
+        async with session_factory() as session:
+            session.add(LearnedRule(
+                day_of_week=now.weekday(), hour=now.hour,
+                predicted_mode="gaming", confidence=0.85, sample_count=7,
+            ))
+            await session.commit()
+
+        result = await service.check_rules("idle")
+        assert result is not None
+        assert "suggestion_id" in result
+
+        history = await service.get_suggestion_history()
+        assert len(history) == 1
+        assert history[0]["status"] == "pending"
+        assert history[0]["predicted_mode"] == "gaming"
+        assert history[0]["sample_count"] == 7
+        assert history[0]["current_mode_at_fire"] == "idle"
+        assert history[0]["confidence"] == 85  # percent in serialized payload
+
+    async def test_supersede_marks_earlier_pending(self, db_and_service):
+        """Two pending rows can't coexist — earlier one gets superseded."""
+        _, service, _, session_factory = db_and_service
+        rule_id_a = await _seed_rule(session_factory, predicted_mode="working")
+        first_id = await _seed_pending(
+            session_factory, rule_id_a, predicted_mode="working",
+        )
+
+        # Inject a second rule for now's slot to force a fresh fire
+        now = datetime.now(TZ)
+        async with session_factory() as session:
+            session.add(LearnedRule(
+                day_of_week=now.weekday(), hour=now.hour,
+                predicted_mode="relax", confidence=0.90, sample_count=10,
+            ))
+            await session.commit()
+
+        result = await service.check_rules("idle")
+        assert result is not None
+        new_id = result["suggestion_id"]
+
+        history = await service.get_suggestion_history()
+        first_row = next(h for h in history if h["id"] == first_id)
+        new_row = next(h for h in history if h["id"] == new_id)
+        assert first_row["status"] == "superseded"
+        assert first_row["resolved_source"] == f"superseded_by:{new_id}"
+        assert new_row["status"] == "pending"
+
+    async def test_expire_stale_pending_marks_old_rows(self, db_and_service):
+        _, service, ws, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        old_fired = datetime.now(timezone.utc) - timedelta(minutes=90)
+        sug_id = await _seed_pending(session_factory, rule_id, fired_at=old_fired)
+        service._last_suggestion = {"suggestion_id": sug_id, "predicted_mode": "gaming"}
+
+        count = await service.expire_stale_pending()
+        assert count == 1
+        assert service.last_suggestion is None
+
+        history = await service.get_suggestion_history()
+        assert history[0]["status"] == "expired"
+        assert history[0]["resolved_source"] == "auto_expire"
+
+        dismissed = [b for b in ws.broadcasts if b[0] == "mode_suggestion_dismissed"]
+        assert len(dismissed) == 1
+
+    async def test_expire_skips_fresh_pending(self, db_and_service):
+        _, service, ws, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        fresh_fired = datetime.now(timezone.utc) - timedelta(minutes=30)
+        await _seed_pending(session_factory, rule_id, fired_at=fresh_fired)
+
+        count = await service.expire_stale_pending()
+        assert count == 0
+        history = await service.get_suggestion_history()
+        assert history[0]["status"] == "pending"
+        dismissed = [b for b in ws.broadcasts if b[0] == "mode_suggestion_dismissed"]
+        assert len(dismissed) == 0
+
+    async def test_restore_pending_on_boot_rebroadcasts(self, db_and_service):
+        _, service, ws, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory, predicted_mode="working")
+        fresh_fired = datetime.now(timezone.utc) - timedelta(minutes=5)
+        await _seed_pending(
+            session_factory, rule_id, predicted_mode="working", fired_at=fresh_fired,
+        )
+
+        await service.restore_pending_on_boot()
+        broadcasts = [b for b in ws.broadcasts if b[0] == "mode_suggestion"]
+        assert len(broadcasts) == 1
+        payload = broadcasts[0][1]
+        assert payload["predicted_mode"] == "working"
+        assert payload["confidence"] == 85
+        assert service.last_suggestion is not None
+        assert service.last_suggestion["predicted_mode"] == "working"
+
+    async def test_restore_expires_stale_on_boot(self, db_and_service):
+        _, service, ws, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        old_fired = datetime.now(timezone.utc) - timedelta(minutes=120)
+        await _seed_pending(session_factory, rule_id, fired_at=old_fired)
+
+        await service.restore_pending_on_boot()
+        broadcasts = [b for b in ws.broadcasts if b[0] == "mode_suggestion"]
+        assert len(broadcasts) == 0  # stale → expire path, no re-broadcast
+
+        history = await service.get_suggestion_history()
+        assert history[0]["status"] == "expired"
+
+    async def test_restore_noop_when_no_pending(self, db_and_service):
+        _, service, ws, _ = db_and_service
+        await service.restore_pending_on_boot()
+        assert len(ws.broadcasts) == 0
+        assert service.last_suggestion is None
+
+    async def test_get_suggestion_history_filters_and_paginates(self, db_and_service):
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        base = datetime.now(timezone.utc)
+        async with session_factory() as session:
+            for i in range(20):
+                status = "accepted" if i % 2 == 0 else "dismissed"
+                session.add(RuleSuggestion(
+                    rule_id=rule_id, fired_at=base - timedelta(minutes=i),
+                    predicted_mode="gaming", confidence=0.85, sample_count=7,
+                    status=status, resolved_at=base,
+                    resolved_source=f"user_{status}:test",
+                ))
+            await session.commit()
+
+        accepted = await service.get_suggestion_history(status="accepted", limit=5)
+        assert len(accepted) == 5
+        assert all(h["status"] == "accepted" for h in accepted)
+        # Newest first
+        fired_at_ts = [h["fired_at"] for h in accepted]
+        assert fired_at_ts == sorted(fired_at_ts, reverse=True)
+
+        all_recent = await service.get_suggestion_history(limit=20)
+        assert len(all_recent) == 20
+
+    async def test_get_latest_pending_returns_none_when_no_pending(self, db_and_service):
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        # Seed a resolved row — should NOT count as latest pending
+        async with session_factory() as session:
+            session.add(RuleSuggestion(
+                rule_id=rule_id, predicted_mode="gaming", confidence=0.85,
+                sample_count=7, status="accepted",
+                resolved_at=datetime.now(timezone.utc),
+                resolved_source="user_accept:test",
+            ))
+            await session.commit()
+
+        assert await service.get_latest_pending() is None
+
+    async def test_get_latest_pending_returns_newest_pending(self, db_and_service):
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        await _seed_pending(
+            session_factory, rule_id,
+            fired_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        newer_id = await _seed_pending(
+            session_factory, rule_id,
+            fired_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+
+        latest = await service.get_latest_pending()
+        assert latest is not None
+        assert latest["id"] == newer_id
 
 
 # ---------------------------------------------------------------------------

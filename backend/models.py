@@ -4,7 +4,7 @@ SQLAlchemy models for persistent data.
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -298,6 +298,57 @@ class LearnedRule(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class RuleSuggestion(Base):
+    """A single fire of a LearnedRule that was surfaced to the user.
+
+    Persistent record of every suggestion. The frontend's Home banner reads
+    the latest pending row at boot; expiry, accept, dismiss, and supersede
+    transitions all UPDATE rows here. Replaces the previous in-memory
+    `_last_suggestion` as the source of truth (kept as a cache pointer).
+
+    Status vocabulary:
+        pending     — broadcast to UI, awaiting user action
+        accepted    — user clicked Switch; mode applied
+        dismissed   — user clicked X
+        expired     — auto-aged out by `expire_stale_pending` after 60min
+        superseded  — a newer suggestion took its slot before resolution
+
+    `resolved_source` vocabulary:
+        user_accept:<remote-ip>
+        user_dismiss:<remote-ip>
+        auto_expire
+        superseded_by:<new_id>
+
+    Confidence is stored 0.0-1.0 (matches LearnedRule); API/WS serializers
+    emit int(round(c*100)) for the percent UX payload.
+    """
+
+    __tablename__ = "rule_suggestions"
+    __table_args__ = (
+        Index("ix_rule_sugg_status_fired", "status", "fired_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rule_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("learned_rules.id"), nullable=False,
+    )
+    fired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+    predicted_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)  # 0.0-1.0
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_mode_at_fire: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    resolved_source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
 
 # ---------------------------------------------------------------------------

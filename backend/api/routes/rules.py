@@ -2,8 +2,9 @@
 Rule engine endpoints — view, manage, and interact with learned rules.
 """
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.api.auth import require_api_key
@@ -11,6 +12,12 @@ from backend.api.auth import require_api_key
 logger = logging.getLogger("home_hub.rules")
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+
+# Valid `status` query values for GET /suggestions. Matches the
+# RuleSuggestion.status vocabulary in models.py.
+_VALID_SUGGESTION_STATUSES = {
+    "pending", "accepted", "dismissed", "expired", "superseded",
+}
 
 
 def _get_service(request: Request):
@@ -39,8 +46,25 @@ async def get_status(request: Request) -> dict:
     return {
         "total_rules": len(rules),
         "enabled_rules": enabled,
-        "last_suggestion": service.last_suggestion,
+        "last_suggestion": await service.get_latest_pending(),
     }
+
+
+@router.get("/suggestions")
+async def list_suggestions(
+    request: Request,
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Recent rule-suggestion fires, newest first. Backs Settings history view."""
+    if status is not None and status not in _VALID_SUGGESTION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of {sorted(_VALID_SUGGESTION_STATUSES)}",
+        )
+    service = _get_service(request)
+    suggestions = await service.get_suggestion_history(status=status, limit=limit)
+    return {"suggestions": suggestions, "total": len(suggestions)}
 
 
 @router.post("/regenerate", dependencies=[Depends(require_api_key)])
@@ -73,14 +97,26 @@ async def delete_rule(rule_id: int, request: Request) -> dict:
 
 @router.post("/suggestion/accept", dependencies=[Depends(require_api_key)])
 async def accept_suggestion(request: Request) -> dict:
-    """Accept the current mode suggestion and apply it."""
+    """Accept the latest pending mode suggestion and apply it.
+
+    Returns 410 Gone when the pending row was auto-expired or
+    superseded between WS broadcast and the click — UI handles
+    silently (optimistic dismiss).
+    """
     service = _get_service(request)
-    suggestion = await service.accept_suggestion()
+    remote = getattr(request.client, "host", None) or "unknown"
+    suggestion = await service.accept_suggestion(remote=remote)
     if not suggestion:
-        raise HTTPException(status_code=404, detail="No active suggestion")
+        raise HTTPException(
+            status_code=410, detail="suggestion no longer pending",
+        )
 
     automation = request.app.state.automation
-    remote = getattr(request.client, "host", None) or "unknown"
+    # IMPORTANT: do NOT append suggestion_id to the source string. The exact
+    # value `rule_suggestion_accept:<remote>` is what bypasses the
+    # USER_CLEAR_AUTO_PUSH_COOLDOWN gate (automation_engine.py:97) and what
+    # analytics LIKE-match against. The suggestion_id lives on the
+    # rule_suggestions row's resolved_source column.
     await automation.set_manual_override(
         suggestion["predicted_mode"], source=f"rule_suggestion_accept:{remote}",
     )
@@ -89,7 +125,8 @@ async def accept_suggestion(request: Request) -> dict:
 
 @router.post("/suggestion/dismiss", dependencies=[Depends(require_api_key)])
 async def dismiss_suggestion(request: Request) -> dict:
-    """Dismiss the current mode suggestion."""
+    """Dismiss the latest pending mode suggestion. Idempotent (200 on no-op)."""
     service = _get_service(request)
-    await service.dismiss_suggestion()
+    remote = getattr(request.client, "host", None) or "unknown"
+    await service.dismiss_suggestion(remote=remote)
     return {"status": "ok"}

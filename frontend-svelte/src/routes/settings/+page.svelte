@@ -7,6 +7,7 @@
   import { apiGet, apiPut, apiPost, apiDelete } from '$lib/api.js'
   import Slider from '$lib/components/Slider.svelte'
   import LearnedRulesCard from '$lib/components/LearnedRulesCard.svelte'
+  import RuleSuggestionHistoryCard from '$lib/components/RuleSuggestionHistoryCard.svelte'
 
   const DND_DURATIONS = [
     { label: '1h',  minutes: 60  },
@@ -1066,6 +1067,9 @@
 
   <!-- Learned Rules — moved from /analytics: it's a control surface, not analytics -->
   <LearnedRulesCard />
+
+  <!-- Suggestion History — every rule_suggestions fire (pending/accepted/dismissed/expired/superseded) -->
+  <RuleSuggestionHistoryCard />
 
   <!-- Quick Actions -->
   <section class="widget">

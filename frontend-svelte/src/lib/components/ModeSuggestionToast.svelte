@@ -1,29 +1,41 @@
 <script>
+  import { page } from '$app/stores'
   import { modeSuggestion, dismissModeSuggestion } from '$lib/stores/modeSuggestion.js'
-  import { apiPost } from '$lib/api.js'
+  import { addError } from '$lib/stores/errors.js'
   import { modeColor, modeLabel } from '$lib/theme.js'
+
+  // The Home page (/) renders <ModeSuggestionCard /> as a full banner.
+  // Toast self-suppresses there to avoid duplication. Other routes
+  // (/music, /settings, /journal, /analytics, /gameday) still get the
+  // toast for cross-page coverage.
+  $: onHome = $page?.url?.pathname === '/'
+
+  // Direct fetch so we can swallow 410 Gone silently (the "auto-expired
+  // before the click" race) — using apiPost would surface an error toast.
+  /** @param {string} path */
+  async function postSilently(path) {
+    try {
+      const res = await fetch(path, { method: 'POST' })
+      if (res.status === 410) return
+      if (!res.ok) addError(`POST ${path}: ${res.status}`)
+    } catch (e) {
+      addError(`POST ${path}: network error`)
+    }
+  }
 
   async function accept() {
     if (!$modeSuggestion) return
-    try {
-      await apiPost('/api/rules/suggestion/accept')
-    } catch {
-      /* ignore */
-    }
     dismissModeSuggestion()
+    await postSilently('/api/rules/suggestion/accept')
   }
 
   async function dismiss() {
-    try {
-      await apiPost('/api/rules/suggestion/dismiss')
-    } catch {
-      /* ignore */
-    }
     dismissModeSuggestion()
+    await postSilently('/api/rules/suggestion/dismiss')
   }
 </script>
 
-{#if $modeSuggestion}
+{#if $modeSuggestion && !onHome}
   {@const color = modeColor($modeSuggestion.predicted_mode)}
   {@const label = modeLabel($modeSuggestion.predicted_mode)}
   <div class="music-toast music-toast-suggestion" style="--accent: {color}">
@@ -52,6 +64,5 @@
         </svg>
       </button>
     </div>
-    <div class="music-toast-progress" style="animation-duration: 20s"></div>
   </div>
 {/if}

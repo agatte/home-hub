@@ -14,11 +14,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from backend.database import async_session
-from backend.models import ActivityEvent, LearnedRule
+from backend.models import ActivityEvent, LearnedRule, RuleSuggestion
 from backend.services.ml.confidence_fusion import VALID_MODES
+
+# Pending rows older than this are auto-expired by `expire_stale_pending`,
+# and `restore_pending_on_boot` will expire (not re-broadcast) anything
+# older than this on startup.
+SUGGESTION_MAX_AGE_MINUTES = 60
 
 logger = logging.getLogger("home_hub.rules")
 
@@ -51,6 +56,43 @@ _DEFAULT_SOURCE_WEIGHT = 1.0
 GENERATION_INTERVAL_HOURS = 6
 
 _DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to tz-aware UTC. SQLite returns naive datetimes."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _suggestion_to_dict(
+    row: "RuleSuggestion",
+    override: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Serialize a RuleSuggestion row to the API/JSON shape.
+
+    `confidence` is emitted as an int percent (UX payload contract);
+    timestamps are ISO8601 UTC. `override` lets the accept/dismiss
+    path return the post-update view without a re-query.
+    """
+    override = override or {}
+    confidence_raw = override.get("confidence", row.confidence)
+    fired_at = _as_utc(row.fired_at)
+    resolved_at = override.get("resolved_at", row.resolved_at)
+    if resolved_at is not None:
+        resolved_at = _as_utc(resolved_at).isoformat()
+    return {
+        "id": row.id,
+        "rule_id": row.rule_id,
+        "fired_at": fired_at.isoformat(),
+        "predicted_mode": override.get("predicted_mode", row.predicted_mode),
+        "confidence": int(round(float(confidence_raw) * 100)),
+        "sample_count": row.sample_count,
+        "current_mode_at_fire": row.current_mode_at_fire,
+        "status": override.get("status", row.status),
+        "resolved_at": resolved_at,
+        "resolved_source": override.get("resolved_source", row.resolved_source),
+    }
 
 
 def _build_rule_factors(rule: "LearnedRule") -> list[dict]:
@@ -332,8 +374,38 @@ class RuleEngineService:
 
         self._cooldowns[rule.id] = now
 
+        # Persist this fire. Mark any prior pending row as `superseded`
+        # in the same transaction so the "latest pending" lookup the
+        # accept/dismiss endpoints rely on always returns one row.
+        now_utc = datetime.now(timezone.utc)
+        async with async_session() as session:
+            prior_pending = (await session.execute(
+                select(RuleSuggestion).where(RuleSuggestion.status == "pending")
+            )).scalars().all()
+
+            new_row = RuleSuggestion(
+                rule_id=rule.id,
+                fired_at=now_utc,
+                predicted_mode=rule.predicted_mode,
+                confidence=float(rule.confidence),
+                sample_count=int(rule.sample_count),
+                current_mode_at_fire=current_mode,
+                status="pending",
+            )
+            session.add(new_row)
+            await session.flush()  # populate new_row.id
+
+            for prior in prior_pending:
+                prior.status = "superseded"
+                prior.resolved_at = now_utc
+                prior.resolved_source = f"superseded_by:{new_row.id}"
+
+            await session.commit()
+            new_id = new_row.id
+
         pct = round(rule.confidence * 100)
         suggestion = {
+            "suggestion_id": new_id,
             "rule_id": rule.id,
             "predicted_mode": rule.predicted_mode,
             "confidence": pct,
@@ -347,8 +419,8 @@ class RuleEngineService:
 
         await self._ws_manager.broadcast("mode_suggestion", suggestion)
         logger.info(
-            "Rule nudge: %s at day=%d hour=%d (%d%% confidence)",
-            rule.predicted_mode, day, hour, pct,
+            "Rule nudge: %s at day=%d hour=%d (%d%% confidence) suggestion_id=%d",
+            rule.predicted_mode, day, hour, pct, new_id,
         )
         return suggestion
 
@@ -416,17 +488,188 @@ class RuleEngineService:
         """The most recent active suggestion, or None."""
         return self._last_suggestion
 
-    async def accept_suggestion(self) -> Optional[dict[str, Any]]:
-        """Accept the current suggestion. Caller should set_manual_override."""
-        suggestion = self._last_suggestion
-        self._last_suggestion = None
-        return suggestion
+    async def accept_suggestion(self, remote: str = "unknown") -> Optional[dict[str, Any]]:
+        """Accept the latest pending suggestion. DB-backed; race-safe.
 
-    async def dismiss_suggestion(self) -> bool:
-        """Dismiss the current suggestion without acting."""
-        self._last_suggestion = None
-        await self._ws_manager.broadcast("mode_suggestion_dismissed", {})
-        return True
+        Returns the resolved row as a dict on success. Returns None when
+        there's no pending row OR when a concurrent click already
+        resolved it (caller maps to 410 Gone). Caller is responsible
+        for applying the override via `automation.set_manual_override`.
+        """
+        return await self._resolve_pending(
+            new_status="accepted",
+            resolved_source=f"user_accept:{remote}",
+            broadcast_dismiss=False,
+        )
+
+    async def dismiss_suggestion(self, remote: str = "unknown") -> Optional[dict[str, Any]]:
+        """Dismiss the latest pending suggestion. DB-backed; idempotent.
+
+        Broadcasts `mode_suggestion_dismissed` whether or not a row was
+        actually resolved — UI's optimistic dismiss should always settle.
+        """
+        return await self._resolve_pending(
+            new_status="dismissed",
+            resolved_source=f"user_dismiss:{remote}",
+            broadcast_dismiss=True,
+        )
+
+    async def _resolve_pending(
+        self,
+        new_status: str,
+        resolved_source: str,
+        broadcast_dismiss: bool,
+    ) -> Optional[dict[str, Any]]:
+        """Shared accept/dismiss path. Race-safe via WHERE status='pending'."""
+        now_utc = datetime.now(timezone.utc)
+        async with async_session() as session:
+            latest = (await session.execute(
+                select(RuleSuggestion)
+                .where(RuleSuggestion.status == "pending")
+                .order_by(RuleSuggestion.fired_at.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+
+            resolved_dict: Optional[dict[str, Any]] = None
+            if latest is not None:
+                result = await session.execute(
+                    update(RuleSuggestion)
+                    .where(
+                        RuleSuggestion.id == latest.id,
+                        RuleSuggestion.status == "pending",
+                    )
+                    .values(
+                        status=new_status,
+                        resolved_at=now_utc,
+                        resolved_source=resolved_source,
+                    )
+                )
+                await session.commit()
+                if result.rowcount > 0:
+                    resolved_dict = _suggestion_to_dict(latest, override={
+                        "status": new_status,
+                        "resolved_at": now_utc,
+                        "resolved_source": resolved_source,
+                    })
+
+        if resolved_dict is not None:
+            self._last_suggestion = None
+
+        if broadcast_dismiss:
+            await self._ws_manager.broadcast("mode_suggestion_dismissed", {})
+
+        return resolved_dict
+
+    async def expire_stale_pending(
+        self, max_age_minutes: int = SUGGESTION_MAX_AGE_MINUTES,
+    ) -> int:
+        """Auto-expire pending rows older than the max-age window.
+
+        Called from the 60s automation tick. If any expired row matches
+        the in-memory cache, clears it + broadcasts dismissal so the UI
+        drops the card.
+        """
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc - timedelta(minutes=max_age_minutes)
+
+        async with async_session() as session:
+            stale = (await session.execute(
+                select(RuleSuggestion).where(
+                    RuleSuggestion.status == "pending",
+                    RuleSuggestion.fired_at < cutoff,
+                )
+            )).scalars().all()
+
+            if not stale:
+                return 0
+
+            stale_ids = {row.id for row in stale}
+            for row in stale:
+                row.status = "expired"
+                row.resolved_at = now_utc
+                row.resolved_source = "auto_expire"
+            await session.commit()
+
+        cached_id = (self._last_suggestion or {}).get("suggestion_id")
+        if cached_id is not None and cached_id in stale_ids:
+            self._last_suggestion = None
+            await self._ws_manager.broadcast("mode_suggestion_dismissed", {})
+
+        logger.info("Expired %d stale rule suggestion(s)", len(stale_ids))
+        return len(stale_ids)
+
+    async def restore_pending_on_boot(
+        self, max_age_minutes: int = SUGGESTION_MAX_AGE_MINUTES,
+    ) -> None:
+        """Re-broadcast the latest pending suggestion after a restart.
+
+        Mirrors `automation.load_override_state()` — without this a deploy
+        mid-suggestion would drop the in-memory `_last_suggestion` and
+        the kiosk would lose the card on WS reconnect. If the latest
+        pending row is older than the max-age window, it's expired in-
+        place instead.
+        """
+        async with async_session() as session:
+            latest = (await session.execute(
+                select(RuleSuggestion)
+                .where(RuleSuggestion.status == "pending")
+                .order_by(RuleSuggestion.fired_at.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+
+        if latest is None:
+            return
+
+        age = datetime.now(timezone.utc) - _as_utc(latest.fired_at)
+        if age > timedelta(minutes=max_age_minutes):
+            await self.expire_stale_pending(max_age_minutes=max_age_minutes)
+            return
+
+        pct = round(latest.confidence * 100)
+        suggestion = {
+            "suggestion_id": latest.id,
+            "rule_id": latest.rule_id,
+            "predicted_mode": latest.predicted_mode,
+            "confidence": pct,
+            "sample_count": latest.sample_count,
+            "message": (
+                f"You're usually in {latest.predicted_mode} mode around this time "
+                f"({pct}% confidence from {latest.sample_count} observations)"
+            ),
+        }
+        self._last_suggestion = suggestion
+        await self._ws_manager.broadcast("mode_suggestion", suggestion)
+        logger.info(
+            "Restored pending suggestion %d (%s) on boot",
+            latest.id, latest.predicted_mode,
+        )
+
+    async def get_suggestion_history(
+        self, status: Optional[str] = None, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return recent suggestion fires, newest first. Backs GET /suggestions."""
+        limit = max(1, min(int(limit), 200))
+        async with async_session() as session:
+            stmt = select(RuleSuggestion).order_by(RuleSuggestion.fired_at.desc()).limit(limit)
+            if status:
+                stmt = select(RuleSuggestion).where(
+                    RuleSuggestion.status == status,
+                ).order_by(RuleSuggestion.fired_at.desc()).limit(limit)
+            rows = (await session.execute(stmt)).scalars().all()
+
+        return [_suggestion_to_dict(r) for r in rows]
+
+    async def get_latest_pending(self) -> Optional[dict[str, Any]]:
+        """Latest pending row as dict, or None. Used by GET /api/rules/status."""
+        async with async_session() as session:
+            latest = (await session.execute(
+                select(RuleSuggestion)
+                .where(RuleSuggestion.status == "pending")
+                .order_by(RuleSuggestion.fired_at.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+
+        return _suggestion_to_dict(latest) if latest is not None else None
 
     # ------------------------------------------------------------------
     # Background loop

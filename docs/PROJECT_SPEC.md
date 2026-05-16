@@ -507,6 +507,22 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 
 UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30 days of activity_events. Minimum thresholds: 70% confidence, 3 samples. Idle is excluded as a prediction target ("you're usually idle" isn't a useful nudge).
 
+**rule_suggestions** — Persistent record of every rule-suggestion fire (Phase 3c.2)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| rule_id | Integer | FK → learned_rules.id, no CASCADE (history outlives rule deletion) |
+| fired_at | DateTime | UTC, indexed |
+| predicted_mode | String(50) | Captured at fire time |
+| confidence | Float | 0.0-1.0, captured at fire time |
+| sample_count | Integer | Captured at fire time |
+| current_mode_at_fire | String(50) | Nullable — typically `idle` (today's only gate) |
+| status | String(20) | `pending`, `accepted`, `dismissed`, `expired`, `superseded` |
+| resolved_at | DateTime | Nullable, UTC; set on status transition out of `pending` |
+| resolved_source | String(100) | `user_accept:<remote-ip>`, `user_dismiss:<remote-ip>`, `auto_expire`, `superseded_by:<new_id>` |
+
+Composite index on (status, fired_at) for "latest pending" lookup + history queries. Pending rows older than 60min are auto-expired on the 60s automation tick. Boot-time `restore_pending_on_boot()` re-broadcasts an unresolved pending suggestion so a deploy mid-banner doesn't drop the kiosk's Home card.
+
 **ml_decisions** — ML decision log (every mode decision with reasoning)
 | Column | Type | Notes |
 |--------|------|-------|
@@ -749,12 +765,13 @@ All messages are JSON with `type` + `data` fields.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/rules/` | List all learned rules |
-| GET | `/api/rules/status` | Engine status + active suggestion |
+| GET | `/api/rules/status` | Engine status + latest pending suggestion (DB-backed) |
+| GET | `/api/rules/suggestions?status=&limit=` | Recent rule-suggestion fires (history), newest first, limit ≤ 200 |
 | POST | `/api/rules/regenerate` | Force rule regeneration from event data |
 | PATCH | `/api/rules/{id}` | Enable/disable a learned rule |
 | DELETE | `/api/rules/{id}` | Delete a learned rule |
-| POST | `/api/rules/suggestion/accept` | Accept suggestion → set_manual_override |
-| POST | `/api/rules/suggestion/dismiss` | Dismiss current suggestion |
+| POST | `/api/rules/suggestion/accept` | Accept latest pending suggestion → set_manual_override. Returns 410 Gone when the row was auto-expired/superseded between WS broadcast and click (UI dismisses silently) |
+| POST | `/api/rules/suggestion/dismiss` | Dismiss latest pending suggestion (idempotent; 200 on no-op) |
 
 #### Camera — `/api/camera/`
 
@@ -1574,7 +1591,8 @@ cleanup landed:
 
 - ✓ **Event Query API** (Phase 3a) — 6 endpoints under `/api/events/` for aggregation, pattern detection, filtering, and timeline visualization over all 4 event tables
 - ✓ **Rule Engine v1** (Phase 3b) — `RuleEngineService` learns time-based mode patterns from 30 days of activity events (70%+ confidence, 3+ samples). Regenerates every 6h. `LearnedRule` table with day_of_week + hour → predicted_mode. 7 REST endpoints under `/api/rules/`
-- ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons, 20s auto-dismiss
+- ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons.
+- ✓ **Persistent Suggestion Surface + History** (Phase 3c.2, May 2026) — `rule_suggestions` table records every fire (`pending`/`accepted`/`dismissed`/`expired`/`superseded`); `ModeSuggestionCard.svelte` renders an inline banner on the Home dashboard above the widget grid until resolved (toast suppresses on `/` to avoid duplication, stays for cross-page coverage). 60-minute server-side auto-expiry on the 60s automation tick; boot-time `restore_pending_on_boot()` re-broadcasts so deploys don't drop the active card. Settings page surfaces a `RuleSuggestionHistoryCard` showing the last 50 fires with status pills.
 - ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route. Originally mode distribution donut, quick stats, hourly patterns, learned rules, recent activity, top Sonos/scenes. Redesigned April 15 as a live decision pipeline dashboard: SVG confidence ring at top showing fused confidence (0-100%), 5 signal cards (process, camera, audio ML, behavioral predictor, rule engine) with animated confidence bars and agreement indicators, output card showing effective mode + lights, decision history. Historical analytics moved to a collapsible section below.
 - ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (cooking mode, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
 - ~~**WiFi Presence Detection**~~ (Phase 3e) — **Retired 2026-04-28** (`b8fdbfe`). iOS Shortcut webhooks flapped despite three rounds of mitigation; ARP probing alone wasn't worth the plumbing. Home/away as a concept is gone — Hue native geofencing handles arrivals/departures outside Home Hub. See git history for the original implementation.

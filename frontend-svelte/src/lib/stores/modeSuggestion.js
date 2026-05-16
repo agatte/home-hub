@@ -1,10 +1,16 @@
 import { writable } from 'svelte/store'
 
 /**
+ * Rule-suggestion store. Expiry is now server-driven via
+ * `mode_suggestion_dismissed` (60min server-side auto-expire on the
+ * automation tick) — the 20s client-side auto-hide was removed when the
+ * inline Home banner became the primary surface.
+ *
  * @typedef {Object} ModeSuggestion
+ * @property {number} suggestion_id  - rule_suggestions.id, used for race-safe accept
  * @property {number} rule_id
  * @property {string} predicted_mode
- * @property {number} confidence
+ * @property {number} confidence     - integer percent (0-100)
  * @property {number} sample_count
  * @property {string} message
  */
@@ -12,23 +18,11 @@ import { writable } from 'svelte/store'
 /** @type {import('svelte/store').Writable<ModeSuggestion | null>} */
 export const modeSuggestion = writable(null)
 
-/** @type {ReturnType<typeof setTimeout> | null} */
-let suggestionTimer = null
-
 /** @param {ModeSuggestion} data */
 export function showModeSuggestion(data) {
-  if (suggestionTimer) clearTimeout(suggestionTimer)
   modeSuggestion.set(data)
-  suggestionTimer = setTimeout(() => {
-    modeSuggestion.set(null)
-    suggestionTimer = null
-  }, 20_000)
 }
 
 export function dismissModeSuggestion() {
-  if (suggestionTimer) {
-    clearTimeout(suggestionTimer)
-    suggestionTimer = null
-  }
   modeSuggestion.set(null)
 }
