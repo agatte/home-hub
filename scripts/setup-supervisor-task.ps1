@@ -60,9 +60,25 @@ $action = New-ScheduledTaskAction `
     -Argument $Arguments `
     -WorkingDirectory $ProjectRoot
 
-# Trigger: on logon with 30s delay (let network settle)
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$trigger.Delay = "PT30S"
+# Trigger 1: on logon with 30s delay (let network settle).
+$loginTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$loginTrigger.Delay = "PT30S"
+
+# Trigger 2: 5-minute watchdog. Combined with MultipleInstances=IgnoreNew
+# below, this is a safe self-heal — Task Scheduler tries to launch every
+# 5 min; if the supervisor is already running it skips, if it died (or
+# was killed externally) it starts a fresh one.
+#
+# Why this is needed in addition to RestartCount=999 on failure: the
+# failure-restart only fires when Task Scheduler observed the task's
+# launcher exit with non-zero. External kills (e.g. a bash background
+# wrapper getting reaped with its Claude session — observed 2026-05-15
+# → 17h apartment stuck in idle) leave Task Scheduler unaware that
+# anything should be running. The polling trigger catches that class.
+$watchdogTrigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5)
 
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -81,7 +97,7 @@ $principal = New-ScheduledTaskPrincipal `
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
-    -Trigger $trigger `
+    -Trigger @($loginTrigger, $watchdogTrigger) `
     -Settings $settings `
     -Principal $principal `
     -Description "Unified supervisor for Home Hub PC agents (activity detector, ambient monitor, screen sync). Reports to Latitude 192.168.1.210."
@@ -90,7 +106,8 @@ Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green
 Write-Host ""
 Write-Host "Key settings:" -ForegroundColor Cyan
-Write-Host "  - Trigger: At logon (30s delay)"
+Write-Host "  - Trigger 1: At logon (30s delay)"
+Write-Host "  - Trigger 2: Watchdog — every 5 min, indefinitely"
 Write-Host "  - Manages: activity_detector, ambient_monitor, screen_sync"
 Write-Host "  - Classifier: YAMNet (shadow mode)"
 Write-Host "  - StopIfGoingOnBatteries: False"
