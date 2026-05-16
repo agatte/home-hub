@@ -205,7 +205,7 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, AmbientMonitor, MLLogger, CameraService, BarApp
+   │   └── mode-change callbacks ──> MusicMapper, AmbientSound, MLLogger, CameraService, BarApp, LoLChampionService
    ├── ML Services ────────────────> see docs/ML_SPEC.md
    │   ├── MLDecisionLogger ───────> logs every mode decision with reasoning
    │   ├── ConfidenceFusion ───────> 4-lane weighted ensemble (process/camera/audio_ml/rule_engine)
@@ -222,6 +222,7 @@ Browser / Phone (PWA)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
    ├── WeatherService ─────────────> NWS API (5-min cache) + severe weather alerts (2-min cache)
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
+   ├── LoLChampionService ─────────> League of Legends champion → bedroom lamp color (gaming mode only)
    ├── TransitLightingService ─────> camera absent → brief L1/L3/L4 navigation brightness
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
@@ -243,9 +244,11 @@ Uptime Kuma (Docker container, port 3002, same machine)
 PC Agent (supervised on the dev machine only, 2026-04-19+)
    ├── activity_detector.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
    │                         (psutil process detection)
-   ├── ambient_monitor.py    ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
-   │                         (Blue Yeti PyAudio RMS + YAMNet shadow classifier — --classifier --shadow;
-   │                          social-gate abandoned 2026-05-09, lane drives silence→quiet + game_audio→watching only)
+   ├── ambient_monitor.py    ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/learning/audio-decision
+   │                         (Blue Yeti PyAudio RMS + YAMNet shadow classifier — --classifier --shadow.
+   │                          Social-gate abandoned 2026-05-09; mode-report POSTs to /api/automation/activity
+   │                          removed 2026-05-16 after the rogue source=ambient idle reports were displacing
+   │                          rescue overrides via the priority guard. Service now publishes ML decisions only.)
    └── screen_sync_agent.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/screen-color
                              (Three agents managed by supervisor.py; Latitude built-in mic no longer runs
                               ambient_monitor — systemd unit disabled because RMS in the corner environment
@@ -362,7 +365,7 @@ External APIs (cloud):
 | value | JSON | Serialized config object |
 | updated_at | DateTime | UTC, auto-updated |
 
-Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`, `dnd_state`, `override_state`, `guest_vibe_playlists`. The middle pair carries runtime state across restarts: `dnd_state` is `{enabled, expiry_utc, duration_minutes}`, and `override_state` is `{manual_override, override_mode, override_time_utc, zone_posture_last_fired_utc}` — restored at boot by `automation.load_dnd_state()` / `load_override_state()`, with override drops past the 4h timeout (sleeping exempt). `mode_volume_curves` is `{mode: {day, evening, night, fade_duration_s}}` driving `ModeVolumeService`'s per-mode Sonos fade on transition. `guest_vibe_playlists` is `{hype, singalong, throwback}` → Sonos favorite title; missing keys fall back to `GUEST_VIBE_DEFAULTS` in `routes/guest.py`.
+Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`, `dnd_state`, `override_state`, `guest_vibe_playlists`, `champion_color_map` (League champion → RGB palette consumed by `LoLChampionService`; seeded via `scripts/seed_champion_colors.py`). The middle pair carries runtime state across restarts: `dnd_state` is `{enabled, expiry_utc, duration_minutes}`, and `override_state` is `{manual_override, override_mode, override_time_utc, zone_posture_last_fired_utc}` — restored at boot by `automation.load_dnd_state()` / `load_override_state()`, with override drops past the 4h timeout (sleeping exempt). `mode_volume_curves` is `{mode: {day, evening, night, fade_duration_s}}` driving `ModeVolumeService`'s per-mode Sonos fade on transition. `guest_vibe_playlists` is `{hype, singalong, throwback}` → Sonos favorite title; missing keys fall back to `GUEST_VIBE_DEFAULTS` in `routes/guest.py`.
 
 **scenes** — User-created light presets
 | Column | Type | Notes |
@@ -877,7 +880,21 @@ Core brain — combines time rules with activity detection.
 
 **Late-night rescue** — inside `run_loop`, after the external-off check and before time-based application: if `_get_time_period() == "late_night"` (23:00+), no manual override is active, `_current_mode ∈ {"working", "idle"}`, and `_sonos_is_playing()` returns False, the engine auto-applies `set_manual_override("relax")`. Respects real entertainment modes (gaming, watching, social, sleeping) and music playback as intentional signals. Complements the winddown routine (which runs at 22:00 and sets a 4h override) by covering the 02:00+ edge after that override expires.
 
+**Rescue priority floor** (added 2026-05-16) — `RESCUE_OVERRIDE_SOURCES = {"late_night_rescue", "zone_posture_rule", "watching_sleep_guard"}`. These sources push manual-only target modes (`relax`, `sleeping`) whose default `MODE_PRIORITY` is 0. The displacement guard in `report_activity` computes the override's effective priority as `max(MODE_PRIORITY.get(target, 0), MODE_PRIORITY["idle"])` when the source is in this set — so an `idle (p=1)` sensor report can't silently undo the rescue (`1 > 1` is False), while real activity (`working` p=2, `watching` p=3, `gaming` p=5) still displaces. Bug fixed by this floor: 2026-05-15 night, a rogue `source=ambient` idle POST every 60s displaced the `late_night_rescue → relax` override 47 times across 47 minutes (4-h apartment-stuck-in-idle). The ambient-monitor mode-POST path was the trigger and is gone (see PC Agent section); the floor exists for defense-in-depth against any future source that might post idle/sleeping.
+
 **Override persistence** — `_manual_override` / `_override_mode` / `_override_time` and the zone+posture rule's `_zone_posture_last_fired_at` stamp are written to `app_settings["override_state"]` on every set/clear/rule-fire and restored at boot. Before this fix (2026-05-01), a deploy mid-relax would briefly snap to whatever the PC agent was reporting until the rule re-fired after its 120s dwell. On restore, the engine drops anything past `override_timeout_hours` (sleeping exempt — no timeout by design); the rule stamp is always restored so gate 2's post-expiry refractory window survives intact.
+
+#### LoLChampionService
+Drives the bedroom lamps (L2 fabric-shade, L5 clear-glass) to the active League of Legends champion's signature color while gaming mode is in an in-match window. PC agent's `activity_detector` polls the LoL Live Client Data API at `https://127.0.0.1:2999/liveclientdata/activeplayer` when a LoL process is running (5s tick, 30s cache) and appends a `champion` factor to the activity report; the backend service maps champion → RGB via the `champion_color_map` app_setting, converts to Hue HSB via the shared `color_utils.rgb_to_hue_hsb` helper (same per-light sat boost + L5 luma compensation as `ScreenSyncService`), and writes directly through `HueService.set_light`. Skips screen-sync on owned lights via `is_owning(light_id)` consulted in the screen-color route. Clears on mode change leaving gaming (registered callback).
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `on_activity_report` | `(report: ActivityReport) → None` | Hooked from `/api/automation/activity`; resolves champion factor + applies color when mode is gaming |
+| `apply` | `(champion_name: str) → None` | Look up color in `champion_color_map`, write to L2+L5 |
+| `clear` | `() → None` | Drop ownership stamps; screen-sync resumes |
+| `on_mode_change` | `(mode: str) → None` | Mode-change callback registered in bootstrap; clears when leaving gaming |
+| `is_owning` | `(light_id: str) → bool` | Consulted by the screen-color route to skip champion-owned lights |
+| `active_lights` | `() → set[str]` | All light ids currently driven |
 
 #### MusicMapper
 Maps modes to Sonos favorites with vibe-based matching and smart auto-play logic.
@@ -1467,12 +1484,20 @@ Auto-login enabled so power-on → desktop with no keystrokes.
 (192.168.1.30) stays as Anthony's workstation — code editing, tests,
 `git push`. It's not a production host. It runs:
 
-- **PC activity detector** via Windows Task Scheduler (hidden
-  `pythonw.exe`, at-logon trigger with 30s delay, restart-on-failure),
-  pointed at the Latitude via `--server http://192.168.1.210:8000`.
-  Dev-machine process detection is only useful where Anthony actually
-  games and works, so this belongs on the dev machine, not the
-  Latitude.
+- **PC Agent Supervisor** via Windows Task Scheduler (`"Home Hub Agent
+  Supervisor"`, hidden `pythonw.exe`, **two triggers**: at-logon with
+  30s delay + 5-min watchdog repetition trigger added 2026-05-16) plus
+  `RestartCount=999 / RestartInterval=1m` on observed failure. Manages
+  the three agents (activity_detector, ambient_monitor,
+  screen_sync_agent) as child processes. Pointed at the Latitude via
+  `--server http://192.168.1.210:8000`. The watchdog catches the class
+  of failure where the supervisor dies but Task Scheduler doesn't see
+  a launcher failure (e.g. a Bash background subprocess reaped along
+  with its parent session — observed 2026-05-15→16, 17h apartment
+  stuck in idle). `MultipleInstancesPolicy=IgnoreNew` plus the
+  supervisor's PID-file mutex prevent duplicate spawns during the
+  5-min polls. Install/reinstall via
+  `scripts/setup-supervisor-task.ps1` (elevated).
 - **Claude Code MCP server** with `HOME_HUB_URL` set via Windows user
   environment variable (`setx HOME_HUB_URL http://192.168.1.210:8000`)
   so Claude sessions on the dev machine can query and control the
