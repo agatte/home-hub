@@ -124,6 +124,45 @@ class TestDeregister:
         assert registry.snapshot()[0]["stale"] is False
 
 
+class TestUpdateInterval:
+    """update_interval mutates cadence without touching last_tick — the
+    motivating case is Hue v1 demoting from 0.5s to 5s while the v2
+    stream is healthy."""
+
+    def test_update_changes_interval(self, registry):
+        registry.register("hue", 0.5)
+        registry.update_interval("hue", 5.0)
+        assert registry.snapshot()[0]["interval_seconds"] == 5.0
+
+    def test_update_preserves_last_tick(self, registry):
+        registry.register("hue", 0.5)
+        # Inject a 2s-old tick — still stale at 0.5s interval (>1s threshold)
+        original = datetime.now(timezone.utc) - timedelta(seconds=2)
+        registry._beats["hue"].last_tick = original
+        assert registry.snapshot()[0]["stale"] is True
+
+        registry.update_interval("hue", 5.0)
+        rows = registry.snapshot()
+        # last_tick must NOT have been reset to now (cadence flips don't
+        # hide a concurrent stall)
+        assert registry._beats["hue"].last_tick == original
+        # At the new 5.0 interval the 2s-old tick is no longer stale
+        # (10s threshold) — but the timestamp itself is preserved
+        assert rows[0]["stale"] is False
+        assert rows[0]["age_seconds"] >= 2.0
+
+    def test_update_unknown_name_is_noop(self, registry):
+        registry.update_interval("nope", 5.0)
+        assert registry.snapshot() == []
+
+    def test_update_rejects_nonpositive_interval(self, registry):
+        registry.register("hue", 0.5)
+        with pytest.raises(ValueError):
+            registry.update_interval("hue", 0)
+        with pytest.raises(ValueError):
+            registry.update_interval("hue", -1)
+
+
 class TestClear:
     def test_clear_removes_everything(self, registry):
         registry.register("a", 1.0)

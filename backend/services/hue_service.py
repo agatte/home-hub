@@ -63,8 +63,14 @@ class HueService:
         has delivered its first light update, False when it disconnects or
         goes into reconnect backoff. The polling loop reads this on every
         cycle to choose its sleep interval.
+
+        Also updates the heartbeat's expected cadence so the v1 task
+        isn't perpetually flagged stale while the loop is deliberately
+        sleeping 5s between iterations.
         """
         self._v2_stream_active = active
+        if self._heartbeat is not None:
+            self._heartbeat.update_interval("hue", 5.0 if active else 0.5)
 
     @property
     def breaker(self) -> CircuitBreaker:

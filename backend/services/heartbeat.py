@@ -75,6 +75,24 @@ class HeartbeatRegistry:
             return
         beat.last_tick = datetime.now(timezone.utc)
 
+    def update_interval(self, name: str, expected_interval_seconds: float) -> None:
+        """Mutate a registered task's expected cadence without resetting
+        ``last_tick``. Used by services whose polling rate changes at
+        runtime (e.g. Hue v1 drops to 5s when the v2 EventStream is up).
+
+        Unlike ``register``, this preserves the last-tick timestamp so a
+        cadence flip doesn't hide a concurrent stall by silently
+        warming up the task. No-op for unknown names."""
+        if expected_interval_seconds <= 0:
+            raise ValueError(
+                f"expected_interval_seconds must be positive, got {expected_interval_seconds}"
+            )
+        with self._lock:
+            beat = self._beats.get(name)
+            if beat is None:
+                return
+            beat.expected_interval_seconds = float(expected_interval_seconds)
+
     def snapshot(self, now: Optional[datetime] = None) -> list[dict]:
         """Return per-task heartbeat status for ``/health``.
 
