@@ -11,7 +11,6 @@
   import BarWidget from '$lib/components/BarWidget.svelte'
   import GuestWifiWidget from '$lib/components/GuestWifiWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
-  import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
   import ModeSuggestionCard from '$lib/components/ModeSuggestionCard.svelte'
 
   /** @type {any} */
@@ -79,7 +78,6 @@
   </div>
 
   <MusicSuggestionToast />
-  <ModeSuggestionToast />
 </main>
 
 <style>

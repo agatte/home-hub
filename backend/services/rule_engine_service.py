@@ -377,31 +377,42 @@ class RuleEngineService:
         # Persist this fire. Mark any prior pending row as `superseded`
         # in the same transaction so the "latest pending" lookup the
         # accept/dismiss endpoints rely on always returns one row.
+        # Roll back the in-memory cooldown stamp on DB failure so we
+        # don't phantom-suppress this rule for the next hour on a pure
+        # infra error.
         now_utc = datetime.now(timezone.utc)
-        async with async_session() as session:
-            prior_pending = (await session.execute(
-                select(RuleSuggestion).where(RuleSuggestion.status == "pending")
-            )).scalars().all()
+        try:
+            async with async_session() as session:
+                prior_pending = (await session.execute(
+                    select(RuleSuggestion).where(RuleSuggestion.status == "pending")
+                )).scalars().all()
 
-            new_row = RuleSuggestion(
-                rule_id=rule.id,
-                fired_at=now_utc,
-                predicted_mode=rule.predicted_mode,
-                confidence=float(rule.confidence),
-                sample_count=int(rule.sample_count),
-                current_mode_at_fire=current_mode,
-                status="pending",
+                new_row = RuleSuggestion(
+                    rule_id=rule.id,
+                    fired_at=now_utc,
+                    predicted_mode=rule.predicted_mode,
+                    confidence=float(rule.confidence),
+                    sample_count=int(rule.sample_count),
+                    current_mode_at_fire=current_mode,
+                    status="pending",
+                )
+                session.add(new_row)
+                await session.flush()  # populate new_row.id
+
+                for prior in prior_pending:
+                    prior.status = "superseded"
+                    prior.resolved_at = now_utc
+                    prior.resolved_source = f"superseded_by:{new_row.id}"
+
+                await session.commit()
+                new_id = new_row.id
+        except Exception:
+            self._cooldowns.pop(rule.id, None)
+            logger.exception(
+                "rule_suggestions DB insert failed for rule_id=%d; cooldown rolled back",
+                rule.id,
             )
-            session.add(new_row)
-            await session.flush()  # populate new_row.id
-
-            for prior in prior_pending:
-                prior.status = "superseded"
-                prior.resolved_at = now_utc
-                prior.resolved_source = f"superseded_by:{new_row.id}"
-
-            await session.commit()
-            new_id = new_row.id
+            return None
 
         pct = round(rule.confidence * 100)
         suggestion = {

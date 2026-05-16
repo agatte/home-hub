@@ -13,6 +13,7 @@
   import NowPlayingChip from '$lib/components/NowPlayingChip.svelte'
   import ErrorToast from '$lib/components/ErrorToast.svelte'
   import VitalStrip from '$lib/components/VitalStrip.svelte'
+  import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
 
   // SvelteKit passes these props to layout components; declaring them
   // silences Svelte's unknown-prop warnings.
@@ -67,5 +68,8 @@
   <FloatingNav />
   <NowPlayingChip />
   <VitalStrip />
+  <!-- Rule-engine mode suggestion toast: cross-route coverage. Self-suppresses
+       on / where ModeSuggestionCard owns the banner spot. -->
+  <ModeSuggestionToast />
 {/if}
 <ErrorToast />
