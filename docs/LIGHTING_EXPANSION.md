@@ -27,7 +27,7 @@ Extends screen light into the room. Works with the existing screen-sync service.
 | **Hue Play HDMI Sync Box 8K** | Replaces mss screen-sync on the dev PC; low-latency projector sync | Between dev PC and projector HDMI | $290 |
 | **Hue Play Gradient Light Tube 75"** | Bigger bar/tube form factor; mountable behind the desk or above projector | Vertical behind desk *or* horizontal above projector if projector is wall-mounted later | $240 |
 
-**Integration notes:** Play bars would register as L5/L6 — join the kitchen-style "pair" rule for gaming/working bias. Gradient strips appear as a single light to `hue_service` but as addressable segments to Hue entertainment areas — keep in `ACTIVITY_LIGHT_STATES` as one light, use entertainment group for screen-sync. Sync Box replaces `screen_sync.py` mss path entirely and fixes the "watching is dev-PC-HDMI only" limitation.
+**Integration notes:** Play bars would register as L8/L9 (L5 = Bedroom Lamp Right installed 2026-05-11; L6 = Signe floor lamp; L7 = Play Wall Washer per "Recommended placement" below) — join the kitchen-style "pair" rule for gaming/working bias. Gradient strips appear as a single light to `hue_service` but as addressable segments to Hue entertainment areas — keep in `ACTIVITY_LIGHT_STATES` as one light, use entertainment group for screen-sync. Sync Box replaces `screen_sync.py` mss path entirely and fixes the "watching is dev-PC-HDMI only" limitation.
 
 ### B. Ambient & Mood (lamps, sculptural)
 Fills out rooms. Replaces or complements existing fabric lamps.
@@ -129,20 +129,20 @@ Everything the apartment can reasonably hold without over-lighting.
 - **L5 — Bedroom Lamp Right** (installed 2026-05-11): clear housing, desk-side, mirrors L2 in Phase A. Phase C curator pass will differentiate its states from L2 for spatial depth.
 - **L6 — Signe floor lamp** in the corner diagonal from the desk, pointed at the wall behind the bed. During watching it backlights the viewer in warm CT; during gaming it becomes a gradient column; scene-drift loves it.
 - **L7 — Play Wall Washer** on the wall behind the desk chair, aimed at the projection wall's adjacent side wall (NOT the projection wall itself). In watching mode: warm CT at ~200 bri, extends the projected image's ambient spread. In gaming: HSB gradient that bounces off the side wall and reaches peripheral vision.
-- **L8 — Play Light Bar pair** flanking the primary monitor. Register as a "pair" like L3/L4. They'd replace a lot of what L2/L5 are currently doing for bias and let you push them down to a softer fill role.
-- **L9 — Twilight Gradient Table Lamp** on the nightstand. Plug into morning routine (sunrise simulation) and wind-down (candle fade). Replaces any dumb bedside lamp.
+- **L8 + L9 — Play Light Bar pair** flanking the primary monitor. Two Hue IDs, registered as a "pair" like L3/L4 (each bar is a distinct light_id at the bridge). They'd replace a lot of what L2/L5 are currently doing for bias and let you push them down to a softer fill role.
+- **L10 — Twilight Gradient Table Lamp** on the nightstand. Plug into morning routine (sunrise simulation) and wind-down (candle fade). Replaces any dumb bedside lamp.
 
 **Living room** — second emitter + window character
-- **L10 — Hue Iris Gen 4** on the coffee table or the side table beside L1. Two emitters in a small room is enough. Single colored wash; choose hue/sat that complements L1's teal base (avoid a second teal — the room is already teal-anchored). The original pick was the IKEA Varmblixt Smart Donut, but its 2026 revision dropped Zigbee for Matter-over-Thread and is no longer Hue-Bridge-compatible. Pending Matter integration in Home Hub, the Iris Gen 4 takes its slot.
-- **L11 — Festavia 26ft** behind the vertical blinds, facing out toward the window. Pairs with the city night view — especially during `social` or `relax` evening/night states. Invisible when off, magic when on. Run as static HSB preset (not entertainment-sync) during gaming to avoid palette clash.
+- **L11 — Hue Iris Gen 4** on the coffee table or the side table beside L1. Two emitters in a small room is enough. Single colored wash; choose hue/sat that complements L1's teal base (avoid a second teal — the room is already teal-anchored). The original pick was the IKEA Varmblixt Smart Donut, but its 2026 revision dropped Zigbee for Matter-over-Thread and is no longer Hue-Bridge-compatible. Pending Matter integration in Home Hub, the Iris Gen 4 takes its slot.
+- **L12 — Festavia 26ft** behind the vertical blinds, facing out toward the window. Pairs with the city night view — especially during `social` or `relax` evening/night states. Invisible when off, magic when on. Run as static HSB preset (not entertainment-sync) during gaming to avoid palette clash.
 
 **Kitchen** — task + accent layering
-- **L12 — OmniGlow 3m** on top of the upper cabinets, aimed at the ceiling. Uplight wash against the exposed ductwork. Deep oranges in evening `cooking`, warm amber `relax`, and a pulsing accent in `social`. This is the move that makes the kitchen photograph well.
-- **L13 — Skydrag/Omlopp** under-cabinet task light. Strict `ct ≥ 333` in evening+. Auto-on during `cooking` at 4000K (food color accuracy within your post-sunset rule allows up to 333 mired = 3000K; 4000K only during daytime cooking). Complements L3/L4 which are island-focused.
+- **L13 — OmniGlow 3m** on top of the upper cabinets, aimed at the ceiling. Uplight wash against the exposed ductwork. Deep oranges in evening `cooking`, warm amber `relax`, and a pulsing accent in `social`. This is the move that makes the kitchen photograph well.
+- **L14 — Skydrag/Omlopp** under-cabinet task light. Strict `ct ≥ 333` in evening+. Auto-on during `cooking` at 4000K (food color accuracy within your post-sunset rule allows up to 333 mired = 3000K; 4000K only during daytime cooking). Complements L3/L4 which are island-focused.
 
 **Hallway** — no fixture, easy wins
-- **L14 — Hue Go Portable** on a small shelf or the floor. Battery-powered warm light that doesn't require permanent install — works as a bathroom or hallway accent. Pair with the **Hue Motion Sensor** (Tier 1) — bridge-side motion rules trigger the Go on entry without any backend changes. The in-app arrival-wave choreography was retired with home/away on 2026-04-27, but hardware-driven welcome lighting works fine.
-- Or **L14 — Hue Dymera** if there's a bare sconce box you can wire. Up+down beams add vertical drama to the narrow hallway.
+- **L15 — Hue Go Portable** on a small shelf or the floor. Battery-powered warm light that doesn't require permanent install — works as a bathroom or hallway accent. Pair with the **Hue Motion Sensor** (Tier 1) — bridge-side motion rules trigger the Go on entry without any backend changes. The in-app arrival-wave choreography was retired with home/away on 2026-04-27, but hardware-driven welcome lighting works fine.
+- Or **L15 — Hue Dymera** if there's a bare sconce box you can wire. Up+down beams add vertical drama to the narrow hallway.
 
 ---
 
@@ -169,8 +169,8 @@ Your memory of "12 times" is in the right ballpark — the Zigbee Touchlink spec
 Any of these additions would require backend changes in `backend/services/light_state_calculator.py` (where `ACTIVITY_LIGHT_STATES` and `EFFECT_AUTO_MAP` live — `automation_engine.py` re-exports both for back-compat but is no longer the edit target):
 
 - **New light IDs** added to `ACTIVITY_LIGHT_STATES` for every mode × time period (see "New automation mode" pattern in `.claude/CLAUDE.md`). Each new light needs a considered state — don't `_uniform()`.
-- **Kitchen-pair rule extension** — if L11 (OmniGlow cabinet uplight) and L12 (under-cabinet task) are added, they're a new functional pair for `cooking` + the 6 guest party scenes. In relax + custom non-party aesthetic scenes they're free to diverge.
-- **Bias-pair rule** — L5/L6 Play bars become a monitor-flanking pair; group with L2 for screen sync entertainment area.
+- **Kitchen-pair rule extension** — if L13 (OmniGlow cabinet uplight) and L14 (under-cabinet task) are added, they're a new functional pair for `cooking` + the 6 guest party scenes. In relax + custom non-party aesthetic scenes they're free to diverge.
+- **Bias-pair rule** — L8/L9 Play bars become a monitor-flanking pair (L5 is installed Bedroom Lamp Right); group with L2/L5 for screen sync entertainment area.
 - **`EFFECT_AUTO_MAP`** (also in `light_state_calculator.py`) — for effects scoped to specific lights (e.g. relax candle/fire is scoped to `["1", "2"]` so moss kitchen pendants stay static), new lights are **excluded by default**. You must explicitly add their IDs to the relevant scope list. Effects with `"lights": None` (e.g. watching glisten) will apply to all lights automatically. Wall Washer + Signe + Festavia + OmniGlow are all Hue v2 effect-capable, but which scope list they should join is a design decision, not an automatic one.
 - **Screen sync service** — Play Sync Box would replace `backend/services/pc_agent/screen_sync_agent.py` (the mss capture loop that runs on the dev PC); the backend `screen_sync.py` receiver service stays. Route sync through the box's Entertainment API instead of the `POST /api/automation/screen-color` path. Much lower latency, frees the dev PC from running mss.
 - **Frontend theme** — `src/lib/theme.js` `LIGHT_COLOR_PRESETS` would need new entries for Varmblixt's limited gamut (snap presets to its supported range to avoid "color requested but not matched" artifacts).
@@ -178,7 +178,7 @@ Any of these additions would require backend changes in `backend/services/light_
 **Scope ordering if executing:**
 1. Add each new light's states to `ACTIVITY_LIGHT_STATES` for all 7 modes × up to 4 time periods (`day`/`evening`/`night`/`late_night` — social is flat; cooking has no `late_night`; modes without a `late_night` entry fall back to `night` automatically).
 2. Test via `mcp__home-hub__get_lights` → `set_light` per new ID.
-3. Validate kitchen-pair rule holds (L11/L12 paired in functional modes).
+3. Validate kitchen-pair rule holds (L13/L14 paired in functional modes).
 4. Update `LIGHT_COLOR_PRESETS` if any light needs a special preset.
 5. Add to screen-sync entertainment group if bias/sync role.
 6. Update scenes in DB via `mode_scene_overrides` if a flagship preset should auto-apply.

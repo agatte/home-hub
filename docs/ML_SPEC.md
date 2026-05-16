@@ -171,15 +171,17 @@ Sensing Layer                    ML Layer                     Action Layer
 PC Agent ─────────┐
   (psutil, 5s)    │
                   ├──> /api/automation/activity
-Ambient Monitor ──┤        │
-  (PyAudio, 1s)   │        ├──> AutomationEngine
+Camera Service ───┤        │
+  (MediaPipe, 5s) │        ├──> AutomationEngine
                   │        │       │
-Camera Service ───┘        │       ├──> MLService.predict_mode()
-  (MediaPipe, 5s)          │       │       │ features from FeatureBuilder
-                           │       │       │ model from data/models/
-                           │       │       └──> prediction + confidence
-Audio Classifier ──────────┘       │
-  (YAMNet, 2-3s)                   ├──> RuleEngine.check_rules()
+Ambient Monitor ──┤        │       ├──> MLService.predict_mode()
+  (PyAudio, 1s)   │        │       │       │ features from FeatureBuilder
+  [classifier     │        │       │       │ model from data/models/
+   only — no      │        │       │       └──> prediction + confidence
+   /activity POST]│        │
+                  │        ├──> RuleEngine.check_rules()
+Audio Classifier ─┘──> /api/learning/audio-decision
+  (YAMNet, 2-3s)               (audio_ml fusion lane only)
                                    │       └──> frequency-based fallback
                                    │
                                    ├──> time_rules (hardcoded fallback)
@@ -713,15 +715,22 @@ ML components that detect what the user is doing report to the automation engine
 via the existing activity report interface:
 
 ```python
-# Camera and audio classifier use this pattern
-await automation.report_activity(mode="social", source="audio_ml")
+# Camera uses this pattern
 await automation.report_activity(mode="idle", source="camera")  # away mode retired 2026-04-28
+
+# Audio classifier does NOT use this pattern — see note below.
 ```
 
 The existing `MODE_PRIORITY` dict arbitrates between sources. Camera "absent"
-overrides idle (faster away detection). Audio "social" uses the same priority=4
-as the current ambient monitor. Activity reports also feed into `ConfidenceFusion`
-as signal inputs (Pattern 5).
+overrides idle (faster away detection). Activity reports also feed into
+`ConfidenceFusion` as signal inputs (Pattern 5).
+
+**Note (2026-05-16):** `audio_ml` was removed from this pattern in `cd8e078`.
+The ambient monitor's `mode=idle, source=ambient` POSTs to `/api/automation/activity`
+were retiring the late_night_rescue relax override (idle p=1 silently displaced
+rescue-set relax p=0). The audio classifier now feeds the fusion lane
+exclusively via `POST /api/learning/audio-decision`; it no longer publishes
+to `/activity` at all.
 
 **Pattern 2: Prediction Replacement**
 The behavioral predictor replaces the rule engine's `check_rules()` with a
@@ -1583,7 +1592,7 @@ which ML feature addresses it.
 |-----------|--------------|------|------------|
 | RMS noise threshold | 800 | 61 | Audio classifier (RMS scoped to quiet path only) |
 | Sustained noise for social | n/a | n/a | Social-mode is manual-only — YAMNet `speech_multiple` gate abandoned 2026-05-09 |
-| Quiet exit from social | 60 seconds | n/a | Manual; `silence` (≥70% for 60s) still gates the engine's quiet path |
+| Quiet exit from social | n/a | n/a | Manual-only; `silence` gate no longer POSTs to `/activity` (retired 2026-05-16 in `cd8e078`) — audio decisions route to `/api/learning/audio-decision` only |
 | Calibration formula | floor x 2 | ~214 | Audio classifier (pretrained, no calibration needed) |
 | RMS averaging window | 5 seconds | 42 | Audio classifier (2-3s inference window) |
 

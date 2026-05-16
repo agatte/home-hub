@@ -194,6 +194,12 @@ class CelebrationOrchestrator:
         "kickoff": CelebrationSequence(...),
         "end_of_game_win": CelebrationSequence(...),
         "end_of_game_loss": CelebrationSequence(...),
+        # Extended scoring subtypes (shipped 2026-05-15):
+        "safety": CelebrationSequence(...),          # defense scores 2pts + gets ball
+        "extra_point_good": CelebrationSequence(...),  # lights-only ack, no TTS
+        "two_point_conv": CelebrationSequence(...),  # bigger than PAT, smaller than TD
+        "defensive_td": CelebrationSequence(...),    # pick-six / return for score
+        "big_play": CelebrationSequence(...),        # WPA momentum lane (non-scoring)
     }
 
     COOLDOWN_SECONDS: float = 8.0
