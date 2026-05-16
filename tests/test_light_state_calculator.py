@@ -527,6 +527,17 @@ class TestWeatherAdjust:
     def test_classify_clouds(self):
         assert classify_weather("overcast clouds", {}) == "clouds"
 
+    def test_classify_nws_cloudy_variants(self):
+        """NWS sends 'Partly Cloudy' / 'Mostly Cloudy' / 'Cloudy' (singular
+        adjective) — the substring match must be ``cloud`` not ``clouds`` or
+        these silently fall through to None. Regression catch for the
+        functional-weather brightness boost not engaging on real cloudy days.
+        """
+        assert classify_weather("partly cloudy", {}) == "clouds"
+        assert classify_weather("mostly cloudy", {}) == "clouds"
+        assert classify_weather("cloudy", {}) == "clouds"
+        assert classify_weather("overcast", {}) == "clouds"
+
     def test_classify_clear_outside_golden_hour(self):
         # No sunset payload → can't be golden hour, returns None.
         assert classify_weather("clear sky", {}) is None

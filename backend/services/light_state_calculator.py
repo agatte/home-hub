@@ -983,7 +983,7 @@ def classify_weather(desc: str, weather: dict[str, Any]) -> Optional[str]:
         return "rain"
     if "snow" in desc:
         return "snow"
-    if "overcast" in desc or "clouds" in desc:
+    if "overcast" in desc or "cloud" in desc:
         return "clouds"
     if "clear" in desc:
         now = datetime.now(tz=TZ)
