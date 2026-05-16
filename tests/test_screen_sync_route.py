@@ -25,12 +25,18 @@ class _FakeHue:
         return [lid for lid, _ in self.calls]
 
 
-def _fake_engine(current_mode: str, manual_light_overrides=None, period: str = "day"):
+def _fake_engine(
+    current_mode: str,
+    manual_light_overrides=None,
+    period: str = "day",
+    weather_condition=None,
+):
     """Minimal fake automation engine — just the attributes the route reads."""
     return SimpleNamespace(
         current_mode=current_mode,
         manual_light_overrides=manual_light_overrides or set(),
         _get_time_period=lambda: period,
+        _get_current_weather_condition=lambda: weather_condition,
     )
 
 

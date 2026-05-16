@@ -36,6 +36,7 @@ from backend.services.automation_engine import (
     DaySchedule,
     ScheduleConfig,
 )
+from backend.services.light_state_calculator import lux_to_multiplier
 
 SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
@@ -260,6 +261,19 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
+    # Gaming-day envelope lift: lux + weather scale the cap+floor so dark
+    # game content on a cloudy daytime doesn't drag L2/L5 to eye-strain
+    # dimness. The screen-sync service applies the same gate as
+    # ``apply_functional_weather_brightness`` (gaming mode + day period
+    # only); watching gets unscaled values so cinematic contrast stays.
+    lux_mult = 1.0
+    if camera is not None:
+        ema_lux = getattr(camera, "ema_lux", None)
+        baseline_lux = getattr(camera, "baseline_lux", None)
+        if ema_lux is not None and baseline_lux is not None:
+            lux_mult = lux_to_multiplier(ema_lux, baseline_lux)
+    weather_condition = engine._get_current_weather_condition()
+
     # Per-light skip gate. A lamp may sit out a frame because the user
     # dragged its slider (manual_light_overrides) or because the LoL
     # champion service owns it mid-match.
@@ -286,6 +300,8 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             zone=zone,
             posture=posture,
             period=period,
+            lux_multiplier=lux_mult,
+            weather_condition=weather_condition,
         )
         applied.append(light_id)
 

@@ -257,3 +257,84 @@ async def test_l2_no_luma_comp():
     assert abs(yellow_bri - blue_bri) <= 5, (
         f"L2 should not luma-compensate: yellow={yellow_bri} blue={blue_bri}"
     )
+
+
+# -----------------------------------------------------------------------------
+# Gaming-day ambient lift — lux × weather scaling on cap + floor
+# -----------------------------------------------------------------------------
+
+
+def test_scale_for_ambient_gaming_day_clouds_lifts_envelope():
+    """Cloudy daytime gaming lifts L2's floor 130 → ~153 (1.07 lux × 1.10)."""
+    out = ss.ScreenSyncService._scale_for_ambient(
+        130, mode="gaming", period="day",
+        lux_multiplier=1.07, weather_condition="clouds",
+    )
+    # 130 × 1.07 × 1.10 = 153.01 → int truncates to 153
+    assert out == 153
+
+
+def test_scale_for_ambient_watching_unchanged():
+    """Watching's flat envelope is preserved — cinematic dim intent intact."""
+    out = ss.ScreenSyncService._scale_for_ambient(
+        25, mode="watching", period="day",
+        lux_multiplier=1.30, weather_condition="thunderstorm",
+    )
+    assert out == 25
+
+
+def test_scale_for_ambient_evening_unchanged():
+    """Evening gaming skips the lift — period-stepped caps stay flat."""
+    out = ss.ScreenSyncService._scale_for_ambient(
+        150, mode="gaming", period="evening",
+        lux_multiplier=1.20, weather_condition="rain",
+    )
+    assert out == 150
+
+
+def test_scale_for_ambient_ceiling_caps_l5_below_overdrive():
+    """L5 gaming-day cap 60 worst-case (thunderstorm + dim ambient) stays
+    under the 90-bri perceptual overdrive threshold from build 4adce9f.
+
+    Naive stacking: 60 × 1.30 × 1.20 = 93.6 → would breach. With the 1.40
+    ceiling: 60 × min(1.40, 1.56) = 60 × 1.40 = 84.
+    """
+    out = ss.ScreenSyncService._scale_for_ambient(
+        60, mode="gaming", period="day",
+        lux_multiplier=1.30, weather_condition="thunderstorm",
+    )
+    assert out == 84
+    assert out < 90, "L5 cap breached perceptual overdrive ceiling"
+
+
+def test_scale_for_ambient_no_weather_uses_lux_only():
+    """Clear weather (no FUNCTIONAL_WEATHER_BRIGHTNESS match) still applies lux."""
+    out = ss.ScreenSyncService._scale_for_ambient(
+        130, mode="gaming", period="day",
+        lux_multiplier=1.20, weather_condition=None,
+    )
+    # 130 × 1.20 × 1.0 = 156
+    assert out == 156
+
+
+def test_get_floor_gaming_day_clouds_lifts_l2():
+    """End-to-end check on the public get_floor entry point."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    floor = sync.get_floor(
+        "gaming", "2", period="day",
+        lux_multiplier=1.07, weather_condition="clouds",
+    )
+    assert floor == 153
+
+
+def test_get_cap_gaming_day_clouds_lifts_l2():
+    """End-to-end check on get_cap — L2 cap 240 × 1.07 × 1.10 → clamped 254."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    cap = sync.get_cap(
+        "gaming", "2", zone=None, posture=None, period="day",
+        lux_multiplier=1.07, weather_condition="clouds",
+    )
+    # 240 × 1.07 × 1.10 = 282.5 → clamped to 254
+    assert cap == 254

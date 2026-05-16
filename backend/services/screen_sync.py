@@ -36,6 +36,10 @@ from backend.services.color_utils import (
     PER_LIGHT_SAT_BOOST,
     rgb_to_hue_hsb,
 )
+from backend.services.light_state_calculator import (
+    FUNCTIONAL_WEATHER_BRIGHTNESS,
+    lux_to_multiplier,
+)
 
 logger = logging.getLogger("home_hub.screen_sync")
 
@@ -185,6 +189,8 @@ class ScreenSyncService:
         zone: Optional[str],
         posture: Optional[str],
         period: Optional[str] = None,
+        lux_multiplier: float = 1.0,
+        weather_condition: Optional[str] = None,
     ) -> int:
         """Resolve the screen-sync cap for the given context.
 
@@ -197,37 +203,107 @@ class ScreenSyncService:
         Zone/posture overrides take precedence over the time-period table
         because they reflect specific physical setups (projector-in-bed) that
         should hard-cap regardless of time of day.
+
+        Gaming-mode envelope lift: when ``mode == "gaming"`` and ``period ==
+        "day"``, the resolved cap is scaled by ``lux_multiplier *
+        FUNCTIONAL_WEATHER_BRIGHTNESS[weather_condition]`` (cloudy 1.10×,
+        rain 1.15×, etc.). Same gates as ``apply_functional_weather_brightness``
+        in light_state_calculator — so the screen-sync envelope tracks the
+        room's ambient compensation that base ACTIVITY_LIGHT_STATES already
+        receives. Watching's caps stay flat to preserve cinematic dim.
         """
         if zone is not None and posture is not None:
             override = self._cap_overrides.get((mode, zone, posture, light_id))
             if override is not None:
-                return override
+                return self._scale_for_ambient(
+                    override, mode, period, lux_multiplier, weather_condition,
+                )
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture, light_id))
             if cap is not None:
-                return cap
+                return self._scale_for_ambient(
+                    cap, mode, period, lux_multiplier, weather_condition,
+                )
         if zone is not None:
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, light_id))
             if cap is not None:
-                return cap
+                return self._scale_for_ambient(
+                    cap, mode, period, lux_multiplier, weather_condition,
+                )
         if period is not None:
             cap = MODE_MAX_BRIGHTNESS_PERIOD.get((mode, period, light_id))
             if cap is not None:
-                return cap
-        return MODE_MAX_BRIGHTNESS.get((mode, light_id), DEFAULT_MAX_BRIGHTNESS)
+                return self._scale_for_ambient(
+                    cap, mode, period, lux_multiplier, weather_condition,
+                )
+        base = MODE_MAX_BRIGHTNESS.get((mode, light_id), DEFAULT_MAX_BRIGHTNESS)
+        return self._scale_for_ambient(
+            base, mode, period, lux_multiplier, weather_condition,
+        )
 
-    def _get_floor(
-        self, mode: str, light_id: str, period: Optional[str],
+    def get_floor(
+        self,
+        mode: str,
+        light_id: str,
+        period: Optional[str],
+        lux_multiplier: float = 1.0,
+        weather_condition: Optional[str] = None,
     ) -> int:
         """Resolve the brightness floor for the given context.
 
         Lookup order: MODE_MIN_BRIGHTNESS_PERIOD (mode, period, light_id) →
         MODE_MIN_BRIGHTNESS (mode, light_id) → MIN_BRIGHTNESS default.
+
+        Subject to the same gaming-day ambient lift as ``get_cap`` — the
+        floor lifting is the main eye-comfort payoff (dark game content
+        no longer drags L2 down to fabric-shade dimness on a cloudy day).
         """
         if period is not None:
             floor = MODE_MIN_BRIGHTNESS_PERIOD.get((mode, period, light_id))
             if floor is not None:
-                return floor
-        return MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
+                return self._scale_for_ambient(
+                    floor, mode, period, lux_multiplier, weather_condition,
+                )
+        base = MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
+        return self._scale_for_ambient(
+            base, mode, period, lux_multiplier, weather_condition,
+        )
+
+    # Worst-case stacked multiplier ceiling: LUX_CURVE peaks at 1.30 (20 lux
+    # baseline-shifted) and FUNCTIONAL_WEATHER_BRIGHTNESS peaks at 1.20
+    # (thunderstorm), so naive stacking allows 1.56×. L5's clear housing
+    # crosses the documented perceptual overdrive threshold (gaming-day cap
+    # 60 × 1.56 = 93, above the 90 ceiling from build 4adce9f). 1.40 keeps
+    # L5 worst-case at 84 and still passes through the cloudy-daytime lift
+    # this change was written for (1.07 × 1.10 ≈ 1.18).
+    _AMBIENT_LIFT_CEILING: float = 1.40
+
+    @staticmethod
+    def _scale_for_ambient(
+        value: int,
+        mode: str,
+        period: Optional[str],
+        lux_multiplier: float,
+        weather_condition: Optional[str],
+    ) -> int:
+        """Apply gaming-day lux × functional-weather scaling to a cap/floor.
+
+        Mirrors the gate in ``apply_functional_weather_brightness``: gaming
+        mode only, daytime only. Watching keeps its flat envelope so the
+        projector contrast intent isn't disturbed. The combined multiplier
+        is capped at ``_AMBIENT_LIFT_CEILING`` to protect L5's clear-housing
+        perceptual ceiling. Final value clamped to [1, 254].
+        """
+        if mode != "gaming":
+            return value
+        if period != "day":
+            return value
+        weather_mult = FUNCTIONAL_WEATHER_BRIGHTNESS.get(weather_condition or "", 1.0)
+        combined = min(
+            ScreenSyncService._AMBIENT_LIFT_CEILING,
+            lux_multiplier * weather_mult,
+        )
+        scaled = int(value * combined)
+        return max(1, min(254, scaled))
 
     @property
     def last_color_at(self) -> Optional[datetime]:
@@ -262,6 +338,8 @@ class ScreenSyncService:
         zone: Optional[str] = None,
         posture: Optional[str] = None,
         period: Optional[str] = None,
+        lux_multiplier: float = 1.0,
+        weather_condition: Optional[str] = None,
     ) -> None:
         """
         Apply an RGB color to one of the managed bedroom lamps.
@@ -279,11 +357,24 @@ class ScreenSyncService:
                 and ``MODE_MIN_BRIGHTNESS_PERIOD`` are checked before the
                 time-agnostic fallbacks so the lamp's bri envelope tracks
                 the room's ambient.
+            lux_multiplier: Camera-derived brightness multiplier (from
+                ``lux_to_multiplier``). Only consumed for gaming-day; lifts
+                the cap+floor envelope on dim ambient. Defaults to 1.0
+                (no lift).
+            weather_condition: Classified weather string ("clouds" / "rain"
+                / "thunderstorm" / "snow" / None). Only consumed for
+                gaming-day; stacks multiplicatively with ``lux_multiplier``
+                to lift the envelope on overcast conditions.
         """
         if light_id not in self._targets:
             return
-        max_bri = self.get_cap(mode, light_id, zone, posture, period)
-        min_bri = self._get_floor(mode, light_id, period)
+        max_bri = self.get_cap(
+            mode, light_id, zone, posture, period,
+            lux_multiplier, weather_condition,
+        )
+        min_bri = self.get_floor(
+            mode, light_id, period, lux_multiplier, weather_condition,
+        )
         sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
         luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)
         h, s, br = rgb_to_hue_hsb(
