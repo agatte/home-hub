@@ -124,6 +124,21 @@ AUTONOMOUS_PUSH_SOURCES = frozenset({
     "internal",
 })
 
+# Autonomous sources whose target modes are typically manual-only (relax,
+# sleeping, cooking, social) and thus carry a default `MODE_PRIORITY=0`.
+# Without a floor, an `idle` sensor report (p=1) silently displaces these
+# rescue overrides — observed bug night of 2026-05-15: ambient `idle`
+# reports churned `late_night_rescue → relax` every 60s for 47 minutes
+# until the user manually changed modes. Members of this set get their
+# override's effective priority floored at `MODE_PRIORITY["idle"]` in the
+# displacement guard, so idle/sleeping sensor reports can no longer
+# undo the rescue; real-activity signals (working+) still displace.
+RESCUE_OVERRIDE_SOURCES = frozenset({
+    "late_night_rescue",
+    "zone_posture_rule",
+    "watching_sleep_guard",
+})
+
 
 # Sources that should preserve per-light manual overrides across mode changes.
 # When the user manually drags a brightness slider, mark_light_manual stamps
@@ -988,16 +1003,29 @@ class AutomationEngine:
         # tapped "Auto". User-set overrides (manual / api:* / guest / alexa:* /
         # rule_suggestion_accept:*) are NEVER auto-displaced — explicit user
         # intent always wins.
+        #
+        # 2026-05-16: added RESCUE_OVERRIDE_SOURCES floor. Rescue sources
+        # (late_night_rescue, zone_posture_rule, watching_sleep_guard) push
+        # manual-only modes (relax/sleeping) whose default priority is 0;
+        # without a floor, an `idle` sensor report (p=1) silently undoes the
+        # rescue. Floor at idle prevents that while still allowing real
+        # activity signals (working+) to displace. Worked example: rescue
+        # sets relax (p=0) → effective p=1 → ambient idle (p=1) cannot
+        # displace (`1 > 1` False); foreground gaming (p=5) still does.
+        override_priority = MODE_PRIORITY.get(self._override_mode, 0)
+        if self._override_source in RESCUE_OVERRIDE_SOURCES:
+            override_priority = max(override_priority, MODE_PRIORITY["idle"])
+
         if (
             self._manual_override
             and self._override_source in AUTONOMOUS_PUSH_SOURCES
-            and new_priority > MODE_PRIORITY.get(self._override_mode, 0)
+            and new_priority > override_priority
         ):
             logger.info(
                 "Autonomous override displaced by priority: %s (p=%d, "
                 "source=%s) → %s (p=%d, source=%s)",
                 self._override_mode,
-                MODE_PRIORITY.get(self._override_mode, 0),
+                override_priority,
                 self._override_source,
                 mode, new_priority, source,
             )

@@ -71,10 +71,13 @@ YAMNET_SAMPLES = 15600
 # Shadow logging throttle — log on class change or every N seconds
 SHADOW_LOG_INTERVAL = 30
 
-# Heartbeat — re-post current state at this cadence even without an edge,
-# so the audio_ml lane in confidence fusion (300 s stale threshold) stays
-# fresh while ambient noise sits steadily on either side of the threshold.
-HEARTBEAT_INTERVAL = 60
+# HEARTBEAT_INTERVAL retired 2026-05-16. Was the cadence for re-posting
+# `mode=idle, source=ambient` to /activity to keep the audio_ml fusion
+# lane "fresh." That contract was wrong — the activity POST publishes to
+# the mode-priority guard, where `idle (p=1)` was displacing rescue-set
+# overrides (`relax`, p=0) every minute (see git log around this date).
+# The audio_ml fusion lane is fed via /api/learning/audio-decision, not
+# /activity, so removing this path has no fusion-freshness side effect.
 
 
 def _build_audio_factors(
@@ -462,63 +465,30 @@ def run_monitor(
     # Shadow logging throttle state
     last_logged_class: Optional[str] = None
     last_log_time: float = 0.0
-    last_heartbeat: float = 0.0
-    # Cache latest YAMNet result so RMS posts can attach factors even
-    # though classification runs later in the loop. It's <1 cycle stale,
-    # which beats an empty factor list on the constellation view.
-    latest_ml_result: Optional[dict] = None
 
     try:
         while not _stop.is_set():
             # ── RMS-based detection (always runs) ──────────────
-            # RMS produces "quiet" edges only. Social detection belongs to
-            # YAMNet (see classifier block below). The ambient lane posts
-            # "idle" on quiet edges and on heartbeat to keep the audio_ml
-            # confidence-fusion lane fresh; it never claims "social" from
-            # RMS alone anymore.
+            # Historical: RMS quiet edges (and a heartbeat fallback) used to
+            # POST `mode=idle, source=ambient` to /api/automation/activity to
+            # keep the audio_ml fusion lane fresh. That contract was wrong:
+            # mode reports go through report_activity → priority guard, where
+            # ambient `idle` (p=1) silently displaced rescue-set overrides
+            # (`relax`, p=0) — observed bug night of 2026-05-15 (47-minute
+            # rescue→idle churn). The audio_ml fusion lane is already fed
+            # separately via /api/learning/audio-decision (ml_endpoint
+            # below), so dropping the activity POST has no side effect on
+            # fusion freshness. Per the 2026-05-09 abandonment of the
+            # social-gate path, this service is now classifier-only:
+            # observe + log + optionally POST YAMNet decisions for ML lane
+            # consumption, but no longer publishes mode opinions to the
+            # engine's priority system.
             rms_result = monitor.check()
-
-            if rms_result == "quiet":
-                try:
-                    resp = client.post(
-                        activity_endpoint,
-                        json={
-                            "mode": "idle",
-                            "source": "ambient",
-                            "detected_at": datetime.now().isoformat(),
-                            "factors": _build_audio_factors(rms_result, latest_ml_result),
-                        },
-                    )
-                    resp.raise_for_status()
-                    logger.info("Reported 'idle' to server (RMS quiet edge)")
-                    last_heartbeat = time.time()
-                except httpx.HTTPError as e:
-                    logger.warning(f"Failed to report RMS result to server: {e}")
-            else:
-                # No edge fired — emit an idle heartbeat so audio_ml fusion
-                # stays fresh. Never claims social; YAMNet owns that signal.
-                now_hb = time.time()
-                if now_hb - last_heartbeat >= HEARTBEAT_INTERVAL:
-                    try:
-                        resp = client.post(
-                            activity_endpoint,
-                            json={
-                                "mode": "idle",
-                                "source": "ambient",
-                                "detected_at": datetime.now().isoformat(),
-                                "factors": _build_audio_factors(rms_result, latest_ml_result),
-                            },
-                        )
-                        resp.raise_for_status()
-                        last_heartbeat = now_hb
-                    except httpx.HTTPError as e:
-                        logger.debug("Heartbeat post failed: %s", e)
 
             # ── YAMNet classification ──────────────────────────
             if classifier_enabled:
                 ml_result = monitor.classify_scene()
                 if ml_result is not None:
-                    latest_ml_result = ml_result
                     mode_signal = ml_result["mode_signal"]
 
                     # Determine what mode the ML would set

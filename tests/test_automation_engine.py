@@ -427,6 +427,54 @@ class TestAutonomousOverrideDisplacement:
         assert engine.manual_override is False
         assert engine.current_mode == "gaming"
 
+    # ── Rescue-override priority floor (bug 2026-05-15) ───────────────
+    # Rescue sources push manual-only modes (relax, sleeping) at default
+    # priority 0; an `idle` sensor report (p=1) used to silently undo
+    # them every 60s. RESCUE_OVERRIDE_SOURCES bumps their effective
+    # priority to idle's level so idle/sleeping reports can't displace —
+    # real activity signals (working+) still can.
+
+    async def test_idle_does_not_displace_late_night_rescue_relax(self, engine):
+        await engine.set_manual_override("relax", source="late_night_rescue")
+        await engine.report_activity("idle", source="ambient")
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "relax"
+        assert engine.override_source == "late_night_rescue"
+
+    async def test_idle_does_not_displace_zone_posture_rule_relax(self, engine):
+        await engine.set_manual_override("relax", source="zone_posture_rule")
+        await engine.report_activity("idle", source="ambient")
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "relax"
+
+    async def test_idle_does_not_displace_watching_sleep_guard_sleeping(self, engine):
+        await engine.set_manual_override("sleeping", source="watching_sleep_guard")
+        await engine.report_activity("idle", source="ambient")
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
+
+    async def test_working_still_displaces_rescue_relax(self, engine):
+        # Regression guard: floor only protects against idle/sleeping
+        # reports; real-activity signals must still win.
+        await engine.set_manual_override("relax", source="late_night_rescue")
+        await engine.report_activity("working", source="process")
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "working"
+
+    async def test_floor_does_not_apply_to_fusion_auto_apply(self, engine):
+        # Regression guard: fusion_auto_apply is NOT in RESCUE_OVERRIDE_SOURCES.
+        # When fusion sets relax (p=0), idle (p=1) should still displace —
+        # matches the existing 2026-05-12 fusion bug fix semantics.
+        await engine.set_manual_override("relax", source="fusion_auto_apply")
+        await engine.report_activity("idle", source="ambient")
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
+
 
 # ---------------------------------------------------------------------------
 # Per-light manual override preservation across mode changes
