@@ -74,7 +74,8 @@ class TestGetStatus:
             "relax:night": {"1": {"bri": 50}},
         }
         status = learner.get_status()
-        assert status["learned_combos"] == 2
+        assert status["learned_slots"] == 2  # mode:period keys
+        assert status["learned_combos"] == 3  # per-light entries: 2 + 1
         assert status["lights_with_preferences"] == 2  # unique ids: 1, 2
         assert status["min_adjustments"] == MIN_ADJUSTMENTS
         assert status["ema_alpha"] == EMA_ALPHA

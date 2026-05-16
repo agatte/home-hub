@@ -98,16 +98,20 @@ class LightingPreferenceLearner(HealthTrackable):
             return None
         return overlay
 
+    def _count_per_light_combos(self) -> int:
+        # Per-light learned entries — matches recalculate()'s metadata.
+        return sum(len(lights) for lights in self._preferences.values())
+
     def get_status(self) -> dict:
         """Return learner status for the API."""
-        combo_count = len(self._preferences)
         light_count = len({
             light_id
             for lights in self._preferences.values()
             for light_id in lights
         })
         return {
-            "learned_combos": combo_count,
+            "learned_slots": len(self._preferences),
+            "learned_combos": self._count_per_light_combos(),
             "lights_with_preferences": light_count,
             "min_adjustments": MIN_ADJUSTMENTS,
             "ema_alpha": EMA_ALPHA,
@@ -121,7 +125,10 @@ class LightingPreferenceLearner(HealthTrackable):
             self,
             is_shadow=False,
             model_loaded=True,
-            extra={"learned_combos": len(self._preferences)},
+            extra={
+                "learned_slots": len(self._preferences),
+                "learned_combos": self._count_per_light_combos(),
+            },
         )
 
     async def retrain(self) -> None:
