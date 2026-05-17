@@ -792,9 +792,14 @@ async def lifespan(app: FastAPI):
         heartbeats.register("hue", 0.5)
     if hue_v2.connected and hue_v2._v2_to_v1:
         # SSE delivers events on physical light changes (sub-second cadence
-        # during a slider drag, otherwise minutes-quiet). 10s stale window
-        # is loose enough to avoid false-positive warns on idle homes.
-        heartbeats.register("hue_v2_stream", 10.0)
+        # during a slider drag, otherwise minutes-quiet). Stale window is
+        # set just past the in-service silence-reconnect timeout
+        # (_STREAM_SILENT_RECONNECT_SECONDS=90s) so a legitimately quiet
+        # bridge stays green: the stream forces its own reconnect after
+        # 90s of silence, and the heartbeat ticks again on the reconnect's
+        # first received byte before the 95s threshold trips. /health
+        # only goes degraded if reconnect itself can't establish.
+        heartbeats.register("hue_v2_stream", 95.0)
     if sonos.connected:
         heartbeats.register("sonos", 2.0)
     heartbeats.register("automation", 60.0)

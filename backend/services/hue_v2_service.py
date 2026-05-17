@@ -28,6 +28,13 @@ logger = logging.getLogger("home_hub.hue_v2")
 _STREAM_BACKOFF_INITIAL_SECONDS = 1.0
 _STREAM_BACKOFF_MAX_SECONDS = 30.0
 
+# Max gap between received SSE lines before we treat the connection as
+# silently dead and force a reconnect. The Hue bridge normally emits
+# `: hi` keepalives every ~10s; quiet periods of 200+s observed in prod
+# (see digests/2026-05-17.md) indicate the TCP socket can go silent
+# without httpx detecting a disconnect. Application-level liveness probe.
+_STREAM_SILENT_RECONNECT_SECONDS = 90.0
+
 # Dynamic effects supported by Hue v2 API
 AVAILABLE_EFFECTS = [
     {"name": "candle", "display_name": "Candlelight", "description": "Warm flickering candle effect"},
@@ -379,7 +386,27 @@ class HueV2Service:
                     logger.info("v2 event stream connected")
                     backoff = _STREAM_BACKOFF_INITIAL_SECONDS
 
-                    async for line in response.aiter_lines():
+                    line_iter = response.aiter_lines()
+                    while True:
+                        try:
+                            line = await asyncio.wait_for(
+                                line_iter.__anext__(),
+                                timeout=_STREAM_SILENT_RECONNECT_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            # No bytes for the silence budget — bridge keepalives
+                            # have stopped without httpx detecting a disconnect.
+                            # Bail out so the outer loop reconnects and proves
+                            # the socket is actually alive.
+                            logger.warning(
+                                "v2 event stream silent %.0fs — forcing reconnect",
+                                _STREAM_SILENT_RECONNECT_SECONDS,
+                            )
+                            break
+                        except StopAsyncIteration:
+                            logger.info("v2 event stream ended, reconnecting")
+                            break
+
                         # Any received line (including SSE keepalive comments)
                         # confirms the stream is alive. Ticking only on data:
                         # payloads went stale during quiet-bridge periods
