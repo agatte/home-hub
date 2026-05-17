@@ -75,7 +75,7 @@ mode on      celebration     (TD/FG)              (wind-down)
 
 ### 2.3 Manual control surfaces
 
-- **Alexa**: "Alexa, command center, game day on" / "game day off". Wired through the existing custom skill at `alexa_skill/lambda_function.py`. Slot type `HOMEHUB_MODE` gains `gameday` value.
+- **Alexa**: "Alexa, home hub, game day on" / "game day off". Wired through the existing custom skill at `alexa_skill/lambda_function.py`. Slot type `HOMEHUB_MODE` gains `gameday` value.
 - **Dashboard**: gameday button in `FloatingNav` or quick actions. Same `set_mode` API call as other modes.
 - **Override-aware**: manual override flips set `source="manual"` and bypass the 30-min auto-exit window.
 

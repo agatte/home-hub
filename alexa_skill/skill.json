@@ -7,9 +7,9 @@
           "summary": "Personal apartment automation control.",
           "description": "Custom skill for the Home Hub apartment automation system. Sets activity modes (gaming, working, relax, etc.), controls Sonos playback, and runs scenes via voice. Single-user, unpublished — runs only on Anthony's developer-account Echo devices.",
           "examplePhrases": [
-            "Alexa, tell command center to set relax mode",
-            "Alexa, ask command center to pause the music",
-            "Alexa, open command center"
+            "Alexa, tell home hub to set relax mode",
+            "Alexa, ask home hub to pause the music",
+            "Alexa, open home hub"
           ],
           "keywords": ["home", "automation", "apartment", "lights", "music"],
           "smallIconUri": "",

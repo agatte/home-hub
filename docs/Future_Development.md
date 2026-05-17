@@ -83,7 +83,7 @@ Worth doing eventually but don't have a clear forcing function yet. Each has a "
 - **#18 Focus Envelope** — heaviest UX cost in the list; design before building
 - **#21 (slimmed) Pose Landmarks Visualization** — debugging widget, nice-to-have
 
-Phase 4 (Game Day, July–August) timeline stands. Phase 5: **Custom Alexa Skill shipped 2026-05-05** (invocation `command center`, Lambda + Cloudflare Tunnel `home-hub.gatte-home.com`, see `alexa_skill/`) — Apple Music, full autopilot, bar app remain.
+Phase 4 (Game Day, July–August) timeline stands. Phase 5: **Custom Alexa Skill shipped 2026-05-05** (invocation `home hub` since 2026-05-16, Lambda + Cloudflare Tunnel `home-hub.gatte-home.com`, see `alexa_skill/`) — Apple Music, full autopilot, bar app remain.
 
 ---
 

@@ -87,7 +87,7 @@ SECTIONS = [
 
 # Wake-word framing — Alexa requires either "tell" or "ask" with the
 # invocation name to route the utterance to the custom skill.
-INVOCATION = "command center"
+INVOCATION = "home hub"
 WAKE_PATTERNS = [
     f'Alexa, tell {INVOCATION} to [command]',
     f'Alexa, ask {INVOCATION} [command]',

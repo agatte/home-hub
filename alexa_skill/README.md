@@ -4,7 +4,7 @@ Phase 5 voice control. Bridges your Echo to the Home Hub backend through
 AWS Lambda → Cloudflare Tunnel → tunnel proxy → FastAPI on the Latitude.
 
 ```
-"Alexa, tell command center to set relax mode"
+"Alexa, tell home hub to set relax mode"
    → Alexa cloud (intent extraction)
    → AWS Lambda (lambda_function.py)
    → https://home-hub.gatte-home.com/api/automation/override
@@ -53,7 +53,7 @@ querying `SELECT source, COUNT(*) FROM activity_events WHERE source LIKE 'alexa:
 **If your Echo is on Alexa+ (Amazon's generative-AI tier), custom skills
 do not route reliably.** Alexa+ uses LLM-based routing that intercepts
 slot-based intents and routes them to its own smart-home executor instead
-of your skill, even with explicit "ask command center" prefixes.
+of your skill, even with explicit "ask home hub" prefixes.
 
 Check + disable: Alexa app → **More** → **Settings** → **Alexa+** →
 disable. Wait ~60 seconds for propagation.
@@ -62,16 +62,34 @@ This was the single largest blocker during the initial setup. If voice
 commands "Setting X mode" don't return verbal responses but the
 simulator works, Alexa+ is the prime suspect.
 
-## Why "command center" instead of something simpler
+## Invocation name history
 
-The invocation name MUST NOT collide with built-in Alexa concepts.
-"home hub" was the obvious first choice but it collides with Alexa's
-built-in smart-home hub category — Alexa interprets "ask home hub" as
-"manage my smart home" and never invokes the skill. "command center"
-is two distinct words that aren't an Alexa-reserved category.
+Current invocation: **`home hub`** (since 2026-05-16).
 
-Reserved/colliding names to avoid: `home hub`, `smart home`, `gaming`,
-`movie`, `cinema` (any phrase Alexa uses for built-in features).
+The skill originally launched as `home hub` on 2026-05-05, but voice
+commands appeared to route to Alexa's built-in smart-home executor
+instead of the custom skill — Echo would reply "ok" / "got it" with no
+Lambda invocation in CloudWatch. We renamed to `command center` to
+escape the apparent collision and the skill worked.
+
+In retrospect, Alexa+ (Amazon's generative-AI tier) was also enabled
+during that setup window and is a separate, documented blocker for
+custom skills (see prerequisite above). Retested `home hub` on
+2026-05-16 with Alexa+ disabled — it routes cleanly, confirming the
+original "collision" was Alexa+'s LLM router, not the literal phrase.
+
+**If routing ever regresses on `home hub`:** check Alexa+ state first
+(it can re-enable itself after Echo updates). Only after confirming
+Alexa+ is off, suspect the phrase. Fallback ladder is `the home hub` →
+`home hub apartment` → `command home` → revert to `command center`.
+The collision symptom is Echo replying "ok" / "got it" with no
+CloudWatch entry — Alexa's smart-home executor caught the phrase
+before the skill was invoked. Update `interaction_model.json` line 4,
+click **Build Model**, retest.
+
+Reserved/colliding names to avoid regardless of Alexa+ state:
+`smart home`, `gaming`, `movie`, `cinema` (any phrase Alexa uses
+for built-in features).
 
 ## One-time setup
 
@@ -123,7 +141,7 @@ Reserved/colliding names to avoid: `home hub`, `smart home`, `gaming`,
    - **Choose a type to start with**: Custom
    - **Choose a method to host**: Provision your own (we use AWS Lambda)
    - Click **Create skill** → **Start from scratch** → **Continue with template**
-3. **Invocation → Skill Invocation Name**: enter `command center` (lowercase, two words). The interaction model JSON ships this value too — keep them in sync.
+3. **Invocation → Skill Invocation Name**: enter `home hub` (lowercase, two words). The interaction model JSON ships this value too — keep them in sync.
 4. **Interaction Model → JSON Editor**: paste the contents of
    `alexa_skill/interaction_model.json`. Click **Save Model**.
 5. **Endpoint**:
@@ -136,9 +154,9 @@ Reserved/colliding names to avoid: `home hub`, `smart home`, `gaming`,
    Go back to the Lambda console and paste it into the Alexa Skills Kit
    trigger you added in step 2.
 8. **Test** tab (top nav): switch the dropdown from "Off" to **Development**.
-9. In the test simulator, type or speak: `open command center`. You should
+9. In the test simulator, type or speak: `open home hub`. You should
    hear "Home Hub is ready..."
-10. Try `tell command center to set relax mode`. Lights should flip on the
+10. Try `tell home hub to set relax mode`. Lights should flip on the
     Latitude dashboard within 2 seconds.
 
 ---
@@ -149,12 +167,12 @@ Any Echo signed into the same Amazon account that owns the developer
 console gets the skill automatically (in Development mode). Just speak
 to it:
 
-- "Alexa, open command center" → enters skill session
-- "Alexa, tell command center to set gaming mode"
-- "Alexa, ask command center to pause the music"
-- "Alexa, tell command center to make it brighter"
-- "Alexa, tell command center to run the party scene"
-- "Alexa, ask command center to enable do not disturb"
+- "Alexa, open home hub" → enters skill session
+- "Alexa, tell home hub to set gaming mode"
+- "Alexa, ask home hub to pause the music"
+- "Alexa, tell home hub to make it brighter"
+- "Alexa, tell home hub to run the party scene"
+- "Alexa, ask home hub to enable do not disturb"
 
 If the skill doesn't respond, the most likely culprit is the Lambda env
 vars — check **CloudWatch Logs** (Lambda → Monitor → View CloudWatch logs)
