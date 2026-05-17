@@ -21,8 +21,10 @@ Write-Host "Building HomeHubNotifier.exe..." -ForegroundColor Cyan
 # --windowed: no console window
 # --onefile: single self-contained exe (slower first launch, simpler distribution)
 # --name: output filename
-# --icon: skipped — tray icon is generated programmatically in code
-& pyinstaller `
+# --icon: skipped - tray icon is generated programmatically in code.
+# Invoke via `python -m PyInstaller` (not bare `pyinstaller`) so the
+# script works whether or not %APPDATA%\Python\...\Scripts is on PATH.
+& python -m PyInstaller `
     --noconfirm `
     --windowed `
     --onefile `
@@ -38,5 +40,5 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "✓ Built dist\HomeHubNotifier.exe" -ForegroundColor Green
+Write-Host "OK - Built dist\HomeHubNotifier.exe" -ForegroundColor Green
 Write-Host "  Quick verify: .\dist\HomeHubNotifier.exe --server ws://192.168.1.210:8000/ws" -ForegroundColor Gray
