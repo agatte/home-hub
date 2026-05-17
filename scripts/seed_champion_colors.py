@@ -41,6 +41,7 @@ CURATED_COLORS: dict[str, dict[str, int]] = {
     "Leona":    {"r": 240, "g": 180, "b":  60},  # Sun gold
     "Diana":    {"r": 180, "g": 200, "b": 240},  # Moon silver-blue
     "Sett":     {"r": 240, "g":  80, "b":  80},  # Warm red
+    "Brand":    {"r": 255, "g":  90, "b":  20},  # Burning Vengeance orange
     "Yuumi":    {"r": 240, "g": 200, "b": 240},  # Soft pastel pink
     "Senna":    {"r":  90, "g": 220, "b": 200},  # Shadow teal
     "Aphelios": {"r": 200, "g": 200, "b": 230},  # Moonstone white
