@@ -596,6 +596,7 @@ All messages are JSON with `type` + `data` fields.
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
 | `mode_suggestion` | Rule engine nudge (idle + rule matches) | `{rule_id, predicted_mode, confidence, sample_count, message}` |
 | `mode_suggestion_dismissed` | User dismissed nudge | `{}` |
+| `notification` | NotifierService threshold-cross — mode flip OR average per-light brightness Δ ≥ 15%. Suppressed during DND, within 10s coalesce window, and on user-initiated mode flips (`api:*` / `manual` / `alexa:*` / `guest:*`). Consumed by `desktop_notifier.py` on the Windows desktop and by `httpx` POST to `https://ntfy.sh/{NTFY_TOPIC}` for iOS push. | `{title, subtitle, factors[{lane, label, value, impact}], output_delta, mode_changed, brightness_shifted, old_mode, new_mode, timestamp, correlation_id}` |
 
 `build_id` is the short git SHA of the running backend, computed once at startup. The frontend stashes the first one it sees per page session and reloads `window.location` if a later `connection_status` (after a WS reconnect, e.g. post-deploy) reports a different value. This is what makes the kiosk dashboard auto-refresh after `scripts/deploy.sh` instead of needing a manual F5.
 
@@ -956,6 +957,24 @@ Manages Alexa virtual device registration and command handling. 7 virtual WeMo d
 
 #### GameDayService + CelebrationOrchestrator (shipped 2026-05-07)
 ESPN polling, play detection, and celebration orchestration. See `docs/GAMEDAY_SPEC.md` for the full interface contracts (`GameDayService`, `CelebrationOrchestrator`, `PlayEvent`, `GameDayState`) and the "Game Day Engine — shipped 2026-05-07" section below for the architecture summary.
+
+#### NotifierService (shipped 2026-05-17)
+Pushes "what just changed and why" through two surfaces: a `notification` WS broadcast consumed by `backend/services/pc_agent/desktop_notifier.py` (PyQt6 frameless toast on the Windows desktop, click-to-expand) AND an `httpx` POST to `https://ntfy.sh/{NTFY_TOPIC}` for iOS native push. The two surfaces share a single payload composed inside the service, so what you see on the desktop matches what lands on the phone.
+
+Triggers: any mode flip (via `register_on_mode_change`), or an effective per-light brightness shift `|Δ| / last ≥ 0.15` (computed by averaging `bri` across the engine's `_last_applied_per_light` — captures camera lux mult, mode-brightness slider, posture overlays, zone overrides in one canonical signal). A 5s `poll_loop` catches brightness drift between mode flips.
+
+The "why" — top-3 factors — comes from flattening `engine._last_fusion_result.signals[].factors[]` across lanes and re-sorting by `impact` desc. No new reasoning logic; the fusion lanes were already computing those factors for analytics, the notifier is just the surface that puts them in front of a human.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `on_mode_change` | `(new_mode, **kwargs) → None` | Registered callback — fires the threshold-check path |
+| `poll_loop` | `() → None` | 5s loop; catches brightness shifts between mode flips |
+| `emit_synthetic` | `(title, body) → dict` | Verification path used by `POST /api/notification/test` — bypasses gating, exercises full dispatch |
+| `close` | `() → None` | Releases the httpx client on shutdown |
+
+**Suppression rules:** DND active (consults `engine.is_dnd_active()`); inside the 10s coalesce window after a previous emit (next emit collapses into the most recent state); first 30s after backend boot (skip fusion-settling noise); mode flips whose source starts with `api:` / `alexa:` / `guest:` or equals `manual` (Anthony pressed it — no toast).
+
+**Config:** `NTFY_TOPIC` doubles as the auth boundary on hosted ntfy.sh (topic name = secret). Unset → desktop toast still works, phone push silently skipped. `NTFY_SERVER` defaults to `https://ntfy.sh`; override for self-hosting.
 
 ---
 

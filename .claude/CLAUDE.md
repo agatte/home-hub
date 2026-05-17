@@ -134,6 +134,7 @@ Browser / Phone (PWA)
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed
    ├── PiholeService (httpx) ──────> Pi-hole v6 API (stats, DNS, blocklists)
+   ├── NotifierService ────────────> mode-flip + brightness-shift → WS "notification" event + ntfy.sh phone push
    ├── WebSocketManager ───────────> bidirectional real-time sync
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves SvelteKit static build from frontend-svelte/build/
@@ -143,7 +144,8 @@ Pi-hole (Docker container, host networking, same machine)
 
 PC Agent (standalone processes, same machine)
    ├── activity_detector.py ───────> psutil → POST /api/automation/activity
-   └── ambient_monitor.py ────────> PyAudio RMS → POST /api/automation/activity
+   ├── ambient_monitor.py ────────> PyAudio RMS → POST /api/automation/activity
+   └── desktop_notifier.py ────────> PyQt6 toast widget — subscribes to /ws, renders "notification" events bottom-right
 ```
 
 ### Target (upcoming work)
@@ -223,6 +225,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Plants | `/api/plants` | `GET /status` summary from external plant-care app (10-min TTL cache); 503 when `PLANT_APP_*` unset |
 | Bar | `/api/bar` | `GET /status` summary from Home Bar app (inventory, party mode, cocktail suggestion); 503 when `BAR_APP_URL` unset |
 | Ambient | `/api/ambient` | Browser-side ambient audio: playback state, volume, mode→sound map, weather-reactive config |
+| Notification | `/api/notification` | `POST /test` fires a synthetic notification through NotifierService (WS broadcast + ntfy.sh push). Bypasses DND/coalesce/boot gating — verification harness for the desktop toast + phone push surfaces |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -373,6 +376,10 @@ TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs).
 
 # Observability
 SENTRY_DSN=                    # Optional — Sentry DSN from home-hub.sentry.io. Unset disables ingestion.
+
+# Notifier (apartment-state nudges → desktop toast + iPhone push via ntfy.sh)
+NTFY_TOPIC=                    # Treat as a secret — topic name IS the auth on hosted ntfy.sh. Unset → WS broadcast still works, ntfy push skipped.
+NTFY_SERVER=https://ntfy.sh    # Override only when self-hosting (e.g. http://192.168.1.210:8085).
 
 # Guest WiFi (surfaces QR on home dashboard + /guest)
 GUEST_WIFI_SSID=               # Empty = "not configured"
