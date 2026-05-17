@@ -75,6 +75,9 @@ _EFFECTS = "(candle|fire|sparkle|prism|glisten|opal)"
 _DIR = "(up|down)"
 
 _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # public liveness probe — minimal {"ok": true}, no internal state
+    # leak. /health stays unallowlisted on purpose.
+    ("GET", re.compile(r"^/api/ping$")),
     # automation
     ("POST", re.compile(r"^/api/automation/override$")),
     ("POST", re.compile(r"^/api/automation/dnd$")),

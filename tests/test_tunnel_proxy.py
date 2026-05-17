@@ -184,6 +184,9 @@ def test_504_on_upstream_timeout():
 
 ALLOWED_PATHS_FROM_LAMBDA = [
     # (method, path) — every row that `_call_homehub` in lambda_function.py touches.
+    # /api/ping is the off-LAN uptime-monitor probe — not Lambda-driven, but
+    # part of the same public-tunnel allowlist surface.
+    ("GET", "/api/ping"),
     ("POST", "/api/automation/override"),
     ("POST", "/api/automation/dnd"),
     ("DELETE", "/api/automation/dnd"),

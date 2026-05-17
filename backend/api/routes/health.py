@@ -1,11 +1,29 @@
 """
-Health check endpoint.
+Health check endpoints.
+
+Two surfaces:
+
+- ``/health`` — full diagnostic blob (device connectivity, breaker
+  state, ML lane health, scheduler tasks, build_id). Intended for the
+  kiosk, dev tools, and internal monitoring. NOT in the public tunnel
+  allowlist — the response is reconnaissance gold for an attacker.
+
+- ``/api/ping`` — minimal liveness probe for external uptime monitors
+  (UptimeRobot / Uptime Kuma / Cloudflare zone health). Returns just
+  ``{"ok": true}`` with no internal state. Allowlisted on the public
+  tunnel so the off-LAN probe path keeps working.
 """
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
 router = APIRouter()
+
+
+@router.get("/api/ping")
+async def ping() -> dict:
+    """Tiny public liveness probe — fixed shape, no app state."""
+    return {"ok": True}
 
 # Predictors we surface in the /health ml block. Each tuple is
 # (state_attribute_name, display_name) — the attribute is the name on

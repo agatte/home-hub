@@ -38,6 +38,30 @@ class TestHealthEndpoint:
         assert isinstance(data["devices"]["sonos"], bool)
 
 
+class TestApiPing:
+    """Verify the minimal public-facing liveness probe."""
+
+    def test_ping_returns_200(self, client):
+        resp = client.get("/api/ping")
+        assert resp.status_code == 200
+
+    def test_ping_body_shape(self, client):
+        """`/api/ping` is the contract surface for external uptime monitors;
+        any change to the shape breaks Anthony's UptimeRobot/Kuma probes."""
+        assert client.get("/api/ping").json() == {"ok": True}
+
+    def test_ping_does_not_leak_internal_state(self, client):
+        """The whole point of /api/ping vs /health is that the response is
+        fixed shape and reveals nothing about the deploy. Guard against
+        future hands "improving" it by adding build_id or status."""
+        body = client.get("/api/ping").json()
+        forbidden = {"build_id", "status", "devices", "ml", "tasks",
+                     "circuit_breakers", "scheduler_tasks"}
+        assert not (forbidden & body.keys()), (
+            f"/api/ping leaked internal state: {forbidden & body.keys()}"
+        )
+
+
 class TestHealthCircuitBreakers:
     """Verify the per-service circuit breaker surface on /health."""
 
