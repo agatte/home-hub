@@ -150,7 +150,9 @@
     white-space: nowrap;
   }
   .ago {
-    color: rgba(255, 255, 255, 0.35);
+    /* 0.35 alpha fails WCAG AA contrast on the analytics panel
+       background; ~0.65 reaches roughly 4.5:1 against #08080c. */
+    color: rgba(255, 255, 255, 0.65);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
   }

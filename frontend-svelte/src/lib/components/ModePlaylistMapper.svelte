@@ -162,6 +162,7 @@
           <div class="mode-playlist-add-row">
             <select
               class="setting-select mode-playlist-select"
+              aria-label="Add favorite for {mode} mode"
               bind:value={addRowState[mode].title}
             >
               <option value="">Add favorite…</option>
@@ -173,6 +174,7 @@
             </select>
             <select
               class="setting-select vibe-select"
+              aria-label="Vibe for {mode} mode"
               bind:value={addRowState[mode].vibe}
               disabled={!addRowState[mode].title}
             >

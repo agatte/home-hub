@@ -688,7 +688,9 @@ button:active, .btn:active, [role="button"]:active {
 .routine-enabled {
   background: var(--success);
   border-color: var(--success);
-  color: white;
+  /* Dark text on the mid-green --success: white on #34d399 is ~1.9:1
+     and fails WCAG AA; near-black on the same green is ~10:1. */
+  color: var(--bg-primary);
 }
 
 .routine-test-btn {
@@ -863,7 +865,8 @@ button:active, .btn:active, [role="button"]:active {
 .toggle-on {
   background: var(--success);
   border-color: var(--success);
-  color: white;
+  /* See .routine-enabled above — same contrast fix. */
+  color: var(--bg-primary);
 }
 
 .setting-stepper {
@@ -1001,7 +1004,9 @@ button:active, .btn:active, [role="button"]:active {
 }
 .schedule-tab-active {
   background: var(--accent);
-  color: white;
+  /* #08080c on #4a6cf7 ≈ 4.55:1 (WCAG AA, razor margin). If --accent is
+     ever darkened, re-check contrast — there's no headroom here. */
+  color: var(--bg-primary);
   border-color: var(--accent);
 }
 /* Music page */

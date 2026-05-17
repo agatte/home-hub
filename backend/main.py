@@ -87,6 +87,43 @@ app_logger = logging.getLogger("home_hub.main")
 _WS_COMMAND_ADAPTER: TypeAdapter[WSCommand] = TypeAdapter(WSCommand)
 
 
+# --- Per-connection WebSocket rate limit -------------------------------------
+#
+# slowapi only binds to HTTP handlers; WebSockets need their own bucket.
+# Today the WS is LAN-only (the tunnel proxy doesn't declare WS upgrade
+# methods, so it's not publicly reachable). But the kiosk drags a slider
+# faster than the bridge can ack, and a future remote-app feature might
+# expose the WS through a tunneled path — either way, a small in-memory
+# token bucket per client is cheap insurance.
+#
+# Implementation: track timestamps of the last N commands per WS object.
+# 30 commands per 10 seconds is generous enough for slider drags (which
+# emit ~20/s during a fast sweep) without leaving the door open to
+# unlimited abuse.
+import time  # noqa: E402
+from collections import deque  # noqa: E402
+
+_WS_RATE_LIMIT_WINDOW = 10.0  # seconds
+_WS_RATE_LIMIT_MAX = 30       # commands per window
+
+
+def _ws_rate_limit_check(bucket: deque[float]) -> bool:
+    """Slide the window, return True if the command should be ALLOWED.
+
+    Mutates `bucket` in place — call once per inbound command. The deque
+    is bounded by the time window, not by maxlen; max-window-size is
+    `_WS_RATE_LIMIT_MAX` items so it stays small.
+    """
+    now = time.monotonic()
+    cutoff = now - _WS_RATE_LIMIT_WINDOW
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= _WS_RATE_LIMIT_MAX:
+        return False
+    bucket.append(now)
+    return True
+
+
 # Rate limiter — prevents abuse from rogue LAN clients
 from backend.rate_limit import limiter  # noqa: E402 — after route imports to avoid circular
 
@@ -136,6 +173,69 @@ async def request_id_middleware(request, call_next):
         return response
     finally:
         request_id_var.reset(token)
+
+
+# Conservative CSP for the kiosk. Tighten over time:
+#   - `'unsafe-inline'` on style-src is needed for Svelte component-scoped
+#     inline styles + style="..." attributes in templates. SvelteKit 2 can
+#     run without it if every component is refactored — out of scope here.
+#   - `'self' blob:` on worker-src is for Threlte/three.js on /gameday.
+#   - connect-src includes ws: for the in-page WebSocket (same-origin
+#     covered by 'self' on modern browsers, but ws: makes it explicit).
+#   - object-src 'none' + base-uri 'self' + form-action 'self' +
+#     frame-ancestors 'none' close the legacy holes browsers leave open.
+# When a console violation appears in production, copy the directive that
+# fired and adjust here; don't blanket-allow 'unsafe-eval' or '*' sources.
+_CSP = (
+    "default-src 'self'; "
+    "img-src 'self' data: blob:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
+    "connect-src 'self' ws: wss:; "
+    "font-src 'self' data:; "
+    "media-src 'self'; "
+    "worker-src 'self' blob:; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    """
+    Apply defense-in-depth response headers to every response.
+
+    These are belt-and-suspenders on top of the LAN/tunnel auth model:
+    they harden the browser side so an attacker who somehow gets a
+    response served back can't pivot it into XSS, clickjacking, MIME
+    sniffing, or referrer leakage. HSTS is only sent on tunnel-origin
+    responses — over plain-HTTP LAN it's a no-op (browsers ignore HSTS
+    on non-HTTPS) and sending it on LAN would just be confusing
+    in dev tools.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault(
+        "Referrer-Policy", "strict-origin-when-cross-origin"
+    )
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    is_tunnel = (
+        request.headers.get("X-Tunnel-Origin", "").strip().lower()
+        == "cloudflare"
+    )
+    if is_tunnel:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
 
 
 # Mount static files (TTS audio, ambient sounds, frontend build)
@@ -214,6 +314,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     rid = new_request_id()
     rid_token = request_id_var.set(rid)
 
+    # Per-connection rate-limit bucket (see _ws_rate_limit_check).
+    ws_bucket: deque[float] = deque()
+
     await ws_manager.connect(websocket)
 
     # Send initial connection status
@@ -259,6 +362,22 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     try:
         while True:
             raw = await websocket.receive_text()
+
+            # Rate-limit BEFORE parsing — a flood of garbage JSON shouldn't
+            # cost us the validator allocations either.
+            if not _ws_rate_limit_check(ws_bucket):
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "rate_limit",
+                        "data": {
+                            "max": _WS_RATE_LIMIT_MAX,
+                            "window_s": _WS_RATE_LIMIT_WINDOW,
+                        },
+                    }))
+                except Exception:
+                    pass
+                continue
+
             try:
                 message = json.loads(raw)
             except (json.JSONDecodeError, ValueError):

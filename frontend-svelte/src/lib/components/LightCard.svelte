@@ -239,6 +239,24 @@
     : 'var(--text-muted)'
 </script>
 
+<!--
+  The card is a composite widget: a drag-to-dim surface PLUS two embedded
+  buttons (color-swatch, power). ARIA forbids interactive descendants
+  inside a `role="slider"` element, so the OUTER container is `role="group"`
+  and the drag surface keeps its slider semantics via aria-* attributes
+  alone — Pointer/keyboard handlers stay on the outer for full-card hit
+  area, but axe sees `role="group"` and accepts the nested buttons.
+
+  Keyboard model: the group itself takes focus (Tab); Arrow / Home / End
+  on the focused group adjust brightness; Space / Enter toggle power.
+  A second Tab moves focus into the group, landing on the swatch button,
+  then a third Tab lands on the power button — both have their own
+  aria-label and run independent of the group's keydown handler.
+
+  The brightness percentage announced to screen readers comes from the
+  visible `.chip-pct` text and the composite aria-label below, not from
+  a slider valuetext.
+-->
 <div
   class="light-chip"
   class:light-on={displayOn}
@@ -252,11 +270,8 @@
   on:pointerup={onPointerEnd}
   on:pointercancel={onPointerEnd}
   on:keydown={onKeydown}
-  role="slider"
-  aria-label="{nameOverride ?? light.name} brightness"
-  aria-valuemin="1"
-  aria-valuemax="254"
-  aria-valuenow={light.on ? displayBri : 1}
+  role="group"
+  aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
   aria-disabled={!light.reachable}
   tabindex={light.reachable ? 0 : -1}
 >

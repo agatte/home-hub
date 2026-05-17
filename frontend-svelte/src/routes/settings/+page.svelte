@@ -670,6 +670,7 @@
           <input
             type="time"
             class="setting-time"
+            aria-label="{scheduleDay} wake-up time"
             value={`${pad(currentSchedule.wake_hour)}:00`}
             on:change={(e) => onTimeHourChange(e, scheduleDay, 'wake_hour')}
           />
@@ -707,6 +708,7 @@
           <input
             type="time"
             class="setting-time"
+            aria-label="{scheduleDay} evening start time"
             value={`${pad(currentSchedule.evening_start_hour)}:00`}
             on:change={(e) => onTimeHourChange(e, scheduleDay, 'evening_start_hour')}
           />
@@ -720,6 +722,7 @@
           <input
             type="time"
             class="setting-time"
+            aria-label="{scheduleDay} wind-down start time"
             value={`${pad(currentSchedule.winddown_start_hour)}:00`}
             on:change={(e) => onTimeHourChange(e, scheduleDay, 'winddown_start_hour')}
           />
@@ -785,6 +788,7 @@
                   <input
                     type="number"
                     class="setting-number"
+                    aria-label="{mode} fade duration in seconds"
                     min="1"
                     max="30"
                     value={modeVolume[mode].fade_duration_s}
@@ -933,6 +937,7 @@
           <input
             type="time"
             class="setting-time"
+            aria-label="Morning routine time"
             value={`${pad(routineConfig.hour)}:${pad(routineConfig.minute)}`}
             on:change={onMorningTimeChange}
           />

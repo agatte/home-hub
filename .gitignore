@@ -2,6 +2,10 @@
 .env
 *.pem
 *.key
+*.p12
+*.crt
+.aws/
+credentials
 
 # Python
 __pycache__/

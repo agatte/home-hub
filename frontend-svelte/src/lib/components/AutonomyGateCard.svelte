@@ -240,7 +240,9 @@
     text-transform: none;
     letter-spacing: 0;
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.25);
+    /* 0.25 alpha fails WCAG AA at 11px against #08080c; bump to a
+       contrast-passing value while keeping the secondary-text feel. */
+    color: rgba(255, 255, 255, 0.65);
   }
 
   /* Rate grid */

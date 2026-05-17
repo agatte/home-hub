@@ -37,9 +37,15 @@ def _current_multiplier(service) -> float:
     return lux_to_multiplier(float(ema), float(baseline) if baseline else 90.0)
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_api_key)])
 async def get_status(request: Request) -> dict:
-    """Return camera service status (includes lux calibration + current multiplier)."""
+    """Return camera service status (includes lux calibration + current multiplier).
+
+    Gated even though it's a GET — the response leaks zone, posture, lux,
+    and the calibration baseline, all of which are useful reconnaissance
+    for a public-tunnel attacker. LAN dashboards keep working via the
+    RFC1918 bypass in `require_api_key`.
+    """
     service = getattr(request.app.state, "camera_service", None)
     if service is None:
         return {"status": "ok", "enabled": False, "available": False}
@@ -50,7 +56,7 @@ async def get_status(request: Request) -> dict:
     }
 
 
-@router.get("/snapshot")
+@router.get("/snapshot", dependencies=[Depends(require_api_key)])
 async def get_snapshot(request: Request, annotate: bool = False) -> Response:
     """Return a single JPEG frame from the webcam.
 
@@ -59,6 +65,10 @@ async def get_snapshot(request: Request, annotate: bool = False) -> Response:
     and is never written to disk or cached server-side. When ``annotate`` is
     true, the response overlays the face bounding box and the current lux +
     multiplier readout for framing / calibration verification.
+
+    **Auth-gated** (defense in depth — the tunnel allowlist already
+    excludes this path, but the gate ensures any future remote-app path
+    that bypasses the allowlist still can't pull JPEGs of the apartment).
     """
     service = getattr(request.app.state, "camera_service", None)
     if service is None or not service.enabled:

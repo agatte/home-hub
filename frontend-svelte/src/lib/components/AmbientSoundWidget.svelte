@@ -73,7 +73,7 @@
     </div>
 
     <div class="ambient-controls">
-      <select class="ambient-select" value={$ambient.sound || ''} on:change={(e) => selectSound(/** @type {HTMLSelectElement} */ (e.currentTarget).value)}>
+      <select class="ambient-select" aria-label="Ambient sound" value={$ambient.sound || ''} on:change={(e) => selectSound(/** @type {HTMLSelectElement} */ (e.currentTarget).value)}>
         <option value="">None</option>
         {#each $ambient.available_sounds as s}
           <option value={s.filename}>{s.label}</option>
@@ -90,7 +90,7 @@
             <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
           {/if}
         </svg>
-        <input type="range" min="0" max="100" value={volumePercent} on:input={onVolumeInput} class="ambient-slider" />
+        <input type="range" min="0" max="100" value={volumePercent} on:input={onVolumeInput} class="ambient-slider" aria-label="Ambient volume" />
         <span class="ambient-vol-label">{volumePercent}</span>
       </div>
     </div>
