@@ -380,8 +380,13 @@ class HueV2Service:
                     backoff = _STREAM_BACKOFF_INITIAL_SECONDS
 
                     async for line in response.aiter_lines():
+                        # Any received line (including SSE keepalive comments)
+                        # confirms the stream is alive. Ticking only on data:
+                        # payloads went stale during quiet-bridge periods
+                        # despite a healthy connection.
+                        if self._heartbeat is not None:
+                            self._heartbeat.tick("hue_v2_stream")
                         if not line or line.startswith(":"):
-                            # Heartbeat comment or keepalive blank — skip.
                             continue
                         if not line.startswith("data:"):
                             continue
@@ -394,9 +399,6 @@ class HueV2Service:
                         except json.JSONDecodeError:
                             logger.debug("v2 stream: malformed JSON payload")
                             continue
-
-                        if self._heartbeat is not None:
-                            self._heartbeat.tick("hue_v2_stream")
 
                         await self._dispatch_stream_events(
                             events, ws_manager, hue_v1_service

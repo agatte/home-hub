@@ -854,6 +854,18 @@ class CameraService:
 
                 if not self._enabled or self._paused:
                     continue
+
+                # Recover capture handle here rather than ticking heartbeat
+                # first — otherwise the lane reads "fresh" while every frame
+                # short-circuits at _process_frame's _cap=None guard. Hit on
+                # 2026-05-17 after a sleeping→working resume with a still-
+                # locked V4L2 handle.
+                if self._cap is None:
+                    self._cap = self._open_capture()
+                    if self._cap is None:
+                        continue
+                    logger.info("Camera capture reopened by poll loop")
+
                 if self._heartbeat is not None:
                     self._heartbeat.tick("camera")
 
