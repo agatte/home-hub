@@ -16,6 +16,8 @@ dist/
 build/
 venv/
 .venv/
+# PyInstaller auto-generated build specs (e.g. HomeHubNotifier.spec)
+*.spec
 
 # Node
 node_modules/
