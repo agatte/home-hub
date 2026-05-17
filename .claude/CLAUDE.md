@@ -164,11 +164,11 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 
 - **`sonos_service.py`** — Favorites always shuffled with random start via `_shuffle_and_play`.
 - **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (set false to shadow-log only). Late-night rescue + zone+posture rule + both attendance vetoes live in `run_loop`. Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0).
-- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping.
+- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping. Heartbeat ticks only after `_cap` is non-None — `poll_loop` retries `_open_capture()` each iteration when `_cap is None`, so a transient V4L2 lock (post-sleep-resume race) can't leave the lane heartbeat-fresh while every frame short-circuits.
 - **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains/Gradle false positives). Media is foreground-gated.
 - **`pc_agent/ambient_monitor.py`** — `speech_multiple→social` gate abandoned 2026-05-09 (max observed score 0.088 across 838k rows; structurally unreachable). Social is manual-override only. Never records audio.
 - **`websocket_manager.py`** — `broadcast` fan-outs via `asyncio.gather` with a 2s per-client `wait_for`. A stalled client (mobile on bad wifi, paused tab) now disconnects itself instead of holding the loop; expect `Client disconnected` log lines in those cases rather than "broadcasts stopped firing."
-- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`; uses a second `_stream_client` (read timeout disabled). Broadcasts on/bri pushes via the existing `light_update` channel; intentionally drops color (CIE xy) + ct events because there's no gamut-aware converter to v1's hue/sat. Color/ct ride the v1 5s fallback. 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s cadence whenever the stream isn't healthy. Diagnose stream state via the `hue_v2_stream` heartbeat in `/health` (stale window 10s).
+- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`; uses a second `_stream_client` (read timeout disabled). Broadcasts on/bri pushes via the existing `light_update` channel; intentionally drops color (CIE xy) + ct events because there's no gamut-aware converter to v1's hue/sat. Color/ct ride the v1 5s fallback. 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s cadence whenever the stream isn't healthy. Diagnose stream state via the `hue_v2_stream` heartbeat in `/health` (stale window 10s) — heartbeat ticks on every received line including SSE keepalive comments, so it tracks connection liveness rather than payload activity.
 
 ---
 
@@ -412,7 +412,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Device | IP | Notes |
 |--------|----|-------|
 | **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04. Backend + ambient as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker. Always-on. Static IP.** |
-| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL` env var. |
+| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL` env var. Desktop notifier autostarts via separate Task Scheduler entry `Home Hub Desktop Notifier` (At-Logon, exe at `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`, built via `scripts/build_desktop_notifier.ps1`). |
 | Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
 | Sonos Era 100 | 192.168.1.157 | "Bedroom". `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page deferred) |

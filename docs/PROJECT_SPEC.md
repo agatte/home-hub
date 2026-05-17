@@ -976,6 +976,8 @@ The "why" — top-3 factors — comes from flattening `engine._last_fusion_resul
 
 **Config:** `NTFY_TOPIC` doubles as the auth boundary on hosted ntfy.sh (topic name = secret). Unset → desktop toast still works, phone push silently skipped. `NTFY_SERVER` defaults to `https://ntfy.sh`; override for self-hosting.
 
+**Desktop wiring (2026-05-17).** The `desktop_notifier.py` widget is PyInstaller-built (`--onefile --windowed`) via `scripts/build_desktop_notifier.ps1` and installed to `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`. Autostart is a dedicated Task Scheduler entry `"Home Hub Desktop Notifier"` (At-Logon for the desktop user, `RestartCount=3` on crash, working-directory pinned to the install path so `logs\desktop_notifier.log` lives alongside the exe rather than in the repo). Kept separate from the PC Agent Supervisor because PyQt6 requires the main thread — the supervisor's thread-per-agent model can't host it.
+
 ---
 
 ## Developer Guide
@@ -1517,6 +1519,15 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   supervisor's PID-file mutex prevent duplicate spawns during the
   5-min polls. Install/reinstall via
   `scripts/setup-supervisor-task.ps1` (elevated).
+- **Desktop Notifier** via Windows Task Scheduler (`"Home Hub Desktop
+  Notifier"`, At-Logon trigger for the dev-machine user,
+  `RestartCount=3 / RestartInterval=1m`). Runs the PyInstaller-built
+  `HomeHubNotifier.exe` from `%LOCALAPPDATA%\HomeHub\` and subscribes
+  to `ws://192.168.1.210:8000/ws` for `notification` events. Kept
+  separate from the PC Agent Supervisor (PyQt6 must own the main
+  thread; the supervisor's thread-per-agent model can't host it).
+  Restart via `Start-ScheduledTask -TaskName 'Home Hub Desktop
+  Notifier'`; rebuild via `scripts/build_desktop_notifier.ps1`.
 - **Claude Code MCP server** with `HOME_HUB_URL` set via Windows user
   environment variable (`setx HOME_HUB_URL http://192.168.1.210:8000`)
   so Claude sessions on the dev machine can query and control the
