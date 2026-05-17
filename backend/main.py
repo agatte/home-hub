@@ -180,6 +180,14 @@ async def request_id_middleware(request, call_next):
 #   - `'unsafe-inline'` on style-src is needed for Svelte component-scoped
 #     inline styles + style="..." attributes in templates. SvelteKit 2 can
 #     run without it if every component is refactored — out of scope here.
+#   - `'unsafe-inline'` on script-src is needed because adapter-static
+#     emits the SvelteKit hydration bootstrap as a literal inline <script>
+#     block in build/index.html (the `__sveltekit_*` IIFE that fires
+#     kit.start). Without it, every browser refuses to hydrate the page
+#     and the kiosk goes black — happened once 2026-05-17. Phase-2 fix is
+#     `kit.csp` in svelte.config.js (mode: 'hash') feeding hashes to this
+#     middleware; not done yet because adapter-static's fallback-index
+#     emit path needs verification first.
 #   - `'self' blob:` on worker-src is for Threlte/three.js on /gameday.
 #   - connect-src includes ws: for the in-page WebSocket (same-origin
 #     covered by 'self' on modern browsers, but ws: makes it explicit).
@@ -191,7 +199,7 @@ _CSP = (
     "default-src 'self'; "
     "img-src 'self' data: blob:; "
     "style-src 'self' 'unsafe-inline'; "
-    "script-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
     "connect-src 'self' ws: wss:; "
     "font-src 'self' data:; "
     "media-src 'self'; "
