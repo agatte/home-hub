@@ -753,6 +753,23 @@ async def lifespan(app: FastAPI):
     app.state.celebration_orchestrator = celebration
     app_logger.info("CelebrationOrchestrator subscribed to GameDayService")
 
+    # NotifierService — pushes "what just changed and why" to the user's
+    # desktop (custom toast widget over WS) and phone (ntfy.sh push).
+    # Watches mode flips + effective brightness shifts on the engine and
+    # surfaces top-3 fusion factors as the "why." Suppression: DND,
+    # 10s coalesce, 30s boot delay, and user-initiated mode flips
+    # (api:* / manual / alexa:* / guest:*) — Anthony pressed it, no toast.
+    from backend.services.notifier_service import NotifierService
+    notifier = NotifierService(
+        ws_manager=ws_manager,
+        automation_engine=automation,
+        ntfy_topic=settings.NTFY_TOPIC,
+        ntfy_server=settings.NTFY_SERVER,
+    )
+    await notifier.start()
+    app.state.notifier = notifier
+    automation.register_on_mode_change(notifier.on_mode_change)
+
     # Background tasks
     tasks: list[asyncio.Task] = []
 
@@ -812,6 +829,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
     tasks.append(asyncio.create_task(gameday.poll_state_loop()))
+    tasks.append(asyncio.create_task(notifier.poll_loop()))
 
     # Camera presence detection (opt-in, runs on Latitude webcam)
     camera_enabled_setting = await load_setting("camera_enabled")
@@ -895,6 +913,9 @@ async def lifespan(app: FastAPI):
     await _safe_shutdown("hue_v2", hue_v2.close)
     await _safe_shutdown("rec_service", rec_service.close)
     await _safe_shutdown("gameday", gameday.close)
+    notifier_inst = getattr(app.state, "notifier", None)
+    if notifier_inst is not None:
+        await _safe_shutdown("notifier", notifier_inst.close)
     camera = getattr(app.state, "camera_service", None)
     if camera is not None:
         await _safe_shutdown("camera", camera.close)

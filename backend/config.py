@@ -117,6 +117,16 @@ class Settings(BaseSettings):
     # ingestion (no events sent). Free tier = 10k events/month.
     SENTRY_DSN: Optional[str] = None
 
+    # NotifierService — pushes "what just changed and why" to desktop +
+    # phone. NTFY_TOPIC doubles as the auth boundary on the hosted ntfy.sh
+    # service (anyone subscribed to the topic name gets the messages), so
+    # treat it like an API key. When unset, the service still broadcasts
+    # the "notification" WS event (desktop toast works), but skips the
+    # phone push. NTFY_SERVER lets us point at a self-hosted instance
+    # later without code changes.
+    NTFY_TOPIC: Optional[str] = None
+    NTFY_SERVER: str = "https://ntfy.sh"
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5
