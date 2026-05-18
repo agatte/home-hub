@@ -15,12 +15,19 @@
   /** @type {string | null} */
   let saving = null
 
+  /** @type {string | null} */
+  let saveError = null
+
   /** @param {Record<string, any>} body */
   async function patch(body) {
     saving = 'ambient'
+    saveError = null
     try {
       await apiPost('/api/ambient/config', body)
-    } catch {}
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : 'Ambient config save failed'
+      console.error('[ambient] config save failed:', e)
+    }
     saving = null
   }
 
@@ -215,10 +222,30 @@
         </div>
       {/each}
     </div>
+
+    {#if saveError}
+      <div class="ambient-save-error">{saveError}</div>
+    {/if}
   {/if}
 </section>
 
 <style>
+  /* widget-hint is defined in /settings's scoped block — child components
+     don't inherit Svelte-scoped parent styles, so redefine locally. */
+  p.widget-hint {
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: -4px 0 8px;
+  }
+
+  .ambient-save-error {
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--color-danger, #d57);
+    margin-top: 8px;
+  }
+
   .ambient-subheading {
     font-family: var(--font-display);
     font-size: 14px;

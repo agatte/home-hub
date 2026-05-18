@@ -18,7 +18,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 
 from backend.config import DATA_DIR, STATIC_DIR
 
@@ -316,7 +316,7 @@ class AmbientSoundService:
                     self._spawn_sonos_task(self._swap_sonos_ambient(filename))
         return {"status": "ok"}
 
-    def _spawn_sonos_task(self, coro) -> None:
+    def _spawn_sonos_task(self, coro: Awaitable[Any]) -> None:
         """Track a fire-and-forget Sonos coroutine so the GC can't drop it."""
         task = asyncio.create_task(coro)
         self._pending_sonos_tasks.add(task)
@@ -704,6 +704,20 @@ class AmbientSoundService:
             logger.warning("Sonos ambient swap: play_uri error: %s", e)
             return
         if success:
+            # Re-check post-await: an interleaved _stop_sonos_ambient() (e.g.
+            # mode flipped to a suppressed mode mid-swap) clears
+            # _sonos_ambient_active and _sonos_ambient_uri. Writing the
+            # pointer here would leave a non-None uri with active=False
+            # and the swap track would bleed through to its natural end.
+            if not self._sonos_ambient_active:
+                logger.info(
+                    "Sonos ambient swap: cancelled mid-flight, pausing"
+                )
+                try:
+                    await self._sonos.pause()
+                except Exception:
+                    pass
+                return
             self._sonos_ambient_uri = uri
             logger.info(
                 "Sonos ambient swapped to %s at volume %d (mode=%s)",
