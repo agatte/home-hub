@@ -43,7 +43,7 @@ from backend.services.pc_agent.game_list import (
 # champion doesn't change mid-game.
 LOL_LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/activeplayer"
 LOL_CHAMPION_CACHE_TTL_S = 30.0
-LOL_CHAMPION_HTTP_TIMEOUT_S = 1.0
+LOL_CHAMPION_HTTP_TIMEOUT_S = 2.0
 
 # ---------------------------------------------------------------------------
 # Logging — file + console (file captures errors even under pythonw.exe)
@@ -232,6 +232,7 @@ class ActivityDetector:
         # every 5s when the champion doesn't change mid-match.
         self._lol_champion: Optional[str] = None
         self._lol_champion_at: float = 0.0
+        self._lol_last_failure_reason: Optional[str] = None
         # Reusable HTTPS client for the LoL Live Client endpoint. Lazy-allocated
         # on first successful gate (LoL process present) so non-LoL sessions
         # never pay the client construction cost. verify=False is bounded to
@@ -509,6 +510,7 @@ class ActivityDetector:
             if self._lol_champion is not None:
                 self._lol_champion = None
                 self._lol_champion_at = 0.0
+            self._lol_last_failure_reason = None
             return None
 
         now = time.time()
@@ -525,27 +527,45 @@ class ActivityDetector:
             )
         try:
             resp = self._lol_http_client.get(LOL_LIVE_CLIENT_URL)
-        except httpx.HTTPError:
+        except httpx.HTTPError as e:
+            self._note_lol_failure(f"http_error: {type(e).__name__}: {e}")
             return None
 
         if resp.status_code != 200:
+            self._note_lol_failure(f"status_{resp.status_code}")
             return None
 
         try:
             data = resp.json()
-        except ValueError:
+        except ValueError as e:
+            self._note_lol_failure(f"json_decode: {e}")
             return None
 
         champion = data.get("championName") if isinstance(data, dict) else None
         if not isinstance(champion, str) or not champion.strip():
+            self._note_lol_failure(f"missing_champion_name (keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__})")
             return None
 
         champion = champion.strip()
-        if champion != self._lol_champion:
-            logger.debug("LoL champion detected: %s", champion)
+        if champion != self._lol_champion or self._lol_last_failure_reason is not None:
+            logger.info("LoL champion detected: %s", champion)
         self._lol_champion = champion
         self._lol_champion_at = now
+        self._lol_last_failure_reason = None
         return champion
+
+    def _note_lol_failure(self, reason: str) -> None:
+        """Log a LoL Live Client poll failure only on transition.
+
+        Polled every 5s while League is running — logging every miss
+        would flood ``supervisor.log``. Transition-only emits one
+        WARNING per failure-mode change, which is enough to diagnose
+        why the bedroom lamps didn't pick up the champion color.
+        """
+        if reason == self._lol_last_failure_reason:
+            return
+        logger.warning("LoL Live Client poll failed: %s", reason)
+        self._lol_last_failure_reason = reason
 
     def build_factors(self) -> list[dict]:
         """Build sub-factor list describing what this lane is seeing.
