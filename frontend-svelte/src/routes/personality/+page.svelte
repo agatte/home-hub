@@ -148,7 +148,7 @@
       <div class="reading">
         <div
           class="swatch"
-          style="background: {hsvToCss(current.preview_hsv)};"
+          style="background: {hsvToCss(current.preview_hsv)}; box-shadow: 0 0 30px {hsvToCss(current.preview_hsv)};"
           title="Mood-ring color preview (Phase B will drive this onto a real lamp)"
         ></div>
         <div class="gauges">
@@ -349,7 +349,6 @@
     width: 120px;
     height: 120px;
     border-radius: 60px;
-    box-shadow: 0 0 30px currentColor;
     border: 1px solid rgba(255, 255, 255, 0.15);
   }
   .gauges {
@@ -534,5 +533,26 @@
     margin-top: 12px;
     color: var(--text-muted);
     font-size: 12px;
+  }
+
+  /* Mobile: stack the slider rows and the reading card so nothing
+     forces horizontal scroll at 390px. The 1280 kiosk surface keeps
+     its side-by-side layout above the 640px breakpoint. */
+  @media (max-width: 640px) {
+    .sliders label {
+      grid-template-columns: 1fr;
+    }
+    .ends {
+      grid-column: 1;
+    }
+    .reading {
+      grid-template-columns: 1fr;
+      justify-items: center;
+      text-align: center;
+    }
+    .gauges {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
   }
 </style>
