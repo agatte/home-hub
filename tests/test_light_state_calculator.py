@@ -216,7 +216,8 @@ class TestApplyLuxMultiplier:
 
     def test_hysteresis_within_epsilon_keeps_old_multiplier(self):
         # lux=70 → mult = lerp between (40,1.20) and (90,1.00) at 0.6 → 1.08.
-        # If last was 1.07, the diff is 0.01 < 0.03, so we keep 1.07.
+        # If last was 1.07, the diff is 0.01 < LUX_MULT_EPSILON (0.08), so
+        # we keep 1.07.
         state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult = apply_lux_multiplier(
             state, "working", lux_reading=70.0, last_multiplier=1.07,
@@ -227,12 +228,31 @@ class TestApplyLuxMultiplier:
 
     def test_hysteresis_outside_epsilon_uses_new_multiplier(self):
         state = {"1": {"on": True, "bri": 100}}
-        # lux=40 → 1.20; last was 1.0 → diff 0.20 > epsilon → use 1.20.
+        # lux=40 → 1.20; last was 1.0 → diff 0.20 > LUX_MULT_EPSILON (0.08)
+        # → use 1.20.
         out_state, out_mult = apply_lux_multiplier(
             state, "working", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult == pytest.approx(1.20)
         assert out_state["1"]["bri"] == int(100 * 1.20)
+
+    def test_sub_perceptual_drift_does_not_repush(self):
+        # Lux jitter shifts the multiplier by ~5% (within the 8% dead-band
+        # raised 2026-05-17). The new multiplier must stay clamped to the
+        # last one — these sub-perceptual shifts were the cause of the
+        # ~230 bri re-pushes per 30min during a stable room.
+        state = {"1": {"on": True, "bri": 100}}
+        # lux=60 → ~1.12, last=1.07 → diff 0.05 < 0.08 → keep 1.07.
+        out_state, out_mult = apply_lux_multiplier(
+            state, "working", lux_reading=60.0, last_multiplier=1.07,
+        )
+        assert out_mult == 1.07
+
+    def test_lux_mult_epsilon_constant_sanity(self):
+        # Lock in 0.08 — lowering this re-introduces the bri-spam regression
+        # (2026-05-17 incident). Raise the value if needed; don't lower it
+        # without revisiting the spam analysis in the notifier plan.
+        assert LUX_MULT_EPSILON == 0.08
 
 
 # ---------------------------------------------------------------------------
@@ -634,14 +654,17 @@ class TestFunctionalWeatherBrightness:
     def test_composes_with_lux_multiplier(self):
         # Mirrors the production pipeline order: lux first, then functional
         # weather. Together they should produce a moderate combined boost.
+        # Lux value chosen so the multiplier shift exceeds LUX_MULT_EPSILON
+        # (0.08) — otherwise hysteresis keeps the old multiplier.
         state = {"1": {"on": True, "bri": 180, "hue": 48500, "sat": 160}}
         after_lux, _ = apply_lux_multiplier(
-            state, "gaming", lux_reading=80.0, last_multiplier=1.0, baseline_lux=90.0,
+            state, "gaming", lux_reading=60.0, last_multiplier=1.0, baseline_lux=90.0,
         )
-        # lux=80 with baseline=90 → effective=80 → between (40,1.20) and (90,1.00)
-        # frac = (80-40)/(90-40) = 0.8 → mult = 1.20 + 0.8*(1.00-1.20) = 1.04
-        assert after_lux["1"]["bri"] == int(180 * 1.04)
+        # lux=60 with baseline=90 → effective=60 → between (40,1.20) and (90,1.00)
+        # frac = (60-40)/(90-40) = 0.4 → mult = 1.20 + 0.4*(1.00-1.20) = 1.12
+        # Diff from 1.0 = 0.12 > LUX_MULT_EPSILON, so multiplier updates.
+        assert after_lux["1"]["bri"] == int(180 * 1.12)
         out = apply_functional_weather_brightness(
             after_lux, "gaming", "day", "rain",
         )
-        assert out["1"]["bri"] == int(int(180 * 1.04) * 1.15)
+        assert out["1"]["bri"] == int(int(180 * 1.12) * 1.15)

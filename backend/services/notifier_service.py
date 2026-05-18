@@ -179,6 +179,15 @@ class NotifierService:
             )
 
             if not (mode_changed or brightness_shifted):
+                # Update the snapshot so the next check compares against
+                # the latest observation, not a stale baseline. Without
+                # this, slow drift accumulates across many polls and
+                # eventually crosses the 15% threshold even though no
+                # rapid change happened (false-positive shift notification).
+                # Narrows the threshold semantics to "shift since last
+                # poll (~5s)," which is what the docstring describes.
+                self._state.last_mode = mode
+                self._state.last_brightness = brightness
                 return
 
             # Coalesce burst events. A mode flip + brightness shift within

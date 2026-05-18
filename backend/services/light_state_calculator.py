@@ -113,7 +113,13 @@ LUX_CURVE: list[tuple[float, float]] = [
 # baseline=90) lands neutral here, and a calibrated room shifts the
 # whole curve so its baseline_lux maps onto this point.
 LUX_NEUTRAL_LUX = 90.0
-LUX_MULT_EPSILON = 0.03      # Skip re-apply if multiplier change < 3%
+# Raised 2026-05-17 from 0.03 → 0.08. At 0.03, low-amplitude EMA jitter
+# (zone-weighted half-frame sampling adds variance) constantly crossed
+# the dead-band, generating ~230 sub-perceptual bri re-pushes per 30min
+# during a stable room. 0.08 sits near the perceptual just-noticeable-
+# difference for brightness at mid-range; real lux shifts (sunset, room
+# light flipped, weather change) still cross promptly.
+LUX_MULT_EPSILON = 0.08      # Skip re-apply if multiplier change < 8%
 LUX_STALE_SECONDS = 30       # Ignore readings older than this
 
 

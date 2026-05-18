@@ -295,6 +295,33 @@ async def test_effective_brightness_off_lights_count_zero(notifier, engine):
 
 
 @pytest.mark.asyncio
+async def test_slow_drift_does_not_accumulate_into_false_positive(
+    notifier, ws, engine,
+):
+    """Many small sub-threshold changes must not stack into a shift fire.
+
+    Pre-fix bug (2026-05-17): non-firing checks returned without updating
+    last_brightness, so slow EMA-lux drift would eventually cross 15%
+    versus a stale baseline and emit a "shift" notification even though
+    no rapid change happened. Fix: update last_brightness on every check
+    so the comparison is always "shift since the last poll (~5s)."
+    """
+    await notifier._maybe_emit(reason="poll")  # seed at avg bri 0.5
+
+    # Five sequential ~5% drops. None individually crosses 15%, and the
+    # CUMULATIVE drop (127 → 90 = ~29%) must not fire if the bug is
+    # actually fixed — each check should re-baseline.
+    for new_bri in (120, 113, 106, 99, 90):
+        for state in engine._last_applied_per_light.values():
+            state["bri"] = new_bri
+        await notifier._maybe_emit(reason="poll")
+
+    assert ws.calls == []
+    # And the snapshot must have followed the drift, not stayed at the seed.
+    assert notifier._state.last_brightness < 0.40
+
+
+@pytest.mark.asyncio
 async def test_brightness_threshold_constant_sanity():
     """Lock in the 15% threshold — bumping it requires a test update."""
     assert BRIGHTNESS_DELTA_THRESHOLD == 0.15

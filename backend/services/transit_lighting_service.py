@@ -64,23 +64,32 @@ HARD_TIMEOUT_SECONDS = 600
 TRIGGER_MODES = frozenset({"working", "gaming", "watching", "relax"})
 
 # Zones where transit lighting must NOT fire — Anthony is stationary, not
-# transiting. The bed zone is the painful one: face / pose detection flickers
-# wildly under blankets in low light (consecutive frames swing 0.0 → 0.99 →
-# 0.0 confidence), and absent each glitch would otherwise raise L1 + L3 + L4
-# every few seconds. Gate is on the *committed* zone reading (15s hysteresis
-# inside camera_service), so brief absences don't drop the gate either.
-STATIONARY_ZONES = frozenset({"bed"})
+# transiting. Two painful zones:
+#   • bed — face / pose detection flickers wildly under blankets in low
+#     light (consecutive frames swing 0.0 → 0.99 → 0.0 confidence), and
+#     absent each glitch would otherwise raise L1 + L3 + L4 every few
+#     seconds.
+#   • desk — added 2026-05-17. Face confidence oscillates the 0.70 trust
+#     threshold during normal desk posture (lean-in, head-down typing,
+#     turning to side monitor); pose detection drops on the same poses.
+#     A single all-paths-miss poll seeds the 4s absent dwell, which fired
+#     transit 23×/30min during a gaming session at the desk (log
+#     evidence 2026-05-17). Symmetric with the bed pattern.
+# Gate is on the *committed* zone reading (15s hysteresis inside
+# camera_service), so brief absences don't drop the gate either. Real
+# exits still fire transit via the BED_EXIT_ABSENT_FRAMES bypass below.
+STATIONARY_ZONES = frozenset({"bed", "desk"})
 
 # Bypass STATIONARY_ZONES when camera has been continuously NOT-strongly-
 # present for this many polls. Strong presence = pose detection OR face
 # above TRANSIT_FACE_TRUST_THRESHOLD. The streak resets to 0 on any
 # strongly-present frame — pose-flicker scenarios always include occasional
-# strong frames, but a real bedroom exit produces sustained absence (the
-# only "presence" signal during a real exit is weak-face from chair-back /
-# picture-frame false positives, which don't count toward the streak).
-# 5 polls ≈ 10s at the camera's 2s cadence; combined with the 4s
-# ABSENT_TRIGGER_SECONDS (already met by then), transit fires ~10s after
-# Anthony actually gets up.
+# strong frames, but a real bedroom/desk exit produces sustained absence
+# (the only "presence" signal during a real exit is weak-face from
+# chair-back / picture-frame false positives, which don't count toward
+# the streak). 5 polls ≈ 10s at the camera's 2s cadence; transit fires
+# ~10s after Anthony actually gets up. Name retains the BED_ prefix for
+# git-history continuity — the constant gates both bed and desk zones.
 BED_EXIT_ABSENT_FRAMES = 5
 
 # Face confidence below which transit treats the detection as "not really

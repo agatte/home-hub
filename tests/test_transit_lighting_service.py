@@ -179,13 +179,48 @@ class TestStationaryZoneGate:
         assert svc.active is False
         assert auto.transit_calls == []
 
-    async def test_activates_when_zone_is_desk(self):
-        # Walked away from the desk; zone is still "desk" (last commit).
-        # This is the canonical transit-firing case and must still work.
+    async def test_blocks_when_zone_is_desk(self):
+        # 2026-05-17: desk added to STATIONARY_ZONES. Face confidence
+        # oscillates the 0.70 trust threshold during normal desk posture
+        # (lean-in, head-down typing), and a single all-paths-miss poll
+        # would otherwise seed the 4s absent dwell. Block at the zone
+        # gate instead — real desk exits go through the BED_EXIT_ABSENT_
+        # FRAMES bypass (see test below).
         svc, auto, cam = _make_service(
             mode="working", cam_zone="desk",
         )
         await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.transit_calls == []
+
+    async def test_desk_exit_bypass_activates_after_sustained_absence(self):
+        # Real desk exit (sustained, not a momentary face-conf dip) still
+        # fires transit. Mirrors the bed-exit weak-face bypass: after
+        # BED_EXIT_ABSENT_FRAMES polls without strong presence, the
+        # STATIONARY_ZONES gate steps aside.
+        from datetime import timedelta
+        from backend.services.transit_lighting_service import (
+            BED_EXIT_ABSENT_FRAMES,
+        )
+        svc, auto, cam = _make_service(
+            mode="working", cam_zone="desk",
+            cam_detection="absent", cam_detection_source=None,
+            cam_confidence=0.0,
+        )
+        # Build the absent streak — gate still blocks during this window.
+        for _ in range(BED_EXIT_ABSENT_FRAMES):
+            await svc._check()
+            assert svc.active is False
+        assert svc._strong_absent_streak >= BED_EXIT_ABSENT_FRAMES
+
+        # Next poll: gate bypasses, absent-dwell timer starts.
+        await svc._check()
+        assert svc._camera_absent_since is not None
+        assert svc.active is False
+
+        # Backdate dwell past trigger; tick fires.
+        svc._camera_absent_since -= timedelta(seconds=ABSENT_TRIGGER_SECONDS + 1)
+        await svc._check()
         assert svc.active is True
         assert len(auto.transit_calls) == 1
 
@@ -197,15 +232,30 @@ class TestStationaryZoneGate:
         assert svc.active is True
 
     async def test_deactivates_when_zone_flips_to_bed_mid_transit(self):
-        # Transit fired while he was at his desk; he then sat down on the
-        # bed (zone commits to "bed"). Service should revert immediately —
-        # not wait for camera to report "present" or for the hard timeout.
-        svc, auto, cam = _make_service(mode="working", cam_zone="desk")
+        # Transit fired while zone was uncommitted (mid-walk); he then sat
+        # down on the bed (zone commits to "bed"). Service should revert
+        # immediately — not wait for camera to report "present" or for the
+        # hard timeout.
+        svc, auto, cam = _make_service(mode="working", cam_zone=None)
         await _drive_absent_window(svc)
         assert svc.active is True
         assert len(auto.clear_calls) == 0
 
         cam.zone = "bed"
+        await svc._check()
+        assert svc.active is False
+        assert len(auto.clear_calls) == 1
+
+    async def test_deactivates_when_zone_flips_to_desk_mid_transit(self):
+        # 2026-05-17: desk now in STATIONARY_ZONES. Mid-walk transit fire
+        # followed by sitting back at the desk should revert immediately,
+        # symmetric with the bed case above.
+        svc, auto, cam = _make_service(mode="working", cam_zone=None)
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.clear_calls) == 0
+
+        cam.zone = "desk"
         await svc._check()
         assert svc.active is False
         assert len(auto.clear_calls) == 1
@@ -223,11 +273,11 @@ class TestStationaryZoneGate:
         assert svc._camera_absent_since is None
 
     def test_stationary_zones_membership(self):
-        # Locked-in invariant: only "bed" is stationary today.
-        # If/when "couch" or another stationary zone gets committed
-        # by the camera, it should be added here too.
+        # Locked-in invariant: bed + desk are both stationary. Desk added
+        # 2026-05-17 to stop the face-confidence-flutter spam fire-pattern
+        # (see test_blocks_when_zone_is_desk).
         assert "bed" in STATIONARY_ZONES
-        assert "desk" not in STATIONARY_ZONES
+        assert "desk" in STATIONARY_ZONES
 
     async def test_weak_face_only_bypasses_stationary_after_5_polls(self):
         # 2026-05-05 regression: when Anthony leaves the bedroom, the camera
