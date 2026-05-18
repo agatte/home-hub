@@ -79,9 +79,11 @@ class PresenceReading:
     # Desktop only runs FaceLandmarker; left None there.
     detection_source: Optional[str] = None
     zone: Optional[str] = None  # "desk" | "bed" | None
-    # Phase 1: Latitude reports "upright" | "reclined". Phase 2 adds
-    # desktop "slouched" / "upright" (frontal-only).
+    # Latitude reports "upright" | "reclined". Desktop adds
+    # "slouched" / "upright" (frontal-only). New sources may extend
+    # the vocabulary; consumers should treat unknown values as opaque.
     posture: Optional[str] = None
+    posture_confidence: Optional[float] = None  # 0..1
     pose_visible_landmarks: Optional[int] = None  # diagnostics
 
 
@@ -218,16 +220,37 @@ class PresenceFusion:
     def latest_posture(
         self, max_age_s: int = DEFAULT_FRESHNESS_S,
     ) -> Optional[str]:
-        """Best posture reading across sources.
+        """Best posture reading across sources, honoring geometry.
 
-        Phase 1 (current): only Latitude reports posture — values are
-        ``"upright"`` or ``"reclined"``. Phase 2 will add desktop
-        ``"slouched"`` (frontal-only signal). Merge rule: most-recent
-        non-None reading wins. ``reclined`` (bed-only) and ``slouched``
-        (desk-only) don't conflict by definition.
+        Merge rule (Phase 2):
+          - If the desktop has a fresh desk-area posture
+            (``upright`` / ``slouched``), prefer it. The desktop's frontal
+            close-range view is more reliable than the Latitude's
+            three-quarter corner view for desk-area posture, and
+            ``slouched`` is desktop-only by construction.
+          - Else fall back to the most-recent fresh non-None reading
+            across all sources. This covers Latitude-only postures
+            (``reclined``, bed-only) and any source-of-last-resort
+            scenarios where future cameras might be the only contributor.
+
+        ``reclined`` and ``slouched`` are geometrically exclusive (one
+        requires being in bed, the other at the desk), so the only
+        practical conflict is when both Latitude and desktop report
+        ``upright``. The desktop wins by design — its frontal view sees
+        the subject head-on at high confidence; the Latitude sees a
+        three-quarter profile at 2-3m.
         """
-        candidates: list[tuple[float, str]] = []
         now = datetime.now(timezone.utc)
+        desktop = self._readings.get("desktop")
+        if (
+            desktop is not None
+            and desktop.posture in ("upright", "slouched")
+            and self._fresh(desktop, max_age_s)
+        ):
+            return desktop.posture
+
+        # Fall back to most-recent fresh non-None across all sources.
+        candidates: list[tuple[float, str]] = []
         for reading in self._readings.values():
             if reading.posture is None:
                 continue
@@ -259,6 +282,7 @@ class PresenceFusion:
                 "detection_source": reading.detection_source,
                 "zone": reading.zone,
                 "posture": reading.posture,
+                "posture_confidence": reading.posture_confidence,
             }
         return out
 

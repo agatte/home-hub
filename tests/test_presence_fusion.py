@@ -272,21 +272,104 @@ def test_latest_posture_reclined_stays_latitude_authoritative() -> None:
     assert fusion.latest_posture() == "reclined"
 
 
-def test_latest_posture_most_recent_wins() -> None:
-    """When both sources report posture, most-recent wins (Phase 1 rule)."""
+def test_latest_posture_desktop_slouched_wins_over_silent_latitude() -> None:
+    """Phase 2 — slouched is desktop-exclusive; nothing else can produce it."""
     fusion = PresenceFusion()
     fusion.on_observation(PresenceReading(
-        source="latitude", captured_at=_ago(120),
-        zone="desk", posture="upright",
-    ))
-    # Phase 1 desktop doesn't yet report posture, but test the merge for
-    # forward-compat. A desktop reading with posture set should win when
-    # newer.
-    fusion.on_observation(PresenceReading(
-        source="desktop", captured_at=_ago(5),
-        face_present=True, posture="slouched",
+        source="desktop", captured_at=_now(),
+        face_present=True, posture="slouched", posture_confidence=0.62,
     ))
     assert fusion.latest_posture() == "slouched"
+
+
+def test_latest_posture_desktop_upright_wins_over_latitude_upright() -> None:
+    """Phase 2 — when both report upright, prefer desktop (frontal close-range
+    view is more reliable than the Latitude's three-quarter corner view).
+    This holds even when the Latitude reading is more recent."""
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(30),
+        face_present=True, posture="upright", posture_confidence=0.55,
+    ))
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_ago(5),
+        zone="desk", posture="upright",
+    ))
+    # Latitude is newer but desktop wins by source-preference rule.
+    assert fusion.latest_posture() == "upright"
+
+
+def test_latest_posture_desktop_geometric_conflict_resolves_to_desktop() -> None:
+    """Phase 2 — Latitude=reclined + desktop=slouched is geometrically
+    impossible (can't be in bed AND at the desk). The fresh desktop
+    desk-area posture wins; we trust the more recent ground truth."""
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_ago(30),
+        zone="bed", posture="reclined",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(2),
+        face_present=True, posture="slouched", posture_confidence=0.58,
+    ))
+    assert fusion.latest_posture() == "slouched"
+
+
+def test_latest_posture_falls_back_to_latitude_when_desktop_silent() -> None:
+    """If the desktop has no posture (model down / hips not visible),
+    Latitude's reading carries — even if the desktop reading exists
+    with face_present but posture=None."""
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        zone="bed", posture="reclined",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, posture=None,
+    ))
+    assert fusion.latest_posture() == "reclined"
+
+
+def test_latest_posture_both_stale_returns_none() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(DEFAULT_FRESHNESS_S + 10),
+        posture="slouched",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_ago(DEFAULT_FRESHNESS_S + 10),
+        posture="upright",
+    ))
+    assert fusion.latest_posture() is None
+
+
+def test_latest_posture_desktop_stale_falls_back_to_latitude() -> None:
+    """Desktop posture was fresh once but expired; Latitude has a fresh
+    reading. The fallback path should pick up Latitude's value."""
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(DEFAULT_FRESHNESS_S + 10),
+        posture="slouched",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        zone="desk", posture="upright",
+    ))
+    assert fusion.latest_posture() == "upright"
+
+
+def test_posture_confidence_surfaces_in_sources() -> None:
+    """posture_confidence on PresenceReading should round-trip through
+    get_sources() so /api/camera/status callers see it."""
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, posture="slouched", posture_confidence=0.73,
+    ))
+    sources = fusion.get_sources()
+    assert sources["desktop"]["posture"] == "slouched"
+    assert sources["desktop"]["posture_confidence"] == 0.73
 
 
 # ---------------------------------------------------------------------------

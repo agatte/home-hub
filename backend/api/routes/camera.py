@@ -35,6 +35,7 @@ class PresenceObservation(BaseModel):
     detection_source: Optional[Literal["face", "pose"]] = None
     zone: Optional[Literal["desk", "bed"]] = None
     posture: Optional[Literal["upright", "reclined", "slouched"]] = None
+    posture_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     pose_visible_landmarks: Optional[int] = Field(default=None, ge=0)
 
 
@@ -121,6 +122,7 @@ async def post_observation(
         detection_source=payload.detection_source,
         zone=payload.zone,
         posture=payload.posture,
+        posture_confidence=payload.posture_confidence,
         pose_visible_landmarks=payload.pose_visible_landmarks,
     )
     presence.on_observation(reading)

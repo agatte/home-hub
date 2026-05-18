@@ -59,7 +59,117 @@ FACE_LANDMARKER_MODEL_URL = (
     "face_landmarker.task"
 )
 
+# PoseLandmarker (lite ~5MB) — same model + URL the Latitude uses, each
+# host downloads its own copy. Required for frontal-posture (upright vs
+# slouched) classification. Lite variant emits 2D normalized landmarks +
+# visibility — the world (3D) variant isn't needed for the head-drop ratio.
+POSE_LANDMARKER_MODEL_FILENAME = "pose_landmarker_lite.task"
+POSE_LANDMARKER_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_lite/float16/latest/"
+    "pose_landmarker_lite.task"
+)
+
+# BlazePose landmark indices (canonical, see MediaPipe pose_landmarker docs).
+POSE_NOSE = 0
+POSE_LEFT_SHOULDER = 11
+POSE_RIGHT_SHOULDER = 12
+POSE_LEFT_HIP = 23
+POSE_RIGHT_HIP = 24
+
+# Posture classification — normalized head-drop ratio between shoulder
+# midpoint and hip midpoint. Distance-invariant because torso height
+# normalizes how close the user sits. Dead-band 0.46..0.54 protects
+# against single-frame jitter near the boundary; classifier keeps the
+# prior commit when the reading falls in the dead-band.
+POSTURE_UPRIGHT = "upright"
+POSTURE_SLOUCHED = "slouched"
+POSTURE_UPRIGHT_MAX = 0.46  # ratio ≤ this → upright
+POSTURE_SLOUCHED_MIN = 0.54  # ratio ≥ this → slouched
+POSTURE_THRESHOLD_CENTER = 0.50  # for confidence calc
+# Visibility floor for the five landmarks the classifier needs. Loosened
+# from the Latitude's 0.8 because the desktop's frontal close-range view
+# is high-confidence; 0.6 keeps real readings + rejects extrapolated ones.
+POSE_MIN_VISIBILITY = 0.6
+# Frame-streak hysteresis — candidate must hold for this many consecutive
+# ticks before transitioning. At the 2s capture cadence this is ~6s,
+# tight enough that real slouching-onset is caught in <10s and noisy
+# enough single ticks don't flip the merged signal.
+POSTURE_HYSTERESIS_FRAMES = 3
+
 HTTP_TIMEOUT_S = 5.0
+
+
+# ---------------------------------------------------------------------------
+# Pure classifier helpers (testable without MediaPipe installed)
+# ---------------------------------------------------------------------------
+
+
+def _compute_head_drop_ratio(
+    pose_landmarks: Any,
+    min_visibility: float = POSE_MIN_VISIBILITY,
+) -> Optional[float]:
+    """Return ``(shoulder_mid.y - nose.y) / (hip_mid.y - nose.y)``.
+
+    Returns ``None`` when any of the five required landmarks (nose, both
+    shoulders, both hips) has visibility below ``min_visibility``, or
+    when the torso height collapses to ~0 (degenerate geometry from a
+    misdetection). The ratio is distance-invariant because the
+    denominator absorbs camera-distance scaling.
+
+    ``pose_landmarks`` is the MediaPipe Tasks API ``pose_landmarks[0]``
+    list — each element exposes ``.x``, ``.y``, ``.visibility`` in 0..1
+    normalized image coordinates (Y=0 top, Y=1 bottom).
+    """
+    if pose_landmarks is None:
+        return None
+    try:
+        nose = pose_landmarks[POSE_NOSE]
+        ls = pose_landmarks[POSE_LEFT_SHOULDER]
+        rs = pose_landmarks[POSE_RIGHT_SHOULDER]
+        lh = pose_landmarks[POSE_LEFT_HIP]
+        rh = pose_landmarks[POSE_RIGHT_HIP]
+    except (IndexError, TypeError):
+        return None
+
+    for lm in (nose, ls, rs, lh, rh):
+        if getattr(lm, "visibility", 0.0) < min_visibility:
+            return None
+
+    shoulder_mid_y = (ls.y + rs.y) / 2.0
+    hip_mid_y = (lh.y + rh.y) / 2.0
+    torso_height = hip_mid_y - nose.y
+    # Degenerate geometry: hip above (or at) nose. Real anatomy can't
+    # produce this; if the lite model emits it, the frame is unusable.
+    if torso_height <= 1e-3:
+        return None
+
+    return (shoulder_mid_y - nose.y) / torso_height
+
+
+def _classify_posture(
+    head_drop: Optional[float],
+    prior: Optional[str],
+) -> tuple[Optional[str], Optional[float]]:
+    """Map head-drop ratio to ``(posture, confidence)`` with a dead-band.
+
+    - ``head_drop <= POSTURE_UPRIGHT_MAX`` → ``"upright"``
+    - ``head_drop >= POSTURE_SLOUCHED_MIN`` → ``"slouched"``
+    - Between the two → keep ``prior`` (dead-band against flicker)
+    - ``head_drop is None`` → ``(None, None)``
+
+    Confidence is ``min(1.0, abs(head_drop - 0.50) * 5.0)`` — low near
+    the boundary, saturates to 1.0 for unambiguous readings.
+    """
+    if head_drop is None:
+        return None, None
+    confidence = min(1.0, abs(head_drop - POSTURE_THRESHOLD_CENTER) * 5.0)
+    if head_drop <= POSTURE_UPRIGHT_MAX:
+        return POSTURE_UPRIGHT, confidence
+    if head_drop >= POSTURE_SLOUCHED_MIN:
+        return POSTURE_SLOUCHED, confidence
+    # Dead-band — preserve prior commit if any, else stay None.
+    return prior, confidence if prior is not None else None
 
 # ---------------------------------------------------------------------------
 # Logging — file + console (file captures errors even under pythonw.exe)
@@ -90,19 +200,19 @@ logger.addHandler(_file_handler)
 # ---------------------------------------------------------------------------
 
 
-def _download_model(model_path: Path, url: str) -> bool:
-    """Fetch the FaceLandmarker .task file. Returns False on failure."""
+def _download_model(model_path: Path, url: str, label: str = "model") -> bool:
+    """Fetch a MediaPipe .task file. Returns False on failure."""
     try:
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.info("Downloading FaceLandmarker model from %s ...", url)
+        logger.info("Downloading %s from %s ...", label, url)
         with httpx.Client(timeout=60.0, follow_redirects=True) as client:
             resp = client.get(url)
             resp.raise_for_status()
             model_path.write_bytes(resp.content)
-        logger.info("FaceLandmarker model saved (%d bytes)", len(resp.content))
+        logger.info("%s saved (%d bytes)", label, len(resp.content))
         return True
     except Exception as exc:
-        logger.error("Failed to download FaceLandmarker model: %s", exc)
+        logger.error("Failed to download %s: %s", label, exc)
         return False
 
 
@@ -118,7 +228,9 @@ def _init_face_landmarker() -> Optional[Any]:
 
     model_path = MODEL_DIR / FACE_LANDMARKER_MODEL_FILENAME
     if not model_path.exists():
-        if not _download_model(model_path, FACE_LANDMARKER_MODEL_URL):
+        if not _download_model(
+            model_path, FACE_LANDMARKER_MODEL_URL, "FaceLandmarker model",
+        ):
             return None
 
     try:
@@ -136,6 +248,48 @@ def _init_face_landmarker() -> Optional[Any]:
         return landmarker
     except Exception as exc:
         logger.warning("FaceLandmarker init failed: %s", exc)
+        return None
+
+
+def _init_pose_landmarker() -> Optional[Any]:
+    """Lazy-create a PoseLandmarker (lite) instance. Returns None on failure.
+
+    Mirrors ``_init_face_landmarker``. The model file lives in the same
+    ``data/models/`` directory; first run downloads ~5MB. Failure modes
+    (mediapipe missing, download error, init exception) leave the
+    posture path disabled while presence keeps working.
+    """
+    try:
+        import mediapipe as mp
+    except ImportError:
+        logger.warning(
+            "mediapipe not installed — desktop posture disabled"
+        )
+        return None
+
+    model_path = MODEL_DIR / POSE_LANDMARKER_MODEL_FILENAME
+    if not model_path.exists():
+        if not _download_model(
+            model_path, POSE_LANDMARKER_MODEL_URL, "PoseLandmarker model",
+        ):
+            return None
+
+    try:
+        BaseOptions = mp.tasks.BaseOptions
+        PoseLandmarker = mp.tasks.vision.PoseLandmarker
+        PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+        options = PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        landmarker = PoseLandmarker.create_from_options(options)
+        logger.info("PoseLandmarker initialized (desktop posture enabled)")
+        return landmarker
+    except Exception as exc:
+        logger.warning("PoseLandmarker init failed: %s", exc)
         return None
 
 
@@ -166,7 +320,17 @@ class EmotionCapture:
         # Lazy-init handles
         self._cap = None
         self._landmarker = None
+        self._pose_landmarker = None
         self._mp_image_cls = None  # cached mp.Image constructor
+
+        # Posture frame-streak hysteresis. Candidate must hold for
+        # POSTURE_HYSTERESIS_FRAMES consecutive ticks before
+        # ``_posture_committed`` flips. Cheaper than wall-clock
+        # hysteresis on the Latitude (no datetime arithmetic per tick).
+        self._posture_committed: Optional[str] = None
+        self._posture_candidate: Optional[str] = None
+        self._posture_candidate_streak: int = 0
+        self._posture_confidence: Optional[float] = None
 
         # Webcam-unavailable transition tracking. Mirrors the LoL
         # _note_lol_failure pattern in activity_detector.py — log a
@@ -192,10 +356,23 @@ class EmotionCapture:
             except Exception:
                 pass
             self._landmarker = None
+        if self._pose_landmarker is not None:
+            try:
+                self._pose_landmarker.close()
+            except Exception:
+                pass
+            self._pose_landmarker = None
         try:
             self._client.close()
         except Exception:
             pass
+
+    def _reset_posture_state(self) -> None:
+        """Clear posture hysteresis state. Called when presence flips off."""
+        self._posture_committed = None
+        self._posture_candidate = None
+        self._posture_candidate_streak = 0
+        self._posture_confidence = None
 
     # ── enable flags ────────────────────────────────────────────────
 
@@ -213,6 +390,11 @@ class EmotionCapture:
             if presence is not None and presence != self._presence_enabled:
                 logger.info("desktop_presence_enabled → %s", presence)
                 self._presence_enabled = presence
+                if not presence:
+                    # Clear hysteresis so the next enable starts cleanly
+                    # — old posture commit shouldn't survive a disable
+                    # cycle (user may have left/returned in between).
+                    self._reset_posture_state()
 
     def is_capture_needed(self) -> bool:
         """True if any consumer is currently enabled."""
@@ -350,6 +532,16 @@ class EmotionCapture:
             face_present = face_confidence >= FACE_CONFIDENCE_FLOOR
             captured_at = datetime.now(timezone.utc)
 
+            # Pose classification — only when presence is enabled and
+            # we have a face (no point classifying posture for an empty
+            # chair). The pose detector + classifier are pure additions
+            # to the existing capture cycle; FaceLandmarker remains the
+            # primary gate.
+            posture: Optional[str] = None
+            posture_confidence: Optional[float] = None
+            if self.is_presence_enabled() and face_present:
+                posture, posture_confidence = self._classify_pose(mp_image)
+
             # Presence is independent of emotion — POST even when face is
             # below the emotion floor, so the backend has an unambiguous
             # absent signal. Skip only when the toggle is off.
@@ -358,6 +550,8 @@ class EmotionCapture:
                     face_present=face_present,
                     face_confidence=face_confidence,
                     captured_at=captured_at,
+                    posture=posture,
+                    posture_confidence=posture_confidence,
                 )
 
             if not face_present:
@@ -372,6 +566,83 @@ class EmotionCapture:
             # before the next tick — mirrors camera_service's finally pattern.
             frame = None
             rgb = None
+
+    def _classify_pose(self, mp_image: Any) -> tuple[Optional[str], Optional[float]]:
+        """Run pose inference + classify + apply frame-streak hysteresis.
+
+        Returns the committed posture + confidence (None on either if
+        the pose model isn't healthy, landmarks aren't visible, or the
+        candidate hasn't held long enough). Lazy-initializes the pose
+        landmarker on the first eligible call; failure stays sticky
+        until the supervisor restarts.
+        """
+        if self._pose_landmarker is None:
+            self._pose_landmarker = _init_pose_landmarker()
+            if self._pose_landmarker is None:
+                # Init failed — posture stays None forever (or until
+                # restart). Don't keep retrying every tick.
+                return None, None
+
+        try:
+            pose_result = self._pose_landmarker.detect(mp_image)
+        except Exception:
+            logger.debug("PoseLandmarker.detect failed", exc_info=True)
+            return None, None
+
+        pose_landmarks_list = getattr(pose_result, "pose_landmarks", None) or []
+        if not pose_landmarks_list:
+            # No torso detected this frame. Don't decay the committed
+            # value here — a single missed frame during a stable session
+            # shouldn't erase posture. The streak logic below will
+            # eventually transition to None if absences sustain.
+            self._update_posture_candidate(None, None)
+            return self._posture_committed, self._posture_confidence
+
+        head_drop = _compute_head_drop_ratio(pose_landmarks_list[0])
+        candidate, confidence = _classify_posture(
+            head_drop, prior=self._posture_committed,
+        )
+        self._update_posture_candidate(candidate, confidence)
+        return self._posture_committed, self._posture_confidence
+
+    def _update_posture_candidate(
+        self,
+        candidate: Optional[str],
+        confidence: Optional[float],
+    ) -> None:
+        """Apply frame-streak hysteresis to a per-tick classifier result.
+
+        - If the candidate matches the committed value: no transition;
+          refresh confidence and reset the streak counter.
+        - If it differs (including transitions to/from None): start /
+          continue counting consecutive matching frames. Once the
+          streak hits POSTURE_HYSTERESIS_FRAMES, commit.
+        """
+        if candidate == self._posture_committed:
+            self._posture_candidate = None
+            self._posture_candidate_streak = 0
+            if confidence is not None:
+                self._posture_confidence = confidence
+            return
+
+        if candidate == self._posture_candidate:
+            self._posture_candidate_streak += 1
+        else:
+            self._posture_candidate = candidate
+            self._posture_candidate_streak = 1
+
+        if self._posture_candidate_streak >= POSTURE_HYSTERESIS_FRAMES:
+            logger.debug(
+                "Posture commit: %s → %s (streak=%d, conf=%s)",
+                self._posture_committed,
+                candidate,
+                self._posture_candidate_streak,
+                confidence,
+            )
+            self._posture_committed = candidate
+            self._posture_confidence = confidence
+            self._posture_candidate = None
+            self._posture_candidate_streak = 0
 
     def _post_blendshapes(
         self,
@@ -402,20 +673,30 @@ class EmotionCapture:
         face_present: bool,
         face_confidence: float,
         captured_at: datetime,
+        posture: Optional[str] = None,
+        posture_confidence: Optional[float] = None,
     ) -> None:
         """POST one PresenceReading to the backend.
 
         Best-effort — transient network errors are logged at DEBUG and
         the next tick will fire 2s later. Mirrors the blendshape POST
         error-handling (the agent shouldn't crash on a backend blip).
+
+        ``posture`` and ``posture_confidence`` are included only when
+        non-None so the backend payload stays small when the pose path
+        is unhealthy (model missing, hips not visible, etc.).
         """
-        payload = {
+        payload: dict[str, Any] = {
             "source": "desktop",
             "captured_at": captured_at.isoformat(),
             "face_present": face_present,
             "face_confidence": face_confidence,
             "detection_source": "face",
         }
+        if posture is not None:
+            payload["posture"] = posture
+        if posture_confidence is not None:
+            payload["posture_confidence"] = posture_confidence
         try:
             resp = self._client.post(self._observation_endpoint, json=payload)
             if resp.status_code >= 400:
