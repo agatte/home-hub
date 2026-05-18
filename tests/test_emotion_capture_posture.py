@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import pytest
 
 from backend.services.pc_agent.emotion_capture import (
+    HEAD_ABOVE_SHOULDER_SLOUCHED_MAX,
+    HEAD_ABOVE_SHOULDER_UPRIGHT_MIN,
     POSE_LEFT_HIP,
     POSE_LEFT_SHOULDER,
     POSE_NOSE,
@@ -29,6 +31,8 @@ from backend.services.pc_agent.emotion_capture import (
     POSTURE_SLOUCHED,
     POSTURE_UPRIGHT,
     _classify_posture,
+    _classify_posture_from_shoulders,
+    _compute_head_above_shoulders_ratio,
     _compute_head_drop_ratio,
 )
 
@@ -210,3 +214,110 @@ def test_hysteresis_constant_exists_for_caller_reference() -> None:
     # Documents the contract that the caller (EmotionCapture.tick) is
     # expected to apply a frame-streak gate on top of this classifier.
     assert POSTURE_HYSTERESIS_FRAMES == 3
+
+
+# ---------------------------------------------------------------------------
+# Shoulder-anchored fallback (Commit 2.5) — used when hips aren't visible
+# ---------------------------------------------------------------------------
+
+
+def test_head_above_shoulders_works_without_hips() -> None:
+    """The defining case: hips at near-zero visibility (the empirical
+    2026-05-18 pose-diag reading was vis(lh=0.01 rh=0.01)) should still
+    yield a ratio because the fallback doesn't consult hips."""
+    pose = _make_pose(
+        nose_y=0.20, shoulder_y=0.40, hip_y=0.70,
+        visibility=0.95, hip_visibility=0.01,
+    )
+    ratio = _compute_head_above_shoulders_ratio(pose)
+    assert ratio is not None
+    # Upright geometry: nose at 0.20, shoulders at 0.40, shoulder
+    # width = |0.6 - 0.4| = 0.20 (from _make_pose's hardcoded x coords)
+    # ratio = (0.40 - 0.20) / 0.20 = 1.0
+    assert ratio == pytest.approx(1.0, abs=0.01)
+
+
+def test_head_above_shoulders_returns_none_on_low_shoulder_visibility() -> None:
+    pose = _make_pose(nose_y=0.2, shoulder_y=0.4, hip_y=0.7, visibility=0.3)
+    assert _compute_head_above_shoulders_ratio(pose) is None
+
+
+def test_head_above_shoulders_returns_none_on_low_nose_visibility() -> None:
+    pose = _make_pose(nose_y=0.2, shoulder_y=0.4, hip_y=0.7)
+    pose[POSE_NOSE].visibility = 0.2  # type: ignore[attr-defined]
+    assert _compute_head_above_shoulders_ratio(pose) is None
+
+
+def test_head_above_shoulders_returns_none_on_degenerate_shoulders() -> None:
+    # Coincident shoulders → shoulder_width ≈ 0 → undefined ratio
+    pose = _make_pose(nose_y=0.2, shoulder_y=0.4, hip_y=0.7)
+    # Force shoulders to coincide
+    pose[POSE_LEFT_SHOULDER].x = 0.5  # type: ignore[attr-defined]
+    pose[POSE_RIGHT_SHOULDER].x = 0.5  # type: ignore[attr-defined]
+    assert _compute_head_above_shoulders_ratio(pose) is None
+
+
+def test_head_above_shoulders_none_input() -> None:
+    assert _compute_head_above_shoulders_ratio(None) is None
+
+
+def test_classify_from_shoulders_clearly_upright() -> None:
+    # Ratio well above the upright_min threshold (0.55 default)
+    posture, conf = _classify_posture_from_shoulders(
+        ratio=HEAD_ABOVE_SHOULDER_UPRIGHT_MIN + 0.15, prior=None,
+    )
+    assert posture == POSTURE_UPRIGHT
+    assert conf is not None and conf > 0.5
+
+
+def test_classify_from_shoulders_clearly_slouched() -> None:
+    # Ratio well below the slouched_max threshold (0.45 default)
+    posture, conf = _classify_posture_from_shoulders(
+        ratio=HEAD_ABOVE_SHOULDER_SLOUCHED_MAX - 0.15, prior=None,
+    )
+    assert posture == POSTURE_SLOUCHED
+    assert conf is not None and conf > 0.5
+
+
+def test_classify_from_shoulders_dead_band_preserves_prior() -> None:
+    # Ratio exactly at the threshold center → dead-band → keep prior
+    posture, _ = _classify_posture_from_shoulders(ratio=0.50, prior=POSTURE_UPRIGHT)
+    assert posture == POSTURE_UPRIGHT
+    posture, _ = _classify_posture_from_shoulders(ratio=0.50, prior=POSTURE_SLOUCHED)
+    assert posture == POSTURE_SLOUCHED
+    posture, _ = _classify_posture_from_shoulders(ratio=0.50, prior=None)
+    assert posture is None
+
+
+def test_classify_from_shoulders_boundaries_inclusive() -> None:
+    # Boundary on the upright side
+    posture, _ = _classify_posture_from_shoulders(
+        ratio=HEAD_ABOVE_SHOULDER_UPRIGHT_MIN, prior=None,
+    )
+    assert posture == POSTURE_UPRIGHT
+    # Boundary on the slouched side
+    posture, _ = _classify_posture_from_shoulders(
+        ratio=HEAD_ABOVE_SHOULDER_SLOUCHED_MAX, prior=None,
+    )
+    assert posture == POSTURE_SLOUCHED
+
+
+def test_classify_from_shoulders_none_input() -> None:
+    assert _classify_posture_from_shoulders(ratio=None, prior=POSTURE_UPRIGHT) == (
+        None, None,
+    )
+
+
+def test_fallback_sign_flipped_from_primary() -> None:
+    """Sanity check: the two classifiers use opposite sign conventions.
+
+    head_drop HIGH → slouched (head dropped low in torso bbox).
+    shoulder-anchored HIGH → upright (head well above shoulders).
+    A regression that mixed them up would produce upside-down results.
+    """
+    # Primary: high ratio → slouched
+    posture, _ = _classify_posture(head_drop=0.65, prior=None)
+    assert posture == POSTURE_SLOUCHED
+    # Fallback: high ratio → upright
+    posture, _ = _classify_posture_from_shoulders(ratio=0.65, prior=None)
+    assert posture == POSTURE_UPRIGHT

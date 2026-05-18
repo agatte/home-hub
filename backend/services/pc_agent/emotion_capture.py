@@ -97,6 +97,20 @@ POSE_MIN_VISIBILITY = 0.6
 # enough single ticks don't flip the merged signal.
 POSTURE_HYSTERESIS_FRAMES = 3
 
+# Fallback classifier — used when the hip-based head-drop ratio can't be
+# computed (hips occluded by desk / below frame). Computes a shoulder-
+# anchored ratio: how far above the shoulder line the nose sits,
+# normalized by shoulder width. Distance-invariant because shoulder width
+# scales with user-camera distance the same way nose-to-shoulder Y does.
+#
+# Sign flipped vs head_drop: HIGH ratio = head well above shoulders =
+# upright; LOW ratio = head dropped toward shoulder line = slouched.
+# Bands and threshold are initial guesses based on typical frontal
+# desktop framing; the pose-diag log captures actual values for tuning.
+HEAD_ABOVE_SHOULDER_UPRIGHT_MIN = 0.55  # ratio ≥ this → upright
+HEAD_ABOVE_SHOULDER_SLOUCHED_MAX = 0.45  # ratio ≤ this → slouched
+HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER = 0.50  # for confidence calc
+
 HTTP_TIMEOUT_S = 5.0
 
 
@@ -169,6 +183,67 @@ def _classify_posture(
     if head_drop >= POSTURE_SLOUCHED_MIN:
         return POSTURE_SLOUCHED, confidence
     # Dead-band — preserve prior commit if any, else stay None.
+    return prior, confidence if prior is not None else None
+
+
+def _compute_head_above_shoulders_ratio(
+    pose_landmarks: Any,
+    min_visibility: float = POSE_MIN_VISIBILITY,
+) -> Optional[float]:
+    """Fallback ratio for desktop setups where hips aren't visible.
+
+    Computes ``(shoulder_mid_y - nose.y) / shoulder_width`` using only
+    nose + both shoulders. The 2D shoulder distance (sqrt(dx² + dy²))
+    normalizes for user-camera distance: closer to camera → larger
+    shoulder_width AND larger nose-to-shoulder distance, so the ratio
+    stays stable. Returns ``None`` if any of the three required landmarks
+    is below ``min_visibility`` or shoulders are degenerate (coincident).
+
+    Validated empirically (2026-05-18): the diag log captured
+    ``vis(nose=1.00 ls=1.00 rs=1.00 lh=0.01 rh=0.01)`` on Anthony's
+    desk — shoulders + nose are at ceiling confidence even when hips
+    are entirely below frame, so this fallback is reliable.
+    """
+    if pose_landmarks is None:
+        return None
+    try:
+        nose = pose_landmarks[POSE_NOSE]
+        ls = pose_landmarks[POSE_LEFT_SHOULDER]
+        rs = pose_landmarks[POSE_RIGHT_SHOULDER]
+    except (IndexError, TypeError):
+        return None
+    for lm in (nose, ls, rs):
+        if getattr(lm, "visibility", 0.0) < min_visibility:
+            return None
+    shoulder_dx = rs.x - ls.x
+    shoulder_dy = rs.y - ls.y
+    shoulder_width = (shoulder_dx * shoulder_dx + shoulder_dy * shoulder_dy) ** 0.5
+    if shoulder_width <= 1e-3:
+        return None
+    shoulder_mid_y = (ls.y + rs.y) / 2.0
+    return (shoulder_mid_y - nose.y) / shoulder_width
+
+
+def _classify_posture_from_shoulders(
+    ratio: Optional[float],
+    prior: Optional[str],
+) -> tuple[Optional[str], Optional[float]]:
+    """Same shape as ``_classify_posture`` but for the shoulder-anchored ratio.
+
+    Sign is flipped versus head_drop:
+      - HIGH ratio (head well above shoulders) → upright
+      - LOW ratio (head dropped toward shoulder line) → slouched
+      - Between → preserve prior commit (dead-band against flicker)
+    """
+    if ratio is None:
+        return None, None
+    confidence = min(
+        1.0, abs(ratio - HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER) * 5.0,
+    )
+    if ratio >= HEAD_ABOVE_SHOULDER_UPRIGHT_MIN:
+        return POSTURE_UPRIGHT, confidence
+    if ratio <= HEAD_ABOVE_SHOULDER_SLOUCHED_MAX:
+        return POSTURE_SLOUCHED, confidence
     return prior, confidence if prior is not None else None
 
 # ---------------------------------------------------------------------------
@@ -613,10 +688,28 @@ class EmotionCapture:
             self._update_posture_candidate(None, None)
             return self._posture_committed, self._posture_confidence
 
+        # Primary classifier: hip-anchored head-drop ratio. When hips
+        # are visible this is the most distance-invariant signal. The
+        # Latitude's mounting + framing typically clears the hip
+        # visibility floor; the desktop's frontal-close-range view
+        # frequently doesn't (desk lip / camera-above-monitor geometry).
         head_drop = _compute_head_drop_ratio(pose_landmarks_list[0])
-        candidate, confidence = _classify_posture(
-            head_drop, prior=self._posture_committed,
-        )
+        if head_drop is not None:
+            candidate, confidence = _classify_posture(
+                head_drop, prior=self._posture_committed,
+            )
+        else:
+            # Fallback: shoulder-anchored ratio for setups where hips
+            # aren't visible. Uses only nose + both shoulders, both of
+            # which the desktop frontal view captures at ceiling
+            # confidence (validated 2026-05-18 via the temporary
+            # pose-diag log path).
+            ratio = _compute_head_above_shoulders_ratio(
+                pose_landmarks_list[0],
+            )
+            candidate, confidence = _classify_posture_from_shoulders(
+                ratio, prior=self._posture_committed,
+            )
         self._update_posture_candidate(candidate, confidence)
         return self._posture_committed, self._posture_confidence
 
