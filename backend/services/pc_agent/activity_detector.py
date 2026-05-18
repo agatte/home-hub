@@ -102,6 +102,17 @@ DWELL_DEFAULT = 60.0           # All transitions default to 60s of sustained foc
 DWELL_LEAVE_WATCHING_DAY = 10.0    # Returning to work from a video — be responsive
 DWELL_LEAVE_WATCHING_NIGHT = 300.0  # Sticky watching at night (5 min) — no lights flip when running a quick command in bed
 DWELL_LEAVE_WORKING_NIGHT = 300.0   # Symmetric counterpart: once committed working at night, don't flip to watching for 5 min either. Kills the watching↔working alt-tab cycle when Stremio + code are both running.
+# Sticky-watching tolerance — if the candidate was ``watching`` within the
+# last N seconds, brief terminal/IDE polls don't reset the dwell. Without
+# this, a user in bed with YouTube who alt-tabs to type a quick command
+# (eg chatting with Claude Code) keeps resetting the working→watching
+# dwell to 0; 5-min sustained-firefox is unreachable when each terminal
+# poll counts as a fresh "working" candidate. 90s = comfortable for a
+# few command lines + reading replies before going back to the video.
+# 2026-05-18 root cause for "watching never triggered tonight" — diagnosed
+# via ml_decisions factor history showing firefox ↔ windowsterminal
+# bouncing every 30–60s.
+WATCHING_STICKY_SECONDS = 90.0
 NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
 
@@ -234,6 +245,10 @@ class ActivityDetector:
         # Hysteresis state — the candidate mode we'd report once the dwell expires.
         self._pending_mode: Optional[str] = None
         self._pending_since: Optional[float] = None
+        # Last time _classify returned ``watching``. Powers the sticky-watching
+        # tolerance in detect() — brief working candidates during a YouTube
+        # session (terminal alt-tab) don't reset the dwell timer.
+        self._last_watching_candidate_at: Optional[float] = None
         # LoL Live Client Data cache — avoids hammering the localhost API
         # every 5s when the champion doesn't change mid-match.
         self._lol_champion: Optional[str] = None
@@ -451,6 +466,25 @@ class ActivityDetector:
         candidate = self._classify()
         now = time.time()
 
+        # Sticky-watching tolerance: once we've seen ``watching`` recently,
+        # brief ``working`` candidates (typically terminal/IDE alt-tabs in
+        # the middle of a YouTube session) get treated as continuing
+        # ``watching`` for hysteresis purposes. Without this, the strict
+        # consecutive dwell at night (DWELL_LEAVE_WORKING_NIGHT=300s) is
+        # unreachable when the user pops back to a terminal every minute.
+        # See WATCHING_STICKY_SECONDS for the rationale.
+        hour = datetime.now().hour
+        is_night = hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
+        if candidate == "watching":
+            self._last_watching_candidate_at = now
+        elif (
+            is_night
+            and candidate == "working"
+            and self._last_watching_candidate_at is not None
+            and (now - self._last_watching_candidate_at) < WATCHING_STICKY_SECONDS
+        ):
+            candidate = "watching"
+
         # First poll — accept immediately, no dwell.
         if self._last_mode is None:
             self._last_mode = candidate
@@ -615,6 +649,18 @@ class ActivityDetector:
                 "value": fg_proc or "none",
                 "display": (fg_proc or "none"),
                 "impact": 1.0 if fg_kind in ("game", "media", "dev") else 0.5,
+            },
+            {
+                # Surfaced so the watching-title check can be debugged from
+                # ml_decisions.factors without restarting the agent — the
+                # 2026-05-18 "watching never fired tonight" investigation
+                # was blind to the actual title and had to be diagnosed via
+                # process-bouncing evidence alone.
+                "key": "foreground_title",
+                "label": "Title",
+                "value": fg_title or "",
+                "display": (fg_title or "")[:80],
+                "impact": 0.3,
             },
             {
                 "key": "idle",
