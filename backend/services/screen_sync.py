@@ -37,7 +37,7 @@ from backend.services.color_utils import (
     rgb_to_hue_hsb,
 )
 from backend.services.light_state_calculator import (
-    FUNCTIONAL_WEATHER_BRIGHTNESS,
+    get_functional_weather_multiplier,
     lux_to_multiplier,
 )
 
@@ -206,11 +206,12 @@ class ScreenSyncService:
 
         Gaming-mode envelope lift: when ``mode == "gaming"`` and ``period ==
         "day"``, the resolved cap is scaled by ``lux_multiplier *
-        FUNCTIONAL_WEATHER_BRIGHTNESS[weather_condition]`` (cloudy 1.10×,
-        rain 1.15×, etc.). Same gates as ``apply_functional_weather_brightness``
-        in light_state_calculator — so the screen-sync envelope tracks the
-        room's ambient compensation that base ACTIVITY_LIGHT_STATES already
-        receives. Watching's caps stay flat to preserve cinematic dim.
+        get_functional_weather_multiplier(mode, period, weather_condition)``
+        (cloudy 1.10×, rain 1.15×, etc.). Screen-sync envelope is gated to
+        gaming-day only on purpose (L5 clear-housing perceptual ceiling);
+        the bri pipeline applies the same weather multipliers across more
+        (mode, period) buckets. Watching's caps stay flat to preserve
+        cinematic dim.
         """
         if zone is not None and posture is not None:
             override = self._cap_overrides.get((mode, zone, posture, light_id))
@@ -297,7 +298,14 @@ class ScreenSyncService:
             return value
         if period != "day":
             return value
-        weather_mult = FUNCTIONAL_WEATHER_BRIGHTNESS.get(weather_condition or "", 1.0)
+        # Screen-sync caps stay gating-restricted to gaming-day on purpose:
+        # the L5 clear-housing perceptual ceiling (build 4adce9f) wasn't
+        # validated for evening/working lifts. The bri pipeline now applies
+        # weather multipliers across more buckets, but the sync envelope
+        # holds its narrower scope.
+        weather_mult = get_functional_weather_multiplier(
+            mode, period, weather_condition,
+        )
         combined = min(
             ScreenSyncService._AMBIENT_LIFT_CEILING,
             lux_multiplier * weather_mult,

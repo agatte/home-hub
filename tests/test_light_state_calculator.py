@@ -573,17 +573,28 @@ class TestWeatherAdjust:
 
 class TestFunctionalWeatherBrightness:
 
-    def test_non_gaming_mode_passes_through(self):
+    def test_aesthetic_modes_pass_through(self):
+        """relax/social/cooking never get the functional weather boost —
+        their palettes are intentional, not visibility-driven."""
         state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
-        for mode in ("working", "relax", "social", "watching", "cooking"):
+        for mode in ("relax", "social", "cooking", "sleeping", "idle"):
             out = apply_functional_weather_brightness(state, mode, "day", "rain")
             assert out is state
 
-    def test_non_day_period_passes_through(self):
+    def test_unmapped_bucket_passes_through(self):
+        """No (mode, period, condition) entry → no-op. Late-night gaming
+        has no rain/clouds/snow entries, so all of those pass through."""
         state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
-        for period in ("evening", "night", "late_night"):
-            out = apply_functional_weather_brightness(state, "gaming", period, "rain")
+        for cond in ("rain", "clouds", "snow"):
+            out = apply_functional_weather_brightness(
+                state, "gaming", "late_night", cond,
+            )
             assert out is state
+        # watching evening also has no entries
+        out = apply_functional_weather_brightness(
+            state, "watching", "evening", "thunderstorm",
+        )
+        assert out is state
 
     def test_none_condition_passes_through(self):
         state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
@@ -613,6 +624,45 @@ class TestFunctionalWeatherBrightness:
         assert apply_functional_weather_brightness(
             state, "gaming", "day", "snow",
         )["1"]["bri"] == 105
+
+    def test_working_day_thunderstorm_applies(self):
+        """Working mode now gets a weather boost (Layer 1 extension)."""
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(
+            state, "working", "day", "thunderstorm",
+        )
+        assert out["1"]["bri"] == 118  # int(100 * 1.18)
+
+    def test_gaming_evening_thunderstorm_applies(self):
+        """Gaming evening now gets a smaller boost during severe weather."""
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(
+            state, "gaming", "evening", "thunderstorm",
+        )
+        assert out["1"]["bri"] == 110  # int(100 * 1.10)
+
+    def test_watching_day_rain_applies_smaller(self):
+        """Watching's projector mode gets a smaller daytime lift to preserve
+        cinematic dim intent."""
+        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        out = apply_functional_weather_brightness(
+            state, "watching", "day", "rain",
+        )
+        assert out["1"]["bri"] == 106  # int(100 * 1.06)
+
+    def test_learner_has_learned_skips_specific_lights(self):
+        """The Layer-5 fade-out: lights with a learned preference bypass the
+        heuristic boost while peers without learning still get it."""
+        state = {
+            "1": {"on": True, "bri": 100, "hue": 8000, "sat": 100},
+            "2": {"on": True, "bri": 100, "hue": 8000, "sat": 100},
+        }
+        out = apply_functional_weather_brightness(
+            state, "gaming", "day", "rain",
+            learner_has_learned={"1"},
+        )
+        assert out["1"]["bri"] == 100  # untouched — learner owns this bucket
+        assert out["2"]["bri"] == 114  # heuristic still applies
 
     def test_hue_and_sat_untouched(self):
         state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}

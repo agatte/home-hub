@@ -1079,20 +1079,68 @@ def apply_weather_adjust(
 # Functional-mode weather brightness — opposite sign from apply_weather_adjust
 # ---------------------------------------------------------------------------
 # Mood-mode weather_adjust DIMS lights on rain/clouds (gloomy mood). For
-# functional modes (gaming) the ambient daylight drop is the problem, not
-# the mood — desk lamps need MORE output when natural light fades. Day-only
-# because evening/night ambient is artificial and weather is irrelevant.
+# functional modes the ambient daylight drop is the problem, not the mood —
+# desk lamps need MORE output when natural light fades.
+#
+# Keyed by (mode, period, condition). Evening/night magnitudes are smaller
+# than day because after sunset the room is artificial-dominant and the
+# weather's contribution to actual luminance is much weaker — too aggressive
+# a multiplier defeats the mode's intentional brightness curve. Day values
+# are larger because outdoor light is the dominant source and storm-driven
+# suppression is real.
+#
 # Composes multiplicatively on top of apply_lux_multiplier so the two
-# compensations stack mildly (rain near-baseline lux: ~1.03 × 1.15 ≈ 1.18).
+# compensations stack mildly. Layer-1 of the weather-aware brightness work
+# (extended 2026-05-18 from gaming-day-only to a 3-axis grid covering
+# gaming/working/watching across day/evening/night).
 
-FUNCTIONAL_WEATHER_BRIGHTNESS_MODES = frozenset(("gaming",))
+FUNCTIONAL_WEATHER_BRIGHTNESS_MODES = frozenset(("gaming", "working", "watching"))
 
-FUNCTIONAL_WEATHER_BRIGHTNESS: dict[str, float] = {
-    "thunderstorm": 1.20,
-    "rain":         1.15,
-    "clouds":       1.10,
-    "snow":         1.05,
+FUNCTIONAL_WEATHER_BRIGHTNESS: dict[tuple[str, str, str], float] = {
+    # gaming — peripheral accents + screen sync; biggest day boost
+    ("gaming",   "day",     "thunderstorm"): 1.20,
+    ("gaming",   "day",     "rain"):         1.15,
+    ("gaming",   "day",     "clouds"):       1.10,
+    ("gaming",   "day",     "snow"):         1.05,
+    ("gaming",   "evening", "thunderstorm"): 1.10,
+    ("gaming",   "evening", "rain"):         1.07,
+    ("gaming",   "evening", "clouds"):       1.05,
+    ("gaming",   "night",   "thunderstorm"): 1.05,
+
+    # working — desk-dominant CT lighting; storms suppress task visibility
+    ("working",  "day",     "thunderstorm"): 1.18,
+    ("working",  "day",     "rain"):         1.12,
+    ("working",  "day",     "clouds"):       1.08,
+    ("working",  "day",     "snow"):         1.04,
+    ("working",  "evening", "thunderstorm"): 1.08,
+    ("working",  "evening", "rain"):         1.05,
+    ("working",  "evening", "clouds"):       1.03,
+
+    # watching — projector mode; smaller lifts to preserve cinematic dim intent
+    ("watching", "day",     "thunderstorm"): 1.10,
+    ("watching", "day",     "rain"):         1.06,
+    ("watching", "day",     "clouds"):       1.04,
 }
+
+
+def get_functional_weather_multiplier(
+    mode: str,
+    period: Optional[str],
+    condition: Optional[str],
+) -> float:
+    """Return the (mode, period, condition) brightness multiplier, or 1.0.
+
+    Single source of truth for both ``apply_functional_weather_brightness``
+    (the bri pipeline) and ``ScreenSyncService._scale_for_ambient`` (the
+    sync-cap envelope). Returns 1.0 for any unmapped bucket — same shape
+    as the prior single-axis ``FUNCTIONAL_WEATHER_BRIGHTNESS.get(cond, 1.0)``
+    call screen_sync used to make directly.
+    """
+    if mode not in FUNCTIONAL_WEATHER_BRIGHTNESS_MODES:
+        return 1.0
+    if period is None or condition is None:
+        return 1.0
+    return FUNCTIONAL_WEATHER_BRIGHTNESS.get((mode, period, condition), 1.0)
 
 
 def apply_functional_weather_brightness(
@@ -1100,26 +1148,29 @@ def apply_functional_weather_brightness(
     mode: str,
     period: str,
     condition: Optional[str],
+    learner_has_learned: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     """Brighten functional-mode lights on dim-ambient weather.
 
-    No-op outside ``FUNCTIONAL_WEATHER_BRIGHTNESS_MODES``, outside
-    ``period == "day"``, or when ``condition`` is None / unmapped.
+    No-op for any (mode, period, condition) without an entry in
+    ``FUNCTIONAL_WEATHER_BRIGHTNESS``. ``learner_has_learned`` is the set
+    of light_ids whose ``(mode, period, condition)`` bucket already has a
+    learned preference — those lights skip the heuristic boost (Layer 5
+    fade-out gate, wired up once the learner is weather-aware).
     """
-    if mode not in FUNCTIONAL_WEATHER_BRIGHTNESS_MODES:
+    mult = get_functional_weather_multiplier(mode, period, condition)
+    if mult == 1.0:
         return state
-    if period != "day":
-        return state
-    if condition is None:
-        return state
-    mult = FUNCTIONAL_WEATHER_BRIGHTNESS.get(condition)
-    if mult is None or mult == 1.0:
-        return state
+
+    skip = learner_has_learned or set()
 
     if _is_per_light_dict(state):
         result: dict[str, Any] = {}
         for lid, ls in state.items():
             ls_copy = ls.copy()
+            if lid in skip:
+                result[lid] = ls_copy
+                continue
             if ls_copy.get("on", True) and "bri" in ls_copy:
                 ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * mult)))
             result[lid] = ls_copy
