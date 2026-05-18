@@ -295,6 +295,75 @@ async def test_log_mode_change_audio_lookup_ignores_stale_rows(ml_db):
     assert rows[0].audio_class is None  # Stale row ignored
 
 
+class _FakeWeatherService:
+    """Stand-in for WeatherService — only get_cached() is consumed."""
+
+    def __init__(self, weather=None) -> None:
+        self._weather = weather
+
+    def get_cached(self):
+        return self._weather
+
+
+@pytest.mark.asyncio
+async def test_log_light_adjustment_captures_weather_class(ml_db):
+    """A wired weather_service populates the new weather_class column."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import LightAdjustment
+
+    weather = _FakeWeatherService(
+        weather={"description": "Thunderstorms in vicinity"},
+    )
+    el = EventLogger(weather_service=weather)
+    await el.log_light_adjustment(
+        light_id="1", bri_before=100, bri_after=180,
+        mode_at_time="gaming", trigger="ws",
+    )
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(LightAdjustment))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].weather_class == "thunderstorm"
+
+
+@pytest.mark.asyncio
+async def test_log_light_adjustment_no_weather_service_writes_null(ml_db):
+    """Without a wired weather_service, weather_class is None (DB NULL)."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import LightAdjustment
+
+    el = EventLogger()  # no weather_service
+    await el.log_light_adjustment(
+        light_id="1", bri_before=100, bri_after=200,
+        mode_at_time="working", trigger="ws",
+    )
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(LightAdjustment))).scalars().all()
+    assert rows[0].weather_class is None
+
+
+@pytest.mark.asyncio
+async def test_log_light_adjustment_caller_weather_class_wins(ml_db):
+    """When the caller passes weather_class explicitly, the service lookup
+    is skipped — useful for synthetic / backfill calls."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import LightAdjustment
+
+    weather = _FakeWeatherService(
+        weather={"description": "Sunny and clear"},
+    )
+    el = EventLogger(weather_service=weather)
+    await el.log_light_adjustment(
+        light_id="1", bri_before=100, bri_after=180,
+        weather_class="rain",  # explicit override
+    )
+    async with ml_db() as session:
+        rows = (await session.execute(sa_select(LightAdjustment))).scalars().all()
+    assert rows[0].weather_class == "rain"
+
+
 @pytest.mark.asyncio
 async def test_log_mode_change_camera_disabled_session_logs_none(ml_db):
     """Camera service present but properties returning None (disabled / not yet committed)

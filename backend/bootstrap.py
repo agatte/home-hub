@@ -202,6 +202,9 @@ async def lifespan(app: FastAPI):
     from backend.services.weather_service import WeatherService
     weather_service = WeatherService()
     app.state.weather_service = weather_service
+    # Wire weather into the event logger so log_light_adjustment captures
+    # weather_class for the LightingLearner weather-aware retrain (Layer 3).
+    event_logger.set_weather_service(weather_service)
     logger.info("Weather service initialized (NWS API)")
 
     # ML services — model manager + learners + fusion. All built before

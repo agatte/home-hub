@@ -43,6 +43,11 @@ async def _run_migrations(conn) -> None:
             await conn.execute(text(f"ALTER TABLE light_adjustments ADD COLUMN {col} INTEGER"))
     if "trigger" not in la_cols:
         await conn.execute(text("ALTER TABLE light_adjustments ADD COLUMN trigger TEXT"))
+    # 2026-05-18: weather_class for LightingLearner weather-aware retrain.
+    # Mirrors the sonos_playback_events pattern below. NULL on pre-migration
+    # rows folds to "any" at retrain time.
+    if "weather_class" not in la_cols:
+        await conn.execute(text("ALTER TABLE light_adjustments ADD COLUMN weather_class TEXT"))
 
     # Camera + audio context columns on activity_events (predictor enrichment)
     result = await conn.execute(text("PRAGMA table_info(activity_events)"))

@@ -43,12 +43,16 @@ _WriteFn = Callable[["async_session"], Awaitable[None]]
 class EventLogger:
     """Thin async wrapper for writing behavioral events to the database."""
 
-    def __init__(self, camera_service=None) -> None:
+    def __init__(self, camera_service=None, weather_service=None) -> None:
         # Optional camera_service reference for enrichment of activity_events
         # with zone/posture/lux at the moment of each mode transition. Late-
         # bind via set_camera_service when bootstrap order has the logger
         # constructed before the camera (current ordering — see bootstrap.py).
         self._camera_service = camera_service
+        # Optional weather_service reference for enrichment of
+        # light_adjustments with weather_class at adjustment time. Late-bound
+        # via set_weather_service for the same boot-order reason.
+        self._weather_service = weather_service
         # Cumulative events dropped by family — both DB-error drops and
         # queue-overflow drops accumulate here so /health shows total loss.
         self._drop_count: dict[str, int] = {
@@ -87,6 +91,30 @@ class EventLogger:
     def set_camera_service(self, camera_service) -> None:
         """Inject the camera service (called from lifespan after camera starts)."""
         self._camera_service = camera_service
+
+    def set_weather_service(self, weather_service) -> None:
+        """Inject the weather service (called from lifespan after weather starts)."""
+        self._weather_service = weather_service
+
+    def _resolve_weather_class(self) -> Optional[str]:
+        """Return classify_for_bandit() of the cached observation, or None.
+
+        Mirrors MusicMapper._current_weather_class but folds the WEATHER_ANY
+        sentinel back to None so log_light_adjustment can write NULL into
+        the DB column when no observation is available yet (retrain folds
+        NULL → "any" — see backend.services.ml.weather_class).
+        """
+        if not self._weather_service:
+            return None
+        try:
+            from backend.services.weather_class import (
+                WEATHER_ANY, classify_for_bandit,
+            )
+            weather = self._weather_service.get_cached()
+            cls = classify_for_bandit(weather)
+            return None if cls == WEATHER_ANY else cls
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------ public
 
@@ -235,8 +263,16 @@ class EventLogger:
         ct_after: Optional[int] = None,
         mode_at_time: Optional[str] = None,
         trigger: Optional[str] = None,
+        weather_class: Optional[str] = None,
     ) -> None:
-        """Record a light change issued from the dashboard or an API client."""
+        """Record a light change issued from the dashboard or an API client.
+
+        ``weather_class`` (clear / clouds / rain / thunderstorm / snow /
+        golden_hour) captured at adjustment time enables the LightingLearner
+        weather-aware retrain. NULL when the weather service hasn't polled
+        yet or the caller didn't pass it — retrain folds those rows into
+        the "any" bucket.
+        """
         # Skip if nothing actually changed — avoids noise from heartbeat writes
         # and slider debouncing that lands on the same value.
         changed = any(
@@ -250,6 +286,9 @@ class EventLogger:
         )
         if not changed:
             return
+
+        if weather_class is None:
+            weather_class = self._resolve_weather_class()
 
         async def _write(session) -> None:
             session.add(LightAdjustment(
@@ -265,6 +304,7 @@ class EventLogger:
                 ct_after=ct_after,
                 mode_at_time=mode_at_time,
                 trigger=trigger,
+                weather_class=weather_class,
             ))
 
         await self._write("light", _write)

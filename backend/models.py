@@ -200,6 +200,11 @@ class LightAdjustment(Base):
     mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # trigger: "ws", "rest", "scene", "automation", "all_lights"
     trigger: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # weather_class: classify_for_bandit() output captured at adjustment time.
+    # Values: "clear" | "clouds" | "rain" | "thunderstorm" | "snow" |
+    # "golden_hour". NULL on pre-migration rows; LightingLearner retrain
+    # folds NULL → "any" (same pattern as sonos_playback_events).
+    weather_class: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
 
 class SonosPlaybackEvent(Base):
