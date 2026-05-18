@@ -50,8 +50,14 @@ class _FakeAutomation:
             {"states": states, "duration": duration_seconds, "transition": transition_time}
         )
 
-    async def clear_transit_override(self, transition_time=30):
-        self.clear_calls.append({"transition": transition_time})
+    async def clear_transit_override(self, light_ids=None, transition_time=30):
+        # Production widened this signature on 2026-05-18 (537b647) so
+        # transit can scope its clear to its own owned lights instead of
+        # stomping DeskExitKitchenService overrides in the shared
+        # _transit_light_overrides dict.
+        self.clear_calls.append(
+            {"light_ids": light_ids, "transition": transition_time}
+        )
 
 
 class _FakeCamera:
@@ -576,7 +582,11 @@ class TestNavigationStates:
             "backend.services.transit_lighting_service.datetime",
             _FrozenDatetime(2026, 4, 26, 23, 30),
         )
-        states = svc._navigation_states()
+        # `relax` skips the productive-evening yield so the kitchen pair
+        # stays in transit's payload. Mode arg added 2026-05-18 (88725d8)
+        # when DeskExitKitchenService owned the kitchen during productive
+        # evening/night windows.
+        states = svc._navigation_states("relax")
         assert states["1"]["bri"] == 60
         assert states["3"]["bri"] == 40
         assert states["4"]["bri"] == 40
@@ -588,10 +598,26 @@ class TestNavigationStates:
             "backend.services.transit_lighting_service.datetime",
             _FrozenDatetime(2026, 4, 26, 19, 0),
         )
-        states = svc._navigation_states()
+        # `relax` outside the productive yield (working/gaming/watching/
+        # idle + evening/late_night) keeps kitchen in the payload.
+        states = svc._navigation_states("relax")
         assert states["1"]["bri"] == 120
         assert states["3"]["bri"] == 80
         assert states["4"]["bri"] == 80
+
+    def test_productive_evening_yields_kitchen_to_desk_exit(self, monkeypatch):
+        """In productive modes during evening/night, transit cedes the
+        kitchen pair to DeskExitKitchenService so the two don't fight."""
+        svc, _, _ = _make_service()
+        monkeypatch.setattr(
+            "backend.services.transit_lighting_service.datetime",
+            _FrozenDatetime(2026, 4, 26, 21, 0),  # evening
+        )
+        states = svc._navigation_states("working")
+        # L1 still painted; L3 + L4 yielded to DeskExitKitchen.
+        assert "1" in states
+        assert "3" not in states
+        assert "4" not in states
 
 
 class _FrozenDatetime:
