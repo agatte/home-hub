@@ -122,6 +122,23 @@ LUX_NEUTRAL_LUX = 90.0
 LUX_MULT_EPSILON = 0.08      # Skip re-apply if multiplier change < 8%
 LUX_STALE_SECONDS = 30       # Ignore readings older than this
 
+# Weather-class baseline shift applied at apply_lux_multiplier time. POSITIVE
+# values RAISE the effective baseline so the same measured lux looks deeper
+# into "below baseline" territory — the LUX_CURVE trips earlier into the
+# lift region, defeating the 8% dead-band that would otherwise suppress a
+# small lux drop during gloomy weather. Real-world: a thunderstorm dropping
+# the room from baseline=143 to ema_lux=134 (6.5% drop, inside dead-band,
+# no boost) becomes effective baseline 173 vs lux 134 — 22% effective drop,
+# multiplier lifts to ~1.16. Layer 2 of the weather-aware brightness work.
+LUX_WEATHER_BASELINE_SHIFT: dict[str, float] = {
+    "thunderstorm": 30.0,
+    "rain":         15.0,
+    "clouds":       10.0,
+    "snow":          8.0,    # high albedo offsets some darkening
+    "golden_hour":   0.0,
+    "clear":         0.0,
+}
+
 
 def lux_to_multiplier(lux: float, baseline: float = 90.0) -> float:
     """Piecewise-linear interpolation across LUX_CURVE anchors.
@@ -771,6 +788,7 @@ def apply_lux_multiplier(
     lux_reading: Optional[float],
     last_multiplier: float,
     baseline_lux: Optional[float] = None,
+    weather_class: Optional[str] = None,
 ) -> tuple[dict[str, Any], float]:
     """Adjust per-light brightness by camera-derived ambient lux.
 
@@ -779,6 +797,13 @@ def apply_lux_multiplier(
     function returns the multiplier that should be remembered for
     next tick (which may be the same ``last_multiplier`` if the new
     raw reading is within ``LUX_MULT_EPSILON``, or a fresh value).
+
+    ``weather_class`` (clear / clouds / rain / thunderstorm / snow /
+    golden_hour / None) applies a baseline shift from
+    ``LUX_WEATHER_BASELINE_SHIFT`` — stormy weather RAISES the effective
+    baseline so the same lux reading lands deeper in the curve's lift
+    region (a small lux drop produces a larger multiplier lift instead
+    of being dead-banded). Default ``None`` is a no-op shift.
 
     Returns ``(new_state, new_last_multiplier)``. Engine stores the
     second element back into ``self._last_lux_multiplier``.
@@ -791,10 +816,11 @@ def apply_lux_multiplier(
     if mode not in LUX_MODES or lux_reading is None:
         return state, last_multiplier
 
-    raw_mult = lux_to_multiplier(
-        float(lux_reading),
-        float(baseline_lux) if baseline_lux else 90.0,
-    )
+    effective_baseline = float(baseline_lux) if baseline_lux else 90.0
+    if weather_class:
+        effective_baseline += LUX_WEATHER_BASELINE_SHIFT.get(weather_class, 0.0)
+
+    raw_mult = lux_to_multiplier(float(lux_reading), effective_baseline)
     # Hysteresis: stay on the last multiplier if the new raw value is
     # within epsilon — keeps the resulting state dict bit-identical so
     # the per-light dedupe downstream skips bridge writes.

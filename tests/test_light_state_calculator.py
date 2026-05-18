@@ -254,6 +254,60 @@ class TestApplyLuxMultiplier:
         # without revisiting the spam analysis in the notifier plan.
         assert LUX_MULT_EPSILON == 0.08
 
+    def test_weather_baseline_shift_pushes_across_dead_band(self):
+        """The exact symptom from 2026-05-18: thunderstorm + small lux drop
+        gets dead-band suppressed without the shift. Shift raises baseline
+        so the same reading produces a multiplier that crosses 8% epsilon."""
+        state = {"1": {"on": True, "bri": 100}}
+        # Real values: ema_lux=134, baseline=143, last_mult=1.0.
+        # No shift: effective = 134 - 143 + 90 = 81 → between (40,1.20)(90,1.00)
+        # frac=0.82 → raw_mult = 1.036. Diff from 1.0 is 0.036 < 0.08 → 1.0.
+        _, mult_clear = apply_lux_multiplier(
+            state, "working", lux_reading=134.0,
+            last_multiplier=1.0, baseline_lux=143.0,
+            weather_class="clear",
+        )
+        assert mult_clear == 1.0  # Dead-band suppressed.
+        # With thunderstorm +30: effective_baseline=173.
+        # effective = 134 - 173 + 90 = 51 → between (40,1.20)(90,1.00)
+        # frac=(51-40)/50=0.22 → raw_mult = 1.20 + 0.22*(-0.20) = 1.156.
+        # Diff from 1.0 is 0.156 > 0.08 → applied.
+        _, mult_storm = apply_lux_multiplier(
+            state, "working", lux_reading=134.0,
+            last_multiplier=1.0, baseline_lux=143.0,
+            weather_class="thunderstorm",
+        )
+        assert mult_storm > 1.05
+        assert mult_storm > mult_clear
+
+    def test_weather_shift_monotonic_storm_intensity(self):
+        """Heavier weather → bigger lift at near-baseline lux."""
+        state = {"1": {"on": True, "bri": 100}}
+        common = dict(
+            state=state, mode="working",
+            lux_reading=134.0, last_multiplier=1.0, baseline_lux=143.0,
+        )
+        _, mult_clear = apply_lux_multiplier(**common, weather_class="clear")
+        _, mult_clouds = apply_lux_multiplier(**common, weather_class="clouds")
+        _, mult_rain = apply_lux_multiplier(**common, weather_class="rain")
+        _, mult_storm = apply_lux_multiplier(**common,
+                                             weather_class="thunderstorm")
+        assert mult_clear <= mult_clouds <= mult_rain <= mult_storm
+
+    def test_weather_shift_noop_when_none(self):
+        """No weather_class arg → behavior matches pre-Layer-2 path."""
+        state = {"1": {"on": True, "bri": 100}}
+        _, mult_no_arg = apply_lux_multiplier(
+            state, "working", lux_reading=60.0,
+            last_multiplier=1.0, baseline_lux=90.0,
+        )
+        _, mult_clear = apply_lux_multiplier(
+            state, "working", lux_reading=60.0,
+            last_multiplier=1.0, baseline_lux=90.0,
+            weather_class="clear",
+        )
+        assert mult_no_arg == mult_clear
+
 
 # ---------------------------------------------------------------------------
 # apply_zone_overlay — desk lift + bed-reclined lower

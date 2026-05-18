@@ -699,10 +699,17 @@ class AutomationEngine:
         camera enabled/paused/calibrated). Hysteresis state lives here:
         the calculator returns the new last-multiplier value, which we
         store back on ``self._last_lux_multiplier``.
+
+        Weather class is threaded in so the calculator can shift the
+        effective baseline — storms drop the baseline so the same lux
+        reading lands deeper in the curve's lift region (Layer 2 of the
+        weather-aware brightness work).
         """
         ema, baseline = self._read_fresh_camera_lux()
+        weather = self._get_current_weather_condition()
         new_state, new_mult = _calc_apply_lux_multiplier(
             state, mode, ema, self._last_lux_multiplier, baseline,
+            weather_class=weather,
         )
         self._last_lux_multiplier = new_mult
         return new_state
