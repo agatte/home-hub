@@ -460,6 +460,32 @@ class EmotionCapture:
         self._posture_confidence = None
         self._pose_init_failed = False
 
+    # Throttle for the pose diag line — ephemeral, used to tune
+    # HEAD_ABOVE_SHOULDER_UPRIGHT_MIN / SLOUCHED_MAX against real desk
+    # geometry. Remove this method + its call site once thresholds are
+    # calibrated.
+    _POSE_DIAG_INTERVAL_S: float = 30.0
+    _last_pose_diag_at: float = 0.0
+
+    def _maybe_log_pose_diag(
+        self,
+        head_drop: Optional[float],
+        fallback_ratio: Optional[float],
+        candidate: Optional[str],
+    ) -> None:
+        """One INFO line per ~30s with the real ratio values for tuning."""
+        now = time.monotonic()
+        if now - self._last_pose_diag_at < self._POSE_DIAG_INTERVAL_S:
+            return
+        self._last_pose_diag_at = now
+        logger.info(
+            "pose-diag: head_drop=%s fallback_ratio=%s cand=%s committed=%s",
+            f"{head_drop:.3f}" if head_drop is not None else "None",
+            f"{fallback_ratio:.3f}" if fallback_ratio is not None else "None",
+            candidate,
+            self._posture_committed,
+        )
+
     # ── enable flags ────────────────────────────────────────────────
 
     def set_enabled(
@@ -694,6 +720,7 @@ class EmotionCapture:
         # visibility floor; the desktop's frontal-close-range view
         # frequently doesn't (desk lip / camera-above-monitor geometry).
         head_drop = _compute_head_drop_ratio(pose_landmarks_list[0])
+        fallback_ratio: Optional[float] = None
         if head_drop is not None:
             candidate, confidence = _classify_posture(
                 head_drop, prior=self._posture_committed,
@@ -704,12 +731,17 @@ class EmotionCapture:
             # which the desktop frontal view captures at ceiling
             # confidence (validated 2026-05-18 via the temporary
             # pose-diag log path).
-            ratio = _compute_head_above_shoulders_ratio(
+            fallback_ratio = _compute_head_above_shoulders_ratio(
                 pose_landmarks_list[0],
             )
             candidate, confidence = _classify_posture_from_shoulders(
-                ratio, prior=self._posture_committed,
+                fallback_ratio, prior=self._posture_committed,
             )
+        self._maybe_log_pose_diag(
+            head_drop=head_drop,
+            fallback_ratio=fallback_ratio,
+            candidate=candidate,
+        )
         self._update_posture_candidate(candidate, confidence)
         return self._posture_committed, self._posture_confidence
 
