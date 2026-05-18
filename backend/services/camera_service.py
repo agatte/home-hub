@@ -162,6 +162,18 @@ POSTURE_RECLINED = "reclined"
 # For Anthony at 2–3m in profile, typical uprights produce ~0.20 and
 # reclined ~0.05 — 0.12 splits the distribution cleanly.
 POSTURE_UPRIGHT_MIN_DELTA = 0.12
+# Higher visibility floor for HIP landmarks specifically. MediaPipe Pose
+# extrapolates occluded landmarks with visibility ≥0.5 — at the desk
+# the hips hide behind the monitor/chair and the extrapolated values
+# collapse to ~shoulder_y, producing a near-zero delta and a false
+# "reclined" classification. Truly-visible hips score 0.95+; 0.8 keeps
+# real readings and rejects extrapolations.
+MIN_POSE_VISIBILITY_HIP = 0.8
+# Anatomical floor on the hip-shoulder Y delta. Real reclined posture
+# (Anthony in profile) produces ~0.05; values below that are geometrically
+# implausible — extrapolated/collapsed landmarks. Return None and let
+# hysteresis preserve the prior commit rather than emit a false reclined.
+POSTURE_MIN_ANATOMICAL_DELTA = 0.05
 # Hysteresis mirrors the zone rule (15s sustained before commit).
 POSTURE_HYSTERESIS_SECONDS = 15
 
@@ -1162,6 +1174,20 @@ class CameraService:
         """
         now = datetime.now(timezone.utc)
 
+        # Posture is meaningful only when the user is in the bed zone. At the
+        # desk the user is by definition seated and any "reclined" call is
+        # noise from hip extrapolation (the desk occludes hips; MediaPipe
+        # places the landmark at chest level → small delta → false reclined).
+        # No automation rule consumes desk+posture today — clear any stale
+        # commit and let bed-zone observations be the only source.
+        if self._last_zone == ZONE_DESK:
+            if self._last_posture is not None or self._candidate_posture is not None:
+                self._last_posture = None
+                self._last_posture_at = None
+                self._candidate_posture = None
+                self._candidate_posture_since = None
+            return
+
         if candidate is None:
             # Face path can't classify posture (no torso landmarks). When the
             # camera observes a person but pose didn't fire this frame, the
@@ -1290,19 +1316,27 @@ class CameraService:
             return None
         landmarks = pose_result.pose_landmarks[0]
 
-        def _mean_y(indices: tuple[int, ...]) -> Optional[float]:
+        def _mean_y(
+            indices: tuple[int, ...],
+            min_vis: float = MIN_POSE_VISIBILITY,
+        ) -> Optional[float]:
             ys = [
                 float(landmarks[i].y) for i in indices
                 if i < len(landmarks)
-                and float(getattr(landmarks[i], "visibility", 0.0)) >= MIN_POSE_VISIBILITY
+                and float(getattr(landmarks[i], "visibility", 0.0)) >= min_vis
             ]
             return sum(ys) / len(ys) if ys else None
 
         shoulder_y = _mean_y((POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER))
-        hip_y = _mean_y((POSE_LEFT_HIP, POSE_RIGHT_HIP))
+        hip_y = _mean_y(
+            (POSE_LEFT_HIP, POSE_RIGHT_HIP),
+            min_vis=MIN_POSE_VISIBILITY_HIP,
+        )
         if shoulder_y is None or hip_y is None:
             return None
         delta = hip_y - shoulder_y
+        if delta < POSTURE_MIN_ANATOMICAL_DELTA:
+            return None
         return POSTURE_UPRIGHT if delta >= POSTURE_UPRIGHT_MIN_DELTA else POSTURE_RECLINED
 
     def _process_frame(self) -> Optional[dict]:

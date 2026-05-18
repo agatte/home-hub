@@ -380,6 +380,48 @@ class TestFreshnessRefreshOnConfirm:
 
         assert service._last_posture_at is None
 
+    def test_posture_cleared_when_zone_is_desk(self):
+        """Fix B: desk zone occludes hips behind monitor/chair; MediaPipe
+        extrapolates them at chest level → false reclined. No automation
+        rule consumes desk+posture, so the cleanest fix is to clear any
+        committed posture whenever the user is in the desk zone. Bed-zone
+        observations remain the only source of committed posture."""
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "desk"
+        service._last_posture = "reclined"  # Stale from a prior bed observation.
+        service._last_posture_at = old
+        service._candidate_posture = "upright"
+        service._candidate_posture_since = old
+
+        service._apply_posture_hysteresis("reclined")
+
+        assert service._last_posture is None
+        assert service._last_posture_at is None
+        assert service._candidate_posture is None
+        assert service._candidate_posture_since is None
+
+    def test_posture_preserved_when_zone_is_bed(self):
+        """Regression check for Fix B: the desk-clear branch must not
+        leak into the bed zone — bed-zone observations are the entire
+        point of the posture pipeline."""
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = "bed"
+        service._last_posture = "reclined"
+        service._last_posture_at = old
+
+        service._apply_posture_hysteresis("reclined")
+
+        # Steady-state refresh path applied — posture preserved, timestamp bumped.
+        assert service._last_posture == "reclined"
+        assert service._last_posture_at is not None
+        assert service._last_posture_at > old
+
     @pytest.mark.asyncio
     async def test_maybe_notify_fires_on_zone_transition(self):
         """When _last_zone transitions None → "bed" between calls,
@@ -602,6 +644,79 @@ class TestFreshnessRefreshOnConfirm:
             datetime.now(timezone.utc) - service._last_zone_at
         ).total_seconds()
         assert zone_age < ZONE_POSTURE_FRESHNESS_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# Posture classification (Fix A — visibility floor + anatomical guard)
+# ---------------------------------------------------------------------------
+
+
+def _mock_pose_result(
+    *,
+    shoulder_y: float,
+    shoulder_vis: float = 0.99,
+    hip_y: float,
+    hip_vis: float = 0.99,
+):
+    """Build a fake pose_result populating only the 4 torso landmarks
+    `_evaluate_posture` actually reads (shoulders + hips)."""
+    Landmark = namedtuple("Landmark", ["y", "visibility"])
+    lms = [Landmark(0.0, 0.0)] * 25
+    lms[11] = Landmark(shoulder_y, shoulder_vis)  # POSE_LEFT_SHOULDER
+    lms[12] = Landmark(shoulder_y, shoulder_vis)  # POSE_RIGHT_SHOULDER
+    lms[23] = Landmark(hip_y, hip_vis)            # POSE_LEFT_HIP
+    lms[24] = Landmark(hip_y, hip_vis)            # POSE_RIGHT_HIP
+    result = MagicMock()
+    result.pose_landmarks = [lms]
+    return result
+
+
+class TestEvaluatePosture:
+    """Hip-visibility floor (Fix A) rejects MediaPipe's extrapolated
+    occluded landmarks; the anatomical-delta floor catches collapsed
+    cases that slip past visibility. Together they kill the
+    desk-83%-reclined false-classification observed 2026-05-17."""
+
+    def test_visible_upright_returns_upright(self):
+        """Regression: full visibility + healthy delta still works."""
+        service = _make_service()
+        pose = _mock_pose_result(shoulder_y=0.30, hip_y=0.55)  # delta=0.25
+        assert service._evaluate_posture(pose) == "upright"
+
+    def test_visible_reclined_returns_reclined(self):
+        """Regression: full visibility + small-but-anatomical delta still
+        classifies reclined (Anthony's empirical ~0.05 baseline)."""
+        service = _make_service()
+        pose = _mock_pose_result(shoulder_y=0.40, hip_y=0.47)  # delta=0.07
+        assert service._evaluate_posture(pose) == "reclined"
+
+    def test_low_hip_visibility_returns_none(self):
+        """Fix A: hip visibility 0.6 falls below MIN_POSE_VISIBILITY_HIP
+        (0.8). Even though delta would classify reclined, treating an
+        extrapolated landmark as a real observation is the bug we're
+        fixing — return None and let hysteresis preserve the prior."""
+        service = _make_service()
+        pose = _mock_pose_result(
+            shoulder_y=0.40, shoulder_vis=0.99,
+            hip_y=0.45, hip_vis=0.6,  # below 0.8 floor
+        )
+        assert service._evaluate_posture(pose) is None
+
+    def test_collapsed_delta_returns_none(self):
+        """Fix A: extrapolated occluded hips can clear the visibility
+        floor but produce a near-zero delta (chest-level placement).
+        The anatomical floor (0.05) rejects these as geometrically
+        implausible."""
+        service = _make_service()
+        pose = _mock_pose_result(shoulder_y=0.40, hip_y=0.42)  # delta=0.02
+        assert service._evaluate_posture(pose) is None
+
+    def test_inverted_geometry_returns_none(self):
+        """Fix A: hip Y above shoulder Y (negative delta) is a model
+        error, not a posture. Return None."""
+        service = _make_service()
+        pose = _mock_pose_result(shoulder_y=0.50, hip_y=0.40)  # delta=-0.10
+        assert service._evaluate_posture(pose) is None
 
 
 # ---------------------------------------------------------------------------
