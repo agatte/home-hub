@@ -30,7 +30,6 @@ import logging
 import signal
 import sys
 import threading
-import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -105,11 +104,18 @@ POSTURE_HYSTERESIS_FRAMES = 3
 #
 # Sign flipped vs head_drop: HIGH ratio = head well above shoulders =
 # upright; LOW ratio = head dropped toward shoulder line = slouched.
-# Bands and threshold are initial guesses based on typical frontal
-# desktop framing; the pose-diag log captures actual values for tuning.
-HEAD_ABOVE_SHOULDER_UPRIGHT_MIN = 0.55  # ratio ≥ this → upright
-HEAD_ABOVE_SHOULDER_SLOUCHED_MAX = 0.45  # ratio ≤ this → slouched
-HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER = 0.50  # for confidence calc
+#
+# Calibrated 2026-05-18 against Anthony's desk geometry. A 25-frame
+# diag pass over ~13 minutes showed natural posture clustering at
+# ratio 0.30–0.47 (median 0.385), with a single deliberate-upright
+# moment hitting 0.55. The wide dead-band [0.30, 0.50] means the
+# natural posture sits in "no commit" territory — the classifier only
+# fires upright when Anthony sits up tall and only fires slouched when
+# he visibly slumps. Outliers (pose detector single-frame glitches
+# producing ratios < 0.05) get muted by the 3-frame streak hysteresis.
+HEAD_ABOVE_SHOULDER_UPRIGHT_MIN = 0.50  # ratio ≥ this → upright
+HEAD_ABOVE_SHOULDER_SLOUCHED_MAX = 0.30  # ratio ≤ this → slouched
+HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER = 0.40  # for confidence calc
 
 HTTP_TIMEOUT_S = 5.0
 
@@ -460,32 +466,6 @@ class EmotionCapture:
         self._posture_confidence = None
         self._pose_init_failed = False
 
-    # Throttle for the pose diag line — ephemeral, used to tune
-    # HEAD_ABOVE_SHOULDER_UPRIGHT_MIN / SLOUCHED_MAX against real desk
-    # geometry. Remove this method + its call site once thresholds are
-    # calibrated.
-    _POSE_DIAG_INTERVAL_S: float = 30.0
-    _last_pose_diag_at: float = 0.0
-
-    def _maybe_log_pose_diag(
-        self,
-        head_drop: Optional[float],
-        fallback_ratio: Optional[float],
-        candidate: Optional[str],
-    ) -> None:
-        """One INFO line per ~30s with the real ratio values for tuning."""
-        now = time.monotonic()
-        if now - self._last_pose_diag_at < self._POSE_DIAG_INTERVAL_S:
-            return
-        self._last_pose_diag_at = now
-        logger.info(
-            "pose-diag: head_drop=%s fallback_ratio=%s cand=%s committed=%s",
-            f"{head_drop:.3f}" if head_drop is not None else "None",
-            f"{fallback_ratio:.3f}" if fallback_ratio is not None else "None",
-            candidate,
-            self._posture_committed,
-        )
-
     # ── enable flags ────────────────────────────────────────────────
 
     def set_enabled(
@@ -720,7 +700,6 @@ class EmotionCapture:
         # visibility floor; the desktop's frontal-close-range view
         # frequently doesn't (desk lip / camera-above-monitor geometry).
         head_drop = _compute_head_drop_ratio(pose_landmarks_list[0])
-        fallback_ratio: Optional[float] = None
         if head_drop is not None:
             candidate, confidence = _classify_posture(
                 head_drop, prior=self._posture_committed,
@@ -730,18 +709,13 @@ class EmotionCapture:
             # aren't visible. Uses only nose + both shoulders, both of
             # which the desktop frontal view captures at ceiling
             # confidence (validated 2026-05-18 via the temporary
-            # pose-diag log path).
-            fallback_ratio = _compute_head_above_shoulders_ratio(
+            # pose-diag log path; thresholds calibrated from that pass).
+            ratio = _compute_head_above_shoulders_ratio(
                 pose_landmarks_list[0],
             )
             candidate, confidence = _classify_posture_from_shoulders(
-                fallback_ratio, prior=self._posture_committed,
+                ratio, prior=self._posture_committed,
             )
-        self._maybe_log_pose_diag(
-            head_drop=head_drop,
-            fallback_ratio=fallback_ratio,
-            candidate=candidate,
-        )
         self._update_posture_candidate(candidate, confidence)
         return self._posture_committed, self._posture_confidence
 

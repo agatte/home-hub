@@ -280,12 +280,17 @@ def test_classify_from_shoulders_clearly_slouched() -> None:
 
 
 def test_classify_from_shoulders_dead_band_preserves_prior() -> None:
-    # Ratio exactly at the threshold center → dead-band → keep prior
-    posture, _ = _classify_posture_from_shoulders(ratio=0.50, prior=POSTURE_UPRIGHT)
+    # Pick a ratio strictly between SLOUCHED_MAX and UPRIGHT_MIN so the
+    # dead-band path fires. The exact value of THRESHOLD_CENTER (0.40
+    # post-tuning) lives strictly inside that band.
+    mid_band = (
+        HEAD_ABOVE_SHOULDER_SLOUCHED_MAX + HEAD_ABOVE_SHOULDER_UPRIGHT_MIN
+    ) / 2.0
+    posture, _ = _classify_posture_from_shoulders(ratio=mid_band, prior=POSTURE_UPRIGHT)
     assert posture == POSTURE_UPRIGHT
-    posture, _ = _classify_posture_from_shoulders(ratio=0.50, prior=POSTURE_SLOUCHED)
+    posture, _ = _classify_posture_from_shoulders(ratio=mid_band, prior=POSTURE_SLOUCHED)
     assert posture == POSTURE_SLOUCHED
-    posture, _ = _classify_posture_from_shoulders(ratio=0.50, prior=None)
+    posture, _ = _classify_posture_from_shoulders(ratio=mid_band, prior=None)
     assert posture is None
 
 
