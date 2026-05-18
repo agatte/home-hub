@@ -237,7 +237,7 @@
             checked={settings.personality_enabled}
             on:change={(e) => toggleSetting('personality_enabled', e.currentTarget.checked)}
           />
-          <span><strong>Personality master kill switch</strong> — disables every sub-feature</span>
+          <span><strong>Personality layer</strong> — master switch for emotion detection, mood-ring light, and the AI scene picker</span>
         </label>
         <label class="toggle" class:disabled={!settings.personality_enabled}>
           <input
@@ -246,7 +246,7 @@
             disabled={!settings.personality_enabled}
             on:change={(e) => toggleSetting('emotion_enabled', e.currentTarget.checked)}
           />
-          <span><strong>Emotion detection</strong> — face blendshapes via FaceLandmarker (camera must also be on)</span>
+          <span><strong>Emotion detection</strong> — face blendshapes via FaceLandmarker (requires the camera service to also be enabled)</span>
         </label>
         <label class="toggle" class:disabled={!settings.personality_enabled}>
           <input
@@ -255,7 +255,7 @@
             disabled={!settings.personality_enabled}
             on:change={(e) => toggleSetting('mood_ring_enabled', e.currentTarget.checked)}
           />
-          <span><strong>Mood-ring light</strong> — passive output (ships Phase B; no effect yet)</span>
+          <span><strong>Mood-ring light</strong> — accent light reflects your mood vector (Phase B; no effect until shipped)</span>
         </label>
       </div>
 
