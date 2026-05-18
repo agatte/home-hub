@@ -183,7 +183,10 @@ async def _maybe_refit_bias() -> dict:
 
     Only refit once we have at least MIN_CALIBRATION_SAMPLES_FOR_BIAS_FIT
     matched (detector-non-null) self-reports. Bias is persisted to
-    app_settings and re-read by EmotionService on next ``set_enabled``.
+    app_settings; takes effect at next server restart (when
+    ``EmotionService.start()`` calls ``_load_bias()``). Phase B prep
+    will add ``await self._load_bias()`` inside ``set_enabled`` for
+    live-reload, but Phase A only reloads at boot.
     """
     async with async_session() as session:
         result = await session.execute(

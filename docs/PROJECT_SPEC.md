@@ -216,6 +216,7 @@ Browser / Phone (PWA)
    │   ├── MusicBandit ────────────> Thompson-sampling playlist selection
    │   ├── FeatureBuilder ─────────> temporal + behavioral feature extraction (training + runtime)
    │   └── ModelManager ───────────> model persistence + nightly retraining (4 AM)
+   ├── EmotionService ─────────────> MediaPipe FaceLandmarker blendshapes → mood vector (Phase A shadow, opt-in). See docs/PERSONALITY_LAYER.md.
    ├── FauxmoService ──────────────> Alexa voice control (7 WeMo virtual devices)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
@@ -553,6 +554,55 @@ Written nightly by `MLDecisionLogger.persist_accuracy_metrics()` from the
 row per source per UTC day; idempotent via delete-then-insert on
 (date, metric_name).
 
+**mood_samples** — AI Personality Layer (Phase A) shadow log
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| timestamp | DateTime | UTC, indexed |
+| valence | Float | [-1, 1] |
+| arousal | Float | [-1, 1] |
+| focus | Float | [0, 1] |
+| confidence | Float | Upstream face confidence at the time of extraction |
+| factors | JSON | `{face_confidence, audio_arousal, top_blendshapes: [...]}`; `audio_arousal` always null in Phase A (face-only) |
+
+Rolling 7-day retention pruned at boot from `_run_migrations`. One row per
+`PERSIST_INTERVAL_S` (10s) when `emotion_enabled=true` and a confident face
+is being seen.
+
+**mood_calibration** — User self-report against detector reading
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| timestamp | DateTime | UTC, indexed |
+| self_valence | Float | User-reported [-1, 1] |
+| self_arousal | Float | User-reported [-1, 1] |
+| self_focus | Float | User-reported [0, 1] |
+| detected_valence | Float | Nullable; detector reading at submit time |
+| detected_arousal | Float | Nullable |
+| detected_focus | Float | Nullable |
+| detected_confidence | Float | Nullable |
+
+Persistent (no retention sweep). Per-axis bias auto-refits on POST `/api/personality/calibration`
+once ≥10 rows with `detected_valence IS NOT NULL` exist; result written to
+`app_settings["mood_calibration_bias"]`.
+
+**vibe_requests** — Phase C `/api/personality/vibe` Claude-routed request log
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| timestamp | DateTime | UTC, indexed |
+| transcript | String(500) | Free-form Alexa slot text |
+| response | JSON | Nullable; Claude's structured `{mode, light_overrides, playlist_hint, tts_response}` |
+| applied | Boolean | Whether the response was actuated |
+| cache_hit | Boolean | 24h SHA256 transcript cache |
+| cost_usd | Float | Anthropic billing for this request (Haiku ~$0.001) |
+| latency_ms | Float | Nullable |
+| source | String(50) | Caller attribution (`api`, `alexa:vibe`) |
+
+Phase A creates this table forward-compatibly so Phase C ships without
+another migration. No rows are written until VibeRouter lands (GH#59).
+Persistent (no retention sweep) for cost auditing.
+
 ### Future Database Tables
 
 Not yet in `backend/models.py`. Listed here so the schema shape is decided when they land.
@@ -812,6 +862,19 @@ All messages are JSON with `type` + `data` fields.
 
 WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `gameday_play` (per new scoring play), `gameday_celebration` (when CelebrationOrchestrator fires a sequence). Mode-flip auto-fires at T-30 pre-kickoff via `automation.set_manual_override("gameday", source="gameday:auto")`; T+30 post-game auto-clear conditional on `automation.override_source` still being `gameday:auto` (skips if user overrode mid-game). Originally projected `/status`, `/mode`, `/celebrations`, `/config` endpoints weren't needed — mode flips ride the standard `/api/automation/override`, celebration history is journalctl-only (see retention note above), config is hardcoded in `CelebrationOrchestrator.SEQUENCES`.
 
+#### Personality — `/api/personality/` **(Phase A live 2026-05-18)**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/personality/mood/current` | Live mood vector `{valence, arousal, focus, confidence, ts, factors, preview_hsv}`; returns `{vector: null, reason}` when stale, disabled, or no fresh face |
+| GET | `/api/personality/mood/history?hours=N` | Up to 168h (7-day) of `mood_samples` rows for plotting; capped at the rolling-retention window |
+| POST | `/api/personality/calibration` | Submit self-report `{self_valence, self_arousal, self_focus, detected_*}`. Triggers `_maybe_refit_bias` — at ≥10 paired samples writes `mood_calibration_bias` to app_settings (per-axis mean(self - detected), clamped) |
+| GET | `/api/personality/calibration/history?limit=N` | Self-report rows newest-first, limit ≤ 500 |
+| GET | `/api/personality/settings` | All five sub-toggles + current `calibration_bias` (read-only snapshot) |
+| POST | `/api/personality/settings` | Partial-update any of `personality_enabled`, `emotion_enabled`, `mood_ring_enabled`, `mood_ring_light_id`. Flipping `emotion_enabled` calls `EmotionService.set_enabled(...)` which lazy-loads FaceLandmarker on first true-flip |
+
+Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`). Full spec: `docs/PERSONALITY_LAYER.md`. Phase B endpoints (`/blendshape` POST for desktop-camera capture, GH#64) and Phase C (`/vibe` POST for Claude routing, GH#59) ship in their respective phases.
+
 #### Widgets — `/api/widgets/` **(future)**
 
 | Method | Path | Purpose |
@@ -955,6 +1018,21 @@ Manages Alexa virtual device registration and command handling. 7 virtual WeMo d
 | `_handle_command` | `(device, state) → None` | Route command to API |
 
 **Virtual devices:** "gaming mode", "relax mode", "cooking mode", "bedtime", "music play", "music pause"
+
+#### EmotionService (Phase A live 2026-05-18)
+Subscribes to MediaPipe FaceLandmarker blendshape callbacks from `camera_service` when `emotion_enabled` is true (the FaceLandmarker pass is a parallel conditional detector — does **not** replace the BlazeFace presence path). Projects 52 ARKit blendshapes (`mouthSmileLeft/Right`, `browDownLeft/Right`, `cheekSquintLeft/Right`, `eyeBlinkLeft/Right`, `eyeSquintLeft/Right`, `eyeLookInLeft/Right`, `browInnerUp`, `browOuterUpLeft/Right`, `jawOpen`, `mouthPressLeft/Right`, `mouthFrownLeft/Right`, `noseSneerLeft/Right`) to a continuous `(valence, arousal, focus)` triple via the hand-tuned `_BLENDSHAPE_COEFFS` table — interpretable, not a black box. Smooths the result with α=0.3 EMA (matches `LightingPreferenceLearner`). Persists every 10s to `mood_samples`.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `start` | `(emotion_enabled: bool) → None` | Load bias from `mood_calibration_bias`; if enabled, register the blendshape callback and start the persist poll loop |
+| `close` | `() → None` | Cancel poll task; clear cache |
+| `set_enabled` | `(enabled: bool) → None` | Runtime toggle; propagates to `camera_service.set_emotion_enabled` (lazy-loads FaceLandmarker model on first true-flip) |
+| `on_blendshape` | `(blendshapes, face_confidence, ts) → None` | Per-frame callback; gates on `face_confidence ≥ 0.30`, skips if mode==sleeping, applies bias, EMA-smooths, caches `_last_vector` |
+| `get_current` | `() → Optional[dict]` | Live snapshot; returns None if stale (>30s) or never seen |
+| `poll_loop` | `() → None` | Every 10s persist a `mood_samples` row when the last vector is fresh |
+| `health_status` | `() → dict` | HealthTrackable surface; always `is_shadow=True` in Phase A |
+
+Phase A is **shadow-log only** — no actuation. Phase B (MoodRingLight, GH#58) gates on Spearman ρ > 0.4 across 30+ paired calibration samples per axis (the `homehub-checkbacks.md` entry #31 evaluator). Phase C (VibeRouter + Alexa VibeIntent, GH#59) layers Claude (Haiku) on top, backend-side. Phase D (cost dashboard + dismiss kill switch, GH#60) hardens before mainstream use. Full design: `docs/PERSONALITY_LAYER.md`.
 
 #### GameDayService + CelebrationOrchestrator (shipped 2026-05-07)
 ESPN polling, play detection, and celebration orchestration. See `docs/GAMEDAY_SPEC.md` for the full interface contracts (`GameDayService`, `CelebrationOrchestrator`, `PlayEvent`, `GameDayState`) and the "Game Day Engine — shipped 2026-05-07" section below for the architecture summary.

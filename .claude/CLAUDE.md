@@ -4,7 +4,7 @@
 > **Source of truth:** `docs/PROJECT_SPEC.md` — read it for full architecture, schema, and feature details. This file is the working guide; the spec is authoritative.
 > **ML specification:** `docs/ML_SPEC.md` — audio classification, behavioral prediction, camera presence, adaptive lighting, and phased rollout plan.
 > **Lighting expansion wishlist:** `docs/LIGHTING_EXPANSION.md` — Hue/Zigbee hardware recommendations by category and price tier, with per-apartment placement and integration notes.
-> **AI Personality Layer:** `docs/PERSONALITY_LAYER.md` — Phase A shipped 2026-05-18 (shadow-log); B/C/D in GH#58/#59/#60. Mood-vector inference + future mood-ring lamp + Claude vibe intent.
+> **AI Personality Layer:** `docs/PERSONALITY_LAYER.md` — mood-vector inference, future mood-ring lamp, Claude vibe intent. Phase A live (shadow-log), B/C/D in GH#58/#59/#60.
 
 ---
 
@@ -128,7 +128,7 @@ Browser / Phone (PWA)
    │   ├── BehavioralPredictor ────> LightGBM mode prediction
    │   ├── LightingLearner ────────> adaptive per-light preferences
    │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax)
-   │   ├── EmotionService ─────────> MediaPipe FaceLandmarker blendshapes → mood vector (V/A/F) shadow log (Phase A, opt-in)
+   │   ├── EmotionService ─────────> FaceLandmarker blendshapes → mood vector (Phase A shadow, opt-in)
    │   └── MusicBandit ────────────> Thompson sampling playlist selection, context-aware (mode × period × weather_class)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
@@ -229,7 +229,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Bar | `/api/bar` | `GET /status` summary from Home Bar app (inventory, party mode, cocktail suggestion); 503 when `BAR_APP_URL` unset |
 | Ambient | `/api/ambient` | Browser-side ambient audio: playback state, volume, mode→sound map, weather-reactive config |
 | Notification | `/api/notification` | `POST /test` fires a synthetic notification through NotifierService (WS broadcast + ntfy.sh push). Bypasses DND/coalesce/boot gating — verification harness for the desktop toast + phone push surfaces |
-| Personality | `/api/personality` | `GET /mood/current` (live V/A/F vector + HSV preview), `GET /mood/history?hours=24`, `POST /calibration` (self-report, auto-fits per-axis bias at ≥10 samples), `GET /calibration/history`, `GET/POST /settings`. Phase A shadow-log; surfaced at `/personality` (hidden from FloatingNav). Full spec: `docs/PERSONALITY_LAYER.md` |
+| Personality | `/api/personality` | `mood/current` + `mood/history`, `calibration` POST + history, `settings` GET/POST. Backs hidden `/personality` page. Spec: `docs/PERSONALITY_LAYER.md` |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -313,7 +313,7 @@ Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `spa
 
 ## Database Schema
 
-Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality (Phase A, 2026-05-18): `mood_samples` (rolling 7-day, pruned at boot), `mood_calibration` (persistent self-report rows), `vibe_requests` (persistent Phase C placeholder). Data retention: 90-day rolling window (mood_samples is the exception, 7-day).
+Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (Phase C placeholder). Data retention: 90-day rolling (mood_samples is the 7-day exception).
 
 ---
 
@@ -408,6 +408,11 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives restarts so a deploy mid-`relax` doesn't snap to `working`. Mirrors `dnd_state` pattern |
 | `ambient_config` | Browser-side ambient sound config (volume, mode→sound map, weather reactivity); also stores Sonos mirroring sub-keys: `sonos_enabled`, `sonos_present_volume` (default 12), `sonos_away_volume` (default 28); written via `/api/ambient/*` |
 | `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB palette driving bedroom-lamp color in `gaming` mode; consumed by `LoLChampionService`, seeded via `python -m scripts.seed_champion_colors` (idempotent re-seed) |
+| `personality_enabled` | `{enabled: bool}` — master kill switch for the AI Personality Layer; gates all sub-toggles |
+| `emotion_enabled` | `{enabled: bool}` — FaceLandmarker blendshape extraction; lazy-loads model on first flip-on. Requires `personality_enabled` + `camera_enabled` |
+| `mood_ring_enabled` | `{enabled: bool}` — Phase B preview toggle; no effect until MoodRingLight ships (GH#58) |
+| `mood_ring_light_id` | `{light_id: str}` — which light the Phase B mood-ring drives (default `"1"`) |
+| `mood_calibration_bias` | `{valence, arousal, focus: float}` — per-axis bias auto-fit from self-report (≥10 samples); loaded at boot |
 
 ---
 
