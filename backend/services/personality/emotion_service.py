@@ -56,6 +56,15 @@ STALE_AFTER_S = 30.0
 # turned head between frames).
 EMA_ALPHA = 0.3
 
+# Per-source freshness window. When both the Latitude camera_service
+# callback and the desktop pc_agent are feeding blendshapes, the desktop
+# source wins as long as its last submit is within this window — the
+# Latitude path then short-circuits to avoid noisy averaging across two
+# very different capture geometries (corner three-quarter profile vs.
+# desktop frontal). After the desktop goes silent (Zoom lock, user
+# leaves the desk) the Latitude path picks back up at next callback.
+DESKTOP_FRESHNESS_S = 30.0
+
 # Below this face confidence we don't update the EMA — a barely-detected
 # face produces garbage blendshapes that, if averaged in, drag the EMA
 # toward whatever the noisy reading was. Matches camera_service's
@@ -179,6 +188,11 @@ class EmotionService(HealthTrackable):
         self._last_persist_at: float = 0.0
         self._poll_task: Optional[asyncio.Task] = None
         self._closed = False
+        # Per-source last-seen timestamps for the dual-source preference
+        # logic (Latitude camera_service callback vs. desktop pc_agent
+        # POST). Desktop wins within DESKTOP_FRESHNESS_S; Latitude
+        # short-circuits when desktop is fresh. Phase A GH#64.
+        self._last_source_seen: dict[str, datetime] = {}
 
         # Per-user calibration bias (added to live readings at output time).
         # Loaded from app_settings["mood_calibration_bias"] when present.
@@ -263,14 +277,31 @@ class EmotionService(HealthTrackable):
         blendshapes: dict[str, float],
         face_confidence: float,
         timestamp: datetime,
+        source: str = "latitude",
     ) -> None:
-        """Callback fired by camera_service per detection cycle when emotion
-        is enabled. Synchronous-friendly: do the math, cache, return fast.
+        """Callback fired per detection cycle when emotion is enabled.
+
+        Two sources feed this: the Latitude `camera_service` callback
+        (default, ``source="latitude"``) and the desktop pc_agent over
+        HTTP POST (``source="desktop"``, GH#64). The desktop wins when
+        fresh — its capture geometry is frontal, which is materially
+        better for the ARKit blendshape projection. The Latitude path
+        keeps the bed scenario covered.
         """
         if not self._enabled or self._closed:
             return
         if face_confidence < MIN_FACE_CONFIDENCE_FOR_UPDATE:
             return
+
+        # Dual-source preference: when the desktop is fresh, drop incoming
+        # Latitude callbacks rather than EMA-blending them. The two
+        # capture geometries are too different to average cleanly.
+        if source == "latitude":
+            desktop_last = self._last_source_seen.get("desktop")
+            if desktop_last is not None:
+                age = (datetime.now(timezone.utc) - desktop_last).total_seconds()
+                if age < DESKTOP_FRESHNESS_S:
+                    return
 
         # Don't track emotion during sleeping mode — the camera is paused
         # anyway, but this is defense-in-depth if the pause races.
@@ -312,11 +343,13 @@ class EmotionService(HealthTrackable):
                 "factors": {
                     "face_confidence": face_confidence,
                     "audio_arousal": None,  # phase A: face-only
+                    "source": source,
                     "top_blendshapes": [
                         {"name": n, "value": float(val)} for n, val in top
                     ],
                 },
             }
+            self._last_source_seen[source] = timestamp
         self._track_predict(True)
 
     # ------------------------------------------------------------------

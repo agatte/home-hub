@@ -191,6 +191,7 @@ Also requires:
 |---|---|---|
 | `personality_enabled` | `{enabled: bool}` | `false` — master kill switch for the whole layer |
 | `emotion_enabled` | `{enabled: bool}` | `false` — face blendshape extraction toggle (requires personality_enabled + camera_enabled) |
+| `desktop_emotion_enabled` | `{enabled: bool}` | `false` — desktop pc_agent capture toggle (GH#64). Polled every 30s by the desktop supervisor; runtime-toggleable without supervisor restart. Independent of `emotion_enabled` (the Latitude path) — both can run simultaneously, EmotionService prefers desktop when fresh within 30s |
 | `mood_ring_enabled` | `{enabled: bool}` | `false` — Phase B preview toggle; no effect until Phase B ships |
 | `mood_ring_light_id` | `{light_id: str}` | `"1"` — which light the mood-ring drives in Phase B |
 | `mood_calibration_bias` | `{valence: float, arousal: float, focus: float}` | `{0, 0, 0}` — per-axis bias correction fit from self-report calibration; auto-updated on POST `/api/personality/calibration` after ≥10 samples |

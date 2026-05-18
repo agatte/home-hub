@@ -404,12 +404,13 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |
 | `guest_vibe_playlists` | `{hype, singalong, throwback}` → favorite_title — overrides `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit; missing keys fall back |
 | `screen_sync_laptop_enabled` | `{enabled: bool}` — laptop screen→bedroom-lamp sync toggle (independent of `camera_enabled`) |
-| `dnd_state` | `{enabled, until, source}` — Do Not Disturb persistence; `load_override_state()` restores at boot, `run_loop` auto-clears past `until` |
-| `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives restarts so a deploy mid-`relax` doesn't snap to `working`. Mirrors `dnd_state` pattern |
+| `dnd_state` | `{enabled, until, source}` — DND persistence; restored at boot, `run_loop` auto-clears past `until` |
+| `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives deploys mid-override |
 | `ambient_config` | Browser-side ambient sound config (volume, mode→sound map, weather reactivity); also stores Sonos mirroring sub-keys: `sonos_enabled`, `sonos_present_volume` (default 12), `sonos_away_volume` (default 28); written via `/api/ambient/*` |
 | `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB palette driving bedroom-lamp color in `gaming` mode; consumed by `LoLChampionService`, seeded via `python -m scripts.seed_champion_colors` (idempotent re-seed) |
 | `personality_enabled` | `{enabled: bool}` — master kill switch for the AI Personality Layer; gates all sub-toggles |
-| `emotion_enabled` | `{enabled: bool}` — FaceLandmarker blendshape extraction; lazy-loads model on first flip-on. Requires `personality_enabled` + `camera_enabled` |
+| `emotion_enabled` | `{enabled: bool}` — Latitude blendshape extraction. Requires `personality_enabled` + `camera_enabled` |
+| `desktop_emotion_enabled` | `{enabled: bool}` — desktop pc_agent blendshape capture (GH#64). Supervisor polls 30s; EmotionService prefers desktop within 30s freshness, else Latitude |
 | `mood_ring_enabled` | `{enabled: bool}` — Phase B preview toggle; no effect until MoodRingLight ships (GH#58) |
 | `mood_ring_light_id` | `{light_id: str}` — which light the Phase B mood-ring drives (default `"1"`) |
 | `mood_calibration_bias` | `{valence, arousal, focus: float}` — per-axis bias auto-fit from self-report (≥10 samples); loaded at boot |

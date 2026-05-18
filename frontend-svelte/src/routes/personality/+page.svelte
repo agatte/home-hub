@@ -8,7 +8,7 @@
   /** @type {{ vector: any, enabled: boolean, reason?: string, preview_hsv?: {hue: number, sat: number, bri: number} } | null} */
   let current = null
 
-  /** @type {{ personality_enabled: boolean, emotion_enabled: boolean, mood_ring_enabled: boolean, mood_ring_light_id: string, calibration_bias: {valence: number, arousal: number, focus: number} } | null} */
+  /** @type {{ personality_enabled: boolean, emotion_enabled: boolean, desktop_emotion_enabled: boolean, mood_ring_enabled: boolean, mood_ring_light_id: string, calibration_bias: {valence: number, arousal: number, focus: number} } | null} */
   let settings = null
 
   /** @type {{count: number, samples: any[]} | null} */
@@ -246,7 +246,16 @@
             disabled={!settings.personality_enabled}
             on:change={(e) => toggleSetting('emotion_enabled', e.currentTarget.checked)}
           />
-          <span><strong>Emotion detection</strong> — face blendshapes via FaceLandmarker (requires the camera service to also be enabled)</span>
+          <span><strong>Emotion detection (Latitude)</strong> — face blendshapes via the Latitude webcam (requires the camera service to also be enabled)</span>
+        </label>
+        <label class="toggle" class:disabled={!settings.personality_enabled}>
+          <input
+            type="checkbox"
+            checked={settings.desktop_emotion_enabled}
+            disabled={!settings.personality_enabled}
+            on:change={(e) => toggleSetting('desktop_emotion_enabled', e.currentTarget.checked)}
+          />
+          <span><strong>Emotion detection (desktop)</strong> — frontal blendshapes from the dev machine's webcam. Better geometry than the Latitude's corner profile; requires the Home Hub Agent Supervisor running on the desktop. Desktop wins when fresh; Latitude covers bed scenarios.</span>
         </label>
         <label class="toggle" class:disabled={!settings.personality_enabled}>
           <input

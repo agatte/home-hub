@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/personality", tags=["personality"])
 # Phase B's mood-ring service can read them independently of the route.
 SETTING_PERSONALITY_ENABLED = "personality_enabled"
 SETTING_EMOTION_ENABLED = "emotion_enabled"
+SETTING_DESKTOP_EMOTION_ENABLED = "desktop_emotion_enabled"
 SETTING_MOOD_RING_ENABLED = "mood_ring_enabled"
 SETTING_MOOD_RING_LIGHT_ID = "mood_ring_light_id"
 SETTING_CALIBRATION_BIAS = "mood_calibration_bias"
@@ -224,12 +225,69 @@ async def _maybe_refit_bias() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Blendshape ingest (Phase A — GH#64 dual-source capture)
+#
+# Latitude camera_service feeds EmotionService.on_blendshape directly via
+# its in-process callback. The desktop pc_agent (backend/services/pc_agent/
+# emotion_capture.py) runs FaceLandmarker locally and POSTs the same
+# 52-float blendshape dict here. Privacy contract: raw frames never cross
+# the network; only the derived float dict + confidence + timestamp do.
+# Mirrors `camera_service.py` lines 18-25.
+# ---------------------------------------------------------------------------
+
+class BlendshapeSubmit(BaseModel):
+    """One desktop-captured FaceLandmarker reading."""
+
+    blendshapes: dict[str, float] = Field(..., min_length=1)
+    face_confidence: float = Field(..., ge=0.0, le=1.0)
+    source: Literal["desktop", "latitude"] = "desktop"
+    timestamp: Optional[datetime] = None
+
+
+@router.post("/blendshape", dependencies=[Depends(require_api_key)])
+async def post_blendshape(payload: BlendshapeSubmit, request: Request) -> dict:
+    """Ingest a blendshape reading from the desktop pc_agent.
+
+    LAN-bypass at `auth.py:90` covers Anthony's 192.168.1.30 desktop —
+    the `require_api_key` dependency stays for shape consistency and
+    future-proofing if this ever needs to accept tunnel-origin traffic.
+
+    The desktop posts only the 52 derived float values plus a confidence
+    scalar and a timestamp; raw frames live in-memory on the desktop and
+    are dereferenced after the FaceLandmarker pass. This route is the
+    network boundary for that contract.
+    """
+    svc = _emotion_service(request)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="emotion_service unavailable")
+
+    # Pydantic enforces dict[str, float] coercion but not per-value ranges;
+    # validate [0, 1] bounds inline.
+    for name, value in payload.blendshapes.items():
+        if value < 0.0 or value > 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"blendshape '{name}' out of range [0, 1]: {value}",
+            )
+
+    ts = payload.timestamp or datetime.now(timezone.utc)
+    await svc.on_blendshape(
+        payload.blendshapes,
+        float(payload.face_confidence),
+        ts,
+        source=payload.source,
+    )
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
 class PersonalitySettings(BaseModel):
     personality_enabled: Optional[bool] = None
     emotion_enabled: Optional[bool] = None
+    desktop_emotion_enabled: Optional[bool] = None
     mood_ring_enabled: Optional[bool] = None
     mood_ring_light_id: Optional[str] = None
 
@@ -242,6 +300,9 @@ async def get_settings() -> dict:
         ).get("enabled", False),
         "emotion_enabled": (
             (await load_setting(SETTING_EMOTION_ENABLED)) or {}
+        ).get("enabled", False),
+        "desktop_emotion_enabled": (
+            (await load_setting(SETTING_DESKTOP_EMOTION_ENABLED)) or {}
         ).get("enabled", False),
         "mood_ring_enabled": (
             (await load_setting(SETTING_MOOD_RING_ENABLED)) or {}
@@ -269,6 +330,14 @@ async def post_settings(payload: PersonalitySettings, request: Request) -> dict:
         svc = _emotion_service(request)
         if svc is not None:
             await svc.set_enabled(payload.emotion_enabled)
+    if payload.desktop_emotion_enabled is not None:
+        # Desktop agent polls this setting on a 30s cadence to learn
+        # whether it should be POSTing. No backend-side service to flip
+        # — the pc_agent owns its own enable state.
+        await save_setting(
+            SETTING_DESKTOP_EMOTION_ENABLED,
+            {"enabled": payload.desktop_emotion_enabled},
+        )
     if payload.mood_ring_enabled is not None:
         await save_setting(
             SETTING_MOOD_RING_ENABLED, {"enabled": payload.mood_ring_enabled},
