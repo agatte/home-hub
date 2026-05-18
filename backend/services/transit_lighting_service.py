@@ -33,6 +33,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from backend.services.camera_service import FACE_TRUST_THRESHOLD
+from backend.services.heartbeat import HeartbeatRegistry
 
 logger = logging.getLogger("home_hub.transit_lighting")
 
@@ -149,9 +150,9 @@ class TransitLightingService:
         # the STATIONARY_ZONES gate when sustained — see BED_EXIT_ABSENT_FRAMES.
         # Resets to 0 on any strongly-present frame.
         self._strong_absent_streak: int = 0
-        self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+        self._heartbeat: Optional[HeartbeatRegistry] = None
 
-    def set_heartbeat_registry(self, registry) -> None:
+    def set_heartbeat_registry(self, registry: HeartbeatRegistry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
 

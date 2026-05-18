@@ -28,6 +28,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from backend.services.camera_service import FACE_TRUST_THRESHOLD
+from backend.services.heartbeat import HeartbeatRegistry
 
 logger = logging.getLogger("home_hub.desk_exit_kitchen")
 
@@ -103,9 +104,9 @@ class DeskExitKitchenService:
         # Only log block-reason transitions, not every silent tick.
         self._last_block_reason: Optional[str] = None
 
-        self._heartbeat = None  # HeartbeatRegistry, injected by bootstrap
+        self._heartbeat: Optional[HeartbeatRegistry] = None
 
-    def set_heartbeat_registry(self, registry) -> None:
+    def set_heartbeat_registry(self, registry: HeartbeatRegistry) -> None:
         self._heartbeat = registry
 
     @property
@@ -144,8 +145,8 @@ class DeskExitKitchenService:
             if mode not in TRIGGER_MODES:
                 await self._deactivate(f"mode left trigger set (mode={mode})")
                 return
-            if period == "day":
-                await self._deactivate("period rolled to day")
+            if period not in TRIGGER_PERIODS:
+                await self._deactivate(f"period left trigger set ({period})")
                 return
             if self._automation.is_at_desk_fresh():
                 await self._deactivate("returned to desk")
@@ -167,8 +168,8 @@ class DeskExitKitchenService:
         if mode not in TRIGGER_MODES:
             self._record_block(f"mode={mode} (not in trigger set)")
             return
-        if period == "day":
-            self._record_block("period=day")
+        if period not in TRIGGER_PERIODS:
+            self._record_block(f"period={period} (not in trigger set)")
             return
 
         # While Anthony is still at the desk, reset the absent timer. We use
