@@ -239,6 +239,10 @@ class BlendshapeSubmit(BaseModel):
     """One desktop-captured FaceLandmarker reading."""
 
     blendshapes: dict[str, float] = Field(..., min_length=1)
+    # Note: source="desktop" sends a max-non-neutral-blendshape proxy
+    # (FaceLandmarker has no top-level detector score); source="latitude"
+    # sends the BlazeFace top-category score. Both gate on 0.30 empirically
+    # but don't compare magnitudes across sources for confidence-weighted logic.
     face_confidence: float = Field(..., ge=0.0, le=1.0)
     source: Literal["desktop", "latitude"] = "desktop"
     timestamp: Optional[datetime] = None

@@ -64,6 +64,7 @@ for _child_name in (
     "home_hub.ambient",
     "home_hub.screen_sync_agent",
     "home_hub.sleep_watcher",
+    "home_hub.emotion_capture",
 ):
     _child = logging.getLogger(_child_name)
     _child.setLevel(logging.INFO)
@@ -152,6 +153,7 @@ class AgentSupervisor:
         self._register_ambient_monitor(classifier, shadow)
         self._register_screen_sync()
         self._register_sleep_watcher()
+        self._register_emotion_capture()
 
     # ── Agent registration ────────────────────────────────────────────
 
@@ -196,6 +198,21 @@ class AgentSupervisor:
             logger.info("Registered: screen_sync")
         except ImportError as e:
             logger.warning("Cannot register screen_sync: %s", e)
+
+    def _register_emotion_capture(self) -> None:
+        # cv2 + mediapipe are lazy-loaded inside the agent's tick, so this
+        # import succeeds on any host with httpx; the agent will no-op
+        # gracefully on a host that lacks the optional deps.
+        try:
+            from backend.services.pc_agent.emotion_capture import run_agent
+            self._agents["emotion_capture"] = AgentState(
+                name="emotion_capture",
+                target=run_agent,
+                kwargs={"server_url": self._server_url},
+            )
+            logger.info("Registered: emotion_capture")
+        except ImportError as e:
+            logger.warning("Cannot register emotion_capture: %s", e)
 
     def _register_sleep_watcher(self) -> None:
         # Windows-only — suspending the PC is meaningless on the Latitude /
