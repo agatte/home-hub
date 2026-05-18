@@ -1,20 +1,25 @@
 """
-Emotion Capture — desktop pc_agent that POSTs FaceLandmarker blendshapes.
+Emotion Capture + Desktop Presence — desktop pc_agent that POSTs
+FaceLandmarker blendshapes (mood) AND tagged presence observations.
 
-Counterpart to the Latitude's camera_service blendshape pass. The desktop
-webcam is frontal most of the working day, so the 52 ARKit blendshapes
-land well-formed (no foreshortening); the Latitude path covers off-hours
-and the bed scenario where the desktop is asleep. Backend EmotionService
-prefers desktop within a 30s freshness window, otherwise falls back.
+Counterpart to the Latitude's camera_service. Each tick runs MediaPipe
+FaceLandmarker once; depending on which toggles are enabled the agent:
+  - POSTs blendshapes to /api/personality/blendshape (emotion gate)
+  - POSTs a PresenceReading to /api/camera/observation (presence gate)
+
+The two toggles are independent because the privacy implications differ
+(emotion infers mood from your face; presence just says "the desk is
+occupied"). Either, neither, or both can be on.
 
 Privacy contract (mirrors camera_service.py):
     - Raw frames are numpy arrays in memory only, dereferenced each cycle.
     - Frames never touch disk, network, logs, or any API response.
-    - Only the derived 52-float blendshape dict + face confidence cross
-      the LAN to /api/personality/blendshape.
-    - Opt-in via desktop_emotion_enabled app_setting (default false). The
-      agent polls the setting every 30s so the toggle takes effect without
-      a supervisor restart.
+    - Only derived values cross the LAN: 52-float blendshape dict +
+      face confidence (emotion path); face_present bool + face_confidence
+      + timestamp (presence path).
+    - Opt-in via desktop_emotion_enabled / desktop_presence_enabled
+      app_settings (both default false). The agent polls them every 30s
+      so toggles take effect without a supervisor restart.
     - Webcam LED activates when capturing (hardware-enforced).
 
 Usage (normally launched by supervisor.py, not directly):
@@ -145,13 +150,17 @@ class EmotionCapture:
     def __init__(self, server_url: str) -> None:
         self._server_url = server_url.rstrip("/")
         self._blendshape_endpoint = f"{self._server_url}/api/personality/blendshape"
+        self._observation_endpoint = f"{self._server_url}/api/camera/observation"
         self._settings_endpoint = f"{self._server_url}/api/personality/settings"
 
-        # Runtime toggle, refreshed by the settings-poll thread. Defaults
+        # Runtime toggles, refreshed by the settings-poll thread. Defaults
         # to False so we don't capture before the user has opted in via
         # the /personality page — the supervisor restart that picks up this
         # agent is the same operation that lets the user flip the toggle.
-        self._enabled: bool = False
+        # `emotion` and `presence` are independent (different privacy
+        # implications). Capture runs iff either is True.
+        self._emotion_enabled: bool = False
+        self._presence_enabled: bool = False
         self._enabled_lock = threading.Lock()
 
         # Lazy-init handles
@@ -188,17 +197,35 @@ class EmotionCapture:
         except Exception:
             pass
 
-    # ── enable flag ─────────────────────────────────────────────────
+    # ── enable flags ────────────────────────────────────────────────
 
-    def set_enabled(self, value: bool) -> None:
+    def set_enabled(
+        self,
+        *,
+        emotion: Optional[bool] = None,
+        presence: Optional[bool] = None,
+    ) -> None:
+        """Update either toggle (or both). Logs only on transitions."""
         with self._enabled_lock:
-            if self._enabled != value:
-                logger.info("desktop_emotion_enabled → %s", value)
-            self._enabled = value
+            if emotion is not None and emotion != self._emotion_enabled:
+                logger.info("desktop_emotion_enabled → %s", emotion)
+                self._emotion_enabled = emotion
+            if presence is not None and presence != self._presence_enabled:
+                logger.info("desktop_presence_enabled → %s", presence)
+                self._presence_enabled = presence
 
-    def is_enabled(self) -> bool:
+    def is_capture_needed(self) -> bool:
+        """True if any consumer is currently enabled."""
         with self._enabled_lock:
-            return self._enabled
+            return self._emotion_enabled or self._presence_enabled
+
+    def is_emotion_enabled(self) -> bool:
+        with self._enabled_lock:
+            return self._emotion_enabled
+
+    def is_presence_enabled(self) -> bool:
+        with self._enabled_lock:
+            return self._presence_enabled
 
     # ── webcam ──────────────────────────────────────────────────────
 
@@ -244,7 +271,7 @@ class EmotionCapture:
 
     def tick(self) -> None:
         """Run one capture cycle. Silent on the happy path; logs only anomalies."""
-        if not self.is_enabled():
+        if not self.is_capture_needed():
             # Release the webcam so other apps (Zoom, Discord) can grab it
             # while we're disabled. Inexpensive — cv2 reopens on next enable.
             self._release_cap()
@@ -320,10 +347,26 @@ class EmotionCapture:
                 default=0.0,
             )
 
-            if face_confidence < FACE_CONFIDENCE_FLOOR:
+            face_present = face_confidence >= FACE_CONFIDENCE_FLOOR
+            captured_at = datetime.now(timezone.utc)
+
+            # Presence is independent of emotion — POST even when face is
+            # below the emotion floor, so the backend has an unambiguous
+            # absent signal. Skip only when the toggle is off.
+            if self.is_presence_enabled():
+                self._post_observation(
+                    face_present=face_present,
+                    face_confidence=face_confidence,
+                    captured_at=captured_at,
+                )
+
+            if not face_present:
                 return
 
-            self._post_blendshapes(blendshape_dict, face_confidence)
+            if self.is_emotion_enabled():
+                self._post_blendshapes(
+                    blendshape_dict, face_confidence, captured_at=captured_at,
+                )
         finally:
             # Explicit dereference so the numpy buffers go out of scope
             # before the next tick — mirrors camera_service's finally pattern.
@@ -331,13 +374,16 @@ class EmotionCapture:
             rgb = None
 
     def _post_blendshapes(
-        self, blendshapes: dict[str, float], face_confidence: float
+        self,
+        blendshapes: dict[str, float],
+        face_confidence: float,
+        captured_at: Optional[datetime] = None,
     ) -> None:
         payload = {
             "blendshapes": blendshapes,
             "face_confidence": face_confidence,
             "source": "desktop",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": (captured_at or datetime.now(timezone.utc)).isoformat(),
         }
         try:
             resp = self._client.post(self._blendshape_endpoint, json=payload)
@@ -349,6 +395,37 @@ class EmotionCapture:
                 )
         except httpx.HTTPError as exc:
             logger.debug("POST /blendshape failed: %s", exc)
+
+    def _post_observation(
+        self,
+        *,
+        face_present: bool,
+        face_confidence: float,
+        captured_at: datetime,
+    ) -> None:
+        """POST one PresenceReading to the backend.
+
+        Best-effort — transient network errors are logged at DEBUG and
+        the next tick will fire 2s later. Mirrors the blendshape POST
+        error-handling (the agent shouldn't crash on a backend blip).
+        """
+        payload = {
+            "source": "desktop",
+            "captured_at": captured_at.isoformat(),
+            "face_present": face_present,
+            "face_confidence": face_confidence,
+            "detection_source": "face",
+        }
+        try:
+            resp = self._client.post(self._observation_endpoint, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "POST /observation returned %d: %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+        except httpx.HTTPError as exc:
+            logger.debug("POST /observation failed: %s", exc)
 
     # ── settings poll ───────────────────────────────────────────────
 
@@ -370,8 +447,14 @@ class EmotionCapture:
             return
 
         personality = bool(data.get("personality_enabled"))
-        desktop = bool(data.get("desktop_emotion_enabled"))
-        self.set_enabled(personality and desktop)
+        emotion_flag = bool(data.get("desktop_emotion_enabled"))
+        presence_flag = bool(data.get("desktop_presence_enabled"))
+        # Presence is gated on personality_enabled too — same opt-in flow.
+        # Either sub-toggle being on is enough to start the capture loop.
+        self.set_enabled(
+            emotion=personality and emotion_flag,
+            presence=personality and presence_flag,
+        )
 
 
 # ---------------------------------------------------------------------------

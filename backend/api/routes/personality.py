@@ -30,6 +30,10 @@ router = APIRouter(prefix="/api/personality", tags=["personality"])
 SETTING_PERSONALITY_ENABLED = "personality_enabled"
 SETTING_EMOTION_ENABLED = "emotion_enabled"
 SETTING_DESKTOP_EMOTION_ENABLED = "desktop_emotion_enabled"
+# Independent of desktop_emotion_enabled: presence is "is someone at the
+# desk", emotion is "what's their mood." Privacy implications differ
+# enough that the user can opt into one without the other.
+SETTING_DESKTOP_PRESENCE_ENABLED = "desktop_presence_enabled"
 SETTING_MOOD_RING_ENABLED = "mood_ring_enabled"
 SETTING_MOOD_RING_LIGHT_ID = "mood_ring_light_id"
 SETTING_CALIBRATION_BIAS = "mood_calibration_bias"
@@ -292,6 +296,7 @@ class PersonalitySettings(BaseModel):
     personality_enabled: Optional[bool] = None
     emotion_enabled: Optional[bool] = None
     desktop_emotion_enabled: Optional[bool] = None
+    desktop_presence_enabled: Optional[bool] = None
     mood_ring_enabled: Optional[bool] = None
     mood_ring_light_id: Optional[str] = None
 
@@ -307,6 +312,9 @@ async def get_settings() -> dict:
         ).get("enabled", False),
         "desktop_emotion_enabled": (
             (await load_setting(SETTING_DESKTOP_EMOTION_ENABLED)) or {}
+        ).get("enabled", False),
+        "desktop_presence_enabled": (
+            (await load_setting(SETTING_DESKTOP_PRESENCE_ENABLED)) or {}
         ).get("enabled", False),
         "mood_ring_enabled": (
             (await load_setting(SETTING_MOOD_RING_ENABLED)) or {}
@@ -341,6 +349,13 @@ async def post_settings(payload: PersonalitySettings, request: Request) -> dict:
         await save_setting(
             SETTING_DESKTOP_EMOTION_ENABLED,
             {"enabled": payload.desktop_emotion_enabled},
+        )
+    if payload.desktop_presence_enabled is not None:
+        # Same poll cadence on the desktop agent as the emotion toggle
+        # — the pc_agent flips POSTing presence on/off when this changes.
+        await save_setting(
+            SETTING_DESKTOP_PRESENCE_ENABLED,
+            {"enabled": payload.desktop_presence_enabled},
         )
     if payload.mood_ring_enabled is not None:
         await save_setting(

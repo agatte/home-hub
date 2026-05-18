@@ -276,6 +276,10 @@ class CameraService:
         self._face_landmarker = None
         self._emotion_enabled: bool = False
         self._blendshape_callbacks: list = []
+        # PresenceFusion (or any tagged-source consumer) registers here.
+        # Fired after each poll-loop frame with a complete PresenceReading
+        # so the fusion layer can merge Latitude + desktop observations.
+        self._observation_callbacks: list = []
 
         # Detection state
         self._consecutive_absent: int = 0
@@ -340,6 +344,18 @@ class CameraService:
         """
         if callback not in self._blendshape_callbacks:
             self._blendshape_callbacks.append(callback)
+
+    def register_observation_callback(self, callback) -> None:
+        """Subscribe to per-frame Latitude presence observations.
+
+        Callback signature: ``cb(reading: PresenceReading) -> None``.
+        Sync callbacks only — PresenceFusion's ``on_observation`` is the
+        canonical consumer and is intentionally sync (dict assignment).
+        Fires after zone/posture hysteresis has settled so the reading
+        carries the just-committed values, not the candidates.
+        """
+        if callback not in self._observation_callbacks:
+            self._observation_callbacks.append(callback)
 
     def set_emotion_enabled(self, enabled: bool) -> None:
         """Flip the per-frame FaceLandmarker pass on or off.
@@ -1077,6 +1093,40 @@ class CameraService:
                     zone_before=zone_before,
                     posture_before=posture_before,
                 )
+
+                # Fan out the just-settled state to PresenceFusion (or any
+                # tagged-source consumer registered via
+                # register_observation_callback). Done after hysteresis so
+                # the reading carries committed zone/posture, not candidates.
+                # Sync-only callbacks; intentionally simple — fusion's
+                # on_observation is just a dict assignment.
+                if self._observation_callbacks:
+                    try:
+                        from backend.services.presence_fusion import (
+                            PresenceReading,
+                        )
+                        reading = PresenceReading(
+                            source="latitude",
+                            captured_at=self._last_detection_at
+                            or datetime.now(timezone.utc),
+                            face_present=(status == "present"),
+                            face_confidence=confidence,
+                            detection_source=source,
+                            zone=self._last_zone,
+                            posture=self._last_posture,
+                            pose_visible_landmarks=pose_landmark_count or None,
+                        )
+                        for cb in list(self._observation_callbacks):
+                            try:
+                                cb(reading)
+                            except Exception:
+                                logger.exception(
+                                    "observation callback raised — ignoring"
+                                )
+                    except Exception:
+                        logger.exception(
+                            "failed to dispatch presence observation"
+                        )
 
                 # Compute the lux multiplier once — used by fusion factors,
                 # the ML logger below, and the WebSocket broadcast at the end.

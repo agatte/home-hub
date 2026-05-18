@@ -125,9 +125,14 @@ class TransitLightingService:
         self,
         automation_engine: Any,
         camera_service: Any,
+        presence_fusion: Any = None,
     ) -> None:
         self._automation = automation_engine
         self._camera = camera_service
+        # Optional multi-source presence layer — when wired, the
+        # strong-presence calc consults it so the desktop camera can
+        # defeat a Latitude chair-back FP (and vice versa).
+        self._presence_fusion = presence_fusion
 
         self._enabled: bool = True
         self._active: bool = False
@@ -223,6 +228,12 @@ class TransitLightingService:
             src == "pose"
             or (src == "face" and conf >= TRANSIT_FACE_TRUST_THRESHOLD)
         )
+        # Multi-source: a desktop face-present reading is high-confidence
+        # at-desk, so reset the absent streak even if the Latitude camera
+        # is flapping or wedged. Keeps the chair-back-FP defeat working
+        # when the desktop sees Anthony head-on.
+        if not strongly_present and self._presence_fusion is not None:
+            strongly_present = self._presence_fusion.is_strongly_present_any()
         if strongly_present:
             self._strong_absent_streak = 0
         else:

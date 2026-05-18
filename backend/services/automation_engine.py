@@ -309,6 +309,7 @@ class AutomationEngine:
         behavioral_predictor=None,
         confidence_fusion=None,
         effect_manager=None,
+        presence_fusion=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
@@ -321,6 +322,7 @@ class AutomationEngine:
         self._lighting_learner = lighting_learner
         self._ml_logger = ml_logger
         self._behavioral_predictor = behavioral_predictor
+        self._presence_fusion = presence_fusion
         self._effect_manager = effect_manager or EffectManager(
             hue_v2=hue_v2, weather_service=weather_service,
         )
@@ -741,13 +743,21 @@ class AutomationEngine:
         return value
 
     def is_at_desk_fresh(self) -> bool:
-        """True iff the camera is enabled with a fresh ``zone == 'desk'`` reading.
+        """True iff a fresh at-desk confirmation exists from any presence source.
 
         Used by autonomous mode-setters (late-night rescue, behavioral
-        predictor, fusion override) to defer to active desk presence. If the
-        camera sees Anthony at the desk, the system should not push him into
-        ``relax`` against his apparent activity.
+        predictor, fusion override) to defer to active desk presence. The
+        signal is multi-source: PresenceFusion combines the Latitude
+        camera (zone=desk) with the desktop pc_agent (face_present), so a
+        weak-face Latitude chair-back FP no longer hides Anthony when the
+        desktop sees him head-on.
         """
+        # Prefer PresenceFusion when wired — it's the source-aware path.
+        # Fall back to direct camera reading for boot-time / test paths
+        # where the fusion layer isn't built yet.
+        presence = self._presence_fusion
+        if presence is not None:
+            return presence.is_at_desk_fresh(ZONE_POSTURE_FRESHNESS_SECONDS)
         camera = self._camera_service
         if camera is None or not getattr(camera, "enabled", False):
             return False

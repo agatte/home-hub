@@ -92,9 +92,15 @@ class DeskExitKitchenService:
         self,
         automation_engine: Any,
         camera_service: Any,
+        presence_fusion: Any = None,
     ) -> None:
         self._automation = automation_engine
         self._camera = camera_service
+        # Optional. ``is_at_desk_fresh`` is consulted via the engine and
+        # already routes through PresenceFusion when wired, so we mostly
+        # keep this for symmetry with TransitLightingService and any
+        # future desktop-aware checks.
+        self._presence_fusion = presence_fusion
 
         self._enabled: bool = True
         self._active: bool = False

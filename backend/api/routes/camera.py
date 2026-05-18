@@ -1,11 +1,14 @@
 """Camera presence detection endpoints — status, enable/disable, calibrate."""
 
 import logging
+from datetime import datetime, timezone
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
+from backend.services.presence_fusion import KNOWN_SOURCES, PresenceReading
 
 logger = logging.getLogger("home_hub.camera")
 
@@ -18,10 +21,25 @@ class CameraToggle(BaseModel):
     enabled: bool
 
 
+class PresenceObservation(BaseModel):
+    """One presence reading from an off-host source (currently desktop pc_agent).
+
+    Fields mirror ``PresenceReading`` — the route builds the dataclass
+    from this body and hands it to ``app.state.presence``.
+    """
+
+    source: Literal["desktop"] = "desktop"
+    captured_at: Optional[datetime] = None
+    face_present: Optional[bool] = None
+    face_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    detection_source: Optional[Literal["face", "pose"]] = None
+    zone: Optional[Literal["desk", "bed"]] = None
+    posture: Optional[Literal["upright", "reclined", "slouched"]] = None
+    pose_visible_landmarks: Optional[int] = Field(default=None, ge=0)
+
+
 def _current_multiplier(service) -> float:
     """Current lux multiplier for the UI readout (1.0 if uncalibrated / stale)."""
-    from datetime import datetime, timezone
-
     from backend.services.automation_engine import LUX_STALE_SECONDS, lux_to_multiplier
 
     ema = getattr(service, "ema_lux", None)
@@ -47,13 +65,66 @@ async def get_status(request: Request) -> dict:
     RFC1918 bypass in `require_api_key`.
     """
     service = getattr(request.app.state, "camera_service", None)
+    presence = getattr(request.app.state, "presence", None)
+    presence_block = presence.get_status() if presence is not None else None
+
     if service is None:
-        return {"status": "ok", "enabled": False, "available": False}
+        return {
+            "status": "ok",
+            "enabled": False,
+            "available": False,
+            "presence": presence_block,
+        }
     return {
         "status": "ok",
         **service.get_status(),
         "current_multiplier": _current_multiplier(service),
+        "presence": presence_block,
     }
+
+
+@router.post("/observation", dependencies=[Depends(require_api_key)])
+async def post_observation(
+    payload: PresenceObservation, request: Request,
+) -> dict:
+    """Ingest a presence reading from an off-host source (desktop pc_agent).
+
+    The desktop emotion_capture POSTs here after each FaceLandmarker tick
+    when ``desktop_presence_enabled`` is on. The Latitude camera reaches
+    PresenceFusion directly via in-process callback; this endpoint is
+    the network boundary for everything else.
+
+    LAN-bypass at ``auth.py:90`` covers the 192.168.1.30 desktop. The
+    ``require_api_key`` dependency stays for shape consistency and for
+    future tunnel-origin sources (e.g. a phone-camera companion app).
+    """
+    if payload.source not in KNOWN_SOURCES:
+        raise HTTPException(
+            status_code=400, detail=f"unknown source: {payload.source}",
+        )
+
+    presence = getattr(request.app.state, "presence", None)
+    if presence is None:
+        # Service hasn't started (early-boot race, or unit-test). Don't
+        # error — silent drops here are safer than 503s that retry-storm
+        # an agent during startup. Logged for observability.
+        logger.debug(
+            "presence observation dropped — PresenceFusion not initialized"
+        )
+        return {"status": "ok", "detail": "presence service unavailable"}
+
+    reading = PresenceReading(
+        source=payload.source,
+        captured_at=payload.captured_at or datetime.now(timezone.utc),
+        face_present=payload.face_present,
+        face_confidence=payload.face_confidence,
+        detection_source=payload.detection_source,
+        zone=payload.zone,
+        posture=payload.posture,
+        pose_visible_landmarks=payload.pose_visible_landmarks,
+    )
+    presence.on_observation(reading)
+    return {"status": "ok"}
 
 
 @router.get("/snapshot", dependencies=[Depends(require_api_key)])
@@ -136,6 +207,11 @@ async def toggle_camera(body: CameraToggle, request: Request) -> dict:
                 request.app.state.camera_service = camera
                 automation.register_on_mode_change(camera.on_mode_change)
                 automation.set_camera_service(camera)
+                # Hook into PresenceFusion if it's running so the
+                # Latitude lane re-attaches after a runtime enable.
+                presence = getattr(request.app.state, "presence", None)
+                if presence is not None:
+                    camera.register_observation_callback(presence.on_observation)
                 asyncio.create_task(camera.poll_loop())
                 logger.info("Camera service started via API toggle")
                 return {"status": "ok", "detail": "Camera enabled", **camera.get_status()}

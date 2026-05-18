@@ -243,6 +243,18 @@ async def lifespan(app: FastAPI):
     app.state.confidence_fusion = confidence_fusion
     app_logger.info("Confidence fusion initialized")
 
+    # Presence fusion — multi-source attendance / zone / posture merger.
+    # No dependencies; sources register against it after they're built
+    # (Latitude camera_service callback below, desktop pc_agent via
+    # /api/camera/observation POST endpoint). Constructed unconditionally
+    # so the merged surface is always available — when no source has
+    # reported yet, it degrades to "not at desk, no posture committed",
+    # matching the no-camera baseline.
+    from backend.services.presence_fusion import PresenceFusion
+    presence = PresenceFusion()
+    app.state.presence = presence
+    app_logger.info("Presence fusion initialized")
+
     # Music bandit — Thompson sampling playlist selection. Built before
     # MusicMapper so it can be passed via constructor.
     from backend.services.ml.music_bandit import MusicBandit
@@ -319,6 +331,7 @@ async def lifespan(app: FastAPI):
         behavioral_predictor=behavioral_predictor,
         confidence_fusion=confidence_fusion,
         effect_manager=effect_manager,
+        presence_fusion=presence,
     )
     app.state.automation = automation
     await automation.load_scene_overrides()
@@ -850,6 +863,9 @@ async def lifespan(app: FastAPI):
                 automation.set_camera_service(camera_service)
                 event_logger.set_camera_service(camera_service)
                 ambient_sound.set_camera_service(camera_service)
+                # Feed PresenceFusion the Latitude lane. Desktop lane is
+                # POST-driven via /api/camera/observation.
+                camera_service.register_observation_callback(presence.on_observation)
                 tasks.append(asyncio.create_task(camera_service.poll_loop()))
                 app_logger.info("Camera presence detection started")
             else:
@@ -872,6 +888,7 @@ async def lifespan(app: FastAPI):
     transit_lighting = TransitLightingService(
         automation_engine=automation,
         camera_service=getattr(app.state, "camera_service", None),
+        presence_fusion=presence,
     )
     transit_lighting.set_heartbeat_registry(heartbeats)
     app.state.transit_lighting = transit_lighting
@@ -887,6 +904,7 @@ async def lifespan(app: FastAPI):
     desk_exit_kitchen = DeskExitKitchenService(
         automation_engine=automation,
         camera_service=getattr(app.state, "camera_service", None),
+        presence_fusion=presence,
     )
     desk_exit_kitchen.set_heartbeat_registry(heartbeats)
     app.state.desk_exit_kitchen = desk_exit_kitchen
