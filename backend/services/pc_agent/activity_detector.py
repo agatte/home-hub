@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 import psutil
@@ -41,7 +41,13 @@ from backend.services.pc_agent.game_list import (
 # bound to 127.0.0.1; verify=False is bounded to this single localhost
 # endpoint. The 30s freshness window matches steady-in-match cadence —
 # champion doesn't change mid-game.
-LOL_LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/activeplayer"
+#
+# Endpoint moved from /activeplayer to /allgamedata on 2026-05-18: Riot
+# dropped the active player's ``championName`` from /activeplayer, so the
+# resolver now reads it off the matching entry in the ``allPlayers``
+# roster instead (matched by ``riotId``). /allgamedata is one HTTPS GET
+# vs the two-endpoint alternative, so timeout budget stays flat.
+LOL_LIVE_CLIENT_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 LOL_CHAMPION_CACHE_TTL_S = 30.0
 LOL_CHAMPION_HTTP_TIMEOUT_S = 2.0
 
@@ -541,12 +547,11 @@ class ActivityDetector:
             self._note_lol_failure(f"json_decode: {e}")
             return None
 
-        champion = data.get("championName") if isinstance(data, dict) else None
-        if not isinstance(champion, str) or not champion.strip():
-            self._note_lol_failure(f"missing_champion_name (keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__})")
+        champion = _resolve_active_champion(data)
+        if not champion:
+            self._note_lol_failure(_describe_allgamedata_miss(data))
             return None
 
-        champion = champion.strip()
         if champion != self._lol_champion or self._lol_last_failure_reason is not None:
             logger.info("LoL champion detected: %s", champion)
         self._lol_champion = champion
@@ -668,6 +673,86 @@ class ActivityDetector:
             except Exception:
                 pass
             self._lol_http_client = None
+
+
+def _resolve_active_champion(data: Any) -> Optional[str]:
+    """Pull the active player's ``championName`` from /allgamedata.
+
+    Riot's /activeplayer no longer carries ``championName`` directly;
+    it only identifies the player by ``riotIdGameName`` +
+    ``riotIdTagLine`` (combined as ``riotId``). The champion still lives
+    on the matching entry in the ``allPlayers`` roster, so we cross-walk.
+
+    Returns the stripped champion name, or None if the payload is the
+    wrong shape, the active player can't be identified, or the matching
+    roster entry has no champion (rare — happens during the very first
+    tick of /allgamedata responses on the loading screen).
+    """
+    if not isinstance(data, dict):
+        return None
+
+    active = data.get("activePlayer")
+    all_players = data.get("allPlayers")
+    if not isinstance(active, dict) or not isinstance(all_players, list):
+        return None
+
+    # Match key — riotId is "GameName#TagLine". Fall back to the
+    # separate fields if the combined form isn't present, then to the
+    # legacy summonerName for spectator / replay / older client edge cases.
+    riot_id = active.get("riotId")
+    if not isinstance(riot_id, str) or not riot_id.strip():
+        game_name = active.get("riotIdGameName")
+        tag_line = active.get("riotIdTagLine")
+        if isinstance(game_name, str) and isinstance(tag_line, str) and game_name and tag_line:
+            riot_id = f"{game_name}#{tag_line}"
+        else:
+            riot_id = None
+    summoner_name = active.get("summonerName")
+
+    for entry in all_players:
+        if not isinstance(entry, dict):
+            continue
+        entry_riot_id = entry.get("riotId")
+        if riot_id and isinstance(entry_riot_id, str) and entry_riot_id == riot_id:
+            matched = entry
+            break
+        entry_summoner = entry.get("summonerName")
+        if (
+            summoner_name
+            and isinstance(entry_summoner, str)
+            and entry_summoner == summoner_name
+        ):
+            matched = entry
+            break
+    else:
+        return None
+
+    champion = matched.get("championName")
+    if isinstance(champion, str) and champion.strip():
+        return champion.strip()
+    return None
+
+
+def _describe_allgamedata_miss(data: Any) -> str:
+    """Build a diagnostic string when /allgamedata returns 200 but we
+    can't resolve a champion. Keeps the WARNING line useful without
+    dumping the entire payload."""
+    if not isinstance(data, dict):
+        return f"non_dict_payload (type={type(data).__name__})"
+    keys = list(data.keys())
+    active = data.get("activePlayer")
+    all_players = data.get("allPlayers")
+    if not isinstance(active, dict):
+        return f"missing_active_player (top_keys={keys})"
+    if not isinstance(all_players, list):
+        return f"missing_all_players (top_keys={keys})"
+    active_riot_id = active.get("riotId") or (
+        f"{active.get('riotIdGameName')}#{active.get('riotIdTagLine')}"
+    )
+    return (
+        f"no_matching_player (active_riot_id={active_riot_id!r}, "
+        f"roster_size={len(all_players)})"
+    )
 
 
 def run_agent(
