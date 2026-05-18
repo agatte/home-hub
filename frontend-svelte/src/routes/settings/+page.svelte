@@ -8,6 +8,7 @@
   import Slider from '$lib/components/Slider.svelte'
   import LearnedRulesCard from '$lib/components/LearnedRulesCard.svelte'
   import RuleSuggestionHistoryCard from '$lib/components/RuleSuggestionHistoryCard.svelte'
+  import AmbientSettings from '$lib/components/AmbientSettings.svelte'
 
   const DND_DURATIONS = [
     { label: '1h',  minutes: 60  },
@@ -1069,6 +1070,9 @@
     </div>
   </section>
   {/if}
+
+  <!-- Ambient Sound — Sonos toggle, per-mode mappings + volume overrides -->
+  <AmbientSettings />
 
   <!-- Learned Rules — moved from /analytics: it's a control surface, not analytics -->
   <LearnedRulesCard />

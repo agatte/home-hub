@@ -37,6 +37,12 @@ class AmbientConfigUpdate(BaseModel):
     mode_sounds: Optional[dict[str, Optional[str]]] = None
     mode_auto_play: Optional[dict[str, bool]] = None
     weather_reactive: Optional[bool] = None
+    sonos_enabled: Optional[bool] = None
+    sonos_present_volume: Optional[int] = Field(default=None, ge=0, le=60)
+    sonos_away_volume: Optional[int] = Field(default=None, ge=0, le=60)
+    # Per-mode override map. Value=None deletes the override for that mode
+    # (falls back to sonos_present_volume).
+    sonos_mode_volume_overrides: Optional[dict[str, Optional[int]]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +101,14 @@ async def set_volume(body: AmbientVolumeRequest, request: Request) -> dict:
 
 @router.post("/config", dependencies=[Depends(require_api_key)])
 async def update_config(body: AmbientConfigUpdate, request: Request) -> dict:
-    """Update ambient config (mode mappings, weather-reactive toggle)."""
+    """Update ambient config (mode mappings, weather-reactive, Sonos)."""
     service = request.app.state.ambient_sound
     return await service.update_config(
         mode_sounds=body.mode_sounds,
         mode_auto_play=body.mode_auto_play,
         weather_reactive=body.weather_reactive,
+        sonos_enabled=body.sonos_enabled,
+        sonos_present_volume=body.sonos_present_volume,
+        sonos_away_volume=body.sonos_away_volume,
+        sonos_mode_volume_overrides=body.sonos_mode_volume_overrides,
     )

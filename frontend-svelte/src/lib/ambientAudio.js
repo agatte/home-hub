@@ -51,6 +51,18 @@ export function initAmbientAudio() {
   const unsubscribe = ambient.subscribe((state) => {
     if (!state) return
 
+    // Sonos is the primary surface — when the backend has Sonos playing
+    // ambient, silence the per-tab HTMLAudio so we don't double up.
+    // Without this gate every connected dashboard tab (Latitude kiosk,
+    // phone, desktop) plays the same file independently, which is why
+    // ambient "felt like it only played on the device I just touched"
+    // (browser autoplay policy let exactly one tab through).
+    if (state.sonos_ambient_active) {
+      if (audio && !audio.paused) audio.pause()
+      pendingPlay = false
+      return
+    }
+
     const a = ensureAudio()
     // Server-resolved URL handles short fallbacks (/static/ambient/) vs
     // long-form user files (/static/ambient-long/). Fall back to the legacy

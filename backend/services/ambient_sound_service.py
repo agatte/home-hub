@@ -50,11 +50,17 @@ WEATHER_SOUND_MAP: dict[str, list[str]] = {
     "wind": ["wind", "gale", "breeze"],
 }
 
-# Modes where Sonos ambient is suppressed — user wants intentional audio
-# control in these states.
-SONOS_BLOCKED_MODES: frozenset[str] = frozenset(
-    {"gaming", "working", "watching", "sleeping", "gameday"}
-)
+# Modes where ambient is fully suppressed (both Sonos and browser).
+# Watching has its own audio (projector / TV); gameday is celebration-exclusive
+# on the Sonos; sleeping is silent. Other "active" modes (working, gaming,
+# relax, cooking, idle, social) all allow ambient — Sonos is the primary
+# surface, per-mode volume overrides keep gaming at a low background level.
+SUPPRESSED_MODES: frozenset[str] = frozenset({"watching", "gameday", "sleeping"})
+
+# Backward-compat alias for any caller still referring to the old name.
+# Sonos eligibility uses the same set as the browser block — the surface
+# distinction is owned by `sonos_enabled`, not by per-mode policy.
+SONOS_BLOCKED_MODES = SUPPRESSED_MODES
 
 
 def _label_from_filename(filename: str) -> str:
@@ -109,6 +115,19 @@ class AmbientSoundService:
         self._sonos_enabled: bool = True
         self._sonos_present_volume: int = 12  # Sonos level when user is nearby
         self._sonos_away_volume: int = 28     # Sonos level when user is away
+        # Per-mode Sonos volume overrides. Missing modes fall back to
+        # _sonos_present_volume. Used in _resolve_sonos_volume(mode) so a
+        # gaming-mode override of e.g. 6 plays rain at near-background level
+        # while relax-mode 14 plays fireplace louder. Both the initial
+        # _start_sonos_ambient call and the camera-driven follow-me ramp
+        # consult this map.
+        self._sonos_mode_volume_overrides: dict[str, int] = {}
+
+        # Weather-watch loop bookkeeping. _last_weather_class is the most
+        # recently classified weather (rain/thunderstorm/snow/wind/None);
+        # watch loop only fires _evaluate() when it actually changes so we
+        # don't churn on identical-class re-reads of the cached NWS data.
+        self._last_weather_class: Optional[str] = None
 
         # Available sounds (populated by scan_sounds)
         # _sound_index maps filename → {url_prefix, abs_path, label, source_dir}
@@ -122,16 +141,14 @@ class AmbientSoundService:
     # ------------------------------------------------------------------
 
     async def load_from_db(self) -> None:
-        """Load persisted config from app_settings."""
+        """Load persisted config from app_settings, seeding defaults on first run."""
         from backend.api.routes.routines import load_setting
 
-        config = await load_setting(AMBIENT_CONFIG_KEY)
-        if not config:
-            return
+        config = await load_setting(AMBIENT_CONFIG_KEY) or {}
 
         self._volume = config.get("volume", 0.3)
-        self._mode_sounds = config.get("mode_sounds", {})
-        self._mode_auto_play = config.get("mode_auto_play", {})
+        self._mode_sounds = dict(config.get("mode_sounds", {}))
+        self._mode_auto_play = dict(config.get("mode_auto_play", {}))
         self._weather_reactive = config.get("weather_reactive", True)
         self._current_sound = config.get("last_sound")
         self._playing = config.get("last_playing", False)
@@ -140,9 +157,34 @@ class AmbientSoundService:
         self._sonos_enabled = config.get("sonos_enabled", True)
         self._sonos_present_volume = config.get("sonos_present_volume", 12)
         self._sonos_away_volume = config.get("sonos_away_volume", 28)
+        self._sonos_mode_volume_overrides = dict(
+            config.get("sonos_mode_volume_overrides", {})
+        )
+
+        # First-boot defaults — only when truly empty so we don't clobber
+        # user-edited config on subsequent restarts. Relax → fireplace is the
+        # one mode default we ship; weather-reactive ambient covers
+        # working/gaming/cooking organically without forcing a sound when
+        # weather is clear.
+        seeded = False
+        if not self._mode_sounds:
+            self._mode_sounds = {"relax": "fireplace.mp3"}
+            seeded = True
+        if "relax" not in self._mode_auto_play:
+            self._mode_auto_play["relax"] = True
+            seeded = True
+        if seeded:
+            await self._save_config()
+            logger.info(
+                "Ambient defaults seeded: %s",
+                {k: v for k, v in self._mode_sounds.items()},
+            )
+
         logger.info(
-            "Ambient config loaded: volume=%.1f, weather=%s, mappings=%d",
+            "Ambient config loaded: volume=%.1f, weather=%s, mappings=%d, "
+            "sonos_enabled=%s",
             self._volume, self._weather_reactive, len(self._mode_sounds),
+            self._sonos_enabled,
         )
 
     def set_camera_service(self, camera: Any) -> None:
@@ -242,6 +284,8 @@ class AmbientSoundService:
             "sonos_ambient_active": self._sonos_ambient_active,
             "sonos_present_volume": self._sonos_present_volume,
             "sonos_away_volume": self._sonos_away_volume,
+            "sonos_mode_volume_overrides": self._sonos_mode_volume_overrides,
+            "suppressed_modes": sorted(SUPPRESSED_MODES),
         }
 
     # ------------------------------------------------------------------
@@ -260,11 +304,23 @@ class AmbientSoundService:
         await self._broadcast_state()
         await self._save_config()
         logger.info("Ambient play: %s (source=%s)", filename, source)
-        if self._sonos and not self._sonos_ambient_active:
-            task = asyncio.create_task(self._start_sonos_ambient())
-            self._pending_sonos_tasks.add(task)
-            task.add_done_callback(self._pending_sonos_tasks.discard)
+        if self._sonos:
+            if not self._sonos_ambient_active:
+                self._spawn_sonos_task(self._start_sonos_ambient())
+            else:
+                # Already mirroring — swap the URI in place so weather
+                # transitions (rain → thunderstorm) don't leave Sonos
+                # stuck on the old file while the browser shows the new one.
+                expected_uri = self._url_for(filename, absolute=True)
+                if expected_uri and expected_uri != self._sonos_ambient_uri:
+                    self._spawn_sonos_task(self._swap_sonos_ambient(filename))
         return {"status": "ok"}
+
+    def _spawn_sonos_task(self, coro) -> None:
+        """Track a fire-and-forget Sonos coroutine so the GC can't drop it."""
+        task = asyncio.create_task(coro)
+        self._pending_sonos_tasks.add(task)
+        task.add_done_callback(self._pending_sonos_tasks.discard)
 
     async def pause(self) -> dict[str, Any]:
         """Pause playback."""
@@ -282,6 +338,10 @@ class AmbientSoundService:
         self._playing = True
         await self._broadcast_state()
         await self._save_config()
+        # pause() stops the Sonos mirror; resume should bring it back so
+        # the "Sonos primary" model stays consistent across the pause/play cycle.
+        if self._sonos and not self._sonos_ambient_active:
+            self._spawn_sonos_task(self._start_sonos_ambient())
         logger.info("Ambient resumed: %s", self._current_sound)
         return {"status": "ok"}
 
@@ -313,6 +373,10 @@ class AmbientSoundService:
         mode_sounds: Optional[dict[str, Optional[str]]] = None,
         mode_auto_play: Optional[dict[str, bool]] = None,
         weather_reactive: Optional[bool] = None,
+        sonos_enabled: Optional[bool] = None,
+        sonos_present_volume: Optional[int] = None,
+        sonos_away_volume: Optional[int] = None,
+        sonos_mode_volume_overrides: Optional[dict[str, Optional[int]]] = None,
     ) -> dict[str, Any]:
         """Update ambient config. Partial updates supported."""
         if mode_sounds is not None:
@@ -326,8 +390,35 @@ class AmbientSoundService:
         if weather_reactive is not None:
             self._weather_reactive = weather_reactive
 
+        sonos_changed = False
+        if sonos_enabled is not None:
+            self._sonos_enabled = bool(sonos_enabled)
+            sonos_changed = True
+        if sonos_present_volume is not None:
+            self._sonos_present_volume = max(0, min(60, int(sonos_present_volume)))
+            sonos_changed = True
+        if sonos_away_volume is not None:
+            self._sonos_away_volume = max(0, min(60, int(sonos_away_volume)))
+            sonos_changed = True
+        if sonos_mode_volume_overrides is not None:
+            for mode, vol in sonos_mode_volume_overrides.items():
+                if vol is None:
+                    self._sonos_mode_volume_overrides.pop(mode, None)
+                else:
+                    self._sonos_mode_volume_overrides[mode] = max(0, min(60, int(vol)))
+            sonos_changed = True
+
+        # If the toggle just flipped off and Sonos was mirroring, stop it.
+        # Re-evaluate so the browser surface picks up where Sonos left off.
+        if sonos_changed and not self._sonos_enabled and self._sonos_ambient_active:
+            self._stop_sonos_ambient()
+
         await self._save_config()
         await self._broadcast_state()
+        # Volume / enable changes warrant re-evaluating so the new policy
+        # takes effect immediately on the active sound.
+        if sonos_changed:
+            await self._evaluate()
         logger.info("Ambient config updated")
         return {"status": "ok"}
 
@@ -340,58 +431,142 @@ class AmbientSoundService:
         await self.on_mode_change(mode)
 
     async def on_mode_change(self, mode: str) -> None:
-        """React to mode change: check weather first, then mode mapping."""
-        if mode in SONOS_BLOCKED_MODES and self._sonos_ambient_active:
-            self._stop_sonos_ambient()
+        """React to mode change. Delegates to the central evaluator."""
+        await self._evaluate(mode)
+
+    async def _evaluate(self, mode: Optional[str] = None) -> None:
+        """Central priority chain — weather > mode mapping > existing state.
+
+        Single entry point so the mode-change callback and the weather-watch
+        loop produce identical behavior. Both surfaces (Sonos + browser)
+        consume the broadcast `playing` / `sound` fields so the choice of
+        what's playing is made in exactly one place.
+        """
+        if mode is None and self._automation is not None:
+            mode = getattr(self._automation, "current_mode", None)
         if not self._available_sounds:
             return
 
-        # Weather-reactive takes priority
-        if self._weather_reactive:
-            weather_sound = self._check_weather()
-            if weather_sound:
-                if weather_sound != self._current_sound or not self._playing:
-                    await self.play(weather_sound, source="weather")
-                return
+        # Hard-blocked modes — silence both surfaces. We pause rather than
+        # stop so _current_sound/_source survive for the next _evaluate
+        # when the mode opens back up.
+        if mode in SUPPRESSED_MODES:
+            if self._playing or self._sonos_ambient_active:
+                await self.pause()
+            return
 
-        # Clear weather override if weather no longer matches
-        if self._weather_override_active:
-            self._weather_override_active = False
+        weather_sound = self._check_weather() if self._weather_reactive else None
 
-        # Check mode mapping
-        mapped_sound = self._mode_sounds.get(mode)
-        auto_play = self._mode_auto_play.get(mode, False)
+        mode_sound = None
+        if mode is not None:
+            mapped = self._mode_sounds.get(mode)
+            auto_play = self._mode_auto_play.get(mode, False)
+            if mapped and auto_play and self._file_exists(mapped):
+                mode_sound = mapped
 
-        if mapped_sound and auto_play and self._file_exists(mapped_sound):
-            if mapped_sound != self._current_sound or not self._playing:
-                await self.play(mapped_sound, source="mode")
-        # Don't stop manually-chosen sounds on mode change
+        if weather_sound:
+            target, target_source = weather_sound, "weather"
+        elif mode_sound:
+            target, target_source = mode_sound, "mode"
+        else:
+            target, target_source = None, None
+
+        if target:
+            need_play = (
+                target != self._current_sound
+                or not self._playing
+                or self._source != target_source
+            )
+            if need_play:
+                await self.play(target, source=target_source)
+            return
+
+        # No active driver. Stop weather/mode-driven playback so the rain
+        # sound doesn't outlive the storm; manual selections persist.
+        if self._playing and self._source in ("weather", "mode"):
+            await self.pause()
+            if self._weather_override_active:
+                self._weather_override_active = False
+                await self._broadcast_state()
 
     # ------------------------------------------------------------------
     # Weather
     # ------------------------------------------------------------------
 
-    def _check_weather(self) -> Optional[str]:
-        """Check cached weather, return matching sound filename or None."""
+    def _classify_weather(self) -> Optional[str]:
+        """Classify cached weather into a sound-stem class or None.
+
+        Returns one of WEATHER_SOUND_MAP's keys (rain/thunderstorm/snow/wind)
+        if the cached description matches any of that class's keywords;
+        otherwise None. Used by weather_watch_loop as a cheap change-detector
+        before calling the full _evaluate().
+        """
         if not self._weather_service:
             return None
-
         try:
             weather = self._weather_service.get_cached()
-            if not weather:
-                return None
         except Exception:
+            return None
+        if not weather:
             return None
 
         description = weather.get("description", "").lower()
-
         for sound_stem, keywords in WEATHER_SOUND_MAP.items():
             if any(kw in description for kw in keywords):
-                # Find matching file in available sounds
-                for s in self._available_sounds:
-                    if s["filename"].lower().startswith(sound_stem):
-                        return s["filename"]
+                return sound_stem
         return None
+
+    def _check_weather(self) -> Optional[str]:
+        """Resolve current weather class to a concrete sound filename."""
+        wclass = self._classify_weather()
+        if not wclass:
+            return None
+        for s in self._available_sounds:
+            if s["filename"].lower().startswith(wclass):
+                return s["filename"]
+        return None
+
+    async def weather_watch_loop(self) -> None:
+        """Background poll: re-evaluate ambient when weather class changes.
+
+        Cached NWS data refreshes on its own 5-min TTL; this loop reads the
+        cache, not the API, so the cadence is cheap. The first tick fires
+        ~5s after startup so the initial _evaluate runs after Sonos + the
+        automation engine have settled — that's what re-arms playback after
+        a deploy with persisted `last_playing=True`.
+        """
+        POLL_INTERVAL = 60.0
+        FIRST_TICK_DELAY = 5.0
+
+        try:
+            await asyncio.sleep(FIRST_TICK_DELAY)
+        except asyncio.CancelledError:
+            raise
+
+        try:
+            self._last_weather_class = self._classify_weather()
+            await self._evaluate()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Initial ambient evaluate failed")
+
+        while True:
+            try:
+                await asyncio.sleep(POLL_INTERVAL)
+                wclass = self._classify_weather()
+                if wclass != self._last_weather_class:
+                    logger.info(
+                        "Ambient: weather class %s -> %s, re-evaluating",
+                        self._last_weather_class, wclass,
+                    )
+                    self._last_weather_class = wclass
+                    await self._evaluate()
+            except asyncio.CancelledError:
+                logger.info("Weather watch loop cancelled")
+                raise
+            except Exception:
+                logger.exception("Weather watch loop iteration failed")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -415,6 +590,20 @@ class AmbientSoundService:
             return False
         mode = getattr(self._automation, "current_mode", None)
         return mode not in SONOS_BLOCKED_MODES if mode else True
+
+    def _current_mode(self) -> Optional[str]:
+        """Read the engine's current mode for per-mode volume / eligibility."""
+        if self._automation is None:
+            return None
+        return getattr(self._automation, "current_mode", None)
+
+    def _resolve_sonos_volume(self, mode: Optional[str] = None) -> int:
+        """Pick the Sonos volume for the given mode (overrides win)."""
+        if mode is None:
+            mode = self._current_mode()
+        if mode and mode in self._sonos_mode_volume_overrides:
+            return self._sonos_mode_volume_overrides[mode]
+        return self._sonos_present_volume
 
     async def _start_sonos_ambient(self) -> None:
         """Start Sonos ambient if eligible + Sonos idle + ambient playing.
@@ -452,7 +641,9 @@ class AmbientSoundService:
                 self._current_sound,
             )
             return
-        success = await self._sonos.play_uri(uri, volume=self._sonos_present_volume)
+        mode = self._current_mode()
+        start_volume = self._resolve_sonos_volume(mode)
+        success = await self._sonos.play_uri(uri, volume=start_volume)
         if not success:
             logger.warning("Sonos ambient: play_uri failed for %s", uri)
             return
@@ -465,9 +656,13 @@ class AmbientSoundService:
             self._sonos_ambient_loop(), name="sonos_ambient_loop"
         )
         logger.info(
-            "Sonos ambient started: %s at volume %d",
-            self._current_sound, self._sonos_present_volume,
+            "Sonos ambient started: %s at volume %d (mode=%s)",
+            self._current_sound, start_volume, mode,
         )
+        # Re-broadcast so frontends see sonos_ambient_active=true and silence
+        # their per-tab audio. Without this the gate in ambientAudio.js
+        # wouldn't fire until the next play()/pause() cycle.
+        await self._broadcast_state()
 
     def _stop_sonos_ambient(self) -> None:
         """Cancel ambient loop and pause Sonos. Sync — fire-and-forget pause."""
@@ -479,10 +674,41 @@ class AmbientSoundService:
         self._sonos_absent_since = None
         self._sonos_present_since = None
         if self._sonos and getattr(self._sonos, "connected", False):
-            task = asyncio.create_task(self._sonos.pause())
-            self._pending_sonos_tasks.add(task)
-            task.add_done_callback(self._pending_sonos_tasks.discard)
+            self._spawn_sonos_task(self._sonos.pause())
         logger.info("Sonos ambient stopped")
+
+    async def _swap_sonos_ambient(self, filename: str) -> None:
+        """Replace the currently-playing Sonos URI without tearing down the loop.
+
+        Called when the active sound changes mid-mirror (weather class
+        transition, manual file pick while Sonos is playing). The loop's
+        track-end re-play branch already uses self._sonos_ambient_uri, so
+        updating that pointer here is sufficient for future restart cycles.
+        """
+        if not self._sonos_ambient_active or not self._sonos:
+            return
+        if not self._sonos_eligible():
+            return
+        uri = self._url_for(filename, absolute=True)
+        if not uri:
+            logger.warning(
+                "Sonos ambient swap: %s no longer indexed, leaving prior URI",
+                filename,
+            )
+            return
+        mode = self._current_mode()
+        vol = self._resolve_sonos_volume(mode)
+        try:
+            success = await self._sonos.play_uri(uri, volume=vol)
+        except Exception as e:
+            logger.warning("Sonos ambient swap: play_uri error: %s", e)
+            return
+        if success:
+            self._sonos_ambient_uri = uri
+            logger.info(
+                "Sonos ambient swapped to %s at volume %d (mode=%s)",
+                filename, vol, mode,
+            )
 
     async def _sonos_ambient_loop(self) -> None:
         """Background task: re-play on track end, follow-me volume via camera.
@@ -512,12 +738,15 @@ class AmbientSoundService:
 
                 sonos_state = status.get("state", "")
 
+                mode = self._current_mode()
+                present_volume = self._resolve_sonos_volume(mode)
+
                 # Re-play when track ends or is paused (e.g. post-TTS duck-resume)
                 if sonos_state in ("STOPPED", "PAUSED_PLAYBACK") and self._sonos_ambient_uri:
                     logger.info("Sonos ambient: restarting stopped track")
                     await self._sonos.play_uri(
                         self._sonos_ambient_uri,
-                        volume=int(status.get("volume", self._sonos_present_volume)),
+                        volume=int(status.get("volume", present_volume)),
                     )
                     continue
 
@@ -530,7 +759,7 @@ class AmbientSoundService:
 
                 detection = cam.get("last_detection", "unknown")
                 now = time.monotonic()
-                current_vol = int(status.get("volume", self._sonos_present_volume))
+                current_vol = int(status.get("volume", present_volume))
 
                 if detection == "absent":
                     self._sonos_present_since = None
@@ -555,14 +784,14 @@ class AmbientSoundService:
                         self._sonos_present_since = now
                     elif (
                         now - self._sonos_present_since >= PRESENT_RAMP_SECONDS
-                        and current_vol > self._sonos_present_volume
+                        and current_vol > present_volume
                     ):
                         logger.info(
-                            "Sonos ambient: ramping down to present volume %d",
-                            self._sonos_present_volume,
+                            "Sonos ambient: ramping down to present volume %d (mode=%s)",
+                            present_volume, mode,
                         )
                         await self._sonos.ramp_volume(
-                            self._sonos_present_volume, steps=4, interval=0.8
+                            present_volume, steps=4, interval=0.8
                         )
                         self._sonos_present_since = now  # reset — don't re-ramp
 
@@ -588,4 +817,5 @@ class AmbientSoundService:
             "sonos_enabled": self._sonos_enabled,
             "sonos_present_volume": self._sonos_present_volume,
             "sonos_away_volume": self._sonos_away_volume,
+            "sonos_mode_volume_overrides": self._sonos_mode_volume_overrides,
         })

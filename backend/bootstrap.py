@@ -872,6 +872,11 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(rule_engine.brightness_scan_loop()))
     tasks.append(asyncio.create_task(gameday.poll_state_loop()))
     tasks.append(asyncio.create_task(notifier.poll_loop()))
+    # Re-evaluate ambient sound whenever the cached weather class changes
+    # (rain ↔ clear, etc.). Same loop seeds the first _evaluate ~5s after
+    # startup, which re-arms playback when load_from_db rehydrates
+    # last_playing=True across a deploy.
+    tasks.append(asyncio.create_task(ambient_sound.weather_watch_loop()))
 
     # Camera presence detection (opt-in, runs on Latitude webcam)
     camera_enabled_setting = await load_setting("camera_enabled")
