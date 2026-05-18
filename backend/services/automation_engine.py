@@ -158,6 +158,7 @@ PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "zone_posture_rule",
     "watching_sleep_guard",
     "timeout_4h",
+    "desk_exit_kitchen",
 })
 
 
@@ -1587,20 +1588,26 @@ class AutomationEngine:
         states: dict[str, dict],
         duration_seconds: int = 600,
         transition_time: int = 20,
+        trigger: str = "transit",
     ) -> None:
-        """Apply temporary per-light brightness for transit-navigation lighting.
+        """Apply temporary per-light brightness, protected from mode reconcile.
 
         Writes the given per-light states directly to the bridge and protects
         those lights from mode-driven automation until ``clear_transit_override``
         is called or the deadline elapses. Used by ``TransitLightingService``
-        when the camera loses Anthony while his phone is still on Wi-Fi — the
-        apartment briefly brightens along his likely walking path without
-        changing the current mode.
+        (gentle navigation lift) and ``DeskExitKitchenService`` (kitchen
+        brighten on desk exit) — both share the same protection slot
+        (``_transit_light_overrides``) but distinguish themselves via the
+        ``trigger`` label written to ``light_adjustments``.
 
         Args:
             states: light_id → state dict (``{"on": True, "bri": ..., "ct": ...}``)
-            duration_seconds: max protection window before auto-expiry (default 10 min)
+            duration_seconds: max protection window before auto-expiry
             transition_time: deciseconds for the Hue transition (20 = 2s)
+            trigger: label written to light_adjustments.trigger — defaults to
+                ``"transit"`` for back-compat; ``DeskExitKitchenService`` passes
+                ``"desk_exit_kitchen"`` so analytics can distinguish the two
+                paths.
         """
         if not self._hue or not self._hue.connected:
             return
@@ -1624,8 +1631,8 @@ class AutomationEngine:
                     if lid in self._manual_light_overrides
                 )
                 logger.info(
-                    "Transit skipped kitchen pair (L3/L4) — manual override on light %s",
-                    stamped,
+                    "%s skipped kitchen pair (L3/L4) — manual override on light %s",
+                    trigger, stamped,
                 )
                 states = {
                     lid: s for lid, s in states.items() if lid not in ("3", "4")
@@ -1653,14 +1660,10 @@ class AutomationEngine:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         logger.info(
-            "Transit override applied to lights %s (expires %s)",
-            list(states.keys()),
+            "%s override applied to lights %s (expires %s)",
+            trigger, list(states.keys()),
             deadline.strftime("%H:%M:%S"),
         )
-        # Log each transit write to light_adjustments with trigger='transit'
-        # so analytics / DB queries see the kitchen on/off cycle that was
-        # previously invisible. Logged after the bridge writes so a failed
-        # write doesn't pollute the table.
         if self._event_logger:
             for light_id, state in states.items():
                 prev = pre_values.get(light_id, {})
@@ -1671,8 +1674,42 @@ class AutomationEngine:
                     sat_before=prev.get("sat"), sat_after=state.get("sat"),
                     ct_before=prev.get("ct"), ct_after=state.get("ct"),
                     mode_at_time=self.current_mode,
-                    trigger="transit",
+                    trigger=trigger,
                 )
+
+    async def apply_desk_exit_override(
+        self,
+        states: dict[str, dict],
+        duration_seconds: int = 4 * 3600,
+        transition_time: int = 5,
+    ) -> None:
+        """Brighten the kitchen pair when Anthony leaves the desk.
+
+        Thin wrapper around ``apply_transit_override`` with the
+        ``trigger="desk_exit_kitchen"`` label so light_adjustments rows are
+        distinguishable from generic transit pulses. Default ``duration_seconds``
+        is 4h (vs transit's 10min) because this override holds until
+        ``DeskExitKitchenService`` sees Anthony back at the desk; the deadline
+        is only a wedged-camera failsafe.
+        """
+        await self.apply_transit_override(
+            states,
+            duration_seconds=duration_seconds,
+            transition_time=transition_time,
+            trigger="desk_exit_kitchen",
+        )
+
+    async def clear_desk_exit_override(self, transition_time: int = 20) -> None:
+        """Revert the kitchen pair back to the current mode's state.
+
+        Thin alias for ``clear_transit_override`` scoped to the kitchen pair
+        only — the desk-exit service never touches L1, so a service-wide
+        clear could safely call the generic method, but this keeps the call
+        sites symmetric with the apply method.
+        """
+        await self.clear_transit_override(
+            light_ids=["3", "4"], transition_time=transition_time,
+        )
 
     async def clear_transit_override(
         self,

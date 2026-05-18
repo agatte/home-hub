@@ -337,8 +337,16 @@ class TransitLightingService:
             )
             self._last_block_reason = None
 
-    def _navigation_states(self) -> dict[str, dict]:
-        """Per-light targets for transit. Lower at late-night to avoid glare."""
+    def _navigation_states(self, mode: str) -> dict[str, dict]:
+        """Per-light targets for transit. Lower at late-night to avoid glare.
+
+        Yields the kitchen pair to ``DeskExitKitchenService`` when it owns
+        the path: productive modes (working / gaming / watching / idle) in
+        evening / night periods get a brighter, hold-until-return kitchen
+        from the dedicated service, so transit only paints L1 in that
+        window. Outside the yield window (eg relax-evening, working-day),
+        transit still paints all three lights.
+        """
         hour = datetime.now(tz=TZ).hour
         late_night = hour >= LATE_NIGHT_START_HOUR or hour < LATE_NIGHT_END_HOUR
 
@@ -352,10 +360,31 @@ class TransitLightingService:
         # L1 = living room, L3 = kitchen front, L4 = kitchen back. L2 (bedroom
         # bias) is left on the current mode's state so walking back into the
         # bedroom feels continuous.
-        return {"1": living_room, "3": kitchen, "4": kitchen}
+        states: dict[str, dict] = {"1": living_room}
+        # Cede kitchen during the productive evening/night window so the two
+        # services don't fight: transit would set kitchen to 40 bri while
+        # DeskExitKitchenService wants 60–120 for the same desk-exit event.
+        # Hour-based check matches DeskExitKitchen's TRIGGER_PERIODS (evening
+        # 18:00+, night = winddown_start_hour onward, late_night above) — we
+        # use a simple hour gate here to avoid importing the schedule.
+        productive_yield = mode in {"working", "gaming", "watching", "idle"}
+        evening_or_night = hour >= 18 or late_night
+        if not (productive_yield and evening_or_night):
+            states["3"] = kitchen
+            states["4"] = kitchen
+        return states
 
     async def _activate(self, mode: str) -> None:
-        states = self._navigation_states()
+        states = self._navigation_states(mode)
+        if not states:
+            # All lights ceded (productive evening/night with only kitchen in
+            # the prior version's payload) — nothing to do here, DeskExit
+            # owns the cue. Don't stamp active state.
+            logger.info(
+                "Transit yielded (mode=%s) — DeskExitKitchen owns the path",
+                mode,
+            )
+            return
         # Fast 0.5s "snap on" rather than a 2s ramp — when stepping into a
         # dark room you want lights *now*, not a slow fade-in.
         await self._automation.apply_transit_override(

@@ -805,6 +805,7 @@ async def lifespan(app: FastAPI):
     heartbeats.register("scheduler", 30.0)
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
+    heartbeats.register("desk_exit_kitchen", 2.0)
 
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)
@@ -876,6 +877,21 @@ async def lifespan(app: FastAPI):
     app.state.transit_lighting = transit_lighting
     tasks.append(asyncio.create_task(transit_lighting.poll_loop()))
     app_logger.info("Transit lighting service started")
+
+    # Desk-exit kitchen — when Anthony leaves the desk in productive evening/
+    # night, brighten the kitchen pair (L3 + L4) and hold until he returns.
+    # Distinct from transit (kitchen-only, time-of-day scaled, hold-until-
+    # return instead of 10-min auto-fade). Transit cedes the kitchen pair
+    # during the same window so the two don't fight.
+    from backend.services.desk_exit_kitchen_service import DeskExitKitchenService
+    desk_exit_kitchen = DeskExitKitchenService(
+        automation_engine=automation,
+        camera_service=getattr(app.state, "camera_service", None),
+    )
+    desk_exit_kitchen.set_heartbeat_registry(heartbeats)
+    app.state.desk_exit_kitchen = desk_exit_kitchen
+    tasks.append(asyncio.create_task(desk_exit_kitchen.poll_loop()))
+    app_logger.info("Desk-exit kitchen service started")
 
     # AI Personality Layer (Phase A — shadow-log only).
     # EmotionService consumes face blendshapes from camera_service when
@@ -958,6 +974,9 @@ async def lifespan(app: FastAPI):
     transit = getattr(app.state, "transit_lighting", None)
     if transit is not None:
         await _safe_shutdown("transit_lighting", transit.close)
+    desk_exit = getattr(app.state, "desk_exit_kitchen", None)
+    if desk_exit is not None:
+        await _safe_shutdown("desk_exit_kitchen", desk_exit.close)
     emotion = getattr(app.state, "emotion_service", None)
     if emotion is not None:
         await _safe_shutdown("emotion_service", emotion.close)

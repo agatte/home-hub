@@ -69,6 +69,19 @@ ABSENT_THRESHOLD = 15
 # dampened by the larger ABSENT_THRESHOLD above. Fixed corner view has no
 # other face-like regions (bed / wall art) that false-trigger at this score.
 MIN_FACE_CONFIDENCE = 0.15
+# Stricter floor for the *weak-face-only* fallback under low ambient light.
+# At ema_lux < LOW_LUX_THRESHOLD the chair-back / picture-frame silhouettes
+# routinely produce 0.15–0.25 face scores that re-emit `present` between
+# real Anthony cycles, defeating downstream services that watch for sustained
+# absence (TransitLightingService, DeskExitKitchenService). This floor only
+# gates the weak path: strong face (≥ FACE_TRUST_THRESHOLD) and pose still
+# fire normally regardless of lux. Evidence (2026-05-18 05:08 ET): Anthony
+# walked off-frame, chair-back held face at 0.18 conf @ ema_lux 151 — the
+# camera flapped present/absent and the downstream absent dwell never
+# stabilized. Pose detection (which has its own torso-visibility gate) is
+# unaffected.
+LOW_LUX_FACE_FLOOR_CONF = 0.25
+LOW_LUX_THRESHOLD = 300.0
 # Face confidence above which face wins outright over pose. Below this, when
 # pose is strong, pose takes priority — this protects against face-like
 # furniture silhouettes (chair backs, accent chair) competing with the real
@@ -1617,6 +1630,29 @@ class CameraService:
                 # committed — prevents the bed-overlay-dims-room → pose-
                 # blinded → chair-back-wins-face → zone-flips-to-desk loop
                 # observed 2026-05-05.
+                #
+                # Low-lux gate: at ema_lux < LOW_LUX_THRESHOLD the chair-back
+                # ghosts hover in the 0.15–0.25 band and re-flip downstream
+                # absent dwells. Demand a tighter confidence floor when the
+                # room is dim so a true exit produces clean sustained
+                # absence (TransitLightingService / DeskExitKitchenService
+                # both depend on this). Strong face and pose paths above
+                # already returned, so we only short-circuit the weak path.
+                if (
+                    self._ema_lux is not None
+                    and self._ema_lux < LOW_LUX_THRESHOLD
+                    and face_conf < LOW_LUX_FACE_FLOOR_CONF
+                ):
+                    return {
+                        "status": "absent",
+                        "confidence": 0.0,
+                        "source": None,
+                        "pose_landmark_count": 0,
+                        "ambient_lux": ambient_lux,
+                        "zone": None,
+                        "posture": None,
+                        "blendshapes": None,
+                    }
                 return {
                     "status": "present",
                     "confidence": face_conf,
