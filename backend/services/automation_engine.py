@@ -2290,10 +2290,24 @@ class AutomationEngine:
     def _functional_weather_brightness(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
-        """Brighten functional-mode lights on dim weather (shim → calculator)."""
+        """Brighten functional-mode lights on dim weather (shim → calculator).
+
+        Resolves the set of light_ids the LightingLearner has already
+        learned a weather-specific preference for; those lights skip the
+        heuristic boost (Layer 5 fade-out gate) so the user's accepted
+        preference isn't double-applied on top of the heuristic.
+        """
         condition = self._get_current_weather_condition()
+        learner = getattr(self, "_lighting_learner", None)
+        learned: set[str] = set()
+        if learner and condition:
+            try:
+                learned = learner.has_weather_pref(mode, period, condition)
+            except Exception:
+                learned = set()
         return _calc_apply_functional_weather_brightness(
             state, mode, period, condition,
+            learner_has_learned=learned,
         )
 
     def _get_desired_effect(
