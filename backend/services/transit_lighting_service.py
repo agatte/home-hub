@@ -150,6 +150,17 @@ class TransitLightingService:
         # the STATIONARY_ZONES gate when sustained — see BED_EXIT_ABSENT_FRAMES.
         # Resets to 0 on any strongly-present frame.
         self._strong_absent_streak: int = 0
+        # Lights this service actually painted on the most recent _activate.
+        # Used to scope _deactivate's clear to only OUR keys in the shared
+        # `_transit_light_overrides` dict — `DeskExitKitchenService` also
+        # writes to that dict (its `apply_desk_exit_override` is a wrapper
+        # around `apply_transit_override`). Before this was tracked, transit
+        # deactivating on `zone=bed` mid-DeskExit-active stomped the kitchen
+        # pair back to working/late_night = OFF (incident 2026-05-18 01:56
+        # ET: DeskExit fired L3+L4 bri=60 at 01:56:00, transit deactivated at
+        # 01:56:10 with `light_ids=None` → clear-all → kitchen back to OFF
+        # before the user reached the kitchen).
+        self._owned_lights: set[str] = set()
         self._heartbeat: Optional[HeartbeatRegistry] = None
 
     def set_heartbeat_registry(self, registry: HeartbeatRegistry) -> None:
@@ -397,6 +408,7 @@ class TransitLightingService:
         self._transit_start = datetime.now(tz=TZ)
         self._camera_present_since = None
         self._presence_during_absent_since = None
+        self._owned_lights = set(states.keys())
         logger.info(
             "Transit lighting activated (mode=%s, lights=%s)",
             mode, list(states.keys()),
@@ -405,12 +417,19 @@ class TransitLightingService:
     async def _deactivate(self, reason: str) -> None:
         if not self._active:
             return
-        await self._automation.clear_transit_override(transition_time=30)
+        # Scope the clear to only the lights we actually painted. The shared
+        # `_transit_light_overrides` dict also holds DeskExitKitchen's
+        # stamps; clearing with light_ids=None would stomp those too.
+        owned = list(self._owned_lights) if self._owned_lights else None
+        await self._automation.clear_transit_override(
+            light_ids=owned, transition_time=30,
+        )
         self._active = False
         self._camera_absent_since = None
         self._camera_present_since = None
         self._presence_during_absent_since = None
         self._transit_start = None
+        self._owned_lights = set()
         logger.info("Transit lighting deactivated (%s)", reason)
 
     async def close(self) -> None:
