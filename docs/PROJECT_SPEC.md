@@ -223,7 +223,8 @@ Browser / Phone (PWA)
    ├── WeatherService ─────────────> NWS API (5-min cache) + severe weather alerts (2-min cache)
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
    ├── LoLChampionService ─────────> League of Legends champion → bedroom lamp color (gaming mode only)
-   ├── TransitLightingService ─────> camera absent → brief L1/L3/L4 navigation brightness
+   ├── TransitLightingService ─────> camera absent → brief L1 navigation brightness (kitchen pair ceded to DeskExitKitchen in productive evening/night)
+   ├── DeskExitKitchenService ─────> productive evening/night + sustained desk-loss → kitchen pair (L3/L4) brightens, holds until return
    ├── Scheduler ──────────────────> morning routine, evening wind-down
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed

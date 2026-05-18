@@ -4,6 +4,7 @@
 > **Source of truth:** `docs/PROJECT_SPEC.md` — read it for full architecture, schema, and feature details. This file is the working guide; the spec is authoritative.
 > **ML specification:** `docs/ML_SPEC.md` — audio classification, behavioral prediction, camera presence, adaptive lighting, and phased rollout plan.
 > **Lighting expansion wishlist:** `docs/LIGHTING_EXPANSION.md` — Hue/Zigbee hardware recommendations by category and price tier, with per-apartment placement and integration notes.
+> **AI Personality Layer:** `docs/PERSONALITY_LAYER.md` — Phase A shipped 2026-05-18 (shadow-log); B/C/D in GH#58/#59/#60. Mood-vector inference + future mood-ring lamp + Claude vibe intent.
 
 ---
 
@@ -127,6 +128,7 @@ Browser / Phone (PWA)
    │   ├── BehavioralPredictor ────> LightGBM mode prediction
    │   ├── LightingLearner ────────> adaptive per-light preferences
    │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax)
+   │   ├── EmotionService ─────────> MediaPipe FaceLandmarker blendshapes → mood vector (V/A/F) shadow log (Phase A, opt-in)
    │   └── MusicBandit ────────────> Thompson sampling playlist selection, context-aware (mode × period × weather_class)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
@@ -164,8 +166,9 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 
 - **`sonos_service.py`** — Favorites always shuffled with random start via `_shuffle_and_play`.
 - **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (set false to shadow-log only). Late-night rescue + zone+posture rule + both attendance vetoes live in `run_loop`. Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0).
-- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping. Heartbeat ticks only after `_cap` is non-None — `poll_loop` retries `_open_capture()` each iteration when `_cap is None`, so a transient V4L2 lock (post-sleep-resume race) can't leave the lane heartbeat-fresh while every frame short-circuits.
-- **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains/Gradle false positives). Media is foreground-gated.
+- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping. Heartbeat ticks only after `_cap` is non-None — `poll_loop` retries `_open_capture()` each iteration when `_cap is None`, so a transient V4L2 lock (post-sleep-resume race) can't leave the lane heartbeat-fresh while every frame short-circuits. Weak-face fallback has a low-lux floor: at `ema_lux < 300`, face conf < 0.25 returns absent (kills chair-back ghosts that defeated absent-dwell counters). Strong-face ≥0.70 and pose paths fire regardless of lux.
+- **`transit_lighting_service.py` + `desk_exit_kitchen_service.py`** — sibling camera-driven overrides sharing `_transit_light_overrides`. Transit = L1+kitchen, 10-min auto-fade. DeskExit = kitchen-only, hold-until-return, time-of-day brightness (evening bri=120/ct=360, night+late_night bri=60/ct=375). Transit **cedes the kitchen pair** in productive evening/night (mode ∈ {working, gaming, watching, idle}, hour ≥ 18 or late_night) so the two don't fight. Both fire on sustained 10s desk-loss; DeskExit also requires `period ∈ TRIGGER_PERIODS` and uses `is_at_desk_fresh()` as the return signal. Distinguish via `light_adjustments.trigger` (`transit` vs `desk_exit_kitchen`). `"desk_exit_kitchen"` is in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES`. 4h hard timeout = wedged-camera failsafe only.
+- **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains false positives). Media is foreground-gated. LoL champion resolved off `/liveclientdata/allgamedata` (Riot dropped `championName` from `/activeplayer` 2026-05-18); `_resolve_active_champion` cross-walks `activePlayer.riotId` → `allPlayers` roster, falls back to `summonerName` for spectator/replay.
 - **`pc_agent/ambient_monitor.py`** — `speech_multiple→social` gate abandoned 2026-05-09 (max observed score 0.088 across 838k rows; structurally unreachable). Social is manual-override only. Never records audio.
 - **`websocket_manager.py`** — `broadcast` fan-outs via `asyncio.gather` with a 2s per-client `wait_for`. A stalled client (mobile on bad wifi, paused tab) now disconnects itself instead of holding the loop; expect `Client disconnected` log lines in those cases rather than "broadcasts stopped firing."
 - **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`; uses a second `_stream_client` (read timeout disabled). Broadcasts on/bri pushes via the existing `light_update` channel; intentionally drops color (CIE xy) + ct events because there's no gamut-aware converter to v1's hue/sat. Color/ct ride the v1 5s fallback. Application-level liveness probe: `asyncio.wait_for` on each `aiter_lines()` step with a 90s budget (`_STREAM_SILENT_RECONNECT_SECONDS`) — if the bridge stops sending keepalives the loop force-reconnects rather than trusting httpx to notice a silently-dead socket. 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s cadence whenever the stream isn't healthy. Heartbeat threshold in `/health` is 100s (silence timeout + 1s backoff + ~10s reconnect handshake budget), so a quiet-then-reconnect cycle stays green; `/health` only goes degraded if the reconnect itself can't establish.
@@ -226,6 +229,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Bar | `/api/bar` | `GET /status` summary from Home Bar app (inventory, party mode, cocktail suggestion); 503 when `BAR_APP_URL` unset |
 | Ambient | `/api/ambient` | Browser-side ambient audio: playback state, volume, mode→sound map, weather-reactive config |
 | Notification | `/api/notification` | `POST /test` fires a synthetic notification through NotifierService (WS broadcast + ntfy.sh push). Bypasses DND/coalesce/boot gating — verification harness for the desktop toast + phone push surfaces |
+| Personality | `/api/personality` | `GET /mood/current` (live V/A/F vector + HSV preview), `GET /mood/history?hours=24`, `POST /calibration` (self-report, auto-fits per-axis bias at ≥10 samples), `GET /calibration/history`, `GET/POST /settings`. Phase A shadow-log; surfaced at `/personality` (hidden from FloatingNav). Full spec: `docs/PERSONALITY_LAYER.md` |
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -309,7 +313,7 @@ Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `spa
 
 ## Database Schema
 
-Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Data retention: 90-day rolling window.
+Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality (Phase A, 2026-05-18): `mood_samples` (rolling 7-day, pruned at boot), `mood_calibration` (persistent self-report rows), `vibe_requests` (persistent Phase C placeholder). Data retention: 90-day rolling window (mood_samples is the exception, 7-day).
 
 ---
 
