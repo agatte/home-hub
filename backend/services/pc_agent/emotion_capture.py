@@ -321,6 +321,11 @@ class EmotionCapture:
         self._cap = None
         self._landmarker = None
         self._pose_landmarker = None
+        # Sticky flag — once pose init has failed in this process, don't
+        # retry every 2s tick (the mediapipe import + path.exists check
+        # is wasted work). Reset only when presence is toggled off-then-
+        # on, which gives one more attempt per enable cycle.
+        self._pose_init_failed: bool = False
         self._mp_image_cls = None  # cached mp.Image constructor
 
         # Posture frame-streak hysteresis. Candidate must hold for
@@ -368,11 +373,17 @@ class EmotionCapture:
             pass
 
     def _reset_posture_state(self) -> None:
-        """Clear posture hysteresis state. Called when presence flips off."""
+        """Clear posture hysteresis state. Called when presence flips off.
+
+        Also clears the sticky pose-init-failed flag so a disable / re-
+        enable cycle gets one more attempt — useful if the user installs
+        mediapipe or unblocks the model URL while the agent is running.
+        """
         self._posture_committed = None
         self._posture_candidate = None
         self._posture_candidate_streak = 0
         self._posture_confidence = None
+        self._pose_init_failed = False
 
     # ── enable flags ────────────────────────────────────────────────
 
@@ -574,13 +585,17 @@ class EmotionCapture:
         the pose model isn't healthy, landmarks aren't visible, or the
         candidate hasn't held long enough). Lazy-initializes the pose
         landmarker on the first eligible call; failure stays sticky
-        until the supervisor restarts.
+        (per ``_pose_init_failed``) until presence is toggled off-then-on.
         """
+        if self._pose_init_failed:
+            return None, None
         if self._pose_landmarker is None:
             self._pose_landmarker = _init_pose_landmarker()
             if self._pose_landmarker is None:
-                # Init failed — posture stays None forever (or until
-                # restart). Don't keep retrying every tick.
+                # Init failed — set the sticky flag so subsequent ticks
+                # don't pay the mediapipe-import + model-path-stat cost
+                # again. Cleared on the next disable/enable cycle.
+                self._pose_init_failed = True
                 return None, None
 
         try:
