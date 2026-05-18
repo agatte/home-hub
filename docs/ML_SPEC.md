@@ -360,11 +360,12 @@ apply them as an overlay on the hardcoded defaults.
 | Attribute | Value |
 |-----------|-------|
 | **Input** | `light_adjustments` table: `bri_after`, `hue_after`, `sat_after`, `ct_after`, `mode_at_time`, timestamp. Only rows where `trigger IN ('ws', 'rest', 'all_lights')` — user-initiated changes only. |
-| **Model** | Exponential moving average (EMA) per (light_id, mode, time_period) combination. For each combo with 5+ manual adjustments, compute decay-weighted average of the "after" values (more recent adjustments weighted higher). No ML library needed — pure math. |
-| **Output** | Adjusted light state values that overlay `ACTIVITY_LIGHT_STATES`. Example: if the user consistently sets bedroom lamp to bri=180 during working/night (vs hardcoded 150), the learner outputs `{"2": {"bri": 180}}` for that slot. |
+| **Model** | Exponential moving average (EMA) per `(light_id, mode, time_period, weather_class)` combination. Two parallel bucket sets: (1) **weather-agnostic** `mode:period:any` from ALL rows — threshold 5+ (`MIN_ADJUSTMENTS`). (2) **weather-specific** `mode:period:<weather>` from rows with a non-NULL `weather_class` — threshold 3+ (`MIN_ADJUSTMENTS_WEATHER`). `get_overlay(mode, period, weather)` merges them at read time: weather-specific overrides per-light, `any` is the floor. No ML library needed — pure math. |
+| **Output** | Adjusted light state values that overlay `ACTIVITY_LIGHT_STATES`. Example: if the user consistently sets bedroom lamp to bri=180 during working/night on rainy days (vs hardcoded 150), the learner outputs `{"2": {"bri": 180}}` for that `working:night:rain` bucket. |
 | **Inference frequency** | Recalculated daily at 4 AM. Applied on every mode change via the existing `_resolve_activity_state()` path. |
-| **Integration point** | New `LightingPreferenceLearner` produces an overlay dict matching the `ACTIVITY_LIGHT_STATES` structure. `AutomationEngine._apply_mode()` checks for learned preferences first, falls back to hardcoded values for any missing slots. **Colorspace safety:** if a mode's hardcoded state uses `ct`, any learner-overlayed `hue`/`sat` is silently dropped at the `hue_service.set_light` layer (CT and HSB are mutually exclusive on the Hue bridge). This was the root cause of the April 2026 "greenish bedroom" bug — a learner that had seen the user set warm amber values during relax was re-applying `hue`/`sat` to working-mode CT commands, and the bridge was merging them into tinted "white". The fix lives in the set_light layer, so learner output never needs to know about colorspace. |
-| **Cold start** | Hardcoded `ACTIVITY_LIGHT_STATES` remain the defaults. Learned values only override when 5+ manual changes exist for a given (light, mode, period). |
+| **Integration point** | New `LightingPreferenceLearner` produces an overlay dict matching the `ACTIVITY_LIGHT_STATES` structure. `AutomationEngine._apply_mode()` checks for learned preferences first, falls back to hardcoded values for any missing slots. The weather dimension is fed by `light_adjustments.weather_class` (auto-resolved at log time by `EventLogger`). **Colorspace safety:** if a mode's hardcoded state uses `ct`, any learner-overlayed `hue`/`sat` is silently dropped at the `hue_service.set_light` layer (CT and HSB are mutually exclusive on the Hue bridge). This was the root cause of the April 2026 "greenish bedroom" bug — a learner that had seen the user set warm amber values during relax was re-applying `hue`/`sat` to working-mode CT commands, and the bridge was merging them into tinted "white". The fix lives in the set_light layer, so learner output never needs to know about colorspace. |
+| **Suggestion pipeline (2026-05-18)** | `LightingPreferenceLearner.scan_for_suggestions` runs hourly via `RuleEngineService.brightness_scan_loop`. It looks for `(light, mode, period, weather)` buckets with ≥3 user-triggered rows in the last 14 days whose `bri_after` values land within ±20% of their mean, dedupes against existing weather-specific learned prefs, and emits a `rule_suggestions` row with `kind="brightness"`. The row fans out via WS `brightness_suggestion` + `NotifierService.emit_suggestion` (Accept/Dismiss action buttons on desktop toast + ntfy.sh iPhone push). User accept calls `write_learned_pref` which transitions the bucket from heuristic-driven to learned; the Layer-5 fade-out gate (`has_weather_pref`) then suppresses the heuristic for that bucket. |
+| **Cold start** | Hardcoded `ACTIVITY_LIGHT_STATES` remain the defaults. Learned values only override when 5+ manual changes exist for a given `(light, mode, period)` cross-weather bucket; weather-specific overrides require 3+. |
 | **Storage** | `data/models/lighting_prefs.json` — simple JSON dict of learned values |
 | **Expected improvement** | Fewer manual corrections over time. Measurable as: manual light adjustments per day trending downward. |
 
@@ -379,8 +380,16 @@ for adjustment in sorted_by_timestamp:
 
 **Files touched:**
 - New `backend/services/ml/lighting_learner.py`
-- `backend/services/automation_engine.py` — `_apply_mode()` merges the learner overlay on top of `ACTIVITY_LIGHT_STATES`
+- `backend/services/automation_engine.py` — `_apply_mode()` merges the learner overlay on top of `ACTIVITY_LIGHT_STATES`; `_functional_weather_brightness` shim threads `has_weather_pref` set through for the Layer-5 fade-out gate (2026-05-18)
 - `backend/services/hue_service.py` — `set_light` enforces CT/HSB exclusivity so learner-overlayed hue/sat never contaminates a CT command (prevents the "greenish bedroom" tint)
+- `backend/services/event_logger.py` — `log_light_adjustment` now auto-resolves `weather_class` via injected `WeatherService` (2026-05-18)
+- `backend/services/light_state_calculator.py` — `LUX_WEATHER_BASELINE_SHIFT` (Layer 2) + `apply_lux_multiplier` accepts `weather_class`; `FUNCTIONAL_WEATHER_BRIGHTNESS` restructured to 3-axis `(mode, period, condition)` grid (Layer 1); `get_functional_weather_multiplier` helper shared with `screen_sync.py` (2026-05-18)
+- `backend/services/rule_engine_service.py` — `brightness_scan_loop` hourly background task; `scan_and_emit_brightness_suggestions`, `emit_brightness_suggestion`, `accept_brightness_suggestion`, `dismiss_brightness_suggestion`, `set_brightness_suggestion_deps` late-bind (2026-05-18)
+- `backend/services/notifier_service.py` — `emit_suggestion` method + `Actions` header for ntfy.sh push action buttons + WS `actions` payload field (2026-05-18)
+- `backend/services/pc_agent/desktop_notifier.py` — `QPushButton` row in toast when `payload.actions` non-empty; threaded HTTP POST on click (2026-05-18)
+- `backend/api/routes/rules.py` — `POST /brightness-suggestion/accept/{sid}` + `POST /brightness-suggestion/dismiss/{sid}` (2026-05-18)
+- `backend/models.py` + `backend/database.py` — `light_adjustments.weather_class` migration; `rule_suggestions.kind`+`payload` migration + `rule_id` NOT NULL relaxation via table-rebuild (2026-05-18)
+- `frontend-svelte/src/lib/components/BrightnessSuggestionCard.svelte` + `stores/brightnessSuggestion.js` + WS handlers in `stores/init.js` + mount on `routes/+page.svelte` (2026-05-18)
 
 ---
 
@@ -507,6 +516,32 @@ default curve center of 90, preserving old behavior until recalibration.
 - `frontend-svelte/src/routes/settings/+page.svelte` — Camera toggle + Calibrate button + live lux/baseline/multiplier readout
 - `frontend-svelte/src/lib/stores/camera.js` + `init.js` — camera store, WS handler
 - `tests/test_camera_service.py` + `tests/test_lux_multiplier.py` — 55 tests
+
+#### 3.4.1 Planned: dual-source lux fusion (desktop + Latitude)
+
+**Status:** flagged for follow-up — `flag_2026-05-18T21-47-00_1zt38c` ("Desktop camera as second lux source for brightness fusion"). Not yet implemented. Captured here as the architectural direction so the design is consistent when it ships.
+
+**Context.** As of 2026-05-18 the apartment has two cameras: the Latitude's built-in webcam (corner-mounted, runs `CameraService` with zone-weighted half-frame lux sampling — `project_camera_zone_weighted_lux.md`) and the desktop's webcam (frontal close-range, runs `backend/services/pc_agent/emotion_capture.py` for opt-in blendshape capture + presence observations posted to `/api/camera/observation`). The desktop camera is higher quality and more centrally positioned, but is currently used only for emotion + presence; its frame is captured every 2s for the FaceLandmarker but the same frame's `gray.mean()` lux is discarded.
+
+**Decision.** When this work is taken up, the desktop camera will become a **second lux source** that fuses with the Latitude reading at the read site (`_read_fresh_camera_lux` in `automation_engine.py`). The Latitude remains the primary because it does zone-weighted lux (needed for zone-specific lighting reasoning); the desktop contributes whole-frame lux only (its viewport is too narrow — face fills most of the frame — for zone weighting). Failover semantics: when both sources are fresh, the read site picks the more recent or weighted-averages them favoring the desktop's higher sensor quality; when one is stale or paused, the other becomes authoritative.
+
+**Why two cameras, not just a better Latitude.** (a) Redundancy — if the Latitude pauses (camera_enabled toggle, V4L2 lock, sleep mode), the desktop can keep the lux signal alive without users noticing the gap. (b) Viewpoint diversity — the corner-mounted Latitude can be fooled by a desk lamp shining directly into it (inflates its baseline); the desktop's central position is less susceptible to single-fixture glare. (c) No new privacy boundary — the desktop frame is already captured for emotion/presence under the opt-in gate; adding `gray.mean()` adds zero new exposure if `desktop_emotion_enabled` or `desktop_presence_enabled` is already on.
+
+**Caveats baked into the design.**
+- **Two baselines required.** Each camera has its own optics + exposure curve; raw lux values can differ 30–50% from sensor characteristics alone. The decision requires a separate `desktop_camera_baseline_lux` app_setting and a calibration endpoint that takes a `source=` parameter (or a sibling `POST /api/desktop_camera/calibrate`). Without this, naïve fusion produces oscillating multipliers.
+- **Zone-weighting stays Latitude-only.** The desktop camera contributes a single whole-frame lux number — no zone weighting because the user's face occupies most of the viewport. Code paths that need zone-specific lux (anything calling `_read_fresh_camera_lux` for zone reasoning) must fall back to the Latitude.
+- **Privacy gates remain independent.** The desktop lux capture should be its own `desktop_camera_lux_enabled` app_setting, NOT inherited from `desktop_emotion_enabled` — users may want lux-only contribution without emotion inference.
+- **Composes above Layer 2 of the weather-aware brightness work.** The Layer 2 `LUX_WEATHER_BASELINE_SHIFT` operates on whatever baseline `_read_fresh_camera_lux` returns. Dual-source fusion just changes how that value is computed; the shift logic doesn't need updates.
+
+**Files that will change when this ships.**
+- New: `backend/services/desktop_lux_service.py` (consumes POSTs, holds desktop `_ema_lux`, `baseline_lux`, exposes `get_fresh_lux()`)
+- Extend: `backend/api/routes/camera.py` — `/observation` POST shape adds optional `lux: float` field; new `POST /api/desktop_camera/calibrate` endpoint
+- Extend: `backend/services/automation_engine.py:_read_fresh_camera_lux` — fuse Latitude + desktop readings with the failover/weighting policy above
+- Extend: `backend/services/pc_agent/emotion_capture.py` — compute `gray.mean()` on the captured frame and include in the existing POST payload (gated on the new toggle)
+- New: `desktop_camera_lux_enabled` + `desktop_camera_baseline_lux` app_settings
+- Frontend: Settings page toggle + "Calibrate desktop camera" button mirroring the Latitude UX
+
+**Why this lives here and not in a separate ADR.** This project doesn't use formal ADRs — architectural decisions live alongside the spec they extend. The decision is a natural successor to §3.4's single-source camera model, and the trade-offs (Latitude vs desktop, zone vs whole-frame, baseline divergence) compose with the existing camera service. Carving it into a separate doc would fragment the read path.
 
 ---
 

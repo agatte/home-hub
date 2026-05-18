@@ -466,6 +466,7 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 | hue | Integer | Nullable |
 | sat | Integer | Nullable |
 | mode_at_time | String(50) | Active mode when change happened |
+| weather_class | String(20) | Nullable — resolved at log time via `EventLogger._resolve_weather_class()`. Values: `clear`/`clouds`/`rain`/`thunderstorm`/`snow`/`golden_hour`. NULL on pre-migration rows; `LightingPreferenceLearner.recalculate` folds NULL → `any` bucket. Added 2026-05-18. |
 | created_at | DateTime | UTC |
 
 **sonos_playback_events** — Playback session log
@@ -512,11 +513,11 @@ Keys in use: `morning_routine_config`, `winddown_routine_config`, `time_schedule
 
 UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30 days of activity_events. Minimum thresholds: 70% confidence, 3 samples. Idle is excluded as a prediction target ("you're usually idle" isn't a useful nudge).
 
-**rule_suggestions** — Persistent record of every rule-suggestion fire (Phase 3c.2)
+**rule_suggestions** — Persistent record of every rule-suggestion fire (Phase 3c.2) and brightness-preference candidates (2026-05-18)
 | Column | Type | Notes |
 |--------|------|-------|
 | id | Integer | PK, auto-increment |
-| rule_id | Integer | FK → learned_rules.id, no CASCADE (history outlives rule deletion) |
+| rule_id | Integer | Nullable FK → learned_rules.id, no CASCADE (history outlives rule deletion). NULL for `kind='brightness'` rows — those have no `LearnedRule` backing them. |
 | fired_at | DateTime | UTC, indexed |
 | predicted_mode | String(50) | Captured at fire time |
 | confidence | Float | 0.0-1.0, captured at fire time |
@@ -525,6 +526,8 @@ UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30
 | status | String(20) | `pending`, `accepted`, `dismissed`, `expired`, `superseded` |
 | resolved_at | DateTime | Nullable, UTC; set on status transition out of `pending` |
 | resolved_source | String(100) | `user_accept:<remote-ip>`, `user_dismiss:<remote-ip>`, `auto_expire`, `superseded_by:<new_id>` |
+| kind | String(20) | `mode` (default, legacy rule-engine nudge) or `brightness` (LightingLearner scanner candidate). Added 2026-05-18. |
+| payload | Text | Nullable. For `kind='brightness'`: `{light_id, mode, period, weather_class, suggested_bri, suggested_multiplier, sample_count}`. NULL on `kind='mode'` rows. |
 
 Composite index on (status, fired_at) for "latest pending" lookup + history queries. Pending rows older than 60min are auto-expired on the 60s automation tick. Boot-time `restore_pending_on_boot()` re-broadcasts an unresolved pending suggestion so a deploy mid-banner doesn't drop the kiosk's Home card.
 
@@ -647,7 +650,9 @@ All messages are JSON with `type` + `data` fields.
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
 | `mode_suggestion` | Rule engine nudge (idle + rule matches) | `{rule_id, predicted_mode, confidence, sample_count, message}` |
 | `mode_suggestion_dismissed` | User dismissed nudge | `{}` |
-| `notification` | NotifierService threshold-cross — mode flip OR average per-light brightness Δ ≥ 15%. Suppressed during DND, within 10s coalesce window, and on user-initiated mode flips (`api:*` / `manual` / `alexa:*` / `guest:*`). Consumed by `desktop_notifier.py` on the Windows desktop and by `httpx` POST to `https://ntfy.sh/{NTFY_TOPIC}` for iOS push. | `{title, subtitle, factors[{lane, label, value, impact}], output_delta, mode_changed, brightness_shifted, old_mode, new_mode, timestamp, correlation_id}` |
+| `brightness_suggestion` | LightingLearner scanner emits a weather-aware brightness candidate (hourly `brightness_scan_loop`) | `{id, kind, payload: {light_id, mode, period, weather_class, suggested_bri, suggested_multiplier, sample_count}, status, fired_at, confidence, sample_count}` |
+| `brightness_suggestion_dismissed` | Brightness suggestion resolved (accepted or dismissed) — optimistic dismiss so all open dashboards drop the card together | `{id}` |
+| `notification` | NotifierService threshold-cross — mode flip OR average per-light brightness Δ ≥ 15%. Suppressed during DND, within 10s coalesce window, and on user-initiated mode flips (`api:*` / `manual` / `alexa:*` / `guest:*`). Consumed by `desktop_notifier.py` on the Windows desktop and by `httpx` POST to `https://ntfy.sh/{NTFY_TOPIC}` for iOS push. Optional `actions[]` carries Accept / Dismiss button metadata (label, url, method, headers) for suggestion-bearing notifications — desktop toast renders a button row, ntfy.sh emits an `Actions` header with `http` action buttons. | `{title, subtitle, factors[{lane, label, value, impact}], output_delta, mode_changed, brightness_shifted, old_mode, new_mode, timestamp, correlation_id, actions?[{label, url, method, headers}], suggestion_id?, kind?}` |
 
 `build_id` is the short git SHA of the running backend, computed once at startup. The frontend stashes the first one it sees per page session and reloads `window.location` if a later `connection_status` (after a WS reconnect, e.g. post-deploy) reports a different value. This is what makes the kiosk dashboard auto-refresh after `scripts/deploy.sh` instead of needing a manual F5.
 
@@ -827,6 +832,8 @@ All messages are JSON with `type` + `data` fields.
 | DELETE | `/api/rules/{id}` | Delete a learned rule |
 | POST | `/api/rules/suggestion/accept` | Accept latest pending suggestion → set_manual_override. Returns 410 Gone when the row was auto-expired/superseded between WS broadcast and click (UI dismisses silently) |
 | POST | `/api/rules/suggestion/dismiss` | Dismiss latest pending suggestion (idempotent; 200 on no-op) |
+| POST | `/api/rules/brightness-suggestion/accept/{id}` | Accept a brightness suggestion by id → calls `LightingPreferenceLearner.write_learned_pref` for the bucket in `payload`. Broadcasts `brightness_suggestion_dismissed` so dashboards drop the card. Returns 410 Gone when the row was auto-expired/superseded between push and click. |
+| POST | `/api/rules/brightness-suggestion/dismiss/{id}` | Dismiss a brightness suggestion by id (idempotent; 200 on no-op). Broadcasts `brightness_suggestion_dismissed`. |
 
 #### Camera — `/api/camera/`
 
@@ -980,7 +987,7 @@ Middleware service that intercepts all state changes and writes to event tables.
 | Method | Signature | Purpose |
 |--------|-----------|---------|
 | `log_mode_change` | `(mode, previous, source) → None` | Write to activity_events |
-| `log_light_adjustment` | `(light_id, state, trigger) → None` | Write to light_adjustments |
+| `log_light_adjustment` | `(light_id, state, trigger) → None` | Write to light_adjustments (auto-resolves `weather_class` via injected `WeatherService`; inject via `set_weather_service()` at boot) |
 | `log_playback` | `(track_info, trigger, mode) → None` | Write to sonos_playback_events |
 | `log_routine` | `(name, status, error?) → None` | Write to routine_executions |
 | `log_interaction` | `(action, detail, page) → None` | Write to user_interactions |

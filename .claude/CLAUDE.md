@@ -127,7 +127,7 @@ Browser / Phone (PWA)
    │   ├── AudioClassifier ────────> YAMNet audio scene classification
    │   ├── BehavioralPredictor ────> LightGBM mode prediction
    │   ├── LightingLearner ────────> adaptive per-light preferences
-   │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax)
+   │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax/gaming/watching)
    │   ├── EmotionService ─────────> FaceLandmarker blendshapes → mood vector (Phase A shadow, opt-in)
    │   └── MusicBandit ────────────> Thompson sampling playlist selection, context-aware (mode × period × weather_class)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
@@ -222,7 +222,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 | Game Day | `/api/gameday` | `GET /state`, `GET /schedule`, `POST /test/{event}`. WS: `gameday_state`/`gameday_play`/`gameday_celebration`. Spec: `docs/GAMEDAY_SPEC.md` |
-| Rules | `/api/rules` | View / enable-disable / regenerate learned RuleEngine rules; rule-suggestion accept endpoint |
+| Rules | `/api/rules` | View / enable-disable / regenerate learned RuleEngine rules; rule-suggestion accept/dismiss; brightness-suggestion accept/dismiss (`POST /brightness-suggestion/accept\|dismiss/{id}`, writes through `LightingPreferenceLearner.write_learned_pref` on accept) |
 | Learning | `/api/learning` | Predictor status, override-rate metric, A/B comparison, fusion weight retune trigger, predictor promote/demote |
 | Events | `/api/events` | Activity/playback/light/scene event aggregation, filtering, mode timeline (backs `/journal` + analytics) |
 | Plants | `/api/plants` | `GET /status` summary from external plant-care app (10-min TTL cache); 503 when `PLANT_APP_*` unset |
@@ -308,6 +308,8 @@ Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `spa
 **Time periods:** `_get_time_period()` returns `day`/`evening`/`night`/`late_night`. `late_night` runs from `DaySchedule.late_night_start_hour` (default 23) until `wake_hour`. Only relax defines a `late_night` state; other modes fall back to `night`.
 
 **Weather effect fallback:** When a mode has no auto-effect, weather overlays one — thunderstorm→sparkle, snow→opal (evening/night only, sparkle any time). Same-effect cycles skipped to preserve the bridge's brightness base. Rain→candle removed 2026-05-09.
+
+**Weather-aware brightness (2026-05-18, `27f5814`):** `LUX_WEATHER_BASELINE_SHIFT` raises effective baseline (POSITIVE values — counter-intuitive); `FUNCTIONAL_WEATHER_BRIGHTNESS` `(mode, period, cond)` grid extended to gaming/working/watching × day/evening/night. `LightingPreferenceLearner` keyed `mode:period:weather`; `has_weather_pref()` powers heuristic fade-out. `brightness_scan_loop` surfaces `kind="brightness"` suggestions via NotifierService (toast + ntfy.sh, Accept/Dismiss buttons). Memory: `project_weather_aware_brightness_2026_05_18.md`.
 
 ---
 
