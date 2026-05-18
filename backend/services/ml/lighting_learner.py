@@ -11,6 +11,7 @@ No external ML libraries required — pure math.
 
 import logging
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -338,6 +339,91 @@ class LightingPreferenceLearner(HealthTrackable):
                 exc,
                 exc_info=True,
             )
+
+    async def scan_for_suggestions(
+        self,
+        *,
+        window_days: int = 14,
+        ema_alpha: float = EMA_ALPHA,
+    ) -> list[dict[str, Any]]:
+        """Find (light, mode, period, weather) buckets ready to be suggested.
+
+        Criteria for a candidate:
+          * ``MIN_ADJUSTMENTS_WEATHER`` (=3) or more user-triggered rows in
+            the last ``window_days`` matching the bucket.
+          * Variance is consistent: (max - min) / mean <= 0.20.
+          * No existing WEATHER-SPECIFIC learned pref for that bucket
+            (deduplicates against already-accepted suggestions).
+
+        Returns the list of candidate dicts. The caller is responsible for
+        deduplicating against existing pending/accepted rule_suggestions
+        rows before inserting (RuleEngineService.emit_brightness_suggestion
+        handles that step so the scanner stays read-only on the DB).
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        async with async_session() as session:
+            result = await session.execute(
+                select(LightAdjustment)
+                .where(LightAdjustment.timestamp >= cutoff)
+                .where(LightAdjustment.weather_class.isnot(None))
+                .where(LightAdjustment.trigger.in_(USER_TRIGGERS))
+                .where(LightAdjustment.mode_at_time.isnot(None))
+                .where(LightAdjustment.bri_after.isnot(None))
+            )
+            rows = list(result.scalars().all())
+
+        # Group by (light_id, mode, period, weather_class). Bri values per
+        # group are kept ordered so the EMA can be computed for the
+        # suggested_bri exactly the way the learner would on accept.
+        groups: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
+        for r in rows:
+            period = get_time_period(r.timestamp)
+            groups[(r.light_id, r.mode_at_time, period, r.weather_class)].append(
+                int(r.bri_after),
+            )
+
+        # Avoid importing ACTIVITY_LIGHT_STATES at module-load (would create
+        # a light_state_calculator → lighting_learner cycle). Late import.
+        from backend.services.light_state_calculator import ACTIVITY_LIGHT_STATES
+
+        suggestions: list[dict[str, Any]] = []
+        for (light_id, mode, period, weather), bris in groups.items():
+            if len(bris) < MIN_ADJUSTMENTS_WEATHER:
+                continue
+            mean = sum(bris) / len(bris)
+            if mean <= 0:
+                continue
+            if (max(bris) - min(bris)) / mean > 0.20:
+                continue  # too inconsistent to suggest as a stable pref
+            if light_id in self.has_weather_pref(mode, period, weather):
+                continue  # already learned
+
+            # Compute the EMA the same way write_learned_pref + recalculate
+            # would, so accepting yields the value the user just saw.
+            ema = float(bris[0])
+            for v in bris[1:]:
+                ema = ema * (1 - ema_alpha) + v * ema_alpha
+            suggested_bri = round(ema)
+
+            try:
+                base = ACTIVITY_LIGHT_STATES[mode][period][light_id].get("bri")
+            except (KeyError, AttributeError):
+                base = None
+
+            suggestion = {
+                "light_id": light_id,
+                "mode": mode,
+                "period": period,
+                "weather_class": weather,
+                "suggested_bri": suggested_bri,
+                "sample_count": len(bris),
+            }
+            if base:
+                suggestion["base_bri"] = int(base)
+                suggestion["suggested_multiplier"] = round(suggested_bri / base, 2)
+            suggestions.append(suggestion)
+
+        return suggestions
 
     @staticmethod
     def _pool_kitchen_pair(

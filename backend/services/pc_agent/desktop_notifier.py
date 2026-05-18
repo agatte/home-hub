@@ -67,12 +67,14 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QPushButton,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
 import psutil
+import urllib.request
 import websockets
 import websockets.sync.client
 
@@ -269,6 +271,13 @@ class ToastWidget(QWidget):
         self._output_label.setWordWrap(True)
         layout.addWidget(self._output_label)
 
+        # Action-button row — populated when a suggestion-kind notification
+        # arrives (payload.actions non-empty). Renders Accept / Dismiss
+        # buttons that POST to the supplied URLs in a worker thread.
+        self._actions_layout = QHBoxLayout()
+        self._actions_layout.setSpacing(8)
+        layout.addLayout(self._actions_layout)
+
         layout.addStretch(1)
 
     def _populate(self, payload: dict[str, Any]) -> None:
@@ -304,9 +313,90 @@ class ToastWidget(QWidget):
         else:
             self._output_label.hide()
 
+        # Clear and repopulate action buttons.
+        while self._actions_layout.count():
+            item = self._actions_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        actions = payload.get("actions") or []
+        if actions:
+            for action in actions:
+                btn = self._build_action_button(action)
+                self._actions_layout.addWidget(btn)
+            self._actions_layout.addStretch(1)
+            # Keep the toast around longer when action buttons are visible —
+            # gives the user time to read and click.
+            self._dismiss_timer.start(TOAST_LIFETIME_MS * 3)
+
         # Size shrinks/grows for expanded view.
         self.setMinimumHeight(TOAST_EXPANDED_HEIGHT if self._expanded else TOAST_HEIGHT)
         self.adjustSize()
+
+    def _build_action_button(self, action: dict[str, Any]) -> QPushButton:
+        label = action.get("label", "Action")
+        url = action.get("url", "")
+        method = action.get("method", "POST")
+        headers = action.get("headers") or {}
+        btn = QPushButton(label)
+        btn.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        # Two-tier styling: first button = accent (Accept), others muted.
+        if self._actions_layout.count() == 0:
+            btn.setStyleSheet(
+                f"QPushButton {{"
+                f" background: rgb({ACCENT_COLOR.red()}, {ACCENT_COLOR.green()}, {ACCENT_COLOR.blue()});"
+                f" color: rgb(20, 22, 28);"
+                f" padding: 6px 14px;"
+                f" border-radius: 6px;"
+                f" border: none;"
+                f"}}"
+                f"QPushButton:hover {{ background: rgb(180, 215, 255); }}"
+            )
+        else:
+            btn.setStyleSheet(
+                f"QPushButton {{"
+                f" background: rgba({BORDER_COLOR.red()}, {BORDER_COLOR.green()}, {BORDER_COLOR.blue()}, 100);"
+                f" color: rgb({TEXT_PRIMARY.red()}, {TEXT_PRIMARY.green()}, {TEXT_PRIMARY.blue()});"
+                f" padding: 6px 14px;"
+                f" border-radius: 6px;"
+                f" border: 1px solid rgba({BORDER_COLOR.red()}, {BORDER_COLOR.green()}, {BORDER_COLOR.blue()}, 160);"
+                f"}}"
+                f"QPushButton:hover {{ background: rgba({BORDER_COLOR.red()}, {BORDER_COLOR.green()}, {BORDER_COLOR.blue()}, 150); }}"
+            )
+        btn.clicked.connect(
+            lambda _checked=False, u=url, m=method, h=dict(headers): (
+                self._dispatch_action(u, m, h)
+            )
+        )
+        return btn
+
+    def _dispatch_action(
+        self,
+        url: str,
+        method: str,
+        headers: dict[str, str],
+    ) -> None:
+        """Fire the HTTP request in a worker thread + dismiss the toast.
+
+        Best-effort: success/failure is not surfaced to the UI (the user
+        sees the toast disappear, and the next backend tick will either
+        broadcast a 'brightness_suggestion_resolved' event or be silent).
+        """
+        if not url:
+            return
+
+        def _send() -> None:
+            try:
+                req = urllib.request.Request(  # noqa: S310 — known LAN URL
+                    url, method=method, headers=headers, data=b"",
+                )
+                urllib.request.urlopen(req, timeout=4.0).close()  # noqa: S310
+            except Exception:
+                logger.warning("action dispatch failed: %s", url, exc_info=True)
+
+        threading.Thread(target=_send, daemon=True).start()
+        self.start_hide()
 
     def _build_factor_row(self, factor: dict[str, Any]) -> QWidget:
         row = QWidget()

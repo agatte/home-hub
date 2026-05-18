@@ -11,6 +11,7 @@ import { automation } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
+import { showBrightnessSuggestion, dismissBrightnessSuggestion } from './brightnessSuggestion.js'
 import { ambient } from './ambient.js'
 import { camera } from './camera.js'
 import { pipeline } from './pipeline.js'
@@ -120,6 +121,12 @@ export function initStores() {
           break
         case 'mode_suggestion_dismissed':
           dismissModeSuggestion()
+          break
+        case 'brightness_suggestion':
+          showBrightnessSuggestion(data)
+          break
+        case 'brightness_suggestion_dismissed':
+          dismissBrightnessSuggestion()
           break
         case 'ambient_update':
           ambient.set(data)

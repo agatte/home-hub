@@ -297,6 +297,73 @@ class TestRecalculateKitchenPair:
         assert slot["3"]["bri"] != slot["4"]["bri"]
 
 
+@pytest.mark.asyncio
+class TestScanForSuggestions:
+    @staticmethod
+    def _recent_adjustment(**kwargs):
+        """Build a LightAdjustment with a timestamp inside the scanner's
+        14-day window AND deterministically in the "day" period.
+
+        Indianapolis local 14:00 (~18:00 UTC during DST, ~19:00 during
+        standard time) is solidly inside the day window regardless of
+        DST. Using "now - 1 day, hour-pinned" instead of just "now -
+        1 day" prevents the test from flipping period (and therefore
+        the dedup bucket key) based on what time of day the suite runs.
+        """
+        now = datetime.now(timezone.utc) - timedelta(days=1)
+        ts = now.replace(hour=18, minute=0, second=0, microsecond=0)
+        kwargs.setdefault("light_id", "1")
+        kwargs.setdefault("mode_at_time", "working")
+        kwargs.setdefault("bri_before", 100)
+        kwargs.setdefault("trigger", "ws")
+        return LightAdjustment(timestamp=ts, **kwargs)
+
+    async def test_returns_empty_with_no_rows(self, learner, ml_db):
+        assert await learner.scan_for_suggestions() == []
+
+    async def test_three_consistent_rows_produce_a_candidate(
+        self, learner, ml_db,
+    ):
+        async with ml_db() as session:
+            for v in (210, 215, 208):
+                session.add(self._recent_adjustment(
+                    bri_after=v, weather_class="thunderstorm",
+                ))
+            await session.commit()
+        suggestions = await learner.scan_for_suggestions()
+        assert len(suggestions) == 1
+        s = suggestions[0]
+        assert s["light_id"] == "1"
+        assert s["mode"] == "working"
+        assert s["weather_class"] == "thunderstorm"
+        assert 208 <= s["suggested_bri"] <= 215
+        assert s["sample_count"] == 3
+
+    async def test_high_variance_rejected(self, learner, ml_db):
+        async with ml_db() as session:
+            # 50, 100, 250 — (250-50)/133 = 1.5 way above 0.20 threshold.
+            for v in (50, 100, 250):
+                session.add(self._recent_adjustment(
+                    bri_after=v, weather_class="rain",
+                ))
+            await session.commit()
+        assert await learner.scan_for_suggestions() == []
+
+    async def test_already_learned_bucket_dedupes(self, learner, ml_db):
+        # Pre-seed a learned pref for the bucket the scanner would otherwise
+        # surface — scanner must skip it.
+        learner._preferences = {
+            "working:day:thunderstorm": {"1": {"bri": 211}},
+        }
+        async with ml_db() as session:
+            for v in (210, 215, 208):
+                session.add(self._recent_adjustment(
+                    bri_after=v, weather_class="thunderstorm",
+                ))
+            await session.commit()
+        assert await learner.scan_for_suggestions() == []
+
+
 class TestComputeEma:
     def test_known_input(self):
         adjustments = [

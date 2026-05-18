@@ -336,8 +336,12 @@ class RuleSuggestion(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    rule_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("learned_rules.id"), nullable=False,
+    # rule_id is the FK to LearnedRule for kind="mode" suggestions. For
+    # kind="brightness" rows (weather-aware brightness suggestions, 2026-05-18)
+    # the source is the LightingLearner scanner output, not a LearnedRule —
+    # rule_id is NULL and the bucket key lives in `payload`.
+    rule_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("learned_rules.id"), nullable=True,
     )
     fired_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -354,6 +358,13 @@ class RuleSuggestion(Base):
         DateTime(timezone=True), nullable=True,
     )
     resolved_source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Discriminator: "mode" (original — LearnedRule mode flip) or "brightness"
+    # (per-bucket lighting preference suggestion from LightingLearner scanner).
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="mode")
+    # JSON-as-TEXT payload for kind-specific data. For "brightness":
+    # {light_id, mode, period, weather_class, suggested_bri,
+    #  suggested_multiplier, sample_count}. NULL on legacy "mode" rows.
+    payload: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 # ---------------------------------------------------------------------------

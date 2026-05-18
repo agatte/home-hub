@@ -768,3 +768,54 @@ class TestMLLoggerIntegration:
         rules = await service.get_rules()
         modes = [r["predicted_mode"] for r in rules]
         assert "away" not in modes
+
+
+# ---------------------------------------------------------------------------
+# Brightness suggestions — emit + accept + dismiss shape
+# ---------------------------------------------------------------------------
+
+
+class TestBrightnessSuggestion:
+    """The WS payload + accept/dismiss serialization for kind="brightness"."""
+
+    @pytest.mark.asyncio
+    async def test_emit_returns_kind_and_payload(self, db_and_service):
+        """The dict returned by emit_brightness_suggestion is what gets
+        fanned out via WS to the dashboard — kind + payload must be
+        present so BrightnessSuggestionCard.svelte can render."""
+        _, service, _, _ = db_and_service
+        candidate = {
+            "light_id": "1",
+            "mode": "working",
+            "period": "day",
+            "weather_class": "thunderstorm",
+            "suggested_bri": 211,
+            "sample_count": 3,
+            "suggested_multiplier": 1.18,
+        }
+        result = await service.emit_brightness_suggestion(candidate)
+        assert result is not None
+        assert result["kind"] == "brightness"
+        assert result["payload"]["light_id"] == "1"
+        assert result["payload"]["mode"] == "working"
+        assert result["payload"]["period"] == "day"
+        assert result["payload"]["weather_class"] == "thunderstorm"
+        assert result["payload"]["suggested_bri"] == 211
+        # Standard suggestion fields still present (frontend store uses .id
+        # for the accept/dismiss URL).
+        assert "id" in result
+        assert result["sample_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_emit_dedupes_pending_same_bucket(self, db_and_service):
+        """A second emit for the same (light, mode, period, weather)
+        returns None so the bucket isn't double-surfaced."""
+        _, service, _, _ = db_and_service
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180, "sample_count": 3,
+        }
+        first = await service.emit_brightness_suggestion(candidate)
+        assert first is not None
+        second = await service.emit_brightness_suggestion(candidate)
+        assert second is None  # pending row exists → no re-emit

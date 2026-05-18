@@ -12,6 +12,7 @@
   import GuestWifiWidget from '$lib/components/GuestWifiWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
   import ModeSuggestionCard from '$lib/components/ModeSuggestionCard.svelte'
+  import BrightnessSuggestionCard from '$lib/components/BrightnessSuggestionCard.svelte'
 
   /** @type {any} */
   export let data = undefined
@@ -29,6 +30,7 @@
   <ModeCardDeck />
 
   <ModeSuggestionCard />
+  <BrightnessSuggestionCard />
 
   <div class="widget-grid">
     <section class="widget widget-mode">

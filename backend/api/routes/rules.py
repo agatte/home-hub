@@ -130,3 +130,66 @@ async def dismiss_suggestion(request: Request) -> dict:
     remote = getattr(request.client, "host", None) or "unknown"
     await service.dismiss_suggestion(remote=remote)
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Brightness-kind suggestions — addressable by id (ntfy.sh action targets
+# need a stable URL per suggestion, can't always read "latest pending").
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/brightness-suggestion/accept/{sid}",
+    dependencies=[Depends(require_api_key)],
+)
+async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
+    """Accept a brightness suggestion. Writes a learned pref into the
+    LightingLearner for the suggested bucket so the heuristic stops
+    applying there and the learned value takes over.
+
+    Returns 410 Gone when the row was auto-expired, superseded, or
+    already-resolved between push and click — UI handles silently.
+    """
+    service = _get_service(request)
+    remote = getattr(request.client, "host", None) or "unknown"
+    resolved = await service.accept_brightness_suggestion(
+        suggestion_id=sid, remote=remote,
+    )
+    if not resolved:
+        raise HTTPException(
+            status_code=410, detail="suggestion no longer pending",
+        )
+
+    learner = getattr(request.app.state, "lighting_learner", None)
+    payload = resolved.get("payload", {})
+    if learner and payload:
+        try:
+            await learner.write_learned_pref(
+                light_id=str(payload["light_id"]),
+                mode=payload["mode"],
+                time_period=payload["period"],
+                weather_class=payload["weather_class"],
+                bri=int(payload["suggested_bri"]),
+            )
+        except Exception as exc:
+            # Resolution row is already accepted; surface a 500 so the
+            # caller can retry but log enough context to diagnose.
+            raise HTTPException(
+                status_code=500,
+                detail=f"learner write failed: {exc}",
+            )
+    return {"status": "ok", "applied": payload}
+
+
+@router.post(
+    "/brightness-suggestion/dismiss/{sid}",
+    dependencies=[Depends(require_api_key)],
+)
+async def dismiss_brightness_suggestion(sid: int, request: Request) -> dict:
+    """Dismiss a brightness suggestion by id. Idempotent (200 on no-op)."""
+    service = _get_service(request)
+    remote = getattr(request.client, "host", None) or "unknown"
+    await service.dismiss_brightness_suggestion(
+        suggestion_id=sid, remote=remote,
+    )
+    return {"status": "ok"}

@@ -786,6 +786,23 @@ async def lifespan(app: FastAPI):
     app.state.notifier = notifier
     automation.register_on_mode_change(notifier.on_mode_change)
 
+    # Late-bind brightness-suggestion collaborators on rule_engine. Built
+    # in this order because rule_engine is constructed early (line ~274)
+    # but the notifier comes online here. Public base url defaults to the
+    # Latitude's LAN address — ntfy.sh action buttons hit it directly from
+    # the iPhone on Wi-Fi (no auth needed via require_api_key's RFC1918
+    # bypass) and the `X-API-Key` header travels for cellular round-trips.
+    rule_engine.set_brightness_suggestion_deps(
+        lighting_learner=lighting_learner,
+        notifier_service=notifier,
+        api_key=settings.HOME_HUB_API_KEY,
+        public_base_url=(
+            f"http://{settings.LOCAL_IP}:8000"
+            if getattr(settings, "LOCAL_IP", None)
+            else "http://192.168.1.210:8000"
+        ),
+    )
+
     # Background tasks
     tasks: list[asyncio.Task] = []
 
@@ -849,6 +866,10 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(automation.run_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
+    # Hourly scan for weather-aware brightness-suggestion candidates.
+    # See LightingPreferenceLearner.scan_for_suggestions + RuleEngineService
+    # .scan_and_emit_brightness_suggestions for the full pipeline.
+    tasks.append(asyncio.create_task(rule_engine.brightness_scan_loop()))
     tasks.append(asyncio.create_task(gameday.poll_state_loop()))
     tasks.append(asyncio.create_task(notifier.poll_loop()))
 

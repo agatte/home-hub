@@ -364,6 +364,13 @@ class NotifierService:
         ntfy.sh's hosted server treats the topic name as the "auth" boundary
         (anyone subscribed to the topic gets the message). Keep NTFY_TOPIC
         secret like an API key — that's why it's an env var, not a setting.
+
+        When ``payload["actions"]`` is non-empty, ntfy.sh's ``Actions``
+        header carries http-action buttons that POST to the supplied URLs
+        when the user taps them in the iOS app. Per-action headers (e.g.
+        ``X-API-Key``) get sent verbatim and ARE visible to the ntfy.sh
+        server in cleartext — single-user system, NTFY_TOPIC already
+        treated as a shared secret, but worth knowing the trade-off.
         """
         if not self._ntfy_topic or self._http is None:
             return
@@ -384,6 +391,9 @@ class NotifierService:
             "Tags": "house",
             "X-Correlation-Id": payload.get("correlation_id", ""),
         }
+        actions_header = self._format_actions_header(payload.get("actions") or [])
+        if actions_header:
+            headers["Actions"] = actions_header
         try:
             resp = await self._http.post(
                 url, content=body.encode("utf-8"), headers=headers,
@@ -400,6 +410,77 @@ class NotifierService:
                 )
         except Exception:
             logger.exception("ntfy.sh push failed (topic=%s)", self._ntfy_topic)
+
+    @staticmethod
+    def _format_actions_header(
+        actions: list[dict[str, Any]],
+    ) -> Optional[str]:
+        """Render the WS-side actions list into ntfy.sh's Actions header.
+
+        Format (per ntfy.sh docs):
+            http, <label>, <url>, method=<METHOD>, headers="K1: v1,K2: v2"
+        Multiple actions joined by ``;``. Empty list → None (header omitted).
+        """
+        if not actions:
+            return None
+        parts: list[str] = []
+        for action in actions:
+            label = action.get("label", "Action")
+            url = action.get("url")
+            if not url:
+                continue
+            method = action.get("method", "POST")
+            piece = f"http, {label}, {url}, method={method}"
+            extra_headers = action.get("headers") or {}
+            if extra_headers:
+                hdr_str = ",".join(f"{k}: {v}" for k, v in extra_headers.items())
+                piece += f', headers="{hdr_str}"'
+            parts.append(piece)
+        return "; ".join(parts) if parts else None
+
+    async def emit_suggestion(
+        self,
+        *,
+        suggestion_id: int,
+        title: str,
+        body: str,
+        accept_url: str,
+        dismiss_url: str,
+        api_key: Optional[str] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Fire a notification with Accept / Dismiss action buttons.
+
+        Bypasses the mode-change / brightness-shift decision logic — the
+        caller (RuleEngineService.emit_brightness_suggestion) has already
+        decided the user should see this. Goes through the same WS +
+        ntfy.sh fan-out as the auto path so the desktop notifier + iOS
+        app render identical action-button rows.
+        """
+        action_headers: dict[str, str] = {}
+        if api_key:
+            action_headers["X-API-Key"] = api_key
+
+        payload: dict[str, Any] = {
+            "title": title,
+            "subtitle": body,
+            "body": body,
+            "factors": [],
+            "output_delta": None,
+            "actions": [
+                {"label": "Accept", "url": accept_url, "method": "POST",
+                 "headers": action_headers},
+                {"label": "Dismiss", "url": dismiss_url, "method": "POST",
+                 "headers": action_headers},
+            ],
+            "suggestion_id": suggestion_id,
+            "kind": "suggestion",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "correlation_id": str(uuid.uuid4()),
+        }
+        if extra:
+            payload.update(extra)
+        await self._dispatch(payload)
 
     # ------------------------------------------------------------------
     # Synthetic / test path

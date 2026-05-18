@@ -69,6 +69,69 @@ async def _run_migrations(conn) -> None:
     if "weather_class" not in spe_cols:
         await conn.execute(text("ALTER TABLE sonos_playback_events ADD COLUMN weather_class TEXT"))
 
+    # 2026-05-18: rule_suggestions extension for kind="brightness" rows.
+    # Adds a discriminator column, a JSON payload, and relaxes rule_id from
+    # NOT NULL to NULL (kind="brightness" rows don't have a LearnedRule
+    # backing them — the bucket lives in payload). SQLite can't change a
+    # column's NOT NULL constraint via ALTER, so the rule_id relaxation
+    # needs a table-rebuild — done below conditionally so it runs at most
+    # once. ADD COLUMN paths cover the new fields on top.
+    result = await conn.execute(text("PRAGMA table_info(rule_suggestions)"))
+    rs_info = result.fetchall()
+    if rs_info:  # table exists (created by Base.metadata)
+        rs_cols = {row[1] for row in rs_info}
+        # Column 1 is `name`, column 3 is `notnull`. We need rule_id row.
+        rule_id_row = next((r for r in rs_info if r[1] == "rule_id"), None)
+        rule_id_notnull = bool(rule_id_row[3]) if rule_id_row else False
+
+        if "kind" not in rs_cols:
+            await conn.execute(text(
+                "ALTER TABLE rule_suggestions ADD COLUMN kind TEXT DEFAULT 'mode'"
+            ))
+        if "payload" not in rs_cols:
+            await conn.execute(text(
+                "ALTER TABLE rule_suggestions ADD COLUMN payload TEXT"
+            ))
+
+        if rule_id_notnull:
+            # Table-rebuild to relax rule_id NOT NULL. SQLite's standard
+            # pattern: create new table with target schema, copy, drop, rename.
+            await conn.execute(text("""
+                CREATE TABLE rule_suggestions_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER,
+                    fired_at DATETIME NOT NULL,
+                    predicted_mode VARCHAR(50) NOT NULL,
+                    confidence FLOAT NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    current_mode_at_fire VARCHAR(50),
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    resolved_at DATETIME,
+                    resolved_source VARCHAR(100),
+                    kind TEXT DEFAULT 'mode',
+                    payload TEXT,
+                    FOREIGN KEY(rule_id) REFERENCES learned_rules(id)
+                )
+            """))
+            await conn.execute(text("""
+                INSERT INTO rule_suggestions_new
+                (id, rule_id, fired_at, predicted_mode, confidence,
+                 sample_count, current_mode_at_fire, status, resolved_at,
+                 resolved_source, kind, payload)
+                SELECT id, rule_id, fired_at, predicted_mode, confidence,
+                       sample_count, current_mode_at_fire, status, resolved_at,
+                       resolved_source, kind, payload
+                FROM rule_suggestions
+            """))
+            await conn.execute(text("DROP TABLE rule_suggestions"))
+            await conn.execute(text(
+                "ALTER TABLE rule_suggestions_new RENAME TO rule_suggestions"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX ix_rule_sugg_status_fired "
+                "ON rule_suggestions(status, fired_at)"
+            ))
+
     # ML decision and metrics tables (Phase 3: ML foundation)
     result = await conn.execute(
         text("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_decisions'")

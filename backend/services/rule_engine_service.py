@@ -143,6 +143,10 @@ class RuleEngineService:
         min_samples: int = 3,
         confidence_fusion=None,
         ml_logger=None,
+        lighting_learner=None,
+        notifier_service=None,
+        api_key: Optional[str] = None,
+        public_base_url: Optional[str] = None,
     ) -> None:
         self._ws_manager = ws_manager
         self._min_confidence = min_confidence
@@ -151,11 +155,44 @@ class RuleEngineService:
         self._last_suggestion: Optional[dict[str, Any]] = None
         self._fusion = confidence_fusion
         self._ml_logger = ml_logger
+        # Brightness-suggestion plumbing — lighting_learner produces the
+        # candidates, notifier_service is the surface. api_key + public
+        # base url are baked into the action URLs ntfy.sh callbacks hit.
+        self._lighting_learner = lighting_learner
+        self._notifier = notifier_service
+        self._api_key = api_key
+        self._public_base_url = (
+            (public_base_url or "").rstrip("/")
+            or "http://192.168.1.210:8000"  # LAN bypass for require_api_key
+        )
         self._heartbeat = None  # HeartbeatRegistry, injected by main.py
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_brightness_suggestion_deps(
+        self,
+        *,
+        lighting_learner=None,
+        notifier_service=None,
+        api_key: Optional[str] = None,
+        public_base_url: Optional[str] = None,
+    ) -> None:
+        """Late-bind the brightness-suggestion collaborators.
+
+        Bootstrap order constructs rule_engine before notifier_service, so
+        these get wired post-construction. Anything passed as None leaves
+        the existing value untouched (test override path).
+        """
+        if lighting_learner is not None:
+            self._lighting_learner = lighting_learner
+        if notifier_service is not None:
+            self._notifier = notifier_service
+        if api_key is not None:
+            self._api_key = api_key
+        if public_base_url is not None:
+            self._public_base_url = public_base_url.rstrip("/")
 
     # ------------------------------------------------------------------
     # Rule generation
@@ -524,6 +561,309 @@ class RuleEngineService:
             resolved_source=f"user_dismiss:{remote}",
             broadcast_dismiss=True,
         )
+
+    # ------------------------------------------------------------------
+    # Brightness-kind suggestions (LightingLearner scanner output)
+    # ------------------------------------------------------------------
+
+    async def emit_brightness_suggestion(
+        self,
+        candidate: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Persist a brightness suggestion and return the inserted row.
+
+        Deduplicates: if a pending kind="brightness" row already exists
+        for the same (light_id, mode, period, weather_class) bucket, this
+        method returns None (caller skips emission for that bucket).
+
+        Caller is responsible for routing the returned dict through
+        NotifierService.emit_suggestion to surface it.
+        """
+        import json as _json
+
+        light_id = str(candidate["light_id"])
+        mode = candidate["mode"]
+        period = candidate["period"]
+        weather = candidate["weather_class"]
+
+        async with async_session() as session:
+            # Deduplicate against pending rows for the same bucket.
+            existing = (await session.execute(
+                select(RuleSuggestion).where(
+                    RuleSuggestion.status == "pending",
+                    RuleSuggestion.kind == "brightness",
+                )
+            )).scalars().all()
+            for row in existing:
+                if not row.payload:
+                    continue
+                try:
+                    parsed = _json.loads(row.payload)
+                except Exception:
+                    continue
+                if (
+                    str(parsed.get("light_id")) == light_id
+                    and parsed.get("mode") == mode
+                    and parsed.get("period") == period
+                    and parsed.get("weather_class") == weather
+                ):
+                    return None  # already pending — don't double-emit
+
+            sample_count = int(candidate.get("sample_count", 0))
+            # Confidence proxy: sample_count / 10 capped at 1.0 — gives the
+            # UI a meaningful "how strong is this pattern" value without
+            # introducing a separate dimension.
+            confidence = min(1.0, sample_count / 10.0)
+
+            row = RuleSuggestion(
+                rule_id=None,
+                predicted_mode=mode,
+                confidence=confidence,
+                sample_count=sample_count,
+                current_mode_at_fire=mode,
+                status="pending",
+                kind="brightness",
+                payload=_json.dumps(candidate),
+            )
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            # Augment the standard dict with kind="brightness" + parsed
+            # payload so the WS consumer (BrightnessSuggestionCard.svelte)
+            # has light_id/mode/period/weather_class/suggested_bri to render.
+            # _suggestion_to_dict was written for kind="mode" rows and
+            # doesn't include these fields.
+            base = _suggestion_to_dict(row)
+            base["kind"] = "brightness"
+            try:
+                base["payload"] = _json.loads(row.payload) if row.payload else {}
+            except Exception:
+                base["payload"] = {}
+            return base
+
+    async def accept_brightness_suggestion(
+        self,
+        suggestion_id: int,
+        remote: str = "unknown",
+    ) -> Optional[dict[str, Any]]:
+        """Resolve a specific brightness suggestion as accepted.
+
+        Returns the resolved row (with parsed payload) on success, None if
+        the row is missing, already-resolved, or wrong kind. Caller writes
+        the learned pref through LightingLearner.write_learned_pref.
+        """
+        import json as _json
+
+        now_utc = datetime.now(timezone.utc)
+        async with async_session() as session:
+            row = (await session.execute(
+                select(RuleSuggestion).where(
+                    RuleSuggestion.id == suggestion_id,
+                    RuleSuggestion.kind == "brightness",
+                    RuleSuggestion.status == "pending",
+                )
+            )).scalar_one_or_none()
+            if row is None:
+                return None
+            result = await session.execute(
+                update(RuleSuggestion)
+                .where(
+                    RuleSuggestion.id == suggestion_id,
+                    RuleSuggestion.status == "pending",
+                )
+                .values(
+                    status="accepted",
+                    resolved_at=now_utc,
+                    resolved_source=f"user_accept:{remote}",
+                )
+            )
+            await session.commit()
+            if result.rowcount == 0:
+                return None
+            payload = {}
+            if row.payload:
+                try:
+                    payload = _json.loads(row.payload)
+                except Exception:
+                    payload = {}
+
+        # Drop the dashboard card (other WS clients also clear).
+        try:
+            await self._ws_manager.broadcast(
+                "brightness_suggestion_dismissed", {"id": row.id},
+            )
+        except Exception:
+            logger.exception(
+                "brightness_suggestion_dismissed broadcast failed on accept sid=%d",
+                row.id,
+            )
+
+        return {
+            "id": row.id,
+            "kind": "brightness",
+            "status": "accepted",
+            "payload": payload,
+            "resolved_at": now_utc.isoformat(),
+        }
+
+    async def scan_and_emit_brightness_suggestions(self) -> int:
+        """Run the LightingLearner scanner, persist candidates as suggestions,
+        and fire notifications for each new row.
+
+        Returns the number of new suggestions emitted (0 if nothing fresh
+        to surface — e.g. all candidates already pending or already learned).
+        Called from the hourly background loop.
+        """
+        if not self._lighting_learner:
+            return 0
+        try:
+            candidates = await self._lighting_learner.scan_for_suggestions()
+        except Exception:
+            logger.exception("LightingLearner scan_for_suggestions failed")
+            return 0
+
+        emitted = 0
+        for candidate in candidates:
+            try:
+                row = await self.emit_brightness_suggestion(candidate)
+            except Exception:
+                logger.exception(
+                    "emit_brightness_suggestion failed for candidate=%r",
+                    candidate,
+                )
+                continue
+            if not row:
+                continue  # duplicate of an already-pending bucket
+            emitted += 1
+
+            # Broadcast a WS event so the dashboard's BrightnessSuggestionCard
+            # can render without waiting for the next reconnect or poll.
+            try:
+                await self._ws_manager.broadcast("brightness_suggestion", row)
+            except Exception:
+                logger.exception("brightness_suggestion WS broadcast failed")
+
+            # Fire the notification (desktop toast + iPhone push). Failure
+            # is non-fatal — the row stays pending and the dashboard banner
+            # is the secondary surface.
+            if self._notifier:
+                try:
+                    body = self._format_brightness_body(candidate)
+                    accept_url = (
+                        f"{self._public_base_url}"
+                        f"/api/rules/brightness-suggestion/accept/{row['id']}"
+                    )
+                    dismiss_url = (
+                        f"{self._public_base_url}"
+                        f"/api/rules/brightness-suggestion/dismiss/{row['id']}"
+                    )
+                    await self._notifier.emit_suggestion(
+                        suggestion_id=row["id"],
+                        title="Brightness preference?",
+                        body=body,
+                        accept_url=accept_url,
+                        dismiss_url=dismiss_url,
+                        api_key=self._api_key,
+                        extra={"payload": candidate},
+                    )
+                except Exception:
+                    logger.exception(
+                        "NotifierService.emit_suggestion failed sid=%d",
+                        row["id"],
+                    )
+
+        if emitted:
+            logger.info(
+                "Emitted %d brightness suggestion(s) from %d candidate(s)",
+                emitted, len(candidates),
+            )
+        return emitted
+
+    @staticmethod
+    def _format_brightness_body(candidate: dict[str, Any]) -> str:
+        """Render a human-readable suggestion body for the notification."""
+        mode = candidate.get("mode", "?")
+        period = candidate.get("period", "?")
+        weather = candidate.get("weather_class", "?")
+        light_id = candidate.get("light_id", "?")
+        bri = candidate.get("suggested_bri", "?")
+        n = candidate.get("sample_count", 0)
+        mult = candidate.get("suggested_multiplier")
+        mult_str = f" ({mult:.2f}× base)" if mult else ""
+        return (
+            f"You've been setting L{light_id} to ~{bri}{mult_str} "
+            f"during {weather} {mode}/{period} ({n} times). "
+            f"Apply automatically next time?"
+        )
+
+    async def brightness_scan_loop(self, interval_seconds: int = 3600) -> None:
+        """Periodically scan for new brightness suggestions and emit them.
+
+        Wired into the bootstrap's `tasks` list so shutdown's cancel-and-
+        wait path tears it down. Default cadence is hourly — same as the
+        rule-engine's overall pulse — but configurable for tests.
+        """
+        # Stagger the first run so it doesn't race the model-manager load
+        # at boot. 60s lets all wiring settle (notifier startup, weather
+        # service first poll, etc.).
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            return
+        while True:
+            try:
+                await self.scan_and_emit_brightness_suggestions()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("brightness_scan_loop iteration failed")
+            try:
+                await asyncio.sleep(interval_seconds)
+            except asyncio.CancelledError:
+                return
+
+    async def dismiss_brightness_suggestion(
+        self,
+        suggestion_id: int,
+        remote: str = "unknown",
+    ) -> Optional[dict[str, Any]]:
+        """Resolve a specific brightness suggestion as dismissed.
+
+        Broadcasts `brightness_suggestion_dismissed` whether or not a row
+        was actually resolved so all open dashboards drop the card together
+        (optimistic-dismiss semantics, matches the mode-suggestion path).
+        """
+        now_utc = datetime.now(timezone.utc)
+        async with async_session() as session:
+            result = await session.execute(
+                update(RuleSuggestion)
+                .where(
+                    RuleSuggestion.id == suggestion_id,
+                    RuleSuggestion.kind == "brightness",
+                    RuleSuggestion.status == "pending",
+                )
+                .values(
+                    status="dismissed",
+                    resolved_at=now_utc,
+                    resolved_source=f"user_dismiss:{remote}",
+                )
+            )
+            await session.commit()
+            resolved = result.rowcount > 0
+
+        try:
+            await self._ws_manager.broadcast(
+                "brightness_suggestion_dismissed", {"id": suggestion_id},
+            )
+        except Exception:
+            logger.exception(
+                "brightness_suggestion_dismissed broadcast failed sid=%d",
+                suggestion_id,
+            )
+
+        if not resolved:
+            return None
+        return {"id": suggestion_id, "status": "dismissed"}
 
     async def _resolve_pending(
         self,
