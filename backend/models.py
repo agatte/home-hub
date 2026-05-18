@@ -386,3 +386,78 @@ class MLMetric(Base):
     metric_name: Mapped[str] = mapped_column(String(50), nullable=False)
     value: Mapped[float] = mapped_column(Float, nullable=False)
     extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# AI Personality Layer (Phase A shadow-log).
+#
+# mood_samples: rolling 7-day record of EmotionService output. One row per
+#   poll where the face was detected with sufficient confidence; suppressed
+#   during sleeping / paused / emotion_enabled=false. Values are unitless
+#   on [-1, 1] (valence, arousal) and [0, 1] (focus).
+# mood_calibration: explicit self-report rows from the calibration UI. Used
+#   to fit a per-user linear bias term added to live readings at output
+#   time. Persistent (not retained on a window).
+# vibe_requests: log of /api/personality/vibe calls — transcript, Claude
+#   response, applied flag, cost ledger. Persistent for cost auditing.
+# ---------------------------------------------------------------------------
+class MoodSample(Base):
+    """One emotion-detector reading; rolling 7-day retention."""
+
+    __tablename__ = "mood_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    valence: Mapped[float] = mapped_column(Float, nullable=False)
+    arousal: Mapped[float] = mapped_column(Float, nullable=False)
+    focus: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    # Factors that contributed: {face_conf, audio_arousal, top_blendshapes:{...}}
+    factors: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class MoodCalibration(Base):
+    """User-supplied self-report against the detector's live reading."""
+
+    __tablename__ = "mood_calibration"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    # Self-report (ground truth)
+    self_valence: Mapped[float] = mapped_column(Float, nullable=False)
+    self_arousal: Mapped[float] = mapped_column(Float, nullable=False)
+    self_focus: Mapped[float] = mapped_column(Float, nullable=False)
+    # Detector's reading at the moment of self-report. Nullable: the user
+    # can self-report even when the camera isn't returning a confident face.
+    detected_valence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    detected_arousal: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    detected_focus: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    detected_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class VibeRequest(Base):
+    """One /api/personality/vibe Claude-routed request."""
+
+    __tablename__ = "vibe_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    transcript: Mapped[str] = mapped_column(String(500), nullable=False)
+    response: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    latency_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="api")

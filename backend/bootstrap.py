@@ -877,6 +877,38 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(transit_lighting.poll_loop()))
     app_logger.info("Transit lighting service started")
 
+    # AI Personality Layer (Phase A — shadow-log only).
+    # EmotionService consumes face blendshapes from camera_service when
+    # emotion_enabled and persists the derived mood vector to mood_samples.
+    # No actuation in Phase A; gated by personality_enabled + emotion_enabled
+    # settings (both default false). Mood-ring light + vibe intent + toast
+    # suggestions layer on in later phases.
+    try:
+        from backend.database import async_session as personality_session_factory
+        from backend.services.personality.emotion_service import EmotionService
+        emotion_service = EmotionService(
+            ws_manager=ws_manager,
+            automation_engine=automation,
+            camera_service=getattr(app.state, "camera_service", None),
+            session_factory=personality_session_factory,
+        )
+        # Compose the two opt-in toggles: personality_enabled is the master
+        # kill switch; emotion_enabled is the sub-toggle for the camera-
+        # driven half. Both must be true for EmotionService to actually run.
+        personality_setting = await load_setting("personality_enabled")
+        emotion_setting = await load_setting("emotion_enabled")
+        emotion_on = (
+            (personality_setting or {}).get("enabled", False)
+            and (emotion_setting or {}).get("enabled", False)
+        )
+        await emotion_service.start(emotion_enabled=emotion_on)
+        app.state.emotion_service = emotion_service
+        app_logger.info(
+            "EmotionService initialized (enabled=%s)", emotion_on,
+        )
+    except Exception:
+        app_logger.exception("EmotionService failed to initialize — personality disabled")
+
     app_logger.info("Home Hub is ready")
 
     yield
@@ -926,3 +958,6 @@ async def lifespan(app: FastAPI):
     transit = getattr(app.state, "transit_lighting", None)
     if transit is not None:
         await _safe_shutdown("transit_lighting", transit.close)
+    emotion = getattr(app.state, "emotion_service", None)
+    if emotion is not None:
+        await _safe_shutdown("emotion_service", emotion.close)

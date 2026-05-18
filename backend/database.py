@@ -98,6 +98,18 @@ async def _run_migrations(conn) -> None:
         """))
         await conn.execute(text("CREATE INDEX ix_ml_metrics_date ON ml_metrics(date)"))
 
+    # Personality layer (Phase A): trim mood_samples to 7 days at startup.
+    # Personality tables themselves are created by Base.metadata.create_all
+    # at the call site; this block only enforces the rolling window.
+    result = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='mood_samples'")
+    )
+    if result.fetchone():
+        await conn.execute(text(
+            "DELETE FROM mood_samples "
+            "WHERE timestamp < datetime('now', '-7 days')"
+        ))
+
 
 async def init_db() -> None:
     """Create all database tables and apply pending migrations."""

@@ -216,6 +216,23 @@ POSE_MODEL_URL = (
     "pose_landmarker_lite.task"
 )
 
+# Face Landmarker — 478 landmarks + 52 ARKit blendshapes. Runs IN PARALLEL
+# with the existing FaceDetector (not as a replacement) and only when
+# emotion_enabled is True. The personality layer subscribes to the
+# blendshape callback to produce its mood vector. ~3MB model, ~20ms per
+# frame at 640×480 on the Latitude CPU.
+FACE_LANDMARKER_MODEL_FILENAME = "face_landmarker.task"
+FACE_LANDMARKER_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "face_landmarker/face_landmarker/float16/latest/"
+    "face_landmarker.task"
+)
+# Minimum face confidence (from the existing BlazeFace pass) below which
+# we don't even bother running the landmarker. Same threshold the
+# EmotionService uses to gate its EMA update — keeps the two consistent
+# without coupling.
+FACE_LANDMARKER_TRIGGER_CONFIDENCE = 0.30
+
 
 class CameraService:
     """MediaPipe-based camera presence detection for the Latitude webcam.
@@ -240,6 +257,12 @@ class CameraService:
         self._cap_lock = threading.Lock()  # Serializes poll-loop and snapshot reads
         self._face_detector = None
         self._pose_landmarker = None
+        # FaceLandmarker is lazy-loaded the first time emotion_enabled
+        # flips True. Keeps the cold-start path lean for the common case
+        # where personality features are off. See set_emotion_enabled().
+        self._face_landmarker = None
+        self._emotion_enabled: bool = False
+        self._blendshape_callbacks: list = []
 
         # Detection state
         self._consecutive_absent: int = 0
@@ -283,6 +306,81 @@ class CameraService:
     def enabled(self) -> bool:
         """Whether the camera service is active and polling."""
         return self._enabled
+
+    # ------------------------------------------------------------------
+    # Personality / emotion hooks (Phase A — face blendshapes)
+    #
+    # EmotionService subscribes to blendshape callbacks here. Only fired
+    # when emotion_enabled is True AND a confident face is detected on
+    # the current frame. Same in-memory-only contract as pose landmarks:
+    # blendshape values are floats derived from the face crop inside
+    # this executor and never persisted as raw frame data.
+    # ------------------------------------------------------------------
+
+    def register_blendshape_callback(self, callback) -> None:
+        """Subscribe to per-frame blendshape readings.
+
+        Callback signature: ``async def cb(blendshapes: dict[str, float],
+        face_confidence: float, timestamp: datetime) -> None``. Async
+        callbacks are scheduled on the running loop; sync callbacks run
+        inline (kept fast).
+        """
+        if callback not in self._blendshape_callbacks:
+            self._blendshape_callbacks.append(callback)
+
+    def set_emotion_enabled(self, enabled: bool) -> None:
+        """Flip the per-frame FaceLandmarker pass on or off.
+
+        Lazy-loads the landmarker model the first time we flip ON. If
+        the model load fails we log + stay disabled (face presence keeps
+        working, only emotion is gated).
+        """
+        enabled = bool(enabled)
+        if enabled == self._emotion_enabled:
+            return
+        self._emotion_enabled = enabled
+        if enabled and self._face_landmarker is None:
+            self._init_face_landmarker()
+        if enabled and self._face_landmarker is None:
+            # init failed — stay off so the per-frame path doesn't try
+            self._emotion_enabled = False
+            logger.warning(
+                "Emotion enabled requested but FaceLandmarker init failed; "
+                "staying disabled"
+            )
+
+    def _init_face_landmarker(self) -> None:
+        """Best-effort lazy load of FaceLandmarker. No-op on failure."""
+        try:
+            import mediapipe as mp
+        except ImportError:
+            logger.warning("mediapipe not installed — FaceLandmarker disabled")
+            return
+
+        model_path = MODEL_DIR / FACE_LANDMARKER_MODEL_FILENAME
+        if not model_path.exists():
+            if not self._download_model(
+                model_path, FACE_LANDMARKER_MODEL_URL, "face landmarker"
+            ):
+                return
+        try:
+            BaseOptions = mp.tasks.BaseOptions
+            FaceLandmarker = mp.tasks.vision.FaceLandmarker
+            FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+            options = FaceLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=str(model_path)),
+                num_faces=1,
+                output_face_blendshapes=True,
+                output_facial_transformation_matrixes=False,
+            )
+            self._face_landmarker = FaceLandmarker.create_from_options(options)
+            logger.info("FaceLandmarker initialized (emotion enabled)")
+        except Exception as exc:
+            logger.warning(
+                "FaceLandmarker init failed — emotion will stay disabled: %s",
+                exc,
+            )
+            self._face_landmarker = None
 
     async def start(self) -> None:
         """Open the webcam and initialize MediaPipe face + pose models.
@@ -922,6 +1020,31 @@ class CameraService:
                 self._last_detection_source = source
                 self._last_ambient_lux = ambient_lux
                 self._update_ema_lux(ambient_lux)
+
+                # Dispatch blendshapes to personality subscribers (Phase A).
+                # Only when emotion is enabled, a face was detected with
+                # reasonable confidence, and the frame actually returned a
+                # blendshape map. Async callbacks are awaited inline — they
+                # are required to be fast (cache + return); slow work goes
+                # in their own poll loops.
+                blendshapes = result.get("blendshapes")
+                if (
+                    self._emotion_enabled
+                    and blendshapes
+                    and source == "face"
+                    and confidence >= FACE_LANDMARKER_TRIGGER_CONFIDENCE
+                    and self._blendshape_callbacks
+                ):
+                    bs_ts = self._last_detection_at
+                    for cb in list(self._blendshape_callbacks):
+                        try:
+                            res = cb(blendshapes, confidence, bs_ts)
+                            if asyncio.iscoroutine(res):
+                                await res
+                        except Exception:
+                            logger.exception(
+                                "blendshape callback raised — ignoring"
+                            )
                 # Run zone + posture hysteresis — may commit new committed values.
                 # `present_observed` lets the hysteresis distinguish "user
                 # absent this frame" (don't refresh stale commits) from
@@ -1406,6 +1529,27 @@ class CameraService:
                 cx = (bbox.origin_x + bbox.width / 2) / max(w, 1)
                 face_zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
 
+            # Face Landmarker (emotion only — ~20ms, ~3MB model). Conditional
+            # on emotion_enabled AND a face already detected above with
+            # sufficient confidence; otherwise we'd burn the budget producing
+            # garbage blendshapes on furniture silhouettes.
+            blendshapes: Optional[dict[str, float]] = None
+            if (
+                self._emotion_enabled
+                and self._face_landmarker is not None
+                and face_best is not None
+                and face_conf >= FACE_LANDMARKER_TRIGGER_CONFIDENCE
+            ):
+                try:
+                    fl_result = self._face_landmarker.detect(mp_image)
+                    if fl_result.face_blendshapes:
+                        blendshapes = {
+                            cat.category_name: float(cat.score)
+                            for cat in fl_result.face_blendshapes[0]
+                        }
+                except Exception:
+                    logger.debug("FaceLandmarker.detect failed", exc_info=True)
+
             # Pose landmarker (~60ms at 640×480) — runs every frame so it can
             # arbitrate when face is unreliable. Total per-frame cost ~75ms,
             # well under the 2s poll budget.
@@ -1449,6 +1593,7 @@ class CameraService:
                     "zone": face_zone,
                     # Borrow pose's posture as a free upgrade when available.
                     "posture": pose_posture if pose_present else None,
+                    "blendshapes": blendshapes,
                 }
 
             if pose_present:
@@ -1460,6 +1605,7 @@ class CameraService:
                     "ambient_lux": ambient_lux,
                     "zone": pose_zone,
                     "posture": pose_posture,
+                    "blendshapes": blendshapes,
                 }
 
             if face_best is not None:
@@ -1479,6 +1625,7 @@ class CameraService:
                     "ambient_lux": ambient_lux,
                     "zone": None,
                     "posture": None,  # Face path can't derive torso geometry
+                    "blendshapes": blendshapes,
                 }
 
             return {
@@ -1489,6 +1636,7 @@ class CameraService:
                 "ambient_lux": ambient_lux,
                 "zone": None,
                 "posture": None,
+                "blendshapes": None,
             }
 
         finally:
