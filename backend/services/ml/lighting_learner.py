@@ -23,9 +23,18 @@ from backend.services.ml.model_manager import ModelManager
 
 logger = logging.getLogger("home_hub.ml")
 
-# Minimum number of manual adjustments per (light, mode, period)
-# before we trust the learned value over the hardcoded default.
+# Minimum number of manual adjustments per (light, mode, period, weather="any")
+# before we trust the learned value over the hardcoded default. Higher for the
+# weather-agnostic "any" bucket because it's the cross-condition baseline —
+# more samples reduce noise from mixing weathers.
 MIN_ADJUSTMENTS = 5
+
+# Minimum samples for a WEATHER-SPECIFIC bucket. Lower than MIN_ADJUSTMENTS
+# because the variance is naturally smaller inside a single weather class
+# (the user's storm-time preference doesn't blend with their sunny-day one).
+# Matches the threshold the brightness-suggestion scanner uses to decide
+# whether a bucket is "consistent enough" to surface.
+MIN_ADJUSTMENTS_WEATHER = 3
 
 # EMA decay factor — recent adjustments weighted ~3x more than older ones.
 EMA_ALPHA = 0.3
@@ -35,6 +44,12 @@ LEARNABLE_PROPERTIES = ("bri", "hue", "sat", "ct")
 
 # Only learn from user-initiated triggers (not automation or scenes).
 USER_TRIGGERS = ("ws", "rest", "all_lights")
+
+# Sentinel weather class for buckets that should match any weather. Rows
+# with NULL weather_class (pre-migration history) and any caller that
+# doesn't have a weather classification land in this bucket. Mirrors
+# weather_class.WEATHER_ANY for the music bandit.
+WEATHER_ANY = "any"
 
 # Kitchen pair: L3 + L4 must learn identical values in pair-enforced modes
 # (CLAUDE.md kitchen-pair invariant). Pooling lives in `recalculate`; other
@@ -76,8 +91,18 @@ class LightingPreferenceLearner(HealthTrackable):
     # Public API
     # ------------------------------------------------------------------
 
-    def get_overlay(self, mode: str, time_period: str) -> Optional[dict[str, dict]]:
-        """Return learned per-light values for a mode + period, or None.
+    def get_overlay(
+        self,
+        mode: str,
+        time_period: str,
+        weather_class: str = WEATHER_ANY,
+    ) -> Optional[dict[str, dict]]:
+        """Return learned per-light values for a mode + period + weather, or None.
+
+        Looks up the weather-specific bucket first, then falls back to the
+        ``WEATHER_ANY`` bucket so legacy (pre-weather) learned values keep
+        applying during the transition. Per-light entries from the specific
+        bucket override the "any" entries for overlapping lights.
 
         The returned dict maps light_id → {property: value}, matching
         the structure inside ``ACTIVITY_LIGHT_STATES``.
@@ -87,16 +112,88 @@ class LightingPreferenceLearner(HealthTrackable):
             {"1": {"bri": 180}, "2": {"bri": 150, "ct": 300}}
         """
         try:
-            key = f"{mode}:{time_period}"
-            overlay = self._preferences.get(key)
+            specific = self._preferences.get(
+                f"{mode}:{time_period}:{weather_class}",
+            )
+            generic = self._preferences.get(
+                f"{mode}:{time_period}:{WEATHER_ANY}",
+            )
         except Exception as exc:
             self._track_predict(False, exc)
             logger.warning("Lighting overlay lookup failed: %s", exc)
             return None
         self._track_predict(True)
-        if not overlay:
+        if not specific and not generic:
             return None
-        return overlay
+        # Merge: generic ("any") is the floor, specific overrides per-light.
+        merged: dict[str, dict] = {}
+        if generic:
+            for lid, prefs in generic.items():
+                merged[lid] = dict(prefs)
+        if specific:
+            for lid, prefs in specific.items():
+                merged[lid] = dict(prefs)
+        return merged or None
+
+    def has_weather_pref(
+        self,
+        mode: str,
+        time_period: str,
+        weather_class: str,
+    ) -> set[str]:
+        """Return the set of light_ids with a WEATHER-SPECIFIC learned bri.
+
+        Used by the heuristic fade-out gate (Layer 5): lights in this set
+        skip ``apply_functional_weather_brightness`` because the learner
+        has accumulated evidence for the exact (mode, period, weather)
+        bucket. The "any" bucket is intentionally excluded — that's the
+        cross-condition baseline, not a weather-specific preference.
+        """
+        if weather_class == WEATHER_ANY:
+            return set()
+        overlay = self._preferences.get(
+            f"{mode}:{time_period}:{weather_class}",
+        ) or {}
+        return {lid for lid, prefs in overlay.items() if "bri" in prefs}
+
+    async def write_learned_pref(
+        self,
+        light_id: str,
+        mode: str,
+        time_period: str,
+        weather_class: str,
+        bri: int,
+    ) -> None:
+        """Persist a single learned bri value into the WEATHER-SPECIFIC bucket.
+
+        Called from the rule-engine's accept_brightness_suggestion path
+        when the user accepts a suggestion through the notification.
+        Persists via ModelManager so the value survives restarts.
+        """
+        slot_key = f"{mode}:{time_period}:{weather_class}"
+        if slot_key not in self._preferences:
+            self._preferences[slot_key] = {}
+        # Preserve any other learned properties for this light_id.
+        existing = self._preferences[slot_key].get(light_id, {})
+        existing["bri"] = int(bri)
+        self._preferences[slot_key][light_id] = existing
+        self._model_manager.save_model(
+            "lighting_prefs",
+            self._preferences,
+            metadata={
+                "lights_with_learned_values": len({
+                    lid
+                    for lights in self._preferences.values()
+                    for lid in lights
+                }),
+                "learned_combos": self._count_per_light_combos(),
+                "last_write_source": "suggestion_accept",
+            },
+        )
+        logger.info(
+            "Learned brightness written: light=%s slot=%s bri=%d",
+            light_id, slot_key, bri,
+        )
 
     def _count_per_light_combos(self) -> int:
         # Per-light learned entries — matches recalculate()'s metadata.
@@ -140,7 +237,17 @@ class LightingPreferenceLearner(HealthTrackable):
         await self.recalculate()
 
     async def recalculate(self) -> None:
-        """Query light_adjustments and recompute EMA preferences."""
+        """Query light_adjustments and recompute EMA preferences.
+
+        Produces two parallel sets of buckets:
+          1. **Weather-agnostic** ``{mode}:{period}:any`` from ALL rows
+             (NULL weather rows + every classified row). MIN_ADJUSTMENTS=5.
+          2. **Weather-specific** ``{mode}:{period}:{weather}`` from rows
+             whose weather_class is non-NULL. MIN_ADJUSTMENTS_WEATHER=3.
+
+        ``get_overlay(mode, period, weather)`` merges them at read time —
+        weather-specific overrides per-light, "any" is the floor.
+        """
         try:
             async with async_session() as session:
                 result = await session.execute(
@@ -155,48 +262,52 @@ class LightingPreferenceLearner(HealthTrackable):
                 logger.info("No user-initiated light adjustments to learn from")
                 return
 
-            # Group adjustments by (light_id, mode, time_period)
-            groups: dict[str, list[LightAdjustment]] = defaultdict(list)
+            # Group adjustments into two parallel keyspaces:
+            #   any_groups: {light_id}:{mode}:{period}:any           — every row
+            #   weather_groups: {light_id}:{mode}:{period}:{weather} — non-NULL only
+            any_groups: dict[str, list[LightAdjustment]] = defaultdict(list)
+            weather_groups: dict[str, list[LightAdjustment]] = defaultdict(list)
             for adj in adjustments:
                 period = get_time_period(adj.timestamp)
-                key = f"{adj.light_id}:{adj.mode_at_time}:{period}"
-                groups[key].append(adj)
+                any_key = f"{adj.light_id}:{adj.mode_at_time}:{period}:{WEATHER_ANY}"
+                any_groups[any_key].append(adj)
+                weather = getattr(adj, "weather_class", None)
+                if weather:
+                    w_key = f"{adj.light_id}:{adj.mode_at_time}:{period}:{weather}"
+                    weather_groups[w_key].append(adj)
 
             # Kitchen-pair pooling: in pair-enforced modes, L3 and L4 share
-            # one adjustment stream so they learn identical EMAs. Without
-            # this, asymmetric history (2026-04-16 seed: L3=110 vs L4=90)
-            # propagates forever and silently desyncs the pendants.
-            processed_pairs: set[tuple[str, str]] = set()
-            for key in list(groups.keys()):
-                light_id, mode, period = key.split(":", 2)
-                if light_id not in KITCHEN_PAIR_IDS or mode not in PAIR_ENFORCED_MODES:
-                    continue
-                if (mode, period) in processed_pairs:
-                    continue
-                l3_key = f"3:{mode}:{period}"
-                l4_key = f"4:{mode}:{period}"
-                pooled = groups.get(l3_key, []) + groups.get(l4_key, [])
-                if pooled:
-                    groups[l3_key] = pooled
-                    groups[l4_key] = pooled
-                processed_pairs.add((mode, period))
+            # one adjustment stream so they learn identical EMAs. Pooled
+            # across both keyspaces. Without this, asymmetric history
+            # (2026-04-16 seed: L3=110 vs L4=90) propagates forever and
+            # silently desyncs the pendants.
+            self._pool_kitchen_pair(any_groups)
+            self._pool_kitchen_pair(weather_groups)
 
             # Compute EMA for each group with enough data
             new_prefs: dict[str, dict[str, dict[str, Any]]] = {}
             learned_count = 0
 
-            for group_key, adjs in groups.items():
+            for group_key, adjs in any_groups.items():
                 if len(adjs) < MIN_ADJUSTMENTS:
                     continue
-
-                light_id, mode, period = group_key.split(":", 2)
-                slot_key = f"{mode}:{period}"
-
-                learned = self._compute_ema(adjs)
+                light_id, mode, period, _ = group_key.split(":", 3)
+                slot_key = f"{mode}:{period}:{WEATHER_ANY}"
+                learned = self._compute_ema(adjs, min_count=MIN_ADJUSTMENTS)
                 if learned:
-                    if slot_key not in new_prefs:
-                        new_prefs[slot_key] = {}
-                    new_prefs[slot_key][light_id] = learned
+                    new_prefs.setdefault(slot_key, {})[light_id] = learned
+                    learned_count += 1
+
+            for group_key, adjs in weather_groups.items():
+                if len(adjs) < MIN_ADJUSTMENTS_WEATHER:
+                    continue
+                light_id, mode, period, weather = group_key.split(":", 3)
+                slot_key = f"{mode}:{period}:{weather}"
+                learned = self._compute_ema(
+                    adjs, min_count=MIN_ADJUSTMENTS_WEATHER,
+                )
+                if learned:
+                    new_prefs.setdefault(slot_key, {})[light_id] = learned
                     learned_count += 1
 
             self._preferences = new_prefs
@@ -228,16 +339,46 @@ class LightingPreferenceLearner(HealthTrackable):
                 exc_info=True,
             )
 
+    @staticmethod
+    def _pool_kitchen_pair(
+        groups: dict[str, list[LightAdjustment]],
+    ) -> None:
+        """Pool L3 + L4 adjustment streams in pair-enforced modes (in place).
+
+        Works for any keyspace whose key prefix is ``{light_id}:{mode}:{period}:...``.
+        """
+        processed_pairs: set[tuple[str, str, str]] = set()
+        for key in list(groups.keys()):
+            parts = key.split(":")
+            if len(parts) < 4:
+                continue
+            light_id, mode, period, tail = parts[0], parts[1], parts[2], ":".join(parts[3:])
+            if light_id not in KITCHEN_PAIR_IDS or mode not in PAIR_ENFORCED_MODES:
+                continue
+            if (mode, period, tail) in processed_pairs:
+                continue
+            l3_key = f"3:{mode}:{period}:{tail}"
+            l4_key = f"4:{mode}:{period}:{tail}"
+            pooled = groups.get(l3_key, []) + groups.get(l4_key, [])
+            if pooled:
+                groups[l3_key] = pooled
+                groups[l4_key] = pooled
+            processed_pairs.add((mode, period, tail))
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_ema(adjustments: list[LightAdjustment]) -> dict[str, int]:
+    def _compute_ema(
+        adjustments: list[LightAdjustment],
+        min_count: int = MIN_ADJUSTMENTS,
+    ) -> dict[str, int]:
         """Compute EMA over a list of adjustments for learnable properties.
 
         Returns a dict of property → rounded integer value for properties
-        that have enough non-None values.
+        that have enough non-None values. ``min_count`` lets weather-specific
+        buckets accept fewer samples than the weather-agnostic baseline.
         """
         learned: dict[str, int] = {}
 
@@ -248,7 +389,7 @@ class LightingPreferenceLearner(HealthTrackable):
                 for adj in adjustments
                 if getattr(adj, after_attr) is not None
             ]
-            if len(values) < MIN_ADJUSTMENTS:
+            if len(values) < min_count:
                 continue
 
             # EMA: start from the first value, accumulate

@@ -1944,9 +1944,17 @@ class AutomationEngine:
 
             # Apply learned lighting preferences as overlay (ML Phase 1).
             # Learned values replace hardcoded defaults per-light, per-property.
+            # Weather class threaded in (Layer 4) so the overlay picks the
+            # weather-specific bucket when one exists, otherwise falls back
+            # to the "any" baseline.
             lighting_learner = getattr(self, "_lighting_learner", None)
             if lighting_learner:
-                overlay = lighting_learner.get_overlay(mode, period)
+                weather_for_overlay = (
+                    self._get_current_weather_condition() or "any"
+                )
+                overlay = lighting_learner.get_overlay(
+                    mode, period, weather_for_overlay,
+                )
                 if overlay:
                     deltas: dict[str, dict] = {}
                     for light_id, prefs in overlay.items():
