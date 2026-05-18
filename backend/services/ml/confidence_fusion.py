@@ -70,7 +70,12 @@ STALE_SIGNAL_SECONDS = 300  # 5 minutes
 LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6
 
 # Max sub-factors surfaced per lane (keeps the analytics constellation readable).
-MAX_FACTORS_PER_LANE = 4
+# Bumped 4 → 5 in Phase 2 of multi-camera fusion so the camera lane can carry
+# the existing 4 pips (presence/zone/posture/lux) PLUS a ``presence_sources``
+# attribution pip naming the live presence sources (latitude / desktop / …).
+# That attribution is what fusion-lane-auditor keys on to assert both cameras
+# are contributing.
+MAX_FACTORS_PER_LANE = 5
 
 
 def _clean_factors(
@@ -162,7 +167,8 @@ class ConfidenceFusion:
             factors: Optional list of sub-factor dicts surfaced to the
                 analytics constellation UI. Each entry should include
                 keys ``key``, ``label``, ``value``, ``display``, ``impact``
-                (float in [0,1]) and optionally ``stale``. Capped at 4.
+                (float in [0,1]) and optionally ``stale``. Capped at
+                ``MAX_FACTORS_PER_LANE``.
         """
         try:
             if source not in SIGNAL_SOURCES:

@@ -853,9 +853,12 @@ class CameraService:
     ) -> list[dict]:
         """Build the camera lane's sub-factors for the analytics constellation.
 
-        Returns four pips: presence (face/pose/absent), zone, posture, and
-        a lux band. Uses currently-committed hysteresis values so pips
-        don't flicker on single-frame misses.
+        Returns up to five pips: presence (face/pose/absent), zone, posture,
+        lux band, and a ``presence_sources`` attribution naming the live
+        cameras. Uses currently-committed hysteresis values so pips don't
+        flicker on single-frame misses. The presence_sources pip is appended
+        in the poll loop where PresenceFusion is reachable; this method
+        emits the first four.
         """
         if status == "absent":
             presence_display = "absent"
@@ -916,6 +919,9 @@ class CameraService:
                 "impact": lux_impact,
             })
 
+        # Cap at 4 here — the optional presence_sources pip is appended
+        # by the poll loop, which keeps PresenceFusion isolated to the one
+        # call site that has access to the automation engine's wiring.
         return factors[:4]
 
     def set_heartbeat_registry(self, registry) -> None:
@@ -1152,6 +1158,19 @@ class CameraService:
                     confidence=confidence,
                     multiplier=current_multiplier,
                 )
+
+                # Append the multi-source attribution factor (Commit 3 of the
+                # multi-camera fusion plan). PresenceFusion.as_fusion_factor()
+                # returns None when no source has reported recently — in that
+                # case we leave camera_factors as-is so we don't emit a
+                # confusing "presence_sources: (empty)" pip.
+                presence_fusion = getattr(
+                    self._automation, "_presence_fusion", None,
+                )
+                if presence_fusion is not None:
+                    presence_factor = presence_fusion.as_fusion_factor()
+                    if presence_factor is not None:
+                        camera_factors.append(presence_factor)
 
                 # Keep the camera lane fresh in confidence fusion every cycle.
                 # The edge-triggered report_activity() calls below drive actual

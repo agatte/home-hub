@@ -790,6 +790,48 @@ class AutomationEngine:
         ).total_seconds()
         return age < window_seconds
 
+    def _attach_presence_attribution(
+        self,
+        factors: dict,
+        zone: Optional[str] = None,
+        posture: Optional[str] = None,
+    ) -> None:
+        """Stamp ``zone_source`` / ``posture_source`` onto a factors dict.
+
+        Reads ``PresenceFusion.get_sources()`` and records the first source
+        whose fresh reading carries the matching ``zone`` / ``posture``
+        value. Tagging makes ml_decisions audit-friendly: the
+        ``fusion-lane-auditor`` can confirm both presence sources are
+        contributing to actual decisions (not just heartbeating into the
+        camera lane). Mutates ``factors`` in place; silently no-ops when
+        PresenceFusion isn't wired or anything raises (rule fires must
+        never abort on telemetry — they already burned their refractory
+        stamp by the time this runs).
+        """
+        presence_fusion = getattr(self, "_presence_fusion", None)
+        if presence_fusion is None:
+            return
+        try:
+            sources = presence_fusion.get_sources()
+            if zone is not None:
+                factors["zone_source"] = next(
+                    (
+                        s for s, st in sources.items()
+                        if st.get("zone") == zone and st.get("fresh")
+                    ),
+                    None,
+                )
+            if posture is not None:
+                factors["posture_source"] = next(
+                    (
+                        s for s, st in sources.items()
+                        if st.get("posture") == posture and st.get("fresh")
+                    ),
+                    None,
+                )
+        except Exception:
+            return
+
     def _is_likely_still_asleep(self, now: datetime) -> bool:
         """True while the user appears to be asleep in bed.
 
@@ -2970,6 +3012,18 @@ class AutomationEngine:
         self._zone_posture_reclined_since = None
         await self._persist_override_state()
 
+        # Source attribution (Commit 3 of multi-camera fusion). Stamped
+        # AFTER the refractory commit on purpose — the helper is the only
+        # remaining thing between the stamp and the ml_logger row, and
+        # `feedback_rule_refractory_burn_pattern.md` mandates "stamp
+        # first, telemetry second" so a helper exception can't dodge the
+        # refractory. Records which presence source's fresh reading
+        # carries the zone/posture the rule fired on, so the
+        # fusion-lane-auditor can confirm both cameras are contributing
+        # to actual decisions rather than just showing up in
+        # /api/camera/status diagnostics.
+        self._attach_presence_attribution(factors, zone=zone, posture=posture)
+
         if should_apply:
             logger.info(
                 "Zone+posture rule firing: %s + %s held %.0fs → relax",
@@ -3150,6 +3204,12 @@ class AutomationEngine:
             "dwell_required": WATCHING_SLEEP_GUARD_DWELL_SECONDS,
             "hour": now.hour,
         }
+        # Source attribution (Commit 3 of multi-camera fusion). For this
+        # rule both will resolve to "latitude" today (zone=bed and
+        # posture=reclined are Latitude-only); tagging makes that explicit
+        # in ml_decisions and future-proofs the row if a bedroom-facing
+        # source ever joins the fusion.
+        self._attach_presence_attribution(factors, zone=zone, posture=posture)
 
         logger.info(
             "Watching-sleep guard firing: bed+reclined held %.0fmin "

@@ -157,3 +157,31 @@ class TestFusionReportsFactors:
         factors = result["signals"]["process"]["factors"]
         assert len(factors) == 1
         assert factors[0]["key"] == "good"
+
+
+class TestFactorCapAccommodatesPresenceAttribution:
+    """The camera lane emits 4 pips (presence/zone/posture/lux) plus an
+    optional ``presence_sources`` attribution pip the poll loop appends
+    from PresenceFusion. ``MAX_FACTORS_PER_LANE`` must be ≥5 so the
+    attribution survives ``_clean_factors``."""
+
+    def test_max_factors_per_lane_at_least_five(self):
+        assert MAX_FACTORS_PER_LANE >= 5
+
+    def test_five_factor_payload_survives_clean(self):
+        full_camera_payload = [
+            {"key": "presence", "label": "Presence",
+             "value": "present", "display": "face", "impact": 0.9},
+            {"key": "zone", "label": "Zone",
+             "value": "desk", "display": "desk", "impact": 0.8},
+            {"key": "posture", "label": "Posture",
+             "value": "upright", "display": "upright", "impact": 0.7},
+            {"key": "lux", "label": "Light",
+             "value": 250, "display": "normal", "impact": 0.4},
+            {"key": "presence_sources", "label": "Presence sources",
+             "value": "desktop,latitude", "display": "desktop, latitude",
+             "impact": 0.4},
+        ]
+        cleaned = _clean_factors(full_camera_payload)
+        assert len(cleaned) == 5
+        assert cleaned[-1]["key"] == "presence_sources"

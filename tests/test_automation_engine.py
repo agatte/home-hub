@@ -928,6 +928,113 @@ class TestZonePostureRule:
 
 
 # ---------------------------------------------------------------------------
+# Presence attribution on rule-fire ml_decisions (Commit 3 of multi-cam fusion)
+# ---------------------------------------------------------------------------
+
+class _FakePresenceFusion:
+    """Minimal stand-in for PresenceFusion that returns a fixed sources dict."""
+
+    def __init__(self, sources: dict) -> None:
+        self._sources = sources
+
+    def get_sources(self) -> dict:
+        return self._sources
+
+
+class TestPresenceAttribution:
+    """``_attach_presence_attribution`` stamps zone_source / posture_source.
+
+    The fusion-lane-auditor keys on these factors to confirm both presence
+    sources (Latitude + desktop) are contributing to actual mode decisions,
+    not just heartbeating into the camera lane.
+    """
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    def test_no_op_without_presence_fusion(self, engine):
+        factors: dict = {}
+        engine._attach_presence_attribution(
+            factors, zone="bed", posture="reclined",
+        )
+        assert factors == {}
+
+    def test_stamps_latitude_for_bed_reclined(self, engine):
+        engine._presence_fusion = _FakePresenceFusion({
+            "latitude": {
+                "zone": "bed", "posture": "reclined", "fresh": True,
+            },
+            "desktop": {
+                "zone": None, "posture": None, "fresh": False,
+            },
+        })
+        factors: dict = {}
+        engine._attach_presence_attribution(
+            factors, zone="bed", posture="reclined",
+        )
+        assert factors["zone_source"] == "latitude"
+        assert factors["posture_source"] == "latitude"
+
+    def test_stamps_desktop_for_slouched(self, engine):
+        engine._presence_fusion = _FakePresenceFusion({
+            "latitude": {
+                "zone": "desk", "posture": "upright", "fresh": True,
+            },
+            "desktop": {
+                "zone": None, "posture": "slouched", "fresh": True,
+            },
+        })
+        factors: dict = {}
+        engine._attach_presence_attribution(
+            factors, zone="desk", posture="slouched",
+        )
+        assert factors["zone_source"] == "latitude"
+        assert factors["posture_source"] == "desktop"
+
+    def test_stale_source_not_picked(self, engine):
+        engine._presence_fusion = _FakePresenceFusion({
+            "latitude": {
+                "zone": "bed", "posture": "reclined", "fresh": False,
+            },
+        })
+        factors: dict = {}
+        engine._attach_presence_attribution(
+            factors, zone="bed", posture="reclined",
+        )
+        assert factors["zone_source"] is None
+        assert factors["posture_source"] is None
+
+    def test_helper_survives_broken_presence_fusion(self, engine):
+        class _Broken:
+            def get_sources(self):
+                raise RuntimeError("boom")
+
+        engine._presence_fusion = _Broken()
+        factors: dict = {}
+        # Helper must swallow exceptions so a broken fusion never
+        # destabilizes the rule fire that's calling it.
+        engine._attach_presence_attribution(
+            factors, zone="bed", posture="reclined",
+        )
+        assert factors == {}
+
+    def test_skips_keys_when_value_is_none(self, engine):
+        """Caller can omit zone or posture; only requested keys get stamped."""
+        engine._presence_fusion = _FakePresenceFusion({
+            "latitude": {
+                "zone": "bed", "posture": "reclined", "fresh": True,
+            },
+        })
+        factors: dict = {}
+        engine._attach_presence_attribution(factors, posture="reclined")
+        assert "zone_source" not in factors
+        assert factors["posture_source"] == "latitude"
+
+
+# ---------------------------------------------------------------------------
 # Zone + posture overlay — watching-mode per-light brightness shaping
 # ---------------------------------------------------------------------------
 
