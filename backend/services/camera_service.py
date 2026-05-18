@@ -29,7 +29,10 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:
+    from backend.services.presence_fusion import PresenceReading
 
 logger = logging.getLogger("home_hub.camera")
 
@@ -345,10 +348,11 @@ class CameraService:
         if callback not in self._blendshape_callbacks:
             self._blendshape_callbacks.append(callback)
 
-    def register_observation_callback(self, callback) -> None:
+    def register_observation_callback(
+        self, callback: "Callable[[PresenceReading], None]",
+    ) -> None:
         """Subscribe to per-frame Latitude presence observations.
 
-        Callback signature: ``cb(reading: PresenceReading) -> None``.
         Sync callbacks only — PresenceFusion's ``on_observation`` is the
         canonical consumer and is intentionally sync (dict assignment).
         Fires after zone/posture hysteresis has settled so the reading

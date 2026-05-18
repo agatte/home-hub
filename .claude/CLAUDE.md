@@ -411,6 +411,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `personality_enabled` | `{enabled: bool}` — master kill switch for the AI Personality Layer; gates all sub-toggles |
 | `emotion_enabled` | `{enabled: bool}` — Latitude blendshape extraction. Requires `personality_enabled` + `camera_enabled` |
 | `desktop_emotion_enabled` | `{enabled: bool}` — desktop pc_agent blendshape capture (GH#64). Supervisor polls 30s; EmotionService prefers desktop within 30s freshness, else Latitude |
+| `desktop_presence_enabled` | `{enabled: bool}` — desktop pc_agent presence POSTs to `/api/camera/observation` (PresenceFusion). Independent of emotion (privacy split: occupancy vs mood inference). Same 30s settings poll |
 | `mood_ring_enabled` | `{enabled: bool}` — Phase B preview toggle; no effect until MoodRingLight ships (GH#58) |
 | `mood_ring_light_id` | `{light_id: str}` — which light the Phase B mood-ring drives (default `"1"`) |
 | `mood_calibration_bias` | `{valence, arousal, focus: float}` — per-axis bias auto-fit from self-report (≥10 samples); loaded at boot |
