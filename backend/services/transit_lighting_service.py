@@ -42,12 +42,18 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 POLL_INTERVAL_SECONDS = 2
 
 # How long camera must report "absent" before we consider Anthony in transit.
-# Tightened from 10s → 4s (2026-04-26) after the bedroom→kitchen walk felt
-# slow in practice. 4s still debounces a brief head-turn or 2s of typing
-# out-of-frame, but lets transit fire ~6-8s sooner. Camera's own 15-frame
-# absent threshold (~30s) is much longer, so transit lights up well before
-# the camera lane decides Anthony has gone idle.
-ABSENT_TRIGGER_SECONDS = 4
+# Restored from 4s → 10s (2026-05-17) after the desk-flap incident: during a
+# gaming session at the desk, pose/face detection regularly drops for 4-8s
+# stretches (head down typing, lean-in, brief occlusion) producing ~6s
+# present↔absent cycles that crossed the 4s gate ~14×/15min and fired
+# transit on each cycle. 10s sustained absence is unambiguous — the camera
+# flap pattern doesn't reach it; a real bedroom-to-kitchen walk does. The
+# original tighten to 4s (2026-04-26) was motivated by "walk felt slow,"
+# but in practice the user experience cost of false fires was worse than
+# the ~6s latency cost of being more conservative. Camera's own 15-frame
+# absent threshold (~30s) still trails this so transit fires before the
+# camera lane decides Anthony has gone idle.
+ABSENT_TRIGGER_SECONDS = 10
 
 # How long camera must report "present" before we revert — protects against
 # a one-frame false positive flipping the lights back too eagerly.
