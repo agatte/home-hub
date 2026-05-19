@@ -119,7 +119,19 @@ async def _drive_absent_window(svc):
 class TestActivateGuards:
     """The activate path: when (and only when) should transit fire?"""
 
-    async def test_activates_when_camera_absent_and_eligible_mode(self):
+    async def test_activates_when_camera_absent_and_eligible_mode(
+        self, monkeypatch,
+    ):
+        # Pin to mid-day so the productive-evening kitchen-cede (working in
+        # evening/late_night → L3/L4 yielded to DeskExitKitchen, shipped
+        # 88725d8 on 2026-05-18) doesn't reduce the payload to L1-only.
+        # The non-ceding window is the legitimate "transit owns all three"
+        # path this test asserts. Productive-evening cede has its own test
+        # in TestNavigationStates.
+        monkeypatch.setattr(
+            "backend.services.transit_lighting_service.datetime",
+            _FrozenDatetime(2026, 4, 26, 10, 0),
+        )
         svc, auto, _ = _make_service(mode="working")
         await _drive_absent_window(svc)
         assert svc.active is True
