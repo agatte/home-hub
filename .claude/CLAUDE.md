@@ -63,23 +63,13 @@ A custom MCP server that wraps the Home Hub REST API as Claude tools. When the m
 python -m backend.mcp_server
 ```
 
-**Available tools:**
-- `get_live_state()` — **one-shot snapshot**: mode+lights+screen-sync+camera+presence+weather+multipliers; use first for any "what's happening" question
-- `get_state_history(minutes=30)` — timeline from event tables: mode transitions, light adjustments, scene activations, sonos events
-- `get_health()` — system status + device connectivity
-- `get_lights()` / `set_light(id, on, bri, hue, sat, ct)` — light control
-- `get_weather()` — current weather conditions
-- `get_automation_status()` / `set_mode(mode)` — automation state
-- `get_schedule()` / `get_mode_brightness()` — schedule + brightness config
-- `get_scenes()` / `activate_scene(id)` — scenes
-- `get_effects()` / `activate_effect(name)` — dynamic effects
-- `get_sonos_status()` / `sonos_play()` / `sonos_pause()` / `sonos_volume(vol)` — Sonos
-- `get_sonos_favorites()` / `get_mode_playlists()` — music
-- `get_routines()` — routine configs
-- `get_pihole_stats()` — Pi-hole DNS stats (queries, blocked, blocklist size)
-- `query_db(sql)` — read-only SQLite queries (SELECT only)
+**Key tools** (full list discoverable via the MCP itself):
+- `get_live_state()` — one-shot snapshot (mode+lights+screen-sync+camera+presence+weather+multipliers); first call for any "what's happening" question
+- `get_state_history(minutes=30)` — timeline from event tables
+- `query_db(sql)` — read-only SQLite (SELECT only)
+- Plus per-domain getters/setters: lights, scenes, effects, sonos, weather, automation, routines, pihole.
 
-**Registered in:** `.mcp.json` (project root — Claude Code auto-loads this on startup and prompts to approve on first run)
+**Registered in:** `.mcp.json` (project root, auto-loaded).
 
 ### Hooks (`.claude/settings.json` + `.claude/hooks/`)
 
@@ -102,9 +92,9 @@ Subagents (`~/.claude/agents/`, 28 total) — fleet table + trigger map in `docs
 
 ### Ambient verification loop
 
-`/checkback-loop` invokes `/loop` (dynamic) against `~/.claude/runbooks/homehub-checkbacks.md` — hourly anomaly sweep + dated one-shot decisions. Writes per-fire markdown blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire a system-tray balloon via `~/.claude/scripts/notify.ps1` (NotifyIcon, ~8s lifetime — modern toast API silently drops on this box); ok/skipped/specialist-self-writing blocks stay silent. Auto-starts via `home-hub-loop.cmd` (kills any prior `--name homehub-loop` claude.exe before launching, so skill edits take effect on relaunch).
+`/checkback-loop` runs `~/.claude/runbooks/homehub-checkbacks.md` (hourly sweep + dated one-shots), writes blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire a system-tray balloon via `~/.claude/scripts/notify.ps1`. Auto-starts via `home-hub-loop.cmd`.
 
-Parallel `/watcher-loop` (separate session) polls the digests every 600s. Warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (per-anomaly playbook in `~/.claude/runbooks/homehub-watcher.md`); root-cause diagnosis appended inline. Investigation-only — never mutates state.
+Parallel `/watcher-loop` polls digests every 600s; warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (playbook: `~/.claude/runbooks/homehub-watcher.md`). Investigation-only.
 
 ---
 
@@ -166,12 +156,12 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 
 - **`sonos_service.py`** — Favorites always shuffled with random start via `_shuffle_and_play`.
 - **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (set false to shadow-log only). Late-night rescue + zone+posture rule + both attendance vetoes live in `run_loop`. Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0).
-- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` 5s watchdog; on timeout `_recover_capture()` reopens V4L2 handle. Pauses during sleeping. Heartbeat ticks only after `_cap` is non-None — `poll_loop` retries `_open_capture()` each iteration when `_cap is None`, so a transient V4L2 lock (post-sleep-resume race) can't leave the lane heartbeat-fresh while every frame short-circuits. Weak-face fallback has a low-lux floor: at `ema_lux < 300`, face conf < 0.25 returns absent (kills chair-back ghosts that defeated absent-dwell counters). Strong-face ≥0.70 and pose paths fire regardless of lux.
-- **`transit_lighting_service.py` + `desk_exit_kitchen_service.py`** — sibling camera-driven overrides sharing `_transit_light_overrides`. Transit = L1+kitchen, 10-min auto-fade. DeskExit = kitchen-only, hold-until-return, time-of-day brightness (evening bri=120/ct=360, night+late_night bri=60/ct=375). Transit **cedes the kitchen pair** in productive evening/night (mode ∈ {working, gaming, watching, idle}, hour ≥ 18 or late_night) so the two don't fight. Both fire on sustained 10s desk-loss; DeskExit also requires `period ∈ TRIGGER_PERIODS` and uses `is_at_desk_fresh()` as the return signal. Distinguish via `light_adjustments.trigger` (`transit` vs `desk_exit_kitchen`). `"desk_exit_kitchen"` is in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES`. 4h hard timeout = wedged-camera failsafe only.
-- **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains false positives). Media is foreground-gated. LoL champion resolved off `/liveclientdata/allgamedata` (Riot dropped `championName` from `/activeplayer` 2026-05-18); `_resolve_active_champion` cross-walks `activePlayer.riotId` → `allPlayers` roster, falls back to `summonerName` for spectator/replay.
-- **`pc_agent/ambient_monitor.py`** — `speech_multiple→social` gate abandoned 2026-05-09 (max observed score 0.088 across 838k rows; structurally unreachable). Social is manual-override only. Never records audio.
-- **`websocket_manager.py`** — `broadcast` fan-outs via `asyncio.gather` with a 2s per-client `wait_for`. A stalled client (mobile on bad wifi, paused tab) now disconnects itself instead of holding the loop; expect `Client disconnected` log lines in those cases rather than "broadcasts stopped firing."
-- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`; uses a second `_stream_client` (read timeout disabled). Broadcasts on/bri pushes via the existing `light_update` channel; intentionally drops color (CIE xy) + ct events because there's no gamut-aware converter to v1's hue/sat. Color/ct ride the v1 5s fallback. Application-level liveness probe: `asyncio.wait_for` on each `aiter_lines()` step with a 90s budget (`_STREAM_SILENT_RECONNECT_SECONDS`) — if the bridge stops sending keepalives the loop force-reconnects rather than trusting httpx to notice a silently-dead socket. 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s cadence whenever the stream isn't healthy. Heartbeat threshold in `/health` is 100s (silence timeout + 1s backoff + ~10s reconnect handshake budget), so a quiet-then-reconnect cycle stays green; `/health` only goes degraded if the reconnect itself can't establish.
+- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` has a 5s watchdog → `_recover_capture()` reopens V4L2. Pauses during sleeping. Heartbeat ticks only after `_cap` is non-None (so a V4L2 lock post-sleep-resume can't leave the lane heartbeat-fresh with every frame short-circuited). Weak-face fallback has a low-lux floor: `ema_lux<300` + face conf<0.25 → absent (kills chair-back ghosts); strong-face ≥0.70 and pose paths fire regardless.
+- **`transit_lighting_service.py` + `desk_exit_kitchen_service.py`** — sibling camera-driven overrides sharing `_transit_light_overrides`. Transit = L1+kitchen, 10-min auto-fade. DeskExit = kitchen-only, hold-until-return, time-of-day brightness. Transit **cedes the kitchen pair** in productive evening/night (mode ∈ {working, gaming, watching, idle}, hour ≥ 18 or late_night). Both fire on sustained 10s desk-loss; DeskExit also requires `period ∈ TRIGGER_PERIODS` and uses `is_at_desk_fresh()` as the return signal. Distinguish via `light_adjustments.trigger`. `"desk_exit_kitchen"` is in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES`. 4h hard timeout = wedged-camera failsafe only.
+- **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains FPs). Media foreground-gated. LoL champion resolved off `/liveclientdata/allgamedata` via `_resolve_active_champion` cross-walking `activePlayer.riotId` → `allPlayers` roster (fallback `summonerName` for spectator/replay).
+- **`pc_agent/ambient_monitor.py`** — YAMNet `speech_multiple→social` gate abandoned (structurally unreachable). Social is manual-override only. Never records audio.
+- **`websocket_manager.py`** — `broadcast` uses `asyncio.gather` with a 2s per-client `wait_for`. A stalled client disconnects itself; expect `Client disconnected` log lines.
+- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`. Broadcasts on/bri pushes via `light_update`; intentionally drops color (CIE xy) + ct events (no gamut-aware converter to v1 hue/sat) — those ride the v1 5s fallback. Liveness probe: `asyncio.wait_for` on each `aiter_lines()` step with a 90s budget (`_STREAM_SILENT_RECONNECT_SECONDS`); 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s whenever the stream isn't healthy. `/health` heartbeat threshold = 100s (covers a normal silence→reconnect cycle).
 
 ---
 
@@ -183,7 +173,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 
 **Gotcha — catch-all order:** Built frontend is served via `/{path:path}`; this must be registered in `main.py` AFTER all `/api/` routes or the API is shadowed.
 
-**Gotcha — scene RAF + debounced derived:** Background scenes (`scene-utils.js` `createAnimationLoop` + bespoke handlers in `GenerativeCanvas` / `ParallaxScene`) pause on `document.visibilitychange` and resume on visible. `MoonScene` (Threlte `useTask`) is exempt — sleeping mode only. `stores/_debounce.js` exports `debounced(stores, fn, ms=150)` mirroring `derived`'s shape with a trailing-debounce; `constellationWithContext` + `sectorBoard` use it. `GenerativeCanvas`'s lights subscription is also 200ms-debounced + palette-capped at 8 — slider drags no longer trigger per-tick HSL recompute.
+**Gotcha — scene RAF + debounced derived:** Background scenes pause on `document.visibilitychange`, resume on visible (`MoonScene` exempt; sleeping only). `stores/_debounce.js` exports a `debounced()` mirror of `derived` with trailing-debounce; used by `constellationWithContext` + `sectorBoard`. `GenerativeCanvas`'s lights subscription is 200ms-debounced + palette-capped at 8.
 
 ---
 
@@ -218,11 +208,11 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Routines | `/api/routines` | Morning routine config, toggle, test |
 | Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
 | Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
-| Guest | `/api/guest` | `GET /wifi` (WIFI: QR from `.env`); `GET/POST /scene/{name}` over 6 safelist scenes (15s cooldown, party→social/others→relax); `POST /scene/{name}/reset`; `GET/POST /vibe/{name}` (Sonos favorite, 15s cooldown, overrides social); `POST /effect/{name}` (candle/sparkle/stop, 3s cooldown); `POST /brightness/{up\|down}` (±10% mult, mode-ceiling-clamped, stamps `_manual_light_overrides`); `POST /handback`; `POST /toast` (≤120 char TTS + sparkle, 60s cooldown). Vibe map: `app_settings["guest_vibe_playlists"]`. `/guest/*` is a layout-reset visitor mini-app via `GuestBottomNav`. |
+| Guest | `/api/guest` | `/wifi` QR; `/scene/{name}` (6 safelist scenes, 15s cooldown); `/vibe/{name}` Sonos favorite; `/effect/{name}` candle/sparkle/stop; `/brightness/{up\|down}` ±10% clamped; `/handback`; `/toast` ≤120 char TTS + sparkle. Vibe map in `app_settings["guest_vibe_playlists"]`. Layout-reset visitor mini-app via `GuestBottomNav`. |
 | Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
 | Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
 | Game Day | `/api/gameday` | `GET /state`, `GET /schedule`, `POST /test/{event}`. WS: `gameday_state`/`gameday_play`/`gameday_celebration`. Spec: `docs/GAMEDAY_SPEC.md` |
-| Rules | `/api/rules` | View / enable-disable / regenerate learned RuleEngine rules; rule-suggestion accept/dismiss; brightness-suggestion accept/dismiss (`POST /brightness-suggestion/accept\|dismiss/{id}`, writes through `LightingPreferenceLearner.write_learned_pref` on accept) |
+| Rules | `/api/rules` | View / enable-disable / regenerate learned RuleEngine rules; rule + brightness suggestion accept/dismiss (`/brightness-suggestion/{accept\|dismiss}/{id}` writes through `LightingPreferenceLearner` on accept) |
 | Learning | `/api/learning` | Predictor status, override-rate metric, A/B comparison, fusion weight retune trigger, predictor promote/demote |
 | Events | `/api/events` | Activity/playback/light/scene event aggregation, filtering, mode timeline (backs `/journal` + analytics) |
 | Plants | `/api/plants` | `GET /status` summary from external plant-care app (10-min TTL cache); 503 when `PLANT_APP_*` unset |
@@ -289,13 +279,13 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Effect reconciliation:** `_reconcile_effect` runs AFTER `_apply_state` so brightness is at target before the old effect stops (otherwise pops to 100%). 0.5s guard between stop+start.
 
-**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop ticks every 0.5s (demotes to 5s when v2 EventStream is active — see `HueV2Service.event_stream_loop`); a 3s max-age clamp force-clears any deadline pushed further than that (unreachable bulb that ack'd the write but never transitioned). The v2 stream dispatcher honors the same inflight window so a stream echo from your own slider drag doesn't snap the UI back mid-drag. Mid-drag slider commands use `transitiontime=1`; release flush uses default 0.4s.
+**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop 0.5s (demotes to 5s when v2 EventStream is active); 3s max-age clamp force-clears stuck deadlines. v2 stream dispatcher honors the same inflight window so stream echoes don't snap the UI mid-drag. Mid-drag commands use `transitiontime=1`; release flush uses default 0.4s.
 
 **Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry in `run_loop`.
 
 **Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
 
-**Late-night autopilot cascade:** (1) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools (`LATE_NIGHT_PROCESS_WEIGHT_FACTOR`). (2) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` late-night-rescue auto-applies `relax`. **Attendance vetoes:** the rescue skips when `is_at_desk_fresh()` (camera zone=desk fresh) OR `is_recent_process_working()` (PC-agent reported working <10min ago) is True. `working` has its own `late_night` state for past-23:00 dev. (3) **late_night, mode=watching, zone=bed+reclined sustained 90min** — `_evaluate_watching_sleep_guard` flips watching→sleeping (catches "asleep with YouTube on the projector"; supersedes manual watching ≥90min old). Sleeping entry triggers "Good night" TTS via bootstrap `_sleeping_tts` and arms the PC sleep watcher (60min Windows suspend); the TTS is gated off when `override_source == "watching_sleep_guard"`.
+**Late-night autopilot cascade:** (1) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools (`LATE_NIGHT_PROCESS_WEIGHT_FACTOR`). (2) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` late-night-rescue → `relax`. **Attendance vetoes:** skips when `is_at_desk_fresh()` OR `is_recent_process_working()` (PC-agent <10min) is True. `working` has its own `late_night` state for past-23:00 dev. (3) **late_night, mode=watching, zone=bed+reclined sustained 90min** — `_evaluate_watching_sleep_guard` flips watching→sleeping; supersedes manual watching ≥90min old. Sleeping entry triggers "Good night" TTS (gated off when `override_source == "watching_sleep_guard"`) + arms PC sleep watcher (60min Windows suspend).
 
 ---
 
@@ -307,9 +297,9 @@ Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `spa
 
 **Time periods:** `_get_time_period()` returns `day`/`evening`/`night`/`late_night`. `late_night` runs from `DaySchedule.late_night_start_hour` (default 23) until `wake_hour`. Only relax defines a `late_night` state; other modes fall back to `night`.
 
-**Weather effect fallback:** When a mode has no auto-effect, weather overlays one — thunderstorm→sparkle, snow→opal (evening/night only, sparkle any time). Same-effect cycles skipped to preserve the bridge's brightness base. Rain→candle removed 2026-05-09.
+**Weather effect fallback:** When a mode has no auto-effect, weather overlays one — thunderstorm→sparkle, snow→opal (evening/night only, sparkle any time). Same-effect cycles skipped.
 
-**Weather-aware brightness (2026-05-18, `27f5814`):** `LUX_WEATHER_BASELINE_SHIFT` raises effective baseline (POSITIVE values — counter-intuitive); `FUNCTIONAL_WEATHER_BRIGHTNESS` `(mode, period, cond)` grid extended to gaming/working/watching × day/evening/night. `LightingPreferenceLearner` keyed `mode:period:weather`; `has_weather_pref()` powers heuristic fade-out. `brightness_scan_loop` surfaces `kind="brightness"` suggestions via NotifierService (toast + ntfy.sh, Accept/Dismiss buttons). Memory: `project_weather_aware_brightness_2026_05_18.md`.
+**Weather-aware brightness:** `LUX_WEATHER_BASELINE_SHIFT` raises effective baseline (POSITIVE values — counter-intuitive); `FUNCTIONAL_WEATHER_BRIGHTNESS` `(mode, period, cond)` grid spans gaming/working/watching × day/evening/night. `LightingPreferenceLearner` keyed `mode:period:weather`. `brightness_scan_loop` surfaces `kind="brightness"` suggestions via NotifierService. Memory: `project_weather_aware_brightness_2026_05_18.md`.
 
 ---
 
@@ -406,17 +396,11 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |
 | `guest_vibe_playlists` | `{hype, singalong, throwback}` → favorite_title — overrides `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit; missing keys fall back |
 | `screen_sync_laptop_enabled` | `{enabled: bool}` — laptop screen→bedroom-lamp sync toggle (independent of `camera_enabled`) |
-| `dnd_state` | `{enabled, until, source}` — DND persistence; restored at boot, `run_loop` auto-clears past `until` |
+| `dnd_state` | `{enabled, expiry_utc, duration_minutes}` — DND persistence; written by `automation_engine._persist_dnd_state`, restored at boot via `_load_dnd_state`, `run_loop` auto-clears past `expiry_utc` |
 | `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives deploys mid-override |
-| `ambient_config` | Browser-side ambient sound config (volume, mode→sound map, weather reactivity); also stores Sonos mirroring sub-keys: `sonos_enabled`, `sonos_present_volume` (default 12), `sonos_away_volume` (default 28); written via `/api/ambient/*` |
-| `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB palette driving bedroom-lamp color in `gaming` mode; consumed by `LoLChampionService`, seeded via `python -m scripts.seed_champion_colors` (idempotent re-seed) |
-| `personality_enabled` | `{enabled: bool}` — master kill switch for the AI Personality Layer; gates all sub-toggles |
-| `emotion_enabled` | `{enabled: bool}` — Latitude blendshape extraction. Requires `personality_enabled` + `camera_enabled` |
-| `desktop_emotion_enabled` | `{enabled: bool}` — desktop pc_agent blendshape capture (GH#64). Supervisor polls 30s; EmotionService prefers desktop within 30s freshness, else Latitude |
-| `desktop_presence_enabled` | `{enabled: bool}` — desktop pc_agent presence POSTs to `/api/camera/observation` (PresenceFusion). Independent of emotion (privacy split: occupancy vs mood inference). Same 30s settings poll |
-| `mood_ring_enabled` | `{enabled: bool}` — Phase B preview toggle; no effect until MoodRingLight ships (GH#58) |
-| `mood_ring_light_id` | `{light_id: str}` — which light the Phase B mood-ring drives (default `"1"`) |
-| `mood_calibration_bias` | `{valence, arousal, focus: float}` — per-axis bias auto-fit from self-report (≥10 samples); loaded at boot |
+| `ambient_config` | Browser-side ambient sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*` |
+| `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB, drives bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors` |
+| Personality (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) | Master kill switch + sub-toggles for the AI Personality Layer. Spec: `docs/PERSONALITY_LAYER.md` |
 
 ---
 
