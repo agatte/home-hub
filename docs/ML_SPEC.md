@@ -256,9 +256,9 @@ Class distribution from 90,978 rows over 36h *including* the 5/02 18:00–23:00 
 **2026-05-09 Decision: ABANDONED (option C).** The 14-day re-evaluation across 838,629 production rows confirmed the 36h finding — `speech_multiple` MAX observed 0.088, never close to the 0.80 threshold. YAMNet is fundamentally a scene classifier, not a speaker-count diarizer; the `speech_multiple` keyword set conflates 2-person conversation with solo speech. Option A (`speech_single` + RMS floor) was rejected — `speech_single ≥ 0.80` fires 98,650 times in 14 days (~7,000/day) with 3.4% overlap into solo working-mode windows; RMS during conversation ≈ RMS during solo speech, so RMS doesn't disambiguate. Option B (retrain YAMNet) was rejected — wrong tool architecturally. The `speech_multiple` entry was removed from `MODE_THRESHOLDS` in `audio_classifier.py`; social-mode is now manual-override only. The score is still emitted into `all_scores` for analytics. Replacement direction (camera multi-face detection + SpeechBrain fallback) is tracked in [#35](https://github.com/agatte/home-hub/issues/35). See `project_audio_classifier_shadow_followup.md`.
 
 **Files touched:**
-- `backend/services/pc_agent/ambient_monitor.py` — Major refactor: add spectrogram pipeline, load ONNX model, emit classified results
+- `backend/services/pc_agent/ambient_monitor.py` — Major refactor: add spectrogram pipeline, load TFLite YAMNet model, emit classified results
 - New `backend/services/ml/audio_classifier.py` — Model loading, inference, class collapsing
-- New model file: `data/models/audio_scene.onnx`
+- New model files: `data/models/yamnet.tflite` (16MB, auto-downloaded) + `data/models/yamnet_class_map.csv` (521 class names, auto-downloaded). Implementation is TFLite YAMNet, not ONNX.
 
 ---
 
@@ -1504,7 +1504,7 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 - ✓ **Auto-demote — counterpart to the diversity gate.** New `BehavioralPredictor.check_and_demote_if_degenerate(ml_logger)` calls `compute_prediction_diversity()` and demotes a promoted predictor when shadow outputs collapse. Anti-flap: only `single_class` / `near_single_class` reasons fire — `insufficient_samples` / `query_failed` are treated as "don't know yet" so a freshly-promoted predictor with <50 logged predictions can't get auto-demoted prematurely. Wired as the `predictor_auto_demote_check` ScheduledTask at 03:45 ET daily, between `fusion_weight_tuning` (3:30) and `ml_nightly_training` (4:00) so the upcoming retrain has a chance to fix the underlying issue. Closes the autonomy-gate loop opened by the 4/27 promote-side diversity gate.
 
 **Remaining:**
-- Re-adding the predictor lane to fusion — gated on diversity + per-class accuracy of the 14-feature retrain. Validation window: 7+ days from 2026-05-05 (first 14-feature model land) per `project_step5_predictor_validation.md`.
+- Re-adding the predictor lane to fusion — gated on diversity + per-class accuracy of the 14-feature retrain. 14-feature plumbing landed 2026-05-11 (commit 411b39c). As of the 2026-05-18 weekly evaluator, promotion gate is **WAIT** — `conf>=0.8` accuracy fell to 0/17 and working→gaming class confusion ran 102/105. Next stage: gaming class weight ×2.0 shipped 2026-05-19 for the 04:00 ET retrain; re-evaluate at the 2026-05-25 weekly gate. If the gate still fails, escalate per `project_step5_predictor_validation.md` (next steps: `previous_zone` feature, then calibrator re-fit).
 - Analytics-page dashboard UI (frontend Svelte card) surfacing `/override-rate` and `/compare`.
 - Threshold tuning based on observed false positive rate once ≥30 days of shadow+backfill data accrues.
 

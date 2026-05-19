@@ -307,7 +307,7 @@ idle votes:
 - **Agreement:** 3/4 = 75%
 - **Fused confidence:** 51.0%
 
-Below the 98% `can_override` threshold (and below 80% agreement). Fusion does **not** override the active process lane. Gaming stays.
+Below the 92% `can_override` threshold (and below 80% agreement). Fusion does **not** override the active process lane. Gaming stays.
 
 For `can_override` to actually fire — pulling the live process lane down — every non-process voter needs to be screaming in agreement at near-1.0 confidence. With process at 0.438 of the weight, the other 3 lanes sum to 0.562 of the weight, and even at perfect 1.0 confidence each, idle tops out at 0.562. **That's by design.** `can_override` is the conservative path — it's meant to fire only when the camera/audio/rule consensus is so loud that the dead process detection becomes obvious noise.
 
