@@ -496,6 +496,22 @@ class BehavioralPredictor(HealthTrackable):
             class_weights = np.sqrt(
                 class_counts.max() / np.maximum(class_counts, 1)
             )
+            # 2026-05-19 escalation per project_step5_predictor_validation.md.
+            # 5/11's sqrt-softened weights lifted gaming recall from 0% to
+            # ~8.5% of predictions but the 5/18 weekly eval still showed
+            # working→gaming class collapse: 102/105 high-conf working
+            # predictions had actual=gaming. conf>=0.8 accuracy was 0/17
+            # by end of day. Gaming is now ~35% of daily actuals but stays
+            # <9% of predictions — the model needs more training mass on
+            # gaming, not just a softmax tilt. ×2.0 on top of the sqrt
+            # boost (~1.97 → ~3.94 effective) is the documented next step
+            # before considering structural fixes (previous_zone feature,
+            # calibrator re-fit). Other classes intentionally unchanged so
+            # the 5/25 weekly eval can attribute any movement to this.
+            GAMING_WEIGHT_BOOST = 2.0
+            gaming_idx = mode_to_int.get("gaming")
+            if gaming_idx is not None:
+                class_weights[gaming_idx] *= GAMING_WEIGHT_BOOST
             sample_weight = class_weights[y_train]
 
             train_data = lgb.Dataset(
