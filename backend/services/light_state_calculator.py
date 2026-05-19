@@ -789,10 +789,11 @@ def apply_lux_multiplier(
     last_multiplier: float,
     baseline_lux: Optional[float] = None,
     weather_class: Optional[str] = None,
-) -> tuple[dict[str, Any], float]:
+    last_weather_class: Optional[str] = None,
+) -> tuple[dict[str, Any], float, Optional[str]]:
     """Adjust per-light brightness by camera-derived ambient lux.
 
-    Pure: caller owns the hysteresis state and gets the new value
+    Pure: caller owns the hysteresis state and gets the new values
     back. ``last_multiplier`` is what was applied last tick; this
     function returns the multiplier that should be remembered for
     next tick (which may be the same ``last_multiplier`` if the new
@@ -805,16 +806,22 @@ def apply_lux_multiplier(
     region (a small lux drop produces a larger multiplier lift instead
     of being dead-banded). Default ``None`` is a no-op shift.
 
-    Returns ``(new_state, new_last_multiplier)``. Engine stores the
-    second element back into ``self._last_lux_multiplier``.
+    ``last_weather_class`` is the class applied on the previous tick.
+    A change between ticks bypasses the ``LUX_MULT_EPSILON`` hysteresis
+    so weather transitions (e.g. clouds→rain, Δmult ~0.06) always land.
+    Same-class jitter remains dead-banded.
 
-    No-op (returns state unchanged + ``last_multiplier`` unchanged) when:
+    Returns ``(new_state, new_last_multiplier, new_last_weather_class)``.
+    Engine stores the second + third elements back onto
+    ``self._last_lux_multiplier`` / ``self._last_weather_class``.
+
+    No-op (returns state unchanged + state values unchanged) when:
       - mode is not in LUX_MODES (only working / relax adapt)
       - ``lux_reading`` is None (camera not wired, paused, stale, etc;
         engine resolves freshness before calling)
     """
     if mode not in LUX_MODES or lux_reading is None:
-        return state, last_multiplier
+        return state, last_multiplier, last_weather_class
 
     effective_baseline = float(baseline_lux) if baseline_lux else 90.0
     if weather_class:
@@ -823,14 +830,18 @@ def apply_lux_multiplier(
     raw_mult = lux_to_multiplier(float(lux_reading), effective_baseline)
     # Hysteresis: stay on the last multiplier if the new raw value is
     # within epsilon — keeps the resulting state dict bit-identical so
-    # the per-light dedupe downstream skips bridge writes.
-    if abs(raw_mult - last_multiplier) < LUX_MULT_EPSILON:
+    # the per-light dedupe downstream skips bridge writes. Weather-class
+    # transitions bypass the dead-band because a class change can shift
+    # the curve by less than epsilon (rain shift = +15 lux → Δmult ~0.06,
+    # under the 0.08 threshold) and would otherwise be suppressed.
+    class_changed = weather_class != last_weather_class
+    if not class_changed and abs(raw_mult - last_multiplier) < LUX_MULT_EPSILON:
         multiplier = last_multiplier
     else:
         multiplier = raw_mult
 
     if multiplier == 1.0:
-        return state, multiplier
+        return state, multiplier, weather_class
 
     if _is_per_light_dict(state):
         result: dict[str, Any] = {}
@@ -839,12 +850,12 @@ def apply_lux_multiplier(
             if ls_copy.get("on", True) and "bri" in ls_copy:
                 ls_copy["bri"] = max(1, min(254, int(ls_copy["bri"] * multiplier)))
             result[lid] = ls_copy
-        return result, multiplier
+        return result, multiplier, weather_class
 
     result = state.copy()
     if result.get("on", True) and "bri" in result:
         result["bri"] = max(1, min(254, int(result["bri"] * multiplier)))
-    return result, multiplier
+    return result, multiplier, weather_class
 
 
 def apply_zone_overlay(

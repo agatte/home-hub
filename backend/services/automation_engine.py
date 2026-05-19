@@ -436,6 +436,11 @@ class AutomationEngine:
         # state dict is identical and the per-light dedupe at _apply_state
         # naturally skips the bridge write.
         self._last_lux_multiplier: float = 1.0
+        # Last weather class the multiplier was computed against. A change
+        # between ticks bypasses the LUX_MULT_EPSILON dead-band in
+        # apply_lux_multiplier so weather-onset shifts (clouds→rain Δmult
+        # ~0.06) aren't suppressed under the 0.08 epsilon.
+        self._last_weather_class: Optional[str] = None
 
         # Do Not Disturb — locks autonomous state changes for a finite window.
         # User-initiated mode picks (source starts with "api:") still pass;
@@ -707,11 +712,13 @@ class AutomationEngine:
         """
         ema, baseline = self._read_fresh_camera_lux()
         weather = self._get_current_weather_condition()
-        new_state, new_mult = _calc_apply_lux_multiplier(
+        new_state, new_mult, new_class = _calc_apply_lux_multiplier(
             state, mode, ema, self._last_lux_multiplier, baseline,
             weather_class=weather,
+            last_weather_class=self._last_weather_class,
         )
         self._last_lux_multiplier = new_mult
+        self._last_weather_class = new_class
         return new_state
 
     # Class-level aliases kept for back-compat with tests that read these

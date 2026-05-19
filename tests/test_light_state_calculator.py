@@ -170,14 +170,14 @@ class TestApplyLuxMultiplier:
         # working / relax / gaming / watching adapt; cooking + social bypass
         # so their explicit bright/medium palettes don't drift.
         state = {"1": {"on": True, "bri": 200}}
-        out_state, out_mult = apply_lux_multiplier(state, "cooking", 50.0, 1.0)
+        out_state, out_mult, _ = apply_lux_multiplier(state, "cooking", 50.0, 1.0)
         assert out_state is state
         assert out_mult == 1.0
 
     def test_gaming_now_adapts(self):
         # Gaming was added to LUX_MODES so dim rooms get a brightness lift.
         state = {"1": {"on": True, "bri": 100}}
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "gaming", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult > 1.0
@@ -185,7 +185,7 @@ class TestApplyLuxMultiplier:
 
     def test_watching_now_adapts(self):
         state = {"1": {"on": True, "bri": 100}}
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "watching", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult > 1.0
@@ -193,14 +193,14 @@ class TestApplyLuxMultiplier:
 
     def test_no_reading_noop(self):
         state = {"1": {"on": True, "bri": 200}}
-        out_state, out_mult = apply_lux_multiplier(state, "working", None, 1.0)
+        out_state, out_mult, _ = apply_lux_multiplier(state, "working", None, 1.0)
         assert out_state is state
         assert out_mult == 1.0
 
     def test_dark_room_lifts_brightness(self):
         # Lux below baseline → multiplier > 1.0 → brighter.
         state = {"1": {"on": True, "bri": 100}}
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "working", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult > 1.0
@@ -208,7 +208,7 @@ class TestApplyLuxMultiplier:
 
     def test_bright_room_dims(self):
         state = {"1": {"on": True, "bri": 100}}
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "working", lux_reading=180.0, last_multiplier=1.0,
         )
         assert out_mult < 1.0
@@ -219,7 +219,7 @@ class TestApplyLuxMultiplier:
         # If last was 1.07, the diff is 0.01 < LUX_MULT_EPSILON (0.08), so
         # we keep 1.07.
         state = {"1": {"on": True, "bri": 100}}
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "working", lux_reading=70.0, last_multiplier=1.07,
         )
         assert out_mult == 1.07  # Hysteresis won.
@@ -230,7 +230,7 @@ class TestApplyLuxMultiplier:
         state = {"1": {"on": True, "bri": 100}}
         # lux=40 → 1.20; last was 1.0 → diff 0.20 > LUX_MULT_EPSILON (0.08)
         # → use 1.20.
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "working", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult == pytest.approx(1.20)
@@ -243,7 +243,7 @@ class TestApplyLuxMultiplier:
         # ~230 bri re-pushes per 30min during a stable room.
         state = {"1": {"on": True, "bri": 100}}
         # lux=60 → ~1.12, last=1.07 → diff 0.05 < 0.08 → keep 1.07.
-        out_state, out_mult = apply_lux_multiplier(
+        out_state, out_mult, _ = apply_lux_multiplier(
             state, "working", lux_reading=60.0, last_multiplier=1.07,
         )
         assert out_mult == 1.07
@@ -257,25 +257,30 @@ class TestApplyLuxMultiplier:
     def test_weather_baseline_shift_pushes_across_dead_band(self):
         """The exact symptom from 2026-05-18: thunderstorm + small lux drop
         gets dead-band suppressed without the shift. Shift raises baseline
-        so the same reading produces a multiplier that crosses 8% epsilon."""
+        so the same reading produces a multiplier that crosses 8% epsilon.
+
+        Tests steady-state (same weather_class on both ticks) — class-change
+        bypass is tested separately in
+        ``test_weather_class_change_bypasses_dead_band``.
+        """
         state = {"1": {"on": True, "bri": 100}}
         # Real values: ema_lux=134, baseline=143, last_mult=1.0.
         # No shift: effective = 134 - 143 + 90 = 81 → between (40,1.20)(90,1.00)
         # frac=0.82 → raw_mult = 1.036. Diff from 1.0 is 0.036 < 0.08 → 1.0.
-        _, mult_clear = apply_lux_multiplier(
+        _, mult_clear, _ = apply_lux_multiplier(
             state, "working", lux_reading=134.0,
             last_multiplier=1.0, baseline_lux=143.0,
-            weather_class="clear",
+            weather_class="clear", last_weather_class="clear",
         )
         assert mult_clear == 1.0  # Dead-band suppressed.
         # With thunderstorm +30: effective_baseline=173.
         # effective = 134 - 173 + 90 = 51 → between (40,1.20)(90,1.00)
         # frac=(51-40)/50=0.22 → raw_mult = 1.20 + 0.22*(-0.20) = 1.156.
-        # Diff from 1.0 is 0.156 > 0.08 → applied.
-        _, mult_storm = apply_lux_multiplier(
+        # Diff from 1.0 is 0.156 > 0.08 → applied even at steady state.
+        _, mult_storm, _ = apply_lux_multiplier(
             state, "working", lux_reading=134.0,
             last_multiplier=1.0, baseline_lux=143.0,
-            weather_class="thunderstorm",
+            weather_class="thunderstorm", last_weather_class="thunderstorm",
         )
         assert mult_storm > 1.05
         assert mult_storm > mult_clear
@@ -283,30 +288,97 @@ class TestApplyLuxMultiplier:
     def test_weather_shift_monotonic_storm_intensity(self):
         """Heavier weather → bigger lift at near-baseline lux."""
         state = {"1": {"on": True, "bri": 100}}
+        # Pin last_weather_class == weather_class so the dead-band is
+        # what's under test (not the class-change bypass).
         common = dict(
             state=state, mode="working",
             lux_reading=134.0, last_multiplier=1.0, baseline_lux=143.0,
         )
-        _, mult_clear = apply_lux_multiplier(**common, weather_class="clear")
-        _, mult_clouds = apply_lux_multiplier(**common, weather_class="clouds")
-        _, mult_rain = apply_lux_multiplier(**common, weather_class="rain")
-        _, mult_storm = apply_lux_multiplier(**common,
-                                             weather_class="thunderstorm")
+        _, mult_clear, _ = apply_lux_multiplier(
+            **common, weather_class="clear", last_weather_class="clear",
+        )
+        _, mult_clouds, _ = apply_lux_multiplier(
+            **common, weather_class="clouds", last_weather_class="clouds",
+        )
+        _, mult_rain, _ = apply_lux_multiplier(
+            **common, weather_class="rain", last_weather_class="rain",
+        )
+        _, mult_storm, _ = apply_lux_multiplier(
+            **common, weather_class="thunderstorm",
+            last_weather_class="thunderstorm",
+        )
         assert mult_clear <= mult_clouds <= mult_rain <= mult_storm
 
     def test_weather_shift_noop_when_none(self):
         """No weather_class arg → behavior matches pre-Layer-2 path."""
         state = {"1": {"on": True, "bri": 100}}
-        _, mult_no_arg = apply_lux_multiplier(
+        # Both calls pin last_weather_class to match weather_class so the
+        # class-change bypass doesn't muddy the equivalence check.
+        _, mult_no_arg, _ = apply_lux_multiplier(
             state, "working", lux_reading=60.0,
             last_multiplier=1.0, baseline_lux=90.0,
+            last_weather_class=None,
         )
-        _, mult_clear = apply_lux_multiplier(
+        _, mult_clear, _ = apply_lux_multiplier(
             state, "working", lux_reading=60.0,
             last_multiplier=1.0, baseline_lux=90.0,
-            weather_class="clear",
+            weather_class="clear", last_weather_class="clear",
         )
         assert mult_no_arg == mult_clear
+
+    def test_weather_class_change_bypasses_dead_band(self):
+        """The 2026-05-19 18:46 ET regression: weather class transitions must
+        force-apply the new multiplier even when the resulting delta is inside
+        the LUX_MULT_EPSILON (0.08) dead-band. Pinned to the diagnosed case:
+        lux=123.6, baseline=143.47. No-shift mult=1.0794. Rain shift +15.0
+        raises effective_baseline to 158.47, effective_lux=55.13, frac=0.3026
+        between (40,1.20)(90,1.00), raw_mult=1.1394. Δ=0.060 < 0.08, so the
+        steady-state dead-band would suppress; the class change must override.
+        """
+        state = {"1": {"on": True, "bri": 100}}
+        # Steady-state on "clouds" with last_multiplier ≈ no-shift raw — a
+        # same-class call obeys epsilon and clamps to last.
+        _, mult_steady, class_steady = apply_lux_multiplier(
+            state, "working", lux_reading=123.6,
+            last_multiplier=1.0794, baseline_lux=143.47,
+            weather_class="clouds", last_weather_class="clouds",
+        )
+        # Within dead-band → clamps to last.
+        assert mult_steady == pytest.approx(1.0794)
+        assert class_steady == "clouds"
+
+        # Transition clouds → rain at the SAME lux: shift raises raw_mult to
+        # ~1.139, Δ=0.060 < 0.08 → would have been suppressed pre-fix.
+        # Class change bypasses the epsilon and the new value lands.
+        _, mult_transition, class_transition = apply_lux_multiplier(
+            state, "working", lux_reading=123.6,
+            last_multiplier=1.0794, baseline_lux=143.47,
+            weather_class="rain", last_weather_class="clouds",
+        )
+        assert mult_transition == pytest.approx(1.1394, abs=1e-3)
+        assert class_transition == "rain"
+        # And the new class is returned so the engine can remember it.
+        assert class_transition != class_steady
+
+    def test_weather_class_returned_for_engine_state(self):
+        """The third tuple element echoes weather_class so the engine can
+        store it back for next-tick comparison."""
+        state = {"1": {"on": True, "bri": 100}}
+        _, _, returned_class = apply_lux_multiplier(
+            state, "working", lux_reading=60.0,
+            last_multiplier=1.0, baseline_lux=90.0,
+            weather_class="rain", last_weather_class=None,
+        )
+        assert returned_class == "rain"
+
+        # When mode is non-LUX, the early-return preserves last_weather_class
+        # so the engine doesn't desync its hysteresis on a cooking tick.
+        _, _, preserved = apply_lux_multiplier(
+            state, "cooking", lux_reading=60.0,
+            last_multiplier=1.0,
+            weather_class="rain", last_weather_class="clouds",
+        )
+        assert preserved == "clouds"
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +833,7 @@ class TestFunctionalWeatherBrightness:
         # Lux value chosen so the multiplier shift exceeds LUX_MULT_EPSILON
         # (0.08) — otherwise hysteresis keeps the old multiplier.
         state = {"1": {"on": True, "bri": 180, "hue": 48500, "sat": 160}}
-        after_lux, _ = apply_lux_multiplier(
+        after_lux, _, _ = apply_lux_multiplier(
             state, "gaming", lux_reading=60.0, last_multiplier=1.0, baseline_lux=90.0,
         )
         # lux=60 with baseline=90 → effective=60 → between (40,1.20) and (90,1.00)
