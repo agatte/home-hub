@@ -387,6 +387,7 @@ class EmotionCapture:
         self._blendshape_endpoint = f"{self._server_url}/api/personality/blendshape"
         self._observation_endpoint = f"{self._server_url}/api/camera/observation"
         self._settings_endpoint = f"{self._server_url}/api/personality/settings"
+        self._mode_endpoint = f"{self._server_url}/api/automation/activity"
 
         # Runtime toggles, refreshed by the settings-poll thread. Defaults
         # to False so we don't capture before the user has opted in via
@@ -396,6 +397,11 @@ class EmotionCapture:
         # implications). Capture runs iff either is True.
         self._emotion_enabled: bool = False
         self._presence_enabled: bool = False
+        # Mirrors the Latitude camera_service "pause during sleeping" behavior
+        # — when mode is sleeping we release the webcam regardless of toggles
+        # so the user isn't broadcasting blendshapes / presence while in bed.
+        # Refreshed alongside the settings poll on the same 30s cadence.
+        self._mode_is_sleeping: bool = False
         self._enabled_lock = threading.Lock()
 
         # Lazy-init handles
@@ -489,9 +495,18 @@ class EmotionCapture:
                     self._reset_posture_state()
 
     def is_capture_needed(self) -> bool:
-        """True if any consumer is currently enabled."""
+        """True if any consumer is enabled AND mode isn't sleeping."""
         with self._enabled_lock:
+            if self._mode_is_sleeping:
+                return False
             return self._emotion_enabled or self._presence_enabled
+
+    def set_mode_sleeping(self, sleeping: bool) -> None:
+        """Update the sleeping-mode gate. Logs only on transitions."""
+        with self._enabled_lock:
+            if sleeping != self._mode_is_sleeping:
+                logger.info("mode_is_sleeping → %s (gate)", sleeping)
+                self._mode_is_sleeping = sleeping
 
     def is_emotion_enabled(self) -> bool:
         with self._enabled_lock:
@@ -829,6 +844,8 @@ class EmotionCapture:
 
         On transient errors (network blip, backend restart) we leave the
         current flag alone — better than going silent during a deploy.
+        Also refreshes the sleeping-mode gate from /health so the desktop
+        cam releases when the apartment goes to sleep.
         """
         try:
             resp = self._client.get(self._settings_endpoint)
@@ -850,6 +867,23 @@ class EmotionCapture:
             emotion=personality and emotion_flag,
             presence=personality and presence_flag,
         )
+
+        # Sleeping-mode gate — /api/automation/activity returns a 2-field
+        # payload ({mode, source}) and is unauthenticated. Transient errors
+        # leave the prior gate state alone (same policy as settings above).
+        try:
+            mode_resp = self._client.get(self._mode_endpoint)
+            mode_resp.raise_for_status()
+            mode_data = mode_resp.json()
+        except httpx.HTTPError as exc:
+            logger.debug("Mode poll failed: %s", exc)
+            return
+        except ValueError:
+            logger.debug("Mode poll returned non-JSON")
+            return
+
+        mode = (mode_data.get("mode") or "").lower()
+        self.set_mode_sleeping(mode == "sleeping")
 
 
 # ---------------------------------------------------------------------------

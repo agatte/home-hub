@@ -114,6 +114,18 @@
 
   // Camera presence — driven by $cameraStore (real-time via WebSocket)
 
+  // Desktop camera (emotion + presence) — single combined toggle. Reads
+  // both desktop_emotion_enabled + desktop_presence_enabled from the
+  // personality settings endpoint; flips them together. The desktop
+  // pc_agent's 30s poll picks up the change without a process restart.
+  /** @type {{personality_enabled: boolean, desktop_emotion_enabled: boolean, desktop_presence_enabled: boolean} | null} */
+  let personalitySettings = null
+  $: desktopCameraOn = !!(
+    personalitySettings?.personality_enabled &&
+    (personalitySettings?.desktop_emotion_enabled ||
+      personalitySettings?.desktop_presence_enabled)
+  )
+
   // Mode → scene overrides
   /** @type {any[]} */
   let modeSceneOverrides = []
@@ -179,6 +191,7 @@
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
     try { modeVolume = await apiGet('/api/automation/mode-volume') } catch {}
     try { watchingPosture = await apiGet('/api/automation/watching-posture') } catch {}
+    try { personalitySettings = await apiGet('/api/personality/settings') } catch {}
     // Camera status is loaded globally in init.js and updated via WebSocket
     loadPiholeData()
     loadModeScenes()
@@ -281,6 +294,29 @@
     try {
       const resp = await apiPost('/api/camera/enable', { enabled: newState })
       $cameraStore = await apiGet('/api/camera/status')
+    } catch {}
+    saving = null
+  }
+
+  // Flips emotion + presence together. When turning ON we also ensure
+  // personality_enabled is set, so a clean opt-in doesn't sit waiting on
+  // the master switch buried in /personality. The desktop pc_agent's
+  // settings poll is 30s — toggle takes effect within that window.
+  async function toggleDesktopCamera() {
+    const target = !desktopCameraOn
+    saving = 'desktop-camera'
+    try {
+      const payload = target
+        ? {
+            personality_enabled: true,
+            desktop_emotion_enabled: true,
+            desktop_presence_enabled: true,
+          }
+        : {
+            desktop_emotion_enabled: false,
+            desktop_presence_enabled: false,
+          }
+      personalitySettings = await apiPost('/api/personality/settings', payload)
     } catch {}
     saving = null
   }
@@ -562,6 +598,25 @@
             </div>
           {/if}
         {/if}
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Desktop Camera</span>
+            <span class="setting-hint">
+              Emotion + presence from the desktop webcam. Releases the
+              webcam handle when off so Meet/Zoom can use it. ~30s for
+              changes to apply.
+            </span>
+          </div>
+          <button
+            class="toggle-btn"
+            class:toggle-on={desktopCameraOn}
+            on:click={toggleDesktopCamera}
+            disabled={saving === 'desktop-camera' || personalitySettings === null}
+          >
+            {saving === 'desktop-camera' ? '...' : desktopCameraOn ? 'ON' : 'OFF'}
+          </button>
+        </div>
 
         <div class="setting-row">
           <div class="setting-info">
