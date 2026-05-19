@@ -844,8 +844,8 @@ class EmotionCapture:
 
         On transient errors (network blip, backend restart) we leave the
         current flag alone — better than going silent during a deploy.
-        Also refreshes the sleeping-mode gate from /health so the desktop
-        cam releases when the apartment goes to sleep.
+        Also refreshes the sleeping-mode gate from /api/automation/activity
+        so the desktop cam releases when the apartment goes to sleep.
         """
         try:
             resp = self._client.get(self._settings_endpoint)
@@ -881,7 +881,6 @@ class EmotionCapture:
         except ValueError:
             logger.debug("Mode poll returned non-JSON")
             return
-
         mode = (mode_data.get("mode") or "").lower()
         self.set_mode_sleeping(mode == "sleeping")
 
