@@ -49,10 +49,18 @@ class ModeVolumeService:
         sonos_service: Any,
         automation_engine: Any,
         tts_service: Optional[Any] = None,
+        ambient_sound_service: Optional[Any] = None,
     ) -> None:
         self._sonos = sonos_service
         self._automation = automation_engine
         self._tts = tts_service
+        # When ambient is mirroring rain/fireplace/etc on the Sonos, ambient
+        # owns the per-mode volume policy (its `_sonos_mode_volume_overrides`
+        # are tuned for ambient noise levels, which are intentionally
+        # different from music levels — e.g. working music=12 but working
+        # ambient=22). Skip our music-tier fade in that case so the two
+        # services don't tug-of-war over the speaker.
+        self._ambient_sound = ambient_sound_service
 
     async def on_mode_change(self, mode: str) -> None:
         """Mode-change callback. Single-arg contract per AutomationEngine."""
@@ -64,6 +72,21 @@ class ModeVolumeService:
     async def _apply(self, mode: str) -> None:
         if not getattr(self._sonos, "connected", False):
             logger.debug("mode_volume: skipped (sonos disconnected) mode=%s", mode)
+            return
+
+        # Ambient mirroring owns Sonos volume — its _sync_sonos_volume already
+        # re-applied the per-mode ambient override during the same callback
+        # fan-out. Ramping the music curve over it would clobber the ambient
+        # baseline within seconds.
+        if (
+            self._ambient_sound is not None
+            and getattr(self._ambient_sound, "_sonos_ambient_active", False)
+        ):
+            logger.info(
+                "mode_volume: skipped mode=%s reason=ambient_active "
+                "(ambient owns Sonos volume policy)",
+                mode,
+            )
             return
 
         # Defer once if TTS is actively speaking — duck-and-resume snapshots

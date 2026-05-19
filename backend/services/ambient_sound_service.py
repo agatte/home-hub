@@ -111,10 +111,16 @@ class AmbientSoundService:
         self._mode_auto_play: dict[str, bool] = {}
         self._weather_reactive: bool = True
 
-        # Sonos config (persisted to DB)
+        # Sonos config (persisted to DB). Defaults calibrated 2026-05-18 for
+        # the cross-room geometry of Anthony's apartment (Sonos in living
+        # room, desk in bedroom) — see memory project_sonos_location_and_
+        # ambient_volumes. Same-room installs can override down to ~12/18
+        # via /settings; these defaults err on the audible side because
+        # silence-by-default is worse than too-loud-by-default for a
+        # weather-reactive ambient layer.
         self._sonos_enabled: bool = True
-        self._sonos_present_volume: int = 12  # Sonos level when user is nearby
-        self._sonos_away_volume: int = 28     # Sonos level when user is away
+        self._sonos_present_volume: int = 25  # Sonos level when user is nearby
+        self._sonos_away_volume: int = 35     # Sonos level when user is away
         # Per-mode Sonos volume overrides. Missing modes fall back to
         # _sonos_present_volume. Used in _resolve_sonos_volume(mode) so a
         # gaming-mode override of e.g. 6 plays rain at near-background level
@@ -155,8 +161,8 @@ class AmbientSoundService:
         if self._playing and self._current_sound:
             self._source = config.get("last_source", "manual")
         self._sonos_enabled = config.get("sonos_enabled", True)
-        self._sonos_present_volume = config.get("sonos_present_volume", 12)
-        self._sonos_away_volume = config.get("sonos_away_volume", 28)
+        self._sonos_present_volume = config.get("sonos_present_volume", 25)
+        self._sonos_away_volume = config.get("sonos_away_volume", 35)
         self._sonos_mode_volume_overrides = dict(
             config.get("sonos_mode_volume_overrides", {})
         )
@@ -479,6 +485,14 @@ class AmbientSoundService:
             )
             if need_play:
                 await self.play(target, source=target_source)
+            elif self._sonos_ambient_active:
+                # Same target, already mirroring. Mode shift or volume-config
+                # change could mean the resolved Sonos volume is now different
+                # from what's actually playing — push it through. This is what
+                # makes the /settings sliders feel live instead of "saved but
+                # nothing happens" (and what keeps mode-change volume policy
+                # honest when mode changes but ambient sticks).
+                await self._sync_sonos_volume()
             return
 
         # No active driver. Stop weather/mode-driven playback so the rain
@@ -604,6 +618,38 @@ class AmbientSoundService:
         if mode and mode in self._sonos_mode_volume_overrides:
             return self._sonos_mode_volume_overrides[mode]
         return self._sonos_present_volume
+
+    async def _sync_sonos_volume(self) -> None:
+        """Re-apply the resolved Sonos volume to a currently-playing track.
+
+        The original follow-me loop only ramps DOWN (absent → present); it
+        never ramps UP from a lower present_volume to a higher new override.
+        And mid-mirror config changes via /api/ambient/config (slider drag in
+        /settings) only updated state, never the Sonos. This helper closes
+        both gaps — call after any policy change that could affect resolved
+        volume.
+        """
+        if not self._sonos_ambient_active or not self._sonos:
+            return
+        if not getattr(self._sonos, "connected", False):
+            return
+        target = self._resolve_sonos_volume()
+        try:
+            status = await self._sonos.get_status()
+        except Exception as e:
+            logger.warning("Sonos ambient volume sync: get_status failed: %s", e)
+            return
+        current = int(status.get("volume", target))
+        if current == target:
+            return
+        try:
+            await self._sonos.ramp_volume(target, steps=4, interval=0.3)
+            logger.info(
+                "Sonos ambient volume synced %d -> %d (mode=%s)",
+                current, target, self._current_mode(),
+            )
+        except Exception as e:
+            logger.warning("Sonos ambient volume sync: ramp failed: %s", e)
 
     async def _start_sonos_ambient(self) -> None:
         """Start Sonos ambient if eligible + Sonos idle + ambient playing.

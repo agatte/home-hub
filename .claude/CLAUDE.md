@@ -427,7 +427,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04. Backend + ambient as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker. Always-on. Static IP.** |
 | Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL` env var. Desktop notifier autostarts via separate Task Scheduler entry `Home Hub Desktop Notifier` (At-Logon, exe at `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`, built via `scripts/build_desktop_notifier.ps1`). |
 | Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
-| Sonos Era 100 | 192.168.1.157 | "Bedroom". `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
+| Sonos Era 100 | 192.168.1.157 | Living room. `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page deferred) |
 
 **iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings. After any rejoin, restore in Settings → WiFi → (i): manual IP `192.168.1.148`, DNS → Pi-hole (`192.168.1.210`), Private WiFi Address → Fixed. iOS treats every fresh join as a clean profile (not a Pi-hole bug).

@@ -374,7 +374,12 @@ async def lifespan(app: FastAPI):
 
     # Per-mode Sonos volume curves (GH#17). Fades the speaker to a mode-shaped
     # target on transition. Pure-policy split: see mode_volume_policy.py.
-    mode_volume = ModeVolumeService(sonos, automation, tts_service=tts)
+    # ambient_sound passed in so the service can skip its fade when ambient is
+    # mirroring (ambient has its own per-mode volume policy, see
+    # ambient_sound_service._sync_sonos_volume).
+    mode_volume = ModeVolumeService(
+        sonos, automation, tts_service=tts, ambient_sound_service=ambient_sound,
+    )
     automation.register_on_mode_change(mode_volume.on_mode_change)
     app.state.mode_volume = mode_volume
 
