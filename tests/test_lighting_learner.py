@@ -22,11 +22,26 @@ def learner(tmp_model_manager):
     return LightingPreferenceLearner(tmp_model_manager)
 
 
+# Counter so successive _make_adjustment calls produce timestamps far enough
+# apart to NOT be collapsed by _collapse_drag_clusters (DRAG_CLUSTER_SECONDS=3).
+# Tests that previously relied on N rows producing N samples assumed a 1:1
+# row-to-sample mapping; the collapse helper breaks that for same-timestamp
+# rows. Bumping by 1 minute per call preserves the original test intent.
+_ADJ_TS_COUNTER = [0]
+
+
 def _make_adjustment(*, light_id="1", mode="working", hour=14,
                      bri_after=180, trigger="ws", **extra):
-    """Build a LightAdjustment row with sane defaults."""
+    """Build a LightAdjustment row with sane defaults.
+
+    Each call increments a module counter to give the row a unique timestamp
+    spaced 1 minute past the prior call's — keeps the collapse helper from
+    fusing distinct test rows into one cluster.
+    """
+    _ADJ_TS_COUNTER[0] += 1
     return LightAdjustment(
-        timestamp=datetime(2026, 4, 24, hour, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 4, 24, hour, 0, tzinfo=timezone.utc)
+        + timedelta(minutes=_ADJ_TS_COUNTER[0]),
         light_id=light_id,
         mode_at_time=mode,
         bri_before=100,
@@ -309,9 +324,15 @@ class TestScanForSuggestions:
         DST. Using "now - 1 day, hour-pinned" instead of just "now -
         1 day" prevents the test from flipping period (and therefore
         the dedup bucket key) based on what time of day the suite runs.
+
+        Each call increments a module counter to space rows 1 minute
+        apart — keeps the drag-cluster collapse helper from fusing
+        same-timestamp rows into a single observation.
         """
+        _ADJ_TS_COUNTER[0] += 1
         now = datetime.now(timezone.utc) - timedelta(days=1)
         ts = now.replace(hour=18, minute=0, second=0, microsecond=0)
+        ts += timedelta(minutes=_ADJ_TS_COUNTER[0])
         kwargs.setdefault("light_id", "1")
         kwargs.setdefault("mode_at_time", "working")
         kwargs.setdefault("bri_before", 100)
@@ -384,3 +405,97 @@ class TestComputeEma:
         learned = LightingPreferenceLearner._compute_ema(adjustments)
         assert "bri" in learned
         assert "hue" not in learned
+
+
+class TestCollapseDragClusters:
+    """A single slider drag emits 5-10 WS rows; the collapse helper
+    should treat each consecutive same-bucket cluster as one observation
+    (the drag-end value). Without this, sample_count inflates and EMAs
+    pull toward transit values rather than rest values."""
+
+    @staticmethod
+    def _row(ts: datetime, *, light_id="2", mode="gaming",
+             weather="clouds", bri=100):
+        return LightAdjustment(
+            timestamp=ts, light_id=light_id, mode_at_time=mode,
+            weather_class=weather, bri_before=bri - 1, bri_after=bri,
+            trigger="ws",
+        )
+
+    def test_empty_input_returns_empty(self):
+        assert LightingPreferenceLearner._collapse_drag_clusters([]) == []
+
+    def test_single_row_passes_through(self):
+        base = datetime(2026, 5, 19, 22, 38, 35, tzinfo=timezone.utc)
+        row = self._row(base, bri=147)
+        out = LightingPreferenceLearner._collapse_drag_clusters([row])
+        assert len(out) == 1
+        assert out[0].bri_after == 147
+
+    def test_drag_collapses_to_drag_end_value(self):
+        # The L2 night/clouds bug case: 6 rows in 1.3s, drag rested at 147.
+        # The learner previously saw 6 "samples" averaging ~131 → suggested 151.
+        # After collapse: 1 sample = 147 (the rest value).
+        base = datetime(2026, 5, 19, 22, 38, 35, tzinfo=timezone.utc)
+        rows = [
+            self._row(base + timedelta(milliseconds=ms), bri=bri)
+            for ms, bri in [
+                (0, 111), (250, 126), (500, 136),
+                (750, 141), (1000, 145), (1300, 147),
+            ]
+        ]
+        out = LightingPreferenceLearner._collapse_drag_clusters(rows)
+        assert len(out) == 1
+        assert out[0].bri_after == 147
+
+    def test_gap_over_window_splits_cluster(self):
+        # Two real preference moments 4s apart → two observations.
+        base = datetime(2026, 5, 19, 22, 38, 35, tzinfo=timezone.utc)
+        rows = [
+            self._row(base, bri=120),
+            self._row(base + timedelta(seconds=4), bri=180),
+        ]
+        out = LightingPreferenceLearner._collapse_drag_clusters(rows)
+        assert len(out) == 2
+        assert [r.bri_after for r in out] == [120, 180]
+
+    def test_different_lights_stay_independent(self):
+        # Kitchen-pair paired writes (L3 then L4 interleaved within 250ms).
+        # Each light's stream clusters separately → 1 survivor per light_id.
+        base = datetime(2026, 5, 19, 22, 38, 35, tzinfo=timezone.utc)
+        rows = []
+        for ms, bri in [(0, 80), (250, 90), (500, 100), (750, 108)]:
+            rows.append(self._row(base + timedelta(milliseconds=ms),
+                                  light_id="3", bri=bri))
+            rows.append(self._row(base + timedelta(milliseconds=ms + 50),
+                                  light_id="4", bri=bri))
+        out = LightingPreferenceLearner._collapse_drag_clusters(rows)
+        # 2 survivors: one per light_id, both at the drag-end value.
+        assert len(out) == 2
+        survivors_by_light = {r.light_id: r.bri_after for r in out}
+        assert survivors_by_light == {"3": 108, "4": 108}
+
+    def test_different_weather_splits_cluster(self):
+        # Same light, same mode, different weather_class — different
+        # buckets, so they don't merge even within the time window.
+        base = datetime(2026, 5, 19, 22, 38, 35, tzinfo=timezone.utc)
+        rows = [
+            self._row(base, weather="clouds", bri=100),
+            self._row(base + timedelta(milliseconds=500),
+                      weather="rain", bri=120),
+        ]
+        out = LightingPreferenceLearner._collapse_drag_clusters(rows)
+        assert len(out) == 2
+        assert {r.weather_class for r in out} == {"clouds", "rain"}
+
+    def test_unordered_input_is_sorted(self):
+        # Helper must be robust to caller order. Sort by timestamp internally.
+        base = datetime(2026, 5, 19, 22, 38, 35, tzinfo=timezone.utc)
+        rows = [
+            self._row(base + timedelta(milliseconds=1300), bri=147),
+            self._row(base, bri=111),
+            self._row(base + timedelta(milliseconds=500), bri=136),
+        ]
+        out = LightingPreferenceLearner._collapse_drag_clusters(rows)
+        assert len(out) == 1
+        assert out[0].bri_after == 147

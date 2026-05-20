@@ -55,9 +55,10 @@
       <div class="suggestion-text">
         <div class="suggestion-headline">
           During <strong>{weatherLabel(payload.weather_class)}</strong> {lbl} you've set
-          <strong>L{payload.light_id}</strong> brighter
-          {#if payload.suggested_multiplier}
-            (~{(payload.suggested_multiplier * 100).toFixed(0)}% of baseline)
+          <strong>L{payload.light_id}</strong> to
+          <strong>~{Math.round((payload.suggested_bri / 254) * 100)}%</strong>
+          {#if payload.base_bri}
+            (default is {Math.round((payload.base_bri / 254) * 100)}%)
           {/if}
         </div>
         <div class="suggestion-meta">

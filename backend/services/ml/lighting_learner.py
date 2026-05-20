@@ -46,6 +46,15 @@ LEARNABLE_PROPERTIES = ("bri", "hue", "sat", "ct")
 # Only learn from user-initiated triggers (not automation or scenes).
 USER_TRIGGERS = ("ws", "rest", "all_lights")
 
+# A single slider drag in the dashboard emits ~5-10 WS events at ~250ms
+# throttle — each one a separate `light_adjustments` row with trigger="ws".
+# Without dedup the learner counts every mid-drag step as an independent
+# "you set this" signal: 1 drag = up to 10 fake samples, biased toward the
+# drag's transit values rather than the rest value. Collapse consecutive
+# same-bucket rows within this window into one observation (last row =
+# drag-end).
+DRAG_CLUSTER_SECONDS = 3.0
+
 # Sentinel weather class for buckets that should match any weather. Rows
 # with NULL weather_class (pre-migration history) and any caller that
 # doesn't have a weather classification land in this bucket. Mirrors
@@ -257,11 +266,23 @@ class LightingPreferenceLearner(HealthTrackable):
                     .where(LightAdjustment.mode_at_time.isnot(None))
                     .order_by(LightAdjustment.timestamp.asc())
                 )
-                adjustments = result.scalars().all()
+                adjustments = list(result.scalars().all())
 
             if not adjustments:
                 logger.info("No user-initiated light adjustments to learn from")
                 return
+
+            # Collapse slider-drag micro-steps before grouping. A single
+            # drag emits ~5-10 rows in 1.5s — counting each as an independent
+            # observation inflates sample_count and biases EMAs toward
+            # transit values rather than rest values.
+            pre_collapse = len(adjustments)
+            adjustments = self._collapse_drag_clusters(adjustments)
+            if pre_collapse != len(adjustments):
+                logger.debug(
+                    "Collapsed %d → %d adjustments (drag-cluster dedup)",
+                    pre_collapse, len(adjustments),
+                )
 
             # Group adjustments into two parallel keyspaces:
             #   any_groups: {light_id}:{mode}:{period}:any           — every row
@@ -372,6 +393,11 @@ class LightingPreferenceLearner(HealthTrackable):
             )
             rows = list(result.scalars().all())
 
+        # Collapse slider-drag micro-steps — see recalculate() for rationale.
+        # A drag emits ~5-10 rows in 1.5s; without dedup the suggestion
+        # scanner emits candidates from a single user action.
+        rows = self._collapse_drag_clusters(rows)
+
         # Group by (light_id, mode, period, weather_class). Bri values per
         # group are kept ordered so the EMA can be computed for the
         # suggested_bri exactly the way the learner would on accept.
@@ -424,6 +450,59 @@ class LightingPreferenceLearner(HealthTrackable):
             suggestions.append(suggestion)
 
         return suggestions
+
+    @staticmethod
+    def _collapse_drag_clusters(
+        rows: list[LightAdjustment],
+        window_s: float = DRAG_CLUSTER_SECONDS,
+    ) -> list[LightAdjustment]:
+        """Collapse slider-drag micro-steps into one observation per cluster.
+
+        A single dashboard slider drag emits one WS event per ~250ms throttle
+        tick → 5-10 rows in the table for one user action. Without this
+        collapse the learner counts every intermediate step, inflating
+        ``sample_count`` and pulling EMAs toward mid-drag transit values
+        instead of the rest value.
+
+        Algorithm: walk rows in time order. Consecutive rows sharing the
+        same ``(light_id, mode_at_time, weather_class)`` AND within
+        ``window_s`` of the previously-kept row are treated as one cluster
+        — only the LAST row (drag-end) survives. Different bucket OR a gap
+        > window_s starts a new cluster.
+
+        Edge cases:
+          * Empty input → empty output.
+          * Two real preference moments separated by >window_s → both kept.
+          * Kitchen-pair paired writes (L3 then L4 ~250ms apart) cluster
+            independently per ``light_id`` — pooling happens afterwards
+            in ``_pool_kitchen_pair``.
+        """
+        if not rows:
+            return []
+        # Group by bucket first so interleaved paired writes (kitchen-pair
+        # drag emits L3@t, L4@t+50ms, L3@t+250ms, L4@t+300ms, ...) don't
+        # break consecutive-row detection inside a linear walk.
+        per_bucket: dict[
+            tuple[Optional[str], Optional[str], Optional[str]],
+            list[LightAdjustment],
+        ] = defaultdict(list)
+        for r in rows:
+            per_bucket[(r.light_id, r.mode_at_time, r.weather_class)].append(r)
+
+        out: list[LightAdjustment] = []
+        for bucket_rows in per_bucket.values():
+            bucket_rows.sort(key=lambda r: r.timestamp)
+            last_keep = bucket_rows[0]
+            for r in bucket_rows[1:]:
+                gap = (r.timestamp - last_keep.timestamp).total_seconds()
+                if gap <= window_s:
+                    last_keep = r  # advance the cluster's tail
+                else:
+                    out.append(last_keep)
+                    last_keep = r
+            out.append(last_keep)
+        out.sort(key=lambda r: r.timestamp)
+        return out
 
     @staticmethod
     def _pool_kitchen_pair(

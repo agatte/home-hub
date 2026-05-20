@@ -781,17 +781,33 @@ class RuleEngineService:
 
     @staticmethod
     def _format_brightness_body(candidate: dict[str, Any]) -> str:
-        """Render a human-readable suggestion body for the notification."""
+        """Render a human-readable suggestion body for the notification.
+
+        bri values are stored in Hue 0-254 scale; we present them as 0-100%
+        for the user. Dropping the "× base" multiplier here — when the
+        engine default is small (kitchen pair=22, relax late_night=10) the
+        ratio reads as alarmingly large for what's actually a sensible
+        change. Absolute target + default conveys the same info without
+        the math-shock.
+        """
         mode = candidate.get("mode", "?")
         period = candidate.get("period", "?")
         weather = candidate.get("weather_class", "?")
         light_id = candidate.get("light_id", "?")
-        bri = candidate.get("suggested_bri", "?")
+        bri = candidate.get("suggested_bri")
+        base = candidate.get("base_bri")
         n = candidate.get("sample_count", 0)
-        mult = candidate.get("suggested_multiplier")
-        mult_str = f" ({mult:.2f}× base)" if mult else ""
+
+        def _pct(v: Any) -> str:
+            try:
+                return f"{round(int(v) / 254 * 100)}%"
+            except (TypeError, ValueError):
+                return "?"
+
+        bri_str = _pct(bri)
+        base_str = f" (default {_pct(base)})" if base else ""
         return (
-            f"You've been setting L{light_id} to ~{bri}{mult_str} "
+            f"You've been setting L{light_id} to ~{bri_str}{base_str} "
             f"during {weather} {mode}/{period} ({n} times). "
             f"Apply automatically next time?"
         )

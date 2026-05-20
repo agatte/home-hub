@@ -222,6 +222,14 @@ async def lifespan(app: FastAPI):
     lighting_learner = LightingPreferenceLearner(model_manager)
     model_manager.register_learner(lighting_learner)
     app.state.lighting_learner = lighting_learner
+    # One-shot recalc on boot. Cheap (DB scan + EMA over ≤14d of user-trigger
+    # rows, typically <2s). Ensures the persisted lighting_prefs.json reflects
+    # the *current* learning logic — important when the collapse / EMA rules
+    # change between deploys and the nightly recalc at 04:00 hasn't run yet.
+    try:
+        await lighting_learner.recalculate()
+    except Exception:
+        logger.exception("Boot-time lighting_learner.recalculate() failed")
 
     ml_logger = MLDecisionLogger(ws_manager=ws_manager)
     app.state.ml_logger = ml_logger
