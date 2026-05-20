@@ -47,6 +47,7 @@ async def fire_test_notification(request: Request) -> dict:
 
     title = (body or {}).get("title") or "Test notification"
     msg = (body or {}).get("body") or "Synthetic test fire"
+    kind = (body or {}).get("kind") or "test"
 
-    payload = await notifier.emit_synthetic(title=title, body=msg)
+    payload = await notifier.emit_synthetic(title=title, body=msg, kind=kind)
     return {"status": "ok", "payload": payload}

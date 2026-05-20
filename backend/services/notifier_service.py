@@ -529,26 +529,54 @@ class NotifierService:
     async def emit_synthetic(
         self, title: str = "Test notification",
         body: str = "Synthetic test fire",
+        kind: str = "test",
     ) -> dict[str, Any]:
         """Fire a synthetic notification through the real dispatch path.
 
         Used by POST /api/notification/test to verify both surfaces end-to-end
         without waiting for a real mode flip. Bypasses DND + coalesce + boot
         suppression so the test always fires.
+
+        ``kind="suggestion"`` switches to a suggestion-style payload with
+        empty factors + Accept/Dismiss action buttons (URLs are no-op
+        echo endpoints) so the desktop toast's action-button render path
+        can be exercised without waiting for the next brightness scan.
         """
-        payload: dict[str, Any] = {
-            "title": title,
-            "subtitle": "test",
-            "factors": [
-                {"lane": "test", "label": "synthetic", "value": body, "impact": 1.0},
-            ],
-            "output_delta": None,
-            "mode_changed": False,
-            "brightness_shifted": False,
-            "old_mode": self._engine.current_mode,
-            "new_mode": self._engine.current_mode,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "correlation_id": str(uuid.uuid4()),
-        }
+        if kind == "suggestion":
+            # No-op URL — buttons just need to render for the toast verify;
+            # click-through is best-effort (handler ignores bad URLs).
+            stub_url = f"{self._ntfy_server.replace('https://ntfy.sh', 'http://localhost:8000')}/api/notification/test"
+            payload: dict[str, Any] = {
+                "title": title,
+                "subtitle": body,
+                "body": body,
+                "factors": [],
+                "output_delta": None,
+                "actions": [
+                    {"label": "Accept", "url": stub_url,
+                     "method": "POST", "headers": {}},
+                    {"label": "Dismiss", "url": stub_url,
+                     "method": "POST", "headers": {}},
+                ],
+                "kind": "suggestion",
+                "suggestion_id": -1,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "correlation_id": str(uuid.uuid4()),
+            }
+        else:
+            payload = {
+                "title": title,
+                "subtitle": "test",
+                "factors": [
+                    {"lane": "test", "label": "synthetic", "value": body, "impact": 1.0},
+                ],
+                "output_delta": None,
+                "mode_changed": False,
+                "brightness_shifted": False,
+                "old_mode": self._engine.current_mode,
+                "new_mode": self._engine.current_mode,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "correlation_id": str(uuid.uuid4()),
+            }
         await self._dispatch(payload)
         return payload
