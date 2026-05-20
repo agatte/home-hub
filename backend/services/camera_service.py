@@ -2307,6 +2307,22 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
             if not setting or not setting.get("enabled", False):
                 continue
 
+            # Sleeping-mode privacy gate. The whole point of sleeping
+            # mode is that the camera is off — LED dark, no captures.
+            # The watchdog must NEVER respawn the service during this
+            # window, even if the service is dead / None / heartbeat
+            # stale, because doing so turns the LED on while the user
+            # is asleep. This check intentionally fires BEFORE the
+            # three respawn triggers (was previously only the
+            # _paused-on-existing-service case that skipped). Recovery
+            # for a service that died during sleep happens naturally:
+            # on_mode_change leaving sleeping does the right thing if
+            # the service is still live, and the next watchdog tick
+            # after waking respawns it if it isn't.
+            automation = getattr(app.state, "automation", None)
+            if automation is not None and automation.current_mode == "sleeping":
+                continue
+
             service = getattr(app.state, "camera_service", None)
             heartbeats = getattr(app.state, "heartbeats", None)
 
@@ -2319,7 +2335,11 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
                 reason = "watchdog_dead_service"
                 detail = "service instance present but _enabled=False"
             elif getattr(service, "_paused", False):
-                # Legitimate pause — sleeping mode. Skip.
+                # Defense in depth: an existing service can also be
+                # _paused for reasons unrelated to sleeping mode (future
+                # callers might add a "Do Not Disturb" or "vacation"
+                # pause). The current_mode gate above handles the
+                # sleeping case; this catches any other legitimate pause.
                 continue
             else:
                 age = _camera_heartbeat_age(heartbeats)

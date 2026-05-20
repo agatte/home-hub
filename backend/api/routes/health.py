@@ -101,10 +101,24 @@ async def health_check(request: Request) -> dict:
     # tasks_stale path above only catches the heartbeat-registered case
     # — a never-registered camera looks healthy to the tasks block
     # despite being the documented 12h blind spot from 2026-05-20.
+    #
+    # Skipped entirely during sleeping mode: a cold/paused camera there
+    # is the intended privacy state, not a degradation. Without this
+    # gate, /health would flap to "degraded" every night when the camera
+    # legitimately stands down — and the kiosk vital strip would turn
+    # yellow during sleep, which is the inverse of what we want.
     try:
+        automation = getattr(app.state, "automation", None)
+        in_sleeping_mode = (
+            automation is not None and automation.current_mode == "sleeping"
+        )
         from backend.api.routes.routines import load_setting as _load_setting
         camera_setting = await _load_setting("camera_enabled")
-        if camera_setting and camera_setting.get("enabled", False):
+        if (
+            camera_setting
+            and camera_setting.get("enabled", False)
+            and not in_sleeping_mode
+        ):
             service = getattr(app.state, "camera_service", None)
             heartbeat_present = any(t["name"] == "camera" for t in tasks)
             if service is None:
