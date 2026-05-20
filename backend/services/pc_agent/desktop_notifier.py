@@ -301,7 +301,10 @@ class ToastWidget(QWidget):
             row = self._build_factor_row(f)
             self._factors_layout.addWidget(row)
 
-        if not visible:
+        # Suggestion-kind notifications intentionally have no fusion
+        # factors (they're user-prompts, not autonomous decisions). Don't
+        # show the empty-state placeholder — reads as a bug/missing data.
+        if not visible and payload.get("kind") != "suggestion":
             empty = QLabel("(no fusion factors available)")
             empty.setStyleSheet(f"color: rgb({TEXT_SECONDARY.red()}, {TEXT_SECONDARY.green()}, {TEXT_SECONDARY.blue()}); font-style: italic;")
             self._factors_layout.addWidget(empty)

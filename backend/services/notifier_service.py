@@ -384,16 +384,16 @@ class NotifierService:
             body = payload.get("subtitle") or "Apartment state changed"
 
         url = f"{self._ntfy_server}/{self._ntfy_topic}"
-        title = payload.get("title", "Home Hub")[:200]
+        title = self._ascii_safe_header(payload.get("title", "Home Hub"))[:200]
         headers = {
             "Title": title,
             "Priority": "low",
             "Tags": "house",
-            "X-Correlation-Id": payload.get("correlation_id", ""),
+            "X-Correlation-Id": self._ascii_safe_header(payload.get("correlation_id", "")),
         }
         actions_header = self._format_actions_header(payload.get("actions") or [])
         if actions_header:
-            headers["Actions"] = actions_header
+            headers["Actions"] = self._ascii_safe_header(actions_header)
         try:
             resp = await self._http.post(
                 url, content=body.encode("utf-8"), headers=headers,
@@ -410,6 +410,42 @@ class NotifierService:
                 )
         except Exception:
             logger.exception("ntfy.sh push failed (topic=%s)", self._ntfy_topic)
+
+    # ntfy.sh sends headers as latin-1 over HTTP/1.1; any UTF-8 char that
+    # isn't representable (→, •, …, em-dash, curly quotes) raises
+    # UnicodeEncodeError inside httpx before the request goes out. Map the
+    # typographic chars we actually emit (mode-flip arrows, factor bullets)
+    # to ASCII equivalents, then fall back to latin-1 errors='replace' for
+    # anything else.
+    _HEADER_CHAR_MAP = str.maketrans({
+        "→": "->",   # →  rightwards arrow (mode flips)
+        "←": "<-",   # ←
+        "↔": "<->",  # ↔
+        "•": "*",    # •  bullet (factor separator)
+        "…": "...",  # …  horizontal ellipsis
+        "—": "--",   # —  em dash
+        "–": "-",    # –  en dash
+        "‘": "'",    # ‘
+        "’": "'",    # ’
+        "“": '"',    # “
+        "”": '"',    # ”
+        "°": " deg", # °
+    })
+
+    @classmethod
+    def _ascii_safe_header(cls, value: str) -> str:
+        """Make an HTTP header value safe to send to ntfy.sh.
+
+        httpx encodes headers as latin-1; non-representable chars raise
+        UnicodeEncodeError pre-send. First substitute the typographic
+        chars we deliberately emit (arrows, bullets, ellipses, dashes,
+        smart quotes); then encode/decode latin-1 with 'replace' to
+        scrub anything we didn't anticipate without crashing.
+        """
+        if not value:
+            return ""
+        mapped = str(value).translate(cls._HEADER_CHAR_MAP)
+        return mapped.encode("latin-1", errors="replace").decode("latin-1")
 
     @staticmethod
     def _format_actions_header(
