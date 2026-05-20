@@ -417,9 +417,12 @@ class NotifierService:
     ) -> Optional[str]:
         """Render the WS-side actions list into ntfy.sh's Actions header.
 
-        Format (per ntfy.sh docs):
-            http, <label>, <url>, method=<METHOD>, headers="K1: v1,K2: v2"
-        Multiple actions joined by ``;``. Empty list → None (header omitted).
+        Format per ntfy.sh action-button spec:
+            http, <label>, <url>, method=<METHOD>, headers.<key>=<value>
+        Each per-action header is its own ``headers.<key>=<value>`` token;
+        the legacy ``headers="K: v,K: v"`` form returns HTTP 400 with
+        ``key 'headers' unknown``. Multiple actions joined by ``; ``.
+        Empty list → None (header omitted).
         """
         if not actions:
             return None
@@ -431,10 +434,11 @@ class NotifierService:
                 continue
             method = action.get("method", "POST")
             piece = f"http, {label}, {url}, method={method}"
-            extra_headers = action.get("headers") or {}
-            if extra_headers:
-                hdr_str = ",".join(f"{k}: {v}" for k, v in extra_headers.items())
-                piece += f', headers="{hdr_str}"'
+            for hk, hv in (action.get("headers") or {}).items():
+                value = str(hv)
+                if any(c in value for c in (",", ";", "=", '"')):
+                    value = '"' + value.replace('"', '\\"') + '"'
+                piece += f", headers.{hk}={value}"
             parts.append(piece)
         return "; ".join(parts) if parts else None
 
