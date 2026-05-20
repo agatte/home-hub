@@ -8,12 +8,14 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Coroutine
+from typing import Awaitable, Callable, Coroutine
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("home_hub.scheduler")
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
+
+PERSIST_KEY = "scheduler_task_state"
 
 
 @dataclass
@@ -43,10 +45,72 @@ class AsyncScheduler:
         self._tasks: dict[str, ScheduledTask] = {}
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
         self._running_tasks: set[asyncio.Task] = set()
+        self._persist_save: Callable[[str, dict], Awaitable[None]] | None = None
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_persistence(
+        self, save: Callable[[str, dict], Awaitable[None]]
+    ) -> None:
+        """Inject the save callable used to mirror task state to app_settings.
+
+        Persistence is opt-in — without this wired, the scheduler behaves
+        exactly as before (in-memory only, wiped on restart). With it wired,
+        every callback completion writes through so /health.scheduler_tasks
+        survives deploys.
+        """
+        self._persist_save = save
+
+    async def load_state(
+        self, load: Callable[[str], Awaitable[dict]]
+    ) -> None:
+        """Rehydrate last_run / last_status / last_error from app_settings.
+
+        Call once after all add_task() calls in lifespan. Missing tasks +
+        missing fields are tolerated — a fresh DB or a newly-added task
+        just starts in the default 'pending' state.
+        """
+        state = await load(PERSIST_KEY) or {}
+        restored = 0
+        for name, task in self._tasks.items():
+            row = state.get(name)
+            if not row:
+                continue
+            ts = row.get("last_run")
+            if ts:
+                try:
+                    parsed = datetime.fromisoformat(ts)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=TZ)
+                    task.last_run = parsed
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"Discarded unparseable last_run for '{name}': {ts!r}"
+                    )
+            task.last_status = row.get("last_status", task.last_status)
+            task.last_error = row.get("last_error")
+            restored += 1
+        if restored:
+            logger.info(f"Restored persisted state for {restored} scheduled task(s)")
+
+    async def _persist(self) -> None:
+        """Snapshot every task's status fields to app_settings."""
+        if self._persist_save is None:
+            return
+        snapshot = {
+            name: {
+                "last_run": task.last_run.isoformat() if task.last_run else None,
+                "last_status": task.last_status,
+                "last_error": task.last_error,
+            }
+            for name, task in self._tasks.items()
+        }
+        try:
+            await self._persist_save(PERSIST_KEY, snapshot)
+        except Exception as e:
+            logger.error(f"Scheduler state persist failed: {e}", exc_info=True)
 
     def add_task(self, task: ScheduledTask) -> None:
         """Register a scheduled task."""
@@ -150,6 +214,8 @@ class AsyncScheduler:
                 f"Scheduled task '{task.name}' failed: {e}",
                 exc_info=True,
             )
+        finally:
+            await self._persist()
 
     async def run_loop(self) -> None:
         """

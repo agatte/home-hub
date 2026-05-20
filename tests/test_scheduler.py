@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from backend.services.scheduler import AsyncScheduler, ScheduledTask
+from backend.services.scheduler import (
+    PERSIST_KEY,
+    AsyncScheduler,
+    ScheduledTask,
+)
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -224,3 +228,166 @@ class TestTaskStatusFields:
         release.set()
         await bg
         assert task.last_status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# State persistence across restarts (survives deploys)
+# ---------------------------------------------------------------------------
+
+class TestStatePersistence:
+    """Verify scheduler state round-trips through app_settings.
+
+    Without persistence, /health.scheduler_tasks shows last_run=null after
+    every deploy — overnight runs become invisible from the dashboard until
+    they fire again 24h later. Each callback completion writes through.
+    """
+
+    @pytest.mark.asyncio
+    async def test_persist_after_successful_callback(self):
+        scheduler = AsyncScheduler()
+        store: dict[str, dict] = {}
+
+        async def saver(key: str, value: dict) -> None:
+            store[key] = value
+
+        async def cb():
+            return None
+
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0, callback=cb))
+        scheduler.set_persistence(saver)
+
+        bg = await scheduler._execute_task(
+            scheduler._tasks["t1"], datetime(2026, 5, 20, 4, 0, tzinfo=TZ)
+        )
+        await bg
+
+        assert PERSIST_KEY in store
+        row = store[PERSIST_KEY]["t1"]
+        assert row["last_status"] == "ok"
+        assert row["last_error"] is None
+        assert row["last_run"].startswith("2026-05-20T04:00")
+
+    @pytest.mark.asyncio
+    async def test_persist_after_failed_callback(self):
+        scheduler = AsyncScheduler()
+        store: dict[str, dict] = {}
+
+        async def saver(key: str, value: dict) -> None:
+            store[key] = value
+
+        async def cb():
+            raise RuntimeError("boom")
+
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0, callback=cb))
+        scheduler.set_persistence(saver)
+
+        bg = await scheduler._execute_task(
+            scheduler._tasks["t1"], datetime(2026, 5, 20, 4, 0, tzinfo=TZ)
+        )
+        await bg
+
+        row = store[PERSIST_KEY]["t1"]
+        assert row["last_status"] == "error"
+        assert "boom" in row["last_error"]
+        assert row["last_run"] is not None
+
+    @pytest.mark.asyncio
+    async def test_load_state_rehydrates_fields(self):
+        scheduler = AsyncScheduler()
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0))
+
+        async def loader(key: str) -> dict:
+            assert key == PERSIST_KEY
+            return {
+                "t1": {
+                    "last_run": "2026-05-20T04:00:03-04:00",
+                    "last_status": "ok",
+                    "last_error": None,
+                }
+            }
+
+        await scheduler.load_state(loader)
+
+        task = scheduler._tasks["t1"]
+        assert task.last_status == "ok"
+        assert task.last_run is not None
+        assert task.last_run.year == 2026 and task.last_run.hour == 4
+
+    @pytest.mark.asyncio
+    async def test_load_state_tolerates_missing_keys(self):
+        """Fresh DB → load returns {} → tasks stay in default state, no raise."""
+        scheduler = AsyncScheduler()
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0))
+
+        async def empty_loader(key: str) -> dict:
+            return {}
+
+        await scheduler.load_state(empty_loader)
+        assert scheduler._tasks["t1"].last_run is None
+        assert scheduler._tasks["t1"].last_status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_load_state_ignores_unparseable_last_run(self):
+        """Corrupt timestamp → warn + leave task in default state, don't crash."""
+        scheduler = AsyncScheduler()
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0))
+
+        async def loader(key: str) -> dict:
+            return {"t1": {"last_run": "not-a-timestamp", "last_status": "ok"}}
+
+        await scheduler.load_state(loader)
+        assert scheduler._tasks["t1"].last_run is None
+        assert scheduler._tasks["t1"].last_status == "ok"
+
+    @pytest.mark.asyncio
+    async def test_load_state_skips_unknown_tasks(self):
+        """Persisted state for a task no longer registered → silently skipped."""
+        scheduler = AsyncScheduler()
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0))
+
+        async def loader(key: str) -> dict:
+            return {
+                "retired_task": {"last_run": "2026-05-20T04:00:00-04:00"},
+                "t1": {"last_status": "ok"},
+            }
+
+        await scheduler.load_state(loader)
+        assert scheduler._tasks["t1"].last_status == "ok"
+
+    @pytest.mark.asyncio
+    async def test_persist_survives_save_failure(self):
+        """A DB write error during persist must not crash the callback chain."""
+        scheduler = AsyncScheduler()
+
+        async def saver(key: str, value: dict) -> None:
+            raise RuntimeError("db unavailable")
+
+        async def cb():
+            return None
+
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0, callback=cb))
+        scheduler.set_persistence(saver)
+
+        bg = await scheduler._execute_task(
+            scheduler._tasks["t1"], datetime(2026, 5, 20, 4, 0, tzinfo=TZ)
+        )
+        await bg  # must not raise
+
+        assert scheduler._tasks["t1"].last_status == "ok"
+
+    @pytest.mark.asyncio
+    async def test_no_persistence_wired_is_a_noop(self):
+        """Without set_persistence, _persist returns immediately — no save."""
+        scheduler = AsyncScheduler()
+
+        async def cb():
+            return None
+
+        scheduler.add_task(ScheduledTask(name="t1", hour=4, minute=0, callback=cb))
+
+        bg = await scheduler._execute_task(
+            scheduler._tasks["t1"], datetime(2026, 5, 20, 4, 0, tzinfo=TZ)
+        )
+        await bg
+
+        assert scheduler._tasks["t1"].last_status == "ok"

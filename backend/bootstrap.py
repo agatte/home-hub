@@ -741,6 +741,13 @@ async def lifespan(app: FastAPI):
 
     app.state.scheduler = scheduler
 
+    # Persist scheduler task status across restarts so /health.scheduler_tasks
+    # survives deploys (without this, last_run resets to None on every boot
+    # and overnight runs look like "never fired" from the dashboard).
+    from backend.api.routes.routines import load_setting, save_setting
+    scheduler.set_persistence(save_setting)
+    await scheduler.load_state(load_setting)
+
     # Game Day service (Phase B slice A) — ESPN polling + Colts game state
     # + auto-flip to gameday mode at T-30 / auto-clear at T+30. Subscribers
     # for play events / state transitions register here in later slices
