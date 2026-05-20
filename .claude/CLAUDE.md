@@ -398,6 +398,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `screen_sync_laptop_enabled` | `{enabled: bool}` — laptop screen→bedroom-lamp sync toggle (independent of `camera_enabled`) |
 | `dnd_state` | `{enabled, expiry_utc, duration_minutes}` — DND persistence; written by `automation_engine._persist_dnd_state`, restored at boot via `_load_dnd_state`, `run_loop` auto-clears past `expiry_utc` |
 | `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives deploys mid-override |
+| `scheduler_task_state` | `{task_name: {last_run, last_status, last_error}}` — mirrors `AsyncScheduler.get_tasks()` so `/health.scheduler_tasks` survives deploys; written from `_run_callback` finally block |
 | `ambient_config` | Browser-side ambient sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*` |
 | `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB, drives bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors` |
 | Personality (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) | Master kill switch + sub-toggles for the AI Personality Layer. Spec: `docs/PERSONALITY_LAYER.md` |
