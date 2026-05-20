@@ -25,6 +25,7 @@ Privacy guarantees:
 """
 
 import asyncio
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
@@ -225,6 +226,16 @@ MODEL_URL = (
     "face_detector/blaze_face_full_range/float16/latest/"
     "blaze_face_full_range.tflite"
 )
+# Pinned MD5 of the face-detector model bytes. Google's CDN only exposes
+# a single `latest/` pointer — there's no versioned URL we can lock to.
+# This hash is the integrity gate against (1) silent CDN regressions
+# (Google republishes a worse model under the same URL) and (2) on-disk
+# corruption. Captured 2026-05-20 from the live production file at
+# Last-Modified: Wed, 11 Mar 2026 20:53:48 GMT. If a hash mismatch
+# happens, the camera service refuses to load and the watchdog reports
+# degraded — operator must verify the new model in shadow before
+# updating this constant. Emergency bypass: HOME_HUB_SKIP_MODEL_HASH_CHECK=1.
+EXPECTED_FACE_MODEL_MD5 = "5de376fcc855273c5c720766d36523a0"
 # Pose Landmarker (lite variant ≈ 5 MB). Runs only when face detection
 # misses in the poll loop, and always during snapshot annotation.
 POSE_MODEL_FILENAME = "pose_landmarker_lite.task"
@@ -460,6 +471,18 @@ class CameraService:
                     self._cap = None
                 return
 
+        # Verify model integrity against the pinned hash. Defends against
+        # silent CDN regressions (Google republishes `latest/`) and
+        # on-disk corruption. On mismatch, attempt ONE re-download in
+        # case the local file rotted; if the fresh download also fails
+        # to match, refuse to start — the camera lane stays cold and
+        # /health flips to degraded so the operator notices.
+        if not self._verify_face_model(face_model_path, re_download_ok=True):
+            if self._cap:
+                self._cap.release()
+                self._cap = None
+            return
+
         # Initialize MediaPipe Face Detection (Tasks API, v0.10.20+)
         try:
             BaseOptions = mp.tasks.BaseOptions
@@ -545,6 +568,79 @@ class CameraService:
         except Exception as exc:
             logger.error("Failed to download %s model: %s", label, exc)
             return False
+
+    @staticmethod
+    def _file_md5(path: Path) -> str:
+        """Compute the hex MD5 digest of a file in fixed-size chunks.
+
+        MD5 is fine here — this is an integrity check against
+        accidental corruption + CDN regression, not a cryptographic
+        defense. The model assets are public and small (~1 MB), so
+        re-hashing on every camera start is cheap (<10ms).
+        """
+        h = hashlib.md5()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _verify_face_model(
+        self, model_path: Path, *, re_download_ok: bool = True,
+    ) -> bool:
+        """Confirm the face-detector model on disk matches the pinned
+        hash; one self-healing re-download attempt on first mismatch.
+
+        Returns True if the file is safe to load. Returns False (and
+        logs a hard error) if the hash still mismatches after re-download
+        — caller should refuse to initialize the detector. The
+        ``HOME_HUB_SKIP_MODEL_HASH_CHECK`` env var bypasses the gate for
+        emergencies (e.g. operator validated a new model and is staging
+        the constant update); it never silently flips on.
+        """
+        import os
+
+        if os.environ.get("HOME_HUB_SKIP_MODEL_HASH_CHECK") == "1":
+            logger.warning(
+                "Skipping face model hash check (HOME_HUB_SKIP_MODEL_HASH_CHECK=1) — "
+                "operator bypass; clear this env var once verification completes",
+            )
+            return True
+
+        actual = self._file_md5(model_path)
+        if actual == EXPECTED_FACE_MODEL_MD5:
+            return True
+
+        logger.warning(
+            "Face model hash mismatch — expected=%s actual=%s. "
+            "Attempting one re-download in case the local file is corrupt.",
+            EXPECTED_FACE_MODEL_MD5, actual,
+        )
+
+        if not re_download_ok:
+            return False
+
+        if not self._download_model(model_path, MODEL_URL, "face detection"):
+            logger.error(
+                "Face model re-download failed; refusing to load to avoid "
+                "running with an unverified model. Camera lane will stay cold."
+            )
+            return False
+
+        actual_after = self._file_md5(model_path)
+        if actual_after == EXPECTED_FACE_MODEL_MD5:
+            logger.info("Face model hash restored after re-download")
+            return True
+
+        logger.error(
+            "Face model hash STILL mismatches after re-download "
+            "(expected=%s, actual=%s). Either the CDN was updated or the local "
+            "filesystem is unhealthy. Refusing to load. To unblock: verify the "
+            "new model in shadow, then update EXPECTED_FACE_MODEL_MD5 in "
+            "camera_service.py — or set HOME_HUB_SKIP_MODEL_HASH_CHECK=1 as a "
+            "temporary bypass.",
+            EXPECTED_FACE_MODEL_MD5, actual_after,
+        )
+        return False
 
     async def _load_calibration(self) -> None:
         """Load persisted exposure calibration and apply it to the webcam.
