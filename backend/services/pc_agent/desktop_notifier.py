@@ -245,12 +245,17 @@ class ToastWidget(QWidget):
         title_font = QFont("Segoe UI", 16, QFont.Weight.Bold)
         self._title_label.setFont(title_font)
         self._title_label.setStyleSheet(f"color: rgb({ACCENT_COLOR.red()}, {ACCENT_COLOR.green()}, {ACCENT_COLOR.blue()});")
+        self._title_label.setWordWrap(True)
         layout.addWidget(self._title_label)
 
         self._subtitle_label = QLabel("")
         subtitle_font = QFont("Segoe UI", 9)
         self._subtitle_label.setFont(subtitle_font)
         self._subtitle_label.setStyleSheet(f"color: rgb({TEXT_SECONDARY.red()}, {TEXT_SECONDARY.green()}, {TEXT_SECONDARY.blue()});")
+        # 360px fixed-width toast + a ~120-char suggestion body needs wrap or
+        # the right edge clips. Default QLabel behavior truncates instead of
+        # wrapping; opt in explicitly. Only output_label had this before.
+        self._subtitle_label.setWordWrap(True)
         layout.addWidget(self._subtitle_label)
 
         # Separator
@@ -286,7 +291,18 @@ class ToastWidget(QWidget):
         title = payload.get("title", "Home Hub")
         subtitle = payload.get("subtitle") or ""
         self._title_label.setText(title)
-        self._subtitle_label.setText(f"source: {subtitle}" if subtitle else "")
+        # For mode_flip / brightness_shift the subtitle is a short "source"
+        # descriptor (e.g. "process") — "source: X" reads cleanly. For
+        # suggestion-kind the subtitle IS the full body sentence
+        # ("You've been setting L3 to ~44%…") — prefixing "source:" makes
+        # the toast read as a malformed log line, drop the prefix.
+        if subtitle:
+            if payload.get("kind") == "suggestion":
+                self._subtitle_label.setText(subtitle)
+            else:
+                self._subtitle_label.setText(f"source: {subtitle}")
+        else:
+            self._subtitle_label.setText("")
 
         # Clear and repopulate factors.
         while self._factors_layout.count():
