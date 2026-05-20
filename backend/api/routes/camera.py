@@ -183,58 +183,39 @@ async def toggle_camera(body: CameraToggle, request: Request) -> dict:
     When enabling: initializes the camera service if not already running.
     When disabling: stops the camera and releases resources.
     """
-    from backend.api.routes.routines import load_setting, save_setting
+    from backend.api.routes.routines import save_setting
 
     await save_setting("camera_enabled", {"enabled": body.enabled})
 
     if body.enabled:
-        # Start camera service if not already running
-        service = getattr(request.app.state, "camera_service", None)
-        if service and service.enabled:
-            return {"status": "ok", "detail": "Camera already enabled"}
-
         try:
-            import asyncio
-
-            from backend.services.camera_service import CameraService
-
-            ws_manager = request.app.state.ws_manager
-            automation = request.app.state.automation
-            ml_logger = getattr(request.app.state, "ml_logger", None)
-
-            camera = CameraService(ws_manager, automation, ml_logger)
-            await camera.start()
-
-            if camera.enabled:
-                request.app.state.camera_service = camera
-                automation.register_on_mode_change(camera.on_mode_change)
-                automation.set_camera_service(camera)
-                # Hook into PresenceFusion if it's running so the
-                # Latitude lane re-attaches after a runtime enable.
-                presence = getattr(request.app.state, "presence", None)
-                if presence is not None:
-                    camera.register_observation_callback(presence.on_observation)
-                asyncio.create_task(camera.poll_loop())
-                logger.info("Camera service started via API toggle")
-                return {"status": "ok", "detail": "Camera enabled", **camera.get_status()}
-            else:
-                return {
-                    "status": "error",
-                    "detail": "Camera unavailable (may be in use or missing)",
-                }
+            from backend.services.camera_service import spawn_camera_service
+            result = await spawn_camera_service(request.app, reason="api_toggle")
         except ImportError as exc:
             logger.warning("Cannot enable camera — missing dependency: %s", exc)
             return {
                 "status": "error",
                 "detail": f"Missing dependency: {exc}",
             }
-    else:
-        # Stop camera service
-        service = getattr(request.app.state, "camera_service", None)
-        if service:
+        return result
+
+    # Disable path. Tear down any existing service; tolerate a half-dead
+    # one (close() is idempotent and releases V4L2 even when _enabled is
+    # already False from a crashed poll_loop).
+    service = getattr(request.app.state, "camera_service", None)
+    if service is not None:
+        try:
             await service.close()
-            request.app.state.camera_service = None
-            automation = request.app.state.automation
-            automation.set_camera_service(None)
-            logger.info("Camera service stopped via API toggle")
-        return {"status": "ok", "detail": "Camera disabled"}
+        except Exception:
+            logger.exception("Camera close() raised during disable — continuing")
+        request.app.state.camera_service = None
+        automation = request.app.state.automation
+        automation.set_camera_service(None)
+        logger.info("Camera service stopped via API toggle")
+    return {"status": "ok", "detail": "Camera disabled"}
+
+
+# spawn_camera_service lives in backend.services.camera_service so the
+# watchdog loop (also in that module) can share it without creating an
+# api → service → api import cycle. The route imports it lazily inside
+# the handler above.

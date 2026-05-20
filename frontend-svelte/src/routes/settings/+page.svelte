@@ -530,8 +530,12 @@
 
         <div class="setting-row">
           <div class="setting-info">
-            <span class="setting-label">Camera Detection</span>
-            <span class="setting-hint">Latitude webcam for fast idle detection (15s)</span>
+            <span class="setting-label">Latitude Camera</span>
+            <span class="setting-hint">
+              Kiosk webcam — presence, zone (desk / bed), posture, and
+              ambient lux. The Desktop Camera toggle below adds a second
+              presence source; PresenceFusion merges both.
+            </span>
           </div>
           <button
             class="toggle-btn"
@@ -542,6 +546,24 @@
             {$cameraStore?.enabled ? 'ON' : 'OFF'}
           </button>
         </div>
+        {#if $cameraStore?.presence?.sources}
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Active presence sources</span>
+              <span class="setting-hint">
+                {#each Object.entries($cameraStore.presence.sources) as [name, info]}
+                  <span>
+                    {name}: {info.fresh ? 'fresh' : 'stale'}
+                    ({info.age_s?.toFixed(0)}s)
+                  </span>
+                  {' '}
+                {:else}
+                  No sources reporting
+                {/each}
+              </span>
+            </div>
+          </div>
+        {/if}
         {#if $cameraStore?.enabled}
           <div class="setting-row">
             <div class="setting-info">

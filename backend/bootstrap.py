@@ -908,7 +908,11 @@ async def lifespan(app: FastAPI):
                 # Feed PresenceFusion the Latitude lane. Desktop lane is
                 # POST-driven via /api/camera/observation.
                 camera_service.register_observation_callback(presence.on_observation)
-                tasks.append(asyncio.create_task(camera_service.poll_loop()))
+                # Store the poll task on the service so close()/respawn
+                # can cancel + await it cleanly. Also append to the
+                # lifespan tasks list so shutdown waits on it.
+                camera_service._poll_task = asyncio.create_task(camera_service.poll_loop())
+                tasks.append(camera_service._poll_task)
                 app_logger.info("Camera presence detection started")
             else:
                 app_logger.warning("Camera service failed to start (webcam unavailable?)")
@@ -916,6 +920,20 @@ async def lifespan(app: FastAPI):
             app_logger.warning("mediapipe/opencv not installed — camera service disabled")
     else:
         app_logger.info("Camera service disabled (camera_enabled=false)")
+
+    # Camera watchdog — supervises the poll_loop and respawns the service
+    # when the lane goes silent (V4L2 wedge after suspend/resume, failed
+    # boot start with camera_enabled=true, etc.). Always running; reads
+    # camera_enabled live, so a user enabling the camera later still gets
+    # supervision without a restart. Inert when disabled.
+    try:
+        from backend.services.camera_service import camera_watchdog_loop
+        tasks.append(asyncio.create_task(camera_watchdog_loop(app)))
+        app_logger.info("Camera watchdog started")
+    except ImportError:
+        # camera_service import only fails when mediapipe/opencv are
+        # missing — same condition that disables the service above.
+        pass
 
     # Late-bind camera into the celebration orchestrator. Used by the
     # volume policy to dial TTS down when no one is home (camera absent

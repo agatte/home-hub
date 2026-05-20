@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:
+    from fastapi import FastAPI
+
     from backend.services.presence_fusion import PresenceReading
 
 logger = logging.getLogger("home_hub.camera")
@@ -313,6 +315,12 @@ class CameraService:
         # Camera is opt-in, so we register only on enable and deregister on
         # disable / pause to avoid false-flagging legitimate downtime.
         self._heartbeat = None
+
+        # poll_loop task handle — set by the spawner (bootstrap or the
+        # API/watchdog respawn path). close() cancels and awaits it so a
+        # respawn doesn't leave an orphan loop ticking against a released
+        # capture handle.
+        self._poll_task: Optional[asyncio.Task] = None
 
         # Ambient lux calibration + smoothing
         self._calibrated: bool = False
@@ -1939,10 +1947,25 @@ class CameraService:
                     self._cap = None
 
     async def close(self) -> None:
-        """Release camera and MediaPipe resources."""
+        """Release camera and MediaPipe resources.
+
+        Idempotent: safe to call on a half-dead service. Cancels the
+        poll_loop task if we own a handle to it so a respawn doesn't
+        race with the old loop's next iteration.
+        """
         self._enabled = False
         if self._heartbeat is not None:
             self._heartbeat.deregister("camera")
+        if self._poll_task is not None and not self._poll_task.done():
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except (asyncio.CancelledError, Exception):
+                # CancelledError is the expected outcome; any other
+                # exception was already logged inside poll_loop's
+                # top-level except block, so we just swallow here.
+                pass
+        self._poll_task = None
         if self._cap and self._cap.isOpened():
             self._cap.release()
             self._cap = None
@@ -1977,3 +2000,217 @@ class CameraService:
             "posture": self._last_posture,
             "candidate_posture": self._candidate_posture,
         }
+
+
+# ----------------------------------------------------------------------
+# Module-level helpers — spawn + watchdog
+# ----------------------------------------------------------------------
+
+# How stale the camera heartbeat must be before the watchdog respawns
+# the service. Set well above 2x POLL_INTERVAL (the /health staleness
+# threshold) so we only step in for genuine wedges, not transient slow
+# frames. Picked at 60s — the V4L2-wedge incident on 2026-05-20 ran for
+# 12h before manual intervention. End-to-end detection latency is
+# bounded by CAMERA_WATCHDOG_INTERVAL_SECONDS + CAMERA_WATCHDOG_STALE_SECONDS
+# (worst case: heartbeat just went stale right after the previous tick).
+CAMERA_WATCHDOG_STALE_SECONDS = 60.0
+
+# How often the watchdog re-evaluates. 5 minutes balances "fast enough
+# to recover the lane during a single working session" with "infrequent
+# enough that a flapping V4L2 doesn't churn." A respawn itself takes
+# ~3–5s (model download is cached after first boot).
+CAMERA_WATCHDOG_INTERVAL_SECONDS = 300.0
+
+
+async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
+    """Spawn a fresh CameraService on ``app.state``, replacing any stale
+    instance.
+
+    Shared by ``POST /api/camera/enable`` and ``camera_watchdog_loop``.
+    Releases the V4L2 handle held by a half-dead predecessor before
+    instantiating the replacement, so a stuck ``/dev/video0`` doesn't
+    keep failing acquisitions forever. The return shape matches the
+    route's response contract so the toggle handler can pass it through.
+
+    Wiring mirrors ``bootstrap.py``'s camera-startup block — keep these
+    in sync (subscribers: automation engine, event_logger, ambient_sound,
+    presence fusion, mode-change dispatch).
+
+    Args:
+        app: The FastAPI app whose ``app.state`` holds the wiring.
+        reason: Short tag for logs/notifications (``"api_toggle"``,
+            ``"watchdog_stale_heartbeat"``, ``"watchdog_dead_service"``).
+    """
+    automation = app.state.automation
+
+    stale = getattr(app.state, "camera_service", None)
+    if stale is not None:
+        logger.info(
+            "Releasing previous camera service before respawn (reason=%s, "
+            "stale_enabled=%s)",
+            reason, getattr(stale, "enabled", None),
+        )
+        # Drop the dead instance's mode-change subscription BEFORE
+        # closing. Otherwise the appended callback list keeps growing
+        # one entry per respawn, and dead-instance callbacks can race a
+        # new instance for the V4L2 handle on the next mode flip
+        # (sleeping→working would call _open_capture on the closed
+        # service, reopening a handle nothing tracks).
+        automation.deregister_on_mode_change(stale.on_mode_change)
+        try:
+            await stale.close()
+        except Exception:
+            logger.exception("Previous camera close() raised — continuing")
+        app.state.camera_service = None
+
+    ws_manager = app.state.ws_manager
+    ml_logger = getattr(app.state, "ml_logger", None)
+    heartbeats = getattr(app.state, "heartbeats", None)
+
+    camera = CameraService(ws_manager, automation, ml_logger)
+    if heartbeats is not None:
+        camera.set_heartbeat_registry(heartbeats)
+
+    await camera.start()
+
+    if not camera.enabled:
+        try:
+            await camera.close()
+        except Exception:
+            logger.exception("Cleanup close() raised after failed start — continuing")
+        return {
+            "status": "error",
+            "detail": "Camera unavailable (may be in use or missing)",
+        }
+
+    app.state.camera_service = camera
+    automation.register_on_mode_change(camera.on_mode_change)
+    automation.set_camera_service(camera)
+    # Re-wire the rest of the subscriber set so a respawn restores all
+    # context (zone enrichment on activity_events rows, presence-aware
+    # ambient volume policy) — not just the mode-change dispatch.
+    for attr in ("event_logger", "ambient_sound", "celebration_orchestrator"):
+        subscriber = getattr(app.state, attr, None)
+        if subscriber is not None and hasattr(subscriber, "set_camera_service"):
+            subscriber.set_camera_service(camera)
+    presence = getattr(app.state, "presence", None)
+    if presence is not None:
+        camera.register_observation_callback(presence.on_observation)
+    # Stamp the poll task on the service so close() / next respawn can
+    # cancel + await it. Without this, a respawn races the old task.
+    camera._poll_task = asyncio.create_task(camera.poll_loop())
+    logger.info("Camera service started (reason=%s)", reason)
+    return {"status": "ok", "detail": "Camera enabled", **camera.get_status()}
+
+
+def _camera_heartbeat_age(heartbeats: Any) -> Optional[float]:
+    """Return the age (seconds) of the ``camera`` heartbeat, or ``None``
+    if it's not registered. ``heartbeats`` is a ``HeartbeatRegistry``
+    (annotated as ``Any`` to avoid a hard import dependency here)."""
+    if heartbeats is None:
+        return None
+    snapshot = heartbeats.snapshot()
+    for row in snapshot:
+        if row["name"] == "camera":
+            return float(row["age_seconds"])
+    return None
+
+
+async def camera_watchdog_loop(app: "FastAPI") -> None:
+    """Background supervisor — respawn the camera service when it goes
+    silent.
+
+    Three trigger conditions, in priority order:
+
+    1. ``camera_enabled=True`` in app_settings but ``app.state.camera_service``
+       is ``None`` (boot start failed; route start failed; user
+       re-enabled but the in-flight start hit an error).
+    2. The service exists but its ``_enabled`` flag is False (poll_loop
+       crashed without close() running — shouldn't happen with the
+       current top-level except guard, but defense in depth).
+    3. The service is enabled but the heartbeat is stale beyond
+       ``CAMERA_WATCHDOG_STALE_SECONDS`` (the documented failure mode:
+       V4L2 wedged after suspend/resume, ``_cap=None`` and the comment
+       at poll_loop's reopen block deliberately gates heartbeat ticks
+       on capture acquisition, so a wedged camera reads as a stale loop).
+
+    Skips the ``_paused`` case (sleeping mode legitimately deregisters
+    the heartbeat) and the camera-disabled case (no work to do).
+
+    Emits a ``notification`` WebSocket event on each respawn so the
+    desktop toast surface logs the recovery — gives the user a paper
+    trail without needing to read journalctl.
+    """
+    from backend.api.routes.routines import load_setting
+
+    logger.info(
+        "Camera watchdog started (interval=%.0fs, stale_threshold=%.0fs)",
+        CAMERA_WATCHDOG_INTERVAL_SECONDS, CAMERA_WATCHDOG_STALE_SECONDS,
+    )
+
+    while True:
+        try:
+            await asyncio.sleep(CAMERA_WATCHDOG_INTERVAL_SECONDS)
+
+            setting = await load_setting("camera_enabled")
+            if not setting or not setting.get("enabled", False):
+                continue
+
+            service = getattr(app.state, "camera_service", None)
+            heartbeats = getattr(app.state, "heartbeats", None)
+
+            reason: Optional[str] = None
+            detail: str = ""
+            if service is None:
+                reason = "watchdog_no_service"
+                detail = "camera_enabled is true but no service instance is live"
+            elif not service.enabled:
+                reason = "watchdog_dead_service"
+                detail = "service instance present but _enabled=False"
+            elif getattr(service, "_paused", False):
+                # Legitimate pause — sleeping mode. Skip.
+                continue
+            else:
+                age = _camera_heartbeat_age(heartbeats)
+                if age is not None and age > CAMERA_WATCHDOG_STALE_SECONDS:
+                    reason = "watchdog_stale_heartbeat"
+                    detail = f"camera heartbeat stale ({age:.0f}s)"
+
+            if reason is None:
+                continue
+
+            logger.warning(
+                "Camera watchdog: %s — respawning service (%s)",
+                reason, detail,
+            )
+
+            result = await spawn_camera_service(app, reason=reason)
+            ws_manager = getattr(app.state, "ws_manager", None)
+            if ws_manager is not None:
+                try:
+                    await ws_manager.broadcast(
+                        "notification",
+                        {
+                            "kind": "system",
+                            "title": "Camera recovered"
+                                if result.get("status") == "ok"
+                                else "Camera recovery failed",
+                            "subtitle": detail,
+                            "source": "camera_watchdog",
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Camera watchdog: failed to broadcast notification"
+                    )
+
+        except asyncio.CancelledError:
+            logger.info("Camera watchdog stopped")
+            raise
+        except Exception:
+            logger.exception("Camera watchdog iteration failed — continuing")
+            # Brief back-off after an exception so we don't tight-loop on
+            # a persistent error. Still much faster than the normal
+            # interval so we recover quickly once the underlying issue
+            # clears.
+            await asyncio.sleep(30.0)

@@ -88,11 +88,51 @@ async def health_check(request: Request) -> dict:
     tasks: list[dict] = []
     tasks_stale: list[str] = []
     status = "healthy"
+    details: dict[str, str] = {}
     if hasattr(app.state, "heartbeats"):
         tasks = app.state.heartbeats.snapshot()
         tasks_stale = [t["name"] for t in tasks if t["stale"]]
         if tasks_stale:
             status = "degraded"
+
+    # Camera-specific degraded check: when camera_enabled=true in
+    # app_settings but the camera service is missing entirely (boot
+    # start failed, half-dead after a crashed poll_loop). The
+    # tasks_stale path above only catches the heartbeat-registered case
+    # — a never-registered camera looks healthy to the tasks block
+    # despite being the documented 12h blind spot from 2026-05-20.
+    try:
+        from backend.api.routes.routines import load_setting as _load_setting
+        camera_setting = await _load_setting("camera_enabled")
+        if camera_setting and camera_setting.get("enabled", False):
+            service = getattr(app.state, "camera_service", None)
+            heartbeat_present = any(t["name"] == "camera" for t in tasks)
+            if service is None:
+                status = "degraded"
+                details["camera"] = (
+                    "camera_enabled=true but no service is live "
+                    "(watchdog will respawn within 5 min)"
+                )
+            elif not getattr(service, "enabled", False) and not getattr(
+                service, "_paused", False
+            ):
+                status = "degraded"
+                details["camera"] = (
+                    "service present but disabled "
+                    "(watchdog will respawn within 5 min)"
+                )
+            elif not heartbeat_present and not getattr(
+                service, "_paused", False
+            ):
+                status = "degraded"
+                details["camera"] = (
+                    "service enabled but no heartbeat registered "
+                    "(watchdog will respawn within 5 min)"
+                )
+    except Exception as exc:
+        # The camera health probe is best-effort — don't let it break
+        # /health for everything else.
+        details["camera_probe_error"] = repr(exc)[:200]
 
     # Circuit breakers protecting calls into Hue / Sonos. When a breaker
     # is open, calls fail fast (raising CircuitBreakerOpen) instead of
@@ -155,4 +195,5 @@ async def health_check(request: Request) -> dict:
         "scheduler_tasks": scheduler_tasks,
         "circuit_breakers": circuit_breakers,
         "ml": ml,
+        "details": details,
     }

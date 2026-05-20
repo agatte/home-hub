@@ -909,6 +909,20 @@ class AutomationEngine:
         """
         self._on_mode_change_callbacks.append(callback)
 
+    def deregister_on_mode_change(self, callback) -> None:
+        """Remove a previously-registered mode-change callback.
+
+        Used when a subscriber is being replaced (e.g. CameraService
+        respawn) so we don't accumulate dead references that would still
+        get invoked on each mode change. No-op for callbacks that were
+        never registered — keeps callers from raising during partial
+        teardown.
+        """
+        try:
+            self._on_mode_change_callbacks.remove(callback)
+        except ValueError:
+            pass
+
     async def notify_camera_commit(self) -> None:
         """Re-apply lighting after the camera commits a new zone or posture.
 
