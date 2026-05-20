@@ -271,7 +271,7 @@ class BehavioralPredictor(HealthTrackable):
 
                 self._label_encoder = label_encoder
 
-                # Calibrators ship as a sidecar pickle next to the
+                # Calibrators ship as a joblib sidecar next to the
                 # booster. Missing-file path is the expected state right
                 # after a deploy that introduces calibration but before
                 # the next 04:00 retrain has run — predict() falls back
@@ -298,7 +298,7 @@ class BehavioralPredictor(HealthTrackable):
         return self._model_manager.data_dir / "mode_predictor_calib.pkl"
 
     def _load_calibrators(self) -> Optional[list]:
-        """Load per-class isotonic calibrators from the sidecar pickle.
+        """Load per-class isotonic calibrators from the joblib sidecar.
 
         Returns None when the file is missing or the loaded list doesn't
         match the booster's class count. Both are recoverable on the
@@ -309,9 +309,8 @@ class BehavioralPredictor(HealthTrackable):
         if not path.exists():
             return None
         try:
-            import pickle
-            with path.open("rb") as fh:
-                calibrators = pickle.load(fh)
+            import joblib
+            calibrators = joblib.load(path)
             if not isinstance(calibrators, list):
                 return None
             # The label_encoder was already populated by the caller — a
@@ -330,12 +329,10 @@ class BehavioralPredictor(HealthTrackable):
             return None
 
     def _save_calibrators(self, calibrators: list) -> None:
-        """Persist the calibrator list as a pickle sidecar."""
+        """Persist the calibrator list as a joblib sidecar."""
         try:
-            import pickle
-            path = self._calibrator_path()
-            with path.open("wb") as fh:
-                pickle.dump(calibrators, fh)
+            import joblib
+            joblib.dump(calibrators, self._calibrator_path())
         except Exception as exc:
             logger.warning("Failed to save calibrators: %s", exc)
 
