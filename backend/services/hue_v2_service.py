@@ -12,8 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
@@ -77,33 +76,6 @@ class HueV2Service:
         # pattern HueService uses). Ticked on every received stream frame
         # under the "hue_v2_stream" key so /health can surface silence.
         self._heartbeat = None
-        # Non-light SSE event handlers — keyed by v2 resource type. Used
-        # by HueGeofenceService to subscribe to behavior_instance events
-        # without coupling this service to its specifics. Handlers are
-        # async callables awaited inside _dispatch_stream_events.
-        self._event_handlers: dict[
-            str, list[Callable[[dict, str], Awaitable[None]]]
-        ] = defaultdict(list)
-
-    def register_event_handler(
-        self,
-        resource_type: str,
-        handler: Callable[[dict, str], Awaitable[None]],
-    ) -> None:
-        """Subscribe to SSE update events for a given v2 resource type.
-
-        ``handler(update, envelope_type)`` receives one resource update
-        plus the envelope action (``"update"`` / ``"add"`` / ``"delete"``)
-        per matching event. Handlers should filter on envelope_type when
-        the distinction matters — e.g. the geofence service only acts on
-        ``"update"`` so bridge-restart ``"add"`` floods don't fire spurious
-        transitions.
-
-        Runs inside the stream dispatcher's task — keep handlers fast and
-        exception-safe; errors are caught and logged but don't tear down
-        the stream.
-        """
-        self._event_handlers[resource_type].append(handler)
 
     @property
     def connected(self) -> bool:
@@ -498,31 +470,8 @@ class HueV2Service:
         first_event_this_batch = True
 
         for envelope in events:
-            # Envelope action ("update" | "add" | "delete"). Handlers
-            # receive this so they can filter — e.g. geofence ignores
-            # "add" (emitted on bridge-restart for every existing
-            # behavior_instance, which would otherwise fire spurious
-            # transitions).
-            envelope_type = envelope.get("type", "update")
             for update in envelope.get("data", []):
-                resource_type = update.get("type")
-
-                # Fan out non-light events to any registered subscribers
-                # (HueGeofenceService listens here for behavior_instance
-                # updates). Errors in handlers are swallowed so a buggy
-                # subscriber can't tear down the stream — the main light
-                # dispatch keeps running regardless.
-                handlers = self._event_handlers.get(resource_type)
-                if handlers:
-                    for handler in handlers:
-                        try:
-                            await handler(update, envelope_type)
-                        except Exception:
-                            logger.exception(
-                                "v2 stream handler for %s raised", resource_type,
-                            )
-
-                if resource_type != "light":
+                if update.get("type") != "light":
                     continue
 
                 v2_id = update.get("id")

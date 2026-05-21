@@ -50,17 +50,10 @@ class TestModePriority:
 
     def test_all_expected_modes_present(self):
         expected = {
-            "sleeping", "away", "idle", "working", "watching", "cooking",
+            "sleeping", "idle", "working", "watching", "cooking",
             "social", "gaming", "gameday", "pregameday",
         }
         assert set(MODE_PRIORITY.keys()) == expected
-
-    def test_away_sits_between_sleeping_and_idle(self):
-        """`away` is the Hue-geofence-driven mode (no sensor lane reports
-        it). Priority sits above sleeping (which carries TTS+fade) but
-        below idle (any organic activity should displace it)."""
-        assert MODE_PRIORITY["sleeping"] < MODE_PRIORITY["away"]
-        assert MODE_PRIORITY["away"] < MODE_PRIORITY["idle"]
 
     def test_pregameday_priority_matches_gameday(self):
         """GAMEDAY_SPEC §10.1 — pregameday shares priority 6 with gameday so

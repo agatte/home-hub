@@ -36,17 +36,6 @@ class Settings(BaseSettings):
     HUE_BRIDGE_IP: str = "192.168.1.50"
     HUE_USERNAME: str = ""
 
-    # LAN-based presence detection — drives `away` mode from iPhone ARP-table
-    # reachability. Requires iOS "Private WiFi Address → Fixed" so the MAC
-    # stays stable across sessions. Empty IP disables the lane cleanly.
-    # The Hue Bridge geofence approach (HueGeofenceService, removed 2026-05-21)
-    # was abandoned after empirical testing confirmed Signify strips both
-    # `is_at_home` from /clip/v2/resource/geofence_client AND
-    # behavior_instance update events from third-party app keys.
-    PRESENCE_PHONE_IP: str = ""
-    PRESENCE_POLL_INTERVAL_SECONDS: int = 30
-    PRESENCE_MISS_THRESHOLD: int = 5
-
     # Sonos (auto-discovered if not set)
     SONOS_IP: Optional[str] = None
 

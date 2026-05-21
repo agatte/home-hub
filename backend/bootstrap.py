@@ -28,7 +28,6 @@ from backend.services.event_logger import EventLogger
 from backend.services.fauxmo_service import FauxmoService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
-from backend.services.lan_presence_service import LanPresenceService
 from backend.services.library_import_service import LibraryImportService
 from backend.services.mode_volume_service import ModeVolumeService
 from backend.services.morning_routine import MorningRoutineService
@@ -361,35 +360,16 @@ async def lifespan(app: FastAPI):
     music_mapper.set_automation(automation)
     ambient_sound.set_automation(automation)
 
-    # LAN-based presence detection — polls the Latitude's ARP neighbor
-    # table for the configured iPhone IP. Distinct from PresenceFusion
-    # below (which fuses multi-camera attendance/zone/posture); naming
-    # explicitly tags this one as the LAN-WiFi lane. The Hue Bridge
-    # geofence path was abandoned 2026-05-21 after empirical testing
-    # confirmed Signify strips both `is_at_home` and behavior_instance
-    # update events from third-party app keys. ARP+UDP-5353 probe is the
-    # gold-standard alternative on iOS 17/18 when Private WiFi Address is
-    # set to Fixed.
-    lan_presence = LanPresenceService(
-        automation=automation,
-        phone_ip=settings.PRESENCE_PHONE_IP,
-        poll_interval_seconds=settings.PRESENCE_POLL_INTERVAL_SECONDS,
-        miss_threshold=settings.PRESENCE_MISS_THRESHOLD,
-    )
-    automation._lan_presence = lan_presence
-    app.state.lan_presence = lan_presence
-    if lan_presence.configured:
-        app_logger.info(
-            "LAN presence: polling ip=%s every %ds (miss_threshold=%d)",
-            settings.PRESENCE_PHONE_IP,
-            settings.PRESENCE_POLL_INTERVAL_SECONDS,
-            settings.PRESENCE_MISS_THRESHOLD,
-        )
-    else:
-        app_logger.info(
-            "LAN presence: idle (PRESENCE_PHONE_IP unset) — set it to "
-            "enable LAN-based away detection"
-        )
+    # Away mode shelved 2026-05-21 — three pivots (Hue REST polling,
+    # Hue v2 SSE behavior_instance events, ARP-based LAN presence) all
+    # failed against either Signify's third-party API gating or iOS sleep
+    # behavior on this apartment's router topology. The Hue iOS app's
+    # native Home & Away automations (which turn entire-home lights on/off
+    # via bridge recipes) integrate cleanly with the existing
+    # `_check_external_off` mechanism in automation_engine.run_loop —
+    # autonomous setters skip while the apartment is dark. See memory
+    # entry `project_away_mode_shelved.md` before attempting another
+    # presence-detection design.
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
@@ -890,11 +870,6 @@ async def lifespan(app: FastAPI):
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
     heartbeats.register("desk_exit_kitchen", 2.0)
-    # Presence polls every PRESENCE_POLL_INTERVAL_SECONDS (default 30s).
-    # 2x cadence keeps the warn threshold tight enough to surface a stuck
-    # poll loop within a minute.
-    heartbeats.register("lan_presence", settings.PRESENCE_POLL_INTERVAL_SECONDS * 2.0)
-    lan_presence.set_heartbeat_registry(heartbeats)
 
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)
@@ -920,9 +895,6 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
 
     tasks.append(asyncio.create_task(automation.run_loop()))
-    # LAN presence poll task — exits immediately if not configured (no IP
-    # set), so the task list stays clean in that case.
-    tasks.append(asyncio.create_task(lan_presence.poll_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
     # Hourly scan for weather-aware brightness-suggestion candidates.
@@ -1087,7 +1059,6 @@ async def lifespan(app: FastAPI):
     # 3. Close long-lived HTTP clients last — poll loops that used them are
     #    already cancelled, so there's no race.
     await _safe_shutdown("hue_v2", hue_v2.close)
-    await _safe_shutdown("lan_presence", lan_presence.close)
     await _safe_shutdown("rec_service", rec_service.close)
     await _safe_shutdown("gameday", gameday.close)
     notifier_inst = getattr(app.state, "notifier", None)

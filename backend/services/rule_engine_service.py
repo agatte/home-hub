@@ -29,10 +29,8 @@ logger = logging.getLogger("home_hub.rules")
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
-# Modes that aren't worth predicting — "you're usually idle" isn't helpful,
-# and "you're usually away" is the same shape (we already have a direct
-# geofence signal driving away — no point inferring it from time-of-day).
-_SKIP_MODES = frozenset(("idle", "away"))
+# Modes that aren't worth predicting — "you're usually idle" isn't helpful
+_SKIP_MODES = frozenset(("idle",))
 
 # Slots where the user is at the office — no meaningful at-home PC activity,
 # so don't try to predict modes here. Hours are local (TZ above). Default:

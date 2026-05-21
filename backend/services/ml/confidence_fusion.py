@@ -34,7 +34,7 @@ def _is_late_night_local() -> bool:
 
 VALID_MODES = frozenset({
     "gaming", "working", "watching", "social", "relax",
-    "cooking", "idle", "sleeping", "away",
+    "cooking", "idle", "sleeping",
 })
 
 SIGNAL_SOURCES = (
