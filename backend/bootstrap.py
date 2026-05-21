@@ -1074,6 +1074,7 @@ async def lifespan(app: FastAPI):
     # 3. Close long-lived HTTP clients last — poll loops that used them are
     #    already cancelled, so there's no race.
     await _safe_shutdown("hue_v2", hue_v2.close)
+    await _safe_shutdown("hue_geofence", hue_geofence.close)
     await _safe_shutdown("rec_service", rec_service.close)
     await _safe_shutdown("gameday", gameday.close)
     notifier_inst = getattr(app.state, "notifier", None)
