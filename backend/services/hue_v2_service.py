@@ -12,7 +12,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 import httpx
 
@@ -76,6 +77,31 @@ class HueV2Service:
         # pattern HueService uses). Ticked on every received stream frame
         # under the "hue_v2_stream" key so /health can surface silence.
         self._heartbeat = None
+        # Non-light SSE event handlers — keyed by v2 resource type. Used
+        # by HueGeofenceService to subscribe to behavior_instance events
+        # without coupling this service to its specifics. Handlers are
+        # async callables awaited inside _dispatch_stream_events.
+        self._event_handlers: dict[
+            str, list[Callable[[dict], Awaitable[None]]]
+        ] = defaultdict(list)
+
+    def register_event_handler(
+        self,
+        resource_type: str,
+        handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        """Subscribe to SSE update events for a given v2 resource type.
+
+        ``handler`` receives one ``update`` dict per matching event (the
+        per-resource entry, not the envelope) and runs inside the stream
+        dispatcher's task — keep it fast and exception-safe; errors are
+        caught and logged but don't tear down the stream.
+
+        Example: ``hue_v2.register_event_handler("behavior_instance",
+        geofence.handle_event)`` lets the geofence service react to
+        Hue-app Home & Away automation fires.
+        """
+        self._event_handlers[resource_type].append(handler)
 
     @property
     def connected(self) -> bool:
@@ -471,7 +497,24 @@ class HueV2Service:
 
         for envelope in events:
             for update in envelope.get("data", []):
-                if update.get("type") != "light":
+                resource_type = update.get("type")
+
+                # Fan out non-light events to any registered subscribers
+                # (HueGeofenceService listens here for behavior_instance
+                # updates). Errors in handlers are swallowed so a buggy
+                # subscriber can't tear down the stream — the main light
+                # dispatch keeps running regardless.
+                handlers = self._event_handlers.get(resource_type)
+                if handlers:
+                    for handler in handlers:
+                        try:
+                            await handler(update)
+                        except Exception:
+                            logger.exception(
+                                "v2 stream handler for %s raised", resource_type,
+                            )
+
+                if resource_type != "light":
                     continue
 
                 v2_id = update.get("id")

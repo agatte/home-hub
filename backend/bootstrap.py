@@ -362,24 +362,33 @@ async def lifespan(app: FastAPI):
     ambient_sound.set_automation(automation)
 
     # Hue Bridge geofence — phone-based home/away, drives the `away` mode.
-    # Constructed after automation since it calls set_manual_override /
-    # clear_override on transitions. Fail-soft: connect() returns without
-    # error when the bridge has no geofence_client resources (user hasn't
-    # enabled geofencing in the Hue iOS app) and the poll loop keeps
-    # checking so a later iOS setup lights up the lane without a restart.
+    # Event-driven: subscribes to the v2 SSE stream's behavior_instance
+    # updates. The Hue iOS app's "Coming home" + "Leaving home" automations
+    # emit SSE update events on their behavior_instance UUIDs when fired;
+    # we match those UUIDs against env-configured IDs and drive the override
+    # accordingly. Polling /clip/v2/resource/geofence_client was a dead end
+    # — Signify strips is_at_home for third-party app keys (verified
+    # empirically 2026-05-20). Unset IDs leave the lane in idle.
     hue_geofence = HueGeofenceService(
-        bridge_ip=settings.HUE_BRIDGE_IP,
-        username=settings.HUE_USERNAME,
         automation=automation,
+        home_behavior_id=settings.HUE_GEOFENCE_HOME_BEHAVIOR_ID,
+        away_behavior_id=settings.HUE_GEOFENCE_AWAY_BEHAVIOR_ID,
     )
-    if hue.connected:
-        await hue_geofence.connect()
+    if hue_geofence.configured:
+        hue_v2.register_event_handler("behavior_instance", hue_geofence.handle_event)
+        app_logger.info(
+            "Hue geofence: subscribed to behavior_instance events "
+            "(home=%s, away=%s)",
+            settings.HUE_GEOFENCE_HOME_BEHAVIOR_ID[:8],
+            settings.HUE_GEOFENCE_AWAY_BEHAVIOR_ID[:8],
+        )
+    else:
+        app_logger.info(
+            "Hue geofence: idle (HUE_GEOFENCE_{HOME,AWAY}_BEHAVIOR_ID unset) "
+            "— set both env vars to enable phone-based away detection"
+        )
     automation._hue_geofence = hue_geofence
     app.state.hue_geofence = hue_geofence
-    app_logger.info(
-        "Hue geofence: %s",
-        "connected" if hue_geofence.connected else "idle (no clients or bridge down)",
-    )
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
@@ -880,9 +889,12 @@ async def lifespan(app: FastAPI):
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
     heartbeats.register("desk_exit_kitchen", 2.0)
-    # Hue geofence ticks once per 60s poll; 2x cadence keeps the warn
-    # threshold tight enough to catch a stalled away signal within ~2min.
-    heartbeats.register("hue_geofence", 120.0)
+    # Hue geofence is event-driven (subscribes to v2 SSE), so heartbeat
+    # cadence is bursty — only ticks when the Hue app fires Coming/Leaving
+    # home. The v2 SSE stream's own `hue_v2_stream` heartbeat (100s) covers
+    # transport liveness. Register a generous threshold here so a healthy
+    # quiet day (no geofence transitions) doesn't get flagged stale.
+    heartbeats.register("hue_geofence", 24 * 3600.0)
     hue_geofence.set_heartbeat_registry(heartbeats)
 
     # Event logger retry task was started above — register for teardown here.
@@ -909,7 +921,8 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
 
     tasks.append(asyncio.create_task(automation.run_loop()))
-    tasks.append(asyncio.create_task(hue_geofence.poll_loop()))
+    # hue_geofence is event-driven now — no poll task. Updates arrive via
+    # the v2 SSE dispatch (registered above via register_event_handler).
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
     # Hourly scan for weather-aware brightness-suggestion candidates.

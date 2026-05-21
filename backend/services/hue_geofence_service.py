@@ -1,192 +1,145 @@
 """
-Hue Bridge geofence service — surfaces phone-based home/away from the bridge.
+Hue Bridge geofence service — event-driven away/home detection.
 
-The Hue iOS app already maintains a geofence per linked phone; the bridge
-exposes that state at ``/clip/v2/resource/geofence_client``. This service
-polls the endpoint on a 60s cadence and, on transitions, drives the
-``automation_engine`` into / out of the ``away`` mode:
+The Hue iOS app exposes a "Home & Away" automation that the user creates as
+two ``behavior_instance`` resources: "Coming home" and "Leaving home." Each
+fires when the user's phone crosses the geofence the app maintains via iOS
+Core Location.
 
-- home → away (no clients home): ``set_manual_override("away", source="hue_geofence")``
-- away → home (any client home):  ``clear_override(source="hue_geofence")``
+Polling ``/clip/v2/resource/geofence_client`` is a dead end on current bridge
+firmware — Signify strips ``is_at_home`` from the third-party API for privacy
+(verified empirically 2026-05-20). The bridge DOES emit SSE update events on
+the behavior_instance resources when those automations fire, so this service
+subscribes to ``HueV2Service``'s existing event dispatch and reacts to
+events with matching IDs.
 
-Fail-soft on first contact. If the bridge returns zero ``geofence_client``
-resources (the user hasn't enabled geofencing in the Hue iOS app), the
-service logs once and stays disabled — the ``connected`` flag stays False
-and downstream code (``automation._is_away``) treats every tick as
-"signal unavailable / assume home".
+Wiring:
+- ``HUE_GEOFENCE_HOME_BEHAVIOR_ID`` + ``HUE_GEOFENCE_AWAY_BEHAVIOR_ID`` env
+  vars carry the UUIDs of the two behavior_instance resources. Discover via
+  ``GET /clip/v2/resource/behavior_instance``, match by ``metadata.name``.
+- Unset / empty IDs leave the service in idle/disconnected state — no event
+  matching happens, ``is_home`` returns ``None``, ``connected`` stays False.
 
-Hue geofence lag is 5–15 min in practice, dictated by iOS's location-fix
-cadence and how aggressively the Hue app re-checks. That's fine for the
-"user left for the day" use case; short trips don't need to trip away.
+Caveat: We do not yet know whether the bridge emits behavior_instance update
+events to third-party application keys on all firmware versions. If it
+doesn't, ``_event_count`` stays zero across a walk-test and we'll need to
+pivot to a different signal source.
 """
-import asyncio
 import logging
 from typing import Any, Optional
 
-import httpx
-
 logger = logging.getLogger("home_hub.hue_geofence")
-
-POLL_INTERVAL_SECONDS = 60.0
-REQUEST_TIMEOUT_SECONDS = 10.0
 
 
 class HueGeofenceService:
-    """Polls the Hue Bridge geofence_client resource and drives away mode."""
+    """Event-driven away/home detector. Listens on the v2 SSE stream.
 
-    def __init__(self, bridge_ip: str, username: str, automation: Any) -> None:
-        self._bridge_ip = bridge_ip
-        self._username = username
+    Public surface matches the prior polling implementation (``connected``,
+    ``is_home``, ``close``) so call sites don't need updating. The
+    ``poll_loop`` method is gone — there is no polling.
+    """
+
+    def __init__(
+        self,
+        automation: Any,
+        home_behavior_id: str,
+        away_behavior_id: str,
+    ) -> None:
         self._automation = automation
-        self._base_url = f"https://{bridge_ip}/clip/v2/resource"
-        self._client: Optional[httpx.AsyncClient] = None
-        self._connected = False
+        self._home_behavior_id = (home_behavior_id or "").strip()
+        self._away_behavior_id = (away_behavior_id or "").strip()
         self._is_home: Optional[bool] = None
+        self._event_count: int = 0
         self._heartbeat = None
 
     @property
     def connected(self) -> bool:
-        """True once a successful poll has produced a home/away reading."""
-        return self._connected
+        """True once at least one geofence event has been observed.
+
+        Used by ``automation._is_away`` to decide whether to trust the
+        ``is_home`` signal — a service with zero observed events can't
+        reliably gate the autonomous setters.
+        """
+        return self._event_count > 0
 
     @property
     def is_home(self) -> Optional[bool]:
-        """Most recent aggregated geofence reading; None until first poll succeeds."""
+        """Last observed home/away state, or ``None`` before any event."""
         return self._is_home
+
+    @property
+    def configured(self) -> bool:
+        """True when both behavior IDs are set — service is wired but may
+        not yet have seen any events."""
+        return bool(self._home_behavior_id and self._away_behavior_id)
 
     def set_heartbeat_registry(self, registry: Any) -> None:
         self._heartbeat = registry
 
-    async def connect(self) -> None:
-        """Open the HTTPS client and confirm the bridge exposes geofence_clients.
-
-        Leaves ``_connected`` False if the user hasn't enabled Hue geofencing —
-        the service will keep polling so a later iOS setup flips it on without
-        a restart.
-        """
-        self._client = httpx.AsyncClient(
-            base_url=self._base_url,
-            headers={"hue-application-key": self._username},
-            verify=False,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        try:
-            initial = await self._fetch_is_home()
-        except Exception as exc:
-            logger.warning("Hue geofence initial fetch failed: %s", exc)
-            return
-        if initial is None:
-            logger.info(
-                "Hue geofence: bridge has no geofence_client resources — "
-                "enable geofencing in the Hue iOS app to activate away mode"
-            )
-            return
-        self._is_home = initial
-        self._connected = True
-        logger.info(
-            "Hue geofence connected — initial state: %s",
-            "home" if initial else "AWAY",
-        )
-
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """No-op — there's no long-lived client to close in the SSE design.
 
-    async def poll_loop(self) -> None:
-        """Background loop — drives away/home transitions every 60s."""
-        logger.info("Hue geofence poll loop started")
-        while True:
-            try:
-                if self._heartbeat is not None:
-                    self._heartbeat.tick("hue_geofence")
-                # Allow a delayed setup — if the user just enabled geofencing
-                # in the iOS app, the next poll succeeds and flips _connected.
-                is_home = await self._fetch_is_home()
-                if is_home is None:
-                    await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                    continue
-
-                previous = self._is_home
-                self._is_home = is_home
-                self._connected = True
-
-                if previous is None:
-                    # First successful read. If we already booted in the AWAY
-                    # state (user left during a deploy / power-cycle) and no
-                    # other override is active, push away now so lights catch
-                    # up. Restored overrides from app_settings take priority —
-                    # _on_left() is a no-op when an override is already set.
-                    logger.info(
-                        "Hue geofence first read: %s",
-                        "home" if is_home else "AWAY",
-                    )
-                    if not is_home and not getattr(
-                        self._automation, "_manual_override", False,
-                    ):
-                        await self._on_left()
-                elif previous and not is_home:
-                    await self._on_left()
-                elif not previous and is_home:
-                    await self._on_arrived()
-
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
-            except asyncio.CancelledError:
-                logger.info("Hue geofence poll loop cancelled")
-                break
-            except Exception as exc:
-                logger.error("Hue geofence poll error: %s", exc, exc_info=True)
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
-
-    async def _fetch_is_home(self) -> Optional[bool]:
-        """Aggregate is_at_home across every geofence_client on the bridge.
-
-        Returns:
-            True  — at least one client is currently at home
-            False — every client is away
-            None  — no clients are defined (geofencing not enabled in app)
+        Kept for shutdown-sequence compatibility with the polling version.
         """
-        if self._client is None:
-            return None
-        resp = await self._client.get("/geofence_client")
-        resp.raise_for_status()
-        data = resp.json()
-        clients = data.get("data", []) or []
-        if not clients:
-            return None
-        # Bridge CLIP v2 has used `is_at_home` historically; tolerate a
-        # rename to `at_home` without forcing a redeploy.
-        flags: list[bool] = []
-        for client in clients:
-            if "is_at_home" in client:
-                flags.append(bool(client["is_at_home"]))
-            elif "at_home" in client:
-                flags.append(bool(client["at_home"]))
-        if not flags:
-            logger.warning(
-                "Hue geofence: %d clients found but none expose is_at_home/"
-                "at_home — schema may have changed, treating as home",
-                len(clients),
-            )
-            return True
-        return any(flags)
+        return
+
+    async def handle_event(self, update: dict) -> None:
+        """Process one SSE update event from ``HueV2Service``.
+
+        Called by the v2 dispatcher for every ``behavior_instance`` event.
+        We match the event's ``id`` against the configured behavior IDs and
+        drive automation overrides accordingly. Unknown IDs are ignored —
+        the bridge emits behavior_instance events for the dimmer-switch
+        automation, wake-up scheduler, etc., and we shouldn't react.
+        """
+        if not self.configured:
+            return
+
+        event_id = update.get("id")
+        if not event_id:
+            return
+
+        if event_id == self._away_behavior_id:
+            await self._on_left()
+        elif event_id == self._home_behavior_id:
+            await self._on_arrived()
+        else:
+            return  # not one of ours
+
+        if self._heartbeat is not None:
+            self._heartbeat.tick("hue_geofence")
 
     async def _on_left(self) -> None:
-        logger.info("Hue geofence: home → AWAY, pushing away mode")
+        self._event_count += 1
+        was_home = self._is_home
+        self._is_home = False
+        logger.info(
+            "Hue geofence: 'Leaving home' fired (was_home=%s, event #%d) "
+            "— pushing away mode",
+            was_home, self._event_count,
+        )
         try:
             await self._automation.set_manual_override(
                 "away", source="hue_geofence",
             )
         except Exception as exc:
-            logger.error("hue_geofence away override failed: %s", exc, exc_info=True)
+            logger.error(
+                "hue_geofence away override failed: %s", exc, exc_info=True,
+            )
 
     async def _on_arrived(self) -> None:
-        logger.info("Hue geofence: AWAY → home, clearing away override")
+        self._event_count += 1
+        was_home = self._is_home
+        self._is_home = True
+        logger.info(
+            "Hue geofence: 'Coming home' fired (was_home=%s, event #%d) "
+            "— clearing away override",
+            was_home, self._event_count,
+        )
         try:
-            # Only clear if the active override is our away push. If the
-            # user manually set something else while we were "away" (e.g.
-            # via Alexa, dashboard, or the override survived a deploy),
-            # respect that — only undo our own state.
+            # Only clear if our away push is the active override. If the
+            # user set something else (manual / Alexa / etc.) while away,
+            # respect their choice.
             override_source = getattr(self._automation, "_override_source", None)
             override_mode = getattr(self._automation, "_override_mode", None)
             if override_source == "hue_geofence" or override_mode == "away":

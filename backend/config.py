@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     # Hue Bridge
     HUE_BRIDGE_IP: str = "192.168.1.50"
     HUE_USERNAME: str = ""
+    # Hue Bridge geofence — UUIDs of the two `behavior_instance` resources
+    # the Hue iOS app creates for "Coming home" and "Leaving home"
+    # automations. We listen on the v2 SSE stream for events on these IDs
+    # and drive away mode accordingly. Empty strings disable the lane
+    # cleanly (HueGeofenceService stays in idle/disconnected state).
+    # Discover via: GET /clip/v2/resource/behavior_instance and match by
+    # metadata.name.
+    HUE_GEOFENCE_HOME_BEHAVIOR_ID: str = ""
+    HUE_GEOFENCE_AWAY_BEHAVIOR_ID: str = ""
 
     # Sonos (auto-discovered if not set)
     SONOS_IP: Optional[str] = None
