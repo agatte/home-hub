@@ -117,13 +117,18 @@ class LanPresenceService:
 
         while True:
             try:
-                self._send_arp_probe()
+                # Both subprocess + socket calls are offloaded to the
+                # default executor so a stuck `ip` shell (~2s timeout)
+                # or a kernel-level UDP stall can't freeze the FastAPI
+                # event loop. Fire-and-forget on the probe; await the
+                # neighbor read since its result drives this iteration.
+                await asyncio.to_thread(self._send_arp_probe)
                 # Tiny wait lets the kernel actually do the ARP exchange
                 # before we read the neighbor table. Without this, the
                 # first poll after a long idle gap can see STALE/PROBE
                 # state instead of the resolved REACHABLE.
                 await asyncio.sleep(0.5)
-                present = self._is_phone_in_arp_table()
+                present = await asyncio.to_thread(self._is_phone_in_arp_table)
                 self._poll_count += 1
 
                 if present:
@@ -143,7 +148,7 @@ class LanPresenceService:
                         self._is_home = False
 
                 if self._heartbeat is not None:
-                    self._heartbeat.tick("presence")
+                    self._heartbeat.tick("lan_presence")
 
                 await asyncio.sleep(self._poll_interval)
 

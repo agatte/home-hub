@@ -251,7 +251,7 @@ MODE_PRIORITY = {
     # Away sits between sleeping and idle. Semantically lower than idle
     # (nobody is here at all) but above sleeping which carries TTS +
     # fade sequences that don't apply to "user left for the day." Set
-    # only by HueGeofenceService — no sensor lane can ever report it
+    # only by LanPresenceService — no sensor lane can ever report it
     # organically, so its priority interacts purely with manual overrides.
     "away": 0.5,
     "idle": 1,
