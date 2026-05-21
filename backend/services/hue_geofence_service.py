@@ -83,16 +83,23 @@ class HueGeofenceService:
         """
         return
 
-    async def handle_event(self, update: dict) -> None:
-        """Process one SSE update event from ``HueV2Service``.
+    async def handle_event(self, update: dict, envelope_type: str) -> None:
+        """Process one SSE event from ``HueV2Service``.
 
         Called by the v2 dispatcher for every ``behavior_instance`` event.
-        We match the event's ``id`` against the configured behavior IDs and
+        We act only on ``"update"`` envelopes — bridge restarts emit
+        ``"add"`` events for every existing behavior_instance, which would
+        otherwise fire spurious away/home pushes at every restart.
+        ``"delete"`` is also ignored.
+
+        Match the event's ``id`` against the configured behavior IDs and
         drive automation overrides accordingly. Unknown IDs are ignored —
         the bridge emits behavior_instance events for the dimmer-switch
         automation, wake-up scheduler, etc., and we shouldn't react.
         """
         if not self.configured:
+            return
+        if envelope_type != "update":
             return
 
         event_id = update.get("id")

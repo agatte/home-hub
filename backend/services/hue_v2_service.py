@@ -82,24 +82,26 @@ class HueV2Service:
         # without coupling this service to its specifics. Handlers are
         # async callables awaited inside _dispatch_stream_events.
         self._event_handlers: dict[
-            str, list[Callable[[dict], Awaitable[None]]]
+            str, list[Callable[[dict, str], Awaitable[None]]]
         ] = defaultdict(list)
 
     def register_event_handler(
         self,
         resource_type: str,
-        handler: Callable[[dict], Awaitable[None]],
+        handler: Callable[[dict, str], Awaitable[None]],
     ) -> None:
         """Subscribe to SSE update events for a given v2 resource type.
 
-        ``handler`` receives one ``update`` dict per matching event (the
-        per-resource entry, not the envelope) and runs inside the stream
-        dispatcher's task — keep it fast and exception-safe; errors are
-        caught and logged but don't tear down the stream.
+        ``handler(update, envelope_type)`` receives one resource update
+        plus the envelope action (``"update"`` / ``"add"`` / ``"delete"``)
+        per matching event. Handlers should filter on envelope_type when
+        the distinction matters — e.g. the geofence service only acts on
+        ``"update"`` so bridge-restart ``"add"`` floods don't fire spurious
+        transitions.
 
-        Example: ``hue_v2.register_event_handler("behavior_instance",
-        geofence.handle_event)`` lets the geofence service react to
-        Hue-app Home & Away automation fires.
+        Runs inside the stream dispatcher's task — keep handlers fast and
+        exception-safe; errors are caught and logged but don't tear down
+        the stream.
         """
         self._event_handlers[resource_type].append(handler)
 
@@ -496,6 +498,12 @@ class HueV2Service:
         first_event_this_batch = True
 
         for envelope in events:
+            # Envelope action ("update" | "add" | "delete"). Handlers
+            # receive this so they can filter — e.g. geofence ignores
+            # "add" (emitted on bridge-restart for every existing
+            # behavior_instance, which would otherwise fire spurious
+            # transitions).
+            envelope_type = envelope.get("type", "update")
             for update in envelope.get("data", []):
                 resource_type = update.get("type")
 
@@ -508,7 +516,7 @@ class HueV2Service:
                 if handlers:
                     for handler in handlers:
                         try:
-                            await handler(update)
+                            await handler(update, envelope_type)
                         except Exception:
                             logger.exception(
                                 "v2 stream handler for %s raised", resource_type,
