@@ -710,8 +710,10 @@ class TestMLLoggerIntegration:
         assert call["broadcast"] is False
 
     async def test_skips_rule_with_retired_mode(self, db_and_service):
-        """Rule predicting a mode no longer in VALID_MODES (e.g. legacy
-        `away`) must not vote — fusion would silently reject it anyway."""
+        """Rule predicting a mode no longer in VALID_MODES must not vote —
+        fusion would silently reject it anyway. Uses a synthetic retired
+        name because the historical example (`away`) was un-retired
+        2026-05-20 when Hue-bridge geofencing brought it back."""
         _, _, ws, session_factory = db_and_service
 
         class MockFusion:
@@ -741,7 +743,8 @@ class TestMLLoggerIntegration:
         async with session_factory() as session:
             session.add(LearnedRule(
                 day_of_week=now.weekday(), hour=now.hour,
-                predicted_mode="away", confidence=0.95, sample_count=12,
+                predicted_mode="legacy_retired_mode",
+                confidence=0.95, sample_count=12,
             ))
             await session.commit()
 
@@ -751,7 +754,7 @@ class TestMLLoggerIntegration:
         assert mock_logger.calls == []
 
     async def test_regenerate_drops_retired_mode_rows(self, db_and_service):
-        """Activity events with retired modes (away) must not seed rules."""
+        """Activity events with retired modes must not seed rules."""
         _, service, _, session_factory = db_and_service
         now = datetime.now(timezone.utc)
         target = now.replace(minute=30, second=0, microsecond=0) + timedelta(hours=7)
@@ -759,7 +762,7 @@ class TestMLLoggerIntegration:
             for i in range(8):
                 session.add(ActivityEvent(
                     timestamp=target - timedelta(weeks=i),
-                    mode="away", previous_mode="idle",
+                    mode="legacy_retired_mode", previous_mode="idle",
                     source="process", duration_seconds=3600,
                 ))
             await session.commit()
@@ -767,7 +770,7 @@ class TestMLLoggerIntegration:
         await service.regenerate_rules()
         rules = await service.get_rules()
         modes = [r["predicted_mode"] for r in rules]
-        assert "away" not in modes
+        assert "legacy_retired_mode" not in modes
 
 
 # ---------------------------------------------------------------------------

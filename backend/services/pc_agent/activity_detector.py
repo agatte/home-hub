@@ -433,6 +433,25 @@ class ActivityDetector:
 
         return "idle"
 
+    def _foreground_is_media(self) -> bool:
+        """
+        True when the user is *explicitly* looking at a video right now.
+
+        Either the foreground process is a known media player, or the
+        foreground window is a browser whose title matches one of
+        WATCHING_TITLE_KEYWORDS (YouTube, Twitch, Netflix, …). This is an
+        unambiguous-intent signal — the user opened the video tab and put
+        it front-and-center.
+        """
+        fg_proc, fg_title = self._get_foreground_window()
+        if fg_proc in MEDIA_PROCESSES:
+            return True
+        if fg_proc in BROWSER_PROCESSES and fg_title:
+            title_lower = fg_title.lower()
+            if any(kw in title_lower for kw in WATCHING_TITLE_KEYWORDS):
+                return True
+        return False
+
     def _dwell_threshold(self, from_mode: Optional[str], to_mode: str) -> float:
         """
         How long the candidate mode must persist before we commit to reporting it.
@@ -446,9 +465,19 @@ class ActivityDetector:
           brief peek at a video while coding shouldn't flip the other way).
 
         Day stays responsive in both directions.
+
+        Fast-path: an explicit foreground media window (YouTube tab is the
+        active window, Stremio is foregrounded, …) commits to ``watching``
+        on DWELL_DEFAULT regardless of time of day. The 300s night gate was
+        protecting against alt-tab churn — when YouTube is literally the
+        foreground window, that's not churn, that's intent.
         """
         hour = datetime.now().hour
         is_night = hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
+
+        # Explicit foreground intent overrides night stickiness — see docstring.
+        if to_mode == "watching" and self._foreground_is_media():
+            return DWELL_DEFAULT
 
         if from_mode == "watching" and to_mode != "watching":
             return DWELL_LEAVE_WATCHING_NIGHT if is_night else DWELL_LEAVE_WATCHING_DAY

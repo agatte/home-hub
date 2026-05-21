@@ -109,6 +109,14 @@ USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
 # zone went stale; PC agent had reported working 1.4s before the fire.)
 RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
 
+# Ambient-relax dwell — how long the apartment must sit in `idle` (no manual
+# override, no Sonos, both attendance vetoes negative, not away) before the
+# soft-default kicks in and pushes to `relax`. Shorter than late_night_rescue
+# because it's day-agnostic — the trigger is "nothing's happening for a few
+# minutes," not "it's past 23:00." 180s is short enough to feel responsive
+# when the user actually steps away, long enough to ignore brief micro-gaps.
+IDLE_AMBIENT_RELAX_DWELL_SECONDS = 180
+
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user
 # choice. User-API actions (api:*) and rule-suggestion accepts
@@ -116,6 +124,7 @@ RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
 # direct user intent, not sensor reactivity.
 AUTONOMOUS_PUSH_SOURCES = frozenset({
     "late_night_rescue",
+    "ambient_relax",
     "zone_posture_rule",
     "watching_sleep_guard",
     "behavioral_predictor",
@@ -135,6 +144,7 @@ AUTONOMOUS_PUSH_SOURCES = frozenset({
 # undo the rescue; real-activity signals (working+) still displace.
 RESCUE_OVERRIDE_SOURCES = frozenset({
     "late_night_rescue",
+    "ambient_relax",
     "zone_posture_rule",
     "watching_sleep_guard",
 })
@@ -152,6 +162,7 @@ RESCUE_OVERRIDE_SOURCES = frozenset({
 # 4h expiry runs independently in run_loop).
 PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "late_night_rescue",
+    "ambient_relax",
     "behavioral_predictor",
     "fusion_can_override",
     "fusion_auto_apply",
@@ -159,6 +170,10 @@ PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "watching_sleep_guard",
     "timeout_4h",
     "desk_exit_kitchen",
+    # Hue geofence away — when the user comes home, their pre-departure
+    # manual brightness/color choices should be intact. Stamps persist
+    # across the away window the same way they survive late_night_rescue.
+    "hue_geofence",
 })
 
 
@@ -232,6 +247,12 @@ from backend.services.effect_manager import (  # noqa: E402
 # Enforced universally by the priority guard in report_activity().
 MODE_PRIORITY = {
     "sleeping": 0,
+    # Away sits between sleeping and idle. Semantically lower than idle
+    # (nobody is here at all) but above sleeping which carries TTS +
+    # fade sequences that don't apply to "user left for the day." Set
+    # only by HueGeofenceService — no sensor lane can ever report it
+    # organically, so its priority interacts purely with manual overrides.
+    "away": 0.5,
     "idle": 1,
     "working": 2,
     "watching": 3,
@@ -347,6 +368,17 @@ class AutomationEngine:
         # camera blip doesn't strand the user in relax while they're actively
         # at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
         self._last_process_working_at: Optional[datetime] = None
+
+        # Timestamp of the most recent transition INTO `idle`. Cleared on any
+        # exit from idle. Used by the ambient_relax setter to require a
+        # continuous idle window (IDLE_AMBIENT_RELAX_DWELL_SECONDS) before
+        # pushing to relax. Set/cleared in report_activity below.
+        self._idle_entered_at: Optional[datetime] = None
+
+        # Hue geofence — set during main.py wiring after HueGeofenceService
+        # connects. The _is_away helper handles None cleanly so unit tests
+        # and pre-connect ticks don't crash.
+        self._hue_geofence = None
 
         # Per-light state tracking for deduplication
         self._last_applied_per_light: dict[str, dict] = {}
@@ -797,6 +829,21 @@ class AutomationEngine:
         ).total_seconds()
         return age < window_seconds
 
+    def _is_away(self) -> bool:
+        """True iff the Hue Bridge geofence reports nobody at home.
+
+        Returns False whenever the geofence service isn't wired or hasn't
+        produced a reading yet — keeps autonomous setters firing normally
+        until Part 3's HueGeofenceService is connected and producing data.
+        """
+        geofence = self._hue_geofence
+        if geofence is None or not getattr(geofence, "connected", False):
+            return False
+        is_home = getattr(geofence, "is_home", None)
+        if is_home is None:
+            return False
+        return not is_home
+
     def _attach_presence_attribution(
         self,
         factors: dict,
@@ -1073,6 +1120,15 @@ class AutomationEngine:
         self._mode_source = source
         self._last_activity = mode
         self._last_activity_change = now
+
+        # Track continuous-idle dwell for the ambient_relax setter. Stamp on
+        # entry only — re-stamping every confirming idle report would defeat
+        # the dwell. A presence blip to any non-idle mode clears the stamp so
+        # the timer restarts on the next idle entry.
+        if mode == "idle" and old_mode != "idle":
+            self._idle_entered_at = now
+        elif mode != "idle":
+            self._idle_entered_at = None
 
         # Priority-bypass for autonomous overrides: when an autonomous setter
         # (fusion_auto_apply, late_night_rescue, behavioral_predictor, …)
@@ -2557,12 +2613,14 @@ class AutomationEngine:
                 # and shouldn't be pushed into relax. DND suppresses this —
                 # set_manual_override would block the call anyway, but
                 # skipping early avoids the log noise + the Sonos polling
-                # round-trip.
+                # round-trip. Away supersedes: when the geofence reports
+                # nobody home, lights stay off — no relax push.
                 if (
                     not self._manual_override
                     and not self.is_dnd_active()
                     and not self.is_at_desk_fresh()
                     and not self.is_recent_process_working()
+                    and not self._is_away()
                     and self._get_time_period() == "late_night"
                     and self._current_mode in ("working", "idle")
                     and not await self._sonos_is_playing()
@@ -2572,6 +2630,31 @@ class AutomationEngine:
                         self._current_mode,
                     )
                     await self.set_manual_override("relax", source="late_night_rescue")
+
+                # Ambient relax — soft default when nothing's happening. Idle
+                # held for IDLE_AMBIENT_RELAX_DWELL_SECONDS without any
+                # attendance signal, no Sonos, not away → push to relax. Same
+                # attendance vetoes as late_night_rescue but day-agnostic; the
+                # late_night branch above handles the post-23:00 case where
+                # mode is still "working" (vs idle) at the desk.
+                elif (
+                    not self._manual_override
+                    and not self.is_dnd_active()
+                    and not self.is_at_desk_fresh()
+                    and not self.is_recent_process_working()
+                    and not self._is_away()
+                    and self._current_mode == "idle"
+                    and self._idle_entered_at is not None
+                    and (now - self._idle_entered_at).total_seconds()
+                        >= IDLE_AMBIENT_RELAX_DWELL_SECONDS
+                    and not await self._sonos_is_playing()
+                ):
+                    logger.info(
+                        "Ambient relax: idle held %.0fs without presence "
+                        "— switching to relax",
+                        (now - self._idle_entered_at).total_seconds(),
+                    )
+                    await self.set_manual_override("relax", source="ambient_relax")
 
                 # If no activity override and no manual override, apply time-based
                 if (
@@ -2882,6 +2965,14 @@ class AutomationEngine:
         if camera is None:
             return
 
+        # Gate -1: away supersedes. When the Hue geofence reports nobody
+        # home, the camera may still see leftover signals (chair-back face
+        # FPs, lingering audio) — don't accumulate dwell or fire a relax
+        # override while lights are supposed to stay off.
+        if self._is_away():
+            self._zone_posture_reclined_since = None
+            return
+
         # Gate 0: DND suppresses the dwell timer entirely so we don't
         # accumulate a "would have fired" stamp during a quiet window.
         # set_manual_override would block the actuation anyway, but
@@ -3087,6 +3178,13 @@ class AutomationEngine:
         """
         camera = self._camera_service
         if camera is None:
+            return
+
+        # Gate -1: away supersedes. Nobody's home — don't flip to sleeping
+        # off lingering camera state. The active mode (watching) will be
+        # superseded by the geofence-driven away override on the next tick.
+        if self._is_away():
+            self._watching_sleep_dwell_since = None
             return
 
         # Gate 0: DND suppresses the dwell timer. set_manual_override would

@@ -67,6 +67,7 @@ DEFAULT_MODE_BRIGHTNESS: dict[str, float] = {
     "social": 1.0,
     "gameday": 1.0,
     "pregameday": 1.0,
+    "away": 1.0,
 }
 
 
@@ -85,6 +86,7 @@ MODE_TRANSITION_TIME: dict[str, int] = {
     "idle":     20,   # 2s
     "gameday":  10,   # 1s snap — celebration windows are time-sensitive
     "pregameday": 40, # 4s slow build — anticipation, not a snap (GAMEDAY_SPEC §10.4)
+    "away":     30,   # 3s soft fade — walking-out experience, not abrupt
 }
 
 
@@ -386,6 +388,20 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         # slightly brighter at equal bri, so 140 there exaggerates that
         # deliberately into a foreground-vs-background pair.
         "5": {"on": True, "bri": 140, "hue": 7500,  "sat": 185},
+    },
+    # ── Away ─────────────────────────────────────────────────────────
+    # Phone-based geofence (Hue Bridge native) reports nobody home → all
+    # lights off. Flat shape (no time-period gating) — "away" means the
+    # apartment is empty, time of day doesn't change that. Restored to
+    # the prior mode automatically when the geofence transitions back to
+    # home. Returning users' per-light manual overrides survive across
+    # the away window via PRESERVE_PER_LIGHT_OVERRIDE_SOURCES.
+    "away": {
+        "1": {"on": False},
+        "2": {"on": False},
+        "3": {"on": False},
+        "4": {"on": False},
+        "5": {"on": False},
     },
     # ── Gameday ──────────────────────────────────────────────────────
     # PLACEHOLDER values — slice B's CelebrationOrchestrator authoring
@@ -922,11 +938,13 @@ def apply_zone_overlay(
         return new_state
 
     # Branch 2 — reclined in bed: lower L1 and L2. Mode-agnostic
-    # except for sleeping (already at ember-dim, no-op anyway).
+    # except for sleeping (already at ember-dim, no-op anyway) and away
+    # (lights are off — no bri to lower; the overlay would inject a
+    # spurious bri key on top of {"on": False}).
     # Working mode picks a higher L2 floor (terminal needs to be
     # readable); every other mode (watching, relax, gaming, social,
     # cooking, idle, gameday) takes the watching-projector floor.
-    if zone == "bed" and posture == "reclined" and mode != "sleeping":
+    if zone == "bed" and posture == "reclined" and mode not in ("sleeping", "away"):
         ratio = BED_RECLINED_L1_RATIO.get(period)
         l2_table = (
             BED_RECLINED_L2_WORKING_BRI

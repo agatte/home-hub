@@ -337,6 +337,27 @@ class MusicMapper:
             logger.debug("pregameday entry — silent build, no auto-play")
             return None
 
+        # Away: nobody home — pause Sonos if it's playing. Skip the rest of
+        # the auto-play flow regardless. Returning home clears the away
+        # override; the user's pre-departure mode resumes via the priority
+        # guard, which fires its own auto-play callback. Music doesn't
+        # auto-resume — that's a deliberate choice (the speaker shouldn't
+        # blast the second you walk in the door).
+        if mode == "away":
+            if self._sonos.connected:
+                try:
+                    status = await asyncio.wait_for(
+                        self._sonos.get_status(), timeout=5.0,
+                    )
+                    if status.get("state") == "PLAYING":
+                        await asyncio.wait_for(self._sonos.pause(), timeout=5.0)
+                        logger.info("Away mode: paused Sonos playback")
+                except asyncio.TimeoutError:
+                    logger.warning("Away mode: Sonos pause timed out")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Away mode: Sonos pause failed: %s", exc)
+            return None
+
         self._last_requested_mode = mode
 
         entry = self.pick_playlist(mode)

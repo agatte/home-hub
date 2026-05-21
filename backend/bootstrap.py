@@ -26,6 +26,7 @@ from backend.database import init_db
 from backend.services.automation_engine import AutomationEngine
 from backend.services.event_logger import EventLogger
 from backend.services.fauxmo_service import FauxmoService
+from backend.services.hue_geofence_service import HueGeofenceService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
@@ -359,6 +360,26 @@ async def lifespan(app: FastAPI):
     # because both services need to exist before the link is established.
     music_mapper.set_automation(automation)
     ambient_sound.set_automation(automation)
+
+    # Hue Bridge geofence — phone-based home/away, drives the `away` mode.
+    # Constructed after automation since it calls set_manual_override /
+    # clear_override on transitions. Fail-soft: connect() returns without
+    # error when the bridge has no geofence_client resources (user hasn't
+    # enabled geofencing in the Hue iOS app) and the poll loop keeps
+    # checking so a later iOS setup lights up the lane without a restart.
+    hue_geofence = HueGeofenceService(
+        bridge_ip=settings.HUE_BRIDGE_IP,
+        username=settings.HUE_USERNAME,
+        automation=automation,
+    )
+    if hue.connected:
+        await hue_geofence.connect()
+    automation._hue_geofence = hue_geofence
+    app.state.hue_geofence = hue_geofence
+    app_logger.info(
+        "Hue geofence: %s",
+        "connected" if hue_geofence.connected else "idle (no clients or bridge down)",
+    )
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
@@ -859,6 +880,10 @@ async def lifespan(app: FastAPI):
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
     heartbeats.register("desk_exit_kitchen", 2.0)
+    # Hue geofence ticks once per 60s poll; 2x cadence keeps the warn
+    # threshold tight enough to catch a stalled away signal within ~2min.
+    heartbeats.register("hue_geofence", 120.0)
+    hue_geofence.set_heartbeat_registry(heartbeats)
 
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)
@@ -884,6 +909,7 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
 
     tasks.append(asyncio.create_task(automation.run_loop()))
+    tasks.append(asyncio.create_task(hue_geofence.poll_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
     # Hourly scan for weather-aware brightness-suggestion candidates.

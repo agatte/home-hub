@@ -85,6 +85,14 @@ BROWSER_PROCESSES: set[str] = {
 # music sites (Spotify, SoundCloud) since music shouldn't flip the mode.
 WATCHING_TITLE_KEYWORDS: tuple[str, ...] = (
     "youtube",
+    "twitch",
+    "netflix",
+    "hulu",
+    "disney+",
+    "hbo max",
+    "max | stream",  # HBO Max rebrand — page title pattern "Movie Title | Stream on Max"
+    "plex",
+    "prime video",
 )
 
 # Dev/terminal processes — also count as "working"

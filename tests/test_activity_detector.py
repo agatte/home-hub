@@ -108,7 +108,14 @@ class TestDwellThreshold:
 
     @pytest.fixture
     def detector(self) -> ActivityDetector:
-        return ActivityDetector()
+        # _dwell_threshold consults _foreground_is_media() for the new
+        # explicit-media bypass. Force it False so the legacy dwell tests
+        # exercise the non-media-foreground path (the case the 300s night
+        # sticky was added for). Tests that need the bypass path mock it
+        # to True explicitly.
+        d = ActivityDetector()
+        d._foreground_is_media = lambda: False  # type: ignore[method-assign]
+        return d
 
     def _at_hour(self, hour: int):
         """Patch datetime.now() inside the activity_detector module."""
@@ -169,6 +176,37 @@ class TestDwellThreshold:
         # Bumped from 30s → 60s: catches longer alt-tab peeks (e.g. 45s
         # at YouTube, 50s in a terminal mid-video).
         assert DWELL_DEFAULT == 60.0
+
+    def test_foreground_media_bypasses_night_sticky(self):
+        """An explicit foreground media window (YouTube tab front-most,
+        Stremio focused, …) commits to watching on DWELL_DEFAULT even at
+        night. Background-tab cases still get the 300s gate — see the
+        non-bypass test above that patches _foreground_is_media to False."""
+        d = ActivityDetector()
+        d._foreground_is_media = lambda: True  # type: ignore[method-assign]
+        with patch(
+            "backend.services.pc_agent.activity_detector.datetime"
+        ) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 4, 26, 22, 0)
+            assert d._dwell_threshold("working", "watching") == DWELL_DEFAULT
+            # Idle → watching also fast-paths when media is foregrounded
+            assert d._dwell_threshold("idle", "watching") == DWELL_DEFAULT
+
+    def test_foreground_media_does_not_bypass_leaving_watching(self):
+        """The bypass only fires for transitions INTO watching. Leaving
+        watching at night still gets the 300s stickiness — a video tab
+        being foregrounded doesn't change the fact that briefly tabbing
+        away shouldn't flip lights."""
+        d = ActivityDetector()
+        d._foreground_is_media = lambda: True  # type: ignore[method-assign]
+        with patch(
+            "backend.services.pc_agent.activity_detector.datetime"
+        ) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 4, 26, 22, 0)
+            assert (
+                d._dwell_threshold("watching", "working")
+                == DWELL_LEAVE_WATCHING_NIGHT
+            )
 
 
 # ---------------------------------------------------------------------------
