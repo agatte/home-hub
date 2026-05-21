@@ -795,6 +795,34 @@ class AutomationEngine:
         zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
         return zone == "desk"
 
+    async def signal_presence(self, source: str) -> None:
+        """Signal that a human is physically present in the apartment.
+
+        Clears `_external_off_detected` if set, releasing the run_loop
+        suppression that the `_check_external_off` mechanism armed when
+        the Hue iOS app's "Leaving home" automation turned all lights off.
+        Without this hook, the flag only clears when `report_activity`
+        fires with a non-idle mode — which can't happen if the user
+        walks in but doesn't touch the PC.
+
+        Camera service calls this on absent→present transitions (today's
+        only caller). A future Latitude-mic audio classifier could call
+        it on high-confidence human-sound events. Idempotent: no-op when
+        the flag is already clear.
+
+        Args:
+            source: Caller identifier for telemetry ("camera" today;
+                "audio" if/when the parked Latitude-mic path ships).
+        """
+        if not self._external_off_detected:
+            return
+        self._external_off_detected = False
+        logger.info(
+            "Presence signal from %s — clearing external-off suppression "
+            "so automation can resume",
+            source,
+        )
+
     def is_recent_process_working(
         self, window_seconds: int = RECENT_PROCESS_WORKING_SECONDS,
     ) -> bool:

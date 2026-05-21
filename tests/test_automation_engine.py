@@ -2688,3 +2688,38 @@ class TestMorningRampAsleepGate:
         state = captured_states[0]
         assert state["bri"] > 60
 
+
+
+# ---------------------------------------------------------------------------
+# Presence signal — clears the external-off suppression flag
+# ---------------------------------------------------------------------------
+
+
+class TestSignalPresence:
+    """`signal_presence(source)` is the hook camera (and future audio)
+    services use to clear `_external_off_detected` after the Hue iOS app's
+    "Leaving home" automation turned all lights off. Without it the flag
+    only clears on report_activity with mode != idle, which can't happen
+    if the user walks back in but doesn't touch the PC."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    async def test_clears_external_off_when_set(self, engine):
+        engine._external_off_detected = True
+        await engine.signal_presence("camera")
+        assert engine._external_off_detected is False
+
+    async def test_idempotent_when_flag_already_clear(self, engine):
+        # Already cleared — second call shouldn't raise or flip state.
+        engine._external_off_detected = False
+        await engine.signal_presence("camera")
+        assert engine._external_off_detected is False
+
+    async def test_accepts_any_source_label(self, engine):
+        # Source is a free-form telemetry tag, not validated. Camera today,
+        # audio tomorrow, anything else later — all valid.
+        engine._external_off_detected = True
+        await engine.signal_presence("audio")
+        assert engine._external_off_detected is False

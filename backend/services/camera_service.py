@@ -1351,6 +1351,18 @@ class CameraService:
                         await self._automation.report_activity(
                             mode="idle", source="camera", factors=camera_factors,
                         )
+                        # Also clear the external-off suppression flag if it's
+                        # set. report_activity above does NOT clear the flag
+                        # for mode=idle reports, so without this call the
+                        # engine stays suppressed indefinitely when the Hue
+                        # iOS app's "Leaving home" automation turned lights
+                        # off and the user returns without touching the PC.
+                        # No-op when the flag is already clear (idempotent).
+                        signal_presence = getattr(
+                            self._automation, "signal_presence", None,
+                        )
+                        if signal_presence is not None:
+                            await signal_presence("camera")
                         logger.info(
                             "Presence detected via %s — reported idle "
                             "(confidence: %.2f, landmarks: %d, lux: %.0f)",
