@@ -170,10 +170,11 @@ PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "watching_sleep_guard",
     "timeout_4h",
     "desk_exit_kitchen",
-    # Hue geofence away — when the user comes home, their pre-departure
-    # manual brightness/color choices should be intact. Stamps persist
-    # across the away window the same way they survive late_night_rescue.
-    "hue_geofence",
+    # Presence (LAN-based away) — when the user comes home, their
+    # pre-departure manual brightness/color choices should be intact.
+    # Stamps persist across the away window the same way they survive
+    # late_night_rescue.
+    "presence",
 })
 
 
@@ -375,10 +376,12 @@ class AutomationEngine:
         # pushing to relax. Set/cleared in report_activity below.
         self._idle_entered_at: Optional[datetime] = None
 
-        # Hue geofence — set during main.py wiring after HueGeofenceService
-        # connects. The _is_away helper handles None cleanly so unit tests
-        # and pre-connect ticks don't crash.
-        self._hue_geofence = None
+        # LAN presence (ARP-based iPhone reachability) — set during
+        # bootstrap wiring after LanPresenceService is constructed.
+        # Distinct from `_presence_fusion` (multi-camera attendance,
+        # constructor kwarg above). The _is_away helper handles None
+        # cleanly so unit tests and pre-poll ticks don't crash.
+        self._lan_presence = None
 
         # Per-light state tracking for deduplication
         self._last_applied_per_light: dict[str, dict] = {}
@@ -830,16 +833,16 @@ class AutomationEngine:
         return age < window_seconds
 
     def _is_away(self) -> bool:
-        """True iff the Hue Bridge geofence reports nobody at home.
+        """True iff LanPresenceService reports the iPhone is off the LAN.
 
-        Returns False whenever the geofence service isn't wired or hasn't
-        produced a reading yet — keeps autonomous setters firing normally
-        until Part 3's HueGeofenceService is connected and producing data.
+        Returns False whenever the LAN presence service isn't wired or
+        hasn't completed a poll yet — keeps autonomous setters firing
+        normally until presence has a real reading.
         """
-        geofence = self._hue_geofence
-        if geofence is None or not getattr(geofence, "connected", False):
+        lan_presence = self._lan_presence
+        if lan_presence is None or not getattr(lan_presence, "connected", False):
             return False
-        is_home = getattr(geofence, "is_home", None)
+        is_home = getattr(lan_presence, "is_home", None)
         if is_home is None:
             return False
         return not is_home

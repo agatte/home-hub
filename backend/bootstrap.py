@@ -26,9 +26,9 @@ from backend.database import init_db
 from backend.services.automation_engine import AutomationEngine
 from backend.services.event_logger import EventLogger
 from backend.services.fauxmo_service import FauxmoService
-from backend.services.hue_geofence_service import HueGeofenceService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
+from backend.services.lan_presence_service import LanPresenceService
 from backend.services.library_import_service import LibraryImportService
 from backend.services.mode_volume_service import ModeVolumeService
 from backend.services.morning_routine import MorningRoutineService
@@ -361,34 +361,35 @@ async def lifespan(app: FastAPI):
     music_mapper.set_automation(automation)
     ambient_sound.set_automation(automation)
 
-    # Hue Bridge geofence — phone-based home/away, drives the `away` mode.
-    # Event-driven: subscribes to the v2 SSE stream's behavior_instance
-    # updates. The Hue iOS app's "Coming home" + "Leaving home" automations
-    # emit SSE update events on their behavior_instance UUIDs when fired;
-    # we match those UUIDs against env-configured IDs and drive the override
-    # accordingly. Polling /clip/v2/resource/geofence_client was a dead end
-    # — Signify strips is_at_home for third-party app keys (verified
-    # empirically 2026-05-20). Unset IDs leave the lane in idle.
-    hue_geofence = HueGeofenceService(
+    # LAN-based presence detection — polls the Latitude's ARP neighbor
+    # table for the configured iPhone IP. Distinct from PresenceFusion
+    # below (which fuses multi-camera attendance/zone/posture); naming
+    # explicitly tags this one as the LAN-WiFi lane. The Hue Bridge
+    # geofence path was abandoned 2026-05-21 after empirical testing
+    # confirmed Signify strips both `is_at_home` and behavior_instance
+    # update events from third-party app keys. ARP+UDP-5353 probe is the
+    # gold-standard alternative on iOS 17/18 when Private WiFi Address is
+    # set to Fixed.
+    lan_presence = LanPresenceService(
         automation=automation,
-        home_behavior_id=settings.HUE_GEOFENCE_HOME_BEHAVIOR_ID,
-        away_behavior_id=settings.HUE_GEOFENCE_AWAY_BEHAVIOR_ID,
+        phone_ip=settings.PRESENCE_PHONE_IP,
+        poll_interval_seconds=settings.PRESENCE_POLL_INTERVAL_SECONDS,
+        miss_threshold=settings.PRESENCE_MISS_THRESHOLD,
     )
-    if hue_geofence.configured:
-        hue_v2.register_event_handler("behavior_instance", hue_geofence.handle_event)
+    automation._lan_presence = lan_presence
+    app.state.lan_presence = lan_presence
+    if lan_presence.configured:
         app_logger.info(
-            "Hue geofence: subscribed to behavior_instance events "
-            "(home=%s, away=%s)",
-            settings.HUE_GEOFENCE_HOME_BEHAVIOR_ID[:8],
-            settings.HUE_GEOFENCE_AWAY_BEHAVIOR_ID[:8],
+            "LAN presence: polling ip=%s every %ds (miss_threshold=%d)",
+            settings.PRESENCE_PHONE_IP,
+            settings.PRESENCE_POLL_INTERVAL_SECONDS,
+            settings.PRESENCE_MISS_THRESHOLD,
         )
     else:
         app_logger.info(
-            "Hue geofence: idle (HUE_GEOFENCE_{HOME,AWAY}_BEHAVIOR_ID unset) "
-            "— set both env vars to enable phone-based away detection"
+            "LAN presence: idle (PRESENCE_PHONE_IP unset) — set it to "
+            "enable LAN-based away detection"
         )
-    automation._hue_geofence = hue_geofence
-    app.state.hue_geofence = hue_geofence
 
     # Mode-change callbacks — runtime event subscriptions, separate from
     # dependency injection. Registered after automation exists.
@@ -889,13 +890,11 @@ async def lifespan(app: FastAPI):
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
     heartbeats.register("desk_exit_kitchen", 2.0)
-    # Hue geofence is event-driven (subscribes to v2 SSE), so heartbeat
-    # cadence is bursty — only ticks when the Hue app fires Coming/Leaving
-    # home. The v2 SSE stream's own `hue_v2_stream` heartbeat (100s) covers
-    # transport liveness. Register a generous threshold here so a healthy
-    # quiet day (no geofence transitions) doesn't get flagged stale.
-    heartbeats.register("hue_geofence", 24 * 3600.0)
-    hue_geofence.set_heartbeat_registry(heartbeats)
+    # Presence polls every PRESENCE_POLL_INTERVAL_SECONDS (default 30s).
+    # 2x cadence keeps the warn threshold tight enough to surface a stuck
+    # poll loop within a minute.
+    heartbeats.register("lan_presence", settings.PRESENCE_POLL_INTERVAL_SECONDS * 2.0)
+    lan_presence.set_heartbeat_registry(heartbeats)
 
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)
@@ -921,8 +920,9 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
 
     tasks.append(asyncio.create_task(automation.run_loop()))
-    # hue_geofence is event-driven now — no poll task. Updates arrive via
-    # the v2 SSE dispatch (registered above via register_event_handler).
+    # LAN presence poll task — exits immediately if not configured (no IP
+    # set), so the task list stays clean in that case.
+    tasks.append(asyncio.create_task(lan_presence.poll_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
     # Hourly scan for weather-aware brightness-suggestion candidates.
@@ -1087,7 +1087,7 @@ async def lifespan(app: FastAPI):
     # 3. Close long-lived HTTP clients last — poll loops that used them are
     #    already cancelled, so there's no race.
     await _safe_shutdown("hue_v2", hue_v2.close)
-    await _safe_shutdown("hue_geofence", hue_geofence.close)
+    await _safe_shutdown("lan_presence", lan_presence.close)
     await _safe_shutdown("rec_service", rec_service.close)
     await _safe_shutdown("gameday", gameday.close)
     notifier_inst = getattr(app.state, "notifier", None)
