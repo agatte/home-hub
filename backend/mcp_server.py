@@ -154,27 +154,72 @@ async def get_automation_status() -> dict:
 
 
 @mcp.tool()
-async def get_camera_snapshot(annotate: bool = True) -> Any:
-    """Capture one JPEG frame from the Latitude's webcam and return it to the agent.
+async def get_camera_snapshot(annotate: bool = True, source: str = "latitude") -> Any:
+    """Capture one JPEG frame from either the Latitude or the desktop webcam.
 
-    Requires the camera service to be enabled (opt-in via POST /api/camera/enable).
-    Frames are never written to disk; the JPEG is returned once and not cached.
-    When ``annotate`` is true the image includes the MediaPipe face box plus a
-    readout of current ambient lux, baseline, multiplier, and last detection.
-    Returns a plain string error (e.g. "camera is not enabled") when the service
-    is disabled, paused, or capture fails.
+    Args:
+        annotate: (Latitude only) overlay MediaPipe face box + lux readout.
+        source: "latitude" (default) — capture from the corner-mounted Latitude
+            camera in real time. "desktop" — request a fresh frame from the
+            desktop pc_agent (used to diagnose the dual-camera arbitration).
+
+    Latitude path: requires `camera_enabled`. Frames are never written to disk.
+    Desktop path: marks a snapshot pending, polls /latest for up to 15s while
+    the desktop pc_agent grabs and uploads the next frame from its 2s capture
+    loop. Saved to `data/diagnostics/desktop_snapshot_<ts>.jpg` on the Latitude
+    (gitignored — investigation artifact).
+
+    Returns the JPEG to the agent, or a plain error string on failure.
     """
     from fastmcp.utilities.types import Image
 
-    async with _client() as c:
-        r = await c.get(f"/api/camera/snapshot?annotate={'true' if annotate else 'false'}")
-        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
-            return Image(data=r.content, format="jpeg")
-        try:
-            detail = r.json().get("detail", r.text)
-        except Exception:
-            detail = r.text
-        return f"snapshot unavailable (HTTP {r.status_code}): {detail}"
+    if source == "latitude":
+        async with _client() as c:
+            r = await c.get(f"/api/camera/snapshot?annotate={'true' if annotate else 'false'}")
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+                return Image(data=r.content, format="jpeg")
+            try:
+                detail = r.json().get("detail", r.text)
+            except Exception:
+                detail = r.text
+            return f"snapshot unavailable (HTTP {r.status_code}): {detail}"
+
+    if source == "desktop":
+        import asyncio
+
+        async with _client() as c:
+            # Capture the current latest_ts so we know when a fresh upload arrives.
+            head = await c.get("/api/camera/desktop/snapshot/latest")
+            prior_ts = head.headers.get("X-Snapshot-Ts") if head.status_code == 200 else None
+
+            req = await c.post("/api/camera/desktop/snapshot/request")
+            if req.status_code >= 400:
+                try:
+                    detail = req.json().get("detail", req.text)
+                except Exception:
+                    detail = req.text
+                return f"desktop snapshot request failed (HTTP {req.status_code}): {detail}"
+
+            # Poll /latest for up to 15s waiting for a new ts. Desktop capture
+            # cadence is 2s, plus encode + upload — typical arrival 2–5s.
+            deadline = 15.0
+            interval = 0.75
+            elapsed = 0.0
+            while elapsed < deadline:
+                await asyncio.sleep(interval)
+                elapsed += interval
+                latest = await c.get("/api/camera/desktop/snapshot/latest")
+                if latest.status_code != 200:
+                    continue
+                ts = latest.headers.get("X-Snapshot-Ts")
+                if ts and ts != prior_ts:
+                    return Image(data=latest.content, format="jpeg")
+            return (
+                "desktop snapshot timed out after 15s — is the pc_agent supervisor "
+                "running on 192.168.1.30 with desktop_presence_enabled=true?"
+            )
+
+    return f"unknown source '{source}' — expected 'latitude' or 'desktop'"
 
 
 @mcp.tool()

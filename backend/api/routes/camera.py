@@ -1,18 +1,33 @@
 """Camera presence detection endpoints — status, enable/disable, calibrate."""
 
+import json
 import logging
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
+from backend.config import DATA_DIR
 from backend.services.presence_fusion import KNOWN_SOURCES, PresenceReading
 
 logger = logging.getLogger("home_hub.camera")
 
 router = APIRouter(prefix="/api/camera", tags=["camera"])
+
+# Desktop snapshot diagnostic — pending-flag TTL. The pc_agent polls
+# /desktop/snapshot/pending every ~2s (capture cadence). If no upload
+# arrives within this window we assume the desktop is offline or the
+# webcam is shuttered, clear the flag, and stop holding the request.
+DESKTOP_SNAPSHOT_TTL_S = 60.0
+DESKTOP_SNAPSHOT_DIR = DATA_DIR / "diagnostics"
+# Hard cap on uploaded JPEG size. A typical 640×480 JPEG at quality 85 is
+# ~30–80 KB; 2 MB leaves headroom for higher-resolution future captures
+# without exposing the route to an OOM-by-upload attack. LAN-only path,
+# but defense-in-depth.
+DESKTOP_SNAPSHOT_MAX_BYTES = 2_000_000
 
 
 class CameraToggle(BaseModel):
@@ -219,3 +234,199 @@ async def toggle_camera(body: CameraToggle, request: Request) -> dict:
 # watchdog loop (also in that module) can share it without creating an
 # api → service → api import cycle. The route imports it lazily inside
 # the handler above.
+
+
+# ---------------------------------------------------------------------------
+# Desktop snapshot diagnostic — request / poll / upload / fetch
+# ---------------------------------------------------------------------------
+#
+# The desktop pc_agent (emotion_capture.py) holds the only handle to the
+# desktop webcam. To compare what the two cameras see for the dual-camera
+# arbitration design, we need to pull a single JPEG from the desktop on
+# demand. This is a four-route pull-then-push: backend marks a snapshot
+# pending, desktop polls the flag on its next capture tick, encodes the
+# current frame, POSTs it back. Latency is bounded by the 2s capture
+# cadence + http round trip.
+#
+# Snapshots land in data/diagnostics/desktop_snapshot_{ts}.jpg. The
+# directory is gitignored along with the rest of data/. These are
+# investigation artifacts — not part of normal operation. There is no
+# automatic cleanup; manual prune after each diagnostic session.
+
+
+def _snapshot_state(app: Any) -> dict:
+    """Lazily initialize app.state.desktop_snapshot.
+
+    Holds: ``pending`` (bool), ``requested_at`` (datetime|None),
+    ``latest_path`` (Path|None), ``latest_ts`` (datetime|None).
+    """
+    state = getattr(app.state, "desktop_snapshot", None)
+    if state is None:
+        state = {
+            "pending": False,
+            "requested_at": None,
+            "latest_path": None,
+            "latest_ts": None,
+        }
+        app.state.desktop_snapshot = state
+    return state
+
+
+def _expire_pending_if_stale(state: dict) -> None:
+    """Clear the pending flag once it's past the TTL (desktop is offline)."""
+    if not state["pending"] or state["requested_at"] is None:
+        return
+    age = (datetime.now(timezone.utc) - state["requested_at"]).total_seconds()
+    if age > DESKTOP_SNAPSHOT_TTL_S:
+        logger.info(
+            "Desktop snapshot request expired after %.0fs without upload", age,
+        )
+        state["pending"] = False
+        state["requested_at"] = None
+
+
+@router.post("/desktop/snapshot/request", dependencies=[Depends(require_api_key)])
+async def request_desktop_snapshot(request: Request) -> dict:
+    """Mark a desktop-camera snapshot as pending.
+
+    The desktop pc_agent will see the flag on its next capture tick
+    (within ~2s) and POST the frame back to /desktop/snapshot/upload.
+    Use /desktop/snapshot/latest to retrieve the result.
+
+    Idempotent — multiple calls before an upload arrives don't queue
+    extra captures; they just refresh ``requested_at`` so the TTL clock
+    starts over.
+    """
+    state = _snapshot_state(request.app)
+    now = datetime.now(timezone.utc)
+    state["pending"] = True
+    state["requested_at"] = now
+    logger.info("Desktop snapshot requested (ttl=%ds)", int(DESKTOP_SNAPSHOT_TTL_S))
+    return {
+        "status": "ok",
+        "pending": True,
+        "requested_at": now.isoformat(),
+        "ttl_seconds": DESKTOP_SNAPSHOT_TTL_S,
+    }
+
+
+@router.get("/desktop/snapshot/pending", dependencies=[Depends(require_api_key)])
+async def get_desktop_snapshot_pending(request: Request) -> dict:
+    """Polled by the desktop pc_agent to check whether to capture.
+
+    Auth-gated; the desktop already has API-key bypass via RFC1918. The
+    response is intentionally tiny — this is called every 2s during
+    normal capture, and the desktop short-circuits on ``pending=False``.
+    """
+    state = _snapshot_state(request.app)
+    _expire_pending_if_stale(state)
+    return {
+        "pending": state["pending"],
+        "requested_at": (
+            state["requested_at"].isoformat()
+            if state["requested_at"] is not None
+            else None
+        ),
+    }
+
+
+@router.post("/desktop/snapshot/upload", dependencies=[Depends(require_api_key)])
+async def upload_desktop_snapshot(
+    request: Request,
+    image: UploadFile = File(...),
+    captured_at: Optional[str] = Form(default=None),
+    face_present: Optional[str] = Form(default=None),
+    face_confidence: Optional[str] = Form(default=None),
+) -> dict:
+    """Receive a JPEG frame from the desktop pc_agent.
+
+    Writes the image to ``data/diagnostics/desktop_snapshot_{ts}.jpg``
+    and a sidecar ``.json`` with the matching presence reading. Clears
+    the pending flag so the desktop stops capturing on subsequent polls.
+
+    The form fields (captured_at / face_present / face_confidence) are
+    optional strings so the desktop doesn't have to re-parse the
+    PresenceReading shape — they're written verbatim to the sidecar.
+    """
+    state = _snapshot_state(request.app)
+    if not state["pending"]:
+        # Late upload after TTL expiry, or unsolicited POST. Still save
+        # it — the diagnostic value isn't conditional on the flag still
+        # being set — but log so a misbehaving agent is visible.
+        logger.warning(
+            "Desktop snapshot upload received with no pending request"
+        )
+
+    if image.content_type and not image.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"expected image/* content-type, got {image.content_type}",
+        )
+
+    # Early-reject oversized uploads — header-based check before we
+    # allocate the bytes. Body is then bounded by the explicit cap below.
+    declared_len = request.headers.get("content-length")
+    if declared_len and declared_len.isdigit() and int(declared_len) > DESKTOP_SNAPSHOT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"snapshot exceeds {DESKTOP_SNAPSHOT_MAX_BYTES} byte cap",
+        )
+
+    data = await image.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty image body")
+    if len(data) > DESKTOP_SNAPSHOT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"snapshot exceeds {DESKTOP_SNAPSHOT_MAX_BYTES} byte cap",
+        )
+
+    DESKTOP_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc)
+    ts_compact = ts.strftime("%Y%m%dT%H%M%SZ")
+    img_path = DESKTOP_SNAPSHOT_DIR / f"desktop_snapshot_{ts_compact}.jpg"
+    sidecar_path = DESKTOP_SNAPSHOT_DIR / f"desktop_snapshot_{ts_compact}.json"
+
+    img_path.write_bytes(data)
+    sidecar = {
+        "captured_at": captured_at,
+        "face_present": face_present,
+        "face_confidence": face_confidence,
+        "uploaded_at": ts.isoformat(),
+        "byte_size": len(data),
+    }
+    sidecar_path.write_text(json.dumps(sidecar, indent=2))
+
+    state["pending"] = False
+    state["requested_at"] = None
+    state["latest_path"] = img_path
+    state["latest_ts"] = ts
+    logger.info(
+        "Desktop snapshot saved: %s (%d bytes)", img_path.name, len(data),
+    )
+    return {
+        "status": "ok",
+        "path": str(img_path),
+        "ts": ts.isoformat(),
+        "byte_size": len(data),
+    }
+
+
+@router.get("/desktop/snapshot/latest", dependencies=[Depends(require_api_key)])
+async def get_desktop_snapshot_latest(request: Request) -> Response:
+    """Return the most recently uploaded desktop snapshot."""
+    state = _snapshot_state(request.app)
+    latest: Optional[Path] = state.get("latest_path")
+    if latest is None or not latest.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="no desktop snapshot uploaded yet — call /desktop/snapshot/request first",
+        )
+    headers = {"Cache-Control": "no-store"}
+    if state.get("latest_ts") is not None:
+        headers["X-Snapshot-Ts"] = state["latest_ts"].isoformat()
+    return Response(
+        content=latest.read_bytes(),
+        media_type="image/jpeg",
+        headers=headers,
+    )

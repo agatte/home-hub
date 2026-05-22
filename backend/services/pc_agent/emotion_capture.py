@@ -388,6 +388,13 @@ class EmotionCapture:
         self._observation_endpoint = f"{self._server_url}/api/camera/observation"
         self._settings_endpoint = f"{self._server_url}/api/personality/settings"
         self._mode_endpoint = f"{self._server_url}/api/automation/activity"
+        # Diagnostic snapshot endpoints — only hit when the backend has
+        # explicitly requested a frame via POST /api/camera/desktop/snapshot/request.
+        # The pending-check GET is cheap (~30 bytes) and the upload POST
+        # only fires when a request is outstanding; raw frames are not
+        # transmitted in normal operation.
+        self._snapshot_pending_endpoint = f"{self._server_url}/api/camera/desktop/snapshot/pending"
+        self._snapshot_upload_endpoint = f"{self._server_url}/api/camera/desktop/snapshot/upload"
 
         # Runtime toggles, refreshed by the settings-poll thread. Defaults
         # to False so we don't capture before the user has opted in via
@@ -639,6 +646,18 @@ class EmotionCapture:
             face_present = face_confidence >= FACE_CONFIDENCE_FLOOR
             captured_at = datetime.now(timezone.utc)
 
+            # Diagnostic snapshot — opt-in, backend-initiated. Check
+            # the pending flag and (if set) ship the raw frame back.
+            # Runs inside the existing tick so we reuse the already-
+            # decoded BGR frame; adds one HTTP GET per cycle (~30 bytes).
+            self._maybe_upload_snapshot(
+                frame=frame,
+                face_present=face_present,
+                face_confidence=face_confidence,
+                captured_at=captured_at,
+                cv2=cv2,
+            )
+
             # Pose classification — only when presence is enabled and
             # we have a face (no point classifying posture for an empty
             # chair). The pose detector + classifier are pure additions
@@ -836,6 +855,89 @@ class EmotionCapture:
                 )
         except httpx.HTTPError as exc:
             logger.debug("POST /observation failed: %s", exc)
+
+    def _maybe_upload_snapshot(
+        self,
+        *,
+        frame: Any,
+        face_present: bool,
+        face_confidence: float,
+        captured_at: datetime,
+        cv2: Any,
+    ) -> None:
+        """If the backend has a pending snapshot request, ship the frame.
+
+        Backend-driven: we only encode + POST when /desktop/snapshot/pending
+        returns ``pending=True``. That route is gated by an explicit
+        diagnostic call to /desktop/snapshot/request — raw frames never
+        leave this host in normal operation.
+
+        Privacy gate: enforced on the desktop side via ``is_presence_enabled``.
+        The emotion-only toggle never lets a raw frame leave the host
+        even if the backend mistakenly sets the pending flag (defense in
+        depth — backend already double-checks, but we don't want the
+        contract to rest on a single point of agreement).
+
+        Best-effort. Pending-check network error → silent retry next tick.
+        Encode error → log + skip (next tick will retry while pending
+        remains set). Upload error → log; the backend will keep the flag
+        set until TTL expiry, so a transient blip auto-recovers.
+        """
+        if not self.is_presence_enabled():
+            return
+        # Cheap pending probe first so we don't encode every tick.
+        try:
+            resp = self._client.get(
+                self._snapshot_pending_endpoint, timeout=HTTP_TIMEOUT_S,
+            )
+            if resp.status_code != 200:
+                return
+            body = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return
+        if not bool(body.get("pending")):
+            return
+
+        # Encode the current BGR frame to JPEG. cv2.imencode returns
+        # (success: bool, ndarray) — we send the ndarray bytes directly
+        # without ever writing to disk on the desktop side.
+        try:
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ok or buf is None:
+                logger.warning("cv2.imencode returned no buffer for snapshot")
+                return
+            jpeg_bytes = buf.tobytes()
+        except Exception:
+            logger.warning("Snapshot encode failed", exc_info=True)
+            return
+
+        files = {
+            "image": ("desktop_snapshot.jpg", jpeg_bytes, "image/jpeg"),
+        }
+        data = {
+            "captured_at": captured_at.isoformat(),
+            "face_present": "true" if face_present else "false",
+            "face_confidence": f"{face_confidence:.4f}",
+        }
+        try:
+            up = self._client.post(
+                self._snapshot_upload_endpoint,
+                files=files,
+                data=data,
+                timeout=HTTP_TIMEOUT_S * 2,  # JPEG is ~50–200 KB
+            )
+            if up.status_code >= 400:
+                logger.warning(
+                    "POST /desktop/snapshot/upload returned %d: %s",
+                    up.status_code,
+                    up.text[:200],
+                )
+            else:
+                logger.info(
+                    "Desktop snapshot uploaded (%d bytes)", len(jpeg_bytes),
+                )
+        except httpx.HTTPError as exc:
+            logger.warning("Snapshot upload failed: %s", exc)
 
     # ── settings poll ───────────────────────────────────────────────
 
