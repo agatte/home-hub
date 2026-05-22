@@ -620,36 +620,36 @@ class EmotionCapture:
                 return
 
             face_blendshapes = getattr(result, "face_blendshapes", None) or []
-            if not face_blendshapes:
-                return
 
-            shapes = face_blendshapes[0]
-            blendshape_dict = {
-                cat.category_name: float(cat.score) for cat in shapes
-            }
-
-            # FaceLandmarker doesn't expose a top-level face confidence in
-            # the same way BlazeFace does. Use the maximum non-neutral
-            # category score as a coarse proxy — when nothing's in front
-            # of the camera, all categories collapse to ~0 and the gate
-            # filters us out. When a face is present, several categories
-            # land in the 0.3–0.9 range.
-            face_confidence = max(
-                (
-                    score
-                    for name, score in blendshape_dict.items()
-                    if name != "_neutral"
-                ),
-                default=0.0,
-            )
+            # Derive face_present + face_confidence even when no blendshapes
+            # were returned. FaceLandmarker has no top-level detector
+            # score; the max non-neutral blendshape activation is the
+            # established proxy. Empty list → confidence 0 → not present.
+            if face_blendshapes:
+                shapes = face_blendshapes[0]
+                blendshape_dict = {
+                    cat.category_name: float(cat.score) for cat in shapes
+                }
+                face_confidence = max(
+                    (
+                        score
+                        for name, score in blendshape_dict.items()
+                        if name != "_neutral"
+                    ),
+                    default=0.0,
+                )
+            else:
+                blendshape_dict = {}
+                face_confidence = 0.0
 
             face_present = face_confidence >= FACE_CONFIDENCE_FLOOR
             captured_at = datetime.now(timezone.utc)
 
-            # Diagnostic snapshot — opt-in, backend-initiated. Check
-            # the pending flag and (if set) ship the raw frame back.
-            # Runs inside the existing tick so we reuse the already-
-            # decoded BGR frame; adds one HTTP GET per cycle (~30 bytes).
+            # Diagnostic snapshot — opt-in, backend-initiated. Fires
+            # regardless of face presence (the truth-table walk needs
+            # to capture what the camera sees from positions where
+            # the desktop can't detect a face — bed, kitchen, etc.).
+            # Privacy-gated server-side via the pending flag.
             self._maybe_upload_snapshot(
                 frame=frame,
                 face_present=face_present,
