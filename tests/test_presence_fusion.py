@@ -148,19 +148,120 @@ def test_custom_max_age_overrides_default() -> None:
     assert fusion.is_at_desk_fresh(max_age_s=180) is True
 
 
+def test_veto_also_suppresses_at_desk_attribution() -> None:
+    """The veto must consistently flow through both ``is_at_desk_fresh``
+    and ``get_at_desk_attribution`` — otherwise the status dict reads
+    incoherent (``at_desk=False`` with ``at_desk_source='desktop'``).
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.78,
+    ))
+    # Latitude lands AFTER, then sees user actively in bed.
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.60,
+        detection_source="face", zone="bed", posture="reclined",
+    ))
+    assert fusion.is_at_desk_fresh() is False
+    assert fusion.get_at_desk_attribution() is None
+
+
+def test_latitude_bed_vetoes_desktop_face_present() -> None:
+    """Cross-source veto (2026-05-21): if Latitude actively sees the user
+    in bed (its wide-angle view is authoritative for off-desk localization),
+    a fresh desktop face_present cannot promote at-desk. The two views can't
+    both be true geometrically. Desktop FaceLandmarker has been observed to
+    misfire on chair-shaped artifacts; Latitude's zone commit on bed is the
+    stronger negative signal here.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.55,
+        detection_source="face", zone="bed", posture="reclined",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.73,
+    ))
+    assert fusion.is_at_desk_fresh() is False
+
+
+def test_latitude_zone_none_does_not_veto_desktop() -> None:
+    """Counterpoint to the bed-veto: when Latitude has a fresh reading but
+    no committed zone (weak-face FP, pose without face anchor, dim room),
+    that's "Latitude doesn't know" — NOT "user not at desk." Desktop's
+    face_present should still promote. This preserves the working case
+    where Latitude misses Anthony due to lighting/pose but the desktop
+    has a clean frontal view.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=False, face_confidence=0.18,
+        detection_source="face", zone=None,
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.73,
+    ))
+    assert fusion.is_at_desk_fresh() is True
+
+
+def test_stale_latitude_does_not_veto_desktop() -> None:
+    """The veto requires Latitude to be FRESH. If Latitude went stale (cam
+    paused, webcam shuttered, V4L2 wedged), desktop carries on its own.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_ago(DEFAULT_FRESHNESS_S + 60),
+        zone="bed", posture="reclined",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.65,
+    ))
+    assert fusion.is_at_desk_fresh() is True
+    assert fusion.get_at_desk_attribution() == "desktop"
+
+
 # ---------------------------------------------------------------------------
 # is_strongly_present_any
 # ---------------------------------------------------------------------------
 
 
-def test_latitude_pose_is_strongly_present() -> None:
+def test_latitude_pose_with_upstream_commit_is_strongly_present() -> None:
+    """After the 2026-05-21 face-anchor fix, pose-only Latitude readings
+    reach fusion only when camera_service.py has confirmed via the face
+    anchor that a real person is present (pose alone fires on the empty
+    chair). The reading carries ``face_present=True`` because upstream
+    committed ``detection=present`` — that's what we trust now.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.6,
+        detection_source="pose", zone="desk",
+    ))
+    assert fusion.is_strongly_present_any() is True
+
+
+def test_latitude_pose_without_face_present_is_not_strong() -> None:
+    """Bug fix from 2026-05-21: pose @ high conf on the empty chair
+    used to promote to strongly-present unconditionally. After the
+    upstream face-anchor gate, such a reading reaches fusion with
+    ``face_present=False`` (anchor stale → upstream demoted to absent).
+    Fusion must respect that — pose without face_present is not strong.
+    """
     fusion = PresenceFusion()
     fusion.on_observation(PresenceReading(
         source="latitude", captured_at=_now(),
         face_present=False, face_confidence=0.0,
         detection_source="pose", zone="desk",
     ))
-    assert fusion.is_strongly_present_any() is True
+    assert fusion.is_strongly_present_any() is False
 
 
 def test_latitude_strong_face_is_strongly_present() -> None:

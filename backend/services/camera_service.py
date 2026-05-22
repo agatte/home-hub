@@ -96,6 +96,29 @@ LOW_LUX_THRESHOLD = 300.0
 # so the bar sits above the chair-back ceiling. Real desk sessions in good
 # lighting typically clear 0.7–0.85.
 FACE_TRUST_THRESHOLD = 0.70
+# Face-anchor cross-validation for pose detections. MediaPipe pose fires at
+# 0.98 confidence with full landmark visibility on the empty office chair
+# (symmetric back + armrests + headrest reads as a human torso) — observed
+# 2026-05-21 truth-table walk, see project_latitude_pose_on_chair_false_positive.md.
+# To distinguish a real user (whose face we saw recently) from furniture
+# (which never has a face), require a face anchor within the TTL window
+# before honoring a pose-only present commit. The anchor refreshes whenever
+# a face fires above ``FACE_ANCHOR_MIN_CONFIDENCE`` in the same zone — so a
+# user who sat down, was face-detected, then turned to the side monitor
+# (face-less but still in the chair) keeps committing pose-present as long
+# as the side-glance is shorter than the TTL.
+#
+# Threshold + window choice:
+#   - 0.40 is comfortably above MIN_FACE_CONFIDENCE (0.15, chair-back territory)
+#     but well below FACE_TRUST_THRESHOLD (0.70, the strong-face bar). It admits
+#     real-but-imperfect frontal face reads while excluding silhouette noise.
+#   - 30s is long enough to cover a real "turn to look at the printer / side
+#     monitor" event without committing pose-only state indefinitely. End-to-
+#     end DeskExitKitchenService latency after a true walkout: anchor expires
+#     at 30s → pose-only stops committing → DeskExit absent timer (10s) →
+#     kitchen brightens at ~40s post-walkout.
+FACE_ANCHOR_MIN_CONFIDENCE = 0.40
+FACE_ANCHOR_TTL_SECONDS = 30.0
 # Pose fallback — MediaPipe Pose Landmarker (Tasks API). Declares "present"
 # when enough torso landmarks (nose, shoulders, hips) are visible above
 # MIN_POSE_VISIBILITY. This catches Anthony at the desk in deep profile,
@@ -324,6 +347,13 @@ class CameraService:
         self._last_posture_at: Optional[datetime] = None
         self._candidate_posture: Optional[str] = None
         self._candidate_posture_since: Optional[datetime] = None
+
+        # Face anchor — last time a face fired in each zone with confidence
+        # >= FACE_ANCHOR_MIN_CONFIDENCE. Gates pose-only present commits so
+        # the empty office chair (which fires pose at 0.98) doesn't masquerade
+        # as the user. See FACE_ANCHOR_MIN_CONFIDENCE / FACE_ANCHOR_TTL_SECONDS
+        # docs above.
+        self._face_anchor_at: dict[str, datetime] = {}
 
         # Heartbeat registry — set via set_heartbeat_registry from lifespan.
         # Camera is opt-in, so we register only on enable and deregister on
@@ -1786,6 +1816,16 @@ class CameraService:
                 cx = (bbox.origin_x + bbox.width / 2) / max(w, 1)
                 face_zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
 
+            # Face-anchor refresh. Any face above FACE_ANCHOR_MIN_CONFIDENCE
+            # refreshes its zone's anchor. The TTL is checked downstream when
+            # arbitrating pose-only present commits.
+            if (
+                face_best is not None
+                and face_conf >= FACE_ANCHOR_MIN_CONFIDENCE
+                and face_zone is not None
+            ):
+                self._face_anchor_at[face_zone] = datetime.now(timezone.utc)
+
             # Face Landmarker (emotion only — ~20ms, ~3MB model). Conditional
             # on emotion_enabled AND a face already detected above with
             # sufficient confidence; otherwise we'd burn the budget producing
@@ -1854,16 +1894,48 @@ class CameraService:
                 }
 
             if pose_present:
-                return {
-                    "status": "present",
-                    "confidence": pose_mean_vis,
-                    "source": "pose",
-                    "pose_landmark_count": pose_count,
-                    "ambient_lux": ambient_lux,
-                    "zone": pose_zone,
-                    "posture": pose_posture,
-                    "blendshapes": blendshapes,
-                }
+                # Face-anchor gate. Pose alone (no co-temporal strong face)
+                # cannot distinguish a real user from the empty office chair
+                # — chair's torso-symmetric silhouette fires pose at 0.98
+                # with all 5 landmarks (2026-05-21 truth-table). Require a
+                # recent face anchor before honoring this commit.
+                #
+                # When pose_zone is None (both shoulders below visibility
+                # floor — deep profile, bent forward), fall back to the
+                # most-recent anchor in ANY zone. The zone ambiguity is
+                # about localization, not presence — a face seen anywhere
+                # recently is evidence of a real person who's now reoriented.
+                if pose_zone:
+                    anchor_at = self._face_anchor_at.get(pose_zone)
+                else:
+                    anchor_at = (
+                        max(self._face_anchor_at.values())
+                        if self._face_anchor_at else None
+                    )
+                anchor_age = (
+                    (datetime.now(timezone.utc) - anchor_at).total_seconds()
+                    if anchor_at is not None
+                    else None
+                )
+                anchor_fresh = (
+                    anchor_age is not None and anchor_age <= FACE_ANCHOR_TTL_SECONDS
+                )
+                if anchor_fresh:
+                    return {
+                        "status": "present",
+                        "confidence": pose_mean_vis,
+                        "source": "pose",
+                        "pose_landmark_count": pose_count,
+                        "ambient_lux": ambient_lux,
+                        "zone": pose_zone,
+                        "posture": pose_posture,
+                        "blendshapes": blendshapes,
+                    }
+                # Stale anchor — pose silhouette is more likely furniture
+                # than the user. Fall through to weak-face / absent paths.
+                # The face fallback below would also need anchor support if
+                # face_best is weak; we keep the existing low-lux floor as
+                # the second line of defense.
 
             if face_best is not None:
                 # Weak face + no pose. We trust the detection for *presence*
@@ -2142,6 +2214,11 @@ class CameraService:
 
     def get_status(self) -> dict:
         """Return current camera service status for health checks."""
+        now = datetime.now(timezone.utc)
+        face_anchor_age_s = {
+            zone: (now - ts).total_seconds()
+            for zone, ts in self._face_anchor_at.items()
+        }
         return {
             "enabled": self._enabled,
             "paused": self._paused,
@@ -2162,6 +2239,8 @@ class CameraService:
             "candidate_zone": self._candidate_zone,
             "posture": self._last_posture,
             "candidate_posture": self._candidate_posture,
+            "face_anchor_age_s_by_zone": face_anchor_age_s,
+            "face_anchor_ttl_s": FACE_ANCHOR_TTL_SECONDS,
         }
 
 

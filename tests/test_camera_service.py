@@ -1003,3 +1003,213 @@ class TestCaptureWatchdog:
             pass
 
         assert recover_called, "Watchdog should have invoked _recover_capture"
+
+
+# ---------------------------------------------------------------------------
+# Face-anchor gate on pose-only present commits (Phase 2, 2026-05-21)
+# ---------------------------------------------------------------------------
+
+
+def _mock_full_pose_landmarks_result(
+    visibility: float = 0.95,
+    landmark_count: int = 5,
+    x_positions: list[float] | None = None,
+):
+    """Construct a MediaPipe-style pose_landmarker result.
+
+    By default sets all 5 torso landmarks (nose, both shoulders, both hips)
+    at high visibility — the exact pattern that fires on the empty office
+    chair (2026-05-21 truth-table walk).
+    """
+    import numpy as np
+
+    def landmark(x: float, y: float, vis: float) -> MagicMock:
+        return MagicMock(x=x, y=y, visibility=vis)
+    # Indices: nose=0, left_shoulder=11, right_shoulder=12,
+    # left_hip=23, right_hip=24. Fill 25 slots so the indexing in
+    # _process_frame's pose_zone math doesn't IndexError.
+    if x_positions is None:
+        # Desk side (x < 0.40)
+        x_positions = [0.30] * 5
+    landmarks = [landmark(0.5, 0.5, 0.0)] * 25
+    landmarks[0] = landmark(x_positions[0], 0.30, visibility)
+    landmarks[11] = landmark(x_positions[1], 0.45, visibility)
+    landmarks[12] = landmark(x_positions[2], 0.45, visibility)
+    landmarks[23] = landmark(x_positions[3], 0.70, visibility)
+    landmarks[24] = landmark(x_positions[4], 0.70, visibility)
+    result = MagicMock()
+    result.pose_landmarks = [landmarks]
+    return result
+
+
+class TestFaceAnchorPoseGate:
+    """Pose-only present commits require a recent face anchor in the same
+    zone — distinguishes the user from the empty office chair, whose
+    torso-symmetric shape fires MediaPipe pose at 0.98 confidence.
+    """
+
+    def _service_with_pose_no_face(self):
+        """Build a service where face detector returns nothing + pose fires."""
+        service = _make_service()
+        service._enabled = True
+
+        import numpy as np
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.zeros((240, 320, 3), dtype=np.uint8))
+        service._cap = mock_cap
+
+        # No face detections
+        mock_face_detector = MagicMock()
+        mock_face_results = MagicMock()
+        mock_face_results.detections = []
+        mock_face_detector.detect.return_value = mock_face_results
+        service._face_detector = mock_face_detector
+
+        # Pose fires at 0.95 with all 5 landmarks at desk-side X
+        mock_pose_landmarker = MagicMock()
+        mock_pose_landmarker.detect.return_value = _mock_full_pose_landmarks_result()
+        service._pose_landmarker = mock_pose_landmarker
+        return service
+
+    def test_pose_only_no_anchor_does_not_commit_present(self):
+        """The empty-chair scenario: pose fires at 0.95 with full landmarks,
+        but no face anchor exists. Should NOT commit present.
+        """
+        service = self._service_with_pose_no_face()
+        result = service._process_frame()
+        assert result is not None
+        # Falls through to absent (no face, no anchor → no commit from pose)
+        assert result["status"] == "absent"
+        assert result["source"] is None
+
+    def test_pose_with_fresh_face_anchor_commits_present(self):
+        """User sat down (face detected → anchor set), then turned to side
+        monitor (face gone, pose still firing). Should keep committing
+        present via pose since the anchor is fresh.
+        """
+        service = self._service_with_pose_no_face()
+        # Seed a fresh face anchor for the desk zone
+        from datetime import datetime, timezone
+        service._face_anchor_at["desk"] = datetime.now(timezone.utc)
+
+        result = service._process_frame()
+        assert result is not None
+        assert result["status"] == "present"
+        assert result["source"] == "pose"
+        assert result["zone"] == "desk"
+
+    def test_pose_with_stale_face_anchor_does_not_commit(self):
+        """Anchor older than TTL → treated as expired. Pose falls through
+        to absent like the no-anchor case.
+        """
+        from datetime import datetime, timedelta, timezone
+        from backend.services.camera_service import FACE_ANCHOR_TTL_SECONDS
+
+        service = self._service_with_pose_no_face()
+        service._face_anchor_at["desk"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=FACE_ANCHOR_TTL_SECONDS + 5)
+        )
+
+        result = service._process_frame()
+        assert result is not None
+        assert result["status"] == "absent"
+
+    def test_face_anchor_refreshes_on_qualifying_face(self):
+        """Face detected with conf >= FACE_ANCHOR_MIN_CONFIDENCE → anchor
+        timestamp updates for the face's zone.
+        """
+        from backend.services.camera_service import FACE_ANCHOR_MIN_CONFIDENCE
+
+        service = _make_service()
+        service._enabled = True
+
+        import numpy as np
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.zeros((240, 320, 3), dtype=np.uint8))
+        service._cap = mock_cap
+
+        # Face at desk zone, confidence just above the anchor threshold
+        mock_face_detector = MagicMock()
+        mock_face_results = MagicMock()
+        mock_face_results.detections = [
+            _mock_detection(FACE_ANCHOR_MIN_CONFIDENCE + 0.05, origin_x=50, width=60),
+        ]
+        mock_face_detector.detect.return_value = mock_face_results
+        service._face_detector = mock_face_detector
+        # No pose this frame
+        service._pose_landmarker = None
+
+        assert "desk" not in service._face_anchor_at
+        service._process_frame()
+        assert "desk" in service._face_anchor_at
+
+    def test_face_below_anchor_threshold_does_not_refresh(self):
+        """Weak chair-back faces (conf < FACE_ANCHOR_MIN_CONFIDENCE) must
+        NOT refresh the anchor — that would defeat the gate's purpose.
+        """
+        from backend.services.camera_service import FACE_ANCHOR_MIN_CONFIDENCE
+
+        service = _make_service()
+        service._enabled = True
+
+        import numpy as np
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.zeros((240, 320, 3), dtype=np.uint8))
+        service._cap = mock_cap
+
+        # Weak face — well below anchor threshold (chair-back range)
+        mock_face_detector = MagicMock()
+        mock_face_results = MagicMock()
+        mock_face_results.detections = [
+            _mock_detection(FACE_ANCHOR_MIN_CONFIDENCE - 0.10, origin_x=50, width=60),
+        ]
+        mock_face_detector.detect.return_value = mock_face_results
+        service._face_detector = mock_face_detector
+        service._pose_landmarker = None
+
+        service._process_frame()
+        assert "desk" not in service._face_anchor_at
+
+    def test_pose_zone_none_falls_back_to_any_anchor(self):
+        """When pose_zone is None (shoulders below visibility floor, e.g.
+        deep profile), the gate falls back to the most-recent anchor in
+        any zone. A real user with a fresh face anchor anywhere shouldn't
+        get demoted to absent just because pose can't disambiguate side.
+        """
+        from datetime import datetime, timezone
+
+        service = self._service_with_pose_no_face()
+        # Override the pose mock to return zone=None (shoulders sub-vis)
+        no_zone_pose = _mock_full_pose_landmarks_result(visibility=0.95)
+        # Drop shoulder visibility below MIN_POSE_VISIBILITY so pose_zone is None
+        no_zone_pose.pose_landmarks[0][11].visibility = 0.1
+        no_zone_pose.pose_landmarks[0][12].visibility = 0.1
+        service._pose_landmarker.detect.return_value = no_zone_pose
+
+        # Anchor exists in bed (recent), pose can't pick a zone
+        service._face_anchor_at["bed"] = datetime.now(timezone.utc)
+        result = service._process_frame()
+        # Pose with fresh anchor in some zone → present.
+        # zone=None confirms the no-zone branch actually fired (otherwise
+        # the test would silently pass via the normal zone-keyed lookup).
+        assert result["status"] == "present"
+        assert result["source"] == "pose"
+        assert result["zone"] is None
+
+    def test_status_surfaces_face_anchor_age(self):
+        """get_status() includes ``face_anchor_age_s_by_zone`` so dashboards
+        and the truth-table walk can see when the anchor was last refreshed.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        service = _make_service()
+        service._face_anchor_at["desk"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=12.0)
+        )
+        status = service.get_status()
+        assert "face_anchor_age_s_by_zone" in status
+        assert "face_anchor_ttl_s" in status
+        assert status["face_anchor_age_s_by_zone"]["desk"] == pytest.approx(12.0, abs=1.0)

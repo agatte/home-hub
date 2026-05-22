@@ -129,20 +129,57 @@ class PresenceFusion:
     # Attendance queries
     # ------------------------------------------------------------------
 
-    def is_at_desk_fresh(self, max_age_s: int = DEFAULT_FRESHNESS_S) -> bool:
-        """True iff any source has a fresh at-desk confirmation.
+    def _latitude_says_bed(self, max_age_s: int) -> bool:
+        """Helper: is Latitude actively localizing the user to bed?
 
-        Latitude: ``zone == 'desk'`` within the freshness window.
-        Desktop: a fresh ``face_present`` reading is definitionally at-desk
-        — the desktop camera only sees the desk.
+        Single-arity rule: the cross-source veto fires only when Latitude
+        has a fresh reading with ``zone=='bed'`` AND ``face_present=True``.
+        ``zone=None`` is "I don't know," not "off-desk" — never veto on it.
+        Extracted so ``is_at_desk_fresh`` and ``get_at_desk_attribution``
+        stay consistent (a desktop attribution shouldn't survive a veto
+        that returned False from the at-desk query).
         """
         now = datetime.now(timezone.utc)
         for reading in self._readings.values():
             if (now - reading.captured_at).total_seconds() > max_age_s:
                 continue
-            if self._is_at_desk(reading):
+            if (
+                reading.source == "latitude"
+                and reading.zone == "bed"
+                and reading.face_present
+            ):
                 return True
         return False
+
+    def is_at_desk_fresh(self, max_age_s: int = DEFAULT_FRESHNESS_S) -> bool:
+        """True iff any source has a fresh at-desk confirmation.
+
+        Latitude: ``zone == 'desk'`` within the freshness window. After
+        2026-05-21, the camera_service.py face-anchor gate prevents pose-on-
+        chair from committing ``zone=desk`` without a recent face — so a
+        fresh Latitude ``zone=desk`` is itself trustworthy.
+
+        Desktop: a fresh ``face_present`` reading implies the user is engaged
+        at the monitor (FaceLandmarker is frontal close-range; profile or
+        no-face frames don't fire). NOT a FoV-bounded claim — the desktop
+        webcam actually has a wide field of view that includes the bed in
+        the background; reliability comes from the model's detection profile.
+
+        Cross-source veto: see ``_latitude_says_bed`` — when Latitude
+        positively localizes user to bed, desktop face_present is vetoed.
+        """
+        now = datetime.now(timezone.utc)
+        any_at_desk = False
+        for reading in self._readings.values():
+            if (now - reading.captured_at).total_seconds() > max_age_s:
+                continue
+            if self._is_at_desk(reading):
+                any_at_desk = True
+        if any_at_desk and self._latitude_says_bed(max_age_s):
+            # Geometric impossibility: Latitude sees user in bed AND desktop
+            # face says at-desk. Trust the wider-angle view.
+            return False
+        return any_at_desk
 
     def is_strongly_present_any(
         self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
@@ -186,13 +223,22 @@ class PresenceFusion:
         return False
 
     def get_at_desk_attribution(self) -> Optional[str]:
-        """Most recent source to confirm at-desk, or None if stale."""
+        """Most recent source to confirm at-desk, or None if stale.
+
+        Respects the cross-source veto: if Latitude currently sees the user
+        in bed, the stored ``_last_at_desk_source`` (likely "desktop" from
+        a still-fresh frontal face reading) is suppressed — the status dict
+        would otherwise read ``at_desk=False, at_desk_source="desktop"``,
+        which is incoherent.
+        """
         if self._last_at_desk_at is None:
             return None
         age = (
             datetime.now(timezone.utc) - self._last_at_desk_at
         ).total_seconds()
         if age > DEFAULT_FRESHNESS_S:
+            return None
+        if self._latitude_says_bed(DEFAULT_FRESHNESS_S):
             return None
         return self._last_at_desk_source
 
@@ -356,10 +402,24 @@ class PresenceFusion:
 
     @staticmethod
     def _is_strongly_present(reading: PresenceReading) -> bool:
-        """Whether one reading qualifies as strong presence."""
+        """Whether one reading qualifies as strong presence.
+
+        Latitude pose is NOT automatically strong (was unconditionally True
+        before 2026-05-21). MediaPipe pose fires at 0.98 confidence with
+        full landmark visibility on the empty office chair — see
+        ``project_latitude_pose_on_chair_false_positive.md``. Pose-only
+        presence is now gated upstream in ``camera_service.py`` by the
+        face-anchor cross-validation: pose without a recent face anchor
+        in the same zone no longer commits ``detection=present``. So a
+        Latitude reading that reaches us with ``detection_source='pose'``
+        already passed that gate — we can trust pose presence here, but
+        we still demand the face_present flag to confirm the upstream
+        commit actually fired.
+        """
         if reading.source == "latitude":
             if reading.detection_source == "pose":
-                return True
+                # Trust upstream's face-anchor gate (camera_service.py).
+                return bool(reading.face_present)
             if reading.detection_source == "face":
                 return (
                     reading.face_confidence or 0.0
