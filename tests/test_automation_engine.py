@@ -2072,6 +2072,20 @@ class TestFusionAutoApplyNoOp:
     the sibling ``fusion_can_override`` branch's no-op guard at 2330).
     """
 
+    @pytest.fixture(autouse=True)
+    def _pin_evening_period(self, monkeypatch):
+        """Pin ``_get_time_period`` to ``"evening"`` for every test in this
+        class. Without this, the late_night_rescue branch (run_loop ~2615)
+        fires first whenever the test suite runs after 23:00 local and
+        overrides mode to ``"relax"`` before fusion_auto_apply can act —
+        the test then sees ``_override_mode='relax'`` instead of the
+        expected ``'working'``. Same pattern as ``_force_daytime`` in
+        test_confidence_fusion.py / project_fusion_test_time_gotcha.md.
+        """
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "evening",
+        )
+
     @pytest.fixture
     def engine(self, mock_hue, mock_hue_v2, mock_ws):
         eng = AutomationEngine(
