@@ -423,9 +423,12 @@ class AmbientSoundService:
             self._weather_reactive = weather_reactive
 
         sonos_changed = False
+        sonos_enabled_turned_on = False
         if sonos_enabled is not None:
+            was_enabled = self._sonos_enabled
             self._sonos_enabled = bool(sonos_enabled)
             sonos_changed = True
+            sonos_enabled_turned_on = self._sonos_enabled and not was_enabled
         if sonos_present_volume is not None:
             self._sonos_present_volume = max(0, min(60, int(sonos_present_volume)))
             sonos_changed = True
@@ -455,6 +458,28 @@ class AmbientSoundService:
         # takes effect immediately on the active sound.
         if sonos_changed:
             await self._evaluate()
+
+        # When `sonos_enabled` flips false → true while something is already
+        # playing locally, `_evaluate()` short-circuits (target == current
+        # sound) and never kicks Sonos off. Migrate the active playback
+        # directly so the toggle feels instant — pending flag goes out first
+        # to silence the browsers, then we spawn the start task.
+        if (
+            sonos_enabled_turned_on
+            and self._playing
+            and self._current_sound
+            and self._sonos
+            and not self._sonos_ambient_active
+            and not self._sonos_ambient_pending
+            and self._sonos_eligible()
+        ):
+            self._sonos_ambient_pending = True
+            await self._broadcast_state()
+            self._spawn_sonos_task(self._start_sonos_ambient())
+            logger.info(
+                "Ambient: sonos_enabled flipped on, migrating %s to Sonos",
+                self._current_sound,
+            )
         logger.info("Ambient config updated")
         return {"status": "ok"}
 
