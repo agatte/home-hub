@@ -52,12 +52,15 @@ export function initAmbientAudio() {
     if (!state) return
 
     // Sonos is the primary surface — when the backend has Sonos playing
-    // ambient, silence the per-tab HTMLAudio so we don't double up.
-    // Without this gate every connected dashboard tab (Latitude kiosk,
-    // phone, desktop) plays the same file independently, which is why
-    // ambient "felt like it only played on the device I just touched"
-    // (browser autoplay policy let exactly one tab through).
-    if (state.sonos_ambient_active) {
+    // ambient (or is about to), silence the per-tab HTMLAudio so we don't
+    // double up. `sonos_ambient_pending` closes the broadcast race: the
+    // first ambient_update after a mode flip arrives BEFORE Sonos confirms
+    // playback, so without the pending gate the device the user just
+    // touched would win on autoplay permission and play locally before the
+    // second broadcast flipped `active` true. If Sonos ultimately fails,
+    // the backend clears pending and re-broadcasts so we fall through to
+    // local playback as the documented fallback.
+    if (state.sonos_ambient_active || state.sonos_ambient_pending) {
       if (audio && !audio.paused) audio.pause()
       pendingPlay = false
       return

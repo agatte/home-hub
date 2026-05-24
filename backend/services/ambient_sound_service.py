@@ -95,6 +95,12 @@ class AmbientSoundService:
 
         # Sonos ambient runtime state
         self._sonos_ambient_active: bool = False
+        # Optimistic gate set the instant we decide Sonos will be attempted,
+        # cleared once _start_sonos_ambient confirms success or fails out.
+        # Browsers silence local <audio> on active OR pending so the first
+        # broadcast after a mode flip doesn't race past the Sonos start and
+        # let the device the user just touched win on autoplay permission.
+        self._sonos_ambient_pending: bool = False
         self._sonos_ambient_uri: Optional[str] = None
         self._sonos_loop_task: Optional[asyncio.Task] = None
         self._sonos_absent_since: Optional[float] = None   # monotonic time
@@ -288,6 +294,7 @@ class AmbientSoundService:
             "weather_reactive": self._weather_reactive,
             "sonos_enabled": self._sonos_enabled,
             "sonos_ambient_active": self._sonos_ambient_active,
+            "sonos_ambient_pending": self._sonos_ambient_pending,
             "sonos_present_volume": self._sonos_present_volume,
             "sonos_away_volume": self._sonos_away_volume,
             "sonos_mode_volume_overrides": self._sonos_mode_volume_overrides,
@@ -307,6 +314,17 @@ class AmbientSoundService:
         self._playing = True
         self._source = source
         self._weather_override_active = source == "weather"
+        # Set pending BEFORE the first broadcast so connected browsers see
+        # "Sonos is coming" on the very first ambient_update and don't race
+        # past on autoplay permission. _start_sonos_ambient clears it on
+        # success (concurrent with active=True) or failure (fall through).
+        if (
+            self._sonos
+            and self._sonos_enabled
+            and not self._sonos_ambient_active
+            and self._sonos_eligible()
+        ):
+            self._sonos_ambient_pending = True
         await self._broadcast_state()
         await self._save_config()
         logger.info("Ambient play: %s (source=%s)", filename, source)
@@ -331,6 +349,7 @@ class AmbientSoundService:
     async def pause(self) -> dict[str, Any]:
         """Pause playback."""
         self._playing = False
+        self._sonos_ambient_pending = False
         await self._broadcast_state()
         await self._save_config()
         self._stop_sonos_ambient()
@@ -342,6 +361,13 @@ class AmbientSoundService:
         if not self._current_sound:
             return {"status": "error", "detail": "No sound to resume"}
         self._playing = True
+        if (
+            self._sonos
+            and self._sonos_enabled
+            and not self._sonos_ambient_active
+            and self._sonos_eligible()
+        ):
+            self._sonos_ambient_pending = True
         await self._broadcast_state()
         await self._save_config()
         # pause() stops the Sonos mirror; resume should bring it back so
@@ -414,10 +440,14 @@ class AmbientSoundService:
                     self._sonos_mode_volume_overrides[mode] = max(0, min(60, int(vol)))
             sonos_changed = True
 
-        # If the toggle just flipped off and Sonos was mirroring, stop it.
-        # Re-evaluate so the browser surface picks up where Sonos left off.
-        if sonos_changed and not self._sonos_enabled and self._sonos_ambient_active:
-            self._stop_sonos_ambient()
+        # If the toggle just flipped off and Sonos was mirroring (or about
+        # to), stop it. Re-evaluate so the browser surface picks up where
+        # Sonos left off.
+        if sonos_changed and not self._sonos_enabled:
+            if self._sonos_ambient_active:
+                self._stop_sonos_ambient()
+            elif self._sonos_ambient_pending:
+                self._sonos_ambient_pending = False
 
         await self._save_config()
         await self._broadcast_state()
@@ -659,56 +689,75 @@ class AmbientSoundService:
           2. Sonos connected.
           3. Sonos currently idle (STOPPED or PAUSED_PLAYBACK).
           4. Browser ambient is actively playing.
+
+        On any failure path we clear `_sonos_ambient_pending` and rebroadcast
+        so connected browsers know Sonos isn't coming and can fall through to
+        local playback (the documented fallback when Sonos is unreachable).
         """
-        if self._sonos_ambient_active:
-            return
-        if not self._sonos_eligible():
-            return
-        if not getattr(self._sonos, "connected", False):
-            return
-        if not self._playing or not self._current_sound:
-            return
         try:
-            status = await self._sonos.get_status()
-        except Exception as e:
-            logger.warning("Sonos ambient: could not read status: %s", e)
-            return
-        if status.get("state") not in ("STOPPED", "PAUSED_PLAYBACK"):
-            logger.debug(
-                "Sonos ambient: Sonos busy (state=%s), skipping",
-                status.get("state"),
-            )
-            return
+            if self._sonos_ambient_active:
+                return
+            if not self._sonos_eligible():
+                return
+            if not getattr(self._sonos, "connected", False):
+                return
+            if not self._playing or not self._current_sound:
+                return
+            try:
+                status = await self._sonos.get_status()
+            except Exception as e:
+                logger.warning("Sonos ambient: could not read status: %s", e)
+                return
+            if status.get("state") not in ("STOPPED", "PAUSED_PLAYBACK"):
+                logger.debug(
+                    "Sonos ambient: Sonos busy (state=%s), skipping",
+                    status.get("state"),
+                )
+                return
 
-        uri = self._url_for(self._current_sound, absolute=True)
-        if not uri:
-            logger.warning(
-                "Sonos ambient: %s no longer indexed, aborting",
-                self._current_sound,
-            )
-            return
-        mode = self._current_mode()
-        start_volume = self._resolve_sonos_volume(mode)
-        success = await self._sonos.play_uri(uri, volume=start_volume)
-        if not success:
-            logger.warning("Sonos ambient: play_uri failed for %s", uri)
-            return
+            uri = self._url_for(self._current_sound, absolute=True)
+            if not uri:
+                logger.warning(
+                    "Sonos ambient: %s no longer indexed, aborting",
+                    self._current_sound,
+                )
+                return
+            mode = self._current_mode()
+            start_volume = self._resolve_sonos_volume(mode)
+            success = await self._sonos.play_uri(uri, volume=start_volume)
+            if not success:
+                logger.warning("Sonos ambient: play_uri failed for %s", uri)
+                return
 
-        self._sonos_ambient_active = True
-        self._sonos_ambient_uri = uri
-        self._sonos_absent_since = None
-        self._sonos_present_since = None
-        self._sonos_loop_task = asyncio.create_task(
-            self._sonos_ambient_loop(), name="sonos_ambient_loop"
-        )
-        logger.info(
-            "Sonos ambient started: %s at volume %d (mode=%s)",
-            self._current_sound, start_volume, mode,
-        )
-        # Re-broadcast so frontends see sonos_ambient_active=true and silence
-        # their per-tab audio. Without this the gate in ambientAudio.js
-        # wouldn't fire until the next play()/pause() cycle.
-        await self._broadcast_state()
+            self._sonos_ambient_active = True
+            self._sonos_ambient_pending = False
+            self._sonos_ambient_uri = uri
+            self._sonos_absent_since = None
+            self._sonos_present_since = None
+            self._sonos_loop_task = asyncio.create_task(
+                self._sonos_ambient_loop(), name="sonos_ambient_loop"
+            )
+            logger.info(
+                "Sonos ambient started: %s at volume %d (mode=%s)",
+                self._current_sound, start_volume, mode,
+            )
+            # Re-broadcast so frontends see sonos_ambient_active=true and
+            # silence their per-tab audio. Without this the gate in
+            # ambientAudio.js wouldn't fire until the next play()/pause()
+            # cycle.
+            await self._broadcast_state()
+        finally:
+            # Any non-success exit (early return, exception) must clear
+            # pending so browsers stop holding their breath and fall through
+            # to local playback. Success already cleared pending above.
+            if not self._sonos_ambient_active and self._sonos_ambient_pending:
+                self._sonos_ambient_pending = False
+                try:
+                    await self._broadcast_state()
+                except Exception:
+                    logger.exception(
+                        "Failed to rebroadcast after Sonos ambient start aborted"
+                    )
 
     def _stop_sonos_ambient(self) -> None:
         """Cancel ambient loop and pause Sonos. Sync — fire-and-forget pause."""
@@ -716,6 +765,7 @@ class AmbientSoundService:
             self._sonos_loop_task.cancel()
         self._sonos_loop_task = None
         self._sonos_ambient_active = False
+        self._sonos_ambient_pending = False
         self._sonos_ambient_uri = None
         self._sonos_absent_since = None
         self._sonos_present_since = None

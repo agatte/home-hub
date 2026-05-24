@@ -15,6 +15,7 @@ import { writable } from 'svelte/store'
  * @property {boolean} weather_reactive
  * @property {boolean} sonos_enabled - master toggle: when true and Sonos is reachable, ambient plays on Sonos and per-tab audio is silenced
  * @property {boolean} sonos_ambient_active - backend has Sonos actually playing right now (consumed by ambientAudio.js to gate browser playback)
+ * @property {boolean} sonos_ambient_pending - backend intends to play on Sonos but hasn't confirmed yet; browsers stay silent on this too so the broadcast race after a mode flip doesn't leak local audio
  * @property {number} sonos_present_volume - default Sonos level when user is nearby (0-60)
  * @property {number} sonos_away_volume - Sonos level when camera reports absent (follow-me ramp)
  * @property {Record<string, number>} sonos_mode_volume_overrides - per-mode override; missing modes fall back to sonos_present_volume
@@ -35,6 +36,7 @@ const initial = {
   weather_reactive: true,
   sonos_enabled: true,
   sonos_ambient_active: false,
+  sonos_ambient_pending: false,
   sonos_present_volume: 12,
   sonos_away_volume: 28,
   sonos_mode_volume_overrides: {},
