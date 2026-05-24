@@ -35,6 +35,31 @@
     await patch({ sonos_enabled: !$ambient.sonos_enabled })
   }
 
+  async function togglePlay() {
+    saving = 'ambient'
+    saveError = null
+    try {
+      const path = $ambient.playing ? '/api/ambient/pause' : '/api/ambient/resume'
+      await apiPost(path, {})
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : 'Ambient transport failed'
+      console.error('[ambient] transport failed:', e)
+    }
+    saving = null
+  }
+
+  async function stopSound() {
+    saving = 'ambient'
+    saveError = null
+    try {
+      await apiPost('/api/ambient/stop', {})
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : 'Ambient stop failed'
+      console.error('[ambient] stop failed:', e)
+    }
+    saving = null
+  }
+
   /** @param {number} v */
   async function setPresentVolume(v) {
     await patch({ sonos_present_volume: v })
@@ -105,6 +130,42 @@
     </div>
   {:else}
     <div class="settings-card">
+      {#if $ambient.sound}
+        <!-- Transport: surface what's playing + manual control -->
+        <div class="setting-row ambient-transport">
+          <div class="setting-info">
+            <span class="setting-label">
+              {$ambient.playing ? 'Now playing' : 'Paused'}
+              {#if $ambient.source && $ambient.source !== 'manual'}
+                <span class="ambient-source-tag">via {$ambient.source}</span>
+              {/if}
+            </span>
+            <span class="setting-hint">
+              {$ambient.sound_label || $ambient.sound}
+            </span>
+          </div>
+          <div class="ambient-transport-buttons">
+            <button
+              class="ambient-transport-btn ambient-play-btn"
+              on:click={togglePlay}
+              disabled={saving === 'ambient'}
+              aria-label={$ambient.playing ? 'Pause ambient sound' : 'Resume ambient sound'}
+            >
+              {$ambient.playing ? 'Pause' : 'Resume'}
+            </button>
+            <button
+              class="ambient-transport-btn ambient-stop-btn"
+              on:click={stopSound}
+              disabled={saving === 'ambient'}
+              aria-label="Stop ambient sound"
+              title="Clear the current sound. Weather / mode auto-play may pick it back up."
+            >
+              Stop
+            </button>
+          </div>
+        </div>
+      {/if}
+
       <!-- Master Sonos toggle -->
       <div class="setting-row">
         <div class="setting-info">
@@ -349,6 +410,60 @@
   .ambient-clear-btn:hover {
     background: rgba(255, 255, 255, 0.12);
     color: var(--text-primary);
+  }
+
+  .ambient-transport {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+  }
+
+  .ambient-source-tag {
+    font-family: var(--font-body);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .ambient-transport-buttons {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .ambient-transport-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+  }
+
+  .ambient-transport-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--accent, #8c64c8);
+  }
+
+  .ambient-transport-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ambient-play-btn {
+    color: var(--accent, #8c64c8);
+  }
+
+  .ambient-stop-btn {
+    color: var(--text-muted);
   }
 
   code {

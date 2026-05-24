@@ -615,6 +615,26 @@ class AmbientSoundService:
         try:
             self._last_weather_class = self._classify_weather()
             await self._evaluate()
+            # Boot-restore safety net: if persisted state had last_playing=true
+            # and _evaluate's diff check short-circuited (target equals the
+            # already-loaded _current_sound), nothing was actually dispatched
+            # this session. Force a play() so Sonos picks up the persisted
+            # sound. Skips if _evaluate already kicked something off
+            # (active/pending true) or Sonos isn't a viable surface right now.
+            if (
+                self._playing
+                and self._current_sound
+                and not self._sonos_ambient_active
+                and not self._sonos_ambient_pending
+                and self._sonos
+                and self._sonos_enabled
+                and self._sonos_eligible()
+            ):
+                logger.info(
+                    "Ambient boot-restore: re-issuing play for %s (source=%s)",
+                    self._current_sound, self._source,
+                )
+                await self.play(self._current_sound, source=self._source)
         except asyncio.CancelledError:
             raise
         except Exception:
