@@ -251,6 +251,7 @@ async def build_training_data(days: int = 60) -> list[dict]:
 
         # Behavioral features from event sequence
         prev_mode = events[i - 1].mode if i > 0 else "idle"
+        prev_zone = getattr(events[i - 1], "zone", None) if i > 0 else None
         prev_duration = ev.duration_seconds or 0
         if i > 0 and events[i - 1].duration_seconds:
             prev_duration = events[i - 1].duration_seconds
@@ -280,6 +281,13 @@ async def build_training_data(days: int = 60) -> list[dict]:
             "posture_enc": _encode_posture(getattr(ev, "posture", None)),
             "audio_class_enc": _encode_audio_class(getattr(ev, "audio_class", None)),
             "lux": _encode_lux(getattr(ev, "lux", None)),
+            # Previous-event zone mirrors the previous_mode pattern above —
+            # gives the model context to distinguish desk→bed→watching from
+            # desk→couch→watching (added 2026-05-25 per
+            # project_predictor_v2_motion_features.md and the 5/25 promotion
+            # advisor verdict that watching over-prediction is the new
+            # dominant per-class failure).
+            "previous_zone_enc": _encode_zone(prev_zone),
         })
 
         # Target
@@ -299,6 +307,7 @@ def build_current_features(
     posture: Optional[str] = None,
     audio_class: Optional[str] = None,
     lux: Optional[float] = None,
+    previous_zone: Optional[str] = None,
 ) -> dict:
     """Build a feature vector for real-time prediction.
 
@@ -321,6 +330,7 @@ def build_current_features(
         "posture_enc": _encode_posture(posture),
         "audio_class_enc": _encode_audio_class(audio_class),
         "lux": _encode_lux(lux),
+        "previous_zone_enc": _encode_zone(previous_zone),
     })
     return features
 
@@ -408,11 +418,16 @@ async def build_runtime_features(
         manual_overrides_7d = int(overrides_result.scalar() or 0)
 
         last_result = await session.execute(
-            select(ActivityEvent.timestamp)
+            select(ActivityEvent.timestamp, ActivityEvent.zone)
             .order_by(ActivityEvent.timestamp.desc())
             .limit(1)
         )
-        last_ts = last_result.scalar_one_or_none()
+        last_row = last_result.first()
+        last_ts = last_row[0] if last_row else None
+        # zone on the most recent activity_event row — i.e. the zone at the
+        # moment the current mode started. Mirrors the prev_zone pattern in
+        # build_training_data which reads events[i-1].zone.
+        previous_zone = last_row[1] if last_row else None
 
     wake = _to_utc(wake) if wake else None
     last_ts = _to_utc(last_ts) if last_ts else None
@@ -434,4 +449,5 @@ async def build_runtime_features(
         posture=posture,
         audio_class=audio_class,
         lux=lux,
+        previous_zone=previous_zone,
     )

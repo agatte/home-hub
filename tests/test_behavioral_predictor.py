@@ -479,8 +479,9 @@ class TestCalibration:
         import numpy as np
 
         # Save a minimal booster matching FEATURE_COLUMNS shape.
+        from backend.services.ml.behavioral_predictor import FEATURE_COLUMNS
         rng = np.random.default_rng(0)
-        x = rng.random((100, 14))
+        x = rng.random((100, len(FEATURE_COLUMNS)))
         y = rng.integers(0, 3, size=100)
         ds = lgb.Dataset(x, label=y)
         booster = lgb.train(

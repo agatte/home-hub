@@ -58,6 +58,7 @@ FEATURE_COLUMNS = [
     "posture_enc",
     "audio_class_enc",
     "lux",
+    "previous_zone_enc",
 ]
 
 # Confidence thresholds for gated actions.
@@ -94,6 +95,7 @@ _FEATURE_LABELS: dict[str, str] = {
     "posture_enc": "Posture",
     "audio_class_enc": "Audio",
     "lux": "Lux",
+    "previous_zone_enc": "Prev Zone",
 }
 
 _DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
