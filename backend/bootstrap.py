@@ -345,6 +345,12 @@ async def lifespan(app: FastAPI):
         presence_fusion=presence,
     )
     app.state.automation = automation
+    # Off-dashboard skip emitter — wire after both event_logger and
+    # automation exist so poll_state_loop can label skips with the
+    # current mode. Pre-2026-05-25, only dashboard ws skips emitted
+    # event_type="skip" rows; physical/Alexa/Sonos-app skips were
+    # invisible to the music bandit's reward signal.
+    sonos.attach_event_logger(event_logger, automation)
     await automation.load_scene_overrides()
     await automation.load_dnd_state()
     await automation.load_override_state()

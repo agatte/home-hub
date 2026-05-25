@@ -56,6 +56,14 @@ class SonosService:
         self._device = None
         self._connected = False
         self._last_status: Optional[dict] = None
+        # Off-dashboard skip emitter — physical buttons, Alexa, Sonos app
+        # don't route through main.py:_handle_sonos_command, so skips
+        # initiated outside the dashboard were invisible to the bandit
+        # until 2026-05-25. attach_event_logger() wires these in
+        # post-bootstrap; poll_state_loop emits event_type="skip" with
+        # the prior track's title when title changes mid-track.
+        self._event_logger = None
+        self._automation = None
         # Favorites/playlists cache (5-min TTL)
         self._favorites_cache: Optional[list] = None
         # Raw SoCo favorite objects, parallel to _favorites_cache, needed so
@@ -79,6 +87,17 @@ class SonosService:
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def attach_event_logger(self, event_logger, automation) -> None:
+        """Wire post-bootstrap dependencies for off-dashboard skip emission.
+
+        Called from bootstrap.py once both event_logger and automation
+        engine are constructed. Until called, poll_state_loop's skip-
+        detection branch no-ops — services that don't attach (tests,
+        partial-bootstrap probes) preserve the prior behavior.
+        """
+        self._event_logger = event_logger
+        self._automation = automation
 
     @property
     def breaker(self) -> CircuitBreaker:
@@ -617,7 +636,11 @@ class SonosService:
         Continuously poll Sonos state and broadcast changes via WebSocket.
 
         Runs as a background task. Detects track changes, play/pause,
-        volume adjustments from the Sonos app or physical controls.
+        volume adjustments from the Sonos app or physical controls. When
+        attach_event_logger() has been called, also emits skip events for
+        track changes that look like user skips (track changed while the
+        prior track's last-observed position was below the natural-end
+        threshold — see _classify_track_change).
         """
         logger.info("Starting Sonos state polling")
 
@@ -629,6 +652,16 @@ class SonosService:
 
                 # Only broadcast if something changed
                 if status != self._last_status:
+                    # Off-dashboard skip detection before stamping _last_status:
+                    # compare new vs prior track. Best-effort — never raises.
+                    if (
+                        self._event_logger is not None
+                        and self._last_status is not None
+                    ):
+                        try:
+                            await self._maybe_emit_skip(self._last_status, status)
+                        except Exception:
+                            logger.debug("skip-emit failed", exc_info=True)
                     self._last_status = status
                     await ws_manager.broadcast("sonos_update", status)
 
@@ -639,3 +672,80 @@ class SonosService:
             except Exception as e:
                 logger.error(f"Sonos polling error: {e}")
                 await asyncio.sleep(5)
+
+    @staticmethod
+    def _parse_hms(s: Optional[str]) -> Optional[float]:
+        """Parse Sonos' ``H:MM:SS`` / ``MM:SS`` time string into seconds.
+
+        Returns None on empty / malformed input. SoCo returns ``"0:00:00"``
+        when transport is idle and ``"NOT_IMPLEMENTED"`` for some sources
+        (streams without duration). Both yield None.
+        """
+        if not s or s == "NOT_IMPLEMENTED":
+            return None
+        try:
+            parts = [float(p) for p in s.split(":")]
+        except ValueError:
+            return None
+        if len(parts) == 3:
+            h, m, sec = parts
+            return h * 3600 + m * 60 + sec
+        if len(parts) == 2:
+            m, sec = parts
+            return m * 60 + sec
+        return None
+
+    async def _maybe_emit_skip(self, prev: dict, new: dict) -> None:
+        """Emit ``event_type='skip'`` when a track change looks like a user skip.
+
+        Heuristic: title changed AND the prior track's last-observed
+        position was below the natural-end threshold. Natural end = within
+        10s of duration OR position >= 80% of duration. Stream sources
+        without a parsable duration are treated as natural-end (we can't
+        tell skip from track-end on Spotify/Apple Music radio streams, so
+        we err on the side of not polluting the bandit signal).
+
+        Matches the bandit's PENALTY_SKIP window indirectly: the bandit's
+        ``retrain`` only counts a skip when it follows an ``auto_play``
+        within 30s (music_bandit.py:355–363). Skips outside that window
+        land in the table but don't penalize the arm — same intent.
+        """
+        prev_title = (prev.get("track") or "").strip()
+        new_title = (new.get("track") or "").strip()
+        # No emission if title didn't actually change. Empty-string
+        # transitions (idle → first track or last track → stop) also skip.
+        if not prev_title or not new_title or prev_title == new_title:
+            return
+        # Only consider PLAYING-to-PLAYING transitions. A pause/stop in
+        # between is the user actively controlling, not a skip signal.
+        if prev.get("state") != "PLAYING" or new.get("state") != "PLAYING":
+            return
+
+        position_s = self._parse_hms(prev.get("position"))
+        duration_s = self._parse_hms(prev.get("duration"))
+        if position_s is None or duration_s is None or duration_s <= 0:
+            return  # unparseable — treat as natural end (conservative)
+
+        # Natural-end cutoff: within 10s of duration OR >=80% played.
+        natural_end_threshold = max(duration_s - 10.0, 0.8 * duration_s)
+        if position_s >= natural_end_threshold:
+            return  # track ran to its natural end, queue advanced
+
+        # Real skip — emit. mode_at_time mirrors the dashboard-skip
+        # path in main.py:514. weather_class is best-effort; bandit's
+        # retrain backfills NULL → WEATHER_ANY.
+        mode = self._automation.current_mode if self._automation else None
+        try:
+            await self._event_logger.log_sonos_event(
+                event_type="skip",
+                favorite_title=prev_title,
+                mode_at_time=mode,
+                triggered_by="off_dashboard",
+            )
+        except Exception:
+            logger.debug("event_logger.log_sonos_event raised", exc_info=True)
+            return
+        logger.info(
+            "Sonos skip detected (off-dashboard): '%s' at %.0fs / %.0fs",
+            prev_title, position_s, duration_s,
+        )
