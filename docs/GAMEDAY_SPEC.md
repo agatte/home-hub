@@ -234,7 +234,8 @@ class LightStep:
 |---|---|---|---|
 | GET | `/api/gameday/state` | `GameDayState` JSON or `{"status": "no-game"}` | Current snapshot |
 | GET | `/api/gameday/schedule` | `[{date, opponent, kickoff_utc, location}]` | Next 5 games |
-| POST | `/api/gameday/test/{event}` | `{"status": "ok"}` | Trigger a sequence locally for tuning. `event` ∈ `touchdown`, `field_goal`, `kickoff`, `end_of_game_win`, `end_of_game_loss`. Auth required. |
+| POST | `/api/gameday/test/{event}` | `{"status": "ok"}` | Trigger a sequence locally for tuning. `event` ∈ `touchdown`, `field_goal`, `kickoff`, `end_of_game_win`, `end_of_game_loss`, `safety`, `extra_point_good`, `two_point_conv`, `defensive_td`, `momentum` (extended scoring + WPA momentum subtypes shipped 2026-05-15). Auth required. |
+| POST | `/api/gameday/test/pregame` | `{"status": "ok"}` | Synthetic T-60 `pregameday` fire (§10.6). Body `{opponent, stakes_tier}`; flips to pregameday for 30s, dispatches the pregame audio policy, then auto-clears. Registered before `/test/{event}` so the wildcard doesn't swallow it. Auth required. |
 
 All routes registered **before** the `/{path:path}` catch-all in `main.py`.
 

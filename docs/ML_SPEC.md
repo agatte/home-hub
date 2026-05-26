@@ -290,7 +290,7 @@ that learns from richer features.
 | Attribute | Value |
 |-----------|-------|
 | **Input** | `activity_events` table (now enriched with camera + audio context — see schema in PROJECT_SPEC.md) + time features |
-| **Feature engineering** | 14 columns. Temporal: `hour`, `minute_bucket` (15-min), `day_of_week`, `is_weekend`, `season_enc`. Behavioral: `previous_mode`, `previous_mode_duration_min`, `minutes_since_wake` (first non-idle event), `mode_transitions_today`, `manual_override_count_7d`. Context (added 2026-05-04): `zone_enc`, `posture_enc`, `audio_class_enc` (categoricals → stable hard-coded indices, unknown values route to a sentinel bucket), `lux` (continuous, NaN passthrough so LightGBM's native missing-value handling routes it). |
+| **Feature engineering** | 15 columns. Temporal: `hour`, `minute_bucket` (15-min), `day_of_week`, `is_weekend`, `season_enc`. Behavioral: `previous_mode`, `previous_mode_duration_min`, `minutes_since_wake` (first non-idle event), `mode_transitions_today`, `manual_override_count_7d`. Context (added 2026-05-04): `zone_enc`, `posture_enc`, `audio_class_enc` (categoricals → stable hard-coded indices, unknown values route to a sentinel bucket), `lux` (continuous, NaN passthrough so LightGBM's native missing-value handling routes it). Motion context (added 2026-05-26, commit `7bbd885`): `previous_zone_enc` — zone from the prior activity event, enabling leaving-desk→kitchen→cooking and late-night brightness-rescue transitions. |
 | **Model** | LightGBM `Booster` with `multiclass` objective. Trains in seconds on CPU. Model file <1MB. |
 | **Output** | Multi-class probabilities: gaming, working, watching, relax, social, cooking. Top class + confidence score. |
 | **Inference frequency** | Every 60 seconds (piggyback on automation loop). Only consulted when current mode is idle. |
@@ -332,6 +332,9 @@ features.update({
                           #   doorbell=5, game_audio=6, other=7
     "lux": 165.0,         # EMA lux from camera_service.ema_lux; float("nan")
                           #   when missing (LightGBM handles natively)
+    "previous_zone_enc": 0,  # Zone from the prior activity_event; same ZONE_ENCODING.
+                             #   Added 2026-05-26 (commit 7bbd885) for leaving-desk
+                             #   → kitchen/cooking and late-night rescue transitions.
 })
 ```
 
@@ -1414,7 +1417,7 @@ except ImportError:
 - ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle/away, ML logger registered as mode-change callback.
 
 **Current state (as of 2026-05-04):**
-- **Behavioral predictor — shadow mode, stripped from fusion.** `lightgbm` installed on the Latitude, model trains nightly at 04:00. The April 27 audit removed the predictor lane from `ConfidenceFusion` after the first model collapsed to single-class output (898/898 → `away`); the predictor still writes shadow rows to `ml_decisions` so future retrains can be evaluated. Step 4 (May 4) extended `FEATURE_COLUMNS` from 10 → 14 columns to include `zone_enc` / `posture_enc` / `audio_class_enc` / `lux`. The next retrain produces a 14-feature model; a 7-day shadow observation window starts 2026-05-05 to decide whether to re-add the lane (see `project_step5_predictor_validation.md`). Promotion is gated by `compute_prediction_diversity`; auto-demote is the symmetric counterpart shipped May 4 — see Phase 3 changelog entry.
+- **Behavioral predictor — shadow mode, stripped from fusion.** `lightgbm` installed on the Latitude, model trains nightly at 04:00. The April 27 audit removed the predictor lane from `ConfidenceFusion` after the first model collapsed to single-class output (898/898 → `away`); the predictor still writes shadow rows to `ml_decisions` so future retrains can be evaluated. Step 4 (May 4) extended `FEATURE_COLUMNS` from 10 → 14 columns to include `zone_enc` / `posture_enc` / `audio_class_enc` / `lux`. Step 5 (2026-05-26, commit `7bbd885`) added `previous_zone_enc` as the 15th feature. Promotion is gated by `compute_prediction_diversity`; auto-demote is the symmetric counterpart shipped May 4 — see Phase 3 changelog entry and `project_step5_predictor_validation.md` for current promotion gate status.
 - **Lighting learner**: active on production. Overlay applications are now logged to `ml_decisions` with `decision_source="lighting_learner"`.
 - **Audio classifier (YAMNet)**: shadow mode on Windows desktop (Blue Yeti mic). 17,922 predictions logged to date. Of the 81 rows with `actual_mode` backfilled, only **2 are correct (2.5%)** — the classifier is predicting "idle" for "silence" almost every cycle and missing mode transitions. The 521→9 → user-mode mapping needs rework before promotion is meaningful. Kept in shadow.
 - **Camera presence (MediaPipe)**: active on Latitude webcam with 15s away detection.
@@ -1504,7 +1507,7 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 - ✓ **Auto-demote — counterpart to the diversity gate.** New `BehavioralPredictor.check_and_demote_if_degenerate(ml_logger)` calls `compute_prediction_diversity()` and demotes a promoted predictor when shadow outputs collapse. Anti-flap: only `single_class` / `near_single_class` reasons fire — `insufficient_samples` / `query_failed` are treated as "don't know yet" so a freshly-promoted predictor with <50 logged predictions can't get auto-demoted prematurely. Wired as the `predictor_auto_demote_check` ScheduledTask at 03:45 ET daily, between `fusion_weight_tuning` (3:30) and `ml_nightly_training` (4:00) so the upcoming retrain has a chance to fix the underlying issue. Closes the autonomy-gate loop opened by the 4/27 promote-side diversity gate.
 
 **Remaining:**
-- Re-adding the predictor lane to fusion — gated on diversity + per-class accuracy of the 14-feature retrain. 14-feature plumbing landed 2026-05-11 (commit 411b39c). As of the 2026-05-18 weekly evaluator, promotion gate is **WAIT** — `conf>=0.8` accuracy fell to 0/17 and working→gaming class confusion ran 102/105. Next stage: gaming class weight ×2.0 shipped 2026-05-19 for the 04:00 ET retrain; re-evaluate at the 2026-05-25 weekly gate. If the gate still fails, escalate per `project_step5_predictor_validation.md` (next steps: `previous_zone` feature, then calibrator re-fit).
+- Re-adding the predictor lane to fusion — gated on diversity + per-class accuracy of the 15-feature retrain. 14-feature plumbing landed 2026-05-11 (commit 411b39c); `previous_zone_enc` (15th feature) shipped 2026-05-26 (commit `7bbd885`). As of the 2026-05-25 weekly evaluator, promotion gate is **WAIT** — watching-class accuracy 10/93 (10.8%) and override rate 4.07/day vs the 3.0/day gate. Gaming class weight ×2.0 shipped 2026-05-19 for the 04:00 ET retrain; `previous_zone_enc` is the next structural lever per `project_step5_predictor_validation.md`. Next gate: re-evaluate after the 15-feature model accumulates a week of shadow observations (~2026-06-01).
 - Analytics-page dashboard UI (frontend Svelte card) surfacing `/override-rate` and `/compare`.
 - Threshold tuning based on observed false positive rate once ≥30 days of shadow+backfill data accrues.
 

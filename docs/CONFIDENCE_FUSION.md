@@ -6,7 +6,11 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-05-03 (v3)
+> **Last updated:** 2026-05-26 (v4)
+
+## v4 Changelog (2026-05-26)
+
+`6f2c2ac` — **Lane-weight floor in the nightly tuner.** Added `WEIGHT_FLOOR_FRACTION = 0.5`; `update_weights_from_accuracy` now floors each lane at `DEFAULT_WEIGHTS[src] * WEIGHT_FLOOR_FRACTION` before normalization. The 2026-05-25 fusion-lane audit found the accuracy tuner had drifted `process` to ~0.62 while starving camera/audio_ml to ~0.057/0.063 — those lanes vote presence/ambient (correctly) rather than the dominant process mode, so their raw mode-match accuracy is structurally low (~8-9%) and the unfloored normalization collapsed them toward zero, making fusion effectively process-only. The floor caps that drift. The all-zero-accuracy guard still fires before flooring, so a fully-zero input keeps the current weights. See "Accuracy-Driven Weight Learning" below.
 
 ## v3 Changelog (2026-05-03)
 
@@ -323,19 +327,19 @@ The static weights above are the starting point. Accuracy-driven tuning runs nig
 
 1. Every fusion auto-apply or override (and every silent 60s tick — see "Fusion shadow logging") writes an `ml_decisions` row with `decision_source="fusion"`. The automation engine stamps `factors.signal_details` with a per-source dict (each source's voted mode + confidence + stale flag) at log time.
 2. `MLDecisionLogger.compute_per_source_metrics(days=14)` walks those rows where `actual_mode` has been backfilled, and for each non-stale signal source, returns `{accuracy, samples, correct}` per source. The legacy `compute_accuracy_by_source` is now a thin wrapper that flattens this to `{src: accuracy}` for callers that only need the ratios.
-3. `ConfidenceFusion.update_weights_from_accuracy()` normalizes those accuracies so the active weights sum to 1.0. Sources with zero usable samples in the window fall back to `DEFAULT_WEIGHTS`.
+3. `ConfidenceFusion.update_weights_from_accuracy()` normalizes those accuracies so the active weights sum to 1.0. Sources with zero usable samples in the window fall back to `DEFAULT_WEIGHTS`. **Weight floor (2026-05-26):** before normalization, each lane's raw value is floored at `DEFAULT_WEIGHTS[src] * WEIGHT_FLOOR_FRACTION` (currently 0.5). This prevents the nightly tuner from starving camera/audio_ml — those lanes vote presence/ambient correctly but their mode-match accuracy is structurally low (~8-9%), which without the floor would drive process toward ~0.62 and the other lanes toward zero, making fusion effectively process-only. Surfaced by the 2026-05-25 fusion-lane audit.
 4. **New (2026-04-28):** `MLDecisionLogger.persist_accuracy_metrics()` writes one `MLMetric` row per source per UTC day (`metric_name="accuracy_<source>"`, value in `[0, 1]`, `extra={samples, correct, window_days}`). Idempotent for a given date via delete-then-insert, so re-runs leave one final row per source. Before this, the `ml_metrics` table existed but was never written to — the analytics dashboard had no historical accuracy to query.
 5. The `fusion_weight_tuning` ScheduledTask wires steps 2–4 into the 3:30 AM cron. `POST /api/learning/retune-weights` is the manual-trigger equivalent — returns `weights_before` + `weights_after` + the derived `accuracy_by_source` so you can validate without waiting for the cron. Manual triggers don't persist to `ml_metrics` (only the nightly cron does), keeping the historical timeline regular.
 
 Example after 14 days of observation (4-lane v3 shape):
 
 ```
-process:    95% accurate  →  raw weight 0.95
-camera:     80% accurate  →  raw weight 0.80
-audio_ml:   60% accurate  →  raw weight 0.60   (often wrong about ambient)
-rules:      75% accurate  →  raw weight 0.75
+process:    95% accurate  →  raw 0.95  → floored 0.95  (above floor 0.219)
+camera:     80% accurate  →  raw 0.80  → floored 0.80  (above floor 0.125)
+audio_ml:   60% accurate  →  raw 0.60  → floored 0.60  (above floor 0.0935)
+rules:      75% accurate  →  raw 0.75  → floored 0.75  (above floor 0.0625)
 
-sum = 3.10
+sum (floored) = 3.10
 
 New normalized weights:
   process:    0.95 / 3.10 = 0.306
@@ -344,7 +348,7 @@ New normalized weights:
   rules:      0.75 / 3.10 = 0.242
 ```
 
-Notice process detection's weight drops from 0.438 → 0.306 because accuracy-weighted math treats all signals more equally. Signals that consistently predict the right mode earn more trust. Signals that fire on stale or bad data lose trust.
+In this example all four lanes are above their floors, so the math is unchanged — process detection's weight drops from 0.438 → 0.306 because accuracy-weighted math treats all signals more equally. In a degraded scenario — say audio_ml accuracy falls to 5% after a bad observation window — it is floored to `0.187 × 0.5 = 0.0935` instead of 0.05, preventing the lane from collapsing toward zero. Signals that consistently predict the right mode earn more trust; signals that fire on stale or bad data lose trust, but cannot be starved entirely.
 
 **Rollout note:** Meaningful weight updates only begin once enough fusion decisions with the expanded `signal_details` factor have accumulated *and* enough of them have `actual_mode` backfilled (which happens on the next mode transition). Expect weights to keep falling back to defaults for the first few days after the factor-payload change ships, then start drifting as data builds.
 

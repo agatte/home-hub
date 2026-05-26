@@ -96,7 +96,7 @@ Subagents (`~/.claude/agents/`, 28 total) — fleet table + trigger map in `docs
 
 Parallel `/watcher-loop` polls digests every 600s; warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (playbook: `~/.claude/runbooks/homehub-watcher.md`). Investigation-only.
 
-**Autostart (both loops):** Windows Scheduled Tasks `Home Hub Checkback Loop` + `Home Hub Watcher Loop` (triggers: logon + unlock + resume-from-sleep; idempotent ensure-running, no-op if already alive), run **hidden** via `~/.claude/scripts/start-homehub-loop.ps1` (wscript shim avoids window-flash). `Home Hub Loops Daily Relaunch` force-recycles both at 04:00 to shed `/loop` dynamic-mode context before it hits auto-compaction. Re-register via `~/.claude/scripts/register-homehub-loop-tasks.ps1`. (Replaced the Startup-folder `.cmd`s, which only fired on a full logon.)
+**Autostart (both loops):** Windows Scheduled Tasks `Home Hub Checkback Loop` + `Home Hub Watcher Loop` (triggers: logon + unlock + resume-from-sleep; idempotent ensure-running, no-op if already alive), run **hidden** via `~/.claude/scripts/start-homehub-loop.ps1`, launched windowless through the `start-homehub-loop-hidden.vbs` wscript shim (avoids the per-trigger window-flash). `Home Hub Loops Daily Relaunch` force-recycles both at 04:00 to shed `/loop` dynamic-mode context before it hits auto-compaction. Re-register via `~/.claude/scripts/register-homehub-loop-tasks.ps1`; check status anytime via `~/.claude/scripts/homehub-loops-status.ps1`. (Replaced the Startup-folder `.cmd`s, which only fired on a full logon.)
 
 ---
 
@@ -222,6 +222,10 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Ambient | `/api/ambient` | Browser-side ambient audio: playback state, volume, mode→sound map, weather-reactive config |
 | Notification | `/api/notification` | `POST /test` fires a synthetic notification through NotifierService (WS broadcast + ntfy.sh push). Bypasses DND/coalesce/boot gating — verification harness for the desktop toast + phone push surfaces |
 | Personality | `/api/personality` | `mood/current` + `mood/history`, `calibration` POST + history, `settings` GET/POST. Backs hidden `/personality` page. Spec: `docs/PERSONALITY_LAYER.md` |
+| Analytics | `/api/analytics` | `digest/entries`, `digest/daily`, `digest/highlights`, `digest/{entry_date}` — serves the analytics-narrator daily digests to the `/analytics` dashboard |
+| Debug | `/api/debug` | `query` (ad-hoc read-only SQL), `event-summary` — diagnostic helpers (LAN/localhost gated) |
+
+> Note: `pihole_proxy.py` also registers an unprefixed reverse proxy (`/admin/*`, `/api/*` pass-through to Pi-hole), mounted LAST in `main.py` after every API route + the frontend catch-all.
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -408,6 +412,8 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `ambient_config` | Browser-side ambient sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*` |
 | `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB, drives bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors` |
 | Personality (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) | Master kill switch + sub-toggles for the AI Personality Layer. Spec: `docs/PERSONALITY_LAYER.md` |
+| `gameday_playoff_state` | Cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot. Spec: `docs/GAMEDAY_SPEC.md` |
+| `gameday_team_form` | Recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection. Spec: `docs/GAMEDAY_SPEC.md` |
 
 ---
 
