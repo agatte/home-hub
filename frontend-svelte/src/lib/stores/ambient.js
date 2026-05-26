@@ -9,7 +9,7 @@ import { writable } from 'svelte/store'
  * @property {number} volume - 0.0-1.0
  * @property {string} source - "manual"|"mode"|"weather"
  * @property {boolean} weather_override
- * @property {Array<{filename: string, label: string}>} available_sounds
+ * @property {Array<{filename: string, label: string, kind?: 'stream'|'file'}>} available_sounds
  * @property {Record<string, string>} mode_sounds
  * @property {Record<string, boolean>} mode_auto_play
  * @property {boolean} weather_reactive

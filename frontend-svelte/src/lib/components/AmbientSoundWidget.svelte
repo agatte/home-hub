@@ -39,6 +39,9 @@
 
   $: volumePercent = Math.round(($ambient.volume || 0) * 100)
   $: hasSounds = $ambient.available_sounds && $ambient.available_sounds.length > 0
+  // Active sound is a live internet-radio stream (vs a looping file)?
+  $: activeIsStream = !!$ambient.sound && ($ambient.available_sounds || [])
+    .some((s) => s.filename === $ambient.sound && s.kind === 'stream')
 </script>
 
 {#if hasSounds}
@@ -57,6 +60,9 @@
       <div class="ambient-info">
         <div class="ambient-sound-name">
           {$ambient.sound_label || 'Off'}
+          {#if activeIsStream && $ambient.playing}
+            <span class="ambient-live" title="Live internet-radio stream">live</span>
+          {/if}
         </div>
         {#if $ambient.weather_override}
           <div class="ambient-source">
@@ -76,7 +82,7 @@
       <select class="ambient-select" aria-label="Ambient sound" value={$ambient.sound || ''} on:change={(e) => selectSound(/** @type {HTMLSelectElement} */ (e.currentTarget).value)}>
         <option value="">None</option>
         {#each $ambient.available_sounds as s}
-          <option value={s.filename}>{s.label}</option>
+          <option value={s.filename}>{s.label}{s.kind === 'stream' ? ' · live' : ''}</option>
         {/each}
       </select>
 
@@ -167,6 +173,21 @@
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+  }
+
+  .ambient-live {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(220, 60, 60, 0.18);
+    color: #ff6b6b;
+    font-family: var(--font-body);
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    vertical-align: middle;
   }
 
   .ambient-controls {

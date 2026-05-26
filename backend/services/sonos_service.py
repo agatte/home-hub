@@ -37,6 +37,25 @@ _ALLOWED_PLAY_URI_PATTERNS: tuple[re.Pattern, ...] = (
     ),
 )
 
+# Exact-URL allowlist for admin-curated ambient internet-radio streams.
+# Nature-stream hostnames are unpredictable (Shoutcast/Icecast CDN hosts on
+# odd ports, sometimes raw IPs), so widening the host-pattern allowlist would
+# open SSRF surface. Instead the AmbientSoundService registers the exact set
+# of stream URLs from its (admin-edited) library via register_allowed_stream_uris;
+# only those precise URLs are playable. Membership is exact-match, not prefix.
+_ALLOWED_STREAM_URIS: set[str] = set()
+
+
+def register_allowed_stream_uris(uris: set[str]) -> None:
+    """Replace the curated ambient-stream allowlist (exact-match URLs).
+
+    Called by AmbientSoundService on config load and on every stream-library
+    change. SSRF-safe: only the precise URLs the admin curated become playable
+    — no host/prefix widening.
+    """
+    global _ALLOWED_STREAM_URIS
+    _ALLOWED_STREAM_URIS = set(uris)
+
 
 def is_allowed_play_uri(uri: str) -> bool:
     """True if a URI is on the allowlist for sonos.play_uri().
@@ -45,9 +64,14 @@ def is_allowed_play_uri(uri: str) -> bool:
     reject with a clear 400) and inside play_uri itself as
     defense-in-depth — any future caller that forgets to validate
     still gets gated.
+
+    Accepts: iTunes/mzstatic previews, locally-served assets (LOCAL_IP),
+    and exact-match members of the curated ambient-stream allowlist.
     """
     if not uri:
         return False
+    if uri in _ALLOWED_STREAM_URIS:
+        return True
     return any(p.match(uri) for p in _ALLOWED_PLAY_URI_PATTERNS)
 
 
@@ -349,6 +373,7 @@ class SonosService:
         uri: str,
         volume: Optional[int] = None,
         meta: Optional[str] = None,
+        force_radio: bool = False,
     ) -> bool:
         """
         Play an audio file or stream from a URI.
@@ -361,6 +386,11 @@ class SonosService:
                 streams (iTunes previews, self-hosted MP3s) show empty Now
                 Playing. Build via ``backend.services.didl_lite.build_track_didl_lite``.
                 Empty string or None falls through to SoCo's default behavior.
+            force_radio: Treat the URI as a continuous internet-radio stream.
+                SoCo rewrites it to the ``x-rincon-mp3radio:`` scheme that Sonos
+                firmware ≥6.4.2 requires for plain HTTP radio (a bare http(s)
+                stream URL is otherwise rejected). Use for the ambient
+                nature-radio streams; leave False for finite files (TTS, loops).
 
         URIs are validated against ``_ALLOWED_PLAY_URI_PATTERNS`` —
         the route handler at /api/music/preview should also gate via
@@ -376,16 +406,16 @@ class SonosService:
         if not self._connected or not self._device:
             return False
         try:
-            def _play(device, uri, vol, meta_xml):
+            def _play(device, uri, vol, meta_xml, radio):
                 if vol is not None:
                     device.volume = max(0, min(100, vol))
                     logger.info(f"Sonos volume set to {vol} before play_uri")
                 logger.info(f"Sonos actual volume now: {device.volume}")
                 if meta_xml:
-                    device.play_uri(uri, meta=meta_xml)
+                    device.play_uri(uri, meta=meta_xml, force_radio=radio)
                 else:
-                    device.play_uri(uri)
-            await self._safe_call(_play, self._device, uri, volume, meta)
+                    device.play_uri(uri, force_radio=radio)
+            await self._safe_call(_play, self._device, uri, volume, meta, force_radio)
             return True
         except CircuitBreakerOpen:
             return False

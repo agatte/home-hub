@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Optional
 
+import httpx
+
 from backend.config import DATA_DIR, STATIC_DIR
 
 logger = logging.getLogger("home_hub.ambient")
@@ -39,16 +41,63 @@ SCAN_DIRS: tuple[tuple[Path, str], ...] = (
 )
 AUDIO_EXTENSIONS = frozenset((".mp3", ".ogg", ".wav", ".webm"))
 AMBIENT_CONFIG_KEY = "ambient_config"
+STREAM_CONFIG_KEY = "ambient_streams"
 
 # Weather description keywords → sound filename stem.
 # If the user has e.g. "rain.mp3" in static/ambient/ and the weather
 # description contains "rain", it auto-plays.
+# Order matters: _classify_weather returns the FIRST matching class, so more
+# specific/severe conditions come first. "thunderstorm" precedes "rain" because
+# NWS phrases like "thunderstorm and rain" must classify as the storm (mirrors
+# the severity order in light_state_calculator.classify_weather).
 WEATHER_SOUND_MAP: dict[str, list[str]] = {
-    "rain": ["rain", "drizzle", "shower"],
     "thunderstorm": ["thunderstorm", "thunder"],
+    "rain": ["rain", "drizzle", "shower"],
     "snow": ["snow", "sleet"],
     "wind": ["wind", "gale", "breeze"],
 }
+
+# Curated internet-radio nature streams, keyed by class. Keys that match a
+# WEATHER_SOUND_MAP class (rain/thunderstorm/snow/wind) auto-trigger on that
+# weather and take priority over the committed loop files; non-weather keys
+# (e.g. "nature") are manual-pick only — selectable in the dropdown but never
+# weather-triggered. Each entry's `id` is the index key ("filename") the rest
+# of the pipeline uses, so a stream is just a virtual sound.
+#
+# Continuous streams need no looping or disk. They are played on Sonos via
+# play_uri(force_radio=True) and in the browser as a direct <audio> src
+# (cross-origin streams play without CORS). Prefer https where a station
+# offers it — the kiosk is LAN-HTTP today so http works, but https survives
+# any future move to an HTTPS origin (mixed-content blocking otherwise).
+#
+# Seeded into the editable `ambient_streams` app_setting on first run; the
+# user can add/replace URLs there without a redeploy. Each URL below was
+# verified live (HTTP 200 + Content-Type audio/mpeg) on 2026-05-26 — verify
+# any replacement the same way before committing it.
+#
+# Stations without a reliable dedicated 24/7 stream (thunderstorm, snow, wind,
+# fireplace) intentionally have no entry: they fall back to the committed loop
+# files (thunderstorm.mp3, wind.mp3, …) automatically. Add streams here as you
+# find ones you trust.
+DEFAULT_STREAM_LIBRARY: dict[str, list[dict[str, str]]] = {
+    "rain": [
+        {
+            "id": "rain-stream",
+            "label": "Nature Radio Rain",
+            "url": "http://maggie.torontocast.com:8108/stream",
+        },
+    ],
+    "nature": [
+        {
+            "id": "nature-stream",
+            "label": "Real World Sounds",
+            "url": "http://uk5.internet-radio.com:8260/stream",
+        },
+    ],
+}
+
+# How long a stream-health probe result stays trusted before re-probing.
+STREAM_HEALTH_TTL_SECONDS = 300.0
 
 # Modes where ambient is fully suppressed (both Sonos and browser).
 # Watching has its own audio (projector / TV); gameday is celebration-exclusive
@@ -102,6 +151,9 @@ class AmbientSoundService:
         # let the device the user just touched win on autoplay permission.
         self._sonos_ambient_pending: bool = False
         self._sonos_ambient_uri: Optional[str] = None
+        # Whether the active Sonos ambient URI is a continuous radio stream
+        # (needs force_radio on every (re)play) vs a finite local file.
+        self._sonos_ambient_is_stream: bool = False
         self._sonos_loop_task: Optional[asyncio.Task] = None
         self._sonos_absent_since: Optional[float] = None   # monotonic time
         self._sonos_present_since: Optional[float] = None  # monotonic time
@@ -142,11 +194,21 @@ class AmbientSoundService:
         self._last_weather_class: Optional[str] = None
 
         # Available sounds (populated by scan_sounds)
-        # _sound_index maps filename → {url_prefix, abs_path, label, source_dir}
+        # _sound_index maps filename → {kind, url_prefix, abs_path, label,
+        # source_dir} for files, or {kind:"stream", url, label, wclass} for
+        # injected internet-radio streams.
         # _available_sounds is the legacy [{filename, label}] list rebuilt
         # from _sound_index for backwards-compatible state payloads.
-        self._sound_index: dict[str, dict[str, str]] = {}
+        self._sound_index: dict[str, dict[str, Any]] = {}
         self._available_sounds: list[dict[str, str]] = []
+
+        # Internet-radio stream library (loaded from DB, seeded from
+        # DEFAULT_STREAM_LIBRARY). {wclass: [{id, label, url}, ...]}.
+        self._stream_library: dict[str, list[dict[str, str]]] = {}
+        # Per-URL health cache: url -> (healthy, checked_at_monotonic). Probed
+        # off the hot path by the weather-watch loop; _pick_healthy_stream
+        # reads this synchronously so mode-change callbacks stay fast.
+        self._stream_health: dict[str, tuple[bool, float]] = {}
 
     # ------------------------------------------------------------------
     # Initialization
@@ -192,12 +254,51 @@ class AmbientSoundService:
                 {k: v for k, v in self._mode_sounds.items()},
             )
 
+        await self._load_stream_library()
+
         logger.info(
             "Ambient config loaded: volume=%.1f, weather=%s, mappings=%d, "
-            "sonos_enabled=%s",
+            "sonos_enabled=%s, stream_classes=%d",
             self._volume, self._weather_reactive, len(self._mode_sounds),
-            self._sonos_enabled,
+            self._sonos_enabled, len(self._stream_library),
         )
+
+    async def _load_stream_library(self) -> None:
+        """Load the internet-radio stream library, seeding defaults on first run.
+
+        Persisted under the editable `ambient_streams` app_setting. On load we
+        re-register the flattened set of stream URLs with the Sonos allowlist
+        so only admin-curated URLs are playable (SSRF defense). Streams become
+        selectable on the next scan_sounds() (called by the route + at boot).
+        """
+        from backend.api.routes.routines import load_setting, save_setting
+
+        library = await load_setting(STREAM_CONFIG_KEY)
+        if not library:
+            library = {
+                k: [dict(e) for e in entries]
+                for k, entries in DEFAULT_STREAM_LIBRARY.items()
+            }
+            await save_setting(STREAM_CONFIG_KEY, library)
+            logger.info("Ambient stream library seeded with defaults")
+
+        self._stream_library = library
+        self._register_stream_allowlist()
+        # Refresh the in-memory sound index so streams are immediately
+        # selectable (scan_sounds also runs, but boot ordering can vary).
+        self.scan_sounds()
+
+    def _register_stream_allowlist(self) -> None:
+        """Push the curated stream URLs into the Sonos exact-match allowlist."""
+        from backend.services.sonos_service import register_allowed_stream_uris
+
+        uris = {
+            entry["url"]
+            for entries in self._stream_library.values()
+            for entry in entries
+            if entry.get("url")
+        }
+        register_allowed_stream_uris(uris)
 
     def set_camera_service(self, camera: Any) -> None:
         """Late-bind camera service (called from bootstrap after camera starts)."""
@@ -232,41 +333,86 @@ class AmbientSoundService:
                     )
                     continue
                 index[path.name] = {
+                    "kind": "file",
                     "url_prefix": url_prefix,
                     "abs_path": str(path),
                     "label": _label_from_filename(path.name),
                     "source_dir": str(scan_dir),
                 }
 
+        # Inject internet-radio streams as virtual sounds. Each stream `id`
+        # becomes an index key, so the dropdown + play(filename) path treat it
+        # exactly like a file. `wclass` carries the library key for weather
+        # matching (which keys off the class, not the id prefix).
+        stream_count = 0
+        for wclass, entries in self._stream_library.items():
+            for entry in entries:
+                sid = entry.get("id")
+                url = entry.get("url")
+                if not sid or not url or sid in index:
+                    continue
+                index[sid] = {
+                    "kind": "stream",
+                    "url": url,
+                    "label": entry.get("label") or _label_from_filename(sid),
+                    "wclass": wclass,
+                }
+                stream_count += 1
+
         self._sound_index = index
         self._available_sounds = [
-            {"filename": filename, "label": entry["label"]}
+            {
+                "filename": filename,
+                "label": entry["label"],
+                "kind": entry.get("kind", "file"),
+            }
             for filename, entry in index.items()
         ]
+        file_count = len(index) - stream_count
         long_count = sum(
-            1 for e in index.values() if e["url_prefix"] == "/static/ambient-long"
+            1 for e in index.values()
+            if e.get("url_prefix") == "/static/ambient-long"
         )
         logger.info(
-            "Scanned %d ambient sound files (%d long-form, %d short)",
-            len(index), long_count, len(index) - long_count,
+            "Scanned %d ambient sounds (%d files [%d long-form], %d streams)",
+            len(index), file_count, long_count, stream_count,
         )
         return self._available_sounds
 
     def _url_for(self, filename: str, *, absolute: bool = False) -> Optional[str]:
         """Resolve a filename to its URL.
 
-        absolute=True returns ``http://{LOCAL_IP}:8000{prefix}/{filename}``
-        for Sonos. absolute=False returns just ``{prefix}/{filename}`` for
-        browser-side broadcast. Returns None if the filename isn't indexed.
+        For files: absolute=True returns ``http://{LOCAL_IP}:8000{prefix}/{filename}``
+        for Sonos; absolute=False returns just ``{prefix}/{filename}`` for
+        browser-side broadcast. For streams the external URL is returned
+        verbatim regardless of `absolute` — Sonos fetches it (force_radio) and
+        the browser plays it directly as an <audio> src. Returns None if the
+        filename isn't indexed.
         """
         entry = self._sound_index.get(filename)
         if entry is None:
             return None
+        if entry.get("kind") == "stream":
+            return entry["url"]
         prefix = entry["url_prefix"]
         if absolute:
             from backend.config import settings
             return f"http://{settings.LOCAL_IP}:8000{prefix}/{filename}"
         return f"{prefix}/{filename}"
+
+    def _is_stream(self, filename: Optional[str]) -> bool:
+        """True when the indexed sound is an internet-radio stream."""
+        if not filename:
+            return False
+        entry = self._sound_index.get(filename)
+        return bool(entry and entry.get("kind") == "stream")
+
+    def _label_for(self, filename: str) -> str:
+        """Display label for a sound — curated index label, else derived."""
+        entry = self._sound_index.get(filename)
+        if entry and entry.get("label"):
+            return entry["label"]
+        return _label_from_filename(filename)
 
     # ------------------------------------------------------------------
     # State
@@ -282,7 +428,7 @@ class AmbientSoundService:
                 if self._current_sound else None
             ),
             "sound_label": (
-                _label_from_filename(self._current_sound)
+                self._label_for(self._current_sound)
                 if self._current_sound else None
             ),
             "volume": self._volume,
@@ -586,14 +732,85 @@ class AmbientSoundService:
         return None
 
     def _check_weather(self) -> Optional[str]:
-        """Resolve current weather class to a concrete sound filename."""
+        """Resolve current weather class to a concrete sound id/filename.
+
+        Prefers a healthy curated internet-radio stream for the class; falls
+        back to a committed/long-form loop file matching the class name when no
+        stream is available or healthy. Sync — reads the stream-health cache
+        (refreshed off the hot path by the watch loop) so it stays fast on the
+        mode-change callback.
+        """
         wclass = self._classify_weather()
         if not wclass:
             return None
+        stream_id = self._pick_healthy_stream(wclass)
+        if stream_id:
+            return stream_id
         for s in self._available_sounds:
-            if s["filename"].lower().startswith(wclass):
-                return s["filename"]
+            fn = s["filename"]
+            if self._is_stream(fn):
+                continue
+            if fn.lower().startswith(wclass):
+                return fn
         return None
+
+    def _pick_healthy_stream(self, wclass: Optional[str]) -> Optional[str]:
+        """Return the first usable stream id for a class, or None.
+
+        "Usable" = known-healthy, or health unknown (optimistic first try —
+        the watch loop probes and corrects), or a known-bad result that has
+        gone stale (retry). A fresh known-bad stream is skipped so a dead
+        station falls through to the file fallback without thrashing.
+        """
+        if not wclass:
+            return None
+        now = time.monotonic()
+        for entry in self._stream_library.get(wclass, []):
+            sid, url = entry.get("id"), entry.get("url")
+            if not sid or not url or sid not in self._sound_index:
+                continue
+            health = self._stream_health.get(url)
+            if health is None:
+                return sid
+            healthy, checked_at = health
+            if healthy or (now - checked_at) >= STREAM_HEALTH_TTL_SECONDS:
+                return sid
+        return None
+
+    async def _probe_stream_health(self, url: str) -> bool:
+        """Probe a stream URL (2xx + audio/* content-type), cache the result.
+
+        Uses a streaming GET and reads only the headers (never the infinite
+        body). Servers that answer with a bare ``ICY 200 OK`` status line
+        instead of HTTP will raise and be marked unhealthy — the curated
+        defaults speak HTTP/1.x, so verify any replacement with curl first.
+        """
+        ok = False
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                async with client.stream(
+                    "GET", url, headers={"Icy-MetaData": "0"}
+                ) as resp:
+                    ctype = resp.headers.get("content-type", "").lower()
+                    ok = resp.status_code < 400 and ctype.startswith("audio")
+        except Exception as e:
+            logger.debug("Stream health probe failed for %s: %s", url, e)
+        self._stream_health[url] = (ok, time.monotonic())
+        return ok
+
+    async def _refresh_stream_health(self, wclass: Optional[str]) -> None:
+        """Re-probe streams for a class whose cached health is stale/missing."""
+        if not wclass:
+            return
+        now = time.monotonic()
+        for entry in self._stream_library.get(wclass, []):
+            url = entry.get("url")
+            if not url:
+                continue
+            cached = self._stream_health.get(url)
+            if cached and (now - cached[1]) < STREAM_HEALTH_TTL_SECONDS:
+                continue
+            await self._probe_stream_health(url)
 
     async def weather_watch_loop(self) -> None:
         """Background poll: re-evaluate ambient when weather class changes.
@@ -614,6 +831,9 @@ class AmbientSoundService:
 
         try:
             self._last_weather_class = self._classify_weather()
+            # Warm the stream-health cache for the current class before the
+            # first selection so _check_weather doesn't have to guess blind.
+            await self._refresh_stream_health(self._last_weather_class)
             await self._evaluate()
             # Boot-restore safety net: if persisted state had last_playing=true
             # and _evaluate's diff check short-circuited (target equals the
@@ -644,12 +864,29 @@ class AmbientSoundService:
             try:
                 await asyncio.sleep(POLL_INTERVAL)
                 wclass = self._classify_weather()
+                # TTL-gated re-probe of the current class's streams (cheap when
+                # fresh). Catches a station dying mid-play or recovering.
+                await self._refresh_stream_health(wclass)
                 if wclass != self._last_weather_class:
                     logger.info(
                         "Ambient: weather class %s -> %s, re-evaluating",
                         self._last_weather_class, wclass,
                     )
                     self._last_weather_class = wclass
+                    await self._evaluate()
+                elif (
+                    self._weather_reactive
+                    and self._playing
+                    and self._source == "weather"
+                    and self._check_weather() != self._current_sound
+                ):
+                    # Same weather class, but stream health flipped — the
+                    # resolved target changed (stream died → file fallback, or
+                    # recovered → back to stream). Re-evaluate to switch.
+                    logger.info(
+                        "Ambient: stream health changed for %s, re-evaluating",
+                        wclass,
+                    )
                     await self._evaluate()
             except asyncio.CancelledError:
                 logger.info("Weather watch loop cancelled")
@@ -769,7 +1006,10 @@ class AmbientSoundService:
                 return
             mode = self._current_mode()
             start_volume = self._resolve_sonos_volume(mode)
-            success = await self._sonos.play_uri(uri, volume=start_volume)
+            is_stream = self._is_stream(self._current_sound)
+            success = await self._sonos.play_uri(
+                uri, volume=start_volume, force_radio=is_stream
+            )
             if not success:
                 logger.warning("Sonos ambient: play_uri failed for %s", uri)
                 return
@@ -777,6 +1017,7 @@ class AmbientSoundService:
             self._sonos_ambient_active = True
             self._sonos_ambient_pending = False
             self._sonos_ambient_uri = uri
+            self._sonos_ambient_is_stream = is_stream
             self._sonos_absent_since = None
             self._sonos_present_since = None
             self._sonos_loop_task = asyncio.create_task(
@@ -812,6 +1053,7 @@ class AmbientSoundService:
         self._sonos_ambient_active = False
         self._sonos_ambient_pending = False
         self._sonos_ambient_uri = None
+        self._sonos_ambient_is_stream = False
         self._sonos_absent_since = None
         self._sonos_present_since = None
         if self._sonos and getattr(self._sonos, "connected", False):
@@ -839,8 +1081,11 @@ class AmbientSoundService:
             return
         mode = self._current_mode()
         vol = self._resolve_sonos_volume(mode)
+        is_stream = self._is_stream(filename)
         try:
-            success = await self._sonos.play_uri(uri, volume=vol)
+            success = await self._sonos.play_uri(
+                uri, volume=vol, force_radio=is_stream
+            )
         except Exception as e:
             logger.warning("Sonos ambient swap: play_uri error: %s", e)
             return
@@ -860,6 +1105,7 @@ class AmbientSoundService:
                     pass
                 return
             self._sonos_ambient_uri = uri
+            self._sonos_ambient_is_stream = is_stream
             logger.info(
                 "Sonos ambient swapped to %s at volume %d (mode=%s)",
                 filename, vol, mode,
@@ -902,6 +1148,7 @@ class AmbientSoundService:
                     await self._sonos.play_uri(
                         self._sonos_ambient_uri,
                         volume=int(status.get("volume", present_volume)),
+                        force_radio=self._sonos_ambient_is_stream,
                     )
                     continue
 
