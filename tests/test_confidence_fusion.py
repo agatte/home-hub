@@ -18,6 +18,7 @@ from backend.services.ml.confidence_fusion import (
     SIGNAL_SOURCES,
     STALE_SIGNAL_SECONDS,
     SUGGEST_THRESHOLD,
+    WEIGHT_FLOOR_FRACTION,
     ConfidenceFusion,
     Signal,
 )
@@ -299,12 +300,40 @@ class TestWeightLearning:
             assert fusion._weights[src] == pytest.approx(expected, abs=1e-4)
         assert sum(fusion._weights.values()) == pytest.approx(1.0, abs=1e-4)
 
-    def test_zero_accuracy_zeroes_that_source(self):
+    def test_zero_accuracy_floored_not_zeroed(self):
+        # A lane measured at 0.0 accuracy is floored to half its design weight,
+        # not starved to zero (the floor added 2026-05-26 after the 5/25 drift
+        # left fusion effectively process-only).
         fusion = ConfidenceFusion()
         acc = {src: 0.5 for src in SIGNAL_SOURCES}
         acc["rule_engine"] = 0.0
         fusion.update_weights_from_accuracy(acc)
-        assert fusion._weights["rule_engine"] == 0.0
+        floor = DEFAULT_WEIGHTS["rule_engine"] * WEIGHT_FLOOR_FRACTION
+        total = 0.5 * 3 + floor
+        assert fusion._weights["rule_engine"] == pytest.approx(floor / total, abs=1e-4)
+        assert fusion._weights["rule_engine"] > 0.0
+        assert sum(fusion._weights.values()) == pytest.approx(1.0, abs=1e-4)
+
+    def test_high_process_accuracy_cannot_starve_other_lanes(self):
+        # Reproduces the 5/25 fusion-lane drift: process ~90% accuracy,
+        # camera/audio_ml structurally low (they vote presence, not mode),
+        # rule_engine quiet. Each lane keeps >= half its design weight share,
+        # and process cannot run away to its pre-floor ~0.84 normalized share.
+        fusion = ConfidenceFusion()
+        fusion.update_weights_from_accuracy(
+            {"process": 0.9, "camera": 0.08, "audio_ml": 0.09, "rule_engine": 0.0}
+        )
+        floored = {
+            "process": 0.9,
+            "camera": DEFAULT_WEIGHTS["camera"] * WEIGHT_FLOOR_FRACTION,
+            "audio_ml": DEFAULT_WEIGHTS["audio_ml"] * WEIGHT_FLOOR_FRACTION,
+            "rule_engine": DEFAULT_WEIGHTS["rule_engine"] * WEIGHT_FLOOR_FRACTION,
+        }
+        total = sum(floored.values())
+        for src, val in floored.items():
+            assert fusion._weights[src] == pytest.approx(val / total, abs=1e-4)
+        assert all(w > 0 for w in fusion._weights.values())
+        assert fusion._weights["process"] < 0.80
         assert sum(fusion._weights.values()) == pytest.approx(1.0, abs=1e-4)
 
     def test_missing_source_falls_back_to_default(self):

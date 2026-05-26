@@ -58,6 +58,15 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "rule_engine": 0.125,
 }
 
+# Floor applied by update_weights_from_accuracy: each lane keeps at least this
+# fraction of its DEFAULT_WEIGHTS value before re-normalization. The nightly
+# accuracy-based tuner otherwise starves the camera/audio_ml lanes — they vote
+# presence/ambient (correctly) rather than the dominant process mode, so their
+# raw mode-match accuracy is structurally low (~8-9%), which would drive process
+# toward ~0.62 and the other lanes toward zero, making fusion effectively
+# process-only. See digests/2026-05-25.md 15:45 ET fusion-lane audit.
+WEIGHT_FLOOR_FRACTION = 0.5
+
 AUTO_APPLY_THRESHOLD = 0.95
 OVERRIDE_THRESHOLD = 0.92
 SUGGEST_THRESHOLD = 0.70
@@ -303,12 +312,19 @@ class ConfidenceFusion:
         for src in SIGNAL_SOURCES:
             raw[src] = accuracy_by_source.get(src, DEFAULT_WEIGHTS[src])
 
-        total = sum(raw.values())
-        if total <= 0:
+        if sum(raw.values()) <= 0:
             logger.warning("All accuracy values zero — keeping current weights")
             return
 
-        self._weights = {src: val / total for src, val in raw.items()}
+        # Floor each lane at half its design weight before normalizing, so a
+        # structurally-low-accuracy lane (camera/audio_ml measure presence, not
+        # mode) can't be starved toward zero by a high-accuracy process lane.
+        floored = {
+            src: max(val, DEFAULT_WEIGHTS[src] * WEIGHT_FLOOR_FRACTION)
+            for src, val in raw.items()
+        }
+        total = sum(floored.values())
+        self._weights = {src: val / total for src, val in floored.items()}
         logger.info(
             "Fusion weights updated: %s",
             {s: round(w, 3) for s, w in self._weights.items()},
