@@ -106,18 +106,19 @@ async def test_no_skip_on_empty_title_transition():
 
 
 @pytest.mark.asyncio
-async def test_skip_safe_when_logger_not_attached():
-    """Pre-attach (or test) state — _event_logger is None. Poll loop guards
-    this case before calling _maybe_emit_skip, but the helper itself must
-    also tolerate it for direct callers / future refactors."""
+async def test_helper_no_ops_when_logger_not_attached():
+    """Without attach_event_logger() having been called, the helper must
+    early-return cleanly even on a skip-triggering payload — so direct
+    callers in tests / future refactors don't AttributeError on the
+    self._event_logger access. The production poll loop also guards this
+    case at its call site, but the helper's self-guard is the documented
+    contract."""
     s = SonosService()  # no attach_event_logger called
     assert s._event_logger is None
-    # Direct call should not crash even though _maybe_emit_skip assumes attached
-    # (poll loop's outer if-guard prevents the call; this asserts the guard exists).
-    # We test the guard by verifying attribute is None and skip path no-ops naturally.
     prev = {"state": "PLAYING", "track": "A", "position": "0:00:30", "duration": "0:04:00"}
     new = {"state": "PLAYING", "track": "B", "position": "0:00:01", "duration": "0:03:00"}
-    # _maybe_emit_skip will AttributeError on self._event_logger.log_sonos_event
-    # if called without attachment — the poll loop's `if self._event_logger is not None`
-    # guard prevents that. Verify the guard by checking the attribute directly.
-    # (Direct call here would raise; we don't make it.)
+    # Skip-triggering payload (mid-song title change, both PLAYING). Without
+    # the self-guard at the top of _maybe_emit_skip, this would
+    # AttributeError on self._event_logger.log_sonos_event.
+    await s._maybe_emit_skip(prev, new)
+    # No assertion target — the test passes iff the call returns without raising.

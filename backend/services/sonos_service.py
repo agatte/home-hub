@@ -6,10 +6,18 @@ import logging
 import random
 import re
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from backend.config import settings
 from backend.services.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+if TYPE_CHECKING:
+    # Avoid runtime import cost — automation_engine pulls in
+    # light_state_calculator + effect_manager, which is heavier than this
+    # module needs at load time. String-annotated below.
+    from backend.services.automation_engine import AutomationEngine
+    from backend.services.event_logger import EventLogger
+    from backend.services.heartbeat import HeartbeatRegistry
 
 logger = logging.getLogger("home_hub.sonos")
 
@@ -84,11 +92,15 @@ class SonosService:
             name="sonos", failure_threshold=3, cooldown_seconds=30.0, call_timeout=5.0
         )
 
-    def set_heartbeat_registry(self, registry) -> None:
+    def set_heartbeat_registry(self, registry: "HeartbeatRegistry") -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
 
-    def attach_event_logger(self, event_logger, automation) -> None:
+    def attach_event_logger(
+        self,
+        event_logger: "EventLogger",
+        automation: "AutomationEngine",
+    ) -> None:
         """Wire post-bootstrap dependencies for off-dashboard skip emission.
 
         Called from bootstrap.py once both event_logger and automation
@@ -709,7 +721,14 @@ class SonosService:
         ``retrain`` only counts a skip when it follows an ``auto_play``
         within 30s (music_bandit.py:355–363). Skips outside that window
         land in the table but don't penalize the arm — same intent.
+
+        Self-safe when ``attach_event_logger`` hasn't run — early-returns
+        without touching ``self._event_logger`` (the poll loop's outer
+        guard prevents this in production, but direct callers in tests /
+        future refactors get the same protection without surprise).
         """
+        if self._event_logger is None:
+            return
         prev_title = (prev.get("track") or "").strip()
         new_title = (new.get("track") or "").strip()
         # No emission if title didn't actually change. Empty-string
