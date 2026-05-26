@@ -92,9 +92,11 @@ Subagents (`~/.claude/agents/`, 28 total) — fleet table + trigger map in `docs
 
 ### Ambient verification loop
 
-`/checkback-loop` runs `~/.claude/runbooks/homehub-checkbacks.md` (hourly sweep + dated one-shots), writes blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire a system-tray balloon via `~/.claude/scripts/notify.ps1`. Auto-starts via `home-hub-loop.cmd`.
+`/checkback-loop` runs `~/.claude/runbooks/homehub-checkbacks.md` (hourly sweep + dated one-shots), writes blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire a system-tray balloon via `~/.claude/scripts/notify.ps1`.
 
 Parallel `/watcher-loop` polls digests every 600s; warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (playbook: `~/.claude/runbooks/homehub-watcher.md`). Investigation-only.
+
+**Autostart (both loops):** Windows Scheduled Tasks `Home Hub Checkback Loop` + `Home Hub Watcher Loop` (triggers: logon + unlock + resume-from-sleep; idempotent ensure-running, no-op if already alive), run **hidden** via `~/.claude/scripts/start-homehub-loop.ps1` (wscript shim avoids window-flash). `Home Hub Loops Daily Relaunch` force-recycles both at 04:00 to shed `/loop` dynamic-mode context before it hits auto-compaction. Re-register via `~/.claude/scripts/register-homehub-loop-tasks.ps1`. (Replaced the Startup-folder `.cmd`s, which only fired on a full logon.)
 
 ---
 
