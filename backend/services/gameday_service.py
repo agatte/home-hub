@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -22,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 import httpx
+
+from backend.config import settings
 
 logger = logging.getLogger("home_hub.gameday")
 
@@ -46,16 +47,9 @@ PREGAMEDAY_AUTO_SOURCE = "gameday:auto:pregame"
 # "big play" as a momentum PlayEvent. Matches `celebration_volume_policy._WPA_BIG`
 # so the system is internally consistent: a play that triggers a momentum
 # celebration is the same magnitude as a play that bumps celebration TTS
-# volume by +10. Env-overridable for post-real-game tuning — defensive
-# parse so a typo in .env doesn't kill the backend at import time.
-try:
-    MOMENTUM_WPA_THRESHOLD = float(os.getenv("MOMENTUM_WPA_THRESHOLD", "0.15"))
-except ValueError:
-    logger.warning(
-        "Invalid MOMENTUM_WPA_THRESHOLD env var (got %r) — falling back to 0.15",
-        os.getenv("MOMENTUM_WPA_THRESHOLD"),
-    )
-    MOMENTUM_WPA_THRESHOLD = 0.15
+# volume by +10. Sourced from Settings (config.py) for consistency with the
+# other Game Day thresholds; override via the MOMENTUM_WPA_THRESHOLD env var.
+MOMENTUM_WPA_THRESHOLD = settings.MOMENTUM_WPA_THRESHOLD
 
 HTTP_TIMEOUT = 10.0
 HTTP_HEADERS = {"User-Agent": "HomeHub/1.0 (anthonygatte@gmail.com)"}

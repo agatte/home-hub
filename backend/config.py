@@ -132,6 +132,7 @@ class Settings(BaseSettings):
     ESPN_POLL_INTERVAL: int = 5
     BIG_PLAY_YARD_THRESHOLD: int = 20
     FIELD_GOAL_YARD_THRESHOLD: int = 40
+    MOMENTUM_WPA_THRESHOLD: float = 0.15  # |WPA| swing that fires a momentum celebration on non-scoring plays
 
     @property
     def trusted_lan_ips_set(self) -> frozenset[str]:
