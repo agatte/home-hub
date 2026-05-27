@@ -27,6 +27,8 @@ Privacy guarantees:
 import asyncio
 import hashlib
 import logging
+import os
+import signal
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,15 @@ POLL_INTERVAL = 2       # Seconds between frame captures
 # POLL_INTERVAL — long enough for an honest slow MediaPipe frame, short
 # enough that a real hang is detected within a single iteration.
 FRAME_READ_TIMEOUT_S = 5.0
+# Bound the blocking capture *open* (cv2.VideoCapture(0) + warm-up read +
+# any release of a prior handle) off the event loop. The open runs in an
+# executor wrapped in asyncio.wait_for(this); on timeout we treat the camera
+# as unavailable rather than letting a wedged V4L2 open freeze the whole
+# backend (lights/Sonos/WS run on the same loop) or park the supervisor that
+# is supposed to recover it (the 2026-05-27 watchdog self-silencing). Picked
+# above CAP_OPEN_TIMEOUT_MS so OpenCV's own open timeout fires first when it
+# works, with this as the hard backstop for a driver that ignores it.
+CAP_OPEN_WATCHDOG_SECONDS = 6.0
 # V4L2 capture timeouts. Set on the cv2.VideoCapture handle at open time;
 # OpenCV ignores these on backends that don't support them, so they're
 # safe to set unconditionally. CAP_READ_TIMEOUT_MSEC is the primary defense
@@ -500,9 +511,11 @@ class CameraService:
             )
             return
 
-        # Open webcam (device 0 = built-in camera on Latitude)
+        # Open webcam (device 0 = built-in camera on Latitude). Bounded +
+        # off-loop so a wedged V4L2 open can't freeze the backend or park
+        # spawn_camera_service (which the watchdog awaits).
         try:
-            self._cap = self._open_capture()
+            self._cap = await self._open_capture_async()
             if self._cap is None:
                 return
             await self._load_calibration()
@@ -681,7 +694,6 @@ class CameraService:
                 re-download already failed (e.g. a same-boot retry from
                 the watchdog).
         """
-        import os
 
         if os.environ.get("HOME_HUB_SKIP_MODEL_HASH_CHECK") == "1":
             logger.warning(
@@ -1156,7 +1168,49 @@ class CameraService:
             logger.warning("Warm-up frame read failed: %s", exc)
         return cap
 
-    def _recover_capture(self) -> None:
+    def _release_and_open(self, old: Optional[Any]) -> Optional[Any]:
+        """Sync: release a prior handle (if any), then open a fresh one.
+
+        Runs entirely in an executor thread (see ``_open_capture_async``)
+        so that *both* the ``release()`` — which can block joining a V4L2
+        worker thread parked in ``read()`` — and the open never run on the
+        event loop. Release-before-open ordering matches the recovery path:
+        a stranded handle is the exact failure that wedges ``/dev/video0``.
+        """
+        if old is not None:
+            try:
+                old.release()
+            except Exception as exc:
+                logger.warning("Camera release before reopen failed: %s", exc)
+        return self._open_capture()
+
+    async def _open_capture_async(self, *, release_first: Optional[Any] = None) -> Optional[Any]:
+        """Open the capture off the event loop with a hard timeout.
+
+        Every open path (boot ``start()``, sleeping resume, poll-loop reopen,
+        watchdog recovery) routes through here so a wedged V4L2 open can
+        neither freeze the loop nor park the caller. On timeout we log and
+        return ``None``; the orphaned executor thread is left to exit when
+        its syscall unblocks (or, if it never does, the watchdog's
+        process-restart escalation reclaims the fd). ``release_first`` lets
+        callers hand off a prior handle so the release also happens off-loop.
+        """
+        loop = asyncio.get_event_loop()
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, self._release_and_open, release_first),
+                timeout=CAP_OPEN_WATCHDOG_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Camera open exceeded %.0fs watchdog — treating as unavailable "
+                "(V4L2 likely wedged; an executor thread may be parked on the "
+                "open/read and holding /dev/video0 until the process restarts)",
+                CAP_OPEN_WATCHDOG_SECONDS,
+            )
+            return None
+
+    async def _recover_capture(self) -> None:
         """Release and reopen the capture handle from the asyncio thread.
 
         Called when the watchdog in ``poll_loop`` trips on a hung frame
@@ -1165,18 +1219,14 @@ class CameraService:
         NOT take that lock here — OpenCV's ``release()`` is thread-safe
         at the C++ level and releasing under the orphan typically unblocks
         the V4L2 driver, letting the orphan exit cleanly on its next
-        syscall. If reopen fails, ``self._cap`` stays ``None`` and
-        ``_process_frame`` short-circuits at its top-of-function guard
-        until a future iteration succeeds.
+        syscall. Release + reopen run off-loop with a hard timeout via
+        ``_open_capture_async``. If reopen fails, ``self._cap`` stays
+        ``None`` and ``_process_frame`` short-circuits at its top-of-function
+        guard until a future iteration succeeds.
         """
         old = self._cap
         self._cap = None
-        if old is not None:
-            try:
-                old.release()
-            except Exception as exc:
-                logger.warning("Camera release during recovery failed: %s", exc)
-        self._cap = self._open_capture()
+        self._cap = await self._open_capture_async(release_first=old)
         if self._cap is None:
             logger.warning("Camera reopen during recovery failed; will retry next poll")
         else:
@@ -1199,7 +1249,7 @@ class CameraService:
                 # 2026-05-17 after a sleeping→working resume with a still-
                 # locked V4L2 handle.
                 if self._cap is None:
-                    self._cap = self._open_capture()
+                    self._cap = await self._open_capture_async()
                     if self._cap is None:
                         continue
                     logger.info("Camera capture reopened by poll loop")
@@ -1224,7 +1274,7 @@ class CameraService:
                         "reopening capture",
                         FRAME_READ_TIMEOUT_S,
                     )
-                    self._recover_capture()
+                    await self._recover_capture()
                     continue
                 if result is None:
                     continue
@@ -2157,9 +2207,26 @@ class CameraService:
                 self._paused = True
                 if self._heartbeat is not None:
                     self._heartbeat.deregister("camera")
-                # Release camera so LED turns off
-                if self._cap and self._cap.isOpened():
-                    self._cap.release()
+                # Release camera so the LED turns off. Hand the handle off to
+                # an executor (bounded) and null _cap first: release() can
+                # block joining a V4L2 worker thread parked in read(), which
+                # would otherwise freeze the event loop on the mode flip.
+                old = self._cap
+                self._cap = None
+                if old is not None:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.get_event_loop().run_in_executor(None, old.release),
+                            timeout=CAP_OPEN_WATCHDOG_SECONDS,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Camera release on sleep exceeded %.0fs watchdog — "
+                            "LED/handle may linger until the process restarts",
+                            CAP_OPEN_WATCHDOG_SECONDS,
+                        )
+                    except Exception as exc:
+                        logger.warning("Camera release on sleep failed: %s", exc)
                 logger.info("Camera paused for sleeping mode")
         else:
             if self._paused:
@@ -2170,16 +2237,17 @@ class CameraService:
                 # zone/posture from before sleep is stale and would otherwise
                 # leak into the morning's first overlay decisions.
                 self._clear_committed_zone_posture("resume from sleeping")
-                # Reopen camera
-                try:
-                    self._cap = self._open_capture()
-                    if self._cap is not None:
-                        logger.info("Camera resumed after sleeping mode")
-                    else:
-                        logger.warning("Camera unavailable after sleep — will retry next poll")
-                except Exception as exc:
-                    logger.error("Failed to reopen camera: %s", exc)
-                    self._cap = None
+                # Reopen camera — release any stranded handle first, off-loop +
+                # bounded, matching the recovery path. A handle left over from
+                # a failed sleep-entry release is exactly what wedges
+                # /dev/video0 across the sleep cycle.
+                old = self._cap
+                self._cap = None
+                self._cap = await self._open_capture_async(release_first=old)
+                if self._cap is not None:
+                    logger.info("Camera resumed after sleeping mode")
+                else:
+                    logger.warning("Camera unavailable after sleep — will retry next poll")
 
     async def close(self) -> None:
         """Release camera and MediaPipe resources.
@@ -2262,6 +2330,28 @@ CAMERA_WATCHDOG_STALE_SECONDS = 60.0
 # enough that a flapping V4L2 doesn't churn." A respawn itself takes
 # ~3–5s (model download is cached after first boot).
 CAMERA_WATCHDOG_INTERVAL_SECONDS = 300.0
+
+# When an orphaned cv2/V4L2 worker thread parks holding /dev/video0, the
+# fd is leaked *inside this process* — in-process respawn can never reclaim
+# it (release() from another thread doesn't free a parked fd). The only
+# reliable reclaim is a fresh process, which systemd (Restart=always) gives
+# us on exit. After this many consecutive watchdog respawns fail to bring
+# the lane back, escalate to a process restart. 3 ≈ 15 min of in-process
+# attempts before the heavier hammer — both the 2026-05-20 (12h) and
+# 2026-05-27 (7.8h) wedges needed a manual restart that this automates.
+CAMERA_WEDGE_RESTART_THRESHOLD = 3
+
+# Hard ceiling on the bounded spawn await inside the watchdog. A spawn that
+# exceeds this is treated as a failed respawn (counts toward escalation) so
+# a hung start() can never silence the supervisor again (root cause of the
+# 2026-05-27 watchdog going dark for ~4h). Generous over start()'s normal
+# ~3–5s and over CAP_OPEN_WATCHDOG_SECONDS so an honest slow boot isn't cut off.
+CAMERA_SPAWN_WATCHDOG_SECONDS = 30.0
+
+# Don't let the process-restart escalation become a boot loop if the camera
+# is wedged at the hardware level (a fresh process would re-wedge and re-exit).
+# Persist the last escalation time and refuse another within this window.
+CAMERA_WEDGE_RESTART_COOLDOWN_SECONDS = 3600.0
 
 
 async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
@@ -2358,6 +2448,82 @@ def _camera_heartbeat_age(heartbeats: Any) -> Optional[float]:
     return None
 
 
+async def _escalate_camera_wedge_restart(app: "FastAPI", detail: str) -> bool:
+    """Last-resort recovery: exit so systemd (Restart=always) brings the
+    unit back on a clean ``/dev/video0`` fd.
+
+    When an orphaned cv2/V4L2 worker thread parks holding the device, the
+    fd is leaked *inside this process* — ``spawn_camera_service``'s
+    ``release()`` from another thread can't reclaim it, so in-process
+    respawn fails forever (the 2026-05-20 + 2026-05-27 incidents). Only a
+    fresh process frees it. Rate-limited via the ``camera_wedge_last_restart``
+    app_setting so a hardware-level wedge — where a fresh process would
+    immediately re-wedge — can't become a boot loop.
+
+    Returns ``False`` (logs, does nothing else) when inside the cooldown
+    window. Otherwise it signals shutdown and does not meaningfully return —
+    the process is going down.
+    """
+    from backend.api.routes.routines import load_setting, save_setting
+
+    now = datetime.now(timezone.utc)
+    try:
+        stamp = await load_setting("camera_wedge_last_restart")
+        last_iso = (stamp or {}).get("at")
+        if last_iso:
+            elapsed = (now - datetime.fromisoformat(last_iso)).total_seconds()
+            if elapsed < CAMERA_WEDGE_RESTART_COOLDOWN_SECONDS:
+                logger.error(
+                    "Camera wedge persists (%s) but a process-restart escalation "
+                    "fired %.0fs ago (<%.0fs cooldown) — NOT restarting. Likely a "
+                    "hardware-level V4L2 wedge needing manual intervention.",
+                    detail, elapsed, CAMERA_WEDGE_RESTART_COOLDOWN_SECONDS,
+                )
+                return False
+    except Exception:
+        logger.exception("Camera wedge cooldown check failed — proceeding with restart")
+
+    try:
+        await save_setting(
+            "camera_wedge_last_restart", {"at": now.isoformat(), "detail": detail}
+        )
+    except Exception:
+        logger.exception("Failed to persist camera wedge restart stamp — continuing")
+
+    logger.critical(
+        "Camera wedge unrecoverable in-process after %d respawns (%s) — restarting "
+        "the service so systemd reclaims /dev/video0",
+        CAMERA_WEDGE_RESTART_THRESHOLD, detail,
+    )
+    ws_manager = getattr(app.state, "ws_manager", None)
+    if ws_manager is not None:
+        try:
+            await ws_manager.broadcast(
+                "notification",
+                {
+                    "kind": "system",
+                    "title": "Camera wedged — restarting service",
+                    "subtitle": "V4L2 handle stuck; recovering via process restart",
+                    "source": "camera_watchdog",
+                },
+            )
+        except Exception:
+            logger.exception("Camera wedge: restart notification broadcast failed")
+
+    # Let the WS frame + logs flush before we go down.
+    await asyncio.sleep(1.0)
+
+    # SIGTERM lets the lifespan shutdown run cleanly; systemd Restart=always
+    # brings the unit back. os._exit is the hard backstop only if the signal
+    # itself can't be delivered — a fresh process is the whole point.
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception:
+        logger.exception("SIGTERM self-signal failed — hard-exiting")
+        os._exit(1)
+    return True
+
+
 async def camera_watchdog_loop(app: "FastAPI") -> None:
     """Background supervisor — respawn the camera service when it goes
     silent.
@@ -2382,6 +2548,12 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
     Emits a ``notification`` WebSocket event on each respawn so the
     desktop toast surface logs the recovery — gives the user a paper
     trail without needing to read journalctl.
+
+    The spawn is bounded by ``CAMERA_SPAWN_WATCHDOG_SECONDS`` so a hung
+    start() can't silence the supervisor. After
+    ``CAMERA_WEDGE_RESTART_THRESHOLD`` consecutive failed respawns the loop
+    escalates to a process restart (``_escalate_camera_wedge_restart``) —
+    the only way to reclaim an orphaned, intra-process ``/dev/video0`` fd.
     """
     from backend.api.routes.routines import load_setting
 
@@ -2389,6 +2561,11 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
         "Camera watchdog started (interval=%.0fs, stale_threshold=%.0fs)",
         CAMERA_WATCHDOG_INTERVAL_SECONDS, CAMERA_WATCHDOG_STALE_SECONDS,
     )
+
+    # Consecutive respawns that failed to bring the lane back. In-process
+    # respawn can't reclaim an orphaned V4L2 fd, so after
+    # CAMERA_WEDGE_RESTART_THRESHOLD failures we escalate to a process restart.
+    consecutive_respawn_failures = 0
 
     while True:
         try:
@@ -2446,7 +2623,28 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
                 reason, detail,
             )
 
-            result = await spawn_camera_service(app, reason=reason)
+            # Bound the spawn: a hung start() (V4L2 open parked) must not be
+            # able to silence the supervisor — that's exactly how the watchdog
+            # went dark for ~4h on 2026-05-27. A timeout counts as a failed
+            # respawn so it feeds the escalation.
+            try:
+                result = await asyncio.wait_for(
+                    spawn_camera_service(app, reason=reason),
+                    timeout=CAMERA_SPAWN_WATCHDOG_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                result = {"status": "error", "detail": "spawn exceeded watchdog timeout"}
+                logger.warning(
+                    "Camera watchdog: spawn exceeded %.0fs — counting as failed respawn",
+                    CAMERA_SPAWN_WATCHDOG_SECONDS,
+                )
+
+            respawn_ok = result.get("status") == "ok"
+            if respawn_ok:
+                consecutive_respawn_failures = 0
+            else:
+                consecutive_respawn_failures += 1
+
             ws_manager = getattr(app.state, "ws_manager", None)
             if ws_manager is not None:
                 try:
@@ -2455,7 +2653,7 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
                         {
                             "kind": "system",
                             "title": "Camera recovered"
-                                if result.get("status") == "ok"
+                                if respawn_ok
                                 else "Camera recovery failed",
                             "subtitle": detail,
                             "source": "camera_watchdog",
@@ -2465,6 +2663,20 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
                     logger.exception(
                         "Camera watchdog: failed to broadcast notification"
                     )
+
+            # In-process respawn cannot reclaim an orphaned /dev/video0 fd.
+            # After repeated failures, escalate to a process restart (systemd
+            # reclaims the device on a clean boot).
+            if consecutive_respawn_failures >= CAMERA_WEDGE_RESTART_THRESHOLD:
+                escalation_detail = (
+                    f"{consecutive_respawn_failures} consecutive failed respawns; "
+                    f"last reason={reason} ({detail})"
+                )
+                # Reset regardless of outcome: on a successful escalation the
+                # process is going down; on a cooldown-blocked one we re-arm the
+                # in-process attempts rather than re-logging the block every tick.
+                consecutive_respawn_failures = 0
+                await _escalate_camera_wedge_restart(app, escalation_detail)
 
         except asyncio.CancelledError:
             logger.info("Camera watchdog stopped")
