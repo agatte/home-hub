@@ -1,10 +1,10 @@
 """Multi-source presence fusion — combines Latitude camera + desktop pc_agent.
 
-The Latitude camera (corner-mounted) sees the whole bedroom and is the only
-source that can produce ``zone=bed`` or ``posture=reclined``. The desktop
-camera (frontal at-desk) is a high-confidence at-desk confirmation that the
-Latitude occasionally misses (chair-back / picture-frame face FPs, weak-face
-flap under low lux).
+As of 2026-05-27 the Latitude camera relocated to the living room: it sees
+the couch and produces ``zone=couch`` (its bedroom desk/bed left-right split
+is retired). The desktop pc_agent (frontal at-desk) is now the authoritative
+"at desk" source — it emits ``zone=desk`` on a confident face. ``reclined``
+posture is no longer produced now that no camera frames the bed.
 
 This service merges the two into a single attendance model:
 
@@ -251,10 +251,11 @@ class PresenceFusion:
     ) -> Optional[str]:
         """Best zone reading.
 
-        Latitude is authoritative because it's the only source that can
-        produce ``zone=bed``. When Latitude doesn't have a fresh zone
-        (sleeping-mode pause, capture failure) but the desktop sees a
-        fresh face, fall back to ``"desk"``.
+        Latitude is authoritative for its own zone (``couch`` since the
+        2026-05-27 living-room move; ``bed``/``desk`` historically). When it
+        has no fresh zone (capture failure, no one in the living room) but the
+        desktop sees a fresh face, fall back to ``"desk"`` — the desktop is
+        the at-desk authority.
         """
         lat = self._readings.get("latitude")
         if lat is not None and lat.zone is not None and self._fresh(lat, max_age_s):

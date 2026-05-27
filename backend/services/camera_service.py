@@ -157,16 +157,17 @@ POSE_SKELETON_EDGES = (
     (POSE_NOSE, POSE_RIGHT_SHOULDER),
 )
 
-# Zone mapping — the Latitude's corner view splits the bedroom into two
-# semantic zones along the horizontal axis: the desk (left ~1/3 of frame)
-# where working / gaming / watching happen, and the bed (right ~2/3) where
-# relax / sleeping happen. The detected person's center-X (from face bbox
-# or pose torso) is classified against ZONE_DESK_THRESHOLD.
-#
-# Expose-only in this pass — zone is published to status / WebSocket /
-# ML logger but no automation behavior consumes it yet.
+# Zone mapping. 2026-05-27: the Latitude relocated from the bedroom corner
+# (which split desk left / bed right along ZONE_DESK_THRESHOLD) to the living
+# room, where it frames a single area — the couch. It now emits one zone,
+# ZONE_COUCH, for any confident detection; the left/right split was bedroom
+# geometry and no longer maps to anything meaningful. "At desk" presence is
+# now owned by the desktop pc_agent (PresenceFusion), which sees the user
+# frontally at the monitor. ZONE_DESK / ZONE_BED are retained as constants
+# because the desktop source + PresenceFusion fallbacks still reference them.
 ZONE_DESK = "desk"
 ZONE_BED = "bed"
+ZONE_COUCH = "couch"
 # Normalized X (detected center / frame width). Corner view places desk
 # around ~0.15 and bed roughly 0.4–0.9; 0.40 catches the accent-chair
 # transition region. Hysteresis (below) absorbs brief crossings.
@@ -186,6 +187,10 @@ def _zone_weighted_lux(gray, zone: Optional[str]) -> float:
     actual perceptual environment. Falls back to full-frame when zone is
     unknown (no commit yet, or just-resumed). The split mirrors
     ``ZONE_DESK_THRESHOLD`` so lux and zone-detection share a boundary.
+
+    The living-room ``ZONE_COUCH`` (2026-05-27 relocation) intentionally
+    uses the full frame — the whole view is the couch/living area, so there
+    is no sub-region to isolate; it falls through to the full-frame mean.
     """
     width = gray.shape[1]
     split = int(ZONE_DESK_THRESHOLD * width)
@@ -813,9 +818,9 @@ class CameraService:
             return {
                 "status": "error",
                 "detail": (
-                    "no committed zone — sit at the desk or in bed for ~20s "
-                    "so a zone commits, then retry. Baseline must be captured "
-                    "at the same ROI the live poll loop will read against."
+                    "no committed zone — sit on the couch for ~20s so a zone "
+                    "commits, then retry. Baseline must be captured at the "
+                    "same ROI the live poll loop will read against."
                 ),
             }
 
@@ -1634,13 +1639,13 @@ class CameraService:
         """
         now = datetime.now(timezone.utc)
 
-        # Posture is meaningful only when the user is in the bed zone. At the
-        # desk the user is by definition seated and any "reclined" call is
-        # noise from hip extrapolation (the desk occludes hips; MediaPipe
-        # places the landmark at chest level → small delta → false reclined).
-        # No automation rule consumes desk+posture today — clear any stale
-        # commit and let bed-zone observations be the only source.
-        if self._last_zone == ZONE_DESK:
+        # Posture has no consumer since the 2026-05-27 living-room move (the
+        # bed-zone overlays + zone_posture_rule that read it are dormant). At
+        # the desk it was always noise (the desk occludes hips → MediaPipe
+        # places the landmark at chest level → false reclined); on the couch
+        # it's simply unconsumed. Suppress for both Latitude zones so we don't
+        # publish a meaningless reclined/upright over status + WebSocket.
+        if self._last_zone in (ZONE_DESK, ZONE_COUCH):
             if self._last_posture is not None or self._candidate_posture is not None:
                 self._last_posture = None
                 self._last_posture_at = None
@@ -1862,9 +1867,9 @@ class CameraService:
                     key=lambda d: d.categories[0].score,
                 )
                 face_conf = float(face_best.categories[0].score)
-                bbox = face_best.bounding_box
-                cx = (bbox.origin_x + bbox.width / 2) / max(w, 1)
-                face_zone = ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
+                # Living-room camera frames a single area — the couch. The old
+                # desk/bed center-X split was bedroom geometry (see ZONE_COUCH).
+                face_zone = ZONE_COUCH
 
             # Face-anchor refresh. Any face above FACE_ANCHOR_MIN_CONFIDENCE
             # refreshes its zone's anchor. The TTL is checked downstream when
@@ -1912,20 +1917,9 @@ class CameraService:
                     pose_result
                 )
                 if pose_present:
-                    landmarks = pose_result.pose_landmarks[0]
-                    shoulders = [
-                        landmarks[idx]
-                        for idx in (POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER)
-                        if idx < len(landmarks)
-                        and float(getattr(landmarks[idx], "visibility", 0.0))
-                        >= MIN_POSE_VISIBILITY
-                    ]
-                    if shoulders:
-                        # MediaPipe pose landmark .x is already normalized 0–1.
-                        cx = sum(s.x for s in shoulders) / len(shoulders)
-                        pose_zone = (
-                            ZONE_DESK if cx < ZONE_DESK_THRESHOLD else ZONE_BED
-                        )
+                    # Single living-room zone — see ZONE_COUCH. The old
+                    # shoulder-center-X split was bedroom desk/bed geometry.
+                    pose_zone = ZONE_COUCH
                     pose_posture = self._evaluate_posture(pose_result)
 
             # Selection — face wins outright above the trust threshold,

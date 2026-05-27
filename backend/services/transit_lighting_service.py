@@ -85,7 +85,9 @@ TRIGGER_MODES = frozenset({"working", "gaming", "watching", "relax"})
 # Gate is on the *committed* zone reading (15s hysteresis inside
 # camera_service), so brief absences don't drop the gate either. Real
 # exits still fire transit via the BED_EXIT_ABSENT_FRAMES bypass below.
-STATIONARY_ZONES = frozenset({"bed", "desk"})
+# "couch" added 2026-05-27 with the Latitude→living-room move: the couch is
+# the living-room equivalent of bed/desk — a settled spot, not a transit cue.
+STATIONARY_ZONES = frozenset({"bed", "desk", "couch"})
 
 # Bypass STATIONARY_ZONES when camera has been continuously NOT-strongly-
 # present for this many polls. Strong presence = pose detection OR face

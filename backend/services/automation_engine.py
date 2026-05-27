@@ -795,6 +795,21 @@ class AutomationEngine:
         zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
         return zone == "desk"
 
+    def is_present_in_room(self) -> bool:
+        """True iff a presence source has a fresh *strong* reading right now.
+
+        Zone-independent — answers "is someone visibly here?" rather than
+        "are they at the desk?". The ``ambient_relax`` soft-default consults
+        this so it no longer treats "present but not at the desk" (e.g. on
+        the couch — the Latitude's living-room view since the 2026-05-27
+        relocation) as "nobody home" and force-flip to relax. Returns False
+        when PresenceFusion isn't wired (boot / tests).
+        """
+        presence = self._presence_fusion
+        if presence is None:
+            return False
+        return presence.is_strongly_present_any()
+
     async def signal_presence(self, source: str) -> None:
         """Signal that a human is physically present in the apartment.
 
@@ -2629,15 +2644,20 @@ class AutomationEngine:
 
                 # Ambient relax — soft default when nothing's happening. Idle
                 # held for IDLE_AMBIENT_RELAX_DWELL_SECONDS without any
-                # attendance signal, no Sonos → push to relax. Same attendance
-                # vetoes as late_night_rescue but day-agnostic; the late_night
-                # branch above handles the post-23:00 case where mode is still
-                # "working" (vs idle) at the desk.
+                # attendance signal, no Sonos → push to relax. Day-agnostic;
+                # the late_night branch above handles the post-23:00 case where
+                # mode is still "working" (vs idle) at the desk.
+                #
+                # The is_present_in_room() veto (added with the 2026-05-27
+                # Latitude→living-room move) blocks the flip when the camera
+                # can SEE someone here — previously, sitting on the couch read
+                # as "absent" and force-flipped relax + auto-played the Sonos.
                 elif (
                     not self._manual_override
                     and not self.is_dnd_active()
                     and not self.is_at_desk_fresh()
                     and not self.is_recent_process_working()
+                    and not self.is_present_in_room()
                     and self._current_mode == "idle"
                     and self._idle_entered_at is not None
                     and (now - self._idle_entered_at).total_seconds()
@@ -2944,6 +2964,12 @@ class AutomationEngine:
     async def _evaluate_zone_posture_rule(self, now: datetime) -> None:
         """Zone+posture → relax actuation rule.
 
+        DORMANT since the 2026-05-27 Latitude→living-room move: no camera
+        produces ``zone="bed"`` anymore, so the bed+reclined gate can never
+        pass and this rule no-ops every tick. Kept (not deleted) pending a
+        possible light-touch desktop bed-detection path; remove this and the
+        ``ZONE_POSTURE_RULE_APPLY`` env gate if bed coverage is abandoned.
+
         First mode-changing sensor actuation — fires when the camera
         observes bed+reclined sustained for ``ZONE_POSTURE_RULE_DWELL_SECONDS``,
         subject to mode / override / time-of-day / refractory gates. Logs
@@ -3147,6 +3173,12 @@ class AutomationEngine:
 
     async def _evaluate_watching_sleep_guard(self, now: datetime) -> None:
         """Watching → sleeping guard rule.
+
+        DORMANT since the 2026-05-27 Latitude→living-room move: needs
+        ``zone="bed"`` + ``posture="reclined"`` to start its dwell, neither of
+        which any camera produces now, so it never fires (it had also fired 0×
+        in production before the move). Kept pending possible desktop
+        bed-detection; safe to remove if bed coverage is abandoned for good.
 
         Catches the "fell asleep with YouTube on the projector" case the
         existing late_night_rescue can't reach (rescue is gated to

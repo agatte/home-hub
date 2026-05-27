@@ -841,6 +841,14 @@ class EmotionCapture:
             "face_confidence": face_confidence,
             "detection_source": "face",
         }
+        # Explicit desk-zone assertion. The frontal FaceLandmarker only fires
+        # on a close-range face at the monitor, so a positive face_present
+        # localizes the user to the desk. Emitting zone="desk" (rather than
+        # leaving PresenceFusion to infer it from face_present) makes the
+        # desktop a first-class desk-zone source — load-bearing once the
+        # Latitude relocates to the living room and stops reporting desk/bed.
+        if face_present:
+            payload["zone"] = "desk"
         if posture is not None:
             payload["posture"] = posture
         if posture_confidence is not None:
