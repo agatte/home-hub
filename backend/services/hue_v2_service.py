@@ -365,9 +365,9 @@ class HueV2Service:
         to v1's hue/sat (0-65535 / 0-254); color and CT changes fall
         through to the v1 polling fallback at 5s cadence.
 
-        Once the first event arrives, signals HueService to demote its
-        own polling to 5s (still acts as bridge-reachability heartbeat
-        and color/ct catch-up).
+        On a successful stream connection, signals HueService to demote
+        its own polling to 5s (still acts as bridge-reachability heartbeat
+        and color/ct catch-up); re-armed to tight cadence on disconnect.
         """
         if not self._stream_client:
             logger.warning("v2 event stream: no stream client, aborting")
@@ -385,6 +385,18 @@ class HueV2Service:
                     response.raise_for_status()
                     logger.info("v2 event stream connected")
                     backoff = _STREAM_BACKOFF_INITIAL_SECONDS
+
+                    # The stream being up is sufficient to demote v1 polling to
+                    # safety-net cadence — we don't wait for the first light
+                    # event. On an idle bridge no `light` event ever arrives
+                    # (only keepalives), which previously stranded v1 at 0.5s
+                    # all night. v1's 5s poll still acts as the bridge-reach
+                    # heartbeat and color/ct catch-up. Reset to False in the
+                    # disconnect path below.
+                    try:
+                        hue_v1_service.set_v2_stream_active(True)
+                    except AttributeError:
+                        pass  # Older HueService without the flag; fail-soft.
 
                     line_iter = response.aiter_lines()
                     while True:
@@ -445,7 +457,7 @@ class HueV2Service:
                 )
 
             # Signal v1 polling to resume tight cadence while the stream
-            # is down. Re-arms on the next successful event below.
+            # is down. Re-armed on the next successful connection above.
             try:
                 hue_v1_service.set_v2_stream_active(False)
             except AttributeError:
@@ -467,8 +479,6 @@ class HueV2Service:
         (Hue spec: top-level wraps a batch of resource updates). We walk the
         embedded `data` arrays and only act on `type=="light"` entries.
         """
-        first_event_this_batch = True
-
         for envelope in events:
             for update in envelope.get("data", []):
                 if update.get("type") != "light":
@@ -527,14 +537,3 @@ class HueV2Service:
                 # re-broadcast the same merged state we just pushed.
                 hue_v1_service._last_states[v1_id] = merged
                 await ws_manager.broadcast("light_update", merged)
-
-                if first_event_this_batch:
-                    # First confirmed light-update from the stream — demote
-                    # v1 polling to safety-net cadence. The flag is sticky
-                    # for the life of the stream; the outer loop clears it
-                    # before going into backoff on disconnect.
-                    try:
-                        hue_v1_service.set_v2_stream_active(True)
-                    except AttributeError:
-                        pass
-                    first_event_this_batch = False

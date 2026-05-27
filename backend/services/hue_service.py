@@ -59,10 +59,10 @@ class HueService:
         """
         Toggle the v2-stream-active flag.
 
-        Called by `HueV2Service.event_stream_loop`: True once the stream
-        has delivered its first light update, False when it disconnects or
-        goes into reconnect backoff. The polling loop reads this on every
-        cycle to choose its sleep interval.
+        Called by `HueV2Service.event_stream_loop`: True immediately on a
+        successful SSE handshake, False when it disconnects or goes into
+        reconnect backoff. The polling loop reads this on every cycle to
+        choose its sleep interval.
 
         Also updates the heartbeat's expected cadence so the v1 task
         isn't perpetually flagged stale while the loop is deliberately
