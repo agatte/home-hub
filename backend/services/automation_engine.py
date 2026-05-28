@@ -170,6 +170,7 @@ PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "watching_sleep_guard",
     "timeout_4h",
     "desk_exit_kitchen",
+    "corridor",
 })
 
 
@@ -1869,6 +1870,56 @@ class AutomationEngine:
         """
         await self.clear_transit_override(
             light_ids=["3", "4"], transition_time=transition_time,
+        )
+
+    async def apply_corridor_override(
+        self,
+        states: dict[str, dict],
+        duration_seconds: int = 600,
+        transition_time: int = 15,
+    ) -> None:
+        """Late-night corridor brighten — L1 + kitchen pair as a path-light unit.
+
+        Sibling to ``apply_desk_exit_override``. Drives L1 (living-room
+        floor lamp) plus L3/L4 (kitchen pendants) under a single override
+        stamp with ``trigger="corridor"``. Called by
+        ``DeskExitKitchenService`` when the period is ``late_night`` — at
+        that hour the user might be heading to the kitchen OR the bathroom,
+        and since neither camera sees the hallway we can't disambiguate.
+        L1 spills warm light into the hallway from the living-room end;
+        L3/L4 spill from the kitchen end. Together they cover both
+        destinations.
+
+        Default ``duration_seconds`` is 10min (vs desk_exit's 4h) because
+        the corridor override is short-lived by design — Anthony either
+        returns to the desk or the failsafe trips before then. ``states``
+        is expected to include L1 plus optionally L3/L4 (the staged
+        ramp-up calls this twice: once with L1 alone, once with the
+        kitchen pair 2s later).
+        """
+        await self.apply_transit_override(
+            states,
+            duration_seconds=duration_seconds,
+            transition_time=transition_time,
+            trigger="corridor",
+        )
+
+    async def clear_corridor_override(
+        self,
+        light_ids: Optional[list[str]] = None,
+        transition_time: int = 30,
+    ) -> None:
+        """Revert corridor-overridden lights back to current mode state.
+
+        Wraps ``clear_transit_override`` for the L1+kitchen set. Default
+        scope is ``["1", "3", "4"]`` (whole corridor) — the service passes
+        a subset for the sequenced wind-down (kitchen first at t=0, L1
+        after a 10s linger).
+        """
+        if light_ids is None:
+            light_ids = ["1", "3", "4"]
+        await self.clear_transit_override(
+            light_ids=light_ids, transition_time=transition_time,
         )
 
     async def clear_transit_override(

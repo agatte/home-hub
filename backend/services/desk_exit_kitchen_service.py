@@ -77,6 +77,63 @@ HARD_TIMEOUT_SECONDS = 4 * 3600
 KITCHEN_FACE_TRUST_THRESHOLD = FACE_TRUST_THRESHOLD
 
 
+# ── Late-night corridor brighten ────────────────────────────────────────
+#
+# At late_night, a desk exit might be a kitchen trip OR a bathroom trip,
+# and neither camera sees the hallway — the desktop FoV is bed+desk only,
+# the Latitude is couch-only (post-2026-05-27 relocation). So we can't
+# disambiguate; we fire L1 + L3/L4 together as a unified corridor that
+# spills warm light into the hallway from both ends.
+#
+# Shorter dwell than the evening/night path (5s vs 10s) because work
+# intensity at 1am is low — the desk-flap pattern that motivated the 10s
+# threshold is rare in late_night idle/gaming, and a brief false-trip
+# just ramps L1 softly and reverts when face returns. If false-positives
+# become a nuisance over the first week, bump to 7s.
+
+CORRIDOR_ABSENT_TRIGGER_SECONDS = 5
+
+# L1 night-visibility threshold is bri≥45 per the apartment-layout memory.
+# 80 ensures meaningful hallway spill without being jarring at 1am.
+CORRIDOR_L1_BRI = 80
+CORRIDOR_L1_CT = 400  # ~2500K — warm corridor-incandescent feel.
+
+# Kitchen pair: pendants are assertive downlights — 40 is path-light
+# territory, well below the cooking baseline. Same CT as the existing
+# night kitchen target so transitions look coherent if the corridor
+# fires and then drops back to a brighter mode.
+CORRIDOR_KITCHEN_BRI = 40
+CORRIDOR_KITCHEN_CT = 375
+
+# Ramp-up stagger: L1 fires immediately, kitchen pendants follow at the
+# next poll-loop tick (≈2s). Anthony reads the L1 spill first as
+# "something noticed you," then the kitchen lights commit if he's
+# actually heading that way.
+CORRIDOR_KITCHEN_RAMP_DELAY_SECONDS = 2
+
+# Return-to-desk debounce: face_present must be True for this many
+# consecutive seconds before we trigger wind-down. Prevents a brief
+# face-flicker glance back (someone walking past the monitor) from
+# tearing down the corridor while Anthony is still in the kitchen.
+CORRIDOR_RETURN_DESK_SECONDS = 3
+
+# Wind-down stagger: kitchen pendants fade first, L1 lingers so Anthony
+# has light for the return walk through the hallway. 10s covers the
+# bathroom → bedroom walk; for a kitchen trip he's already back at the
+# desk by the time L1 fades.
+CORRIDOR_L1_LINGER_SECONDS = 10
+
+# Hard timeout — much tighter than desk_exit's 4h. The corridor is a
+# transient state ("I'm going to the kitchen / bathroom"), not a
+# hold-until-return. 10min covers even the longest realistic trip.
+CORRIDOR_HARD_TIMEOUT_SECONDS = 600
+
+# Sub-states within an active corridor.
+CORRIDOR_RAMP_L1 = "ramp_l1"            # L1 just fired; kitchen not yet
+CORRIDOR_HOLDING = "holding"            # Both lights up; waiting for return
+CORRIDOR_WINDDOWN_KITCHEN = "winddown_kitchen"  # Kitchen fading; L1 still lit
+
+
 class DeskExitKitchenService:
     """Watches camera + mode; brightens kitchen L3/L4 on sustained desk exit.
 
@@ -109,6 +166,17 @@ class DeskExitKitchenService:
         self._active_period: Optional[str] = None
         # Only log block-reason transitions, not every silent tick.
         self._last_block_reason: Optional[str] = None
+
+        # Late-night corridor state — separate from the evening/night
+        # kitchen-only path because the corridor manages three lights with
+        # a sequenced ramp-up + wind-down, not a single override.
+        self._corridor_active: bool = False
+        self._corridor_substate: Optional[str] = None
+        self._corridor_substate_started_at: Optional[datetime] = None
+        self._corridor_activated_at: Optional[datetime] = None
+        # Tracks the leading edge of a sustained face-present streak so
+        # the wind-down trigger debounces against brief flickers.
+        self._corridor_return_streak_start: Optional[datetime] = None
 
         self._heartbeat: Optional[HeartbeatRegistry] = None
 
@@ -143,7 +211,42 @@ class DeskExitKitchenService:
             self._camera_absent_since = None
             if self._active:
                 await self._deactivate("camera disabled")
+            if self._corridor_active:
+                await self._corridor_full_deactivate("camera disabled")
             self._record_block("camera disabled")
+            return
+
+        # ── Late-night corridor branch ──
+        # At late_night with a productive mode active, route to the
+        # corridor state machine (L1 + kitchen pair, sequenced). This
+        # supersedes the kitchen-only path for the late_night period —
+        # if we entered late_night with kitchen-only already active,
+        # gracefully promote.
+        if period == "late_night" and mode in TRIGGER_MODES:
+            if self._active:
+                await self._deactivate("promoting to corridor at late_night")
+            await self._check_corridor(now, mode, cam_status)
+            return
+
+        # Rolled out of late_night (or mode left trigger set) while
+        # corridor was active — wind it down through the same sequence.
+        if self._corridor_active:
+            if mode not in TRIGGER_MODES:
+                await self._corridor_full_deactivate(
+                    f"mode left trigger set (mode={mode})",
+                )
+            elif period != "late_night":
+                # Sequenced wind-down — kitchen first, L1 lingers. The
+                # period crossing isn't a hard-stop reason; let the
+                # holding-state state machine handle it.
+                if self._corridor_substate != CORRIDOR_WINDDOWN_KITCHEN:
+                    await self._corridor_start_winddown(
+                        f"period left late_night ({period})",
+                    )
+                else:
+                    # Already winding down — let the existing tick logic
+                    # finish the L1 linger.
+                    await self._corridor_tick_winddown(now)
             return
 
         # ── If already active: look for conditions to clear ──
@@ -219,6 +322,179 @@ class DeskExitKitchenService:
         if (now - self._camera_absent_since).total_seconds() >= ABSENT_TRIGGER_SECONDS:
             await self._activate(mode, period)
 
+    # ── Corridor state machine ──────────────────────────────────────────
+
+    async def _check_corridor(
+        self, now: datetime, mode: str, cam_status: dict,
+    ) -> None:
+        """Late-night corridor: L1 + kitchen pair, sequenced ramp + fade.
+
+        Called from ``_check`` when period == late_night and mode is in
+        the trigger set. Handles both arming (sustained desk-absence
+        builds toward activation) and the active state machine.
+        """
+        # If already active, advance the state machine.
+        if self._corridor_active:
+            await self._tick_corridor_active(now, mode, cam_status)
+            return
+
+        # Arming phase — same shape as the kitchen-only path but with
+        # the corridor-specific dwell threshold.
+        if self._automation.is_at_desk_fresh():
+            self._camera_absent_since = None
+            self._record_unblock()
+            return
+
+        # Strong presence elsewhere (couch, hypothetical future zones)
+        # means Anthony didn't head to the kitchen/bathroom — defer.
+        detection = cam_status.get("last_detection", "unknown")
+        src = cam_status.get("detection_source")
+        conf = cam_status.get("confidence", 0.0) or 0.0
+        zone = cam_status.get("zone")
+        strongly_present_elsewhere = (
+            detection == "present"
+            and zone is not None
+            and zone != "desk"
+            and (src == "pose" or (src == "face" and conf >= KITCHEN_FACE_TRUST_THRESHOLD))
+        )
+        if strongly_present_elsewhere:
+            self._camera_absent_since = None
+            self._record_block(f"corridor: strong presence elsewhere (zone={zone})")
+            return
+
+        self._record_unblock()
+        if self._camera_absent_since is None:
+            self._camera_absent_since = now
+            logger.info(
+                "Corridor: absent timer started (mode=%s)", mode,
+            )
+            return
+
+        if (now - self._camera_absent_since).total_seconds() >= CORRIDOR_ABSENT_TRIGGER_SECONDS:
+            await self._activate_corridor(mode)
+
+    async def _tick_corridor_active(
+        self, now: datetime, mode: str, cam_status: dict,
+    ) -> None:
+        """Advance an in-flight corridor through its substates."""
+        # Hard-timeout failsafe — independent of state machine.
+        if (
+            self._corridor_activated_at is not None
+            and (now - self._corridor_activated_at).total_seconds()
+            >= CORRIDOR_HARD_TIMEOUT_SECONDS
+        ):
+            if self._corridor_substate != CORRIDOR_WINDDOWN_KITCHEN:
+                await self._corridor_start_winddown("hard timeout")
+            else:
+                await self._corridor_tick_winddown(now)
+            return
+
+        # Substate transitions
+        if self._corridor_substate == CORRIDOR_RAMP_L1:
+            # L1 just lit; arm the kitchen pair after the stagger delay.
+            elapsed = (now - (self._corridor_substate_started_at or now)).total_seconds()
+            if elapsed >= CORRIDOR_KITCHEN_RAMP_DELAY_SECONDS:
+                await self._corridor_ramp_kitchen(now)
+            return
+
+        if self._corridor_substate == CORRIDOR_HOLDING:
+            # Both lights up — look for return-to-desk to begin wind-down.
+            if self._automation.is_at_desk_fresh():
+                if self._corridor_return_streak_start is None:
+                    self._corridor_return_streak_start = now
+                elif (
+                    now - self._corridor_return_streak_start
+                ).total_seconds() >= CORRIDOR_RETURN_DESK_SECONDS:
+                    await self._corridor_start_winddown("returned to desk")
+            else:
+                self._corridor_return_streak_start = None
+            return
+
+        if self._corridor_substate == CORRIDOR_WINDDOWN_KITCHEN:
+            await self._corridor_tick_winddown(now)
+            return
+
+    async def _activate_corridor(self, mode: str) -> None:
+        """Fire L1 — Phase 1 of the ramp-up. Kitchen follows on next tick."""
+        states = {
+            "1": {"on": True, "bri": CORRIDOR_L1_BRI, "ct": CORRIDOR_L1_CT},
+        }
+        await self._automation.apply_corridor_override(
+            states,
+            duration_seconds=CORRIDOR_HARD_TIMEOUT_SECONDS,
+            transition_time=15,
+        )
+        now = datetime.now(tz=TZ)
+        self._corridor_active = True
+        self._corridor_substate = CORRIDOR_RAMP_L1
+        self._corridor_substate_started_at = now
+        self._corridor_activated_at = now
+        self._corridor_return_streak_start = None
+        self._camera_absent_since = None
+        logger.info(
+            "Corridor activated (mode=%s) — L1 ramping; kitchen in %ds",
+            mode, CORRIDOR_KITCHEN_RAMP_DELAY_SECONDS,
+        )
+
+    async def _corridor_ramp_kitchen(self, now: datetime) -> None:
+        """Phase 2 of ramp-up — bring up the kitchen pair to path-light."""
+        kitchen = {"on": True, "bri": CORRIDOR_KITCHEN_BRI, "ct": CORRIDOR_KITCHEN_CT}
+        states = {"3": dict(kitchen), "4": dict(kitchen)}
+        await self._automation.apply_corridor_override(
+            states,
+            duration_seconds=CORRIDOR_HARD_TIMEOUT_SECONDS,
+            transition_time=15,
+        )
+        self._corridor_substate = CORRIDOR_HOLDING
+        self._corridor_substate_started_at = now
+        logger.info("Corridor: kitchen pair ramped (bri=%d)", CORRIDOR_KITCHEN_BRI)
+
+    async def _corridor_start_winddown(self, reason: str) -> None:
+        """Begin sequenced wind-down — kitchen first, L1 lingers."""
+        await self._automation.clear_corridor_override(
+            light_ids=["3", "4"], transition_time=30,
+        )
+        now = datetime.now(tz=TZ)
+        self._corridor_substate = CORRIDOR_WINDDOWN_KITCHEN
+        self._corridor_substate_started_at = now
+        logger.info(
+            "Corridor: wind-down started (%s) — kitchen fading; L1 lingers %ds",
+            reason, CORRIDOR_L1_LINGER_SECONDS,
+        )
+
+    async def _corridor_tick_winddown(self, now: datetime) -> None:
+        """Tail end of wind-down — clear L1 once the linger window expires."""
+        elapsed = (now - (self._corridor_substate_started_at or now)).total_seconds()
+        if elapsed < CORRIDOR_L1_LINGER_SECONDS:
+            return
+        await self._automation.clear_corridor_override(
+            light_ids=["1"], transition_time=30,
+        )
+        logger.info("Corridor: L1 cleared — deactivated")
+        self._corridor_reset_state()
+
+    async def _corridor_full_deactivate(self, reason: str) -> None:
+        """Hard-stop the corridor — used on camera disable / mode exit.
+
+        Skips the sequenced fade because the trigger condition (camera
+        gone, mode left trigger set) means we want lights back to the
+        current mode now, not after a 10s linger.
+        """
+        if not self._corridor_active:
+            return
+        await self._automation.clear_corridor_override(
+            light_ids=["1", "3", "4"], transition_time=30,
+        )
+        logger.info("Corridor: full deactivate (%s)", reason)
+        self._corridor_reset_state()
+
+    def _corridor_reset_state(self) -> None:
+        self._corridor_active = False
+        self._corridor_substate = None
+        self._corridor_substate_started_at = None
+        self._corridor_activated_at = None
+        self._corridor_return_streak_start = None
+
     def _record_block(self, reason: str) -> None:
         if reason != self._last_block_reason:
             logger.info("DeskExit: blocked (%s)", reason)
@@ -269,3 +545,5 @@ class DeskExitKitchenService:
     async def close(self) -> None:
         if self._active:
             await self._deactivate("service shutdown")
+        if self._corridor_active:
+            await self._corridor_full_deactivate("service shutdown")
