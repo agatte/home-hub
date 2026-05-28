@@ -597,6 +597,15 @@ class AutomationEngine:
         """Resolve the current time period via the calculator (shim)."""
         return _calc_get_time_period(self._schedule_config, datetime.now(tz=TZ))
 
+    def get_time_period(self) -> str:
+        """Public accessor for the current time period.
+
+        Surfaced for consumers that need to mirror the engine's day/evening/
+        night/late_night logic without reaching into the private shim — the
+        monitor_brightness pc_agent and the /api/automation/status route.
+        """
+        return self._get_time_period()
+
     async def _sonos_is_playing(self) -> bool:
         """Check if Sonos is actively playing. Used by the late-night rescue
         so intentional late listening isn't interrupted by an auto-relax flip.
@@ -3640,5 +3649,6 @@ class AutomationEngine:
             "mode": self.current_mode,
             "source": self.mode_source,
             "manual_override": self._manual_override,
+            "time_period": self._get_time_period(),
         })
         await self._broadcast_pipeline()

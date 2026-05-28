@@ -38,6 +38,8 @@ httpx==0.28.1             # Async HTTP client for ESPN API
 psutil==7.2.2             # Process monitoring for activity detection
 pyaudio==0.2.14           # Blue Yeti mic ambient noise detection
 mss==10.1.0               # Fast screen capture for screen sync
+screen-brightness-control==0.24.1  # DDC/CI monitor brightness (desktop monitor_brightness agent)
+monitorcontrol==4.2.0     # DDC/CI VCP color-preset control (desktop monitor_brightness agent)
 
 # ML
 numpy==2.4.4

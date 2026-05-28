@@ -352,6 +352,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "mode": automation.current_mode,
             "source": automation.mode_source,
             "manual_override": automation.manual_override,
+            "time_period": automation.get_time_period(),
         },
     }))
 

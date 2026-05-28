@@ -142,6 +142,7 @@ async def get_status(request: Request) -> AutomationStatus:
         dnd_enabled=dnd["enabled"],
         dnd_expiry_utc=dnd["expiry_utc"],
         dnd_minutes_remaining=dnd["minutes_remaining"],
+        time_period=engine.get_time_period(),
     )
 
 

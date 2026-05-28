@@ -75,6 +75,10 @@ class AutomationStatus(BaseModel):
         default=0,
         description="Whole minutes left on the DND window",
     )
+    time_period: str = Field(
+        default="day",
+        description="Resolved time period: day, evening, night, late_night",
+    )
 
 
 class DNDRequest(BaseModel):

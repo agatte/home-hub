@@ -154,6 +154,7 @@ class AgentSupervisor:
         self._register_screen_sync()
         self._register_sleep_watcher()
         self._register_emotion_capture()
+        self._register_monitor_brightness()
 
     # ── Agent registration ────────────────────────────────────────────
 
@@ -230,6 +231,24 @@ class AgentSupervisor:
             logger.info("Registered: sleep_watcher")
         except ImportError as e:
             logger.warning("Cannot register sleep_watcher: %s", e)
+
+    def _register_monitor_brightness(self) -> None:
+        # Windows-only — DDC/CI tooling + the Night Light registry helper
+        # are Win32-specific. The Latitude has no attached monitor the
+        # user looks at, so there's no value in running this elsewhere.
+        if sys.platform != "win32":
+            logger.info("Skipping monitor_brightness (non-Windows platform)")
+            return
+        try:
+            from backend.services.pc_agent.monitor_brightness import run_agent
+            self._agents["monitor_brightness"] = AgentState(
+                name="monitor_brightness",
+                target=run_agent,
+                kwargs={"server_url": self._server_url},
+            )
+            logger.info("Registered: monitor_brightness")
+        except ImportError as e:
+            logger.warning("Cannot register monitor_brightness: %s", e)
 
     # ── Thread lifecycle ──────────────────────────────────────────────
 
