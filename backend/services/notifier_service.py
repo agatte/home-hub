@@ -162,6 +162,12 @@ class NotifierService:
                 return
 
             if self._engine.is_dnd_active():
+                # Refresh the snapshot so the first post-DND poll compares
+                # against the now-baseline, not the pre-DND values. Without
+                # this, any brightness drift during the DND window crosses
+                # the shift threshold on lift and fires a spurious notification.
+                self._state.last_mode = self._engine.current_mode
+                self._state.last_brightness = self._effective_brightness()
                 return
 
             mode = self._engine.current_mode
