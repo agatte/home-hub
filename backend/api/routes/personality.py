@@ -366,3 +366,64 @@ async def post_settings(payload: PersonalitySettings, request: Request) -> dict:
             SETTING_MOOD_RING_LIGHT_ID, {"light_id": payload.mood_ring_light_id},
         )
     return await get_settings()
+
+
+@router.post("/nudge/fire", dependencies=[Depends(require_api_key)])
+async def fire_calibration_nudge(request: Request) -> dict:
+    """Bypass all gates and fire one calibration nudge end-to-end.
+
+    Use for verifying the WS toast + ntfy.sh push surfaces after deploy
+    without waiting for a scheduled bucket time. Returns the dispatched
+    payload so the caller can confirm the actions / click_url shape.
+    """
+    svc = getattr(request.app.state, "calibration_nudge", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="calibration_nudge unavailable")
+    payload = await svc.fire_now(bucket="test")
+    return {"status": "ok", "fired": payload}
+
+
+@router.get("/nudge/status")
+async def get_calibration_nudge_status() -> dict:
+    """Read-only snapshot for the runbook + dashboard.
+
+    Returns per-bucket paired-sample counts, total paired, the last-nudge
+    record, and the target gates. No auth required — pure read.
+    """
+    from backend.services.personality.calibration_nudge import (
+        BUCKETS,
+        BUCKET_TARGET,
+        NUDGE_STATE_KEY,
+        _bucket_for_minute_of_day,
+    )
+    from sqlalchemy import text
+
+    async with async_session() as session:
+        result = await session.execute(text(
+            "SELECT "
+            "  CAST(strftime('%H', timestamp, 'localtime') AS INTEGER) * 60 + "
+            "  CAST(strftime('%M', timestamp, 'localtime') AS INTEGER) AS mod "
+            "FROM mood_calibration "
+            "WHERE detected_valence IS NOT NULL "
+            "  AND timestamp >= datetime('now', '-60 days')"
+        ))
+        mods = [row[0] for row in result.fetchall() if row[0] is not None]
+
+    per_bucket: dict[str, int] = {name: 0 for name, *_ in BUCKETS}
+    for mod in mods:
+        b = _bucket_for_minute_of_day(int(mod))
+        if b is not None:
+            per_bucket[b] += 1
+
+    nudge_state = (await load_setting(NUDGE_STATE_KEY)) or {}
+    return {
+        "total_paired": len(mods),
+        "per_bucket": per_bucket,
+        "bucket_target": BUCKET_TARGET,
+        "buckets": [
+            {"name": n, "fire_hour": h, "fire_minute": m}
+            for n, h, m, _ws, _we in BUCKETS
+        ],
+        "last_nudge_at_utc": nudge_state.get("last_nudge_at_utc"),
+        "last_nudge_bucket": nudge_state.get("last_nudge_bucket"),
+    }

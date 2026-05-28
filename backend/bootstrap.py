@@ -756,6 +756,32 @@ async def lifespan(app: FastAPI):
         enabled=True,
     ))
 
+    # Calibration nudge tasks (GH#58) — registered here so scheduler.load_state
+    # below restores their last_run across deploys. The backing service is
+    # constructed later (after NotifierService); callbacks look it up
+    # lazily via app.state.calibration_nudge at fire time, which is
+    # guaranteed to be populated by the time the scheduler ticks.
+    from backend.services.personality.calibration_nudge import (
+        BUCKETS as NUDGE_BUCKETS,
+    )
+
+    def _make_nudge_callback(bucket_name: str):
+        async def _cb() -> None:
+            svc = getattr(app.state, "calibration_nudge", None)
+            if svc is not None:
+                await svc.maybe_fire(bucket_name)
+        return _cb
+
+    for _bname, _bhour, _bminute, _ws, _we in NUDGE_BUCKETS:
+        scheduler.add_task(ScheduledTask(
+            name=f"calibration_nudge_{_bname}",
+            hour=_bhour,
+            minute=_bminute,
+            weekdays=[0, 1, 2, 3, 4, 5, 6],
+            callback=_make_nudge_callback(_bname),
+            enabled=True,
+        ))
+
     app.state.scheduler = scheduler
 
     # Persist scheduler task status across restarts so /health.scheduler_tasks
@@ -839,6 +865,33 @@ async def lifespan(app: FastAPI):
             else "http://192.168.1.210:8000"
         ),
     )
+
+    # CalibrationNudgeService — accumulates paired mood_calibration rows
+    # toward the Phase A→B Spearman gate (GH#58). Five per-bucket
+    # ScheduledTasks were registered upstream (before scheduler.load_state)
+    # with lazy callbacks; this is where the service backing them comes
+    # online. The lazy-lookup pattern lets the task last_run state persist
+    # across deploys while keeping the service-construction order natural.
+    from backend.services.personality.calibration_nudge import (
+        CalibrationNudgeService,
+    )
+    from backend.api.routes.routines import load_setting as _nudge_load_setting
+    from backend.api.routes.routines import save_setting as _nudge_save_setting
+    from backend.database import async_session as _nudge_async_session
+
+    calibration_nudge = CalibrationNudgeService(
+        notifier_service=notifier,
+        automation_engine=automation,
+        async_session_factory=_nudge_async_session,
+        save_setting=_nudge_save_setting,
+        load_setting=_nudge_load_setting,
+        deeplink_base=(
+            f"http://{settings.LOCAL_IP}:8000"
+            if getattr(settings, "LOCAL_IP", None)
+            else "http://192.168.1.210:8000"
+        ),
+    )
+    app.state.calibration_nudge = calibration_nudge
 
     # Background tasks
     tasks: list[asyncio.Task] = []

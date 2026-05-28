@@ -400,6 +400,12 @@ class NotifierService:
         actions_header = self._format_actions_header(payload.get("actions") or [])
         if actions_header:
             headers["Actions"] = self._ascii_safe_header(actions_header)
+        # Click header — when set, tapping the phone notification opens this
+        # URL directly (no button required). Used by calibration_nudge so the
+        # phone push deep-links into /personality on tap.
+        click_url = payload.get("click_url")
+        if click_url:
+            headers["Click"] = self._ascii_safe_header(str(click_url))
         try:
             resp = await self._http.post(
                 url, content=body.encode("utf-8"), headers=headers,
@@ -474,6 +480,15 @@ class NotifierService:
             url = action.get("url")
             if not url:
                 continue
+            # ntfy.sh action types: "http" (POSTs/GETs to a URL with optional
+            # headers) and "view" (opens the URL in the user's browser). view
+            # actions don't take method= or headers.* fields — adding them
+            # would be silently ignored by ntfy.sh but the spec is cleaner if
+            # we omit them entirely.
+            action_type = (action.get("type") or "http").lower()
+            if action_type == "view":
+                parts.append(f"view, {label}, {url}")
+                continue
             method = action.get("method", "POST")
             piece = f"http, {label}, {url}, method={method}"
             for hk, hv in (action.get("headers") or {}).items():
@@ -526,6 +541,20 @@ class NotifierService:
         }
         if extra:
             payload.update(extra)
+        await self._dispatch(payload)
+
+    # ------------------------------------------------------------------
+    # Calibration nudge path
+    # ------------------------------------------------------------------
+
+    async def emit_calibration_nudge(self, payload: dict[str, Any]) -> None:
+        """Fire a calibration-nudge notification through the dispatch path.
+
+        Caller (CalibrationNudgeService) has already decided this should fire
+        and built the full payload — bypasses every NotifierService gate
+        (boot suppress, DND, coalesce). The nudge service runs its own gating
+        upstream and shouldn't be silently swallowed here.
+        """
         await self._dispatch(payload)
 
     # ------------------------------------------------------------------
