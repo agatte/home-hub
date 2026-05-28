@@ -75,6 +75,7 @@ from PyQt6.QtWidgets import (
 
 import psutil
 import urllib.request
+import webbrowser
 import websockets
 import websockets.sync.client
 
@@ -358,6 +359,12 @@ class ToastWidget(QWidget):
         url = action.get("url", "")
         method = action.get("method", "POST")
         headers = action.get("headers") or {}
+        # ntfy.sh-style action types: "http" (default — POST/GET with optional
+        # headers, for Accept/Dismiss-style suggestions) and "view" (open the
+        # URL in the user's default browser). View actions ignore method and
+        # headers — they're just deeplinks (used by calibration_nudge to
+        # open /personality).
+        action_type = (action.get("type") or "http").lower()
         btn = QPushButton(label)
         btn.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         # Two-tier styling: first button = accent (Accept), others muted.
@@ -383,12 +390,32 @@ class ToastWidget(QWidget):
                 f"}}"
                 f"QPushButton:hover {{ background: rgba({BORDER_COLOR.red()}, {BORDER_COLOR.green()}, {BORDER_COLOR.blue()}, 150); }}"
             )
-        btn.clicked.connect(
-            lambda _checked=False, u=url, m=method, h=dict(headers): (
-                self._dispatch_action(u, m, h)
+        if action_type == "view":
+            btn.clicked.connect(
+                lambda _checked=False, u=url: self._dispatch_view(u)
             )
-        )
+        else:
+            btn.clicked.connect(
+                lambda _checked=False, u=url, m=method, h=dict(headers): (
+                    self._dispatch_action(u, m, h)
+                )
+            )
         return btn
+
+    def _dispatch_view(self, url: str) -> None:
+        """Open a URL in the user's default browser and dismiss the toast.
+
+        Used by view-type actions (e.g. calibration_nudge's 'Open calibration'
+        button). The HTTP-action path is reserved for buttons that mutate
+        backend state (Accept / Dismiss); view is purely a deeplink.
+        """
+        if not url:
+            return
+        try:
+            webbrowser.open(url, new=2)
+        except Exception:
+            logger.warning("view dispatch failed: %s", url, exc_info=True)
+        self.start_hide()
 
     def _dispatch_action(
         self,
