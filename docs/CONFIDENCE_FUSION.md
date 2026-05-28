@@ -225,8 +225,9 @@ Everything else is probabilistic:
 
 - **Camera** can see empty frames (you leaned out) or confuse a plant for a face
 - **Audio** can be fooled by TV, music from another room, or open windows
-- **Behavioral predictor** is pattern-matching from history, doesn't know *today*
 - **Rule engine** is just "usually at this time, you're gaming"
+
+*(The behavioral predictor was a v1/v2 lane but was stripped from fusion 2026-04-27 — see v3 changelog above. It still trains nightly in shadow mode but does not vote.)*
 
 So process detection's high weight is saying "trust the hard evidence first."
 

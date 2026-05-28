@@ -46,7 +46,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal) with 5-min cache on bridge scene fetches
 - Social mode — "Velvet Speakeasy" single static palette (dusty rose statement on L1 + cognac amber L2 + matched burnt-orange kitchen pendants). Sub-styles removed in favor of a grown-up cocktail-lounge aesthetic tuned for small hangouts.
 - Relax mode — "Moss & Candlelight" biophilic palette: warm ember on living-room lamps (L1/L2) with muted moss/sage kitchen pendants (L3/L4) that echo the plants and olive/sage/teal accents in the room. Candle/fire effects are scoped to L1/L2 so the moss pendants stay static. Late-night variant ("Moss & Ember") kicks in after 23:00 — deeper ember + hunter-green shadow for the cave/den feel.
-- Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when the camera says `zone=desk` (YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default.
+- Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when `zone=desk` is committed (sourced from the desktop pc_agent since the 2026-05-27 Latitude→living-room relocation — YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default.
 - Manual override with 4-hour auto-timeout
 - Configurable per-mode brightness multipliers
 
@@ -64,7 +64,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 - PC activity detection (psutil process monitoring for games/media)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
-- Camera-based presence (MediaPipe face + pose) is the sole "is the user here" signal in-app. Home/away as a concept was retired 2026-04-28; arrivals/departures are now handled by Hue's native geofencing outside Home Hub.
+- Camera-based presence (MediaPipe face + pose) is the primary "is the user here" signal in-app, fused with the desktop pc_agent's presence observations via `PresenceFusion` (shipped 2026-05-18). The Latitude camera sees the couch zone (since the 2026-05-27 living-room relocation); the desktop pc_agent owns the desk zone. Home/away as a concept was retired 2026-04-28; arrivals/departures are now handled by Hue's native geofencing outside Home Hub.
 - Mode priority system: gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
@@ -206,7 +206,7 @@ Browser / Phone (PWA)
    ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
    ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
    ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, AmbientSound, MLLogger, CameraService, BarApp, LoLChampionService
+   │   └── mode-change callbacks ──> MusicMapper, AmbientSound, MLLogger, ModeVolumeService, CameraService, BarApp, LoLChampionService, NotifierService
    ├── ML Services ────────────────> see docs/ML_SPEC.md
    │   ├── MLDecisionLogger ───────> logs every mode decision with reasoning
    │   ├── ConfidenceFusion ───────> 4-lane weighted ensemble (process/camera/audio_ml/rule_engine)
@@ -253,14 +253,22 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    │                             removed 2026-05-16 after the rogue source=ambient idle reports were displacing
    │                             rescue overrides via the priority guard. Service now publishes ML decisions only.)
    ├── screen_sync_agent.py     ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/screen-color
-   └── monitor_brightness.py    ON dev machine (192.168.1.30) ──> WS sub ws://192.168.1.210:8000/ws + GET /api/camera/status
-                                (Windows-only, 2026-05-28+. Subscribes to `mode_update` for instant reaction, polls
-                                 lux every 30s. Drops monitor backlight via DDC/CI (screen-brightness-control) and
-                                 warms color temperature via VCP code 0x14 (monitorcontrol) on a mode×time_period
-                                 curve, with ±10% lux modulation. Replaces an earlier Windows-Night-Light attempt
-                                 — the registry-edit path was abandoned because Windows caches Night Light state
-                                 in-memory and only reloads on session events, so writes never actually flipped
-                                 the screen. Hardware-level DDC color preset is the working path.
+   ├── monitor_brightness.py    ON dev machine (192.168.1.30) ──> WS sub ws://192.168.1.210:8000/ws + GET /api/camera/status
+   │                            (Windows-only, 2026-05-28+. Subscribes to `mode_update` for instant reaction, polls
+   │                             lux every 30s. Drops monitor backlight via DDC/CI (screen-brightness-control) and
+   │                             warms color temperature via VCP code 0x14 (monitorcontrol) on a mode×time_period
+   │                             curve, with ±10% lux modulation. Replaces an earlier Windows-Night-Light attempt
+   │                             — the registry-edit path was abandoned because Windows caches Night Light state
+   │                             in-memory and only reloads on session events, so writes never actually flipped
+   │                             the screen. Hardware-level DDC color preset is the working path.)
+   ├── emotion_capture.py       ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/personality/blendshape
+   │                            (FaceLandmarker blendshapes → EmotionService mood vector + presence observation.
+   │                             Opt-in via desktop_emotion_enabled / desktop_presence_enabled. EmotionService
+   │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.)
+   └── sleep_watcher.py         ON dev machine (Windows-only)
+                                (Suspends the PC 60min after sleeping mode is set; cancels on any non-sleeping
+                                 mode change. Registered by supervisor on win32 only.
+
                                  Latitude built-in mic no longer runs ambient_monitor — systemd unit disabled
                                  because RMS in the corner environment was false-latching social mode. Blue Yeti
                                  is the sole audio source.)
@@ -652,7 +660,7 @@ All messages are JSON with `type` + `data` fields.
 | Type | Trigger | Data |
 |------|---------|------|
 | `connection_status` | On connect | `{hue: bool, sonos: bool, build_id: str}` |
-| `mode_update` | On connect + mode change | `{mode, source, manual_override}` |
+| `mode_update` | On connect + mode change | `{mode, source, manual_override, time_period}` |
 | `light_update` | Polling detects change | `{light_id, name, on, bri, hue, sat, ct, colormode, reachable}` |
 | `sonos_update` | Polling detects change | `{state, track, artist, album, art_url, volume, mute}` |
 | `music_auto_played` | Auto-play triggered | `{mode, title}` |
@@ -1553,10 +1561,9 @@ ESPN API (polling) → GameDayEngine service
 ```
 
 New database tables:
-- `game_schedule` — Upcoming Colts games (date, opponent, channel)
-- `celebration_log` — History of triggered celebrations
+**No new database tables were built.** `GameDayService` is in-memory + ESPN polling; `CelebrationOrchestrator` is callback-driven. Celebration writes land in `light_adjustments` as of commit `34fc550` with `trigger="celebration:<key>"`, queryable via `WHERE trigger LIKE 'celebration:%'`. Schedule is fetched live from ESPN and cached in-process; there is no persisted `game_schedule` table.
 
-Registers as a mode-change callback + runs its own ESPN polling loop. No changes to existing services needed.
+Registers as a mode-change callback + runs its own ESPN polling loop.
 
 ### External Project Integration
 
@@ -1581,8 +1588,12 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   `venv/bin/python run.py`, `Restart=on-failure`, `loginctl enable-linger`
   for boot-time start without login
 - `home-hub-ambient.service` (systemd user unit) — ambient noise
-  monitor via laptop built-in mic, `ExecStartPre` polls `/health`
-  until backend ready before starting
+  monitor via laptop built-in mic. **Disabled as of 2026-05-16** — the
+  Latitude built-in mic produced false-latching social mode (RMS in the
+  corner environment was unreliable); the Blue Yeti on the dev PC is
+  now the sole audio source. The unit file + `deploy.sh` references are
+  retained for revival if a better Latitude audio path surfaces (see
+  memory `project_latitude_audio_parked.md`)
 - **Pi-hole** (Docker container, host networking) — DNS ad blocker on
   port 53, web admin on port 8080. Compose file at
   `docker/pihole/docker-compose.yml`, config persisted in

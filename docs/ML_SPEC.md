@@ -56,7 +56,7 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s away detection), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15s away detection (vs 10-min idle timer). Audio: shadow mode collecting data for RMS comparison. |
+| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s absent detection), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15s absent detection (vs 10-min idle timer); engine reports `idle`, not `away` (`away` mode retired 2026-04-28). Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
 | **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
 | **Phase 4 (sibling track): AI Personality Layer** | Phase A live 2026-05-18; B/C/D queued | Mood-vector inference (V/A/F) from face blendshapes (Phase A shadow log), passive mood-ring accent light (Phase B, gated on Spearman ρ > 0.4), Claude (Haiku) vibe-intent router (Phase C, backend-side), cost dashboard + hardening (Phase D) | Spearman ρ > 0.4 across V/A/F on 30+ paired calibration rows → Phase B promote. Full spec: `docs/PERSONALITY_LAYER.md`. Not a classifier lane — interpretable linear projection from 52 ARKit blendshapes; calibration loop fits per-axis bias from self-report. Sibling to but distinct from the Phase 1-3 ML lanes (no fusion-math contribution in v1 — cosmetic + suggestion-only). |
 
@@ -413,7 +413,7 @@ detection from the Latitude's 720p webcam.
 | **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Captured at 640×480 for inference (bumped from 320×240 on 2026-04-19 after observing marginal face-detection gains and better future-feature headroom — requires lux recalibration on any change). |
 | **Preprocessing** | Capture one frame every 2 seconds (not continuous video). `cv2.resize()` downsample is a safety no-op when the webcam honors the capture-resolution hint. No image enhancement. |
 | **Model** | MediaPipe BlazePose (lite variant, shipped 2026-04-19 as a fallback signal). Runs alongside full-range BlazeFace: face first (~15ms at 640×480), pose as fallback on face-miss (~60ms). Presence declared if either detector hits. |
-| **Output classes** | Presence: `present` / `absent`. Zone (shipped 2026-04-19, expose-only): `desk` / `bed` / `None`, computed from detected center-X vs `ZONE_DESK_THRESHOLD=0.40`, with 15-second hysteresis on commits. Posture (shipped 2026-04-19, expose-only): `upright` / `reclined` / `None`, computed from `mean(hip_y) - mean(shoulder_y)` vs `POSTURE_UPRIGHT_MIN_DELTA=0.12`, same 15s hysteresis. `None` when hips aren't visible (face-path hits, pose misses) — hysteresis preserves the committed value through those blanks. |
+| **Output classes** | Presence: `present` / `absent`. Zone (shipped 2026-04-19): post 2026-05-27 Latitude→living-room relocation, Latitude camera emits only `couch` / `None` — the original `desk` / `bed` bedroom split is retired. `zone=desk` is now sourced exclusively from the desktop pc_agent via PresenceFusion. Posture (shipped 2026-04-19, expose-only): `upright` / `reclined` / `None`, computed from `mean(hip_y) - mean(shoulder_y)` vs `POSTURE_UPRIGHT_MIN_DELTA=0.12`, same 15s hysteresis; couch posture is currently suppressed (no consumer). `None` when hips aren't visible (face-path hits, pose misses) — hysteresis preserves the committed value through those blanks. |
 | **Inference frequency** | Every 2 seconds (one frame capture + inference). Triggers "absent" after 7 consecutive absent frames (~14 seconds). |
 | **Integration point** | New `CameraService` reports to `AutomationEngine.report_activity(source="camera")`. |
 | **CPU cost** | 30-50ms per inference every 5 seconds = <2% CPU sustained |
@@ -446,9 +446,11 @@ else:
 |-------------------|-----------|-------------|
 | gaming (process) | upright | gaming (confirmed) |
 | watching (process) | reclined | watching (confirmed) |
-| idle (no process) | upright at desk | likely working (browser) |
-| idle (no process) | reclined | likely watching/relaxing |
-| any | absent (3 frames) | away (within 15s, not 10min) |
+| idle (no process) | upright at desk *(desktop pc_agent)* | likely working (browser) |
+| idle (no process) | reclined at couch *(Latitude)* | likely watching/relaxing |
+| any | absent (≥30s) | idle (engine signals `signal_presence("camera")` on return; `away` mode retired 2026-04-28) |
+
+*Note: post 2026-05-27 Latitude relocation, `zone=desk` is sourced from the desktop pc_agent (not the Latitude camera). The Latitude sees only the couch.*
 
 **Ambient light measurement — adaptive brightness (shipped April 18 2026):**
 
@@ -1028,7 +1030,7 @@ degrade gracefully without NWS API access).
 | Metric | Current | With ML | Improvement |
 |--------|---------|---------|-------------|
 | Mode change reaction | ~5s (process poll) | ~5s (no change) | — |
-| Away detection | 10 minutes (idle timer) | 15 seconds (camera) | **40x faster** |
+| Absent detection | 10 minutes (idle timer) | 15 seconds (camera → idle) | **40x faster** |
 | Social detection | 2 minutes (sustained RMS) | Manual override only (2026-05-09: `speech_multiple` gate abandoned — structurally unreachable, see §3.1; replacement direction deferred to camera multi-face path) | — |
 | Lighting preference application | 0 (no learning) | <1ms on mode change | New capability |
 | Music selection | Instant (heuristic) | Instant (bandit) | Better choices over time |

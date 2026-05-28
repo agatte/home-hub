@@ -6,7 +6,7 @@ Current setup is 5 lights (L1 living-room lamp, L2 bedroom desk lamp left, L3/L4
 
 The gaps (biggest opportunities to make the space feel special):
 - **Zero uplight or wall-wash anywhere** — every current emitter is either a diffused lamp (L1, L2) or a downpendant (L3, L4). Adding up/wall-washing light is the single biggest drama lever.
-- **Bedroom is a one-emitter room** — L2 does everything (work bias, gaming bias, watching bias, ambient). Adds of spatial depth in the bedroom will be felt the most.
+- **Bedroom has two emitters (L2 + L5 installed 2026-05-11)** — both desk-side. Spatial depth is still limited (no wall-wash or uplighting); adding a wall-wash layer is the biggest remaining bedroom upgrade.
 - **Living room has one emitter (L1)** and a big window with a city view — the window is an untapped accent opportunity.
 - **Kitchen has no task light** under the cabinets and no accent wash against the exposed ductwork.
 - **Hallway is dark** — only L2 spill. Good welcome-home real estate.
