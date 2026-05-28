@@ -57,11 +57,19 @@ class WebSocketManager:
             except Exception:
                 return ws
 
+        # return_exceptions=True forward-safety: _send_one already catches
+        # everything internally and returns either None (ok) or the failing
+        # WebSocket. If a future change introduces an unhandled raise inside
+        # _send_one, return_exceptions=False would short-circuit the whole
+        # gather and drop the broadcast for every other still-pending client.
+        # The True variant lets every other client finish; we treat any
+        # leaked exception as a failed send and disconnect that client.
         results = await asyncio.gather(
-            *(_send_one(ws) for ws in targets), return_exceptions=False
+            *(_send_one(ws) for ws in targets), return_exceptions=True
         )
-        for failed in results:
-            if failed is not None:
+        for ws, result in zip(targets, results):
+            if isinstance(result, BaseException) or result is not None:
+                failed = result if isinstance(result, WebSocket) else ws
                 self.disconnect(failed)
 
     @property

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     # Avoid runtime import cost — automation_engine pulls in
     # light_state_calculator + effect_manager, which is heavier than this
     # module needs at load time. String-annotated below.
+    from soco import SoCo
     from backend.services.automation_engine import AutomationEngine
     from backend.services.event_logger import EventLogger
     from backend.services.heartbeat import HeartbeatRegistry
@@ -545,7 +546,7 @@ class SonosService:
 
         return results
 
-    def _shuffle_and_play(self, device) -> None:
+    def _shuffle_and_play(self, device: "SoCo") -> None:
         """Set SHUFFLE play mode and start at a random queue index.
 
         Belt-and-suspenders for "always shuffle on play": SoCo's ``SHUFFLE``
@@ -559,7 +560,13 @@ class SonosService:
         """
         try:
             queue_size = int(getattr(device, "queue_size", 0))
-        except Exception:
+        except Exception as exc:
+            # Catches AttributeError, ValueError, TypeError as expected; also
+            # SoCo's RuntimeError on UPnP failures (test_queue_size_unreadable_
+            # falls_back_to_zero exercises this path). Log at debug so a
+            # storm of UPnP errors surfaces under -vv without blocking
+            # playback when one slips through.
+            logger.debug("queue_size read failed: %s", exc)
             queue_size = 0
         device.play_mode = "SHUFFLE"
         start = random.randint(0, queue_size - 1) if queue_size > 1 else 0
