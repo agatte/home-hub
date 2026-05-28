@@ -796,19 +796,26 @@ class AutomationEngine:
         return zone == "desk"
 
     def is_present_in_room(self) -> bool:
-        """True iff a presence source has a fresh *strong* reading right now.
+        """True iff a presence source shows the user is visibly here right now.
 
-        Zone-independent — answers "is someone visibly here?" rather than
-        "are they at the desk?". The ``ambient_relax`` soft-default consults
-        this so it no longer treats "present but not at the desk" (e.g. on
-        the couch — the Latitude's living-room view since the 2026-05-27
-        relocation) as "nobody home" and force-flip to relax. Returns False
-        when PresenceFusion isn't wired (boot / tests).
+        Zone-independent — answers "is someone here?" rather than "at the
+        desk?". The ``ambient_relax`` soft-default consults this so it no
+        longer treats "present but not at the desk" (e.g. on the couch — the
+        Latitude's living-room view since the 2026-05-27 relocation) as
+        "nobody home" and force-flip to relax.
+
+        Strong presence (pose / face≥0.70) OR a fresh committed zone. The
+        committed-zone arm matters at night: couch detection is often
+        weak-face-only (conf ~0.3-0.45, never strong — measured 2026-05-27),
+        but the committed couch zone survives the 15s hysteresis + face-anchor
+        gating, so it's a reliable "someone is here" signal that strong
+        presence alone misses. An empty couch does not commit a zone. Returns
+        False when PresenceFusion isn't wired (boot / tests).
         """
         presence = self._presence_fusion
         if presence is None:
             return False
-        return presence.is_strongly_present_any()
+        return presence.is_strongly_present_any() or presence.latest_zone() is not None
 
     async def signal_presence(self, source: str) -> None:
         """Signal that a human is physically present in the apartment.
