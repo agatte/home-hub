@@ -245,17 +245,25 @@ Uptime Kuma (Docker container, port 3002, same machine)
        └── Alerting via Telegram/Pushover on downtime
 
 PC Agent (supervised on the dev machine only, 2026-04-19+)
-   ├── activity_detector.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
-   │                         (psutil process detection)
-   ├── ambient_monitor.py    ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/learning/audio-decision
-   │                         (Blue Yeti PyAudio RMS + YAMNet shadow classifier — --classifier --shadow.
-   │                          Social-gate abandoned 2026-05-09; mode-report POSTs to /api/automation/activity
-   │                          removed 2026-05-16 after the rogue source=ambient idle reports were displacing
-   │                          rescue overrides via the priority guard. Service now publishes ML decisions only.)
-   └── screen_sync_agent.py  ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/screen-color
-                             (Three agents managed by supervisor.py; Latitude built-in mic no longer runs
-                              ambient_monitor — systemd unit disabled because RMS in the corner environment
-                              was false-latching social mode. Blue Yeti is the sole audio source.)
+   ├── activity_detector.py     ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
+   │                            (psutil process detection)
+   ├── ambient_monitor.py       ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/learning/audio-decision
+   │                            (Blue Yeti PyAudio RMS + YAMNet shadow classifier — --classifier --shadow.
+   │                             Social-gate abandoned 2026-05-09; mode-report POSTs to /api/automation/activity
+   │                             removed 2026-05-16 after the rogue source=ambient idle reports were displacing
+   │                             rescue overrides via the priority guard. Service now publishes ML decisions only.)
+   ├── screen_sync_agent.py     ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/screen-color
+   └── monitor_brightness.py    ON dev machine (192.168.1.30) ──> WS sub ws://192.168.1.210:8000/ws + GET /api/camera/status
+                                (Windows-only, 2026-05-28+. Subscribes to `mode_update` for instant reaction, polls
+                                 lux every 30s. Drops monitor backlight via DDC/CI (screen-brightness-control) and
+                                 warms color temperature via VCP code 0x14 (monitorcontrol) on a mode×time_period
+                                 curve, with ±10% lux modulation. Replaces an earlier Windows-Night-Light attempt
+                                 — the registry-edit path was abandoned because Windows caches Night Light state
+                                 in-memory and only reloads on session events, so writes never actually flipped
+                                 the screen. Hardware-level DDC color preset is the working path.
+                                 Latitude built-in mic no longer runs ambient_monitor — systemd unit disabled
+                                 because RMS in the corner environment was false-latching social mode. Blue Yeti
+                                 is the sole audio source.)
 ```
 
 **Deployment note:** As of 2026-04-11 the "dedicated laptop" from the
@@ -723,7 +731,7 @@ All messages are JSON with `type` + `data` fields.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/automation/status` | Current mode, source, override state |
+| GET | `/api/automation/status` | Current mode, source, override state, `time_period` (day/evening/night/late_night) |
 | GET | `/api/automation/config` | Automation toggles |
 | PUT | `/api/automation/config` | Update automation config |
 | GET | `/api/automation/schedule` | Time-based schedule (weekday/weekend) |
@@ -1596,8 +1604,10 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   Supervisor"`, hidden `pythonw.exe`, **two triggers**: at-logon with
   30s delay + 5-min watchdog repetition trigger added 2026-05-16) plus
   `RestartCount=999 / RestartInterval=1m` on observed failure. Manages
-  the three agents (activity_detector, ambient_monitor,
-  screen_sync_agent) as child processes. Pointed at the Latitude via
+  the pc_agent fleet as in-process daemon threads — activity_detector,
+  ambient_monitor, screen_sync_agent, and (Windows-only)
+  monitor_brightness; emotion_capture + sleep_watcher round out the
+  list. Pointed at the Latitude via
   `--server http://192.168.1.210:8000`. The watchdog catches the class
   of failure where the supervisor dies but Task Scheduler doesn't see
   a launcher failure (e.g. a Bash background subprocess reaped along

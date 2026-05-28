@@ -28,6 +28,9 @@ python -m backend.services.pc_agent.activity_detector
 # Ambient noise monitor (separate terminal, requires Blue Yeti + PyAudio)
 python -m backend.services.pc_agent.ambient_monitor
 
+# Monitor brightness agent (Windows; DDC/CI brightness + color temp); --detect probes hardware
+python -m backend.services.pc_agent.monitor_brightness --detect
+
 # Frontend dev server (hot reload, proxies API to :8000)
 cd frontend-svelte && npm run dev
 
