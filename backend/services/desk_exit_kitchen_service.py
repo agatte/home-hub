@@ -111,14 +111,17 @@ CORRIDOR_KITCHEN_CT = 375
 # actually heading that way.
 CORRIDOR_KITCHEN_RAMP_DELAY_SECONDS = 2
 
-# Return-to-desk debounce: face_present must be True for this many
-# consecutive seconds before we trigger wind-down. Was 3s initially,
-# tightened to 1s after the 2026-05-28 bathroom-trip showed face
-# flicker during settle-in repeatedly reset the streak — net 9s
-# perceived wind-down latency vs Transit's instant-deactivate on the
-# same signal. 1s = one poll tick — still filters the single-frame
-# false-positive (someone walks past the monitor) but doesn't wait
-# through 3 seconds of normal sit-down jitter.
+# Return-to-desk debounce: face_present must be True across the streak
+# threshold before we trigger wind-down. Was 3s initially, tightened to
+# 1s after the 2026-05-28 bathroom-trip showed face flicker during
+# settle-in repeatedly reset the streak — net 9s perceived wind-down
+# latency vs Transit's instant-deactivate on the same signal.
+#
+# Effective wall-clock gate is ~2s, not 1s: with POLL_INTERVAL_SECONDS=2,
+# the first True frame sets the streak start; the next True frame (one
+# tick later, 2s) crosses the threshold and fires wind-down. A solitary
+# single-frame false positive (someone walks past the monitor between
+# ticks) can't fire on its own — it needs a second True frame to follow.
 CORRIDOR_RETURN_DESK_SECONDS = 1
 
 # Wind-down stagger: kitchen pendants fade first, L1 lingers so Anthony
