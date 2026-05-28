@@ -37,8 +37,18 @@ if ($task -and $task.State -eq "Running") {
 Start-Sleep -Seconds 2
 
 Write-Host "Starting agent supervisor..."
-Start-Process "$ProjectRoot\venv\Scripts\pythonw.exe" `
-    -ArgumentList "-m","backend.services.pc_agent.supervisor","--server","http://192.168.1.210:8000","--classifier","--active" `
+# Route through the same VBS -> start-supervisor.ps1 chain that the
+# "Home Hub Agent Supervisor" Scheduled Task uses. Single source of truth
+# for the launch path -- start-supervisor.ps1 owns the system-Python +
+# venv-PYTHONPATH composition (see its header comment for the rationale).
+# Launching venv\Scripts\pythonw.exe directly here was a mistake: the venv
+# launcher resolves packages only from venv\Lib\site-packages, while the
+# Scheduled Task picks up packages installed in either system OR venv via
+# the PYTHONPATH setup in start-supervisor.ps1. The mismatch silently
+# disabled emotion_capture (mediapipe was system-only) on 2026-05-28.
+$VbsLauncher = Join-Path $ProjectRoot "scripts\start-supervisor-hidden.vbs"
+Start-Process "wscript.exe" `
+    -ArgumentList "`"$VbsLauncher`"" `
     -WorkingDirectory $ProjectRoot `
     -WindowStyle Hidden
 
