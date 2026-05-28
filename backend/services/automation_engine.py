@@ -964,6 +964,10 @@ class AutomationEngine:
         Evening and late_night L1 scale proportionally so a single slider
         tunes the whole reclined profile coherently. Accepts 1..100 and
         clamps; the settings page does its own range validation too.
+
+        DORMANT since 2026-05-27 (Latitude→living-room move retired the
+        bed-zone source the consuming overlay branch depends on). Setter
+        still accepts writes so the stored value survives for revival.
         """
         self._bed_reclined_l1_night = max(1, min(100, int(value)))
 

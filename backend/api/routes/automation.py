@@ -251,8 +251,11 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
         return {"status": "ok", "applied": False}
 
     # Pull zone + posture from the camera service so the sync cap can differ
-    # between watching-at-desk (brighter bias), watching-in-bed-reclined
-    # (hard projector-safe dim), and watching-in-bed-upright (middle ground).
+    # between watching-at-desk (brighter bias) and (historically) the
+    # watching-in-bed-reclined / upright variants. Post 2026-05-27 Latitude→
+    # living-room move: no camera produces zone="bed", so only the desk arm
+    # fires in practice. Bed-variant caps stay in MODE_ZONE_MAX_BRIGHTNESS
+    # for revival pending a future bed-zone source.
     camera = getattr(request.app.state, "camera_service", None)
     zone = getattr(camera, "zone", None) if camera else None
     posture = getattr(camera, "posture", None) if camera else None
@@ -547,7 +550,10 @@ async def update_mode_volume(
 
 
 # ---------------------------------------------------------------------------
-# Watching posture tuning — runtime knobs for projector-in-bed brightness
+# Watching posture tuning — runtime knobs for projector-in-bed brightness.
+# DORMANT since 2026-05-27 (Latitude→living-room move retired the zone="bed"
+# source the underlying overlay branches depend on); endpoint + storage kept
+# so values stay editable for revival pending a future bed-zone source.
 # ---------------------------------------------------------------------------
 
 @router.get("/watching-posture")

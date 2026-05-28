@@ -116,6 +116,13 @@ MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
 # lamp can have its own projector-safe cap when reclining in bed.
 # Lookup prefers the most specific match: (mode, zone, posture, light_id) →
 # (mode, zone, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)] → default.
+#
+# DORMANT NOTE (2026-05-27 Latitude→living-room move): the bed-zone entries
+# below (("watching","bed","reclined",…) and ("watching","bed","upright",…))
+# are unreachable now — no camera produces zone="bed". The watching-at-desk
+# entry (("watching","desk","2")) still fires via the desktop pc_agent's
+# zone="desk" emission (Phase 1). The bed entries are kept (not deleted) for
+# revival if bed-zone detection is later added via the desktop's wide FoV.
 MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
     ("watching", "desk",            "2"): 180,
     ("watching", "bed", "reclined", "2"):  25,

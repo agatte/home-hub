@@ -873,12 +873,18 @@ def apply_zone_overlay(
     1. ``zone=desk`` + watching: LIFT L2 above the projector-safe dim —
        watching at the desk is YouTube / a monitor stream and the
        projector is off, so the default dim L2 reads as too dark.
+       (LIVE — `zone="desk"` now sourced from the desktop pc_agent via
+       PresenceFusion since the 2026-05-27 Latitude→living-room move.)
     2. ``zone=bed + posture=reclined`` (any mode except sleeping):
        LOWER L1 and L2 below the baseline. ``bed + reclined`` is a
        physical fact about the user's body, not a mode label — when
        you're lying down with the projector on, bright bedside lamps
        compete with the screen and hit eyes directly regardless of
        what the activity detector thinks you're doing.
+       **DORMANT since 2026-05-27** — no camera produces `zone="bed"`
+       after the Latitude relocated to the living room. Branch never
+       fires; kept (with the third bed+upright variant lower in this
+       function) pending revival via desktop pose-based bed detection.
 
     Only ever moves brightness in one direction per branch (lift-only
     for desk, lower-only for reclined) so a learned override stays

@@ -159,9 +159,10 @@ async def get_camera_snapshot(annotate: bool = True, source: str = "latitude") -
 
     Args:
         annotate: (Latitude only) overlay MediaPipe face box + lux readout.
-        source: "latitude" (default) — capture from the corner-mounted Latitude
-            camera in real time. "desktop" — request a fresh frame from the
-            desktop pc_agent (used to diagnose the dual-camera arbitration).
+        source: "latitude" (default) — capture from the Latitude camera in
+            real time (living-room-mounted since 2026-05-27, framing the
+            couch). "desktop" — request a fresh frame from the desktop
+            pc_agent (used to diagnose the dual-camera arbitration).
 
     Latitude path: requires `camera_enabled`. Frames are never written to disk.
     Desktop path: marks a snapshot pending, polls /latest for up to 15s while
