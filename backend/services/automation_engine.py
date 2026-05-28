@@ -1915,7 +1915,17 @@ class AutomationEngine:
         scope is ``["1", "3", "4"]`` (whole corridor) — the service passes
         a subset for the sequenced wind-down (kitchen first at t=0, L1
         after a 10s linger).
+
+        Note on ``transition_time``: ``clear_transit_override`` discards
+        this parameter (API-compat shim) and lets ``_apply_mode`` use the
+        mode-default transition speed for the revert. The kwarg is kept
+        here for call-site symmetry with the apply path; the actual fade
+        speed is driven by ``MODE_TRANSITION_TIME[current_mode]``
+        (working=2s, relax=4s, etc.). At late_night this is typically a
+        2–4s fade — close enough to the original 3s design intent that
+        no caller-side override is needed.
         """
+        _ = transition_time  # See docstring — passed for symmetry only.
         if light_ids is None:
             light_ids = ["1", "3", "4"]
         await self.clear_transit_override(
