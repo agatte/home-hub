@@ -99,6 +99,12 @@ HYSTERESIS = 4
 MANUAL_OVERRIDE_DELTA = 5
 MANUAL_OVERRIDE_BACKOFF_S = 30 * 60   # 30 min
 
+# If two reconcile() calls are separated by more than this, the agent was
+# paused (Windows sleep, process restart, hung WS) — any drift from
+# _last_applied_brightness can't be a user button-press because the agent
+# wasn't around to set it. Resync silently instead of arming the backoff.
+SUSPEND_GAP_THRESHOLD_S = RECONCILE_INTERVAL_S * 2
+
 # Mode × time_period brightness curve. Defaults match the apartment
 # lighting cadence — bright daytime, gentle wind-down at night.
 BASE_BRIGHTNESS: dict[str, dict[str, int]] = {
@@ -348,6 +354,7 @@ class Reconciler:
         self._last_applied_brightness: Optional[int] = None
         self._last_applied_period_for_color: Optional[str] = None
         self._manual_override_until: float = 0.0
+        self._last_reconcile_at: float = 0.0
 
     def reconcile(
         self,
@@ -358,16 +365,23 @@ class Reconciler:
     ) -> None:
         with self._lock:
             now = time.time()
+            gap = now - self._last_reconcile_at if self._last_reconcile_at else 0.0
+            self._last_reconcile_at = now
+            # gap=0 = first call this process; treat as "agent wasn't running"
+            # so a cold start against a stale panel value silently resyncs.
+            agent_was_running = 0 < gap <= SUSPEND_GAP_THRESHOLD_S
 
             # Manual-override sentinel — if the user moved the hardware
-            # brightness, hold off until the timer expires.
+            # brightness, hold off until the timer expires. Only trip when
+            # the agent was actively running between writes; large gaps mean
+            # the drift happened while we were paused (Windows sleep, etc.).
             current = get_current_brightness()
-            if (
+            drifted = (
                 self._last_applied_brightness is not None
                 and current is not None
                 and abs(current - self._last_applied_brightness) >= MANUAL_OVERRIDE_DELTA
-                and now >= self._manual_override_until
-            ):
+            )
+            if drifted and agent_was_running and now >= self._manual_override_until:
                 logger.info(
                     "Manual brightness change detected (last=%d, current=%d) — "
                     "backing off for %ds",
@@ -378,6 +392,13 @@ class Reconciler:
                 # sentinel against a stale baseline.
                 self._last_applied_brightness = current
                 return
+            if drifted and not agent_was_running:
+                logger.info(
+                    "Brightness drift across pause (last=%d current=%d gap=%.1fs) — "
+                    "resyncing baseline, no backoff",
+                    self._last_applied_brightness, current, gap,
+                )
+                self._last_applied_brightness = current
 
             if now < self._manual_override_until:
                 # Still in cooldown — only re-engage the color preset, not
