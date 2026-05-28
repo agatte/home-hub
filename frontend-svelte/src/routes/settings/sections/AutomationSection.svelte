@@ -102,10 +102,10 @@
     </SettingGroup>
   {/if}
 
-  <SettingGroup title="Cameras" hint="PresenceFusion merges both webcams into one zone + posture + lux read.">
+  <SettingGroup title="Cameras" hint="PresenceFusion merges both webcams into one presence + zone + lux read. Posture (reclined/upright) is dormant since the 2026-05-27 Latitude relocation — no camera frames the bed.">
     <SettingRow
       label="Latitude camera"
-      hint="Kiosk webcam — presence, zone (desk / bed), posture, and ambient lux. Off by default."
+      hint="Kiosk webcam in the living room — couch presence (zone=couch since 2026-05-27; previously desk/bed when bedroom-mounted) and ambient lux baseline. Off by default."
     >
       <SettingToggle
         checked={!!$cameraStore?.enabled}

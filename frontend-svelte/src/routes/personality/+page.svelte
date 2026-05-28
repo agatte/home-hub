@@ -255,7 +255,7 @@
             disabled={!settings.personality_enabled}
             on:change={(e) => toggleSetting('desktop_emotion_enabled', e.currentTarget.checked)}
           />
-          <span><strong>Emotion detection (desktop)</strong> — frontal blendshapes from the dev machine's webcam. Better geometry than the Latitude's corner profile; requires the Home Hub Agent Supervisor running on the desktop. Desktop wins when fresh; Latitude covers bed scenarios.</span>
+          <span><strong>Emotion detection (desktop)</strong> — frontal blendshapes from the dev machine's webcam. Better geometry than the Latitude's living-room view (the desktop sees you head-on at the monitor); requires the Home Hub Agent Supervisor running on the desktop. Desktop wins when fresh; Latitude covers couch/relax moments.</span>
         </label>
         <label class="toggle" class:disabled={!settings.personality_enabled}>
           <input

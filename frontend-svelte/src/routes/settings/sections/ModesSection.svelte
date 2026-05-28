@@ -200,7 +200,7 @@
         {/if}
 
         {#if mode.hasPosture && watchingPosture}
-          <SettingGroup title="Posture tuning" hint="Brightness caps when watching in bed. The camera detects reclined vs upright; the lamp follows.">
+          <SettingGroup title="Posture tuning (currently inactive)" hint="Bed-zone overlay retired with the 2026-05-27 Latitude→living-room move — no camera frames the bed now, so reclined/upright detection doesn't fire and these caps don't apply. Values stay editable in case bed-zone detection comes back later (e.g. via the desktop's wide FoV).">
             <div class="posture-row">
               <span class="posture-label">Reclined — projector cap</span>
               <span class="posture-value">{watchingPosture.reclined_sync_cap}</span>
