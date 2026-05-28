@@ -49,6 +49,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -422,13 +423,19 @@ class Reconciler:
 # Shared state — populated by WS listener, consumed by reconciler
 # ---------------------------------------------------------------------------
 
+# Indiana DST rules require an explicit tz on every datetime arithmetic
+# call — system local could disagree on a non-Indiana host (e.g. someone
+# running the supervisor on a laptop on the road).
+_INDY_TZ = ZoneInfo("America/Indiana/Indianapolis")
+
+
 # Local fallback for time_period when the backend doesn't report it (pre-
 # deploy of the get_time_period() route addition). Matches the engine's
 # default schedule (wake 7, evening 18, winddown 22, late_night 23) — if
 # the user has customized their schedule via the dashboard, the API will
 # eventually carry an authoritative value and overwrite this default.
 def _local_time_period() -> str:
-    hour = datetime.now().hour
+    hour = datetime.now(tz=_INDY_TZ).hour
     if hour < 7:
         return "late_night"
     if hour < 18:

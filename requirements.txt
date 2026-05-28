@@ -40,6 +40,7 @@ pyaudio==0.2.14           # Blue Yeti mic ambient noise detection
 mss==10.1.0               # Fast screen capture for screen sync
 screen-brightness-control==0.24.1  # DDC/CI monitor brightness (desktop monitor_brightness agent)
 monitorcontrol==4.2.0     # DDC/CI VCP color-preset control (desktop monitor_brightness agent)
+tzdata==2026.2            # IANA tz database for ZoneInfo on Windows (system has none)
 
 # ML
 numpy==2.4.4
