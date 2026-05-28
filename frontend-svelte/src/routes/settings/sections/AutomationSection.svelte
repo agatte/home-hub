@@ -76,6 +76,32 @@
     const next = Math.min(12, Math.max(1, autoConfig.override_timeout_hours + n))
     saveAutoConfig({ override_timeout_hours: next })
   }
+
+  // Fused-presence chip — replaces the old Latitude-only `last_detection` read.
+  // Priority: zone-specific labels (At desk / On couch) outrank the generic
+  // "Present" so the chip names *where* the user is, not just that someone is
+  // somewhere. Falls back to the legacy field if the presence block is absent
+  // (e.g. fusion service not initialized).
+  $: detectionChip = (() => {
+    const p = $cameraStore?.presence
+    if (!p) {
+      const ld = $cameraStore?.last_detection
+      if (ld === 'present') return { label: 'Present', tone: 'ok', via: null, conf: $cameraStore?.confidence }
+      if (ld === 'absent') return { label: 'Absent', tone: '', via: null, conf: null }
+      return { label: 'Unknown', tone: '', via: null, conf: null }
+    }
+    if (p.zone === 'couch') {
+      return { label: 'On couch', tone: 'ok', via: 'latitude', conf: p.sources?.latitude?.face_confidence }
+    }
+    if (p.at_desk_fresh) {
+      const src = p.at_desk_source ?? 'desktop'
+      return { label: 'At desk', tone: 'ok', via: src, conf: p.sources?.[src]?.face_confidence }
+    }
+    if (p.strongly_present) {
+      return { label: 'Present', tone: 'ok', via: null, conf: null }
+    }
+    return { label: 'Absent', tone: '', via: null, conf: null }
+  })()
 </script>
 
 <SettingsSection
@@ -127,11 +153,14 @@
         </SettingRow>
       {/if}
 
-      <SettingRow label="Detection" hint="Most recent vision result">
-        <span class="value-chip" class:ok={$cameraStore.last_detection === 'present'}>
-          {$cameraStore.last_detection === 'present' ? 'Present' : $cameraStore.last_detection === 'absent' ? 'Absent' : 'Unknown'}
-          {#if ($cameraStore.confidence ?? 0) > 0}
-            <span class="value-sub">{(($cameraStore.confidence ?? 0) * 100).toFixed(0)}%</span>
+      <SettingRow label="Detection" hint="PresenceFusion verdict across both cameras — On couch from Latitude, At desk from desktop webcam.">
+        <span class="value-chip" class:ok={detectionChip.tone === 'ok'}>
+          {detectionChip.label}
+          {#if detectionChip.via}
+            <span class="value-sub">via {detectionChip.via}</span>
+          {/if}
+          {#if (detectionChip.conf ?? 0) > 0}
+            <span class="value-sub">{((detectionChip.conf ?? 0) * 100).toFixed(0)}%</span>
           {/if}
         </span>
       </SettingRow>
