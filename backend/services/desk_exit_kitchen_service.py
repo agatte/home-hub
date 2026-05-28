@@ -94,8 +94,11 @@ KITCHEN_FACE_TRUST_THRESHOLD = FACE_TRUST_THRESHOLD
 CORRIDOR_ABSENT_TRIGGER_SECONDS = 5
 
 # L1 night-visibility threshold is bri≥45 per the apartment-layout memory.
-# 80 ensures meaningful hallway spill without being jarring at 1am.
-CORRIDOR_L1_BRI = 80
+# Started at 80 (2026-05-28); bumped to 100 after user feedback the
+# hallway spill wasn't quite bright enough at 1am. Still well below the
+# evening kitchen target (120) so the corridor reads as path-light not
+# wake-up.
+CORRIDOR_L1_BRI = 100
 CORRIDOR_L1_CT = 400  # ~2500K — warm corridor-incandescent feel.
 
 # Kitchen pair: pendants are assertive downlights — 40 is path-light
