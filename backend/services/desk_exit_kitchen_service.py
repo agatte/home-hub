@@ -112,10 +112,14 @@ CORRIDOR_KITCHEN_CT = 375
 CORRIDOR_KITCHEN_RAMP_DELAY_SECONDS = 2
 
 # Return-to-desk debounce: face_present must be True for this many
-# consecutive seconds before we trigger wind-down. Prevents a brief
-# face-flicker glance back (someone walking past the monitor) from
-# tearing down the corridor while Anthony is still in the kitchen.
-CORRIDOR_RETURN_DESK_SECONDS = 3
+# consecutive seconds before we trigger wind-down. Was 3s initially,
+# tightened to 1s after the 2026-05-28 bathroom-trip showed face
+# flicker during settle-in repeatedly reset the streak — net 9s
+# perceived wind-down latency vs Transit's instant-deactivate on the
+# same signal. 1s = one poll tick — still filters the single-frame
+# false-positive (someone walks past the monitor) but doesn't wait
+# through 3 seconds of normal sit-down jitter.
+CORRIDOR_RETURN_DESK_SECONDS = 1
 
 # Wind-down stagger: kitchen pendants fade first, L1 lingers so Anthony
 # has light for the return walk through the hallway. 10s covers the

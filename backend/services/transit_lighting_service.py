@@ -397,6 +397,14 @@ class TransitLightingService:
         if not (productive_yield and evening_or_night):
             states["3"] = kitchen
             states["4"] = kitchen
+        # At late_night specifically, also cede L1 to DeskExitKitchen's
+        # corridor: the corridor fires at the 5s desk-absent threshold and
+        # ramps L1 to bri=80, but transit fires at 10s with bri=60 and
+        # overwrote the corridor's L1 four seconds later (2026-05-28
+        # bathroom-trip incident: L1 brighten then dim mid-ramp). At
+        # evening/night transit still owns L1 — corridor is late_night-only.
+        if productive_yield and late_night:
+            states.pop("1", None)
         return states
 
     async def _activate(self, mode: str) -> None:
