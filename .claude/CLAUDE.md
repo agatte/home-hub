@@ -417,6 +417,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB, drives bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors` |
 | `camera_wedge_last_restart` | `{at, detail}` — last camera-watchdog process-restart escalation; rate-limits it to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart` |
 | Personality (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) | Master kill switch + sub-toggles for the AI Personality Layer. Spec: `docs/PERSONALITY_LAYER.md` |
+| `mood_calibration_nudge_state` | `{last_nudge_at_utc, last_nudge_bucket}` — `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges); survives restart so a deploy mid-day doesn't reset the gate. Driver for the Phase A→B Spearman gate (GH#58). |
 | `gameday_playoff_state` | Cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot. Spec: `docs/GAMEDAY_SPEC.md` |
 | `gameday_team_form` | Recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection. Spec: `docs/GAMEDAY_SPEC.md` |
 

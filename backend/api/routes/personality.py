@@ -393,6 +393,7 @@ async def get_calibration_nudge_status() -> dict:
     from backend.services.personality.calibration_nudge import (
         BUCKETS,
         BUCKET_TARGET,
+        COUNT_LOOKBACK_DAYS,
         NUDGE_STATE_KEY,
         _bucket_for_minute_of_day,
     )
@@ -405,8 +406,8 @@ async def get_calibration_nudge_status() -> dict:
             "  CAST(strftime('%M', timestamp, 'localtime') AS INTEGER) AS mod "
             "FROM mood_calibration "
             "WHERE detected_valence IS NOT NULL "
-            "  AND timestamp >= datetime('now', '-60 days')"
-        ))
+            "  AND timestamp >= datetime('now', :cutoff)"
+        ), {"cutoff": f"-{COUNT_LOOKBACK_DAYS} days"})
         mods = [row[0] for row in result.fetchall() if row[0] is not None]
 
     per_bucket: dict[str, int] = {name: 0 for name, *_ in BUCKETS}
