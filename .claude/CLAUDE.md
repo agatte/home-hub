@@ -96,7 +96,7 @@ Subagents (`~/.claude/agents/`, 28 total) — fleet table + trigger map in `docs
 
 Parallel `/watcher-loop` polls digests every 600s; warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (playbook: `~/.claude/runbooks/homehub-watcher.md`). Investigation-only.
 
-**Autostart (both loops):** Windows Scheduled Tasks `Home Hub Checkback Loop` + `Home Hub Watcher Loop` (triggers: logon + unlock + resume-from-sleep; idempotent ensure-running, no-op if already alive), run **hidden** via `~/.claude/scripts/start-homehub-loop.ps1`, launched windowless through the `start-homehub-loop-hidden.vbs` wscript shim (avoids the per-trigger window-flash). `Home Hub Loops Daily Relaunch` force-recycles both at 04:00 to shed `/loop` dynamic-mode context before it hits auto-compaction. Re-register via `~/.claude/scripts/register-homehub-loop-tasks.ps1`; check status anytime via `~/.claude/scripts/homehub-loops-status.ps1`. (Replaced the Startup-folder `.cmd`s, which only fired on a full logon.)
+**Autostart (both loops):** Windows Scheduled Tasks `Home Hub Checkback Loop` + `Home Hub Watcher Loop` (triggers: logon + unlock + resume; idempotent ensure-running), run hidden via `start-homehub-loop.ps1` through the `start-homehub-loop-hidden.vbs` shim. `Home Hub Loops Daily Relaunch` recycles both at 04:00 to shed `/loop` context before auto-compaction. Re-register: `register-homehub-loop-tasks.ps1`; status: `homehub-loops-status.ps1` (all in `~/.claude/scripts/`).
 
 ---
 
@@ -157,13 +157,13 @@ Tech stack: `docs/PROJECT_SPEC.md` § "Tech Stack". Import quirks / gotchas: see
 Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "Additional Services". Non-obvious footguns only:
 
 - **`sonos_service.py`** — Favorites always shuffled with random start via `_shuffle_and_play`.
-- **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (set false to shadow-log only). Late-night rescue + ambient_relax + zone+posture rule + both attendance vetoes live in `run_loop`. Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0). Away mode + dedicated detection service shelved 2026-05-21 after Hue/ARP/Pi-hole paths all hit dead ends — see `project_away_mode_shelved.md` before designing another presence layer. The Hue iOS app's native Home & Away automations integrate via the existing `_check_external_off` mechanism.
-- **`camera_service.py`** — **Re-run lux calibration after any resolution change.** `poll_loop` has a 5s watchdog → `_recover_capture()` reopens V4L2. Pauses during sleeping. Heartbeat ticks only after `_cap` is non-None (so a V4L2 lock post-sleep-resume can't leave the lane heartbeat-fresh with every frame short-circuited). Weak-face fallback has a low-lux floor: `ema_lux<300` + face conf<0.25 → absent (kills chair-back ghosts); strong-face ≥0.70 and pose paths fire regardless.
-- **`transit_lighting_service.py` + `desk_exit_kitchen_service.py`** — sibling camera-driven overrides sharing `_transit_light_overrides`. Transit = L1+kitchen, 10-min auto-fade. DeskExit = kitchen-only, hold-until-return, time-of-day brightness. Transit **cedes the kitchen pair** in productive evening/night (mode ∈ {working, gaming, watching, idle}, hour ≥ 18 or late_night). Both fire on sustained 10s desk-loss; DeskExit also requires `period ∈ TRIGGER_PERIODS` and uses `is_at_desk_fresh()` as the return signal. Distinguish via `light_adjustments.trigger`. `"desk_exit_kitchen"` is in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES`. 4h hard timeout = wedged-camera failsafe only.
+- **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (**dormant since 2026-05-27** — no camera produces `zone=bed` after the Latitude→living-room move; kept pending future bed-zone source). Late-night rescue + ambient_relax + zone+posture rule + both attendance vetoes live in `run_loop`. `is_present_in_room()` (added with the move) gates `ambient_relax` so a fresh committed couch zone vetoes the auto-flip. Mode priority: gameday(6) > gaming(5) > social(4) > watching(3) > working(2) > idle(1) > sleeping(0). Away mode + dedicated detection service shelved 2026-05-21 after Hue/ARP/Pi-hole paths all hit dead ends — see `project_away_mode_shelved.md` before designing another presence layer. The Hue iOS app's native Home & Away automations integrate via the existing `_check_external_off` mechanism.
+- **`camera_service.py`** — **Latitude relocated to living room 2026-05-27** (sees couch only — emits a single `ZONE_COUCH`; the bedroom desk/bed left-right split is retired; baseline_lux recalibrated to ~74). Desktop pc_agent owns `zone=desk` via PresenceFusion. **Re-run lux calibration after any resolution change OR camera relocation.** All V4L2 open/release runs off-loop + time-bounded (`_open_capture_async`); poll_loop's 5s frame watchdog → `_recover_capture()`. An orphaned fd can wedge `/dev/video0` intra-process (respawn can't reclaim it) → watchdog escalates to a systemd restart after 3 failed respawns, rate-limited via `camera_wedge_last_restart`; see `project_camera_v4l2_fd_wedge_self_heal.md`. Pauses during sleeping; heartbeat ticks only after `_cap` is non-None. Weak-face low-lux floor: `ema_lux<300` + conf<0.25 → absent; strong-face ≥0.70 and pose fire regardless. Couch posture is suppressed (no consumer).
+- **`transit_lighting_service.py` + `desk_exit_kitchen_service.py`** — sibling camera-driven overrides sharing `_transit_light_overrides`. Transit = L1+kitchen, 10-min auto-fade. DeskExit = kitchen-only, hold-until-return, time-of-day brightness. Transit **cedes the kitchen pair** in productive evening/night (mode ∈ {working, gaming, watching, idle}, hour ≥ 18 or late_night). Both fire on sustained 10s desk-loss; DeskExit also needs `period ∈ TRIGGER_PERIODS` and uses `is_at_desk_fresh()` to return. Distinguish via `light_adjustments.trigger`. `desk_exit_kitchen` is in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES`. 4h hard timeout = wedged-camera failsafe.
 - **`pc_agent/activity_detector.py`** — `GAME_PROCESSES` excludes `javaw.exe` (JetBrains FPs). Media foreground-gated. LoL champion resolved off `/liveclientdata/allgamedata` via `_resolve_active_champion` cross-walking `activePlayer.riotId` → `allPlayers` roster (fallback `summonerName` for spectator/replay).
 - **`pc_agent/ambient_monitor.py`** — YAMNet `speech_multiple→social` gate abandoned (structurally unreachable). Social is manual-override only. Never records audio.
 - **`websocket_manager.py`** — `broadcast` uses `asyncio.gather` with a 2s per-client `wait_for`. A stalled client disconnects itself; expect `Client disconnected` log lines.
-- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`. Broadcasts on/bri pushes via `light_update`; intentionally drops color (CIE xy) + ct events (no gamut-aware converter to v1 hue/sat) — those ride the v1 5s fallback. Liveness probe: `asyncio.wait_for` on each `aiter_lines()` step with a 90s budget (`_STREAM_SILENT_RECONNECT_SECONDS`); 1s→30s exponential backoff on disconnect; v1 polling auto-resumes 0.5s whenever the stream isn't healthy. `/health` heartbeat threshold = 100s (covers a normal silence→reconnect cycle).
+- **`hue_v2_service.py`** — `event_stream_loop` is the SSE consumer for `/eventstream/clip/v2`. Broadcasts on/bri via `light_update`; intentionally drops color (CIE xy) + ct events (no gamut-aware v1 converter) — those ride the v1 5s fallback. Liveness: `asyncio.wait_for` on each `aiter_lines()` step, 90s budget (`_STREAM_SILENT_RECONNECT_SECONDS`); 1s→30s backoff on disconnect; v1 polling resumes 0.5s when the stream isn't healthy. `/health` heartbeat threshold 100s.
 
 ---
 
@@ -245,7 +245,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **WebSocket.** `await self._ws_manager.broadcast("{domain}_{event}", {...})`. Client→server handled in `main.py` websocket handler.
 
-**Activity detector.** POST `{mode, source, factors?}` to `/api/automation/activity` — `factors` is optional sub-signal detail surfaced to the analytics constellation. Engine enforces priority.
+**Activity detector.** POST `{mode, source, factors?}` to `/api/automation/activity` — `factors` = optional sub-signal detail for the analytics constellation. Engine enforces priority.
 
 **Scheduled routine.** Build a `ScheduledTask` (from `backend.services.scheduler`) and call `scheduler.add_task(task)`. Persist config in `app_settings` under `{routine_name}_config`. Expose `POST /api/routines/{name}/test`.
 
@@ -253,7 +253,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **App settings (SQLite).** `await save_setting(db, key, value_dict)` / `await load_setting(db, key)`. Known keys: `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
 
-**Source attribution on write endpoints.** Write routes that log to `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` should pull caller identity via `source_from_request(request, fallback="...")` from `backend.api.auth`. The Alexa lambda sets `X-Source: alexa:<intent>`; absent header → route's existing default (`api:<ip>`, `rest`, `manual`, `preset`/`custom`/`bridge`).
+**Source attribution on write endpoints.** Routes logging to `activity_events`/`light_adjustments`/`sonos_playback_events`/`scene_activations` pull caller identity via `source_from_request(request, fallback="...")` (`backend.api.auth`). Alexa lambda sets `X-Source: alexa:<intent>`; absent → route default (`api:<ip>`, `rest`, `manual`, etc.).
 
 ---
 
@@ -261,21 +261,21 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 | Mode | Detection | Lighting Strategy |
 |------|-----------|-------------------|
-| `gameday` | `GameDayService` ESPN polling, T-30 auto-flip, T+30 conditional clear | Colts blue L1 + warm-amber L2/L3/L4 baseline, kitchen pair preserved. `CelebrationOrchestrator` runs custom light + TTS sequences per scoring play (8s cooldown); TTS volume is WPA-driven with apartment-context suppressions. Spec: `docs/GAMEDAY_SPEC.md` |
-| `gaming` | Specific game binaries in `game_list.py` (NOT `javaw.exe` — matches JetBrains IDEs) | Neutral fill + blue/purple peripheral accents, warm desk-lamp bias. Night: deep blue ambient. Screen sync on L2, glisten effect eve/night. While League is in an active match, L2 + L5 shift to the champion's signature color (`LoLChampionService` reads `champion` factor from activity report → `champion_color_map` app_setting → bypasses screen-sync on those lamps) |
+| `gameday` | `GameDayService` ESPN polling, T-30 auto-flip, T+30 conditional clear | Colts blue L1 + warm-amber L2/L3/L4, kitchen pair preserved. `CelebrationOrchestrator` runs light + TTS sequences per scoring play (8s cooldown); WPA-driven TTS volume with apartment-context suppressions. Spec: `docs/GAMEDAY_SPEC.md` |
+| `gaming` | Game binaries in `game_list.py` (NOT `javaw.exe` — JetBrains FP) | Neutral fill + blue/purple peripheral accents, warm desk-lamp bias. Night: deep blue ambient. Screen sync on L2, glisten eve/night. In an active League match, L2 + L5 shift to the champion's color (`LoLChampionService` → `champion_color_map`, bypassing screen-sync on those lamps) |
 | `working` | Terminals + IDEs (powershell, pwsh, bash, claude, code, cursor, devenv, JetBrains, wezterm, alacritty) | ct-mode clean whites, desk-dominant. IES 1:3 monitor-ambient contrast. Night: L2 130/2700K + L1 60/2270K + kitchen OFF |
-| `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` lifts L2; `zone=bed + reclined` evening/night drops L1/L2; `zone=bed + upright` is mid-bright. Numeric vectors in `automation_engine.py` |
+| `watching` | Media players (VLC, Plex, Stremio) — foreground-gated | Projector default: warm, dim, L2 as soft bias. Kitchen OFF evening+. **Zone/posture-aware**: `zone=desk` lifts L2 (now sourced from desktop pc_agent since 2026-05-27); `zone=bed` branches (reclined dim L1/L2; upright reading-bright) are **dormant** post Latitude→living-room move — no camera produces `zone=bed` |
 | `social` | Manual override only (YAMNet `speech_multiple` gate abandoned 2026-05-09 — structurally unreachable; replacement direction deferred) | "Velvet Speakeasy" static: L1 dusty rose, L2 cognac amber, L3/L4 matched burnt-orange. Saturation does the work, no effect. 1s snap |
-| `relax` | Manual override | "Moss & Candlelight": L1/L2 warm ember/honey, L3/L4 moss/sage (pendants stay static). Late-night "Moss & Ember": deeper ember + hunter-green. opal day / **none eve** / fire night+late_night — fire scoped to L1/L2 only. Candle removed from auto-map 2026-05-09 (locked color state, persisted through mode changes). |
+| `relax` | Manual override | "Moss & Candlelight": L1/L2 warm ember/honey, L3/L4 moss/sage (pendants stay static). Late-night "Moss & Ember": deeper ember + hunter-green. opal day / **none eve** / fire night+late_night — fire scoped to L1/L2 only |
 | `cooking` | Manual override | L3+L4 paired peak 3500K (accurate food colors), L1 warm, L2 dim. 1s snap |
-| `sleeping` | Manual only | "Good night" TTS on entry. Dim initial (bri=20 ember) BEFORE stopping the active effect to prevent 100% pop, then fade. Manual: 24s fade off. Persistent override — no 4h timeout. Pauses media. PC sleep watcher (Windows desktop) suspends 60min after entry; cancels if mode leaves sleeping. |
+| `sleeping` | Manual only | "Good night" TTS on entry. Dim (bri=20 ember) BEFORE stopping the active effect to avoid 100% pop, then fade. Manual 24s fade off. Persistent override — no 4h timeout. Pauses media. PC sleep watcher suspends 60min after entry; cancels if mode leaves sleeping. |
 | `idle` | No process detected, OR Win32 idle >10min, OR camera absent ≥30s | Falls through to time-based rules. After 180s of continuous idle (no Sonos, no fresh desk/process attendance), `ambient_relax` autonomous setter pushes to `relax` as the soft default |
 
 **Mode priority:** `report_activity` guards against lower-priority cross-source displacement of a fresh higher-priority mode; same-source updates always pass. `SOURCE_STALE_SECONDS=300` — an owning source that hasn't reported in 5 min yields to lower-priority reports (prevents stale-lock).
 
-**Mode transition speeds:** gaming 0.5s (snappy), gameday 1s (snap — celebrations are time-sensitive), working 2s, watching 3s (cinematic), cooking 1s (snappy), relax 4s (gentle), sleeping 5s (gradual)
+**Mode transition speeds:** gaming 0.5s, gameday 1s, working 2s, watching 3s, cooking 1s, relax 4s, sleeping 5s.
 
-**Scene drift:** After 30min in **relax**, subtle random perturbation (±15 bri, ±1500 hue) with 10s transitions prevents staleness. Scoped to relax only — functional modes need stable, paired values.
+**Scene drift:** After 30min in **relax**, subtle perturbation (±15 bri, ±1500 hue, 10s transitions) prevents staleness. Relax-only — functional modes need stable paired values.
 
 **Kitchen pair rule:** L3 + L4 must match `bri` + `hue/sat` + on/off in functional modes (working, gaming, watching, cooking) and in the 6 guest party scenes — identical pendants shouldn't read as different colors. Free to diverge in relax + custom non-party scenes. Dashboard fuses them into a single "Kitchen" card via `LightCard`'s `linkedIds` prop; ApartmentViz shows them as distinct bulbs.
 
@@ -285,25 +285,25 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Effect reconciliation:** `_reconcile_effect` runs AFTER `_apply_state` so brightness is at target before the old effect stops (otherwise pops to 100%). 0.5s guard between stop+start.
 
-**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop 0.5s (demotes to 5s when v2 EventStream is active); 3s max-age clamp force-clears stuck deadlines. v2 stream dispatcher honors the same inflight window so stream echoes don't snap the UI mid-drag. Mid-drag commands use `transitiontime=1`; release flush uses default 0.4s.
+**In-flight window:** Per-light write deadlines suppress `light_update` broadcasts until transition+0.5s. Poll loop 0.5s (demotes to 5s when v2 EventStream active); 3s max-age clamp clears stuck deadlines. v2 dispatcher honors the same window so echoes don't snap the UI mid-drag. Mid-drag uses `transitiontime=1`; release flush 0.4s.
 
-**Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps. 4h auto-expiry in `run_loop`.
+**Manual light overrides:** Slider drags stamp `_manual_light_overrides[light_id]`; reconcile + screen-sync skip stamped lights. `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES` keeps stamps through autonomous pushes (late-night rescue, fusion, predictor, zone+posture, timeout_4h). User-initiated mode changes (`api:*`, `manual`, `guest`, `rule_suggestion_accept:*`) wipe stamps; 4h auto-expiry in `run_loop`.
 
-**Mode → scene overrides:** Any mode+time slot can be mapped to a Hue bridge scene or curated preset via `mode_scene_overrides` table, overriding the default `ACTIVITY_LIGHT_STATES`.
+**Mode → scene overrides:** Any mode+time slot maps to a Hue bridge scene or curated preset via `mode_scene_overrides`, overriding default `ACTIVITY_LIGHT_STATES`.
 
-**Late-night autopilot cascade:** (1) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools (`LATE_NIGHT_PROCESS_WEIGHT_FACTOR`). (2) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` late-night-rescue → `relax`. **Attendance vetoes:** skips when `is_at_desk_fresh()` OR `is_recent_process_working()` (PC-agent <10min) is True. `working` has its own `late_night` state for past-23:00 dev. (3) **late_night, mode=watching, zone=bed+reclined sustained 90min** — `_evaluate_watching_sleep_guard` flips watching→sleeping; supersedes manual watching ≥90min old. Sleeping entry triggers "Good night" TTS (gated off when `override_source == "watching_sleep_guard"`) + arms PC sleep watcher (60min Windows suspend).
+**Late-night autopilot cascade:** (1) **22:00–06:00** — `ConfidenceFusion` weights down stale dev tools (`LATE_NIGHT_PROCESS_WEIGHT_FACTOR`). (2) **23:00+, no override, no Sonos, mode ∈ {working, idle}** — `run_loop` late-night-rescue → `relax`; skips when `is_at_desk_fresh()` OR `is_recent_process_working()` (PC-agent <10min). `working` has its own `late_night` state. (3) **DORMANT since 2026-05-27** — `_evaluate_watching_sleep_guard` (late_night watching + `zone=bed+reclined` 90min → sleeping) requires a bed-zone source no camera now produces. Kept (not deleted) pending light-touch desktop bed-detection; original behavior preserved in docstring + memory for revival.
 
-**Ambient-relax soft default:** When `_current_mode == "idle"` continuously for ≥180s (`IDLE_AMBIENT_RELAX_DWELL_SECONDS`) with no Sonos and both attendance vetoes negative, `run_loop` pushes `set_manual_override("relax", source="ambient_relax")`. Day-agnostic — the late_night branch handles past-23:00 cases where the user might still be at the desk; this catches the "stepped away after dinner" gap that previously sat in bare idle.
+**Ambient-relax soft default:** When `_current_mode == "idle"` continuously ≥180s (`IDLE_AMBIENT_RELAX_DWELL_SECONDS`) with no Sonos and both attendance vetoes negative, `run_loop` pushes `set_manual_override("relax", source="ambient_relax")`. Day-agnostic; catches the "stepped away after dinner" gap.
 
-**Apartment-empty handling (no `away` mode):** When the Hue iOS app's "Leaving home" automation recalls a bridge_home all-off recipe, the engine's existing `_check_external_off` mechanism detects the all-lights-off state, sets `_external_off_detected = True`, and the run_loop `continue`s past every autonomous setter for that tick. Lights stay off until either (a) `report_activity` is called with a non-idle mode, or (b) `automation.signal_presence(source)` is called by a presence-detection service. **CameraService** calls `signal_presence("camera")` on absent→present transitions so a user walking into the bedroom or sitting at the desk releases the suppression even before any PC activity. A future Latitude-built-in-mic audio classifier could call it with `source="audio"` — parked option, see `project_latitude_audio_parked.md`. The dedicated `away` mode itself was shelved 2026-05-21 — see `project_away_mode_shelved.md`.
+**Apartment-empty handling (no `away` mode):** When the Hue iOS app's "Leaving home" automation recalls a bridge_home all-off recipe, `_check_external_off` detects the all-off state, sets `_external_off_detected = True`, and `run_loop` `continue`s past every autonomous setter. Lights stay off until either `report_activity` fires a non-idle mode or `automation.signal_presence(source)` is called. **CameraService** calls `signal_presence("camera")` on absent→present so walking in releases the suppression before any PC activity. `away` mode shelved 2026-05-21 — see `project_away_mode_shelved.md` (a Latitude-mic audio source is parked: `project_latitude_audio_parked.md`).
 
 ---
 
 ## Dynamic Effects (Hue v2)
 
-Available effects: `candle` (warm flicker), `fire` (shifting oranges/reds), `sparkle` (bright flashes), `prism` (slow color cycle), `glisten` (shimmer), `opal` (soft pastel). Activate via `POST /api/scenes/effects/{name}` (all lights) or `.../effects/{name}/light/{id}` (single). **Effects flatten per-light HSB** to the effect's own color base — custom-palette scenes must use `effect: None`.
+Effects: `candle`, `fire`, `sparkle`, `prism`, `glisten`, `opal`. Activate via `POST /api/scenes/effects/{name}` (all lights) or `.../effects/{name}/light/{id}` (single). **Effects flatten per-light HSB** to the effect's own color base — custom-palette scenes must use `effect: None`.
 
-**EFFECT_AUTO_MAP** entries `{"effect": name, "lights": [...] | None}` — `lights=None` = all, list scopes to v1 IDs. Mappings: relax → opal day / **none eve** / fire night+late_night (fire scoped to L1/L2 so moss pendants stay static); watching → glisten eve/night; social, gaming, working, cooking → none. Candle removed from auto-map 2026-05-09 (locked color values, persisted through mode changes); manual candle still callable via scene browser / guest UI / MCP.
+**EFFECT_AUTO_MAP** entries `{"effect": name, "lights": [...] | None}` — `lights=None` = all, list scopes to v1 IDs. Mappings: relax → opal day / **none eve** / fire night+late_night (fire scoped to L1/L2 so moss pendants stay static); watching → glisten eve/night; social, gaming, working, cooking → none. Candle removed from auto-map (color-lock persists through mode changes); manual candle still callable.
 
 **Time periods:** `_get_time_period()` returns `day`/`evening`/`night`/`late_night`. `late_night` runs from `DaySchedule.late_night_start_hour` (default 23) until `wake_hour`. Only relax defines a `late_night` state; other modes fall back to `night`.
 
@@ -373,7 +373,7 @@ FIELD_GOAL_YARD_THRESHOLD=40   # Yards for "long field goal" celebration trigger
 MOMENTUM_WPA_THRESHOLD=0.15    # |WPA| swing that triggers a momentum celebration on non-scoring plays
 
 # ML rule
-ZONE_POSTURE_RULE_APPLY=true   # Zone+posture→relax actuation. Default True (live since 2026-04-27); set false to shadow-log only.
+ZONE_POSTURE_RULE_APPLY=true   # Zone+posture→relax actuation. DORMANT since 2026-05-27 (Latitude→living-room move retired zone=bed). Kept for future bed-zone source; set false to shadow-log if reactivated.
 
 # Auth — write endpoints + Alexa Skill
 HOME_HUB_API_KEY=<urlsafe random>  # Write-endpoint gate. Unset → 503. Localhost + RFC1918 LAN auto-bypass.
@@ -384,7 +384,7 @@ TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs).
 SENTRY_DSN=                    # Optional — Sentry DSN from home-hub.sentry.io. Unset disables ingestion.
 
 # Notifier (apartment-state nudges → desktop toast + iPhone push via ntfy.sh)
-NTFY_TOPIC=                    # Treat as a secret — topic name IS the auth on hosted ntfy.sh. Unset → WS broadcast still works, ntfy push skipped.
+NTFY_TOPIC=                    # Secret — topic name IS the auth on ntfy.sh. Unset → WS still works, push skipped.
 NTFY_SERVER=https://ntfy.sh    # Override only when self-hosting (e.g. http://192.168.1.210:8085).
 
 # Guest WiFi (surfaces QR on home dashboard + /guest)
@@ -400,7 +400,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `morning_routine_config` | `{hour, minute, enabled, volume}` |
 | `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ..., late_night_start_hour}, weekend: {...}}` |
 | `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
-| `mode_volume_curves` | `{mode: {day, evening, night, fade_duration_s}}` — per-mode Sonos targets, smooth fade on mode change. `ModeVolumeService` callback. Sleeping forced 0; DND suppresses. PUT `/api/automation/mode-volume` |
+| `mode_volume_curves` | `{mode: {day, evening, night, fade_duration_s}}` — per-mode Sonos targets, fade on mode change (`ModeVolumeService`). Sleeping forced 0; DND suppresses. PUT `/api/automation/mode-volume` |
 | `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — projector-in-bed sliders, live-patched via `PUT /api/automation/watching-posture` |
 | `camera_enabled` | `{enabled: bool}` — opt-in toggle for the camera service |
 | `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |
@@ -410,8 +410,9 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives deploys mid-override |
 | `scheduler_task_state` | `{task_name: {last_run, last_status, last_error}}` — mirrors `AsyncScheduler.get_tasks()` so `/health.scheduler_tasks` survives deploys; written from `_run_callback` finally block |
 | `ambient_config` | Browser-side ambient sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*` |
-| `ambient_streams` | Curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play (preferred over committed loop files via a health check, file fallback when down); other keys are manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; URLs reboot-loaded + registered to the Sonos play_uri allowlist. Streams play via `play_uri(force_radio=True)` |
+| `ambient_streams` | Curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play with a health check (file fallback when down); other keys manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)` |
 | `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB, drives bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors` |
+| `camera_wedge_last_restart` | `{at, detail}` — last camera-watchdog process-restart escalation; rate-limits it to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart` |
 | Personality (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) | Master kill switch + sub-toggles for the AI Personality Layer. Spec: `docs/PERSONALITY_LAYER.md` |
 | `gameday_playoff_state` | Cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot. Spec: `docs/GAMEDAY_SPEC.md` |
 | `gameday_team_form` | Recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection. Spec: `docs/GAMEDAY_SPEC.md` |
@@ -423,12 +424,12 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Device | IP | Notes |
 |--------|----|-------|
 | **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04. Backend + ambient as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker. Always-on. Static IP.** |
-| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL` env var. Desktop notifier autostarts via separate Task Scheduler entry `Home Hub Desktop Notifier` (At-Logon, exe at `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`, built via `scripts/build_desktop_notifier.ps1`). |
+| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL`. Desktop notifier autostarts via Task Scheduler `Home Hub Desktop Notifier` (At-Logon, `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`). |
 | Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
 | Sonos Era 100 | 192.168.1.157 | Living room. `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page deferred) |
 
-**iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings. After any rejoin, restore in Settings → WiFi → (i): manual IP `192.168.1.148`, DNS → Pi-hole (`192.168.1.210`), Private WiFi Address → Fixed. iOS treats every fresh join as a clean profile (not a Pi-hole bug).
+**iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings (iOS treats each join as a clean profile — not a Pi-hole bug). After any rejoin, restore Settings → WiFi → (i): manual IP `192.168.1.148`, DNS → Pi-hole `192.168.1.210`, Private WiFi Address → Fixed.
 
 ---
 
@@ -437,7 +438,7 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 | Phase | Status | Focus |
 |-------|--------|-------|
 | 1–2 | ✓ | Core foundation + dashboard. See `docs/PROJECT_SPEC.md` |
-| 3: Intelligence & Voice | ✓ | Fauxmo + Custom Skill (Lambda→Tunnel→:8002→:8000). Rule engine + persistent suggestion UX shipped (rule_suggestions table + Home banner + 60min auto-expire + Settings history) |
+| 3: Intelligence & Voice | ✓ | Fauxmo + Custom Skill (Lambda→Tunnel→:8002→:8000). Rule engine + persistent suggestion UX shipped |
 | 4: Game Day | A+B+C ✓; preseason 2026-08-13, reg-season 2026-09-13 | See `docs/GAMEDAY_SPEC.md`. SEQUENCES iteration + preseason validation pending |
 | 5: Polish & Expand | Future | Apple Music API, full autopilot, bar app widget |
 
@@ -445,17 +446,17 @@ GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
 
 ## Technical Limitations
 
-- **Hue bridge SSL** — Self-signed cert; httpx calls require `verify=False`. Cannot be changed.
-- **Sonos TTS** — Requires server's LAN IP (`LOCAL_IP` in .env); Sonos fetches the MP3 over the network. `localhost` won't work.
-- **Sonos Apple Music** — SoCo can play tracks by URI (v0.26.0+) but cannot browse the catalog. Catalog browsing requires $99/year Apple Music API.
-- **phue2 import quirk** — pip package is `phue2` but imports as `from phue import Bridge`.
-- **Screen sync Windows-only** — mss capture only works on Windows. Will break if server moves to headless Linux.
-- **edge-tts requires internet** — Falls back to gTTS (also internet). No offline TTS currently.
-- **SQLite concurrency** — Single-writer. Event logging at high frequency may need batching.
-- **Indiana timezone** — `America/Indiana/Indianapolis` has unique DST rules. All scheduling must use this timezone explicitly.
-- **Fauxmo device limits** — Simple on/off per virtual device. Complex voice commands use the Custom Skill.
-- **1080p landscape primary** — Animated backgrounds designed for this. Must degrade gracefully on mobile.
-- **Android tablet blank page** — Known issue, deferred.
+- **Hue bridge SSL** — self-signed cert; httpx calls require `verify=False`.
+- **Sonos TTS** — needs server LAN IP (`LOCAL_IP`); Sonos fetches the MP3 over the network, `localhost` won't work.
+- **Sonos Apple Music** — SoCo plays tracks by URI (v0.26.0+) but can't browse the catalog ($99/yr Apple Music API).
+- **phue2 import quirk** — pip package `phue2` imports as `from phue import Bridge`.
+- **Screen sync Windows-only** — mss capture is Windows-only; breaks on headless Linux.
+- **edge-tts needs internet** — falls back to gTTS (also internet). No offline TTS.
+- **SQLite concurrency** — single-writer; high-frequency event logging may need batching.
+- **Indiana timezone** — `America/Indiana/Indianapolis` DST rules; scheduling must set it explicitly.
+- **Fauxmo** — on/off per virtual device; complex commands use the Custom Skill.
+- **1080p landscape primary** — backgrounds designed for it; degrade gracefully on mobile.
+- **Android tablet blank page** — deferred.
 
 Non-goals + scope discussion: `docs/PROJECT_SPEC.md`.
 

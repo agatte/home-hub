@@ -451,8 +451,8 @@ Keys in use: `morning_routine_config`, `time_schedule_config`, `mode_brightness_
 | previous_mode | String(50) | Mode before transition |
 | source | String(30) | What triggered: time, process, ambient, manual, alexa, learned |
 | duration_seconds | Integer | Filled in when the *next* event arrives |
-| zone | String(20) | Camera-derived zone at the moment of the transition (`desk`/`bed`/null). Populated by `EventLogger` from `camera_service`; backfilled historically from nearby `ml_decisions` camera rows. |
-| posture | String(20) | Camera-derived posture (`upright`/`reclined`/null). Same source as zone. |
+| zone | String(20) | Camera-derived zone at the moment of the transition (`desk`/`couch`/null since 2026-05-27 Latitude→living-room move; rows before that date may show `bed`). Populated by `EventLogger` from `camera_service`; backfilled historically from nearby `ml_decisions` camera rows. |
+| posture | String(20) | Camera-derived posture (`upright`/`reclined`/null). Same source as zone. Effectively null since 2026-05-27 — couch posture is suppressed (no consumer) and no camera produces `reclined` anymore; historical rows still retain values. |
 | audio_class | String(40) | YAMNet top class from the most recent `audio_ml` `ml_decisions` row within ±60s (`silence`/`speech_single`/`speech_multiple`/`music`/`mechanical_noise`/`doorbell`/`game_audio`/null). |
 | lux | Float | Camera EMA lux at the moment of the transition. Backfill source = `ambient_lux` from the same camera frame; live writes use `camera_service.ema_lux`. |
 
@@ -541,7 +541,7 @@ Composite index on (status, fired_at) for "latest pending" lookup + history quer
 | actual_mode | String(50) | Nullable, backfilled on next mode change |
 | applied | Boolean | Whether the prediction was acted upon |
 | confidence | Float | Nullable, prediction confidence |
-| decision_source | String(30) | One of: `fusion`, `ml`, `rule_engine`, `process`, `camera`, `audio_ml`, `lighting_learner`, `zone_posture_rule`, `manual` |
+| decision_source | String(30) | One of: `fusion`, `ml`, `rule_engine`, `process`, `camera`, `audio_ml`, `lighting_learner`, `zone_posture_rule` (dormant since 2026-05-27 — historical rows only), `manual` |
 | factors | JSON | Nullable, reasoning chain for explainability |
 
 **ml_metrics** — Daily aggregate ML performance metrics
@@ -840,7 +840,7 @@ All messages are JSON with `type` + `data` fields.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/camera/status` | Enabled flag, last detection, `detection_source` (face/pose/None), confidence, `pose_available`, `zone` (`desk`/`bed`/None — committed after 15s hysteresis) + `candidate_zone` (pending commit), `posture` (`upright`/`reclined`/None — same 15s hysteresis) + `candidate_posture`, EMA lux, baseline, current multiplier, exposure value |
+| GET | `/api/camera/status` | Enabled flag, last detection, `detection_source` (face/pose/None), confidence, `pose_available`, `zone` (`desk`/`couch`/None — committed after 15s hysteresis; `bed` retired with the 2026-05-27 Latitude→living-room move) + `candidate_zone` (pending commit), `posture` (`upright`/`reclined`/None — same 15s hysteresis; effectively None now, couch posture is suppressed) + `candidate_posture`, EMA lux, baseline, current multiplier, exposure value |
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |

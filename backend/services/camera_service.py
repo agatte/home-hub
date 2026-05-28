@@ -2133,22 +2133,15 @@ class CameraService:
                 except Exception as exc:
                     logger.warning("Snapshot annotation failed: %s", exc)
 
-                # Zone threshold line + DESK/BED labels so framing and zone
-                # classification are visible side-by-side in the overlay.
+                # Single COUCH label at bottom-left. The bedroom desk/bed
+                # left-right split + threshold line was retired with the
+                # 2026-05-27 Latitude→living-room move — ZONE_COUCH is the
+                # camera's only zone now, so a single zone label is sufficient.
                 try:
-                    zone_x = int(ZONE_DESK_THRESHOLD * frame_w)
-                    cv2.line(frame, (zone_x, 0), (zone_x, frame_h),
-                             (180, 180, 180), 1, cv2.LINE_AA)
-                    cv2.putText(frame, "DESK", (6, frame_h - 8),
+                    cv2.putText(frame, "COUCH", (6, frame_h - 8),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                                 (0, 0, 0), 2, cv2.LINE_AA)
-                    cv2.putText(frame, "DESK", (6, frame_h - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                                (220, 220, 220), 1, cv2.LINE_AA)
-                    cv2.putText(frame, "BED", (zone_x + 6, frame_h - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                                (0, 0, 0), 2, cv2.LINE_AA)
-                    cv2.putText(frame, "BED", (zone_x + 6, frame_h - 8),
+                    cv2.putText(frame, "COUCH", (6, frame_h - 8),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                                 (220, 220, 220), 1, cv2.LINE_AA)
                 except Exception as exc:

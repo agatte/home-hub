@@ -895,7 +895,7 @@ class MLDecision(Base):
     actual_mode = Column(String(50), nullable=True)  # Filled on next transition
     applied = Column(Boolean, nullable=False)         # Was the prediction acted on?
     confidence = Column(Float, nullable=True)
-    decision_source = Column(String(30), nullable=False)  # fusion / ml / rule_engine / process / camera / audio_ml / lighting_learner / zone_posture_rule / manual
+    decision_source = Column(String(30), nullable=False)  # fusion / ml / rule_engine / process / camera / audio_ml / lighting_learner / zone_posture_rule (dormant since 2026-05-27) / manual
     factors = Column(JSON, nullable=True)             # Reasoning chain
 ```
 
@@ -1444,12 +1444,15 @@ Audio classifier promotion from shadow to active
     current shadow stream
 
 Posture as a separate fusion lane
-  - BlazePose detection itself shipped; posture is consumed today by
-    AutomationEngine._evaluate_zone_posture_rule (since 2026-04-27;
-    extended 2026-05-03 to supersede stale social override)
+  - BlazePose detection itself shipped; posture WAS consumed by
+    AutomationEngine._evaluate_zone_posture_rule (live 2026-04-27;
+    extended 2026-05-03 to supersede stale social override;
+    DORMANT since 2026-05-27 — no camera produces zone=bed after the
+    Latitude→living-room move; couch posture is suppressed upstream)
     and by ScreenSyncService MODE_ZONE_MAX_BRIGHTNESS keying
-  - Promoting posture into ConfidenceFusion as its own voter is the
-    deferred work — needs more override data to justify a weight
+  - Promoting posture into ConfidenceFusion as its own voter is now
+    blocked on bed-zone reactivation (e.g. light-touch desktop bed
+    detection from the desktop's wide FoV — see project_camera_position)
 
 Zone+posture rule — social-supersede extension (shipped 2026-05-03)
   - Original rule (2026-04-27) ELIGIBLE_MODES = {idle, working};
@@ -1622,7 +1625,7 @@ which ML feature addresses it.
 | Poll interval | 5 seconds | 67 | — (keep as-is, good balance) |
 | Idle → away | 600 seconds (10 min) | 70 | Camera presence (15s detection) |
 | Late night working cutoff | 21:00 (9 PM) | 73 | Behavioral predictor (learns actual patterns) |
-| Sleep detection hour | 22:30 (10:30 PM) | 76-77 | Behavioral predictor + camera (posture=reclined + eyes closed) |
+| Sleep detection hour | 22:30 (10:30 PM) | 76-77 | Behavioral predictor + camera (posture=reclined + eyes closed) — posture=reclined path dormant since 2026-05-27 (no bed-zone source) |
 | Sleep idle threshold | 900 seconds (15 min) | 78 | Camera presence (asleep posture) |
 
 ### Ambient Monitor (`backend/services/pc_agent/ambient_monitor.py`)
