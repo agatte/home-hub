@@ -2612,8 +2612,10 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
 
             # Bound the spawn: a hung start() (V4L2 open parked) must not be
             # able to silence the supervisor — that's exactly how the watchdog
-            # went dark for ~4h on 2026-05-27. A timeout counts as a failed
-            # respawn so it feeds the escalation.
+            # went dark for ~4h on 2026-05-27. Both a timeout and any spawn
+            # exception count as failed respawns so they feed the escalation
+            # (otherwise a spawn that raises would bypass the counter and a
+            # persistent wedge could never reach the process-restart threshold).
             try:
                 result = await asyncio.wait_for(
                     spawn_camera_service(app, reason=reason),
@@ -2624,6 +2626,11 @@ async def camera_watchdog_loop(app: "FastAPI") -> None:
                 logger.warning(
                     "Camera watchdog: spawn exceeded %.0fs — counting as failed respawn",
                     CAMERA_SPAWN_WATCHDOG_SECONDS,
+                )
+            except Exception as exc:
+                result = {"status": "error", "detail": f"spawn raised: {exc!r}"}
+                logger.exception(
+                    "Camera watchdog: spawn raised — counting as failed respawn"
                 )
 
             respawn_ok = result.get("status") == "ok"

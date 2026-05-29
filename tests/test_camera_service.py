@@ -1213,3 +1213,157 @@ class TestFaceAnchorPoseGate:
         assert "face_anchor_age_s_by_zone" in status
         assert "face_anchor_ttl_s" in status
         assert status["face_anchor_age_s_by_zone"]["desk"] == pytest.approx(12.0, abs=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Watchdog wedge-restart escalation (GH#73)
+# ---------------------------------------------------------------------------
+#
+# ``camera_watchdog_loop`` must escalate to a process restart after
+# ``CAMERA_WEDGE_RESTART_THRESHOLD`` consecutive failed respawns, regardless of
+# whether spawn returned ``{"status": "error"}`` (the common
+# cv2.VideoCapture-can't-open path) or raised (defense in depth).
+# Locks the contract surfaced in GH#73 / commit f25e079.
+
+
+def _watchdog_fake_app():
+    app = MagicMock()
+    app.state.camera_service = None
+    app.state.automation.current_mode = "working"
+    app.state.heartbeats = None
+    app.state.ws_manager = AsyncMock()
+    app.state.ws_manager.broadcast = AsyncMock()
+    return app
+
+
+def _patch_camera_enabled_setting(monkeypatch):
+    from backend.api.routes import routines
+
+    async def fake_load_setting(key, *args, **kwargs):
+        if key == "camera_enabled":
+            return {"enabled": True}
+        return None
+
+    monkeypatch.setattr(routines, "load_setting", fake_load_setting)
+
+
+async def _drive_watchdog_until(predicate, monkeypatch, *, spawn_fn, timeout=5.0):
+    """Drive ``camera_watchdog_loop`` until ``predicate()`` returns truthy
+    or ``timeout`` elapses, then cancel cleanly. Returns ``escalation_calls``."""
+    from backend.services import camera_service as cs
+
+    monkeypatch.setattr(cs, "CAMERA_WATCHDOG_INTERVAL_SECONDS", 0.0)
+    _patch_camera_enabled_setting(monkeypatch)
+    monkeypatch.setattr(cs, "spawn_camera_service", spawn_fn)
+
+    escalation_calls: list[str] = []
+
+    async def fake_escalate(app, detail):
+        escalation_calls.append(detail)
+        return True
+
+    monkeypatch.setattr(cs, "_escalate_camera_wedge_restart", fake_escalate)
+
+    app = _watchdog_fake_app()
+    task = asyncio.create_task(cs.camera_watchdog_loop(app))
+    try:
+        deadline_ticks = int(timeout / 0.01)
+        for _ in range(deadline_ticks):
+            if predicate():
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    return escalation_calls
+
+
+@pytest.mark.asyncio
+async def test_watchdog_consecutive_open_failures_escalate(monkeypatch):
+    """cv2 open failure path: spawn returns status=error each tick → escalation
+    fires at the threshold."""
+    from backend.services import camera_service as cs
+
+    failed_spawns: list[str] = []
+
+    async def fake_spawn(app, *, reason):
+        failed_spawns.append(reason)
+        return {
+            "status": "error",
+            "detail": "Camera unavailable (may be in use or missing)",
+        }
+
+    escalation_calls = await _drive_watchdog_until(
+        predicate=lambda: len(failed_spawns) >= cs.CAMERA_WEDGE_RESTART_THRESHOLD,
+        monkeypatch=monkeypatch,
+        spawn_fn=fake_spawn,
+    )
+    await asyncio.sleep(0.05)  # Let the escalation tick land after threshold.
+
+    assert len(failed_spawns) >= cs.CAMERA_WEDGE_RESTART_THRESHOLD
+    assert len(escalation_calls) >= 1
+    assert "consecutive failed respawns" in escalation_calls[0]
+    assert "watchdog_no_service" in escalation_calls[0]
+
+
+@pytest.mark.asyncio
+async def test_watchdog_consecutive_spawn_exceptions_also_escalate(monkeypatch):
+    """spawn raising an exception (not just returning status=error) must also
+    feed the counter — otherwise a persistent wedge that surfaces as an
+    exception (rather than a clean error return) could never escalate."""
+    from backend.services import camera_service as cs
+
+    spawn_calls: list[str] = []
+
+    async def raising_spawn(app, *, reason):
+        spawn_calls.append(reason)
+        raise RuntimeError("simulated spawn failure")
+
+    escalation_calls = await _drive_watchdog_until(
+        predicate=lambda: len(spawn_calls) >= cs.CAMERA_WEDGE_RESTART_THRESHOLD,
+        monkeypatch=monkeypatch,
+        spawn_fn=raising_spawn,
+    )
+    await asyncio.sleep(0.05)
+
+    assert len(spawn_calls) >= cs.CAMERA_WEDGE_RESTART_THRESHOLD
+    assert len(escalation_calls) >= 1
+    assert "consecutive failed respawns" in escalation_calls[0]
+
+
+@pytest.mark.asyncio
+async def test_watchdog_successful_respawn_resets_counter(monkeypatch):
+    """A successful respawn must reset the consecutive-failure counter so a
+    transient flap (fail → fail → ok → fail → fail) never accumulates the
+    3-in-a-row that would trip escalation."""
+    sequence = iter(
+        [
+            {"status": "error", "detail": "first fail"},
+            {"status": "error", "detail": "second fail"},
+            {"status": "ok", "detail": "recovered"},
+            {"status": "error", "detail": "fourth fail"},
+            {"status": "error", "detail": "fifth fail"},
+        ]
+    )
+    spawn_calls: list[str] = []
+
+    async def fake_spawn(app, *, reason):
+        spawn_calls.append(reason)
+        try:
+            return next(sequence)
+        except StopIteration:
+            return {"status": "ok", "detail": "exhausted"}
+
+    escalation_calls = await _drive_watchdog_until(
+        predicate=lambda: len(spawn_calls) >= 5,
+        monkeypatch=monkeypatch,
+        spawn_fn=fake_spawn,
+    )
+    await asyncio.sleep(0.05)
+
+    assert len(spawn_calls) >= 5
+    assert escalation_calls == []
