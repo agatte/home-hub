@@ -105,53 +105,11 @@ Parallel `/watcher-loop` polls digests every 600s; warn/error blocks without `**
 
 ## Architecture
 
-### Current
+Full current + target ASCII diagrams: `docs/PROJECT_SPEC.md` § "Current Architecture" / "Target Architecture". Tech stack: § "Tech Stack". Import quirks: see § "Technical Limitations" below. At-a-glance:
 
-```
-Browser / Phone (PWA)
-        |  WebSocket + REST
-        v
-   FastAPI Backend (port 8000, async)
-   ├── HueService (v1/phue2) ──────> Hue Bridge (basic control, 0.5s polling; 5s when v2 stream active)
-   ├── HueV2Service (CLIP v2) ─────> Hue Bridge (native scenes, effects, SSE EventStream push)
-   ├── SonosService (SoCo/UPnP) ──> Sonos Era 100 (2s polling)
-   ├── TTSService (edge-tts) ──────> generates MP3 → Sonos plays URL
-   ├── AutomationEngine ───────────> time + activity → light state
-   │   └── mode-change callbacks ──> MusicMapper, AmbientMonitor, MLLogger, ModeVolumeService, CameraService, BarApp
-   ├── ML Services (shipped) ──────> see docs/ML_SPEC.md
-   │   ├── AudioClassifier ────────> YAMNet audio scene classification
-   │   ├── BehavioralPredictor ────> LightGBM mode prediction
-   │   ├── LightingLearner ────────> adaptive per-light preferences
-   │   ├── CameraService ──────────> MediaPipe presence (opt-in) + adaptive lux → brightness multiplier (working/relax/gaming/watching)
-   │   ├── EmotionService ─────────> FaceLandmarker blendshapes → mood vector (Phase A shadow, opt-in)
-   │   └── MusicBandit ────────────> Thompson sampling playlist selection, context-aware (mode × period × weather_class)
-   ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
-   ├── ScreenSyncService (mss) ────> dominant screen color → bedroom lamp
-   ├── Scheduler ──────────────────> morning routine + nightly maintenance
-   ├── LibraryImportService ───────> Apple Music XML → taste profile
-   ├── RecommendationService ──────> Last.fm + iTunes → discovery feed
-   ├── PiholeService (httpx) ──────> Pi-hole v6 API (stats, DNS, blocklists)
-   ├── NotifierService ────────────> mode-flip + brightness-shift → WS "notification" event + ntfy.sh phone push
-   ├── WebSocketManager ───────────> bidirectional real-time sync
-   ├── SQLite (aiosqlite + SQLAlchemy async)
-   └── Serves SvelteKit static build from frontend-svelte/build/
+**FastAPI backend** (port 8000, async) serves the SvelteKit static build (`frontend-svelte/build/`) + WS/REST. Devices: `HueService` (v1/phue2, 0.5s poll; 5s when v2 active) + `HueV2Service` (CLIP v2 scenes/effects/SSE) → Hue Bridge; `SonosService` (SoCo, 2s) → Era 100; `TTSService` (edge-tts) → MP3 → Sonos. `AutomationEngine` maps time+activity → light state and fires mode-change callbacks (MusicMapper, AmbientMonitor, MLLogger, ModeVolumeService, CameraService, BarApp). ML services (`docs/ML_SPEC.md`): AudioClassifier, BehavioralPredictor, LightingLearner, CameraService, EmotionService, MusicBandit. Plus MusicMapper, ScreenSyncService (mss), Scheduler, Library/RecommendationService, PiholeService, NotifierService (→ WS + ntfy.sh), WebSocketManager, SQLite (aiosqlite + SQLAlchemy async).
 
-Pi-hole (Docker container, host networking, same machine)
-   └── pihole/pihole:latest ───────> DNS on :53, admin on :8080
-
-PC Agent (standalone processes, same machine)
-   ├── activity_detector.py ───────> psutil → POST /api/automation/activity
-   ├── ambient_monitor.py ────────> PyAudio RMS → POST /api/automation/activity
-   └── desktop_notifier.py ────────> PyQt6 toast widget — subscribes to /ws, renders "notification" events bottom-right
-```
-
-### Target (upcoming work)
-
-Key additions beyond current:
-- **Database migration** — SQLite → PostgreSQL (Supabase) as event volume grows
-- See `docs/PROJECT_SPEC.md` for full target architecture diagram
-
-Tech stack: `docs/PROJECT_SPEC.md` § "Tech Stack". Import quirks / gotchas: see § "Technical Limitations" below.
+**Pi-hole** — Docker (host networking), same machine; DNS :53, admin :8080. **PC agents** (standalone, dev desktop): `activity_detector.py` + `ambient_monitor.py` → `POST /api/automation/activity`; `desktop_notifier.py` subscribes `/ws` for toast events. **Target:** SQLite → PostgreSQL (Supabase) as event volume grows.
 
 ---
 
@@ -199,36 +157,36 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 
 ## API Routes
 
-**Prefix:** All REST endpoints use `/api/`. Health is at `/health` (no prefix). All routes must be registered BEFORE the `/{path:path}` frontend catch-all. See route files in `backend/api/routes/` for full endpoint details.
+**Prefix:** REST endpoints use `/api/`; `/health` + `/ws` are unprefixed. **All routes must register BEFORE the `/{path:path}` frontend catch-all** in `main.py` or the API is shadowed. One module per group in `backend/api/routes/`; full endpoint signatures there + `docs/PROJECT_SPEC.md` § "API Routes".
 
-| Group | Prefix | Key endpoints |
-|-------|--------|---------------|
-| System | `/health`, `/ws` | Health check (status, devices, breakers, ml, tasks, `scheduler_tasks`, `build_id`), WebSocket sync |
-| Lights | `/api/lights` | CRUD per-light state (on, bri, hue, sat, ct), bulk set |
-| Scenes | `/api/scenes` | Curated + custom + bridge scenes, activate, effects (per-light or all) |
-| Weather | `/api/weather` | Current conditions (5-min cache, NWS), alerts |
-| Automation | `/api/automation` | Mode status/override, schedule, brightness multipliers, activity reports, social styles, screen sync, mode→scene overrides, DND (POST/DELETE/GET `/dnd`) |
-| Sonos | `/api/sonos` | Transport (play/pause/next/prev), volume, TTS, favorites |
-| Music | `/api/music` | Mode→playlist mapping, Apple Music import, taste profile, recommendations + feedback, iTunes preview playback (`POST /preview` with DIDL-Lite metadata), bandit arm landscape (`GET /bandit-status`) |
-| Routines | `/api/routines` | Morning routine config, toggle, test |
-| Pi-hole | `/api/pihole` | Stats, top-blocked, DNS host CRUD, blocklist CRUD |
-| Camera | `/api/camera` | Status (detection, detection_source, lux, baseline, multiplier, pose_available, zone, posture), snapshot (JPEG, optional annotation), enable/disable, calibrate exposure |
-| Guest | `/api/guest` | `/wifi` QR; `/scene/{name}` (6 safelist scenes, 15s cooldown); `/vibe/{name}` Sonos favorite; `/effect/{name}` candle/sparkle/stop; `/brightness/{up\|down}` ±10% clamped; `/handback`; `/toast` ≤120 char TTS + sparkle. Vibe map in `app_settings["guest_vibe_playlists"]`. Layout-reset visitor mini-app via `GuestBottomNav`. |
-| Journal | `/api/journal` | List entries / read markdown / regenerate. Backed by `journal_service.py`; nightly ScheduledTask at 02:00 writes `data/journal/YYYY-MM-DD.md`. Surfaced at `/journal` (hidden from FloatingNav) |
-| Vitals | `/api/vitals` | Aggregator for the always-visible kiosk strip. One GET re-projects hue/sonos breaker, fusion `_last_fusion_result`, pihole summary, psutil mem/disk/CPU-temp into `{value, status: ok\|warn\|error}` chips with a roll-up status. Polled by `VitalStrip.svelte` every 30s |
-| Game Day | `/api/gameday` | `GET /state`, `GET /schedule`, `POST /test/{event}`. WS: `gameday_state`/`gameday_play`/`gameday_celebration`. Spec: `docs/GAMEDAY_SPEC.md` |
-| Rules | `/api/rules` | View / enable-disable / regenerate learned RuleEngine rules; rule + brightness suggestion accept/dismiss (`/brightness-suggestion/{accept\|dismiss}/{id}` writes through `LightingPreferenceLearner` on accept) |
-| Learning | `/api/learning` | Predictor status, override-rate metric, A/B comparison, fusion weight retune trigger, predictor promote/demote |
-| Events | `/api/events` | Activity/playback/light/scene event aggregation, filtering, mode timeline (backs `/journal` + analytics) |
-| Plants | `/api/plants` | `GET /status` summary from external plant-care app (10-min TTL cache); 503 when `PLANT_APP_*` unset |
-| Bar | `/api/bar` | `GET /status` summary from Home Bar app (inventory, party mode, cocktail suggestion); 503 when `BAR_APP_URL` unset |
-| Ambient | `/api/ambient` | Browser-side ambient audio: playback state, volume, mode→sound map, weather-reactive config |
-| Notification | `/api/notification` | `POST /test` fires a synthetic notification through NotifierService (WS broadcast + ntfy.sh push). Bypasses DND/coalesce/boot gating — verification harness for the desktop toast + phone push surfaces |
-| Personality | `/api/personality` | `mood/current` + `mood/history`, `calibration` POST + history, `settings` GET/POST. Backs hidden `/personality` page. Spec: `docs/PERSONALITY_LAYER.md` |
-| Analytics | `/api/analytics` | `digest/entries`, `digest/daily`, `digest/highlights`, `digest/{entry_date}` — serves the analytics-narrator daily digests to the `/analytics` dashboard |
-| Debug | `/api/debug` | `query` (ad-hoc read-only SQL), `event-summary` — diagnostic helpers (LAN/localhost gated) |
+| Group | Prefix | Module · note |
+|-------|--------|------|
+| System | `/health`, `/ws` | `health.py` — status/devices/breakers/ml/tasks/`scheduler_tasks`/`build_id`; WS sync |
+| Lights | `/api/lights` | `lights.py` — per-light + bulk set (on/bri/hue/sat/ct) |
+| Scenes | `/api/scenes` | `scenes.py` — curated/custom/bridge scenes + effects (per-light or all) |
+| Weather | `/api/weather` | `weather.py` — NWS conditions (5-min cache), alerts |
+| Automation | `/api/automation` | `automation.py` — mode status/override, schedule, brightness mult, social styles, screen sync, mode→scene, DND |
+| Sonos | `/api/sonos` | `sonos.py` — transport, volume, TTS, favorites |
+| Music | `/api/music` | `music.py` — mode→playlist, import, recs+feedback, iTunes `POST /preview` (DIDL-Lite), `GET /bandit-status` |
+| Routines | `/api/routines` | `routines.py` — morning routine config/toggle/test |
+| Pi-hole | `/api/pihole` | `pihole.py` — stats, top-blocked, DNS + blocklist CRUD |
+| Camera | `/api/camera` | `camera.py` — status (lux/baseline/zone/posture/pose), snapshot, enable, calibrate |
+| Guest | `/api/guest` | `guest.py` — wifi QR, scene/vibe/effect/brightness(±10%), handback, toast(≤120c) |
+| Journal | `/api/journal` | `journal.py` — list/read/regenerate; nightly 02:00 task → `data/journal/`; at `/journal` |
+| Vitals | `/api/vitals` | `vitals.py` — kiosk-strip chips `{value, status}` + roll-up; VitalStrip polls 30s |
+| Game Day | `/api/gameday` | `gameday.py` — `/state`, `/schedule`, `/test/{event}`; spec GAMEDAY_SPEC |
+| Rules | `/api/rules` | `rules.py` — view/toggle/regenerate learned rules; rule + brightness suggestion accept/dismiss |
+| Learning | `/api/learning` | `learning.py` — predictor status, override-rate, A/B, fusion retune, promote/demote |
+| Events | `/api/events` | `events.py` — activity/playback/light/scene aggregation, mode timeline (backs journal + analytics) |
+| Plants | `/api/plants` | `plants.py` — external plant app summary (10-min TTL); 503 when unset |
+| Bar | `/api/bar` | `bar.py` — Home Bar app summary; 503 when `BAR_APP_URL` unset |
+| Ambient | `/api/ambient` | `ambient.py` — browser ambient audio state/volume/map/weather config |
+| Notification | `/api/notification` | `notification.py` — `POST /test` synthetic notification; bypasses DND/coalesce/boot gating |
+| Personality | `/api/personality` | `personality.py` — mood current/history, calibration, settings; backs `/personality`; spec PERSONALITY_LAYER |
+| Analytics | `/api/analytics` | `analytics.py` — digest entries/daily/highlights/{date} for `/analytics` |
+| Debug | `/api/debug` | `debug.py` — ad-hoc read-only SQL + event-summary (LAN/localhost gated) |
 
-> Note: `pihole_proxy.py` also registers an unprefixed reverse proxy (`/admin/*`, `/api/*` pass-through to Pi-hole), mounted LAST in `main.py` after every API route + the frontend catch-all.
+> `pihole_proxy.py` registers an unprefixed reverse proxy (`/admin/*`, `/api/*` → Pi-hole), mounted LAST in `main.py` after every API route + the frontend catch-all.
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -326,100 +284,23 @@ Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live
 
 ### .env Variables
 
-```
-# App
-APP_ENV=development
-LOCAL_IP=192.168.1.30          # Server LAN IP — Sonos fetches TTS MP3 from here
-FRONTEND_BUILD=frontend-svelte/build  # Relative path from repo root to the SvelteKit build dir
-TIMEZONE=America/Indiana/Indianapolis  # Scheduling timezone (Indiana DST rules)
-LOG_LEVEL=INFO
+**Full list + inline docs:** `.env.example` (repo root). **Source of truth:** `backend/config.py` (pydantic `BaseSettings`). Keep those two in sync — don't re-enumerate the vars here (this block kept drifting).
 
-# Hue + Sonos
-HUE_BRIDGE_IP=192.168.1.50
-HUE_USERNAME=<bridge token>    # From bridge pairing
-SONOS_IP=192.168.1.157         # Optional; auto-discovers via SSDP if unset
-
-# TTS
-TTS_VOICE=en-US-GuyNeural
-TTS_VOLUME=10
-
-# Routines + music discovery
-GOOGLE_MAPS_API_KEY=...
-HOME_ADDRESS=...
-WORK_ADDRESS=...
-MORNING_ROUTINE_HOUR=6
-MORNING_ROUTINE_MINUTE=40
-MORNING_VOLUME=10
-LASTFM_API_KEY=...
-
-# Plant App (optional widget integration)
-PLANT_APP_API_URL=
-PLANT_APP_EMAIL=
-PLANT_APP_PASSWORD=
-PLANT_APP_ALLOW_INSECURE=false # Escape hatch for plain-HTTP Plant App API. Default false rejects http:// at boot.
-
-# Bar App (optional widget integration)
-BAR_APP_URL=
-
-# Pi-hole (optional — enables network stats widget)
-PIHOLE_API_URL=
-PIHOLE_API_KEY=
-
-# Voice (Phase 3 — Fauxmo virtual WeMos)
-FAUXMO_ENABLED=false
-
-# Game Day (Phase 4 — Colts celebrations)
-OPENAI_API_KEY=                # Optional — TTS celebration line generator
-ESPN_POLL_INTERVAL=5           # ESPN polling cadence in seconds
-BIG_PLAY_YARD_THRESHOLD=20     # Yards for "big play" celebration trigger
-FIELD_GOAL_YARD_THRESHOLD=40   # Yards for "long field goal" celebration trigger
-MOMENTUM_WPA_THRESHOLD=0.15    # |WPA| swing that triggers a momentum celebration on non-scoring plays
-
-# ML rule
-ZONE_POSTURE_RULE_APPLY=true   # Zone+posture→relax actuation. DORMANT since 2026-05-27 (Latitude→living-room move retired zone=bed). Kept for future bed-zone source; set false to shadow-log if reactivated.
-
-# Auth — write endpoints + Alexa Skill
-HOME_HUB_API_KEY=<urlsafe random>  # Write-endpoint gate. Unset → 503. Localhost + RFC1918 LAN auto-bypass.
-HOME_HUB_SKILL_TOKEN=<urlsafe random>  # Tunnel-origin auth (Alexa Skill), paired with API_KEY.
-TRUSTED_LAN_IPS=               # Optional pin-list (comma-separated public IPs).
-
-# Observability
-SENTRY_DSN=                    # Optional — Sentry DSN from home-hub.sentry.io. Unset disables ingestion.
-
-# Notifier (apartment-state nudges → desktop toast + iPhone push via ntfy.sh)
-NTFY_TOPIC=                    # Secret — topic name IS the auth on ntfy.sh. Unset → WS still works, push skipped.
-NTFY_SERVER=https://ntfy.sh    # Override only when self-hosting (e.g. http://192.168.1.210:8085).
-
-# Guest WiFi (surfaces QR on home dashboard + /guest)
-GUEST_WIFI_SSID=               # Empty = "not configured"
-GUEST_WIFI_PASSWORD=
-GUEST_WIFI_SECURITY=WPA        # WPA | WEP | nopass
-```
+Non-obvious runtime behavior worth knowing without opening the files:
+- `HOME_HUB_API_KEY` — gates every write endpoint; **unset → writes 503**. Localhost (kiosk) + RFC1918 LAN auto-bypass; `TRUSTED_LAN_IPS` pins extra public IPs. `HOME_HUB_SKILL_TOKEN` is the tunnel-origin pair for the Alexa Skill (requires BOTH).
+- `NTFY_TOPIC` — the topic name **IS** the auth on hosted ntfy.sh; treat as a secret. Unset → desktop toast still fires via WS, phone push skipped.
+- `ZONE_POSTURE_RULE_APPLY` — DORMANT since 2026-05-27 (no `zone=bed` source post Latitude→living-room move); kept for a future bed-zone source.
+- `PLANT_APP_ALLOW_INSECURE` — default false **rejects `http://` at boot**; only flip if upstream lacks TLS.
+- `LOCAL_IP` — server LAN IP; Sonos fetches the TTS MP3 from here, so `localhost` won't work.
 
 ### SQLite Persisted Settings (`app_settings` table)
 
-| Key | Content |
-|-----|---------|
-| `morning_routine_config` | `{hour, minute, enabled, volume}` |
-| `time_schedule_config` | `{weekday: {wake_hour, ramp_start_hour, ..., late_night_start_hour}, weekend: {...}}` |
-| `mode_brightness_config` | `{gaming: 1.0, working: 1.0, watching: 0.8, ...}` (range 0.3–1.5) |
-| `mode_volume_curves` | `{mode: {day, evening, night, fade_duration_s}}` — per-mode Sonos targets, fade on mode change (`ModeVolumeService`). Sleeping forced 0; DND suppresses. PUT `/api/automation/mode-volume` |
-| `watching_posture_config` | `{reclined_sync_cap, reclined_l1_night, upright_sync_cap}` — projector-in-bed sliders, live-patched via `PUT /api/automation/watching-posture` |
-| `camera_enabled` | `{enabled: bool}` — opt-in toggle for the camera service |
-| `lux_calibration_config` | `{exposure_value, target_lux, baseline_lux, calibrated_at}` — fixed-exposure baseline for adaptive brightness, written by `POST /api/camera/calibrate` |
-| `guest_vibe_playlists` | `{hype, singalong, throwback}` → favorite_title — overrides `GUEST_VIBE_DEFAULTS` in `routes/guest.py`. Hand-edit; missing keys fall back |
-| `screen_sync_laptop_enabled` | `{enabled: bool}` — laptop screen→bedroom-lamp sync toggle (independent of `camera_enabled`) |
-| `dnd_state` | `{enabled, expiry_utc, duration_minutes}` — DND persistence; written by `automation_engine._persist_dnd_state`, restored at boot via `_load_dnd_state`, `run_loop` auto-clears past `expiry_utc` |
-| `override_state` | `{manual_override, override_mode, override_time, zone_posture_fire_stamp}` — survives deploys mid-override |
-| `scheduler_task_state` | `{task_name: {last_run, last_status, last_error}}` — mirrors `AsyncScheduler.get_tasks()` so `/health.scheduler_tasks` survives deploys; written from `_run_callback` finally block |
-| `ambient_config` | Browser-side ambient sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*` |
-| `ambient_streams` | Curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play with a health check (file fallback when down); other keys manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)` |
-| `champion_color_map` | `{ChampionName: {r, g, b}, ...}` — LoL champion → RGB, drives bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors` |
-| `camera_wedge_last_restart` | `{at, detail}` — last camera-watchdog process-restart escalation; rate-limits it to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart` |
-| Personality (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) | Master kill switch + sub-toggles for the AI Personality Layer. Spec: `docs/PERSONALITY_LAYER.md` |
-| `mood_calibration_nudge_state` | `{last_nudge_at_utc, last_nudge_bucket}` — `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges); survives restart so a deploy mid-day doesn't reset the gate. Driver for the Phase A→B Spearman gate (GH#58). |
-| `gameday_playoff_state` | Cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot. Spec: `docs/GAMEDAY_SPEC.md` |
-| `gameday_team_form` | Recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection. Spec: `docs/GAMEDAY_SPEC.md` |
+**Full key reference** (all ~22 keys with shapes + write paths): `docs/PROJECT_SPEC.md` § "Database Schema → app_settings". Access via `await save_setting(db, key, value)` / `load_setting(db, key)`.
+
+Keys you **hand-edit** (no UI; edit the row directly):
+- `guest_vibe_playlists` — `{hype, singalong, throwback}` → Sonos favorite_title; missing keys fall back to `GUEST_VIBE_DEFAULTS` in `routes/guest.py`.
+- `ambient_streams` — curated internet-radio nature streams `{wclass: [{id, label, url}]}`; weather-class keys auto-play (file fallback when down), others manual-pick. Seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)`.
+- `champion_color_map` — `{ChampionName: {r, g, b}}` → bedroom lamp in `gaming` mode. Seed: `python -m scripts.seed_champion_colors`.
 
 ---
 

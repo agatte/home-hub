@@ -386,6 +386,17 @@ External APIs (cloud):
 
 Keys in use: `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`, `dnd_state`, `override_state`, `guest_vibe_playlists`, `champion_color_map` (League champion → RGB palette consumed by `LoLChampionService`; seeded via `scripts/seed_champion_colors.py`). The middle pair carries runtime state across restarts: `dnd_state` is `{enabled, expiry_utc, duration_minutes}`, and `override_state` is `{manual_override, override_mode, override_time_utc, zone_posture_last_fired_utc}` — restored at boot by `automation.load_dnd_state()` / `load_override_state()`, with override drops past the 4h timeout (sleeping exempt). `mode_volume_curves` is `{mode: {day, evening, night, fade_duration_s}}` driving `ModeVolumeService`'s per-mode Sonos fade on transition. `guest_vibe_playlists` is `{hype, singalong, throwback}` → Sonos favorite title; missing keys fall back to `GUEST_VIBE_DEFAULTS` in `routes/guest.py`.
 
+Additional keys:
+- `scheduler_task_state` — `{task_name: {last_run, last_status, last_error}}`; mirrors `AsyncScheduler.get_tasks()` so `/health.scheduler_tasks` survives deploys. Written from `_run_callback`'s finally block.
+- `ambient_config` — browser-side ambient-sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*`.
+- `ambient_streams` — curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play with a health check (file fallback when down); other keys manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)`.
+- `screen_sync_laptop_enabled` — `{enabled: bool}`; laptop screen→bedroom-lamp sync toggle, independent of `camera_enabled`.
+- `camera_wedge_last_restart` — `{at, detail}`; last camera-watchdog process-restart escalation, rate-limited to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart`.
+- Personality bundle (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) — master kill switch + sub-toggles for the AI Personality Layer (spec: `docs/PERSONALITY_LAYER.md`).
+- `mood_calibration_nudge_state` — `{last_nudge_at_utc, last_nudge_bucket}`; `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges), survives restart so a deploy mid-day doesn't reset the gate.
+- `gameday_playoff_state` — cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot (spec: `docs/GAMEDAY_SPEC.md`).
+- `gameday_team_form` — recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection (spec: `docs/GAMEDAY_SPEC.md`).
+
 **scenes** — User-created light presets
 | Column | Type | Notes |
 |--------|------|-------|
