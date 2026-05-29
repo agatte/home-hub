@@ -12,9 +12,16 @@
   // L1 (living room), L2 (bedroom lamp left), L5 (bedroom lamp right, added
   // 2026-05-11) each render as their own card — no pair-fusion rule applies
   // outside the kitchen.
+  //
+  // Display order walks the apartment from back to front: bedroom right (L5),
+  // bedroom left (L2), kitchen (L3+L4 fused), living room (L1).
+  const DISPLAY_ORDER = ['5', '2', '3', '1']
   $: lightList = Object.values($lights)
     .filter((l) => l.light_id !== '4')
-    .sort((a, b) => Number(a.light_id) - Number(b.light_id))
+    .sort(
+      (a, b) =>
+        DISPLAY_ORDER.indexOf(a.light_id) - DISPLAY_ORDER.indexOf(b.light_id),
+    )
 
   $: l4 = $lights['4']
 </script>
