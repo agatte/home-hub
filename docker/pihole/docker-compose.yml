@@ -17,11 +17,14 @@ services:
   # Recursive, DNSSEC-validating resolver. Pi-hole forwards queries here
   # instead of to Google/Cloudflare, so no third party sees the full query
   # stream — unbound walks the DNS tree from the root servers itself.
-  # Published ONLY on host loopback (127.0.0.1:5335), never the LAN.
+  # The image listens on :53 inside the container; we publish it ONLY on the
+  # host loopback at 5335 (127.0.0.1:5335 -> container :53), so pihole reaches
+  # it at 127.0.0.1#5335 and nothing on the LAN can. (Can't use host networking
+  # here — unbound's :53 would collide with pihole's own :53.)
   unbound:
     image: mvance/unbound:latest  # TODO: pin to a released digest/tag once confirmed
     container_name: unbound
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5335:5335/tcp"
-      - "127.0.0.1:5335:5335/udp"
+      - "127.0.0.1:5335:53/tcp"
+      - "127.0.0.1:5335:53/udp"
