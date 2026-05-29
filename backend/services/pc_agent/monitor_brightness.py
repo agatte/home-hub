@@ -504,7 +504,11 @@ def _sun_aware_time_period(
     ).timestamp()
 
     day_start = sunrise_ts + DAY_START_AFTER_SUNRISE_S
-    evening_start = sunset_ts - EVENING_START_BEFORE_SUNSET_S
+    # Clamp evening_start >= day_start to keep the period sequence
+    # monotone even on a corrupted/partial weather response (e.g. sunset
+    # earlier than sunrise + 90min). Indianapolis at ~39.7°N never gets
+    # close, but the clamp is one line of cheap insurance.
+    evening_start = max(sunset_ts - EVENING_START_BEFORE_SUNSET_S, day_start)
     night_start = min(sunset_ts + NIGHT_START_AFTER_SUNSET_S, late_night_floor_ts)
 
     if now_ts < day_start:
@@ -535,7 +539,9 @@ class SharedState:
         self.period: str = self._derive_period_locked()
 
     def _derive_period_locked(self) -> str:
-        """Caller must hold self._lock."""
+        """Caller must hold self._lock, except during __init__ when the
+        object is not yet shared across threads.
+        """
         if self._sun is None:
             return _wallclock_time_period()
         sunrise, sunset = self._sun.snapshot()
