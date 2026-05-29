@@ -86,8 +86,20 @@ DEFAULT_SERVER = "http://192.168.1.210:8000"
 
 RECONCILE_INTERVAL_S = 30.0
 LUX_POLL_INTERVAL_S = 30.0
+SUN_POLL_INTERVAL_S = 30 * 60.0   # sunrise/sunset only change at midnight
 WS_RECONNECT_INITIAL_S = 1.0
 WS_RECONNECT_MAX_S = 30.0
+
+# Sun-aware period boundaries (offsets in seconds around sunrise/sunset).
+# Rationale: ~30 min after sunrise the sun is unambiguously up; golden
+# hour starts ~60 min before sunset; astronomical twilight is done ~90
+# min after sunset. Calibrated for the apartment's east-facing windows.
+DAY_START_AFTER_SUNRISE_S   = 30 * 60
+EVENING_START_BEFORE_SUNSET_S = 60 * 60
+NIGHT_START_AFTER_SUNSET_S  = 90 * 60
+# Hard late_night floor — on summer nights sunset can be 9pm+ which
+# would push "night" past midnight without a wall-clock backstop.
+LATE_NIGHT_HOUR = 23
 
 # Hysteresis — DDC/CI writes are slow and panels can flicker on micro
 # changes. Skip a write unless the delta exceeds this.
@@ -450,12 +462,10 @@ class Reconciler:
 _INDY_TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 
-# Local fallback for time_period when the backend doesn't report it (pre-
-# deploy of the get_time_period() route addition). Matches the engine's
-# default schedule (wake 7, evening 18, winddown 22, late_night 23) — if
-# the user has customized their schedule via the dashboard, the API will
-# eventually carry an authoritative value and overwrite this default.
-def _local_time_period() -> str:
+# Wall-clock fallback for time_period when sun data is unavailable
+# (weather endpoint down, fresh boot before first refresh). Matches the
+# engine's default schedule (wake 7, evening 18, winddown 22, late_night 23).
+def _wallclock_time_period() -> str:
     hour = datetime.now(tz=_INDY_TZ).hour
     if hour < 7:
         return "late_night"
@@ -468,53 +478,95 @@ def _local_time_period() -> str:
     return "late_night"
 
 
-class SharedState:
-    """Latest known automation mode + time period. Mutated from WS thread."""
+def _sun_aware_time_period(
+    sunrise_ts: Optional[float],
+    sunset_ts: Optional[float],
+    now_ts: Optional[float] = None,
+) -> str:
+    """Derive time_period from sun position. Falls back to wall-clock when sun data missing.
 
-    def __init__(self) -> None:
+    Boundaries:
+      day        — sunrise+30min → sunset-60min
+      evening    — sunset-60min → min(sunset+90min, today's 23:00)
+      night      — that boundary → today's 23:00
+      late_night — 23:00 → next sunrise+30min
+
+    Matters most in late spring/summer when sunset is ~9pm — wall-clock
+    18:00 evening-flip dims the monitor 22 points while the apartment is
+    still flooded with sun. See `project_monitor_brightness_sun_aware.md`.
+    """
+    if sunrise_ts is None or sunset_ts is None:
+        return _wallclock_time_period()
+    now_ts = now_ts if now_ts is not None else time.time()
+    now_local = datetime.fromtimestamp(now_ts, tz=_INDY_TZ)
+    late_night_floor_ts = now_local.replace(
+        hour=LATE_NIGHT_HOUR, minute=0, second=0, microsecond=0,
+    ).timestamp()
+
+    day_start = sunrise_ts + DAY_START_AFTER_SUNRISE_S
+    evening_start = sunset_ts - EVENING_START_BEFORE_SUNSET_S
+    night_start = min(sunset_ts + NIGHT_START_AFTER_SUNSET_S, late_night_floor_ts)
+
+    if now_ts < day_start:
+        return "late_night"
+    if now_ts < evening_start:
+        return "day"
+    if now_ts < night_start:
+        return "evening"
+    if now_ts < late_night_floor_ts:
+        return "night"
+    return "late_night"
+
+
+class SharedState:
+    """Latest known automation mode + sun-derived time period.
+
+    The agent owns period derivation — backend `time_period` in WS
+    payloads is intentionally ignored. Backend's period is wall-clock
+    based and drives the lighting engine; the monitor agent uses the
+    sun so a late-spring 6pm doesn't dim the screen while the sun is
+    still high. See `project_monitor_brightness_sun_aware.md`.
+    """
+
+    def __init__(self, sun_provider: Optional["SunProvider"] = None) -> None:
         self._lock = threading.Lock()
         self.mode: str = "idle"
-        self.period: str = _local_time_period()
-        # Tracks whether the backend has supplied an authoritative period.
-        # When False, the reconcile loop re-derives period locally each
-        # tick so the wall-clock rolling forward across boundaries (e.g.
-        # 23:00 -> late_night) still triggers a color preset change.
-        self._period_from_backend: bool = False
+        self._sun = sun_provider
+        self.period: str = self._derive_period_locked()
 
-    def update(self, mode: Optional[str], period: Optional[str]) -> bool:
-        """Return True if either field changed."""
+    def _derive_period_locked(self) -> str:
+        """Caller must hold self._lock."""
+        if self._sun is None:
+            return _wallclock_time_period()
+        sunrise, sunset = self._sun.snapshot()
+        return _sun_aware_time_period(sunrise, sunset)
+
+    def update(self, mode: Optional[str], period: Optional[str]) -> bool:  # noqa: ARG002
+        """Return True if mode changed or sun-derived period rolled over.
+
+        `period` from the backend is accepted for signature compatibility
+        with the WS payload but ignored — see class docstring.
+        """
         changed = False
         with self._lock:
             if mode and mode != self.mode:
                 self.mode = mode
                 changed = True
-            if period:
-                self._period_from_backend = True
-                if period != self.period:
-                    self.period = period
-                    changed = True
-            elif not self._period_from_backend:
-                # Backend isn't carrying time_period yet (pre-deploy).
-                # Re-derive locally so we still follow the wall clock.
-                local = _local_time_period()
-                if local != self.period:
-                    self.period = local
-                    changed = True
+            fresh = self._derive_period_locked()
+            if fresh != self.period:
+                self.period = fresh
+                changed = True
         return changed
 
     def tick_period_if_stale(self) -> bool:
-        """Refresh period from the wall clock if backend hasn't supplied one.
-
-        Called by the reconcile loop so a wall-clock roll-over (e.g.
-        22:59 -> 23:00) triggers a color preset change even when no WS
-        event fires.
+        """Refresh period from the sun. Called by the reconcile loop so a
+        sun-boundary roll-over triggers a color preset change even when
+        no WS event fires.
         """
         with self._lock:
-            if self._period_from_backend:
-                return False
-            local = _local_time_period()
-            if local != self.period:
-                self.period = local
+            fresh = self._derive_period_locked()
+            if fresh != self.period:
+                self.period = fresh
                 return True
             return False
 
@@ -636,6 +688,51 @@ class LuxProvider:
 
 
 # ---------------------------------------------------------------------------
+# Sun provider — polls /api/weather/current for sunrise/sunset
+# ---------------------------------------------------------------------------
+
+class SunProvider:
+    """Caches today's sunrise/sunset unix-epoch timestamps from weather.
+
+    Refreshed every SUN_POLL_INTERVAL_S — sunrise/sunset only roll over
+    at midnight, no need to hammer the endpoint.
+    """
+
+    def __init__(self, server_url: str) -> None:
+        self._url = f"{server_url.rstrip('/')}/api/weather/current"
+        self._lock = threading.Lock()
+        self._sunrise: Optional[float] = None
+        self._sunset: Optional[float] = None
+        self._client = httpx.Client(timeout=5.0)
+
+    def snapshot(self) -> tuple[Optional[float], Optional[float]]:
+        with self._lock:
+            return self._sunrise, self._sunset
+
+    def refresh(self) -> None:
+        try:
+            resp = self._client.get(self._url)
+            resp.raise_for_status()
+            body = resp.json()
+        except Exception as e:
+            logger.debug("sun refresh failed: %s", e)
+            return
+        # /api/weather/current shape: {"status":"ok","weather":{...sunrise,sunset...}}
+        weather = body.get("weather") or body
+        sunrise = weather.get("sunrise")
+        sunset = weather.get("sunset")
+        with self._lock:
+            self._sunrise = float(sunrise) if sunrise is not None else None
+            self._sunset = float(sunset) if sunset is not None else None
+
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Bootstrap — fetch initial mode / period via REST in case WS is slow
 # ---------------------------------------------------------------------------
 
@@ -687,7 +784,9 @@ def run_agent(
             [m.get("name") or m.get("model") for m in reachable],
         )
 
-    shared = SharedState()
+    sun = SunProvider(server_url)
+    sun.refresh()
+    shared = SharedState(sun_provider=sun)
     reconciler = Reconciler()
     lux = LuxProvider(server_url)
 
@@ -707,15 +806,18 @@ def run_agent(
     )
 
     last_lux_refresh = 0.0
+    last_sun_refresh = time.time()  # refreshed above; track from now
     try:
         while not _stop.is_set():
             now = time.time()
             if now - last_lux_refresh >= LUX_POLL_INTERVAL_S:
                 lux.refresh()
                 last_lux_refresh = now
+            if now - last_sun_refresh >= SUN_POLL_INTERVAL_S:
+                sun.refresh()
+                last_sun_refresh = now
 
-            # Roll the wall-clock period forward if backend isn't carrying
-            # time_period yet (pre-deploy of the schema change).
+            # Roll the sun-derived period forward (e.g. crossing sunset-60min).
             shared.tick_period_if_stale()
 
             mode, period = shared.snapshot()
@@ -725,6 +827,7 @@ def run_agent(
             _stop.wait(RECONCILE_INTERVAL_S)
     finally:
         lux.close()
+        sun.close()
 
 
 # ---------------------------------------------------------------------------
