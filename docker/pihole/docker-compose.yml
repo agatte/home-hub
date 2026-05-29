@@ -10,3 +10,18 @@ services:
     volumes:
       - ./etc-pihole:/etc/pihole
     restart: unless-stopped
+    # Upstream resolver is the unbound service below (127.0.0.1#5335),
+    # set in etc-pihole/pihole.toml -> dns.upstreams. Pi-hole stays on
+    # host networking; it reaches unbound via the host loopback publish.
+
+  # Recursive, DNSSEC-validating resolver. Pi-hole forwards queries here
+  # instead of to Google/Cloudflare, so no third party sees the full query
+  # stream — unbound walks the DNS tree from the root servers itself.
+  # Published ONLY on host loopback (127.0.0.1:5335), never the LAN.
+  unbound:
+    image: mvance/unbound:latest  # TODO: pin to a released digest/tag once confirmed
+    container_name: unbound
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5335:5335/tcp"
+      - "127.0.0.1:5335:5335/udp"
