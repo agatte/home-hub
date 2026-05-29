@@ -2,6 +2,7 @@
 Pi-hole endpoints — DNS ad blocking stats, local DNS, and blocklist management.
 """
 import logging
+from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -145,6 +146,49 @@ async def delete_blocklist(address: str, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.delete_blocklist(unquote(address))
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Allowlist (exact-domain exceptions)
+# ---------------------------------------------------------------------------
+
+
+class AllowDomainBody(BaseModel):
+    domain: str
+    comment: Optional[str] = None
+
+
+@router.get("/allow")
+async def get_allow_domains(request: Request) -> dict:
+    """List all exact-allow (whitelisted) domains."""
+    service = _get_service(request)
+    try:
+        data = await service.get_allow_domains()
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
+    return {"status": "ok", "allow": data}
+
+
+@router.post("/allow", dependencies=[Depends(require_api_key)])
+async def add_allow_domain(body: AllowDomainBody, request: Request) -> dict:
+    """Whitelist a single domain (un-block a false positive)."""
+    service = _get_service(request)
+    try:
+        await service.add_allow_domain(body.domain, body.comment)
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
+    return {"status": "ok"}
+
+
+@router.delete("/allow/{domain:path}", dependencies=[Depends(require_api_key)])
+async def delete_allow_domain(domain: str, request: Request) -> dict:
+    """Remove a domain from the allowlist."""
+    service = _get_service(request)
+    try:
+        await service.delete_allow_domain(unquote(domain))
     except PiholeUnreachableError as e:
         raise _unreachable(e) from e
     return {"status": "ok"}

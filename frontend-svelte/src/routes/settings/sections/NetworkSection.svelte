@@ -33,10 +33,13 @@
   let dnsHosts = null
   /** @type {any[] | null} */
   let blocklists = null
+  /** @type {any[] | null} */
+  let allowDomains = null
   let piholeAvailable = false
   let newDnsHostname = ''
   let newDnsIp = ''
   let newBlocklistUrl = ''
+  let newAllowDomain = ''
   /** @type {string | null} */
   let saving = null
 
@@ -50,6 +53,10 @@
       const resp = /** @type {any} */ (await apiGet('/api/pihole/lists'))
       blocklists = resp.lists || []
     } catch { blocklists = null }
+    try {
+      const resp = /** @type {any} */ (await apiGet('/api/pihole/allow'))
+      allowDomains = resp.allow || []
+    } catch { allowDomains = null }
   })
 
   async function addDnsHost() {
@@ -127,6 +134,29 @@
     try {
       const resp = /** @type {any} */ (await apiGet('/api/pihole/lists'))
       blocklists = resp.lists || []
+    } catch {}
+    saving = null
+  }
+
+  async function addAllowDomain() {
+    const domain = newAllowDomain.trim().toLowerCase()
+    if (!domain) return
+    saving = 'allow-add'
+    try {
+      await apiPost('/api/pihole/allow', { domain, comment: 'added from dashboard' })
+      newAllowDomain = ''
+      const resp = /** @type {any} */ (await apiGet('/api/pihole/allow'))
+      allowDomains = resp.allow || []
+    } catch {}
+    saving = null
+  }
+
+  /** @param {string} domain */
+  async function deleteAllowDomain(domain) {
+    saving = 'allow-del'
+    try {
+      await apiDelete(`/api/pihole/allow/${encodeURIComponent(domain)}`)
+      allowDomains = (allowDomains || []).filter((/** @type {any} */ d) => d.domain !== domain)
     } catch {}
     saving = null
   }
@@ -224,6 +254,44 @@
         <span class="muted-mini">{RECOMMENDED_LISTS.length} lists · ads, malware, tracking, phishing</span>
       </div>
     </SettingGroup>
+
+    {#if allowDomains !== null}
+      <SettingGroup title="Allowlist" hint="Domains to never block — your safety net for false positives, like an email “click” link a blocklist caught. A bulk functionality allowlist is also subscribed directly on Pi-hole.">
+        {#if allowDomains.length > 0}
+          <div class="rows">
+            {#each allowDomains as entry (entry.domain)}
+              <div class="allow-row">
+                <span class="allow-domain">{entry.domain}</span>
+                {#if entry.comment}<span class="allow-comment">{entry.comment}</span>{/if}
+                <button
+                  class="allow-del"
+                  disabled={saving === 'allow-del'}
+                  on:click={() => deleteAllowDomain(entry.domain)}
+                  aria-label={`Remove ${entry.domain} from allowlist`}
+                >×</button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="empty">No individually-allowed domains yet.</p>
+        {/if}
+
+        <div class="add-form">
+          <input
+            type="text"
+            class="form-input form-input-wide"
+            placeholder="click.email-example.com"
+            bind:value={newAllowDomain}
+          />
+          <SettingButton
+            variant="ghost"
+            disabled={!newAllowDomain || saving === 'allow-add'}
+            loading={saving === 'allow-add'}
+            on:click={addAllowDomain}
+          >Allow</SettingButton>
+        </div>
+      </SettingGroup>
+    {/if}
   {/if}
 </SettingsSection>
 
@@ -300,6 +368,58 @@
     align-items: center;
     gap: 12px;
     margin-top: 6px;
+  }
+
+  .allow-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .allow-domain {
+    flex: 0 1 auto;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  .allow-comment {
+    flex: 1;
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .allow-del {
+    flex: 0 0 auto;
+    margin-left: auto;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.18s, border-color 0.18s;
+  }
+
+  .allow-del:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
+
+  .allow-del:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .muted-mini {

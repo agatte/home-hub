@@ -366,3 +366,50 @@ class PiholeService:
         await self._request("DELETE", f"/api/lists/{encoded}")
         logger.info("Pi-hole blocklist removed: %s", address)
         return True
+
+    # -----------------------------------------------------------------
+    # Allowlist management (exact-domain exceptions)
+    # -----------------------------------------------------------------
+    #
+    # The bulk allowlist is an allow-type adlist (anudeepND) managed as an
+    # antigravity source; these exact entries are the per-domain safety net
+    # for one-off false positives (e.g. an email click-tracker a blocklist
+    # caught). Pi-hole v6 exposes them at /api/domains/allow/exact.
+
+    async def get_allow_domains(self) -> list[dict[str, Any]]:
+        """Get all exact-allow domains.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        """
+        data = await self._get("/api/domains/allow/exact")
+        # Pi-hole v6 returns {"domains": [{"domain","enabled","comment",...}]}
+        domains = data.get("domains", data) if isinstance(data, dict) else data
+        if not isinstance(domains, list):
+            return []
+        return domains
+
+    async def add_allow_domain(
+        self, domain: str, comment: Optional[str] = None,
+    ) -> bool:
+        """Add an exact-allow domain (whitelist a single domain).
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        Returns True on a successful API call.
+        """
+        body: dict[str, Any] = {"domain": domain, "enabled": True}
+        if comment:
+            body["comment"] = comment
+        await self._request("POST", "/api/domains/allow/exact", json_body=body)
+        logger.info("Pi-hole allowlist added: %s", domain)
+        return True
+
+    async def delete_allow_domain(self, domain: str) -> bool:
+        """Remove an exact-allow domain.
+
+        Raises :class:`PiholeUnreachableError` if Pi-hole is down.
+        Returns True on a successful API call.
+        """
+        encoded = domain.replace("/", "%2F")
+        await self._request("DELETE", f"/api/domains/allow/exact/{encoded}")
+        logger.info("Pi-hole allowlist removed: %s", domain)
+        return True
