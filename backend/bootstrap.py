@@ -692,21 +692,26 @@ async def lifespan(app: FastAPI):
     async def retention_sweep() -> None:
         from sqlalchemy import text as _sql_text
         from backend.database import async_session
-        cutoff_sql = "datetime('now', '-90 days')"
+        # Per-table retention (days). ml_decisions logs ~75k rows/day (one row
+        # per fusion lane, every poll) and would plateau ~4.6 GB at 90 days, so
+        # it gets a tighter 21-day window — still safely above the 14-day span
+        # the 03:30 fusion weight-tune reads. Everything else stays 90 days.
         targets = (
-            ("activity_events", "timestamp"),
-            ("light_adjustments", "timestamp"),
-            ("sonos_playback_events", "timestamp"),
-            ("scene_activations", "timestamp"),
-            ("ml_decisions", "timestamp"),
+            ("activity_events", "timestamp", 90),
+            ("light_adjustments", "timestamp", 90),
+            ("sonos_playback_events", "timestamp", 90),
+            ("scene_activations", "timestamp", 90),
+            ("ml_decisions", "timestamp", 21),
         )
         deleted_total = 0
         async with async_session() as session:
-            for table, ts_col in targets:
+            for table, ts_col, days in targets:
                 try:
+                    # table/ts_col/days are hard-coded literals above, not input.
                     result = await session.execute(
                         _sql_text(
-                            f"DELETE FROM {table} WHERE {ts_col} < {cutoff_sql}"
+                            f"DELETE FROM {table} WHERE {ts_col} < "
+                            f"datetime('now', '-{int(days)} days')"
                         )
                     )
                     deleted_total += result.rowcount or 0
@@ -716,7 +721,8 @@ async def lifespan(app: FastAPI):
                     )
             await session.commit()
         app_logger.info(
-            "retention_sweep: pruned %d rows older than 90 days", deleted_total,
+            "retention_sweep: pruned %d rows (ml_decisions 21d, others 90d)",
+            deleted_total,
         )
 
     scheduler.add_task(ScheduledTask(
