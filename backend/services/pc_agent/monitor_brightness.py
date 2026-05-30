@@ -97,11 +97,16 @@ WS_RECONNECT_INITIAL_S = 1.0
 WS_RECONNECT_MAX_S = 30.0
 
 # Sun-aware period boundaries (offsets in seconds around sunrise/sunset).
-# Rationale: ~30 min after sunrise the sun is unambiguously up; golden
-# hour starts ~60 min before sunset; astronomical twilight is done ~90
-# min after sunset. Calibrated for the apartment's east-facing windows.
+# Rationale: ~30 min after sunrise the sun is unambiguously up; the evening
+# offset targets golden-hour onset (sun ≈ +6°), which at Indianapolis's
+# 39.8°N falls ~40 min before sunset (validated against solarwatch.app);
+# 45 min lands the sun at ~+5–7° year-round (a fixed minute-offset is stable
+# here — only ~2° elevation spread across seasons at this latitude).
+# Astronomical-ish twilight is done ~90 min after sunset. The earlier 60 min
+# fired while the sun was still ~9–10° up — a touch early — so it was tightened
+# to 45 on 2026-05-30. Calibrated for the apartment's east-facing windows.
 DAY_START_AFTER_SUNRISE_S   = 30 * 60
-EVENING_START_BEFORE_SUNSET_S = 60 * 60
+EVENING_START_BEFORE_SUNSET_S = 45 * 60
 NIGHT_START_AFTER_SUNSET_S  = 90 * 60
 # Hard late_night floor — on summer nights sunset can be 9pm+ which
 # would push "night" past midnight without a wall-clock backstop.
@@ -492,8 +497,8 @@ def _sun_aware_time_period(
     """Derive time_period from sun position. Falls back to wall-clock when sun data missing.
 
     Boundaries:
-      day        — sunrise+30min → sunset-60min
-      evening    — sunset-60min → min(sunset+90min, today's 23:00)
+      day        — sunrise+30min → sunset-45min
+      evening    — sunset-45min → min(sunset+90min, today's 23:00)
       night      — that boundary → today's 23:00
       late_night — 23:00 → next sunrise+30min
 
