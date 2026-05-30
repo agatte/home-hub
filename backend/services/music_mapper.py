@@ -315,7 +315,8 @@ class MusicMapper:
         """
         Handle a mode change — smart auto-play based on Sonos state.
 
-        Uses time-of-day vibe heuristic to pick the best playlist.
+        Picks the playlist via pick_playlist() — Thompson sampling bandit
+        if available, else the time-of-day vibe heuristic.
         If Sonos is idle and auto_play is set, starts the playlist.
         If Sonos is busy, broadcasts a suggestion via WebSocket.
 

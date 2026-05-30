@@ -8,7 +8,7 @@ or turn lights on. L2 is untouched — the bedroom bias lamp stays on the
 current mode's state for when he sits back down.
 
 State machine:
-  idle ─[camera absent ≥4s + eligible mode + non-stationary zone]─> active
+  idle ─[camera absent ≥10s + eligible mode + non-stationary zone]─> active
   active ─[camera present ≥2s]─> idle  (revert lights)
   active ─[mode left trigger set: sleeping/cooking/social/idle]─> idle
   active ─[10-minute hard timeout]─> idle  (failsafe)

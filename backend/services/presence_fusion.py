@@ -78,7 +78,7 @@ class PresenceReading:
     # ``detection_source`` is Latitude-specific: "face" | "pose" | None.
     # Desktop only runs FaceLandmarker; left None there.
     detection_source: Optional[str] = None
-    zone: Optional[str] = None  # "desk" | "bed" | None
+    zone: Optional[str] = None  # "desk" (desktop) | "couch" (Latitude) | None
     # Latitude reports "upright" | "reclined". Desktop adds
     # "slouched" / "upright" (frontal-only). New sources may extend
     # the vocabulary; consumers should treat unknown values as opaque.

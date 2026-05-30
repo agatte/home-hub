@@ -414,7 +414,7 @@ class WeatherService:
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
             # NWS API is slow/flaky at off-peak hours — transient network
             # blips burn Sentry quota at ERROR but aren't actionable. The
-            # 5-minute cache cycle will retry; the user sees stale alerts
+            # 2-minute alert cache cycle will retry; the user sees stale alerts
             # for one cycle, no degradation otherwise.
             logger.warning("NWS alert fetch transient (%s): %s", type(e).__name__, e)
         except Exception as e:
