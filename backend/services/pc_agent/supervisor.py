@@ -91,10 +91,18 @@ _mutex_handle = None
 
 
 def _acquire_mutex() -> bool:
-    """Acquire a Windows named mutex. Returns False if another instance holds it."""
+    """Acquire a Windows named mutex. Returns False if another instance holds it.
+
+    Idempotent within a process: once this process owns the mutex, later calls
+    return True without re-acquiring. A second CreateMutexW for a name this
+    process already owns reports ERROR_ALREADY_EXISTS too, which would
+    otherwise look like a competing instance and make us exit on ourselves.
+    """
     global _mutex_handle
     if sys.platform != "win32":
         # On Linux the supervisor isn't used (systemd manages agents directly)
+        return True
+    if _mutex_handle is not None:
         return True
     import ctypes
     _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, True, MUTEX_NAME)
@@ -424,6 +432,16 @@ if __name__ == "__main__":
 
     # Clean shutdown on SIGTERM (e.g., from Task Scheduler stop)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    # Singleton guard FIRST — the ensure-running Scheduled Task respawns this
+    # every ~5 min. Acquiring the mutex before constructing the supervisor lets
+    # a duplicate exit immediately, instead of importing the (heavy) agent
+    # modules and emitting a "Registered: …" burst on every doomed spawn. The
+    # routine duplicate-exit is expected, so log it at DEBUG to keep the log
+    # quiet; the owning process announces itself with the INFO line in run().
+    if not _acquire_mutex():
+        logger.debug("Another supervisor already running — exiting")
+        sys.exit(0)
 
     supervisor = AgentSupervisor(
         server_url=args.server,
