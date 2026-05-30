@@ -564,7 +564,7 @@ class AutomationEngine:
     def update_schedule_config(self, config: ScheduleConfig) -> None:
         """Hot-reload the time schedule config. Takes effect on next loop cycle."""
         self._schedule_config = config
-        self._last_applied_per_light = {}  # Force re-apply
+        self._invalidate_dedup_cache()  # Force re-apply
         logger.info("Schedule config updated")
 
     async def load_scene_overrides(self) -> None:
@@ -590,7 +590,7 @@ class AutomationEngine:
     def update_mode_brightness(self, brightness: dict[str, float]) -> None:
         """Hot-reload per-mode brightness multipliers."""
         self._mode_brightness = {**DEFAULT_MODE_BRIGHTNESS, **brightness}
-        self._last_applied_per_light = {}  # Force re-apply
+        self._invalidate_dedup_cache()  # Force re-apply
         logger.info(f"Mode brightness updated: {brightness}")
 
     def _get_time_period(self) -> str:
@@ -1727,6 +1727,27 @@ class AutomationEngine:
             )
             self._manual_light_overrides.clear()
 
+    def _invalidate_dedup_cache(self) -> None:
+        """Drop the per-light dedup cache so the next ``_apply_state`` re-sends
+        to every light instead of being suppressed as a no-op.
+
+        Single owner for the "force re-apply" discipline. Call wherever the
+        bridge may have diverged from ``_last_applied_per_light`` (mode
+        transitions across a colorspace switch, effect stop/start, config
+        hot-reloads, sleep-fade steps, scene drift). Centralized so a new code
+        path can't silently reintroduce the stale-cache dedup-skip behind the
+        kitchen-pair drift of 2026-05-09 (project_transit_lighting_cache_pop_churn).
+        """
+        self._last_applied_per_light = {}
+
+    def _forget_dedup_light(self, light_id: str) -> None:
+        """Drop one light from the dedup cache so the next reconcile re-sends
+        the mode's state to it. Used when a transit override is cleared/expired
+        and the cache would otherwise retain the stale transit value and
+        dedup-skip the revert.
+        """
+        self._last_applied_per_light.pop(light_id, None)
+
     def _prune_expired_transit_overrides(self) -> None:
         """Remove transit overrides whose deadline has passed.
 
@@ -1746,7 +1767,7 @@ class AutomationEngine:
             # cache retains transit values after deadline expiry and the
             # next reconcile dedup-skips on stale data (kitchen-pair drift
             # 2026-05-09; memory project_transit_lighting_cache_pop_churn).
-            self._last_applied_per_light.pop(lid, None)
+            self._forget_dedup_light(lid)
         if expired:
             logger.info(
                 "Transit overrides auto-expired for lights %s",
@@ -1967,7 +1988,7 @@ class AutomationEngine:
         # Drop dedup cache for reverted lights so _apply_mode will actually
         # re-send the mode's state to them.
         for lid in cleared:
-            self._last_applied_per_light.pop(lid, None)
+            self._forget_dedup_light(lid)
         # Reapply against the EFFECTIVE (override-aware) mode. Using the raw
         # `_current_mode` field here discards an active manual override and
         # snaps lights to whatever the PC activity detector last reported —
@@ -2030,7 +2051,7 @@ class AutomationEngine:
         # any of which can leave the cache stale. Periodic reapply ticks
         # don't have those concerns and rely on dedup to no-op cleanly.
         if force_resend:
-            self._last_applied_per_light = {}
+            self._invalidate_dedup_cache()
 
         # Sleep mode: dim the bridge FIRST, then stop the effect, then fade to off.
         # Stopping an active effect before setting a brightness target pops the
@@ -2044,7 +2065,7 @@ class AutomationEngine:
             # Apply dim initial target — deep ember at bri=20. 1s snap so the
             # first thing Anthony sees (already in bed) is sleep-friendly.
             initial_state = {"on": True, "bri": 20, "hue": 5000, "sat": 254}
-            self._last_applied_per_light = {}
+            self._invalidate_dedup_cache()
             await self._apply_state(initial_state, transitiontime=10)
             await asyncio.sleep(1.2)  # Let the bridge settle the target
 
@@ -2247,13 +2268,13 @@ class AutomationEngine:
                 # so the dim start is visible, then smooth 20s slide to near-off,
                 # then off.
                 await asyncio.sleep(2.0)
-                self._last_applied_per_light = {}
+                self._invalidate_dedup_cache()
                 await self._apply_state(
                     {"on": True, "bri": 1, "hue": 5000, "sat": 254},
                     transitiontime=200,  # 20s
                 )
                 await asyncio.sleep(22)
-                self._last_applied_per_light = {}
+                self._invalidate_dedup_cache()
                 await self._apply_state({"on": False})
                 logger.info("Sleep fade complete (manual, ~24s)")
                 return
@@ -2275,12 +2296,12 @@ class AutomationEngine:
                 await asyncio.sleep(step_interval)
                 new_bri = max(1, int(current_bri - bri_step * i))
                 state = {"on": True, "bri": new_bri, "hue": 6000, "sat": 200}
-                self._last_applied_per_light = {}
+                self._invalidate_dedup_cache()
                 await self._apply_state(state)
                 logger.info(f"Sleep fade step {i}/{steps}: bri={new_bri}")
 
             await asyncio.sleep(step_interval)
-            self._last_applied_per_light = {}
+            self._invalidate_dedup_cache()
             await self._apply_state({"on": False})
             logger.info("Sleep fade complete — lights off")
 
@@ -2478,7 +2499,7 @@ class AutomationEngine:
         drifted = self._functional_weather_brightness(drifted, mode, period)
         if mode not in WEATHER_SKIP_MODES:
             drifted = self._weather_adjust(drifted)
-        self._last_applied_per_light = {}  # Force apply
+        self._invalidate_dedup_cache()  # Force apply
         await self._apply_state(drifted, transitiontime=100)  # 10s imperceptible
         logger.info("Scene drift applied for mode '%s'", mode)
 
