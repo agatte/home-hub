@@ -20,13 +20,15 @@
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/native.winoffice.txt', label: 'Windows Telemetry' },
   ]
 
+  // .lan, not .local — macOS/iOS treat .local as mDNS/Bonjour and may bypass
+  // Pi-hole for those names. Keep in sync with Pi-hole's dns.hosts records.
   const DEFAULT_DNS_HOSTS = [
-    { ip: '192.168.1.210', hostname: 'homehub.local' },
-    { ip: '192.168.1.210', hostname: 'pihole.local' },
-    { ip: '192.168.1.50',  hostname: 'hue.local' },
-    { ip: '192.168.1.157', hostname: 'sonos.local' },
-    { ip: '192.168.1.30',  hostname: 'desktop.local' },
-    { ip: '192.168.1.209', hostname: 'tablet.local' },
+    { ip: '192.168.1.210', hostname: 'homehub.lan' },
+    { ip: '192.168.1.210', hostname: 'pihole.lan' },
+    { ip: '192.168.1.50',  hostname: 'hue.lan' },
+    { ip: '192.168.1.157', hostname: 'sonos.lan' },
+    { ip: '192.168.1.30',  hostname: 'desktop.lan' },
+    { ip: '192.168.1.209', hostname: 'tablet.lan' },
   ]
 
   /** @type {any[] | null} */
@@ -196,7 +198,7 @@
         <input
           type="text"
           class="form-input"
-          placeholder="hostname.local"
+          placeholder="hostname.lan"
           bind:value={newDnsHostname}
         />
         <input
