@@ -109,7 +109,7 @@ Full current + target ASCII diagrams: `docs/PROJECT_SPEC.md` § "Current Archite
 
 **FastAPI backend** (port 8000, async) serves the SvelteKit static build (`frontend-svelte/build/`) + WS/REST. Devices: `HueService` (v1/phue2, 0.5s poll; 5s when v2 active) + `HueV2Service` (CLIP v2 scenes/effects/SSE) → Hue Bridge; `SonosService` (SoCo, 2s) → Era 100; `TTSService` (edge-tts) → MP3 → Sonos. `AutomationEngine` maps time+activity → light state and fires mode-change callbacks (MusicMapper, AmbientMonitor, MLLogger, ModeVolumeService, CameraService, BarApp). ML services (`docs/ML_SPEC.md`): AudioClassifier, BehavioralPredictor, LightingLearner, CameraService, EmotionService, MusicBandit. Plus MusicMapper, ScreenSyncService (mss), Scheduler, Library/RecommendationService, PiholeService, NotifierService (→ WS + ntfy.sh), WebSocketManager, SQLite (aiosqlite + SQLAlchemy async).
 
-**Pi-hole** — Docker (host networking), same machine; DNS :53, admin :8080. **PC agents** (standalone, dev desktop): `activity_detector.py` + `ambient_monitor.py` → `POST /api/automation/activity`; `desktop_notifier.py` subscribes `/ws` for toast events. **Target:** SQLite → PostgreSQL (Supabase) as event volume grows.
+**Pi-hole** — Docker (host networking), same machine; DNS :53, admin :8080; upstream is a local **Unbound** recursive + DNSSEC resolver (`127.0.0.1#5335`, separate `mvance/unbound` container, loopback-only) — no third-party DNS in path. **Footgun:** `docker/pihole/.env` (holds `PIHOLE_PASSWORD`) must exist before any `docker compose up` that recreates the pihole container, or the admin password blanks + home-hub auth breaks. **PC agents** (standalone, dev desktop): `activity_detector.py` + `ambient_monitor.py` → `POST /api/automation/activity`; `desktop_notifier.py` subscribes `/ws` for toast events. **Target:** SQLite → PostgreSQL (Supabase) as event volume grows.
 
 ---
 
@@ -169,7 +169,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Sonos | `/api/sonos` | `sonos.py` — transport, volume, TTS, favorites |
 | Music | `/api/music` | `music.py` — mode→playlist, import, recs+feedback, iTunes `POST /preview` (DIDL-Lite), `GET /bandit-status` |
 | Routines | `/api/routines` | `routines.py` — morning routine config/toggle/test |
-| Pi-hole | `/api/pihole` | `pihole.py` — stats, top-blocked, DNS + blocklist CRUD |
+| Pi-hole | `/api/pihole` | `pihole.py` — stats, top-blocked, DNS + blocklist + allowlist CRUD |
 | Camera | `/api/camera` | `camera.py` — status (lux/baseline/zone/posture/pose), snapshot, enable, calibrate |
 | Guest | `/api/guest` | `guest.py` — wifi QR, scene/vibe/effect/brightness(±10%), handback, toast(≤120c) |
 | Journal | `/api/journal` | `journal.py` — list/read/regenerate; nightly 02:00 task → `data/journal/`; at `/journal` |
@@ -276,7 +276,7 @@ Effects: `candle`, `fire`, `sparkle`, `prism`, `glisten`, `opal`. Activate via `
 
 ## Database Schema
 
-Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (Phase C placeholder). Data retention: 90-day rolling (mood_samples is the 7-day exception).
+Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (Phase C placeholder). Data retention: per-table via nightly `retention_sweep` — 90-day rolling, with `mood_samples` 7-day and `ml_decisions` 21-day exceptions (ml_decisions logs ~75k rows/day; 21d plateau ≈ 1.1–1.2 GB).
 
 ---
 
@@ -309,7 +309,7 @@ Keys you **hand-edit** (no UI; edit the row directly):
 | Device | IP | Notes |
 |--------|----|-------|
 | **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04. Backend + ambient as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker. Always-on. Static IP.** |
-| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL`. Desktop notifier autostarts via Task Scheduler `Home Hub Desktop Notifier` (At-Logon, `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`). |
+| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL`. Desktop notifier autostarts via Task Scheduler `Home Hub Desktop Notifier` (At-Logon, `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`). Nightly backup pulls via Task Scheduler `Home Hub Pihole Backup` (04:30) + `Home Hub Data Backup` (04:40) → `C:\Users\antho\HomeHubBackups\`; strategy in `~/.claude/runbooks/backup-strategy.md`. |
 | Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
 | Sonos Era 100 | 192.168.1.157 | Living room. `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
 | Android Tablet | 192.168.1.209 | Kiosk display (blank page deferred) |

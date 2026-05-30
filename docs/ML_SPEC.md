@@ -979,8 +979,8 @@ class MLDecision(Base):
 
 ### Data Retention
 
-- Event tables pruned to 90 days (configurable via `app_settings`).
-- `ml_decisions` table follows same 90-day retention.
+- Event tables pruned by the nightly `retention_sweep` (03:00), per-table: `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` → **90 days**.
+- `ml_decisions` → **21 days** (logs ~75k rows/day at one shadow row per fusion lane per poll; 21d still covers the 14-day fusion weight-tuning window).
 - User can trigger full ML data wipe from Settings page:
   - Deletes all models in `data/models/`
   - Clears `ml_decisions` and `ml_metrics` tables

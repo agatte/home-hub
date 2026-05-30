@@ -82,6 +82,14 @@ if [ -z "${PIHOLE_PASSWORD:-}" ]; then
     export PIHOLE_PASSWORD
 fi
 
+# Persist the password to docker/pihole/.env so a later `docker compose up`
+# that recreates the container (e.g. a version bump) doesn't blank the admin
+# password — FTLCONF_webserver_api_password would otherwise resolve to "".
+# .env is gitignored. Keep PIHOLE_API_KEY in the Home Hub .env equal to this.
+printf 'PIHOLE_PASSWORD=%s\n' "$PIHOLE_PASSWORD" > "$SCRIPT_DIR/.env"
+chmod 600 "$SCRIPT_DIR/.env"
+echo "[OK] Wrote $SCRIPT_DIR/.env (gitignored; preserves password across recreates)"
+
 # --- Step 4: Start Pi-hole ---
 echo "[*] Starting Pi-hole container..."
 docker compose up -d
@@ -108,8 +116,9 @@ echo "DNS:       192.168.1.210:53"
 echo ""
 echo "Next steps:"
 echo "  1. Open the admin UI and verify it's working"
-echo "  2. Set your router's DHCP DNS server to 192.168.1.210"
-echo "     (or configure DNS per-device if your router doesn't support it)"
+echo "  2. Point each device at 192.168.1.210 for DNS (per-device — the"
+echo "     apartment router's DHCP DNS is locked). Pi-hole's upstream is the"
+echo "     Unbound recursive + DNSSEC resolver started alongside it."
 echo "  3. Add these to your Home Hub .env on the Latitude:"
 echo "     PIHOLE_API_URL=http://localhost:8080"
 echo "     PIHOLE_API_KEY=$PIHOLE_PASSWORD"

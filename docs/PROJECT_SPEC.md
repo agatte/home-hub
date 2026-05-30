@@ -116,10 +116,11 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 ### Network & DNS
 
 - **Pi-hole v6** running in Docker (host networking) on the Latitude for network-wide DNS ad blocking
-- 2M+ domains blocked across 10 curated blocklists (ads, malware, phishing, tracking, Windows telemetry)
-- Local DNS records for all network devices: `homehub.local`, `pihole.local`, `hue.local`, `sonos.local`, `desktop.local`, `tablet.local`
+- DNS upstream: **Unbound** recursive resolver (DNSSEC-validating, `mvance/unbound`) on `127.0.0.1#5335` — Pi-hole forwards here instead of to Google/Cloudflare; Unbound walks the DNS tree from root servers. Defined in `docker/pihole/docker-compose.yml` (bridge network, publishes `127.0.0.1:5335:53` so only Pi-hole can reach it). Query path: clients → Pi-hole :53 → Unbound 127.0.0.1#5335 → root servers.
+- 2M+ domains blocked across curated blocklists (ads, malware, phishing, tracking, Windows telemetry). HaGeZi TIF blocklist is disabled — caused false positives on email click-trackers. A 191-domain anudeepND functionality allow-adlist is active (antigravity source).
+- Local DNS records for all network devices: `homehub.lan`, `pihole.lan`, `hue.lan`, `sonos.lan`, `desktop.lan`, `tablet.lan`
 - Dashboard Network widget showing real-time stats (block percentage, total queries, blocklist size, active clients)
-- Settings page management for local DNS records and blocklists (add/remove, one-click bulk add)
+- Settings page management for local DNS records, blocklists (add/remove, one-click bulk add), and **allowlist** (exact-domain exceptions — add/remove false-positive domains)
 - Per-device DNS configuration (apartment router is locked — no DHCP DNS control)
 - Pi-hole admin UI at `http://192.168.1.210:8080/admin`
 
@@ -231,14 +232,15 @@ Browser / Phone (PWA)
    ├── LibraryImportService ───────> Apple Music XML → taste profile
    ├── RecommendationService ──────> Last.fm + iTunes → discovery feed
    ├── WebSocketManager ───────────> bidirectional real-time sync
-   ├── PiholeService (httpx) ────────> Pi-hole v6 API (DNS stats, blocklists, local DNS)
+   ├── PiholeService (httpx) ────────> Pi-hole v6 API (DNS stats, blocklists, local DNS, allowlist)
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves SvelteKit static build from frontend-svelte/build/ (via FRONTEND_BUILD env)
 
 Pi-hole (Docker container, host networking, same machine)
    └── pihole/pihole:latest ───────> DNS on :53, web admin on :8080
        ├── Network-wide ad/malware/tracking blocking (2M+ domains)
-       └── Local DNS (homehub.local, pihole.local, hue.local, etc.)
+       ├── Local DNS (homehub.lan, pihole.lan, hue.lan, etc.)
+       └── Upstream → Unbound 127.0.0.1#5335 (DNSSEC recursive; mvance/unbound, loopback-only)
 
 Uptime Kuma (Docker container, port 3002, same machine)
    └── louislam/uptime-kuma:1 ─────> monitors Home Hub :8000/health + Pi-hole :8080
@@ -658,7 +660,7 @@ Not yet in `backend/models.py`. Listed here so the schema shape is decided when 
 
 *(Phase 4 Game Day shipped 2026-05-07 without new DB tables — `GameDayService` is in-memory + ESPN polling, `CelebrationOrchestrator` is callback-driven. The `game_schedule` and `celebration_log` tables originally projected here weren't built. Celebration writes DO land in `light_adjustments` as of commit `34fc550` with `trigger="celebration:<key>"`, queryable via `WHERE trigger LIKE 'celebration:%'`.)*
 
-**Data retention policy:** 90-day rolling window for raw events. Older data aggregated into daily/weekly summaries stored in a separate `event_summaries` table. Aggregation runs as a scheduled task in the learning engine.
+**Data retention policy:** Per-table rolling window enforced by the nightly `retention_sweep` ScheduledTask (03:00). `activity_events`, `light_adjustments`, `sonos_playback_events`, and `scene_activations` are pruned at **90 days**. `ml_decisions` is pruned at **21 days** — it logs ~75k rows/day (one shadow row per fusion lane per poll) and would reach ~4.6 GB at 90 days; the 21-day window still covers the 14-day span the fusion weight-tuner reads. Older data aggregation into daily/weekly summaries is deferred (`event_summaries` table not yet built — target state, not current).
 
 ### WebSocket Protocol
 
@@ -1605,12 +1607,15 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   now the sole audio source. The unit file + `deploy.sh` references are
   retained for revival if a better Latitude audio path surfaces (see
   memory `project_latitude_audio_parked.md`)
-- **Pi-hole** (Docker container, host networking) — DNS ad blocker on
-  port 53, web admin on port 8080. Compose file at
-  `docker/pihole/docker-compose.yml`, config persisted in
-  `docker/pihole/etc-pihole/`. Requires `PIHOLE_PASSWORD` env var for
-  `docker compose up`. systemd-resolved DNS stub disabled
-  (`DNSStubListener=no`) to free port 53.
+- **Pi-hole + Unbound** (Docker, same compose file at
+  `docker/pihole/docker-compose.yml`) — Pi-hole v6 on host networking
+  (DNS :53, web admin :8080); Unbound DNSSEC-validating recursive resolver
+  (`mvance/unbound`) on a bridge network, published at `127.0.0.1:5335`
+  (host loopback only). Pi-hole forwards upstream queries to Unbound, not
+  Google/Cloudflare. Config persisted in `docker/pihole/etc-pihole/`.
+  Requires `docker/pihole/.env` with `PIHOLE_PASSWORD` for `docker compose
+  up` — **missing it blanks the admin password on container recreate**.
+  systemd-resolved DNS stub disabled (`DNSStubListener=no`) to free port 53.
 - **Firefox kiosk** — auto-launches on GNOME login via
   `~/.config/autostart/home-hub-kiosk.desktop`, displays
   `http://localhost:8000` fullscreen on the built-in laptop display.
@@ -1735,7 +1740,7 @@ and Sonos speaker are LAN-only.
 - ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
 - ✓ **Science-based night work lighting** — per-light variation with 3200K desk lamp + ambient fill, mode-specific transitions, scene drift, mode→scene overrides
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering, and opens the full app in an in-dashboard iframe modal
-- ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across 10 curated blocklists, Network widget on dashboard, local DNS for all devices (homehub.local, etc.), Settings page management for DNS records and blocklists, per-device DNS config (apartment router locked)
+- ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across curated blocklists (HaGeZi TIF disabled — false positives on email trackers; anudeepND functionality allow-adlist active), DNS upstream is a local **Unbound** DNSSEC-validating recursive resolver (`127.0.0.1#5335`, sidecar in same compose file), Network widget on dashboard, local DNS for all devices (homehub.lan, etc.), Settings page management for DNS records, blocklists, and exact-domain allowlist, per-device DNS config (apartment router locked)
 - ✓ **Test suite expansion** — 101 tests across 8 files (automation, music mapper, scheduler, weather, pihole, API routes, WebSocket). GitHub Actions CI runs full suite on push
 - ✓ **Observability tooling** — python-json-logger (structured JSON to file), Uptime Kuma monitoring on port 3002 (Home Hub + Pi-hole health checks with alerting), vite-plugin-visualizer for bundle analysis
 - ✓ **Ops tooling** — py-spy for production profiling, httpie for readable API testing (requirements-ops.txt on Latitude)
@@ -1805,7 +1810,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 - Apple Music API integration ($99/year) — catalog browsing (search by genre/mood, dynamic playlists). Phase A (DIDL-Lite Now Playing metadata for HTTP streams), Phase A.5 (always-shuffle + random queue start via `play_favorite`), and Phase B (weather-aware bandit arm key `(mode, period, weather_class, title)` with legacy 3-tuple migration + warm-start) all shipped 2026-05-12
 - Bar app widget integration
 - Seasonal lighting adjustments
-- Guest mode polish (mini-app shipped 2026-05-02 — bottom nav + WiFi/Bar/Plants/Vibe pages, 6 party scenes with live color previews, 3 music vibe tiles via Sonos favorites; remaining: Pi-hole DNS for `guest.homehub.local`, settings UI for `guest_vibe_playlists` mapping, optionally a free-text "tell the host" channel)
+- Guest mode polish (mini-app shipped 2026-05-02 — bottom nav + WiFi/Bar/Plants/Vibe pages, 6 party scenes with live color previews, 3 music vibe tiles via Sonos favorites; remaining: Pi-hole DNS for `guest.homehub.lan`, settings UI for `guest_vibe_playlists` mapping, optionally a free-text "tell the host" channel)
 
 ## Technical Limitations & Constraints
 
