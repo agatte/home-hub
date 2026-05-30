@@ -87,6 +87,12 @@ DEFAULT_SERVER = "http://192.168.1.210:8000"
 RECONCILE_INTERVAL_S = 30.0
 LUX_POLL_INTERVAL_S = 30.0
 SUN_POLL_INTERVAL_S = 30 * 60.0   # sunrise/sunset only change at midnight
+# Consecutive sun-refresh failures before escalating from DEBUG to WARNING.
+# A single blip (boot before weather warms, brief network hiccup) is noise;
+# 3 straight failures (~60 min at the poll interval) means something is
+# actually broken — wrong endpoint, sustained weather outage — and the agent
+# has been silently flipping on the wall-clock fallback the whole time.
+SUN_REFRESH_WARN_AFTER = 3
 WS_RECONNECT_INITIAL_S = 1.0
 WS_RECONNECT_MAX_S = 30.0
 
@@ -710,26 +716,60 @@ class SunProvider:
         self._sunrise: Optional[float] = None
         self._sunset: Optional[float] = None
         self._client = httpx.Client(timeout=5.0)
+        self._consecutive_failures = 0
 
     def snapshot(self) -> tuple[Optional[float], Optional[float]]:
         with self._lock:
             return self._sunrise, self._sunset
 
     def refresh(self) -> None:
+        # /api/weather shape: {"status":"ok","weather":{...sunrise,sunset...}}.
+        # A 200 with the sun fields absent is treated as a failure too — that
+        # path also strands derivation on the wall-clock fallback, so it must
+        # escalate like a transport error rather than silently caching None.
         try:
             resp = self._client.get(self._url)
             resp.raise_for_status()
             body = resp.json()
+            weather = body.get("weather") or body
+            sunrise = weather.get("sunrise")
+            sunset = weather.get("sunset")
+            if sunrise is None or sunset is None:
+                raise ValueError(
+                    f"weather response missing sunrise/sunset "
+                    f"(keys: {sorted(weather)})"
+                )
+            sunrise_f, sunset_f = float(sunrise), float(sunset)
         except Exception as e:
-            logger.debug("sun refresh failed: %s", e)
+            self._note_failure(e)
             return
-        # /api/weather/current shape: {"status":"ok","weather":{...sunrise,sunset...}}
-        weather = body.get("weather") or body
-        sunrise = weather.get("sunrise")
-        sunset = weather.get("sunset")
         with self._lock:
-            self._sunrise = float(sunrise) if sunrise is not None else None
-            self._sunset = float(sunset) if sunset is not None else None
+            self._sunrise = sunrise_f
+            self._sunset = sunset_f
+        if self._consecutive_failures:
+            logger.info(
+                "sun refresh recovered after %d failed attempt(s)",
+                self._consecutive_failures,
+            )
+            self._consecutive_failures = 0
+
+    def _note_failure(self, exc: Exception) -> None:
+        """Log a sun-refresh failure, escalating to WARNING once the failure
+        is persistent. Warns exactly on crossing the threshold (and again on
+        each recurrence after a recovery) so a stuck endpoint surfaces without
+        spamming the log every poll. Leaves cached sun values untouched."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures == SUN_REFRESH_WARN_AFTER:
+            logger.warning(
+                "sun refresh failed %d× in a row (%s) — falling back to "
+                "wall-clock time_period; check %s",
+                self._consecutive_failures, exc, self._url,
+            )
+        else:
+            logger.debug(
+                "sun refresh failed (attempt %d): %s",
+                self._consecutive_failures, exc,
+            )
 
     def close(self) -> None:
         try:
