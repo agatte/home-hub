@@ -242,6 +242,17 @@ class ActivityDetector:
         self._last_mode: Optional[str] = None              # Committed mode after dwell
         self._last_reported_mode: Optional[str] = None      # Last mode the loop POSTed
         self._media_paused: bool = False                    # Track if we already paused media this sleep cycle
+        # When _pause_media() injects a media key, Windows records it as user
+        # input — GetLastInputInfo can't distinguish our synthetic keystroke
+        # from a real one. We remember the exact input-tick our key produces
+        # (_synthetic_last_input_tick) and the user's real last-input tick
+        # just before injection (_real_last_input_tick) so _get_idle_seconds
+        # can fold our own keystroke out and keep idle climbing. Without this
+        # the detector reads its own pause key as "user returned" and
+        # oscillates working<->idle all night while the apartment is empty
+        # (root cause of the 2026-05-29 "awake while away" incident).
+        self._real_last_input_tick: Optional[int] = None
+        self._synthetic_last_input_tick: Optional[int] = None
         # Hysteresis state — the candidate mode we'd report once the dwell expires.
         self._pending_mode: Optional[str] = None
         self._pending_since: Optional[float] = None
@@ -272,11 +283,12 @@ class ActivityDetector:
             pass
         return names
 
-    def _get_idle_seconds(self) -> int:
-        """
-        Get seconds since last user input (keyboard/mouse) via Win32 API.
+    def _read_last_input(self) -> Optional[tuple[int, int]]:
+        """Return ``(now_tick, last_input_tick)`` from Win32, or None on error.
 
-        Returns 0 on non-Windows or on error.
+        Both are raw 32-bit GetTickCount millisecond values. Split out from
+        ``_get_idle_seconds`` so ``_pause_media`` can capture the exact tick
+        its injected key registers (see ``_synthetic_last_input_tick``).
         """
         try:
 
@@ -289,25 +301,75 @@ class ActivityDetector:
             lii = LASTINPUTINFO()
             lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
             if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
-                millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
-                return millis // 1000
+                # Declare DWORD return so GetTickCount comes back unsigned;
+                # ctypes defaults to signed c_int, which sign-extends to a
+                # negative int above ~24.7 days of uptime. (The & 0xFFFFFFFF
+                # mask in _get_idle_seconds still yields the right delta, but
+                # unsigned is what these values actually are.)
+                ctypes.windll.kernel32.GetTickCount.restype = ctypes.wintypes.DWORD
+                now_tick = ctypes.windll.kernel32.GetTickCount()
+                return now_tick, lii.dwTime
         except Exception:
             pass
-        return 0
+        return None
+
+    def _get_idle_seconds(self) -> int:
+        """
+        Get seconds since last user input (keyboard/mouse) via Win32 API.
+
+        Folds out the synthetic media key our own ``_pause_media`` injects: if
+        the most recent input is exactly the keystroke we sent, idle is
+        measured from the user's real last input instead, so it keeps
+        climbing. Otherwise the detector treats its own pause key as the user
+        returning and flaps working<->idle all night when the apartment is
+        empty (root cause of the 2026-05-29 "awake while away" incident).
+
+        Returns 0 on non-Windows or on error.
+        """
+        reading = self._read_last_input()
+        if reading is None:
+            return 0
+        now_tick, last_input_tick = reading
+        if (
+            self._synthetic_last_input_tick is not None
+            and last_input_tick == self._synthetic_last_input_tick
+            and self._real_last_input_tick is not None
+        ):
+            # The latest "input" is the media key we injected — ignore it and
+            # measure idle from the user's genuine last input. A real keystroke
+            # landing on the exact same GetTickCount ms as the synthetic key
+            # would false-match here, but it self-corrects on the next poll (5s).
+            last_input_tick = self._real_last_input_tick
+        # GetTickCount is a 32-bit ms counter; mask the delta so a wrap
+        # (every ~49.7 days of uptime) can't produce a negative idle.
+        return ((now_tick - last_input_tick) & 0xFFFFFFFF) // 1000
 
     def _pause_media(self) -> None:
         """
         Send a media play/pause key via Win32 to pause YouTube or other media.
 
-        Only fires once per sleep cycle to avoid toggling play/pause repeatedly.
+        Only fires once per sleep cycle to avoid toggling play/pause
+        repeatedly. Captures the user's real last-input tick before injecting
+        and the synthetic tick our key produces afterward, so
+        ``_get_idle_seconds`` can discount the keystroke — otherwise it resets
+        our own idle reading and the detector flaps awake all night.
         """
         if self._media_paused:
             return
+        # The user's genuine last-input tick, captured before we inject.
+        pre = self._read_last_input()
+        if pre is not None:
+            self._real_last_input_tick = pre[1]
         try:
             VK_MEDIA_PLAY_PAUSE = 0xB3
             ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
             ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
             self._media_paused = True
+            # Exact input-tick our injected key just registered — lets
+            # _get_idle_seconds recognize and fold out our own keystroke.
+            post = self._read_last_input()
+            if post is not None:
+                self._synthetic_last_input_tick = post[1]
             logger.info("Sent media pause key (sleep detected)")
         except Exception as e:
             logger.error(f"Failed to send media pause key: {e}")
@@ -372,9 +434,13 @@ class ActivityDetector:
         if idle_seconds > IDLE_THRESHOLD:
             return "idle"
 
-        # Reset media pause flag when user is active again
+        # Reset media pause flag when user is active again. Real input has
+        # arrived (idle dropped below the threshold), so clear the synthetic-
+        # keystroke tracking too — the next sleep cycle recaptures it.
         if self._media_paused:
             self._media_paused = False
+            self._real_last_input_tick = None
+            self._synthetic_last_input_tick = None
             logger.info("User active again — media pause flag reset")
 
         # Gaming takes highest priority — but only when the player is
