@@ -705,7 +705,7 @@ class SunProvider:
     """
 
     def __init__(self, server_url: str) -> None:
-        self._url = f"{server_url.rstrip('/')}/api/weather/current"
+        self._url = f"{server_url.rstrip('/')}/api/weather"
         self._lock = threading.Lock()
         self._sunrise: Optional[float] = None
         self._sunset: Optional[float] = None
