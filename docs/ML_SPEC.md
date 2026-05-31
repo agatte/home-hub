@@ -1370,7 +1370,7 @@ app.state.ml_logger = ml_logger
 automation.register_on_mode_change(ml_logger.on_mode_change)
 
 # ML services (Phase 2, conditional)
-camera_enabled = await load_setting(db, "camera_enabled")
+camera_enabled = await load_setting("camera_enabled")
 if camera_enabled:
     from backend.services.ml.camera_service import CameraService
     camera = CameraService(model_manager)
