@@ -29,6 +29,11 @@ TZ = ZoneInfo("America/Indiana/Indianapolis")
 # endpoint at POST /api/automation/screen-color drops colors silently when
 # the current mode isn't in this set.
 SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
+# How recently screen sync must have pushed a color for the engine to treat
+# its target lamps (L2/L5) as sync-owned and skip re-applying the mode's
+# static state to them. Sync captures every ~2.5s; 8s ≈ 3 frames of grace.
+# Past this with no push, the engine reclaims the lamps on the next tick.
+SCREEN_SYNC_FRESH_SECONDS = 8.0
 
 # Effect lifecycle (Hue v2 dynamic effects + weather-effect mapping +
 # WEATHER_SKIP_MODES) lives in effect_manager.py. Re-exported below at
@@ -2336,6 +2341,30 @@ class AutomationEngine:
         else:
             await self._apply_uniform(state, transitiontime)
 
+    def _protected_light_ids(self) -> set[str]:
+        """Light ids the mode-apply pipeline must NOT write this tick.
+
+        Always includes manual + transit per-light overrides. Additionally
+        includes the screen-sync target lamps (L2/L5) while sync is actively
+        owning them — current mode is a SCREEN_SYNC_MODE and a color was
+        pushed within ``SCREEN_SYNC_FRESH_SECONDS``. Screen sync writes those
+        lamps directly to the bridge (bypassing the per-light dedup cache),
+        so without this guard the periodic mode-reapply — and every
+        ``notify_camera_commit`` force-resend — re-writes them to their
+        static state, fighting sync and producing the visible L2/L5 flicker
+        (audit 2026-05-30, syncfight-1). When sync goes quiet the freshness
+        gate lapses and the engine reclaims the lamps on the next tick.
+        """
+        protected = set(self._manual_light_overrides) | set(self._transit_light_overrides)
+        sync = self._screen_sync
+        if sync is not None and self.current_mode in SCREEN_SYNC_MODES:
+            last = sync.last_color_at
+            if last is not None:
+                age = (datetime.now(timezone.utc) - last).total_seconds()
+                if age < SCREEN_SYNC_FRESH_SECONDS:
+                    protected |= set(sync.target_lights)
+        return protected
+
     async def _apply_uniform(
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
@@ -2343,9 +2372,10 @@ class AutomationEngine:
         # Prune expired transit overrides before consulting them.
         self._prune_expired_transit_overrides()
 
-        # If any lights have manual or transit overrides, fall through to the
-        # per-light path so the filter can skip the protected lights.
-        if self._manual_light_overrides or self._transit_light_overrides:
+        # If any lights are protected (manual / transit overrides, or sync-
+        # owned L2/L5), fall through to the per-light path so the filter can
+        # skip them instead of stomping them via set_all_lights.
+        if self._protected_light_ids():
             per_light = {lid: state for lid in ALL_LIGHT_IDS}
             await self._apply_per_light(per_light, transitiontime)
             return
@@ -2382,9 +2412,10 @@ class AutomationEngine:
         # Drop any transit overrides whose deadline has passed before we check.
         self._prune_expired_transit_overrides()
 
-        # Filter out lights with active manual or transit overrides.
-        # Both dicts freeze their lights against mode-driven automation.
-        protected = set(self._manual_light_overrides) | set(self._transit_light_overrides)
+        # Filter out protected lights: manual + transit per-light overrides,
+        # plus screen-sync-owned L2/L5 while sync is fresh (see
+        # _protected_light_ids — stops the static-vs-sync flicker).
+        protected = self._protected_light_ids()
         if protected:
             skipped = [lid for lid in states if lid in protected]
             if skipped:

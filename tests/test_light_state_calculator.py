@@ -167,33 +167,37 @@ class TestApplyBrightnessMultiplier:
 class TestApplyLuxMultiplier:
 
     def test_non_lux_mode_noop(self):
-        # working / relax / gaming / watching adapt; cooking + social bypass
-        # so their explicit bright/medium palettes don't drift.
+        # Only relax adapts now (2026-05-30, room-correct scope). cooking /
+        # social / gaming / watching / working all bypass — the living-room
+        # camera can't see the rooms those modes happen in.
         state = {"1": {"on": True, "bri": 200}}
         out_state, out_mult, _ = apply_lux_multiplier(state, "cooking", 50.0, 1.0)
         assert out_state is state
         assert out_mult == 1.0
 
-    def test_gaming_now_adapts(self):
-        # Gaming was added to LUX_MODES so dim rooms get a brightness lift.
+    def test_gaming_no_longer_adapts(self):
+        # Gaming dropped from LUX_MODES 2026-05-30: it's a bedroom-desk mode
+        # the living-room couch camera can't see, so couch lux must not scale
+        # it (was cross-room contamination). Now a no-op.
         state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult, _ = apply_lux_multiplier(
             state, "gaming", lux_reading=40.0, last_multiplier=1.0,
         )
-        assert out_mult > 1.0
-        assert out_state["1"]["bri"] > 100
+        assert out_state is state
+        assert out_mult == 1.0
 
-    def test_watching_now_adapts(self):
+    def test_watching_no_longer_adapts(self):
+        # Watching (projector, bedroom) dropped from LUX_MODES same as gaming.
         state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult, _ = apply_lux_multiplier(
             state, "watching", lux_reading=40.0, last_multiplier=1.0,
         )
-        assert out_mult > 1.0
-        assert out_state["1"]["bri"] > 100
+        assert out_state is state
+        assert out_mult == 1.0
 
     def test_no_reading_noop(self):
         state = {"1": {"on": True, "bri": 200}}
-        out_state, out_mult, _ = apply_lux_multiplier(state, "working", None, 1.0)
+        out_state, out_mult, _ = apply_lux_multiplier(state, "relax", None, 1.0)
         assert out_state is state
         assert out_mult == 1.0
 
@@ -201,7 +205,7 @@ class TestApplyLuxMultiplier:
         # Lux below baseline → multiplier > 1.0 → brighter.
         state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult, _ = apply_lux_multiplier(
-            state, "working", lux_reading=40.0, last_multiplier=1.0,
+            state, "relax", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult > 1.0
         assert out_state["1"]["bri"] > 100
@@ -209,7 +213,7 @@ class TestApplyLuxMultiplier:
     def test_bright_room_dims(self):
         state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult, _ = apply_lux_multiplier(
-            state, "working", lux_reading=180.0, last_multiplier=1.0,
+            state, "relax", lux_reading=180.0, last_multiplier=1.0,
         )
         assert out_mult < 1.0
         assert out_state["1"]["bri"] < 100
@@ -220,7 +224,7 @@ class TestApplyLuxMultiplier:
         # we keep 1.07.
         state = {"1": {"on": True, "bri": 100}}
         out_state, out_mult, _ = apply_lux_multiplier(
-            state, "working", lux_reading=70.0, last_multiplier=1.07,
+            state, "relax", lux_reading=70.0, last_multiplier=1.07,
         )
         assert out_mult == 1.07  # Hysteresis won.
         # And state was scaled by 1.07.
@@ -231,7 +235,7 @@ class TestApplyLuxMultiplier:
         # lux=40 → 1.20; last was 1.0 → diff 0.20 > LUX_MULT_EPSILON (0.08)
         # → use 1.20.
         out_state, out_mult, _ = apply_lux_multiplier(
-            state, "working", lux_reading=40.0, last_multiplier=1.0,
+            state, "relax", lux_reading=40.0, last_multiplier=1.0,
         )
         assert out_mult == pytest.approx(1.20)
         assert out_state["1"]["bri"] == int(100 * 1.20)
@@ -244,7 +248,7 @@ class TestApplyLuxMultiplier:
         state = {"1": {"on": True, "bri": 100}}
         # lux=60 → ~1.12, last=1.07 → diff 0.05 < 0.08 → keep 1.07.
         out_state, out_mult, _ = apply_lux_multiplier(
-            state, "working", lux_reading=60.0, last_multiplier=1.07,
+            state, "relax", lux_reading=60.0, last_multiplier=1.07,
         )
         assert out_mult == 1.07
 
@@ -268,7 +272,7 @@ class TestApplyLuxMultiplier:
         # No shift: effective = 134 - 143 + 90 = 81 → between (40,1.20)(90,1.00)
         # frac=0.82 → raw_mult = 1.036. Diff from 1.0 is 0.036 < 0.08 → 1.0.
         _, mult_clear, _ = apply_lux_multiplier(
-            state, "working", lux_reading=134.0,
+            state, "relax", lux_reading=134.0,
             last_multiplier=1.0, baseline_lux=143.0,
             weather_class="clear", last_weather_class="clear",
         )
@@ -278,7 +282,7 @@ class TestApplyLuxMultiplier:
         # frac=(51-40)/50=0.22 → raw_mult = 1.20 + 0.22*(-0.20) = 1.156.
         # Diff from 1.0 is 0.156 > 0.08 → applied even at steady state.
         _, mult_storm, _ = apply_lux_multiplier(
-            state, "working", lux_reading=134.0,
+            state, "relax", lux_reading=134.0,
             last_multiplier=1.0, baseline_lux=143.0,
             weather_class="thunderstorm", last_weather_class="thunderstorm",
         )
@@ -291,7 +295,7 @@ class TestApplyLuxMultiplier:
         # Pin last_weather_class == weather_class so the dead-band is
         # what's under test (not the class-change bypass).
         common = dict(
-            state=state, mode="working",
+            state=state, mode="relax",
             lux_reading=134.0, last_multiplier=1.0, baseline_lux=143.0,
         )
         _, mult_clear, _ = apply_lux_multiplier(
@@ -315,12 +319,12 @@ class TestApplyLuxMultiplier:
         # Both calls pin last_weather_class to match weather_class so the
         # class-change bypass doesn't muddy the equivalence check.
         _, mult_no_arg, _ = apply_lux_multiplier(
-            state, "working", lux_reading=60.0,
+            state, "relax", lux_reading=60.0,
             last_multiplier=1.0, baseline_lux=90.0,
             last_weather_class=None,
         )
         _, mult_clear, _ = apply_lux_multiplier(
-            state, "working", lux_reading=60.0,
+            state, "relax", lux_reading=60.0,
             last_multiplier=1.0, baseline_lux=90.0,
             weather_class="clear", last_weather_class="clear",
         )
@@ -339,7 +343,7 @@ class TestApplyLuxMultiplier:
         # Steady-state on "clouds" with last_multiplier ≈ no-shift raw — a
         # same-class call obeys epsilon and clamps to last.
         _, mult_steady, class_steady = apply_lux_multiplier(
-            state, "working", lux_reading=123.6,
+            state, "relax", lux_reading=123.6,
             last_multiplier=1.0794, baseline_lux=143.47,
             weather_class="clouds", last_weather_class="clouds",
         )
@@ -351,7 +355,7 @@ class TestApplyLuxMultiplier:
         # ~1.139, Δ=0.060 < 0.08 → would have been suppressed pre-fix.
         # Class change bypasses the epsilon and the new value lands.
         _, mult_transition, class_transition = apply_lux_multiplier(
-            state, "working", lux_reading=123.6,
+            state, "relax", lux_reading=123.6,
             last_multiplier=1.0794, baseline_lux=143.47,
             weather_class="rain", last_weather_class="clouds",
         )
@@ -365,7 +369,7 @@ class TestApplyLuxMultiplier:
         store it back for next-tick comparison."""
         state = {"1": {"on": True, "bri": 100}}
         _, _, returned_class = apply_lux_multiplier(
-            state, "working", lux_reading=60.0,
+            state, "relax", lux_reading=60.0,
             last_multiplier=1.0, baseline_lux=90.0,
             weather_class="rain", last_weather_class=None,
         )
@@ -827,20 +831,28 @@ class TestFunctionalWeatherBrightness:
         assert out["1"] == {"on": False}
         assert out["2"]["bri"] == 114
 
-    def test_composes_with_lux_multiplier(self):
-        # Mirrors the production pipeline order: lux first, then functional
-        # weather. Together they should produce a moderate combined boost.
-        # Lux value chosen so the multiplier shift exceeds LUX_MULT_EPSILON
-        # (0.08) — otherwise hysteresis keeps the old multiplier.
+    def test_lux_and_weather_layers_are_mode_disjoint(self):
+        # Post-2026-05-30 room-correct scoping: lux adaptation fires ONLY for
+        # relax (the couch/living-room mode the camera sees), while functional
+        # weather brightness fires for gaming/working/watching. The two layers
+        # no longer overlap on any single mode, so neither double-applies.
         state = {"1": {"on": True, "bri": 180, "hue": 48500, "sat": 160}}
-        after_lux, _, _ = apply_lux_multiplier(
+        # Gaming: lux is a no-op (dropped from LUX_MODES); weather still lifts.
+        after_lux_gaming, _, _ = apply_lux_multiplier(
             state, "gaming", lux_reading=60.0, last_multiplier=1.0, baseline_lux=90.0,
         )
-        # lux=60 with baseline=90 → effective=60 → between (40,1.20) and (90,1.00)
-        # frac = (60-40)/(90-40) = 0.4 → mult = 1.20 + 0.4*(1.00-1.20) = 1.12
-        # Diff from 1.0 = 0.12 > LUX_MULT_EPSILON, so multiplier updates.
-        assert after_lux["1"]["bri"] == int(180 * 1.12)
-        out = apply_functional_weather_brightness(
-            after_lux, "gaming", "day", "rain",
+        assert after_lux_gaming is state  # lux skipped gaming entirely
+        weather_gaming = apply_functional_weather_brightness(
+            state, "gaming", "day", "rain",
         )
-        assert out["1"]["bri"] == int(int(180 * 1.12) * 1.15)
+        assert weather_gaming["1"]["bri"] > 180  # weather layer applies to gaming
+        # Relax: lux lifts (lux=60, baseline=90 → mult 1.12); weather is a no-op.
+        after_lux_relax, _, _ = apply_lux_multiplier(
+            state, "relax", lux_reading=60.0, last_multiplier=1.0, baseline_lux=90.0,
+        )
+        assert after_lux_relax["1"]["bri"] == int(180 * 1.12)
+        weather_relax = apply_functional_weather_brightness(
+            after_lux_relax, "relax", "day", "rain",
+        )
+        # relax isn't a functional-weather mode → bri unchanged by that layer.
+        assert weather_relax["1"]["bri"] == after_lux_relax["1"]["bri"]

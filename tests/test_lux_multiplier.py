@@ -184,58 +184,56 @@ class TestApplyLuxMultiplierGuards:
         return _make_engine(mock_hue, mock_hue_v2, mock_ws)
 
     def test_mode_not_in_lux_modes_returns_unchanged(self, engine):
-        # cooking and social are out of LUX_MODES; their explicit palettes
-        # (bright kitchen, mid-conversational social) shouldn't drift with
-        # ambient light.
+        # Only relax is in LUX_MODES now (2026-05-30, room-correct scope).
+        # cooking / social keep their explicit palettes; gaming / watching /
+        # working are bedroom modes the living-room camera can't see.
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 200}}
         assert engine._apply_lux_multiplier(state, "cooking") is state
         assert engine._apply_lux_multiplier(state, "social") is state
 
-    def test_gaming_now_modulates(self, engine):
-        # Gaming was added to LUX_MODES so dim rooms get a brightness lift.
-        # Spatial design stays — the +20%/-15% range doesn't reshape it.
+    def test_gaming_no_longer_modulates(self, engine):
+        # Gaming dropped from LUX_MODES 2026-05-30: bedroom-desk mode the
+        # living-room couch camera can't see → couch lux must not scale it
+        # (was cross-room contamination dimming the bedroom). Now a no-op.
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "gaming")
-        assert result is not state
-        assert result["1"]["bri"] > 200
+        assert engine._apply_lux_multiplier(state, "gaming") is state
 
-    def test_watching_now_modulates(self, engine):
+    def test_watching_no_longer_modulates(self, engine):
+        # Watching (projector, bedroom) dropped same as gaming.
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "watching")
-        assert result is not state
-        assert result["1"]["bri"] > 200
+        assert engine._apply_lux_multiplier(state, "watching") is state
 
     def test_no_camera_service_returns_unchanged(self, engine):
         state = {"1": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         assert result is state
 
     def test_disabled_camera_returns_unchanged(self, engine):
         engine.set_camera_service(_fake_camera(40.0, enabled=False))
         state = {"1": {"on": True, "bri": 200}}
-        assert engine._apply_lux_multiplier(state, "working") is state
+        assert engine._apply_lux_multiplier(state, "relax") is state
 
     def test_paused_camera_returns_unchanged(self, engine):
         engine.set_camera_service(_fake_camera(40.0, paused=True))
         state = {"1": {"on": True, "bri": 200}}
-        assert engine._apply_lux_multiplier(state, "working") is state
+        assert engine._apply_lux_multiplier(state, "relax") is state
 
     def test_uncalibrated_camera_returns_unchanged(self, engine):
         # ema_lux=None represents "calibration missing" (CameraService.ema_lux
         # property returns None when _calibrated is false)
         engine.set_camera_service(_fake_camera(None))
         state = {"1": {"on": True, "bri": 200}}
-        assert engine._apply_lux_multiplier(state, "working") is state
+        assert engine._apply_lux_multiplier(state, "relax") is state
 
     def test_stale_reading_returns_unchanged(self, engine):
         engine.set_camera_service(
             _fake_camera(40.0, age_seconds=LUX_STALE_SECONDS + 5)
         )
         state = {"1": {"on": True, "bri": 200}}
-        assert engine._apply_lux_multiplier(state, "working") is state
+        assert engine._apply_lux_multiplier(state, "relax") is state
 
 
 class TestApplyLuxMultiplierArithmetic:
@@ -245,23 +243,23 @@ class TestApplyLuxMultiplierArithmetic:
     def engine(self, mock_hue, mock_hue_v2, mock_ws):
         return _make_engine(mock_hue, mock_hue_v2, mock_ws)
 
-    def test_working_at_bright_dims_bri(self, engine):
+    def test_relax_at_bright_dims_bri(self, engine):
         engine.set_camera_service(_fake_camera(180.0))
         state = {"1": {"on": True, "bri": 200, "ct": 250}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         # multiplier = 0.85, 200 * 0.85 = 170
         assert result["1"]["bri"] == 170
         # ct untouched
         assert result["1"]["ct"] == 250
 
-    def test_working_at_dark_lifts_bri(self, engine):
+    def test_relax_at_dark_lifts_bri(self, engine):
         engine.set_camera_service(_fake_camera(40.0))
         state = {"1": {"on": True, "bri": 150, "ct": 250}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         # multiplier = 1.20, 150 * 1.20 = 180
         assert result["1"]["bri"] == 180
 
-    def test_kitchen_pair_preserved_in_working(self, engine):
+    def test_kitchen_pair_preserved_in_relax(self, engine):
         engine.set_camera_service(_fake_camera(135.0))
         state = {
             "1": {"on": True, "bri": 200, "ct": 233},
@@ -269,7 +267,7 @@ class TestApplyLuxMultiplierArithmetic:
             "3": {"on": True, "bri": 170, "ct": 233},
             "4": {"on": True, "bri": 170, "ct": 233},
         }
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         # Kitchen pair (L3/L4) must scale together
         assert result["3"]["bri"] == result["4"]["bri"]
 
@@ -292,49 +290,51 @@ class TestApplyLuxMultiplierArithmetic:
             "1": {"on": True, "bri": 200},
             "2": {"on": False},
         }
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         assert result["2"] == {"on": False}  # no bri added
 
     def test_bri_clamp_upper_bound(self, engine):
         engine.set_camera_service(_fake_camera(40.0))  # multiplier 1.20
         state = {"2": {"on": True, "bri": 254}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         # 254 * 1.20 = 304.8 -> clamped to 254
         assert result["2"]["bri"] == 254
 
     def test_hysteresis_avoids_tiny_changes(self, engine):
         # Warm up the hysteresis tracker
         engine.set_camera_service(_fake_camera(90.0))  # multiplier = 1.00
-        engine._apply_lux_multiplier({"1": {"on": True, "bri": 200}}, "working")
+        engine._apply_lux_multiplier({"1": {"on": True, "bri": 200}}, "relax")
         assert engine._last_lux_multiplier == pytest.approx(1.00)
 
         # A microscopic change (lux=91 → mult ≈ 0.998) must not count —
         # the engine should keep using 1.00 so the state dict is unchanged.
         engine.set_camera_service(_fake_camera(91.0))
         state = {"1": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         assert result["1"]["bri"] == 200  # unchanged (multiplier effectively 1.0)
 
-    def test_modes_scope_includes_adaptive_modes(self):
-        # working / relax / gaming / watching adapt; cooking / social keep
-        # their explicit palettes regardless of ambient light.
-        assert LUX_MODES == frozenset({"working", "relax", "gaming", "watching"})
-        assert "cooking" not in LUX_MODES
-        assert "social" not in LUX_MODES
+    def test_modes_scope_is_relax_only(self):
+        # 2026-05-30 room-correct scope: ONLY relax adapts (the couch/living-
+        # room mode the sole camera sees). working/gaming/watching are bedroom
+        # modes the living-room camera can't see; cooking/social keep their
+        # explicit palettes. See the LUX_MODES note in light_state_calculator.
+        assert LUX_MODES == frozenset({"relax"})
+        for excluded in ("working", "gaming", "watching", "cooking", "social"):
+            assert excluded not in LUX_MODES
 
     def test_baseline_makes_calibrated_room_neutral(self, engine):
         # User's room calibrates at lux=141. At lux=141 the multiplier must
         # be 1.00 → bri must equal the untouched base value.
         engine.set_camera_service(_fake_camera(141.0, baseline_lux=141.0))
         state = {"2": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         assert result["2"]["bri"] == 200  # no modulation at baseline
 
     def test_baseline_dark_room_lifts_bri(self, engine):
         # lux=91 < baseline=141 → effective=40 → 1.20 lift.
         engine.set_camera_service(_fake_camera(91.0, baseline_lux=141.0))
         state = {"2": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         # 200 * 1.20 = 240.
         assert result["2"]["bri"] == 240
 
@@ -342,7 +342,7 @@ class TestApplyLuxMultiplierArithmetic:
         # lux=231 > baseline=141 → full dim (×0.85).
         engine.set_camera_service(_fake_camera(231.0, baseline_lux=141.0))
         state = {"2": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         assert result["2"]["bri"] == 170  # int(200 * 0.85)
 
     def test_missing_baseline_falls_back_to_90(self, engine):
@@ -350,6 +350,6 @@ class TestApplyLuxMultiplierArithmetic:
         # preserving the original (pre-fix) behavior. lux=141 → 0.915×.
         engine.set_camera_service(_fake_camera(141.0, baseline_lux=None))
         state = {"2": {"on": True, "bri": 200}}
-        result = engine._apply_lux_multiplier(state, "working")
+        result = engine._apply_lux_multiplier(state, "relax")
         # int(200 * 0.915) = 183
         assert result["2"]["bri"] == 183

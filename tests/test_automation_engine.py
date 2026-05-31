@@ -1699,6 +1699,88 @@ class TestLogAdjustmentTagsUseOverrideMode:
 
 
 # ---------------------------------------------------------------------------
+# Screen-sync target protection (B3, audit 2026-05-30 syncfight-1). Screen
+# sync writes L2/L5 straight to the bridge, bypassing the dedup cache; the
+# mode-apply pipeline must skip those lamps while sync is fresh or it fights
+# sync and the two lamps flicker. Freshness-gated so the engine reclaims them
+# when sync goes quiet.
+# ---------------------------------------------------------------------------
+
+
+class TestScreenSyncTargetProtection:
+    """`_protected_light_ids()` adds the sync target lamps while sync is
+    fresh in a SCREEN_SYNC_MODE, and the apply pipeline honors that."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    def _fake_sync(self, *, age_seconds, targets=("2", "5")):
+        from datetime import datetime, timedelta, timezone
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            last_color_at=datetime.now(timezone.utc) - timedelta(seconds=age_seconds),
+            target_lights=list(targets),
+        )
+
+    async def test_fresh_sync_protects_targets_in_gaming(self, engine):
+        from unittest.mock import AsyncMock
+        await engine.report_activity("gaming", source="pc_agent")
+        engine._screen_sync = self._fake_sync(age_seconds=1.0)
+        assert engine._protected_light_ids() == {"2", "5"}
+
+        # Spy set_light (the conftest fake isn't a Mock and doesn't track L5).
+        engine._hue.set_light = AsyncMock(return_value=True)
+        engine._last_applied_per_light = {}  # force every light to be a write
+        await engine._apply_per_light({
+            "1": {"on": True, "bri": 65, "hue": 47000, "sat": 190},
+            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
+            "3": {"on": True, "bri": 40, "hue": 50000, "sat": 190},
+            "4": {"on": True, "bri": 40, "hue": 50000, "sat": 190},
+            "5": {"on": True, "bri": 120, "hue": 48000, "sat": 170},
+        })
+        written = {call.args[0] for call in engine._hue.set_light.await_args_list}
+        assert "2" not in written and "5" not in written  # sync owns L2/L5
+        assert {"1", "3", "4"} <= written  # ambient still applied
+
+    async def test_stale_sync_reclaims_targets(self, engine):
+        from unittest.mock import AsyncMock
+        await engine.report_activity("gaming", source="pc_agent")
+        engine._screen_sync = self._fake_sync(age_seconds=30.0)  # > 8s grace
+        assert engine._protected_light_ids() == set()
+
+        engine._hue.set_light = AsyncMock(return_value=True)
+        engine._last_applied_per_light = {}
+        await engine._apply_per_light({
+            "1": {"on": True, "bri": 65, "hue": 47000, "sat": 190},
+            "2": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
+            "5": {"on": True, "bri": 120, "hue": 48000, "sat": 170},
+        })
+        written = {call.args[0] for call in engine._hue.set_light.await_args_list}
+        assert {"1", "2", "5"} <= written  # stale sync → engine reclaims L2/L5
+
+    async def test_no_protection_outside_sync_modes(self, engine):
+        # working is NOT a SCREEN_SYNC_MODE → a fresh sync push must not
+        # protect (the engine owns the lamps in non-sync modes).
+        await engine.report_activity("working", source="pc_agent")
+        engine._screen_sync = self._fake_sync(age_seconds=1.0)
+        assert engine._protected_light_ids() == set()
+
+    async def test_protection_unions_manual_transit_sync(self, engine):
+        from datetime import datetime, timedelta, timezone
+        await engine.report_activity("gaming", source="pc_agent")
+        engine._screen_sync = self._fake_sync(age_seconds=1.0)
+        engine._manual_light_overrides = {"1": datetime.now(timezone.utc)}
+        engine._transit_light_overrides = {
+            "3": datetime.now(timezone.utc) + timedelta(minutes=5),
+        }
+        # manual L1 + transit L3 + sync L2/L5
+        assert engine._protected_light_ids() == {"1", "2", "3", "5"}
+
+
+# ---------------------------------------------------------------------------
 # Transit override + kitchen-pair atomicity. Regression guard for the
 # 2026-05-09 21:44 ET Check J warn: 21 solo-L3 writes / zero L4 writes over
 # 11 min while L4 had a manual brightness stamp. Two intertwined bugs:

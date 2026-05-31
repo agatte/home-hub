@@ -92,12 +92,17 @@ MODE_TRANSITION_TIME: dict[str, int] = {
 # Ambient lux adaptive brightness
 # ---------------------------------------------------------------------------
 
-# Modes where ambient adaptation is desirable. +30%/-15% range is small
-# enough that gaming/watching's intentional spatial palettes stay recognizable
-# while still compensating when the room is significantly darker (or brighter)
-# than the calibrated baseline. Cooking + social keep their intentional
-# bright/medium palettes — explicit user-mode choices that shouldn't drift.
-LUX_MODES = frozenset(("working", "relax", "gaming", "watching"))
+# Modes where camera-derived ambient adaptation is applied. SCOPED TO RELAX
+# ONLY (2026-05-30): the sole camera (Latitude) sees the living-room couch,
+# and relax is the couch/living-room mode — its lux reading matches the room
+# being lit. working / gaming / watching are bedroom-desk/projector modes the
+# living-room camera CANNOT see, so scaling their lamps by couch lux is
+# cross-room contamination (a bright living-room window was dimming the
+# windowed-but-blinds-closed bedroom). Removed until per-room lux exists
+# (desktop-webcam bedroom sampler — see project_lighting_ml_audit_2026_05_30).
+# The multiplier applies ONE scalar to every light, so even relax only truly
+# "matches" for L1; kept because relax is ambiance, not task light.
+LUX_MODES = frozenset(("relax",))
 
 # Piecewise-linear curve mapping camera-derived ambient brightness
 # (gray.mean, 0–255) to a brightness multiplier. Dark rooms (low lux)
@@ -248,28 +253,36 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
             "5": {"on": True, "bri": 180, "hue": 48500, "sat": 160},
         },
+        # Surround floor raised 2026-05-30 (lighting-curator stage-1, advisory
+        # agent a627831): L1 + kitchen L3/L4 lifted across evening/night/
+        # late_night so the gaming room isn't a near-black cave that turns any
+        # brighter desk lamp into a glare point against the dark surround
+        # (bedroomGamingBothLampsEvningGaming.JPEG). L2/L5 unchanged this
+        # stage. Kitchen pair stays matched. Lands true now that gaming was
+        # dropped from LUX_MODES (no more living-room-camera dimming).
         "evening": {
-            "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 190},
+            "1": {"on": True, "bri": 65,  "hue": 47000, "sat": 190},
             "2": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
-            "3": {"on": True, "bri": 22,  "hue": 50000, "sat": 190},
-            "4": {"on": True, "bri": 22,  "hue": 50000, "sat": 190},
+            "3": {"on": True, "bri": 40,  "hue": 50000, "sat": 190},
+            "4": {"on": True, "bri": 40,  "hue": 50000, "sat": 190},
             "5": {"on": True, "bri": 120, "hue": 48000, "sat": 170},
         },
         "night": {
-            "1": {"on": True, "bri": 55,  "hue": 47000, "sat": 200},
+            "1": {"on": True, "bri": 70,  "hue": 47000, "sat": 200},
             "2": {"on": True, "bri": 140, "hue": 46920, "sat": 200},
-            "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 200},
-            "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 200},
+            "3": {"on": True, "bri": 40,  "hue": 50000, "sat": 200},
+            "4": {"on": True, "bri": 40,  "hue": 50000, "sat": 200},
             "5": {"on": True, "bri": 110, "hue": 48000, "sat": 175},
         },
         # Late-night gaming — warmer accent, less saturation, dimmed overall.
         # L1 shifts toward muted teal, L2 (desk dominant) keeps the blue but
-        # at lower bri to ease eye strain. Kitchen drops further into accent.
+        # at lower bri to ease eye strain. Kitchen stays a dim accent but is
+        # now visible (was bri18 = invisible) so the surround isn't pitch black.
         "late_night": {
-            "1": {"on": True, "bri": 40,  "hue": 47000, "sat": 160},
+            "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 160},
             "2": {"on": True, "bri": 110, "hue": 46920, "sat": 170},
-            "3": {"on": True, "bri": 18,  "hue": 50000, "sat": 180},
-            "4": {"on": True, "bri": 18,  "hue": 50000, "sat": 180},
+            "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 180},
+            "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 180},
             "5": {"on": True, "bri": 80,  "hue": 47500, "sat": 150},
         },
     },
@@ -816,7 +829,8 @@ def apply_lux_multiplier(
     ``self._last_lux_multiplier`` / ``self._last_weather_class``.
 
     No-op (returns state unchanged + state values unchanged) when:
-      - mode is not in LUX_MODES (only working / relax adapt)
+      - mode is not in LUX_MODES (only relax adapts — the living-room/couch
+        mode the sole camera can see; see the LUX_MODES definition note)
       - ``lux_reading`` is None (camera not wired, paused, stale, etc;
         engine resolves freshness before calling)
     """
