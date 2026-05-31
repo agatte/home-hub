@@ -536,8 +536,12 @@ async def query_db(sql: str) -> list[dict]:
       learned_rules         id, day_of_week, hour, predicted_mode, confidence,
                             sample_count, enabled, created_at, updated_at
 
-    Timestamps are UTC ISO8601; use ``datetime(timestamp,'localtime')`` to
-    render (does not apply to ml_metrics.date). ``light_adjustments.trigger``
+    Timestamps are stored as SPACE-separated UTC -- ``'YYYY-MM-DD HH:MM:SS'``,
+    NOT ISO-with-``T``. Comparing a column against a ``'...T...'`` literal
+    silently mis-sorts (space 0x20 < 'T' 0x54) and returns wrong/empty rows --
+    filter with space-format literals (``timestamp >= '2026-05-29 23:30:00'``)
+    or ``datetime(timestamp,'localtime')`` for local-time windows. (None of this
+    applies to ml_metrics.date, which is a bare Date.) ``light_adjustments.trigger``
     values: "ws" / "rest" / "scene" / "automation" / "all_lights" /
     "transit" / "celebration:<key>". Full schemas in backend/models.py.
 
