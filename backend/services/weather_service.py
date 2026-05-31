@@ -147,6 +147,9 @@ class WeatherService:
         self._cache_time: float = 0
         self._alert_cache: Optional[list[dict[str, Any]]] = None
         self._alert_cache_time: float = 0
+        # IDs of alerts active as of the last fetch — used to emit the
+        # "active alerts" log only on novelty, not every 2-min re-poll (#26).
+        self._seen_alert_ids: set[str] = set()
         # Sunrise/sunset (Unix timestamps, from sunrise-sunset.org)
         self._sunrise: Optional[int] = None
         self._sunset: Optional[int] = None
@@ -371,6 +374,23 @@ class WeatherService:
             logger.warning("NWS forecast fetch failed: %s", e)
             return None, None
 
+    @staticmethod
+    def _alert_id(alert: dict[str, Any]) -> str:
+        """Stable identity for an alert: the NWS feature id, else a composite of
+        event + onset + expires (covers any alert that arrives without an id)."""
+        return alert.get("id") or (
+            f"{alert.get('event', '')}|{alert.get('onset')}|{alert.get('expires')}"
+        )
+
+    def _novel_alerts(self, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return alerts that were not active as of the previous fetch, then
+        refresh the seen-set to the currently-active IDs. Called every fetch
+        (including the empty case), so an alert that expires drops out of the
+        set and will be treated as novel again if it later reappears (#26)."""
+        novel = [a for a in alerts if self._alert_id(a) not in self._seen_alert_ids]
+        self._seen_alert_ids = {self._alert_id(a) for a in alerts}
+        return novel
+
     async def _fetch_alerts(self, client: httpx.AsyncClient) -> None:
         """Fetch active weather alerts for Indianapolis."""
         now = time.time()
@@ -393,6 +413,9 @@ class WeatherService:
             for feature in features:
                 props = feature.get("properties", {})
                 alerts.append({
+                    # NWS feature-level id (stable URN per alert) — used for
+                    # novelty dedup (#26). Composite fallback in _alert_id().
+                    "id": feature.get("id", ""),
                     "event": props.get("event", ""),
                     "severity": props.get("severity", ""),
                     "urgency": props.get("urgency", ""),
@@ -407,9 +430,14 @@ class WeatherService:
             self._alert_cache = alerts
             self._alert_cache_time = now
 
-            if alerts:
-                events = [a["event"] for a in alerts]
-                logger.info("Active weather alerts: %s", ", ".join(events))
+            # Emit only on novelty — the same active alert is otherwise re-logged
+            # every 2-min poll for its whole lifetime (#26). _novel_alerts also
+            # updates the seen-set, so an alert that expires drops out and will
+            # re-fire if it later reappears.
+            novel = self._novel_alerts(alerts)
+            if novel:
+                events = [a["event"] for a in novel]
+                logger.info("New weather alert(s): %s", ", ".join(events))
 
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
             # NWS API is slow/flaky at off-peak hours — transient network

@@ -155,3 +155,34 @@ class TestResponseParsing:
         assert result["city"] == "Indianapolis"
         assert result["sunrise"] is not None
         assert result["sunset"] is not None
+
+
+# --- Alert novelty dedup (#26) -----------------------------------------------
+
+def test_alert_novelty_emits_once_then_suppresses_then_refires():
+    """Same active alert is novel once; a new id is novel; an expired alert that
+    reappears is novel again (seen-set resets to the current active ids)."""
+    svc = WeatherService()
+    a = {"id": "urn:oid:a", "event": "Tornado Warning", "onset": None, "expires": None}
+    b = {"id": "urn:oid:b", "event": "Flood Warning", "onset": None, "expires": None}
+
+    # First sighting of `a` → novel.
+    assert [x["id"] for x in svc._novel_alerts([a])] == ["urn:oid:a"]
+    # Same alert still active next poll → suppressed (no re-emit).
+    assert svc._novel_alerts([a]) == []
+    # `b` joins while `a` persists → only `b` is novel.
+    assert [x["id"] for x in svc._novel_alerts([a, b])] == ["urn:oid:b"]
+    # Everything clears → nothing novel, and the seen-set empties.
+    assert svc._novel_alerts([]) == []
+    assert svc._seen_alert_ids == set()
+    # `a` reappears after expiring → novel again.
+    assert [x["id"] for x in svc._novel_alerts([a])] == ["urn:oid:a"]
+
+
+def test_alert_id_composite_fallback_when_feature_has_no_id():
+    """Alerts lacking an NWS id fall back to an event|onset|expires composite,
+    which is still stable across polls (so they don't re-spam)."""
+    svc = WeatherService()
+    a = {"event": "Heat Advisory", "onset": "2026-06-01T12:00", "expires": "2026-06-01T20:00"}
+    assert [x["event"] for x in svc._novel_alerts([a])] == ["Heat Advisory"]
+    assert svc._novel_alerts([a]) == []  # composite id stable → suppressed
