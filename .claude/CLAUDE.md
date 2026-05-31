@@ -91,7 +91,7 @@ python -m backend.mcp_server
 
 Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
 
-Subagents (`~/.claude/agents/`, 28 total) — fleet table + trigger map in `docs/AGENT_STRATEGY.md` Parts 1 + 5. Single canonical source — don't re-enumerate here.
+Subagents (`~/.claude/agents/`, 30 total) — fleet table + trigger map in `docs/AGENT_STRATEGY.md` Parts 1 + 5. Single canonical source — don't re-enumerate here.
 
 ### Ambient verification loop
 
