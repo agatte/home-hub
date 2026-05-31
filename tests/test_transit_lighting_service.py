@@ -26,6 +26,30 @@ from backend.services.transit_lighting_service import (
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 
+@pytest.fixture(autouse=True)
+def _force_daytime(monkeypatch):
+    """Pin the service's wall-clock reads to 10:00 local so transit's
+    time-of-day gates evaluate deterministically regardless of when the
+    suite runs.
+
+    Without this, ``_navigation_states`` reads the real ``datetime.now()``:
+    in productive modes during the late-night window (23:00-06:00 local) it
+    cedes L1 *and* the kitchen pair to DeskExitKitchenService, yielding an
+    empty payload, so ``_activate`` early-returns and ``svc.active`` never
+    flips True. That made ~13 ``assert svc.active is True`` tests pass by day
+    and fail late-night / on UTC CI (GH#88). 10:00 is mid-day — the
+    non-ceding window — so every light transit owns is painted.
+
+    Mirrors the ``_force_daytime`` autouse fixture in test_confidence_fusion.
+    Tests needing a specific hour (TestNavigationStates) re-pin via their own
+    in-body ``monkeypatch.setattr``, which overrides this default for that test.
+    """
+    monkeypatch.setattr(
+        "backend.services.transit_lighting_service.datetime",
+        _FrozenDatetime(2026, 4, 26, 10, 0),
+    )
+
+
 class _FakeAutomation:
     """Engine stub exposing only what TransitLightingService consumes."""
 
