@@ -131,6 +131,26 @@ class TestQueryRouteValidator:
         )
         assert resp.status_code == 400
 
+    def test_bad_column_returns_400_not_bare_500(self, client):
+        # The issue's exact repro (GH #82): activity_events has no `confidence`
+        # column. The query passes the read-only validator but errors at
+        # execute — must surface as a 400 with the SQLite detail, not an
+        # opaque 500 (the MCP query_db wraps this endpoint).
+        resp = client.get(
+            "/api/debug/query",
+            params={"sql": "SELECT confidence FROM activity_events LIMIT 1"},
+        )
+        assert resp.status_code == 400, resp.text
+        assert "SQL error" in resp.json()["detail"]
+
+    def test_bad_table_returns_400_not_bare_500(self, client):
+        resp = client.get(
+            "/api/debug/query",
+            params={"sql": "SELECT * FROM no_such_table_xyz"},
+        )
+        assert resp.status_code == 400, resp.text
+        assert "no such table" in resp.json()["detail"].lower()
+
 
 class TestEngineLevelReadOnly:
     """If the validator were bypassed, the engine would still refuse writes.

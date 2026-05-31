@@ -84,14 +84,20 @@ async def query(sql: str) -> dict[str, Any]:
 
     async with aiosqlite.connect(_RO_URI, uri=True) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(sql) as cursor:
-            # Pull MAX+1 to detect overflow without loading the whole table.
-            rows = await cursor.fetchmany(MAX_QUERY_ROWS + 1)
-            truncated = len(rows) > MAX_QUERY_ROWS
-            return {
-                "result": [dict(r) for r in rows[:MAX_QUERY_ROWS]],
-                "truncated": truncated,
-            }
+        try:
+            async with db.execute(sql) as cursor:
+                # Pull MAX+1 to detect overflow without loading the whole table.
+                rows = list(await cursor.fetchmany(MAX_QUERY_ROWS + 1))
+        except aiosqlite.Error as e:
+            # Bad column / syntax / unknown table → a 400 with the SQLite
+            # message, not a bare 500. The MCP query_db wraps this endpoint, so
+            # the caller sees "no such column: foo" instead of an opaque 500.
+            raise HTTPException(status_code=400, detail=f"SQL error: {e}") from e
+        truncated = len(rows) > MAX_QUERY_ROWS
+        return {
+            "result": [dict(r) for r in rows[:MAX_QUERY_ROWS]],
+            "truncated": truncated,
+        }
 
 
 @router.get("/event-summary")
