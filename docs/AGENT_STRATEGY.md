@@ -4,7 +4,7 @@
 
 This is a durable strategy document, not a plan-of-record. Shipping any individual agent or tool is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
 
-## Current fleet at a glance (28 agents)
+## Current fleet at a glance (30 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
@@ -34,10 +34,36 @@ This is a durable strategy document, not a plan-of-record. Shipping any individu
 | `frontend-a11y-auditor` | 2 | shipped | manual (on-demand, requires dev server at localhost:8000) |
 | `dead-code-finder` | 2 | shipped | manual (quarterly) |
 | `flag-triager` | 2 | shipped | manual (on-demand when flag queue is overgrown) |
+| `ci-health-watcher` | 2 | shipped | auto (daily 08:30 ET, runbook entry #33) + manual / `/ci-health` |
+| `gh-backlog-triager` | 2 | shipped | manual (on-demand when GH backlog is overgrown) |
 | `gameday-preflight` | 3 | shipped | auto (preseason + weekly Sun NFL) + manual T-90 |
 | `gameday-postmortem` | 3 | shipped | auto (loop pre-fire detector) + manual on test fires |
 
 Tier-4 orchestration is implicit (main session plays lead). Tier-3 runtime specialists (music librarian, routine scheduler advisor) remain unshipped — see Part 1.
+
+> **Note on the Tier column:** the value above is the *value × cadence* tier from Part 1, **not** the model the agent runs on. Model tiering is a separate axis — see "Model tiering" below.
+
+---
+
+## Model tiering (reviewed 2026-05-31)
+
+The fleet was authored May 2026 pinned flat to `model: sonnet` (which resolves to the latest Sonnet — currently 4.6). With Opus 4.8 (1M ctx) and Haiku 4.5 now available, a flat fleet leaves value on the table both ways. Guiding principle:
+
+- **Opus 4.8 — rare fire + high judgment + costly-to-miss.** These fire seldom (per-commit, per-push, on-demand), so the per-token premium barely moves aggregate cost, but a miss is expensive (a bad lighting commit, a missed backend footgun, a wrong root-cause). The 1M context also lets the code-reasoning agents hold oversize files (`automation_engine.py` ~2500 LOC) + logs at once.
+- **Haiku 4.5 — frequent fire + mechanical.** "Query → compute → format a digest block" jobs with little judgment. These are where token spend accumulates (hourly/weekly auto-fires), so the cheaper/faster model is a real saving with no quality loss.
+- **Sonnet 4.6 — everything in the middle** (structured analysis, moderate judgment). The default; only deviate with a reason.
+
+Net effect is roughly cost-neutral-or-cheaper while quality rises on the decisions that matter.
+
+| Model | Agents | Why |
+|---|---|---|
+| **opus** | `lighting-curator`, `pr-review-backend`, `homehub-investigator`, `refactor-proposer` | Aesthetic/spatial reasoning; footgun-aware push gate; root-cause diagnosis (also gets Sentry MCP — see below); module-boundary reasoning on oversize files. All rare-fire. |
+| **haiku** | `override-rate-tracker`, `performance-regression-hunter`, `backup-verifier`, `homehub-verifier` | Rolling-rate arithmetic; threshold compare; checklist walk; hourly state snapshot. `homehub-verifier` is a **trial** — it's the highest-frequency agent (biggest saving) but does some anomaly judgment; fall back to Sonnet if anomaly recall drops. |
+| **sonnet** | all other 22 | Default — structured analysis, moderate judgment. Includes the Opus-*optional* set (`doc-curator`, `roadmap-advisor`, `pr-review-frontend`, `gh-backlog-triager`) — bump to opus only if their output quality disappoints. `ci-health-watcher` is a straight Sonnet (scan→cluster→format). |
+
+**Sentry MCP access (2026-05-31):** Sentry SDK has been live since `8bd4b82` (backend errors → `home-hub.sentry.io`), but no agent referenced `mcp__sentry__*`. Two error-facing agents now do: `homehub-investigator` (search_issues / search_issue_events / get_issue_tag_values / analyze_issue_with_seer / find_projects — prefers Sentry over best-effort `ssh homehub` journalctl, which its sandbox often can't reach) and `error-pattern-watcher` (uses Sentry's server-side fingerprint grouping as a pre-clustered source instead of re-deriving clusters from journalctl by hand).
+
+**GitHub-surface coverage (2026-05-31):** the fleet pointed almost entirely *inward* (live apartment + ML + code); the GitHub surface (Actions CI + the issue backlog) was a blind spot — a ~2-day CI red streak (5/29–5/31) went completely unnoticed. Two agents closed it: `ci-health-watcher` (daily, watches Actions runs via `gh` CLI — the github MCP has no workflow-run tool) and `gh-backlog-triager` (on-demand grooming of the open issue backlog: label normalization, dedup, priority/size, stale detection — advisory, read-only). `roadmap-advisor` was also extended to read the live GH backlog as a fourth source (was docs + memory only). Boundary: `flag-triager` grooms the pre-filing local queue, `gh-backlog-triager` grooms the post-filing GH backlog, `roadmap-advisor` prioritizes across all surfaces. Still deferred: fleet token/cost observability (`subagent_audit.log` records presence, not consumption) and an issue→PR implementation pipeline.
 
 ---
 
@@ -224,6 +250,7 @@ The fleet is 28 agents. Most fire automatically — the manual spawns left are d
 | `rule-engine-misfire-auditor` | runbook entry #24 | weekly Fri 08:00 ET | digest block (agent writes its own) |
 | `performance-regression-hunter` | runbook entry #25 | weekly Tue 09:00 ET | digest block; trends to `~/.claude/data/perf_trends.jsonl` |
 | `error-pattern-watcher` | runbook entry #26 | weekly Thu 09:00 ET | digest block (agent writes its own) |
+| `ci-health-watcher` | runbook entry #33 | daily 08:30 ET | digest block (self-diagnosed — watcher-loop skips investigator) |
 | `deploy-verifier` | `/deploy-home` skill step 7 | post-deploy, automatic | inline conversation report (no digest) |
 | `lighting-curator` | PreToolUse hook on `git commit` | per-commit when staged diff matches lighting files + design identifiers | blocks commit unless `[curator-reviewed]` token in message |
 | `gameday-preflight` | runbook entry #12 (preseason T-7) + entry #13 (weekly Sun Aug-Jan) + manual T-90 game morning | once preseason + every Sunday in NFL season + ad-hoc | digest block (agent writes its own) |
@@ -237,7 +264,8 @@ The fleet is 28 agents. Most fire automatically — the manual spawns left are d
 | `refactor-proposer` | manual | quarterly, on-demand | inline refactor proposals (first target: `automation_engine.py`) |
 | `frontend-a11y-auditor` | manual | on-demand (requires dev server at localhost:8000) | inline axe-core findings per route |
 | `dead-code-finder` | manual | quarterly | inline unused-symbol report |
-| `flag-triager` | manual | on-demand when flag queue is overgrown | inline label normalization + dedup + priority report |
+| `flag-triager` | manual | on-demand when flag queue is overgrown | inline label normalization + dedup + priority report (pre-filing local queue) |
+| `gh-backlog-triager` | manual | on-demand when GH backlog is overgrown | inline canonical-label proposal + dedup + priority/size + stale report (post-filing GH backlog) — advisory, never mutates issues |
 | `analytics-narrator` | manual | ad-hoc daily glance | writes `data/analytics/daily/YYYY-MM-DD.md`; default target is yesterday |
 | `doc-drift-checker` | manual spawn (recommended after shipping a new agent / route / env var / app_setting key) | monthly first-Mon runbook entry 14 + ad-hoc | inline drift report — never mutates docs |
 | `doc-curator` | manual spawn (recommended monthly third-Mon per runbook entry 15, or after a large feature ships) | monthly + ad-hoc | inline structured Edit-ready proposals — never mutates docs |
