@@ -82,7 +82,7 @@ python -m backend.mcp_server
 - **PostToolUse Edit/Write** (`post_edit_env_validate.py`) — `.env*` only: required keys + empty-value + FRONTEND_BUILD path + smart-quote check.
 - **PostToolUse all-tools** (`post_tool_failure.py`) — logs failures to `~/.claude/data/tool_failures.jsonl`; consumed by `error-pattern-watcher`.
 - **SessionStart** (`session_start_homehub.py`) — injects mode/source/override + anomaly-only fields via `additionalContext`. Healthy systems stay terse.
-- **SubagentStop** (`subagent_stop_audit.py`) — logs every subagent completion to `~/.claude/data/subagent_audit.log`.
+- **SubagentStop** (`subagent_stop_audit.py`) — logs every subagent completion to `~/.claude/data/subagent_audit.jsonl` (structured: agent + token usage parsed from the subagent's own transcript). Read by `error-pattern-watcher` + the `/fleet-usage` reporter.
 - **PostToolUse Bash** (`post_git_push.py`) — after a real `git push`, nudges `/deploy-home`.
 - **PreToolUse Bash** (`pre_commit_lighting_curator.py`) — blocks `git commit` touching `light_state_calculator.py` / `scenes.py` / `celebration_orchestrator.py` + a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, `SEQUENCES`, …) unless the message contains `[curator-reviewed]`. Override: spawn `lighting-curator`, address, re-commit.
 - **PreToolUse Bash** (`pre_push_pr_review.py`) — blocks `git push` of Python/SvelteKit diffs unless PASS markers (`<git-dir>/.pr-review-{backend,frontend}-ok` = HEAD SHA) exist. Bypass: `SKIP_PR_REVIEW=1`. Docs/config-only pushes skip.
