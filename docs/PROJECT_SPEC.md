@@ -65,7 +65,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - PC activity detection (psutil process monitoring for games/media)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
 - Camera-based presence (MediaPipe face + pose) is the primary "is the user here" signal in-app, fused with the desktop pc_agent's presence observations via `PresenceFusion` (shipped 2026-05-18). The Latitude camera sees the couch zone (since the 2026-05-27 living-room relocation); the desktop pc_agent owns the desk zone. Home/away as a concept was retired 2026-04-28; arrivals/departures are now handled by Hue's native geofencing outside Home Hub.
-- Mode priority system: gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
+- Mode priority system: pregameday (6) = gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
 - All routine config persisted to SQLite, hot-reloadable
@@ -1303,7 +1303,7 @@ if __name__ == "__main__":
     main()
 ```
 
-**Mode priority (engine enforces automatically):** gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
+**Mode priority (engine enforces automatically):** pregameday (6) = gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 
 ### Pattern 6: Adding a Scheduled Routine
 
