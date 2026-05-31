@@ -246,12 +246,17 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         # when L5 echoes them. Bri stepped back (peripheral vs L2 screen-adjacent
         # primary). Sat lowered because seeded glass pops sat more than fabric —
         # sat=200 produced aggressive bleed in bedroomLampRightGamingDay.jpeg.
+        # Stage-2 2026-05-31 (curator agent a976374): L5 static bri lowered to a
+        # RESTING FLOOR (90/75/65/50 day/eve/night/late) so the screen-sync caps
+        # can sit ABOVE it and LIFT L5 on vivid frames instead of dragging it
+        # down (the static>cap inversion that read as "dim"). Kitchen L3/L4 hue
+        # 50000->44000 (clinical cyan -> room teal, echoes L1 base + monstera).
         "day": {
             "1": {"on": True, "bri": 130, "hue": 47000, "sat": 180},
             "2": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
-            "3": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
-            "4": {"on": True, "bri": 30,  "hue": 50000, "sat": 180},
-            "5": {"on": True, "bri": 180, "hue": 48500, "sat": 160},
+            "3": {"on": True, "bri": 30,  "hue": 44000, "sat": 170},
+            "4": {"on": True, "bri": 30,  "hue": 44000, "sat": 170},
+            "5": {"on": True, "bri": 90,  "hue": 48500, "sat": 160},
         },
         # Surround floor raised 2026-05-30 (lighting-curator stage-1, advisory
         # agent a627831): L1 + kitchen L3/L4 lifted across evening/night/
@@ -263,16 +268,16 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "evening": {
             "1": {"on": True, "bri": 65,  "hue": 47000, "sat": 190},
             "2": {"on": True, "bri": 150, "hue": 46920, "sat": 190},
-            "3": {"on": True, "bri": 40,  "hue": 50000, "sat": 190},
-            "4": {"on": True, "bri": 40,  "hue": 50000, "sat": 190},
-            "5": {"on": True, "bri": 120, "hue": 48000, "sat": 170},
+            "3": {"on": True, "bri": 40,  "hue": 44000, "sat": 180},
+            "4": {"on": True, "bri": 40,  "hue": 44000, "sat": 180},
+            "5": {"on": True, "bri": 75,  "hue": 48000, "sat": 170},
         },
         "night": {
             "1": {"on": True, "bri": 70,  "hue": 47000, "sat": 200},
             "2": {"on": True, "bri": 140, "hue": 46920, "sat": 200},
-            "3": {"on": True, "bri": 40,  "hue": 50000, "sat": 200},
-            "4": {"on": True, "bri": 40,  "hue": 50000, "sat": 200},
-            "5": {"on": True, "bri": 110, "hue": 48000, "sat": 175},
+            "3": {"on": True, "bri": 40,  "hue": 44000, "sat": 185},
+            "4": {"on": True, "bri": 40,  "hue": 44000, "sat": 185},
+            "5": {"on": True, "bri": 65,  "hue": 48000, "sat": 175},
         },
         # Late-night gaming — warmer accent, less saturation, dimmed overall.
         # L1 shifts toward muted teal, L2 (desk dominant) keeps the blue but
@@ -281,9 +286,9 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         "late_night": {
             "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 160},
             "2": {"on": True, "bri": 110, "hue": 46920, "sat": 170},
-            "3": {"on": True, "bri": 28,  "hue": 50000, "sat": 180},
-            "4": {"on": True, "bri": 28,  "hue": 50000, "sat": 180},
-            "5": {"on": True, "bri": 80,  "hue": 47500, "sat": 150},
+            "3": {"on": True, "bri": 28,  "hue": 44000, "sat": 165},
+            "4": {"on": True, "bri": 28,  "hue": 44000, "sat": 165},
+            "5": {"on": True, "bri": 50,  "hue": 47500, "sat": 150},
         },
     },
     # ── Working ───────────────────────────────────────────────────────

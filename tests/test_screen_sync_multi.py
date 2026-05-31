@@ -193,28 +193,32 @@ async def test_l5_luma_comp_dampens_yellow_more_than_blue():
 @pytest.mark.asyncio
 async def test_period_keyed_caps_take_precedence():
     """When a `period` is passed, MODE_MAX_BRIGHTNESS_PERIOD wins over the
-    time-agnostic table. Gaming evening L5 cap = 50 (vs day 60)."""
+    time-agnostic table. Stage-2 (2026-05-31) inverted the L5 relationship:
+    gaming evening L5 cap = 95, ABOVE the day flat cap 60 — the accent should
+    read more present in a dark room than in daylight (the L5 inversion fix)."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Saturate pure deep-blue (low-luma → no comp damping). Day cap=60.
+    # Saturate pure deep-blue (low-luma → no comp damping). Day uses flat cap=60.
     for _ in range(20):
         await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
     day_bri = hue.last_for("5")["bri"]
 
-    # Evening cap=50.
+    # Evening uses the period-keyed cap=95.
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
     for _ in range(20):
         await sync2.apply_color("5", 0, 0, 255, mode="gaming", period="evening")
     evening_bri = hue2.last_for("5")["bri"]
 
-    assert day_bri > evening_bri, (
-        f"evening cap should be tighter than day (day={day_bri} evening={evening_bri})"
+    # The period table takes precedence: evening's 95 cap lands above the day
+    # flat 60, proving the (mode, period, light) lookup wins.
+    assert evening_bri > day_bri, (
+        f"evening period cap (95) should exceed day flat cap (60) "
+        f"(day={day_bri} evening={evening_bri})"
     )
-    # Within their respective per-period caps.
     assert day_bri <= 60
-    assert evening_bri <= 50
+    assert evening_bri <= 95
 
 
 @pytest.mark.asyncio

@@ -77,15 +77,17 @@ MODE_MAX_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
     ("gaming", "evening",    "2"): 185,
     ("gaming", "night",      "2"): 170,
     ("gaming", "late_night", "2"): 130,
-    # L5 (clear seeded glass) — continues today's downward iteration trajectory
-    # since the user's complaint thread was specifically about L5's
-    # visible-bulb brightness on high-luma frames at evening ambient. Caps
-    # stay below the per-period static baselines (120/110/80) on the
-    # assumption that the visible-bulb perceptual punch already counts the
-    # static value, so sync can't justify exceeding it.
-    ("gaming", "evening",    "5"):  50,
-    ("gaming", "night",      "5"):  35,
-    ("gaming", "late_night", "5"):  25,
+    # L5 (clear seeded glass) — Stage-2 2026-05-31 (curator agent a976374):
+    # caps RAISED above the lowered static resting floor (90/75/65/50) so
+    # screen-sync can LIFT L5 on vivid frames instead of dragging it below its
+    # resting state (the prior 50/35/25 caps sat 2-3x UNDER the static base =
+    # the "dim colors" complaint, audit syncfight-2). Rec.601 luma comp still
+    # scales warm/green frames down, so the lift mainly benefits low-luma blue
+    # gaming content. Evening cap (95) intentionally exceeds day (flat 60): an
+    # accent should read MORE present in a dark room than in daylight.
+    ("gaming", "evening",    "5"):  95,
+    ("gaming", "night",      "5"):  80,
+    ("gaming", "late_night", "5"):  50,
 }
 
 # Per-(mode, light_id) minimum brightness. Gaming stays visible even on
