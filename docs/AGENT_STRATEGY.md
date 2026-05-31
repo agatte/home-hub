@@ -73,7 +73,7 @@ Net effect is roughly cost-neutral-or-cheaper while quality rises on the decisio
 
 ## Verification note
 
-Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Project-specific skills (all under `~/.claude/skills/`): `/api-audit`, `/deploy-home`, `/home-hub-dev`, `/ui-audit`, `/project-spec`, `/checkback-loop`, `/watcher-loop` (original seven); `/ml-status`, `/promotion-decision`, `/override-rate-check` (Round 1 — ML autonomy); `/health-snapshot`, `/why-this-mode`, `/last-fail`, `/grep-journal`, `/digest-today` (Round 2 — dev velocity); `/flag`, `/flag-sync`, `/flag-list` (Round 3 — flag-capture workflow); `/lsp-verify` (LSP marketplace patch drift check + auto-reapply). User-global skills available in all projects: `/loop`, `/schedule`, `/simplify`, `/init`, `/review`, `/security-review`, `/update-config`, `/keybindings-help`, `/fewer-permission-prompts`, `/claude-api`, `/frontend-design`, `/ui-ux-pro-max`.
+Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Project-specific skills (all under `~/.claude/skills/`): `/api-audit`, `/deploy-home`, `/home-hub-dev`, `/ui-audit`, `/project-spec`, `/checkback-loop`, `/watcher-loop` (original seven); `/ml-status`, `/promotion-decision`, `/override-rate-check` (Round 1 — ML autonomy); `/health-snapshot`, `/why-this-mode`, `/last-fail`, `/grep-journal`, `/digest-today` (Round 2 — dev velocity); `/flag`, `/flag-sync`, `/flag-list` (Round 3 — flag-capture workflow); `/lsp-verify` (LSP marketplace patch drift check + auto-reapply); `/ci-health`, `/fleet-usage`, `/implement-issue` (Round 4, 2026-05-31 — GitHub surface: on-demand CI status, weekly fleet token-spend report, single-issue plan-gated PR pipeline). User-global skills available in all projects: `/loop`, `/schedule`, `/simplify`, `/init`, `/review`, `/security-review`, `/update-config`, `/keybindings-help`, `/fewer-permission-prompts`, `/claude-api`, `/frontend-design`, `/ui-ux-pro-max`.
 
 Canonical multi-agent path on this machine: **git worktrees + manual coordination**, OR the **experimental Agent Teams** behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (enabled in `~/.claude/settings.json`). Treat any reference elsewhere to a `/batch` skill as aspirational, not actionable.
 
@@ -111,9 +111,13 @@ Canonical multi-agent path on this machine: **git worktrees + manual coordinatio
 
 **Refactor proposer.** **Shipped 2026-05-11. ✓** Quarterly / on-demand. Analyzes git log + LOC + concerns. `automation_engine.py` (2500+ lines) is the obvious first target.
 
-**Error pattern watcher.** **Shipped 2026-05-11. ✓** Weekly Thu 09:00 ET (runbook entry #26). Clusters across `tool_failures.jsonl` + `subagent_audit.log` + digest dir + journalctl by fingerprint.
+**Error pattern watcher.** **Shipped 2026-05-11. ✓** Weekly Thu 09:00 ET (runbook entry #26). Clusters across `tool_failures.jsonl` + `subagent_audit.jsonl` + digest dir + journalctl + Sentry by fingerprint.
 
 **Dead code finder.** **Shipped 2026-05-11. ✓** Quarterly. Pyright unused-symbol + grep cross-check. False-positive filter for route handlers, MCP tools, mode-change callbacks, ScheduledTask handlers, `__all__` exports.
+
+**CI health watcher.** **Shipped 2026-05-31. ✓** Daily 08:30 ET (runbook entry #33). Watches GitHub Actions runs via the `gh` CLI (the github MCP has no run-list tool), clusters failures by job+step, computes the `master` consecutive-failure streak, and audits action versions. **Self-diagnoses** so the watcher loop never spawns the apartment `homehub-investigator` on a CI block. Read-only. Sister skill `/ci-health` for synchronous on-demand checks.
+
+**GitHub backlog triager.** **Shipped 2026-05-31. ✓** On-demand. Grooms the *open* issue backlog at `agatte/home-hub` — label-taxonomy normalization, dedup/overlap clusters, priority + size inference, stale + already-shipped detection. Advisory; never mutates issues. Complements `flag-triager` (pre-filing local queue) and `roadmap-advisor` (which now also reads the live GH backlog for prioritization).
 
 ### Tier 3 — Future / aspirational
 
@@ -301,7 +305,7 @@ next day Curator review on any subsequent SEQUENCES tweak (advisory section K) b
 | `post_edit_env_validate.py` | PostToolUse | Edit\|Write | Filters to `.env*` files. Validates required keys (APP_ENV, LOCAL_IP, HUE_BRIDGE_IP, HUE_USERNAME, TIMEZONE), empty values, FRONTEND_BUILD path existence, smart-quote substitution. Prints `[env]` inline. |
 | `post_git_push.py` | PostToolUse | Bash | After a real `git push`, nudges `/deploy-home`. |
 | `post_tool_failure.py` | PostToolUse | — (all tools) | Logs tool call failures to `~/.claude/data/tool_failures.jsonl`. 10s dedup window. Idempotent. |
-| `subagent_stop_audit.py` | SubagentStop | — | Logs every subagent completion to `~/.claude/data/subagent_audit.log` with a `ZERO_OUTPUT` flag for empty completions. |
+| `subagent_stop_audit.py` | SubagentStop | — | Logs every subagent completion to `~/.claude/data/subagent_audit.jsonl` (structured row: agent + token usage parsed from the subagent's own transcript). Read by `error-pattern-watcher` + `/fleet-usage`. (Rebuilt 2026-05-31 — the old `.log` logged `unknown/chars=0` on every row.) |
 
 ### Pre-commit gate (lighting changes)
 
@@ -402,9 +406,11 @@ Entries in `~/.claude/runbooks/homehub-checkbacks.md` that dispatch specialist a
 | #24 (rule-engine misfire auditor) | weekly Fri 08:00 ET | `rule-engine-misfire-auditor` |
 | #25 (performance-regression hunter) | weekly Tue 09:00 ET | `performance-regression-hunter` |
 | #26 (error-pattern watcher) | weekly Thu 09:00 ET | `error-pattern-watcher` |
+| #33 (ci-health watcher) | daily 08:30 ET | `ci-health-watcher` |
+| #34 (fleet-usage report) | weekly Sun 18:00 ET | `/fleet-usage` skill (loop runs it inline — not a subagent) |
 | Pre-fire detector (gameday auto-close) | every loop tick (SQL check) | `gameday-postmortem` |
 
-All other entries dispatch to `homehub-verifier` with an inline recipe. `homehub-watcher.md` has matching diagnostic procedures for entries #7, #23, #24, #25, #26.
+All other entries dispatch to `homehub-verifier` with an inline recipe. `homehub-watcher.md` has matching diagnostic procedures for entries #7, #23, #24, #25, #26, #33 (#33 is self-diagnosed — the watcher skips the investigator; #34 is verdict-only, no watcher procedure).
 
 ---
 
