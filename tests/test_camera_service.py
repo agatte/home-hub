@@ -1089,15 +1089,16 @@ class TestFaceAnchorPoseGate:
         present via pose since the anchor is fresh.
         """
         service = self._service_with_pose_no_face()
-        # Seed a fresh face anchor for the desk zone
+        # Seed a fresh face anchor for the couch zone (the single living-room
+        # zone the camera emits since the 2026-05-27 Latitude relocation).
         from datetime import datetime, timezone
-        service._face_anchor_at["desk"] = datetime.now(timezone.utc)
+        service._face_anchor_at["couch"] = datetime.now(timezone.utc)
 
         result = service._process_frame()
         assert result is not None
         assert result["status"] == "present"
         assert result["source"] == "pose"
-        assert result["zone"] == "desk"
+        assert result["zone"] == "couch"
 
     def test_pose_with_stale_face_anchor_does_not_commit(self):
         """Anchor older than TTL → treated as expired. Pose falls through
@@ -1130,7 +1131,7 @@ class TestFaceAnchorPoseGate:
         mock_cap.read.return_value = (True, np.zeros((240, 320, 3), dtype=np.uint8))
         service._cap = mock_cap
 
-        # Face at desk zone, confidence just above the anchor threshold
+        # Face in the couch zone, confidence just above the anchor threshold
         mock_face_detector = MagicMock()
         mock_face_results = MagicMock()
         mock_face_results.detections = [
@@ -1141,9 +1142,9 @@ class TestFaceAnchorPoseGate:
         # No pose this frame
         service._pose_landmarker = None
 
-        assert "desk" not in service._face_anchor_at
+        assert "couch" not in service._face_anchor_at
         service._process_frame()
-        assert "desk" in service._face_anchor_at
+        assert "couch" in service._face_anchor_at
 
     def test_face_below_anchor_threshold_does_not_refresh(self):
         """Weak chair-back faces (conf < FACE_ANCHOR_MIN_CONFIDENCE) must
@@ -1173,31 +1174,33 @@ class TestFaceAnchorPoseGate:
         service._process_frame()
         assert "desk" not in service._face_anchor_at
 
-    def test_pose_zone_none_falls_back_to_any_anchor(self):
-        """When pose_zone is None (shoulders below visibility floor, e.g.
-        deep profile), the gate falls back to the most-recent anchor in
-        any zone. A real user with a fresh face anchor anywhere shouldn't
-        get demoted to absent just because pose can't disambiguate side.
+    def test_pose_with_degraded_shoulders_commits_via_couch_anchor(self):
+        """Degraded shoulder visibility (deep profile / bent forward) must not
+        demote a real user to absent.
+
+        Pre-2026-05-27 the camera split desk/bed by shoulder-center X, so
+        sub-visibility shoulders left ``pose_zone`` ambiguous (None) and the
+        gate fell back to the most-recent anchor in any zone. After the
+        living-room relocation the camera emits a single ``ZONE_COUCH`` for any
+        firing pose, so that fallback branch is now unreachable — pose always
+        resolves to couch. This guards the surviving contract: a degraded-pose
+        frame still fires and commits present when a fresh couch anchor exists.
         """
         from datetime import datetime, timezone
 
         service = self._service_with_pose_no_face()
-        # Override the pose mock to return zone=None (shoulders sub-vis)
-        no_zone_pose = _mock_full_pose_landmarks_result(visibility=0.95)
-        # Drop shoulder visibility below MIN_POSE_VISIBILITY so pose_zone is None
-        no_zone_pose.pose_landmarks[0][11].visibility = 0.1
-        no_zone_pose.pose_landmarks[0][12].visibility = 0.1
-        service._pose_landmarker.detect.return_value = no_zone_pose
+        # Both shoulders below the visibility floor — pose still fires off the
+        # remaining landmarks and resolves to the single couch zone.
+        degraded_pose = _mock_full_pose_landmarks_result(visibility=0.95)
+        degraded_pose.pose_landmarks[0][11].visibility = 0.1
+        degraded_pose.pose_landmarks[0][12].visibility = 0.1
+        service._pose_landmarker.detect.return_value = degraded_pose
 
-        # Anchor exists in bed (recent), pose can't pick a zone
-        service._face_anchor_at["bed"] = datetime.now(timezone.utc)
+        service._face_anchor_at["couch"] = datetime.now(timezone.utc)
         result = service._process_frame()
-        # Pose with fresh anchor in some zone → present.
-        # zone=None confirms the no-zone branch actually fired (otherwise
-        # the test would silently pass via the normal zone-keyed lookup).
         assert result["status"] == "present"
         assert result["source"] == "pose"
-        assert result["zone"] is None
+        assert result["zone"] == "couch"
 
     def test_status_surfaces_face_anchor_age(self):
         """get_status() includes ``face_anchor_age_s_by_zone`` so dashboards

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { get } from 'svelte/store'
 
 import {
@@ -14,11 +14,6 @@ const sample = {
 
 beforeEach(() => {
   modeSuggestion.set(null)
-  vi.useFakeTimers()
-})
-
-afterEach(() => {
-  vi.useRealTimers()
 })
 
 describe('showModeSuggestion', () => {
@@ -27,21 +22,18 @@ describe('showModeSuggestion', () => {
     expect(get(modeSuggestion)).toEqual(sample)
   })
 
-  it('auto-dismisses after 20 seconds', () => {
+  it('does not auto-dismiss — expiry is server-driven', () => {
+    // The 20s client-side auto-hide was removed; the server expires the
+    // suggestion via `mode_suggestion_dismissed` (60min automation-tick
+    // auto-expire). The store value persists until explicitly cleared.
     showModeSuggestion(sample)
-    vi.advanceTimersByTime(20_000)
-    expect(get(modeSuggestion)).toBeNull()
+    expect(get(modeSuggestion)).toEqual(sample)
   })
 
-  it('a second call resets the auto-dismiss timer', () => {
+  it('a second call replaces the value', () => {
     showModeSuggestion(sample)
-    vi.advanceTimersByTime(15_000)
     showModeSuggestion({ ...sample, predicted_mode: 'gaming' })
-    vi.advanceTimersByTime(15_000)
-    // 30s total elapsed but timer was reset at 15s — still alive at 30s.
     expect(get(modeSuggestion)?.predicted_mode).toBe('gaming')
-    vi.advanceTimersByTime(10_000)
-    expect(get(modeSuggestion)).toBeNull()
   })
 })
 
@@ -52,14 +44,10 @@ describe('dismissModeSuggestion', () => {
     expect(get(modeSuggestion)).toBeNull()
   })
 
-  it('cancels the pending auto-dismiss so a later show isn\'t cut short', () => {
+  it('a show after dismiss keeps the new value', () => {
     showModeSuggestion(sample)
-    vi.advanceTimersByTime(10_000)
     dismissModeSuggestion()
     showModeSuggestion(sample)
-    vi.advanceTimersByTime(10_000)
-    // 20s would have elapsed since first show, but dismiss reset the timer
-    // to a fresh window.
-    expect(get(modeSuggestion)).not.toBeNull()
+    expect(get(modeSuggestion)).toEqual(sample)
   })
 })
