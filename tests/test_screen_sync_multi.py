@@ -342,3 +342,63 @@ def test_get_cap_gaming_day_clouds_lifts_l2():
     )
     # 240 × 1.07 × 1.10 = 282.5 → clamped to 254
     assert cap == 254
+
+
+class _FakeEventLogger:
+    """Records log_light_adjustment calls (syncfight-3 logging tests)."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def log_light_adjustment(self, **kwargs) -> None:
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_screen_sync_logs_throttled_adjustment():
+    """apply_color records ONE throttled light_adjustments row per light per
+    interval, tagged trigger='screen_sync' with the applied values (closes
+    syncfight-3); rapid repeats within the interval are throttled, and each
+    light throttles independently."""
+    import datetime as _dt
+
+    hue = _FakeHue()
+    elog = _FakeEventLogger()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    sync.set_event_logger(elog)
+
+    # First synced write to L2 logs once, tagged screen_sync, with applied values.
+    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    assert len(elog.calls) == 1
+    row = elog.calls[0]
+    assert row["light_id"] == "2"
+    assert row["trigger"] == "screen_sync"
+    assert row["mode_at_time"] == "gaming"
+    assert "bri_after" in row and "hue_after" in row and "sat_after" in row
+
+    # A rapid second write (within the interval) is throttled — still 1 row.
+    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    assert len(elog.calls) == 1
+
+    # L5 throttles independently → its first write logs (now 2 total).
+    await sync.apply_color("5", 0, 0, 255, mode="gaming", period="evening")
+    assert len(elog.calls) == 2
+    assert elog.calls[1]["light_id"] == "5"
+
+    # Backdate L2's throttle past the interval → the next L2 write logs again.
+    sync._last_log_at["2"] = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
+        seconds=ss.SCREEN_SYNC_LOG_INTERVAL_S + 1
+    )
+    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    assert len(elog.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_screen_sync_no_event_logger_is_safe():
+    """With no event logger wired (default None), apply_color must still write
+    the bridge and not error — keeps the laptop-loopback + unit-test paths working."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    # No set_event_logger call.
+    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    assert hue.last_for("2")["bri"] > 0  # the bridge write still happened

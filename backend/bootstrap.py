@@ -191,6 +191,12 @@ async def lifespan(app: FastAPI):
     # Registered to tasks below so the existing cancel-and-wait path tears it down.
     event_logger_retry_task = await event_logger.start()
 
+    # Screen-sync writes the bridge directly (bypassing the engine), so wire
+    # the event logger into it now that it exists — synced colors get
+    # throttled-logged to light_adjustments with trigger='screen_sync'
+    # (closes audit syncfight-3; screen_sync was constructed earlier above).
+    screen_sync.set_event_logger(event_logger)
+
     # Event query service — read-only aggregation over event tables
     from backend.services.event_query_service import EventQueryService
     app.state.event_query_service = EventQueryService()

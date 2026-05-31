@@ -43,6 +43,12 @@ from backend.services.light_state_calculator import (
 
 logger = logging.getLogger("home_hub.screen_sync")
 
+# Throttle for screen_sync → event_logger writes (closes audit syncfight-3:
+# synced colors otherwise bypass the logger and never reach light_adjustments /
+# analytics). One row per light per interval so the ~2.5s capture cadence
+# doesn't flood the table — ~720 rows/hr/light at 5s, negligible vs retention.
+SCREEN_SYNC_LOG_INTERVAL_S = 5.0
+
 
 # Per-(mode, light_id) max brightness clamps for the synced lamps.
 # Gaming gets a higher cap so the lamp can pop on bright moments; watching
@@ -175,6 +181,13 @@ class ScreenSyncService:
         # Runtime overrides for specific (mode, zone, posture, light_id) caps —
         # settings page writes through this dict, persisted in app_settings.
         self._cap_overrides: dict[tuple[str, str, str, str], int] = {}
+
+        # Event logger for throttled screen_sync write logging (syncfight-3).
+        # Wired post-construction via set_event_logger (the EventLogger is
+        # built later in bootstrap). None => no logging. _last_log_at throttles
+        # to one row per light per SCREEN_SYNC_LOG_INTERVAL_S.
+        self._event_logger = None
+        self._last_log_at: dict[str, datetime] = {}
 
     def set_cap_override(
         self,
@@ -407,6 +420,7 @@ class ScreenSyncService:
         })
         self._last_color_at = datetime.now(timezone.utc)
         self._last_source = source
+        await self._maybe_log_adjustment(light_id, int(sh), int(ss), int(sb), mode)
 
     def _smooth(
         self, light_id: str, h: float, s: float, b: float,
@@ -434,6 +448,41 @@ class ScreenSyncService:
         self._last_bri[light_id] = smoothed_b
 
         return (smoothed_h, smoothed_s, smoothed_b)
+
+    def set_event_logger(self, event_logger) -> None:
+        """Wire the EventLogger so synced writes get recorded (throttled) to
+        light_adjustments with trigger='screen_sync'. Called post-construction
+        in bootstrap because the EventLogger is built after this service.
+        ``None`` (the default) disables logging — keeps unit tests and the
+        laptop-loopback path working without an event logger."""
+        self._event_logger = event_logger
+
+    async def _maybe_log_adjustment(
+        self, light_id: str, hue: int, sat: int, bri: int, mode: str,
+    ) -> None:
+        """Throttled event-log of a synced bridge write (closes syncfight-3).
+
+        ``apply_color`` writes the bridge directly, bypassing the engine's
+        event logger, so without this the synced colors never reach
+        ``light_adjustments`` / analytics. Throttled to one row per light per
+        ``SCREEN_SYNC_LOG_INTERVAL_S`` so the ~2.5s capture cadence doesn't
+        flood the table. Logs the post-EMA applied values with
+        ``trigger='screen_sync'``. No-op when no event logger is wired."""
+        if self._event_logger is None:
+            return
+        now = datetime.now(timezone.utc)
+        last = self._last_log_at.get(light_id)
+        if last is not None and (now - last).total_seconds() < SCREEN_SYNC_LOG_INTERVAL_S:
+            return
+        self._last_log_at[light_id] = now
+        await self._event_logger.log_light_adjustment(
+            light_id=light_id,
+            hue_after=hue,
+            sat_after=sat,
+            bri_after=bri,
+            mode_at_time=mode,
+            trigger="screen_sync",
+        )
 
 
 class LaptopLoopbackCapture:
