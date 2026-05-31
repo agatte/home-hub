@@ -784,12 +784,16 @@ class TestModeChangeCallback:
     async def test_pauses_on_sleeping(self):
         service = _make_service()
         service._enabled = True
-        service._cap = MagicMock()
-        service._cap.isOpened.return_value = True
+        cap = MagicMock()
+        cap.isOpened.return_value = True
+        service._cap = cap
 
         await service.on_mode_change("sleeping")
         assert service._paused is True
-        service._cap.release.assert_called_once()
+        # on_mode_change nulls _cap and hands the old handle to an executor
+        # for release — so assert on the captured reference, not service._cap.
+        assert service._cap is None
+        cap.release.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_resumes_on_non_sleeping(self):
@@ -936,30 +940,50 @@ class TestCaptureWatchdog:
         finally:
             cv2.VideoCapture.reset_mock(return_value=True, side_effect=True)
 
-    def test_recover_capture_releases_old_and_reopens(self):
-        """_recover_capture releases the wedged handle and installs a fresh one."""
+    @pytest.mark.asyncio
+    async def test_recover_capture_releases_old_and_reopens(self):
+        """_recover_capture hands the wedged handle off for release and installs a fresh one.
+
+        Release + reopen run off-loop in ``_open_capture_async`` (which calls
+        ``_release_and_open`` in an executor). We stub that boundary so the
+        test exercises recovery wiring without real hardware, and assert the
+        old handle was passed in for release.
+        """
         service = _make_service()
         old_cap = MagicMock()
         service._cap = old_cap
+        fresh_cap = MagicMock()
 
-        service._recover_capture()
+        async def fake_open(*, release_first=None):
+            # Mirror the real _release_and_open: release the prior handle.
+            if release_first is not None:
+                release_first.release()
+            return fresh_cap
+
+        with patch.object(service, "_open_capture_async", side_effect=fake_open):
+            await service._recover_capture()
 
         old_cap.release.assert_called_once()
-        assert service._cap is not None
-        assert service._cap is not old_cap
+        assert service._cap is fresh_cap
 
-    def test_recover_capture_swallows_release_exception(self):
-        """A broken release() must not propagate — orphan thread may hold a soft lock."""
+    @pytest.mark.asyncio
+    async def test_recover_capture_reopen_failure_leaves_cap_none(self):
+        """If the off-loop reopen fails (watchdog timeout → None), _cap stays None.
+
+        _process_frame short-circuits on a None cap, so leaving it None is the
+        correct degraded state until a later poll succeeds.
+        """
         service = _make_service()
         old_cap = MagicMock()
-        old_cap.release.side_effect = RuntimeError("driver wedged")
         service._cap = old_cap
 
-        # Must not raise.
-        service._recover_capture()
-        # Reopen still happened.
-        assert service._cap is not None
-        assert service._cap is not old_cap
+        async def fake_open(*, release_first=None):
+            return None
+
+        with patch.object(service, "_open_capture_async", side_effect=fake_open):
+            await service._recover_capture()
+
+        assert service._cap is None
 
     @pytest.mark.asyncio
     async def test_poll_loop_recovers_from_frame_timeout(self, monkeypatch):
