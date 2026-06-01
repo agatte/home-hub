@@ -23,12 +23,12 @@
   // .lan, not .local — macOS/iOS treat .local as mDNS/Bonjour and may bypass
   // Pi-hole for those names. Keep in sync with Pi-hole's dns.hosts records.
   const DEFAULT_DNS_HOSTS = [
-    { ip: '192.168.1.210', hostname: 'homehub.lan' },
-    { ip: '192.168.1.210', hostname: 'pihole.lan' },
-    { ip: '192.168.1.50',  hostname: 'hue.lan' },
-    { ip: '192.168.1.157', hostname: 'sonos.lan' },
-    { ip: '192.168.1.30',  hostname: 'desktop.lan' },
-    { ip: '192.168.1.209', hostname: 'tablet.lan' },
+    { ip: '192.168.86.210', hostname: 'homehub.lan' },
+    { ip: '192.168.86.210', hostname: 'pihole.lan' },
+    { ip: '192.168.86.50',  hostname: 'hue.lan' },
+    { ip: '192.168.86.157', hostname: 'sonos.lan' },
+    { ip: '192.168.86.30',  hostname: 'desktop.lan' },
+    { ip: '192.168.86.209', hostname: 'tablet.lan' },
   ]
 
   /** @type {any[] | null} */
@@ -204,7 +204,7 @@
         <input
           type="text"
           class="form-input form-input-sm"
-          placeholder="192.168.1.x"
+          placeholder="192.168.86.x"
           bind:value={newDnsIp}
         />
         <SettingButton

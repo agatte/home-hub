@@ -4,7 +4,7 @@ Desktop notifier — custom toast widget that subscribes to Home Hub's
 desktop.
 
 Runs as a standalone PyQt6 process on Anthony's Windows desktop
-(192.168.1.30), separate from the backend on the Latitude. Pattern
+(192.168.86.30), separate from the backend on the Latitude. Pattern
 mirrors ``activity_detector.py``: PID lock, rotating logfile, sigterm
 handler, exponential-backoff reconnect.
 
@@ -83,7 +83,7 @@ import websockets.sync.client
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_SERVER = "ws://192.168.1.210:8000/ws"
+DEFAULT_SERVER = "ws://192.168.86.210:8000/ws"
 
 # Reconnect cadence — matches the v2 stream loop in hue_v2_service.
 RECONNECT_INITIAL_S = 1.0

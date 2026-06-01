@@ -23,7 +23,7 @@ Detection logic (YAMNet classifier, shadow/active):
 
 Usage:
     python -m backend.services.pc_agent.ambient_monitor
-    python -m backend.services.pc_agent.ambient_monitor --server http://192.168.1.210:8000
+    python -m backend.services.pc_agent.ambient_monitor --server http://192.168.86.210:8000
     python -m backend.services.pc_agent.ambient_monitor --classifier --shadow
     python -m backend.services.pc_agent.ambient_monitor --classifier --active
 """

@@ -5,7 +5,7 @@
 // then in another shell:
 //   cd frontend-svelte && npm run test:e2e
 //
-// Or point at a different host with PLAYWRIGHT_BASE_URL=http://192.168.1.210:8000.
+// Or point at a different host with PLAYWRIGHT_BASE_URL=http://192.168.86.210:8000.
 //
 // These tests are NOT in the GitHub Actions CI pipeline — running them
 // requires a live backend, which CI doesn't currently spin up.

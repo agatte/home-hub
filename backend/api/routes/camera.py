@@ -110,7 +110,7 @@ async def post_observation(
     PresenceFusion directly via in-process callback; this endpoint is
     the network boundary for everything else.
 
-    LAN-bypass at ``auth.py:90`` covers the 192.168.1.30 desktop. The
+    LAN-bypass at ``auth.py:90`` covers the 192.168.86.30 desktop. The
     ``require_api_key`` dependency stays for shape consistency and for
     future tunnel-origin sources (e.g. a phone-camera companion app).
     """

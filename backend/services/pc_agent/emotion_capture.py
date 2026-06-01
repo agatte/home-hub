@@ -23,7 +23,7 @@ Privacy contract (mirrors camera_service.py):
     - Webcam LED activates when capturing (hardware-enforced).
 
 Usage (normally launched by supervisor.py, not directly):
-    python -m backend.services.pc_agent.emotion_capture --server http://192.168.1.210:8000
+    python -m backend.services.pc_agent.emotion_capture --server http://192.168.86.210:8000
 """
 import argparse
 import logging
@@ -1058,8 +1058,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--server",
-        default="http://192.168.1.210:8000",
-        help="Home Hub server URL (default: http://192.168.1.210:8000)",
+        default="http://192.168.86.210:8000",
+        help="Home Hub server URL (default: http://192.168.86.210:8000)",
     )
     args = parser.parse_args()
 

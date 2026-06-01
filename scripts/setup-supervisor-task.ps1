@@ -110,7 +110,7 @@ Register-ScheduledTask `
     -Trigger @($loginTrigger, $watchdogTrigger) `
     -Settings $settings `
     -Principal $principal `
-    -Description "Unified supervisor for Home Hub PC agents (activity detector, ambient monitor, screen sync). Reports to Latitude 192.168.1.210."
+    -Description "Unified supervisor for Home Hub PC agents (activity detector, ambient monitor, screen sync). Reports to Latitude 192.168.86.210."
 
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green

@@ -6,7 +6,9 @@
 $TaskName = "Home Hub Ambient Monitor"
 $ProjectRoot = "C:\Users\antho\Desktop\home-hub"
 $PythonW = "$ProjectRoot\venv\Scripts\pythonw.exe"
-$Arguments = "-m backend.services.pc_agent.ambient_monitor --server http://192.168.1.210:8000 --classifier --shadow"
+# Server URL from the HOME_HUB_URL user env var; falls back to the current Latitude LAN IP.
+$Server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { "http://192.168.86.210:8000" }
+$Arguments = "-m backend.services.pc_agent.ambient_monitor --server $Server --classifier --shadow"
 
 # Remove existing task if present
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -48,7 +50,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "YAMNet audio scene classification via Blue Yeti - reports to Home Hub backend on Latitude 192.168.1.210"
+    -Description "YAMNet audio scene classification via Blue Yeti - reports to Home Hub backend on Latitude 192.168.86.210"
 
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green

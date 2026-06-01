@@ -1337,10 +1337,10 @@ on the machine via scheduled training tasks.
 
 ```bash
 # Standard deploy (code changes)
-ssh anthony@192.168.1.210 "cd ~/home-hub && ./scripts/deploy.sh"
+ssh anthony@192.168.86.210 "cd ~/home-hub && ./scripts/deploy.sh"
 
 # First-time ML setup (downloads pretrained models)
-ssh anthony@192.168.1.210 "cd ~/home-hub && python -m backend.services.ml.model_manager --setup"
+ssh anthony@192.168.86.210 "cd ~/home-hub && python -m backend.services.ml.model_manager --setup"
 ```
 
 ### Startup Sequence

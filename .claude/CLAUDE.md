@@ -46,7 +46,7 @@ cd frontend-svelte && npm install
 
 Server runs at http://localhost:8000. Frontend dev server: `cd frontend-svelte && npm run dev` on port 3001 (proxies API to 8000).
 
-### Production deploy (Latitude at 192.168.1.210)
+### Production deploy (Latitude at 192.168.86.210)
 
 Use the `/deploy-home` skill — it commits/pushes/SSHes/spawns deploy-verifier end-to-end. Direct CLI shorthand: `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"` (passwordless via `id_ed25519_homehub` + `~/.ssh/config` Host alias).
 
@@ -309,13 +309,13 @@ Keys you **hand-edit** (no UI; edit the row directly):
 
 | Device | IP | Notes |
 |--------|----|-------|
-| **Latitude 7420 (production)** | **192.168.1.210** | **Ubuntu 24.04. Backend + ambient as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker. Always-on. Static IP.** |
-| Windows desktop (dev) | 192.168.1.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.1.210:8000`). MCP uses `HOME_HUB_URL`. Desktop notifier autostarts via Task Scheduler `Home Hub Desktop Notifier` (At-Logon, `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`). Nightly backup pulls via Task Scheduler `Home Hub Pihole Backup` (04:30) + `Home Hub Data Backup` (04:40) → `C:\Users\antho\HomeHubBackups\`; strategy in `~/.claude/runbooks/backup-strategy.md`. |
-| Hue Bridge | 192.168.1.50 | Self-signed SSL cert |
-| Sonos Era 100 | 192.168.1.157 | Living room. `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
-| Android Tablet | 192.168.1.209 | Kiosk display (blank page deferred) |
+| **Latitude 7420 (production)** | **192.168.86.210** | **Ubuntu 24.04. Backend + ambient as systemd user services, Firefox kiosk via GNOME autostart, Pi-hole v6 Docker. Always-on. Static IP.** |
+| Windows desktop (dev) | 192.168.86.30 | Code edits, `git push`, local testing. PC activity detector via Task Scheduler (`--server http://192.168.86.210:8000`). MCP uses `HOME_HUB_URL`. Desktop notifier autostarts via Task Scheduler `Home Hub Desktop Notifier` (At-Logon, `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`). Nightly backup pulls via Task Scheduler `Home Hub Pihole Backup` (04:30) + `Home Hub Data Backup` (04:40) → `C:\Users\antho\HomeHubBackups\`; strategy in `~/.claude/runbooks/backup-strategy.md`. |
+| Hue Bridge | 192.168.86.50 | Self-signed SSL cert |
+| Sonos Era 100 | 192.168.86.157 | Living room. `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
+| Android Tablet | 192.168.86.209 | Kiosk display (blank page deferred) |
 
-**iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings (iOS treats each join as a clean profile — not a Pi-hole bug). After any rejoin, restore Settings → WiFi → (i): manual IP `192.168.1.148`, DNS → Pi-hole `192.168.1.210`, Private WiFi Address → Fixed.
+**iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings (iOS treats each join as a clean profile — not a Pi-hole bug). After any rejoin, restore Settings → WiFi → (i): manual IP `192.168.86.148`, DNS → Pi-hole `192.168.86.210`, Private WiFi Address → Fixed.
 
 ---
 

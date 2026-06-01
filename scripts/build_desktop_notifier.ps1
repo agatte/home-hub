@@ -11,7 +11,7 @@
 # After build, install by:
 #   1. Copy dist\HomeHubNotifier.exe to a stable path (e.g. %LOCALAPPDATA%\HomeHub\)
 #   2. Add a Task Scheduler entry: Trigger=At log on, Action=Start a program,
-#      Program/script = full path to the .exe, Arguments = --server ws://192.168.1.210:8000/ws
+#      Program/script = full path to the .exe, Arguments = --server ws://192.168.86.210:8000/ws
 #   3. First launch: tray icon appears bottom-right. Double-click for a test toast.
 
 $ErrorActionPreference = "Stop"
@@ -41,4 +41,4 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "OK - Built dist\HomeHubNotifier.exe" -ForegroundColor Green
-Write-Host "  Quick verify: .\dist\HomeHubNotifier.exe --server ws://192.168.1.210:8000/ws" -ForegroundColor Gray
+Write-Host "  Quick verify: .\dist\HomeHubNotifier.exe --server ws://192.168.86.210:8000/ws" -ForegroundColor Gray

@@ -12,14 +12,14 @@ Agents managed:
   - sleep_watcher: suspends Windows 60min after sleeping mode (Windows-only)
 
 Usage:
-    python -m backend.services.pc_agent.supervisor --server http://192.168.1.210:8000
-    pythonw -m backend.services.pc_agent.supervisor --server http://192.168.1.210:8000
+    python -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000
+    pythonw -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000
 
     # With YAMNet classifier in shadow mode
-    pythonw -m backend.services.pc_agent.supervisor --server http://192.168.1.210:8000 --classifier
+    pythonw -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000 --classifier
 
     # With YAMNet classifier in active mode (drives mode changes)
-    pythonw -m backend.services.pc_agent.supervisor --server http://192.168.1.210:8000 --classifier --active
+    pythonw -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000 --classifier --active
 """
 import argparse
 import logging
@@ -409,8 +409,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--server",
-        default="http://192.168.1.210:8000",
-        help="Home Hub server URL (default: http://192.168.1.210:8000)",
+        default="http://192.168.86.210:8000",
+        help="Home Hub server URL (default: http://192.168.86.210:8000)",
     )
     parser.add_argument(
         "--classifier",

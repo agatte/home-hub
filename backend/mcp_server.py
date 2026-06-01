@@ -217,7 +217,7 @@ async def get_camera_snapshot(annotate: bool = True, source: str = "latitude") -
                     return Image(data=latest.content, format="jpeg")
             return (
                 "desktop snapshot timed out after 15s — is the pc_agent supervisor "
-                "running on 192.168.1.30 with desktop_presence_enabled=true?"
+                "running on 192.168.86.30 with desktop_presence_enabled=true?"
             )
 
     return f"unknown source '{source}' — expected 'latitude' or 'desktop'"

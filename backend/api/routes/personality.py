@@ -256,7 +256,7 @@ class BlendshapeSubmit(BaseModel):
 async def post_blendshape(payload: BlendshapeSubmit, request: Request) -> dict:
     """Ingest a blendshape reading from the desktop pc_agent.
 
-    LAN-bypass at `auth.py:90` covers Anthony's 192.168.1.30 desktop —
+    LAN-bypass at `auth.py:90` covers Anthony's 192.168.86.30 desktop —
     the `require_api_key` dependency stays for shape consistency and
     future-proofing if this ever needs to accept tunnel-origin traffic.
 

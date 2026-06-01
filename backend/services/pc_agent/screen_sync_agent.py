@@ -14,11 +14,11 @@ distance — see the lighting-curator INDEX for the documented anti-pattern.
 
 Usage:
     python -m backend.services.pc_agent.screen_sync_agent
-    python -m backend.services.pc_agent.screen_sync_agent --server http://192.168.1.30:8000
+    python -m backend.services.pc_agent.screen_sync_agent --server http://192.168.86.30:8000
 
 Autostart on Windows:
     Create a Task Scheduler task that runs at user logon. Action:
-        python.exe -m backend.services.pc_agent.screen_sync_agent --server http://192.168.1.30:8000
+        python.exe -m backend.services.pc_agent.screen_sync_agent --server http://192.168.86.30:8000
     Set "Run whether user is logged on or not" off (it needs the user session
     to capture the screen). Set "Hidden" on so it stays out of the way.
 """

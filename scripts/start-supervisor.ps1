@@ -19,7 +19,11 @@ $env:PYTHONPATH = "$ProjectRoot\venv\Lib\site-packages;$ProjectRoot"
 
 Set-Location $ProjectRoot
 
+# Server URL from the HOME_HUB_URL user env var (set during the 2026-06
+# network re-IP to 192.168.86.x); falls back to the current Latitude LAN IP.
+$Server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { "http://192.168.86.210:8000" }
+
 & $SystemPythonW -m backend.services.pc_agent.supervisor `
-    --server http://192.168.1.210:8000 `
+    --server $Server `
     --classifier `
     --active

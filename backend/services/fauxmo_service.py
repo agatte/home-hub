@@ -199,7 +199,7 @@ class FauxmoService:
     Manages SSDP + per-device HTTP servers for Alexa discovery.
 
     Lifecycle:
-        fauxmo = FauxmoService(local_ip="192.168.1.30", enabled=True)
+        fauxmo = FauxmoService(local_ip="192.168.86.30", enabled=True)
         await fauxmo.start()   # binds sockets, registers devices
         # ... server runs ...
         await fauxmo.stop()    # tears down sockets, closes httpx client

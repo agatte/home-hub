@@ -34,7 +34,7 @@ CLI:
     --detect        Enumerate monitors and try a brightness round-trip
     --apply N       Force-set brightness to N (smoke test, no backend)
     --color-temp warm|neutral|cool   Smoke test the color preset path
-    --server URL    Home Hub base URL (default http://192.168.1.210:8000)
+    --server URL    Home Hub base URL (default http://192.168.86.210:8000)
 """
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_SERVER = "http://192.168.1.210:8000"
+DEFAULT_SERVER = "http://192.168.86.210:8000"
 
 RECONCILE_INTERVAL_S = 30.0
 LUX_POLL_INTERVAL_S = 30.0

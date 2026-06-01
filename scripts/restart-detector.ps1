@@ -42,8 +42,10 @@ Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | ForEach-Object {
 Start-Sleep -Seconds 1
 
 Write-Host "Starting activity detector..."
+# Server URL from the HOME_HUB_URL user env var; falls back to the current Latitude LAN IP.
+$Server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { "http://192.168.86.210:8000" }
 Start-Process "$ProjectRoot\venv\Scripts\pythonw.exe" `
-    -ArgumentList "-m","backend.services.pc_agent.activity_detector","--server","http://192.168.1.210:8000" `
+    -ArgumentList "-m","backend.services.pc_agent.activity_detector","--server",$Server `
     -WorkingDirectory $ProjectRoot `
     -WindowStyle Hidden
 

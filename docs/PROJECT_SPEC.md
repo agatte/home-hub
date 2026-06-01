@@ -122,7 +122,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - Dashboard Network widget showing real-time stats (block percentage, total queries, blocklist size, active clients)
 - Settings page management for local DNS records, blocklists (add/remove, one-click bulk add), and **allowlist** (exact-domain exceptions — add/remove false-positive domains)
 - Per-device DNS configuration (apartment router is locked — no DHCP DNS control)
-- Pi-hole admin UI at `http://192.168.1.210:8080/admin`
+- Pi-hole admin UI at `http://192.168.86.210:8080/admin`
 
 ### Known Issues & Pain Points
 
@@ -247,15 +247,15 @@ Uptime Kuma (Docker container, port 3002, same machine)
        └── Alerting via Telegram/Pushover on downtime
 
 PC Agent (supervised on the dev machine only, 2026-04-19+)
-   ├── activity_detector.py     ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/activity
+   ├── activity_detector.py     ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/automation/activity
    │                            (psutil process detection)
-   ├── ambient_monitor.py       ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/learning/audio-decision
+   ├── ambient_monitor.py       ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/learning/audio-decision
    │                            (Blue Yeti PyAudio RMS + YAMNet shadow classifier — --classifier --shadow.
    │                             Social-gate abandoned 2026-05-09; mode-report POSTs to /api/automation/activity
    │                             removed 2026-05-16 after the rogue source=ambient idle reports were displacing
    │                             rescue overrides via the priority guard. Service now publishes ML decisions only.)
-   ├── screen_sync_agent.py     ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/automation/screen-color
-   ├── monitor_brightness.py    ON dev machine (192.168.1.30) ──> WS sub ws://192.168.1.210:8000/ws + GET /api/camera/status
+   ├── screen_sync_agent.py     ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/automation/screen-color
+   ├── monitor_brightness.py    ON dev machine (192.168.86.30) ──> WS sub ws://192.168.86.210:8000/ws + GET /api/camera/status
    │                            (Windows-only, 2026-05-28+. Subscribes to `mode_update` for instant reaction, polls
    │                             lux every 30s. Drops monitor backlight via DDC/CI (screen-brightness-control) and
    │                             warms color temperature via VCP code 0x14 (monitorcontrol) on a mode×time_period
@@ -263,7 +263,7 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    │                             — the registry-edit path was abandoned because Windows caches Night Light state
    │                             in-memory and only reloads on session events, so writes never actually flipped
    │                             the screen. Hardware-level DDC color preset is the working path.)
-   ├── emotion_capture.py       ON dev machine (192.168.1.30) ──> POST http://192.168.1.210:8000/api/personality/blendshape
+   ├── emotion_capture.py       ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/personality/blendshape
    │                            (FaceLandmarker blendshapes → EmotionService mood vector + presence observation.
    │                             Opt-in via desktop_emotion_enabled / desktop_presence_enabled. EmotionService
    │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.)
@@ -278,9 +278,9 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
 
 **Deployment note:** As of 2026-04-11 the "dedicated laptop" from the
 Target Architecture is real — a Dell Latitude 7420 running Ubuntu
-24.04 LTS at 192.168.1.210. The FastAPI backend, ambient monitor, and
+24.04 LTS at 192.168.86.210. The FastAPI backend, ambient monitor, and
 Firefox kiosk all run there as systemd user services + GNOME
-autostart. The Windows dev machine (192.168.1.30) stays as a
+autostart. The Windows dev machine (192.168.86.30) stays as a
 workstation for code editing + `git push`, and runs the PC activity
 detector pointed at the Latitude. See the Deployment section below
 and `CLAUDE.md` for operational details.
@@ -1275,7 +1275,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SERVER_URL = "http://192.168.1.XXX:8000"  # Laptop IP
+SERVER_URL = "http://192.168.86.XXX:8000"  # Laptop IP
 POLL_INTERVAL = 15  # seconds
 
 
@@ -1591,7 +1591,7 @@ Registers as a mode-change callback + runs its own ESPN polling loop.
 
 **Primary host:** Dell Latitude 7420 (service tag 81FPDB3), running
 **Ubuntu 24.04 LTS Desktop**, hostname `homehub-dashboard`, static LAN
-IP `192.168.1.210`. Always-on 24/7, lid-close configured to ignore
+IP `192.168.86.210`. Always-on 24/7, lid-close configured to ignore
 via `/etc/systemd/logind.conf`, display never sleeps via `gsettings`.
 Auto-login enabled so power-on → desktop with no keystrokes.
 
@@ -1624,7 +1624,7 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   screen)
 
 **Parallel-forever architecture.** The Windows gaming/dev machine
-(192.168.1.30) stays as Anthony's workstation — code editing, tests,
+(192.168.86.30) stays as Anthony's workstation — code editing, tests,
 `git push`. It's not a production host. It runs:
 
 - **PC Agent Supervisor** via Windows Task Scheduler (`"Home Hub Agent
@@ -1635,7 +1635,7 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   ambient_monitor, screen_sync_agent, and (Windows-only)
   monitor_brightness; emotion_capture + sleep_watcher round out the
   list. Pointed at the Latitude via
-  `--server http://192.168.1.210:8000`. The watchdog catches the class
+  `--server http://192.168.86.210:8000`. The watchdog catches the class
   of failure where the supervisor dies but Task Scheduler doesn't see
   a launcher failure (e.g. a Bash background subprocess reaped along
   with its parent session — observed 2026-05-15→16, 17h apartment
@@ -1647,13 +1647,13 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   Notifier"`, At-Logon trigger for the dev-machine user,
   `RestartCount=3 / RestartInterval=1m`). Runs the PyInstaller-built
   `HomeHubNotifier.exe` from `%LOCALAPPDATA%\HomeHub\` and subscribes
-  to `ws://192.168.1.210:8000/ws` for `notification` events. Kept
+  to `ws://192.168.86.210:8000/ws` for `notification` events. Kept
   separate from the PC Agent Supervisor (PyQt6 must own the main
   thread; the supervisor's thread-per-agent model can't host it).
   Restart via `Start-ScheduledTask -TaskName 'Home Hub Desktop
   Notifier'`; rebuild via `scripts/build_desktop_notifier.ps1`.
 - **Claude Code MCP server** with `HOME_HUB_URL` set via Windows user
-  environment variable (`setx HOME_HUB_URL http://192.168.1.210:8000`)
+  environment variable (`setx HOME_HUB_URL http://192.168.86.210:8000`)
   so Claude sessions on the dev machine can query and control the
   production backend via MCP tools without a local FastAPI running.
   The `HOME_HUB_URL` env var support was added in commit `11e3798`.
@@ -1696,7 +1696,7 @@ and must be nano-edited directly on the Latitude via SSH, followed by
 ### Secondary access
 
 Mobile phone (PWA) or any browser on the LAN can hit
-`http://192.168.1.210:8000` for the full dashboard. Same dashboard as
+`http://192.168.86.210:8000` for the full dashboard. Same dashboard as
 the kiosk. Writes are gated by `X-API-Key`, but the auth dep
 auto-bypasses any RFC1918 / loopback / link-local caller — so LAN
 devices see no auth friction. External callers (e.g. a future

@@ -22,7 +22,7 @@ from pathlib import Path
 import httpx
 
 
-BASE = os.environ.get("HOME_HUB_URL", "http://192.168.1.210:8000")
+BASE = os.environ.get("HOME_HUB_URL", "http://192.168.86.210:8000")
 API_KEY = os.environ.get("HOME_HUB_API_KEY", "")
 HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
 DESKTOP_POLL_TIMEOUT_S = 20

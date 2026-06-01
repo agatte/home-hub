@@ -37,7 +37,7 @@
   /** @param {string} source */
   function formatSource(source) {
     if (!source) return ''
-    // Sources arrive as 'process', 'camera', 'fusion', 'manual', 'gameday:auto', 'api:192.168.1.30', etc.
+    // Sources arrive as 'process', 'camera', 'fusion', 'manual', 'gameday:auto', 'api:192.168.86.30', etc.
     // Show the bit before the colon for the dashboard glance — full string is in the agent narrative.
     return source.split(':')[0]
   }

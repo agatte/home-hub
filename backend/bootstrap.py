@@ -874,7 +874,7 @@ async def lifespan(app: FastAPI):
         public_base_url=(
             f"http://{settings.LOCAL_IP}:8000"
             if getattr(settings, "LOCAL_IP", None)
-            else "http://192.168.1.210:8000"
+            else "http://192.168.86.210:8000"
         ),
     )
 
@@ -900,7 +900,7 @@ async def lifespan(app: FastAPI):
         deeplink_base=(
             f"http://{settings.LOCAL_IP}:8000"
             if getattr(settings, "LOCAL_IP", None)
-            else "http://192.168.1.210:8000"
+            else "http://192.168.86.210:8000"
         ),
     )
     app.state.calibration_nudge = calibration_nudge

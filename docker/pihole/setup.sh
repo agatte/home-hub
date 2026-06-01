@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pi-hole Docker setup for Ubuntu 24.04 (Latitude 192.168.1.210)
+# Pi-hole Docker setup for Ubuntu 24.04 (Latitude 192.168.86.210)
 # Run as: sudo bash setup.sh
 #
 # What this does:
@@ -9,8 +9,8 @@
 #   4. Verifies DNS resolution
 #
 # After running this script:
-#   - Pi-hole admin UI: http://192.168.1.210:8080/admin
-#   - Set your router's DHCP DNS to 192.168.1.210 for network-wide blocking
+#   - Pi-hole admin UI: http://192.168.86.210:8080/admin
+#   - Set your router's DHCP DNS to 192.168.86.210 for network-wide blocking
 #   - Or configure DNS per-device if your router doesn't support custom DNS
 
 set -euo pipefail
@@ -111,12 +111,12 @@ fi
 
 echo ""
 echo "=== Pi-hole is running ==="
-echo "Admin UI:  http://192.168.1.210:8080/admin"
-echo "DNS:       192.168.1.210:53"
+echo "Admin UI:  http://192.168.86.210:8080/admin"
+echo "DNS:       192.168.86.210:53"
 echo ""
 echo "Next steps:"
 echo "  1. Open the admin UI and verify it's working"
-echo "  2. Point each device at 192.168.1.210 for DNS (per-device — the"
+echo "  2. Point each device at 192.168.86.210 for DNS (per-device — the"
 echo "     apartment router's DHCP DNS is locked). Pi-hole's upstream is the"
 echo "     Unbound recursive + DNSSEC resolver started alongside it."
 echo "  3. Add these to your Home Hub .env on the Latitude:"

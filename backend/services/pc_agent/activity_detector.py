@@ -7,7 +7,7 @@ time, then reports changes to the Home Hub backend.
 
 Usage:
     python -m backend.services.pc_agent.activity_detector
-    python -m backend.services.pc_agent.activity_detector --server http://192.168.1.30:8000
+    python -m backend.services.pc_agent.activity_detector --server http://192.168.86.30:8000
 """
 import argparse
 import atexit

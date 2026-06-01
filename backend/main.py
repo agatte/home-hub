@@ -143,10 +143,10 @@ _CORS_ORIGINS = [
     "http://localhost:8000",
     "http://localhost:3001",
     "http://127.0.0.1:8000",
-    "http://192.168.1.210:8000",   # Latitude kiosk (production)
-    "http://192.168.1.30:8000",    # Windows dev machine
-    "http://192.168.1.30:3001",    # Vite dev server
-    "http://192.168.1.209:8000",   # Android tablet
+    "http://192.168.86.210:8000",   # Latitude kiosk (production)
+    "http://192.168.86.30:8000",    # Windows dev machine
+    "http://192.168.86.30:3001",    # Vite dev server
+    "http://192.168.86.209:8000",   # Android tablet
 ]
 app.add_middleware(
     CORSMiddleware,

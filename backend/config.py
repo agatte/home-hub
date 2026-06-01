@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     FRONTEND_BUILD: str = "frontend-svelte/build"
 
     # Hue Bridge
-    HUE_BRIDGE_IP: str = "192.168.1.50"
+    HUE_BRIDGE_IP: str = "192.168.86.50"
     HUE_USERNAME: str = ""
 
     # Sonos (auto-discovered if not set)

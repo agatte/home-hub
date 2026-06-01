@@ -6,7 +6,9 @@
 $TaskName = "Home Hub PC Activity Detector"
 $ProjectRoot = "C:\Users\antho\Desktop\home-hub"
 $PythonW = "$ProjectRoot\venv\Scripts\pythonw.exe"
-$Arguments = "-m backend.services.pc_agent.activity_detector --server http://192.168.1.210:8000"
+# Server URL from the HOME_HUB_URL user env var; falls back to the current Latitude LAN IP.
+$Server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { "http://192.168.86.210:8000" }
+$Arguments = "-m backend.services.pc_agent.activity_detector --server $Server"
 
 # Remove existing task if present
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -48,7 +50,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Reports active mode (gaming/working/watching/idle) to Home Hub backend on Latitude 192.168.1.210"
+    -Description "Reports active mode (gaming/working/watching/idle) to Home Hub backend on Latitude 192.168.86.210"
 
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully." -ForegroundColor Green

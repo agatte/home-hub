@@ -1,9 +1,9 @@
-# Desktop-only additions (Anthony's Windows desktop 192.168.1.30).
+# Desktop-only additions (Anthony's Windows desktop 192.168.86.30).
 #
 # Install on the desktop with:
 #   pip install -r requirements.txt -r requirements-desktop.txt
 #
-# The Latitude (192.168.1.210, headless Ubuntu) does NOT install this file —
+# The Latitude (192.168.86.210, headless Ubuntu) does NOT install this file —
 # the server is Qt-free by design. PyQt6 ships ~200 MB of native Qt and isn't
 # useful on a kiosk-only box.
 

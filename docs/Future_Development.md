@@ -192,7 +192,7 @@ What started as a thin "WiFi QR + Welcome page" grew into a full visitor surface
 - **House Notes** at `/guest` updated with the welcome message Anthony writes for guests.
 
 **Still open:**
-- `guest.homehub.local` Pi-hole DNS entry — currently reachable only as `http://192.168.1.210:8000/guest`.
+- `guest.homehub.local` Pi-hole DNS entry — currently reachable only as `http://192.168.86.210:8000/guest`.
 - Captive-portal-style auto-redirect — infeasible without router-level DNS control (guest's phone uses router DHCP DNS, not Pi-hole). Documented in CLAUDE.md so future-Anthony doesn't relitigate.
 - Settings UI for `guest_vibe_playlists` (currently hand-edit `app_settings`) — small but worth it if the vibe→favorite mapping needs tuning often.
 - Optional "Tell the host" free-text channel — not yet built. Would need a small kiosk-side notification component to surface inbound requests; vibe-nudge covers the common case so this stays deferred.

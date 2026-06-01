@@ -163,7 +163,7 @@ class RuleEngineService:
         self._api_key = api_key
         self._public_base_url = (
             (public_base_url or "").rstrip("/")
-            or "http://192.168.1.210:8000"  # LAN bypass for require_api_key
+            or "http://192.168.86.210:8000"  # LAN bypass for require_api_key
         )
         self._heartbeat = None  # HeartbeatRegistry, injected by main.py
 
