@@ -26,6 +26,7 @@ from backend.services.light_state_calculator import (
     classify_weather,
     get_time_period,
     is_zone_posture_freshness_ok,
+    path_light_brightness,
     resolve_activity_state,
 )
 from backend.services.automation_engine import DaySchedule, ScheduleConfig
@@ -856,3 +857,75 @@ class TestFunctionalWeatherBrightness:
         )
         # relax isn't a functional-weather mode → bri unchanged by that layer.
         assert weather_relax["1"]["bri"] == after_lux_relax["1"]["bri"]
+
+
+# ---------------------------------------------------------------------------
+# path_light_brightness — baseline-relative D1 navigation brightness
+# ---------------------------------------------------------------------------
+
+
+class TestPathLightBrightness:
+    """Darkness-scaled path light: d = clamp((baseline-lux)/baseline, 0, 1),
+    bri = round(lo + d*(hi-lo)). Anchors from the curator design pass."""
+
+    def test_room_at_baseline_lands_on_lo(self):
+        # lux == baseline → d=0 → minimal path light (the lo anchor).
+        assert path_light_brightness(
+            74.0, 74.0, "evening", kind="desk_exit_kitchen", fallback=120,
+        ) == 55  # desk_exit_kitchen evening lo
+
+    def test_pitch_black_lands_on_hi(self):
+        # lux == 0 → d=1 → max navigational boost (the hi anchor).
+        assert path_light_brightness(
+            0.0, 74.0, "evening", kind="desk_exit_kitchen", fallback=120,
+        ) == 140  # desk_exit_kitchen evening hi
+
+    def test_dark_room_interpolates(self):
+        # lux=15, baseline=74 → d≈0.797 → 30 + 0.797*(70-30) ≈ 62.
+        assert path_light_brightness(
+            15.0, 74.0, "night", kind="desk_exit_kitchen", fallback=60,
+        ) == 62
+
+    def test_brighter_than_baseline_clamps_to_lo(self):
+        # lux > baseline (room brighter than calibrated) → d clamps to 0,
+        # never goes below lo (no negative boost).
+        assert path_light_brightness(
+            200.0, 74.0, "late_night", kind="corridor_kitchen", fallback=40,
+        ) == 25  # corridor_kitchen lo
+
+    def test_none_lux_returns_fallback(self):
+        assert path_light_brightness(
+            None, 74.0, "evening", kind="transit_l1", fallback=120,
+        ) == 120
+
+    def test_none_baseline_returns_fallback(self):
+        assert path_light_brightness(
+            40.0, None, "evening", kind="transit_l1", fallback=120,
+        ) == 120
+
+    def test_nonpositive_baseline_returns_fallback(self):
+        # Guards a division-by-zero / nonsense calibration.
+        assert path_light_brightness(
+            40.0, 0.0, "evening", kind="transit_kitchen", fallback=80,
+        ) == 80
+
+    def test_missing_anchor_returns_fallback(self):
+        # No curve row for (transit_l1, late_night) — transit maps its
+        # late_night tier onto the "night" row, so this key is intentionally
+        # absent and must degrade to the fixed fallback.
+        assert path_light_brightness(
+            10.0, 74.0, "late_night", kind="transit_l1", fallback=60,
+        ) == 60
+
+    def test_l1_night_floor_respected(self):
+        # transit_l1 night lo is the floor-corrected 45 (L1 ≥45 night-
+        # visibility floor) — a bright room must never drive L1 below it.
+        assert path_light_brightness(
+            74.0, 74.0, "night", kind="transit_l1", fallback=60,
+        ) == 45
+
+    def test_corridor_l1_dark_caps_at_hi(self):
+        # Validated-comfortable late-night L1 ceiling is 100, not above.
+        assert path_light_brightness(
+            0.0, 74.0, "late_night", kind="corridor_l1", fallback=100,
+        ) == 100

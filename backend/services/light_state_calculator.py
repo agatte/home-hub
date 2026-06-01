@@ -169,6 +169,70 @@ def lux_to_multiplier(lux: float, baseline: float = 90.0) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Baseline-relative path-light brightness (D1)
+# ---------------------------------------------------------------------------
+# Desk-exit + transit path lighting scale their navigation brightness by how
+# dark the *destination* room actually is, instead of a single fixed value.
+# Driven by the Latitude (living-room) camera, whose lux reading is
+# room-correct for the boosted fixtures (L1 living-room lamp + L3/L4 kitchen
+# pendants). Darkness ratio ``d = clamp((baseline - lux)/baseline, 0, 1)``:
+#   d→0  room already at (or above) its calibrated bright baseline → minimal
+#        path light (lo); d→1  pitch black → max navigational boost (hi).
+# Anchors are a lighting-curator design pass (2026-06-01); rationale +
+# floor/ceiling reasoning in docs/PRESENCE_LIGHTING_SCENARIOS.md Part 7.5.
+# Kitchen rows feed BOTH L3+L4 from one value (kitchen-pair rule); compute
+# the bri once, then copy to both. ``lux``/``baseline`` None → fixed fallback
+# so a camera outage degrades to exactly the pre-D1 behavior.
+#
+# (kind, period) → (lo, hi). kind ∈ {desk_exit_kitchen, corridor_l1,
+# corridor_kitchen, transit_l1, transit_kitchen}. Transit collapses its
+# day/evening/night tier onto "evening" and its late_night tier onto "night"
+# (the service only distinguishes late_night vs not).
+PATH_LIGHT_CURVE: dict[tuple[str, str], tuple[int, int]] = {
+    ("desk_exit_kitchen", "evening"):   (55, 140),
+    ("desk_exit_kitchen", "night"):     (30, 70),
+    ("corridor_l1", "late_night"):      (48, 100),
+    ("corridor_kitchen", "late_night"): (25, 45),
+    ("transit_l1", "evening"):          (55, 130),
+    ("transit_l1", "night"):            (45, 70),
+    ("transit_kitchen", "evening"):     (40, 90),
+    ("transit_kitchen", "night"):       (25, 45),
+}
+
+
+def path_light_brightness(
+    lux: Optional[float],
+    baseline: Optional[float],
+    period: str,
+    *,
+    kind: str,
+    fallback: int,
+) -> int:
+    """Baseline-relative navigation brightness for D1 path lighting.
+
+    Returns ``fallback`` (the legacy fixed constant) when ``lux``/``baseline``
+    are unavailable (camera down, uncalibrated, or stale — the caller
+    resolves freshness via ``_read_fresh_camera_lux``) or when no curve
+    anchor exists for ``(kind, period)``. So a camera outage degrades to
+    exactly the pre-D1 fixed behavior.
+
+    Brightness interpolates ``lo + d*(hi - lo)`` where
+    ``d = clamp((baseline - lux)/baseline, 0, 1)`` — 0 when the room is at
+    (or above) its calibrated bright baseline, 1 at pitch black. The caller
+    samples lux ONCE before boosting (measure-then-hold), so the boosted
+    fixtures don't feed back into the reading and oscillate.
+    """
+    if lux is None or baseline is None or baseline <= 0:
+        return fallback
+    anchors = PATH_LIGHT_CURVE.get((kind, period))
+    if anchors is None:
+        return fallback
+    lo, hi = anchors
+    d = max(0.0, min(1.0, (baseline - lux) / baseline))
+    return int(round(lo + d * (hi - lo)))
+
+
+# ---------------------------------------------------------------------------
 # Time-period rollover for fades + activity_light_states lookup
 # ---------------------------------------------------------------------------
 

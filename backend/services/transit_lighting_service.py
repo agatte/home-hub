@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 
 from backend.services.camera_service import FACE_TRUST_THRESHOLD
 from backend.services.heartbeat import HeartbeatRegistry
+from backend.services.light_state_calculator import path_light_brightness
 
 logger = logging.getLogger("home_hub.transit_lighting")
 
@@ -398,12 +399,30 @@ class TransitLightingService:
         hour = datetime.now(tz=TZ).hour
         late_night = hour >= LATE_NIGHT_START_HOUR or hour < LATE_NIGHT_END_HOUR
 
-        if late_night:
-            living_room = {"on": True, "bri": 60, "ct": 400}
-            kitchen = {"on": True, "bri": 40, "ct": 400}
-        else:
-            living_room = {"on": True, "bri": 120, "ct": 360}
-            kitchen = {"on": True, "bri": 80, "ct": 360}
+        # Baseline-relative path brightness (D1): scale L1 + kitchen by how
+        # dark the living room actually is, via the Latitude camera. Sampled
+        # once here (transit fires this only at activate, so it's inherently
+        # measure-then-hold for the 10-min window). Transit's two tiers map
+        # onto the curve's "night" (late_night) / "evening" (otherwise) rows;
+        # the legacy fixed values stay as the camera-down fallback. CT is
+        # unchanged.
+        try:
+            lux, baseline = self._automation._read_fresh_camera_lux()
+        except Exception:
+            lux, baseline = None, None
+        curve_period = "night" if late_night else "evening"
+        ct = 400 if late_night else 360
+        l1_fallback = 60 if late_night else 120
+        kitchen_fallback = 40 if late_night else 80
+        l1_bri = path_light_brightness(
+            lux, baseline, curve_period, kind="transit_l1", fallback=l1_fallback,
+        )
+        kitchen_bri = path_light_brightness(
+            lux, baseline, curve_period, kind="transit_kitchen",
+            fallback=kitchen_fallback,
+        )
+        living_room = {"on": True, "bri": l1_bri, "ct": ct}
+        kitchen = {"on": True, "bri": kitchen_bri, "ct": ct}
 
         # L1 = living room, L3 = kitchen front, L4 = kitchen back. L2 (bedroom
         # bias) is left on the current mode's state so walking back into the

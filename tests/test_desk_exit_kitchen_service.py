@@ -33,12 +33,24 @@ class _FakeAutomation:
     evening/night kitchen-only path."""
 
     def __init__(self, mode: str = "gaming", period: str = "evening",
-                 at_desk: bool = False) -> None:
+                 at_desk: bool = False, lux=None, baseline=None) -> None:
         self._mode = mode
         self._period = period
         self._at_desk = at_desk
+        self._lux = lux
+        self._baseline = baseline
+        self.lux_read_calls = 0
         self.apply_calls: list[dict] = []
         self.clear_calls: list[dict] = []
+
+    def _read_fresh_camera_lux(self):
+        """Mirror the engine's (ema_lux, baseline_lux) freshness getter.
+
+        Default (None, None) makes the service fall back to its fixed
+        constants — preserving the pre-D1 behavior the older tests assert.
+        """
+        self.lux_read_calls += 1
+        return self._lux, self._baseline
 
     @property
     def current_mode(self) -> str:
@@ -89,8 +101,10 @@ class _FakeCamera:
 
 def _make_service(mode="gaming", period="evening", at_desk=False,
                   cam_detection="absent", cam_detection_source=None,
-                  cam_confidence=0.0, cam_zone=None):
-    auto = _FakeAutomation(mode=mode, period=period, at_desk=at_desk)
+                  cam_confidence=0.0, cam_zone=None, lux=None, baseline=None):
+    auto = _FakeAutomation(
+        mode=mode, period=period, at_desk=at_desk, lux=lux, baseline=baseline,
+    )
     cam = _FakeCamera(
         last_detection=cam_detection, detection_source=cam_detection_source,
         confidence=cam_confidence, zone=cam_zone,
@@ -252,3 +266,70 @@ class TestInstantExitsRegression:
         await svc._check()
         assert svc.active is False
         assert len(auto.clear_calls) == 1
+
+
+class TestLuxAdaptiveBrightness:
+    """D1: kitchen path brightness scales with the held living-room lux.
+
+    The fixed BRI_EVENING/BRI_NIGHT become the camera-down fallback; a fresh
+    Latitude lux drives a baseline-relative value, sampled once at activation
+    and held (measure-then-hold) across repaints.
+    """
+
+    async def test_fresh_dark_lux_brightens_above_fallback(self):
+        # Dark living room (lux 12, baseline 74) at night → near the curve's
+        # hi (70), well above the fixed BRI_NIGHT fallback (60).
+        svc, auto, _ = _make_service(
+            mode="gaming", period="night", lux=12.0, baseline=74.0,
+        )
+        await _drive_absent_window(svc)
+        assert svc.active
+        bri = auto.apply_calls[-1]["states"]["3"]["bri"]
+        assert bri > 60  # adapted up for the dark room
+        assert auto.apply_calls[-1]["states"]["3"]["bri"] == \
+            auto.apply_calls[-1]["states"]["4"]["bri"]  # kitchen pair matched
+
+    async def test_bright_room_dims_below_fallback(self):
+        # Room at/above baseline → lands on the lo anchor (30), below the
+        # fixed BRI_NIGHT fallback — minimal path light when it's already lit.
+        svc, auto, _ = _make_service(
+            mode="gaming", period="night", lux=80.0, baseline=74.0,
+        )
+        await _drive_absent_window(svc)
+        assert auto.apply_calls[-1]["states"]["3"]["bri"] == 30
+
+    async def test_no_lux_uses_fixed_fallback(self):
+        # Camera reading not fresh (None) → exact pre-D1 fixed value.
+        from backend.services.desk_exit_kitchen_service import BRI_EVENING
+        svc, auto, _ = _make_service(mode="gaming", period="evening")
+        await _drive_absent_window(svc)
+        assert auto.apply_calls[-1]["states"]["3"]["bri"] == BRI_EVENING
+
+    async def test_measure_then_hold_repaint_does_not_resample(self):
+        # Activate (1 sample), then a period repaint must reuse the held
+        # sample — never re-read lux (else L1/kitchen feed back + oscillate).
+        svc, auto, _ = _make_service(
+            mode="gaming", period="evening", lux=12.0, baseline=74.0,
+        )
+        await _drive_absent_window(svc)
+        assert svc.active
+        assert auto.lux_read_calls == 1
+        held_evening_bri = auto.apply_calls[-1]["states"]["3"]["bri"]
+        # Roll the period to night while held active → repaint path.
+        auto._period = "night"
+        await svc._check()
+        # Repaint happened (new apply with the night ct) but no new sample.
+        assert auto.lux_read_calls == 1
+        assert auto.apply_calls[-1]["states"]["3"]["ct"] == 375  # night ct
+        # Held lux carried into the night curve (≠ the evening value).
+        assert auto.apply_calls[-1]["states"]["3"]["bri"] != held_evening_bri
+
+    async def test_deactivate_clears_held_lux(self):
+        svc, auto, _ = _make_service(
+            mode="gaming", period="night", lux=12.0, baseline=74.0,
+        )
+        await _drive_absent_window(svc)
+        assert svc._held_lux == 12.0
+        await svc._deactivate("test")
+        assert svc._held_lux is None
+        assert svc._held_baseline is None

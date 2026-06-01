@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 from backend.services.camera_service import FACE_TRUST_THRESHOLD
 from backend.services.heartbeat import HeartbeatRegistry
+from backend.services.light_state_calculator import path_light_brightness
 
 logger = logging.getLogger("home_hub.desk_exit_kitchen")
 
@@ -206,6 +207,15 @@ class DeskExitKitchenService:
         self._last_deactivated_at: Optional[datetime] = None
         # Only log block-reason transitions, not every silent tick.
         self._last_block_reason: Optional[str] = None
+
+        # Measure-then-hold lux for D1 baseline-relative path brightness.
+        # Sampled ONCE from the Latitude (living-room) camera at the moment
+        # of activation — before any boost — and held until deactivate so
+        # the boosted L1/kitchen don't feed back into the reading and
+        # oscillate. None when the camera reading wasn't fresh at sample
+        # time → path_light_brightness falls back to the fixed constants.
+        self._held_lux: Optional[float] = None
+        self._held_baseline: Optional[float] = None
 
         # Late-night corridor state — separate from the evening/night
         # kitchen-only path because the corridor manages three lights with
@@ -480,8 +490,16 @@ class DeskExitKitchenService:
 
     async def _activate_corridor(self, mode: str) -> None:
         """Fire L1 — Phase 1 of the ramp-up. Kitchen follows on next tick."""
+        # Measure-then-hold for the whole corridor sequence: sample once
+        # here so the L1 ramp AND the kitchen ramp (≈2s later) share one
+        # pre-boost lux reading.
+        self._sample_lux()
+        l1_bri = path_light_brightness(
+            self._held_lux, self._held_baseline, "late_night",
+            kind="corridor_l1", fallback=CORRIDOR_L1_BRI,
+        )
         states = {
-            "1": {"on": True, "bri": CORRIDOR_L1_BRI, "ct": CORRIDOR_L1_CT},
+            "1": {"on": True, "bri": l1_bri, "ct": CORRIDOR_L1_CT},
         }
         await self._automation.apply_corridor_override(
             states,
@@ -502,7 +520,11 @@ class DeskExitKitchenService:
 
     async def _corridor_ramp_kitchen(self, now: datetime) -> None:
         """Phase 2 of ramp-up — bring up the kitchen pair to path-light."""
-        kitchen = {"on": True, "bri": CORRIDOR_KITCHEN_BRI, "ct": CORRIDOR_KITCHEN_CT}
+        k_bri = path_light_brightness(
+            self._held_lux, self._held_baseline, "late_night",
+            kind="corridor_kitchen", fallback=CORRIDOR_KITCHEN_BRI,
+        )
+        kitchen = {"on": True, "bri": k_bri, "ct": CORRIDOR_KITCHEN_CT}
         states = {"3": dict(kitchen), "4": dict(kitchen)}
         await self._automation.apply_corridor_override(
             states,
@@ -558,6 +580,8 @@ class DeskExitKitchenService:
         self._corridor_substate_started_at = None
         self._corridor_activated_at = None
         self._corridor_return_streak_start = None
+        self._held_lux = None
+        self._held_baseline = None
 
     def _record_block(self, reason: str) -> None:
         if reason != self._last_block_reason:
@@ -570,15 +594,42 @@ class DeskExitKitchenService:
             logger.info("DeskExit: unblocked (was %s)", self._last_block_reason)
             self._last_block_reason = None
 
+    def _sample_lux(self) -> None:
+        """Sample the Latitude (living-room) lux once for measure-then-hold.
+
+        Stores ``(ema_lux, baseline_lux)`` — both None when the camera
+        reading isn't fresh (disabled, paused, uncalibrated, stale), in
+        which case ``path_light_brightness`` returns the fixed fallback.
+        """
+        try:
+            lux, baseline = self._automation._read_fresh_camera_lux()
+        except Exception:  # defensive — never let a lux read break the cue
+            lux, baseline = None, None
+        self._held_lux = lux
+        self._held_baseline = baseline
+
     def _kitchen_states(self, period: str) -> dict[str, dict]:
         if period == "evening":
-            bri, ct = BRI_EVENING, KITCHEN_CT_EVENING
+            fallback_bri, ct = BRI_EVENING, KITCHEN_CT_EVENING
         else:
-            bri, ct = BRI_NIGHT, KITCHEN_CT_NIGHT
+            fallback_bri, ct = BRI_NIGHT, KITCHEN_CT_NIGHT
+        # Baseline-relative: darker living room → brighter path light, up to
+        # the curated cap; held lux keeps it stable until return. Compute
+        # bri ONCE and copy to both pendants (kitchen-pair rule).
+        bri = path_light_brightness(
+            self._held_lux, self._held_baseline, period,
+            kind="desk_exit_kitchen", fallback=fallback_bri,
+        )
         kitchen = {"on": True, "bri": bri, "ct": ct}
         return {"3": dict(kitchen), "4": dict(kitchen)}
 
     async def _activate(self, mode: str, period: str, *, repaint: bool = False) -> None:
+        # Measure-then-hold: sample lux ONLY on a true activation. A repaint
+        # (period rollover while held active) recomputes brightness from the
+        # SAME held sample, never re-sampling — re-evaluating while boosted
+        # would let L1/kitchen feed back into the camera and oscillate.
+        if not repaint:
+            self._sample_lux()
         target_period = "night" if period == "late_night" else period
         states = self._kitchen_states(target_period)
         await self._automation.apply_desk_exit_override(
@@ -606,6 +657,8 @@ class DeskExitKitchenService:
         self._activate_ts = None
         self._active_period = None
         self._return_streak_start = None
+        self._held_lux = None
+        self._held_baseline = None
         self._last_deactivated_at = datetime.now(tz=TZ)
         logger.info("DeskExit deactivated (%s)", reason)
 
