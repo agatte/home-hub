@@ -6,7 +6,16 @@ services:
     environment:
       TZ: "America/Indiana/Indianapolis"
       FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD}"
-      FTLCONF_webserver_port: "8080"
+      # Admin webserver bound to LOOPBACK ONLY (v4+v6). Under host networking
+      # a bare "8080" binds 0.0.0.0 → every LAN/guest device can reach the
+      # admin UI; the password gated it but the pre-auth surface was exposed
+      # (2026-06-01 network audit, #6). home-hub's PiholeService + the
+      # /admin reverse-proxy both reach it via localhost, so nothing local
+      # breaks; admin-from-another-device is now via SSH tunnel
+      # (`ssh -L 8080:localhost:8080 homehub`). The `o` suffix = optional
+      # bind (FTL won't fail to start if one family is unavailable).
+      # DNS on :53 is unaffected — it stays LAN-wide.
+      FTLCONF_webserver_port: "127.0.0.1:8080o,[::1]:8080o"
     volumes:
       - ./etc-pihole:/etc/pihole
     restart: unless-stopped
