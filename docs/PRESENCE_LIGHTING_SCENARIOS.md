@@ -32,7 +32,8 @@
 - [ ] Sign off strawman → commit the doc
 
 **D. Implementation (after design sign-off)**
-- [ ] **D1 + D4 lead build — design-locked 2026-06-01, full plan in Part 7.5.** D1 first (existing Latitude lux, no new plumbing), D4 second (bedroom lux channel).
+- [x] **D1 — lux-adaptive desk-exit/transit/corridor path brightness** — SHIPPED + DEPLOYED 2026-06-01 (`9163c39`, curator + pr-review + deploy-verifier GO). `path_light_brightness()` helper + measure-then-hold; camera-down → pre-D1 fixed fallback. Live-verified: first post-deploy activation scaled to bri=55 (room at 125 lux vs 74 baseline → lands on `lo`). **Perceptual follow-up:** watch a genuinely dark evening desk-exit to confirm the dark-end (`hi`) caps feel right.
+- [ ] **D4 — bedroom lux channel** (full plan in Part 7.5) — next build: webcam flip-sample-flip + settings-flag self-calibrate + per-room `LuxChannel` + re-expand `LUX_MODES` + screen-sync gate extension.
 - [ ] `PresenceResolver` — shadow build (log-only), validate vs reality
 - [ ] Migrate transit + desk_exit onto resolver transitions (delete local dwell/sustain/cooldown)
 - [ ] Migrate relax setters (`ambient_relax`, `late_night_rescue`) onto `on_afk`/`on_away`
