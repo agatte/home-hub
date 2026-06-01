@@ -25,14 +25,14 @@
 - [x] **D1 — desk-exit lux-adaptive path lighting** — DECIDED: fire on real exit, scale kitchen+L1 brightness by Latitude (room-correct) lux, measure-then-hold, **baseline-relative per room** (each path measured against its own room's baseline — see D4). Sub-q closed 2026-06-01.
 - [~] **D2 — phone presence → away/home (WANTED, signal reframed)** — Anthony wants away + welcome-home (see D6). **Signal: NOT the Google Wifi API** (unofficial, largely removed on app-managed GWifi; LAN-polling an iPhone is what shelved the ARP attempt — sleep+MAC-randomization). Use the **iPhone geofence → iOS Shortcut webhook** to the hub (push, reliable). Phone-keyed (iPhone confirmed visible in Google Home, but app≠API). Reuse `signal_presence()` + `_check_external_off()` + Hue Home/Away. Build = formalize an explicit away/home STATE + behaviors.
 - [~] **D3 — bed signals.** Anthony's biggest miss = the **late-night bed-watching DIM** (old `_apply_zone_overlay` bed branch). Auto-sleep (`watching_sleep_guard`) = nice-to-have, not a priority. **Revive bed-dim with NO camera-zone / NO hardware:** trigger on **projector ON (bedroom watching) + not-at-desk + evening/night** as the "in bed watching" proxy (deeper dim at late_night). **Depends on the projector Kasa integration landing** (`worktree-projector-kasa`, deploy pending — it provides the watching-in-bedroom signal). True reclined-vs-upright posture stays unavailable but isn't needed for "watching in bed → dim."
-- [~] **D4 — per-room lux / two baselines (audit H2) — ELEVATED 2026-06-01** — Anthony's bedroom reads dim in *daytime* (his room is darker than the blinds-open living room). Root cause: only the Latitude/living-room camera has a baseline (~74); the desktop webcam reports presence but NO lux, and `LUX_MODES={relax}` means gaming/working/watching get zero lux lift. Fix = **two baselines, one per camera/room** (`living_room←latitude`, `bedroom←desktop`), mode tagged with its room, re-expand `LUX_MODES`. **Couples with D1** (each path uses its own room's baseline → "baseline-relative"). **Exposure spike PASSED 2026-06-01 (P1 viable, no buy):** webcam honors manual exposure via DSHOW (sweep -4→-10 gave mean 149→17). Path = pin exposure for lux sampling. Open design detail: balance fixed-exposure lux vs auto-exposure face detection (likely a periodic flip-sample-flip).
+- [x] **D4 — per-room lux / two baselines (audit H2) — DESIGN-LOCKED 2026-06-01** — Anthony's bedroom reads dim in *daytime* (his room is darker than the blinds-open living room). Root cause: only the Latitude/living-room camera has a baseline (~74); the desktop webcam reports presence but NO lux, and `LUX_MODES={relax}` means gaming/working/watching get zero lux lift. Fix = **two baselines, one per camera/room** (`living_room←latitude`, `bedroom←desktop`), mode tagged with its room, re-expand `LUX_MODES`. **Couples with D1** (each path uses its own room's baseline → "baseline-relative"). **Exposure spike PASSED 2026-06-01 (P1 viable, no buy):** webcam honors manual exposure via DSHOW (sweep -4→-10 gave mean 149→17). Path = pin exposure for lux sampling. Build plan in **Part 7.5**. Key finding: the synced-lamp half is already scaffolded — `screen_sync._scale_for_ambient()` already scales L2/L5 caps/floors by a `lux_multiplier`, today gated to gaming-*day* only and fed the (bedroom-blind) Latitude lux. D4 swaps in the bedroom lux source + extends the gate to the dark periods, so both lamp groups (L1+kitchen via the engine multiplier, L2/L5 via sync caps) ride ONE bedroom darkness factor. Lux sampling = periodic flip-sample-flip (auto-exposure for faces; brief pinned exposure for one lux sample, presence POST suppressed during the flip).
 - [x] **D5 — couch vs desk authority (decided)** — **single-occupant model** (Anthony lives alone; guests are almost always with him in the same room). Rare both-fresh conflict resolved **freshness-first, activity breaks the tie ONLY when both presence signals are genuinely fresh**: a *background* game must NOT pin "desk" after the desk face goes stale + couch commits → couch wins. Common real "conflict" = phantom desk face-FP while on couch → no foreground game → couch wins (feature). Guest-sleepover (guest on couch, him in bedroom) = out of scope for auto-tracking → manual scene / future guest mode.
 - [x] **D6 — away/home behaviors (decided via D2)** — LEAVE: lights off + suppress autonomous setters (already what `_check_external_off` does) → **no brightness-churn → no spam** (NOT a mute); emit ONE "away" notification; genuine events still notify. **Notifications stay fully ON when home — Anthony wants the visibility.** ARRIVE: welcome-home sequence (lights ± TTS/music). FUTURE: NL "coming home with friends → set the mood".
 - [ ] Fill in the state→lighting matrix (Part 6)
 - [ ] Sign off strawman → commit the doc
 
 **D. Implementation (after design sign-off)**
-- [ ] Lux-adaptive desk-exit/transit brightness (D1) — replace fixed `BRI_EVENING/NIGHT`
+- [ ] **D1 + D4 lead build — design-locked 2026-06-01, full plan in Part 7.5.** D1 first (existing Latitude lux, no new plumbing), D4 second (bedroom lux channel).
 - [ ] `PresenceResolver` — shadow build (log-only), validate vs reality
 - [ ] Migrate transit + desk_exit onto resolver transitions (delete local dwell/sustain/cooldown)
 - [ ] Migrate relax setters (`ambient_relax`, `late_night_rescue`) onto `on_afk`/`on_away`
@@ -189,6 +189,54 @@ This is the artifact the sit-down should fill in / correct. Time-of-day (day/eve
   - **P2 Philips Hue motion sensor in bedroom (~$40, fallback if P1's face/lux flip proves too fiddly):** built-in lux + motion presence, native Hue, also a partial **D3** answer. Route via `lighting-shopper` + `LIGHTING_EXPANSION.md`.
 5. **Couch vs desk authority — DECIDED 2026-06-01.** **Single-occupant model** (Anthony lives alone; guests are almost always co-located with him). Tiebreak when both fresh: **freshness-first; activity adjudicates ONLY a genuine simultaneous-fresh conflict** — a *background* game must not pin "desk" once the desk face goes stale and the couch commits (→ couch wins). Bonus: the common phantom desk face-FP (chair/picture) while on the couch is correctly rejected (no foreground game → couch). Guest-sleepover (guest on couch, him in bedroom) is explicitly **out of scope** for auto-tracking → manual scene / future guest mode, not resolver cleverness.
 6. **Away/home behaviors — DECIDED (via D2).** Confirmed spam source = the hub's own ntfy + desktop toasts. **Root cause is presence, not the notifier:** with no away-detection the hub thinks Anthony's home, autonomous setters keep nudging brightness, and each nudge notifies. So LEAVE: lights off + suppress autonomous setters (already `_check_external_off`'s behavior) → nothing happening → no churn notifications; emit ONE "away" notification; a genuine event would still notify. **Do NOT blanket-mute — full notifications stay ON when home (he values the visibility).** ARRIVE: welcome-home sequence (lights ± TTS / music), the inverse of the Hue "Leaving home" all-off. FUTURE: NL "coming home with friends → set the mood" via Alexa skill / text endpoint (deferred).
+
+---
+
+## Part 7.5 — D1 + D4 build plan (DESIGN-LOCKED 2026-06-01)
+
+The lead build. Decisions resolved in the sit-down: **(a)** synced lamps (L2/L5) DO scale with bedroom lux — that's the whole point, the bedroom is consistently dark while gaming/watching; **(b)** bedroom calibration via settings-flag self-calibrate; **(c)** sequence D1 → D4.
+
+**Why two lux sources.** Both decisions are "baseline-relative per room," but they read *different* cameras:
+- **D1** boosts L1 + kitchen — **living-room** fixtures the **Latitude already** measures (`ema_lux` + baseline ~74, via `automation._read_fresh_camera_lux()`). No new plumbing → ships first.
+- **D4** is the new plumbing — a **bedroom** lux channel off the desktop webcam (flip-sample-flip), a second baseline, mode→room tagging, re-expanded `LUX_MODES`.
+
+The bedroom's lamps split into two ownership groups, both driven by ONE bedroom darkness factor:
+- **L1 + kitchen** (static palette) → engine's `apply_lux_multiplier` (re-expanded `LUX_MODES`).
+- **L2 + L5** (screen-synced) → `screen_sync._scale_for_ambient()`, which *already* scales caps/floors by a `lux_multiplier` — today gated to gaming-day + fed the bedroom-blind Latitude lux. D4 swaps the source + extends the gate.
+
+### Phase 1 — D1 (existing Latitude lux)
+1. New curator-gated pure helper `path_light_brightness(lux, baseline, period, *, fallback)` in `light_state_calculator.py` — baseline-relative darkness `clamp((baseline−lux)/baseline,0,1)` → interpolate into `[min,max]` per period (evening brighter, night gentler); `lux is None` → return the existing fixed constant.
+2. `desk_exit_kitchen_service.py` — sample Latitude lux **once at `_activate`** (**measure-then-hold**: stash the sample, recompute from it on the evening→night repaint, never re-sample while boosted — L1 feeds back into Latitude lux → re-eval oscillates). Kitchen-only path + late-night corridor (L1 + kitchen). CT unchanged.
+3. `transit_lighting_service.py` — same helper in `_navigation_states` for L1 (+ kitchen when it owns it).
+4. `BRI_EVENING=120 / BRI_NIGHT=60` (+ transit 60/120/40/80) become **fallback anchors**, not deletions.
+5. Re-spawn `lighting-curator` on the real diff before commit (helper lives in a hook-gated file) — the anchors below are curator-proposed but the full D-section checks run against concrete code.
+
+**Locked CURVE anchors** (lighting-curator design pass 2026-06-01 — `(lo, hi)` = bri at room-bright `d→0` / pitch-black `d→1`; CT unchanged):
+
+| kind · period | (lo, hi) | note |
+|---|---|---|
+| desk-exit kitchen (L3/L4) · evening | (55, 140) | hi matches working/day kitchen baseline |
+| desk-exit kitchen (L3/L4) · night | (30, 70) | pendant lo-floor 25; dark-end held sub-lighthouse (was 75) |
+| corridor L1 · late_night | (48, 100) | hi = validated comfortable L1 (the 80→100 user bump); lo +3 off the 45 threshold |
+| corridor kitchen (L3/L4) · late_night | (25, 45) | pendant lo-floor 25 |
+| transit L1 · evening | (55, 130) | fabric-shade wash, lower ceiling than the kitchen downlights |
+| transit L1 · night | (45, 70) | **lo floor-corrected 30→45** (L1 ≥45 night-visibility floor, `project_apartment_layout`) |
+| transit kitchen (L3/L4) · evening | (40, 90) | path-light flood, sub-cooking |
+| transit kitchen (L3/L4) · night | (25, 45) | pendant lo-floor 25 |
+
+Curator rules carried into the build: compute the ramped `bri` **once** then assign to both L3+L4 (kitchen-pair stays matched by construction); keep the evening>night `hi` gap distinct (evening tolerates flood, night is sleep-adjacent); `late_night→night` already collapses for the desk-exit *kitchen* path, so only the corridor needs true late_night anchors.
+
+### Phase 2 — D4 (bedroom lux channel)
+1. `emotion_capture.py` — open cam with `CAP_DSHOW` (default MSMF ignores exposure); every ~25s flip to the calibrated fixed exposure, average `gray.mean()`, restore auto-exposure; **suppress the presence POST during the ~1.5s flip** (hold prior `face_present`) so dark frames never flip the desk-flicker signal. POST lux separately.
+2. **Calibration — settings-flag self-calibrate** (mirrors the snapshot-request pattern): `desktop_lux_calibrate_requested` flag picked up on the 30s settings poll → exposure sweep to `gray.mean()≈100` at "comfortable bright" bedroom light → POST `{exposure, baseline_lux}` → persisted to `app_settings.desktop_lux_calibration_config`, flag cleared. Agent pins that exposure for every sample thereafter.
+3. Transport + store — new `POST /api/camera/desktop/lux {ambient_lux, captured_at}` → a small `LuxChannel` (ema + baseline + last_update + staleness) on `app.state` for `bedroom`. Living-room stays on `camera_service`.
+4. Engine — `MODE_ROOM = {relax: living_room, gaming|working|watching: bedroom}`; `_apply_lux_multiplier` selects `(ema, baseline)` by the mode's room; re-expand `LUX_MODES → {relax, gaming, working, watching}`. Scope the engine multiplier to L1+kitchen in gaming/watching (L2/L5 owned by sync).
+5. Screen-sync — feed the **bedroom** lux_multiplier into `apply_color` for gaming/watching (swap the source at `automation.py:273`); **extend `_scale_for_ambient`'s gate** from gaming-day to evening/night/late_night + watching. **Curator-validate the L5 clear-housing ceiling** at evening/night — the code comment flags this lift was never validated (`feedback_clear_housing_perceptual_luma`).
+
+### Risks tracked
+- **L5 perceptual overdrive** (clear housing) at evening/night — the one genuinely unvalidated piece; curator gates it.
+- **Flip-sample vs face-flicker** — mitigated by suppressing the POST during the flip; non-negotiable given this whole initiative came from the warm↔gaming strobe.
+- **Bedroom calibration drift** — re-measure if the webcam moves or its resolution changes (same rule as the Latitude).
 
 ---
 
