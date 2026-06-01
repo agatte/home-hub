@@ -20,8 +20,16 @@
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/native.winoffice.txt', label: 'Windows Telemetry' },
   ]
 
-  // .lan, not .local — macOS/iOS treat .local as mDNS/Bonjour and may bypass
-  // Pi-hole for those names. Keep in sync with Pi-hole's dns.hosts records.
+  // Pi-hole local-DNS (dns.hosts) records — kept in sync with Pi-hole.
+  // CAVEAT (post-2026-06 Google Wifi migration): the router runs its own
+  // resolver that owns the .lan TLD and answers it authoritatively
+  // (NXDOMAIN), so it never forwards .lan upstream to Pi-hole. These names
+  // therefore only resolve for clients pointed DIRECTLY at Pi-hole
+  // (192.168.86.210) as their DNS server — not via the default router DNS.
+  // For zero-config name access from ANY device, use the mDNS name the
+  // Latitude advertises via avahi: `homehub-dashboard.local` (multicast,
+  // bypasses both the router hijack and Pi-hole). Don't add .local records
+  // to Pi-hole — mDNS owns that TLD.
   const DEFAULT_DNS_HOSTS = [
     { ip: '192.168.86.210', hostname: 'homehub.lan' },
     { ip: '192.168.86.210', hostname: 'pihole.lan' },
