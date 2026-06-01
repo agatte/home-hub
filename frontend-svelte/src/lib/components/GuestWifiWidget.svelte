@@ -4,7 +4,7 @@
   import { Wifi } from 'lucide-svelte'
   import { apiGet } from '$lib/api.js'
 
-  /** @type {{ configured: boolean, ssid?: string, password?: string, security?: string, qr_payload?: string } | null} */
+  /** @type {{ configured: boolean, ssid?: string, password?: string, security?: string, qr_payload?: string, landing_url?: string } | null} */
   let info = null
   let error = false
   let modalOpen = false
@@ -49,7 +49,11 @@
       qrDataUrl = ''
     }
     try {
-      urlQrDataUrl = await QRCode.toDataURL(`${window.location.origin}/guest`, {
+      // Prefer the server-provided LAN URL (landing_url); fall back to the
+      // caller origin only if the backend didn't supply one. The kiosk's
+      // origin is localhost, which is useless in a QR — see /api/guest/wifi.
+      const guestUrl = info.landing_url || `${window.location.origin}/guest`
+      urlQrDataUrl = await QRCode.toDataURL(guestUrl, {
         width: 200,
         margin: 1,
         color: { dark: '#000000', light: '#ffffff' },

@@ -162,6 +162,12 @@ async def get_guest_wifi() -> dict:
     if not ssid or not password:
         return {"status": "ok", "configured": False}
 
+    # Canonical /guest landing URL built from the server's LAN IP, NOT the
+    # caller's origin — the kiosk loads the dashboard from localhost, so a
+    # client-side `window.location.origin` QR would encode localhost and be
+    # useless to a guest's phone. LOCAL_IP is the address guests can reach.
+    landing_url = f"http://{settings.LOCAL_IP}:8000/guest" if settings.LOCAL_IP else None
+
     return {
         "status": "ok",
         "configured": True,
@@ -169,6 +175,7 @@ async def get_guest_wifi() -> dict:
         "password": password,
         "security": security,
         "qr_payload": _wifi_uri(ssid, password, security),
+        "landing_url": landing_url,
     }
 
 
