@@ -126,7 +126,7 @@ Everything the apartment can reasonably hold without over-lighting.
 ## Recommended placement (your apartment, L6 onward)
 
 **Bedroom** — fills out the two-emitter room (L2 + L5 installed; spatial depth still limited)
-- **L5 — Bedroom Lamp Right** (installed 2026-05-11): clear housing, desk-side, mirrors L2 in Phase A. Phase C curator pass will differentiate its states from L2 for spatial depth.
+- **L5 — Bedroom Lamp Right** (installed 2026-05-11): clear housing, desk-side. Differentiated from L2 in the Phase B/C curator-reviewed gameday SEQUENCES (shipped 2026-05-07); per-mode state differentiation for non-gameday modes is still ongoing as Tier 3 buildout proceeds.
 - **L6 — Signe floor lamp** in the corner diagonal from the desk, pointed at the wall behind the bed. During watching it backlights the viewer in warm CT; during gaming it becomes a gradient column; scene-drift loves it.
 - **L7 — Play Wall Washer** on the wall behind the desk chair, aimed at the projection wall's adjacent side wall (NOT the projection wall itself). In watching mode: warm CT at ~200 bri, extends the projected image's ambient spread. In gaming: HSB gradient that bounces off the side wall and reaches peripheral vision.
 - **L8 + L9 — Play Light Bar pair** flanking the primary monitor. Two Hue IDs, registered as a "pair" like L3/L4 (each bar is a distinct light_id at the bridge). They'd replace a lot of what L2/L5 are currently doing for bias and let you push them down to a softer fill role.

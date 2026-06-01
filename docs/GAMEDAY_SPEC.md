@@ -432,7 +432,7 @@ Final clamp `[5, 50]`.
 
 ## 10. Pre-game ambient mode (v2 design)
 
-**Status:** spec only. Implementation tracked in [#9](https://github.com/agatte/home-hub/issues/9); target before preseason 2026-08-13.
+**Status:** Shipped 2026-05-15 (5 commits; see `project_pregameday_shipped_2026_05_15.md`). Pre-preseason owed: palette verify (GH #8), TTS authoring (GH #6), playoff backfill, hype playlist tuning. §10.1+ below preserves the design spec for those remaining tuning passes.
 
 The pre-game window is the hour leading up to kickoff. The current architecture has the apartment doing whatever it was doing (working, idle, etc) right up until the T-30 auto-flip lands the gameday baseline. v2 fills that hour with anticipation: lighting starts shifting earlier, and audio reads the season's stakes the same way `compute_celebration_volume` reads each play's stakes.
 

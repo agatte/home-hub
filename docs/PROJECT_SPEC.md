@@ -118,11 +118,11 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - **Pi-hole v6** running in Docker (host networking) on the Latitude for network-wide DNS ad blocking
 - DNS upstream: **Unbound** recursive resolver (DNSSEC-validating, `mvance/unbound`) on `127.0.0.1#5335` — Pi-hole forwards here instead of to Google/Cloudflare; Unbound walks the DNS tree from root servers. Defined in `docker/pihole/docker-compose.yml` (bridge network, publishes `127.0.0.1:5335:53` so only Pi-hole can reach it). Query path: clients → Pi-hole :53 → Unbound 127.0.0.1#5335 → root servers.
 - 2M+ domains blocked across curated blocklists (ads, malware, phishing, tracking, Windows telemetry). HaGeZi TIF blocklist is disabled — caused false positives on email click-trackers. A 191-domain anudeepND functionality allow-adlist is active (antigravity source).
-- Local DNS records for all network devices: `homehub.lan`, `pihole.lan`, `hue.lan`, `sonos.lan`, `desktop.lan`, `tablet.lan`
+- Local DNS records exist in Pi-hole (`homehub.lan`, `pihole.lan`, `hue.lan`, `sonos.lan`, `desktop.lan`, `tablet.lan`) but **do NOT resolve through the Google Wifi router** (post-2026-06 migration: the router proxies DNS and answers `.lan` with an authoritative NXDOMAIN, never forwarding it upstream). They resolve only for devices pointed directly at Pi-hole (`192.168.86.210`). The working zero-config hostname is **mDNS**: `homehub-dashboard.local:8000` (avahi on the Latitude). Don't add `.local` records to Pi-hole — mDNS owns that TLD.
 - Dashboard Network widget showing real-time stats (block percentage, total queries, blocklist size, active clients)
 - Settings page management for local DNS records, blocklists (add/remove, one-click bulk add), and **allowlist** (exact-domain exceptions — add/remove false-positive domains)
-- Per-device DNS configuration (apartment router is locked — no DHCP DNS control)
-- Pi-hole admin UI at `http://192.168.86.210:8080/admin`
+- Network-wide DNS via the personal Google Wifi router (post-2026-06 migration; no per-device config needed). Google Wifi proxies DNS, so clients see `.86.1` and per-device Pi-hole attribution is lost.
+- Pi-hole admin UI at `http://localhost:8080/admin` (loopback-only since 2026-06-01; reach from another machine via SSH tunnel: `ssh -L 8080:localhost:8080 homehub`)
 
 ### Known Issues & Pain Points
 
@@ -157,7 +157,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 **Infrastructure (from April 2026 audit):**
 - ~~CORS allows all origins~~ — fixed: locked to specific LAN IPs (localhost, Latitude, dev machine, tablet)
 - ~~No tests~~ — fixed: pytest suite with 101 tests across 8 files (automation engine, music mapper, scheduler, weather, pihole, API routes, WebSocket). GitHub Actions CI runs full suite on push
-- ~~No rate limiting~~ — fixed: slowapi (120/min default, 10/min on override/TTS, 5/min on file import)
+- ~~No rate limiting~~ — partial: slowapi per-route limits (10/min on override/TTS, 5/min on file import). The `120/min` global default is **NOT active** — `SlowAPIMiddleware` is intentionally not registered (a 2026-06-01 attempt was reverted; on a flat trust-the-room LAN it would throttle the kiosk/dev devices, not just guests, and there's no internet path). Only the explicitly `@limiter.limit`-decorated routes are enforced.
 - ~~No log rotation~~ — fixed: RotatingFileHandler (5MB per file, 3 backups, 20MB max)
 - ~~WebSocket crashes on malformed JSON~~ — fixed: try-catch guard around json.loads()
 - ~~No database backup automation~~ — fixed: daily SQLite backup cron on Latitude (4 AM, 7-day retention)
@@ -237,13 +237,13 @@ Browser / Phone (PWA)
    └── Serves SvelteKit static build from frontend-svelte/build/ (via FRONTEND_BUILD env)
 
 Pi-hole (Docker container, host networking, same machine)
-   └── pihole/pihole:latest ───────> DNS on :53, web admin on :8080
+   └── pihole/pihole:latest ───────> DNS on :53 (LAN-wide), web admin on :8080 (loopback-only; SSH tunnel)
        ├── Network-wide ad/malware/tracking blocking (2M+ domains)
-       ├── Local DNS (homehub.lan, pihole.lan, hue.lan, etc.)
+       ├── Local DNS (homehub.lan etc.) — Pi-hole resolves them but Google Wifi NXDOMAINs .lan; use mDNS homehub-dashboard.local
        └── Upstream → Unbound 127.0.0.1#5335 (DNSSEC recursive; mvance/unbound, loopback-only)
 
 Uptime Kuma (Docker container, port 3002, same machine)
-   └── louislam/uptime-kuma:1 ─────> monitors Home Hub :8000/health + Pi-hole :8080
+   └── louislam/uptime-kuma:1 ─────> monitors Home Hub :8000/health + Pi-hole :8080 (localhost-to-localhost)
        └── Alerting via Telegram/Pushover on downtime
 
 PC Agent (supervised on the dev machine only, 2026-04-19+)
@@ -1609,7 +1609,7 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   memory `project_latitude_audio_parked.md`)
 - **Pi-hole + Unbound** (Docker, same compose file at
   `docker/pihole/docker-compose.yml`) — Pi-hole v6 on host networking
-  (DNS :53, web admin :8080); Unbound DNSSEC-validating recursive resolver
+  (DNS :53 LAN-wide, web admin :8080 loopback-only — admin via SSH tunnel); Unbound DNSSEC-validating recursive resolver
   (`mvance/unbound`) on a bridge network, published at `127.0.0.1:5335`
   (host loopback only). Pi-hole forwards upstream queries to Unbound, not
   Google/Cloudflare. Config persisted in `docker/pihole/etc-pihole/`.
@@ -1740,7 +1740,7 @@ and Sonos speaker are LAN-only.
 - ✓ **Effect auto-activation** — EFFECT_AUTO_MAP by mode + time period
 - ✓ **Science-based night work lighting** — per-light variation with 3200K desk lamp + ambient fill, mode-specific transitions, scene drift, mode→scene overrides
 - ✓ **Plant app widget** — polls the external Vercel-hosted plant care app, shows total / needs-water / overdue counts + next watering, and opens the full app in an in-dashboard iframe modal
-- ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across curated blocklists (HaGeZi TIF disabled — false positives on email trackers; anudeepND functionality allow-adlist active), DNS upstream is a local **Unbound** DNSSEC-validating recursive resolver (`127.0.0.1#5335`, sidecar in same compose file), Network widget on dashboard, local DNS for all devices (homehub.lan, etc.), Settings page management for DNS records, blocklists, and exact-domain allowlist, per-device DNS config (apartment router locked)
+- ✓ **Pi-hole DNS ad blocker** — Pi-hole v6 in Docker (host networking) on the Latitude, 2M+ domains blocked across curated blocklists (HaGeZi TIF disabled — false positives on email trackers; anudeepND functionality allow-adlist active), DNS upstream is a local **Unbound** DNSSEC-validating recursive resolver (`127.0.0.1#5335`, sidecar in same compose file), Network widget on dashboard, local DNS records in Pi-hole (homehub.lan, etc. — but post-2026-06 Google Wifi migration the router NXDOMAINs `.lan`, so use mDNS `homehub-dashboard.local`), Settings page management for DNS records, blocklists, and exact-domain allowlist, network-wide DNS via the Google Wifi router (no per-device config)
 - ✓ **Test suite expansion** — 101 tests across 8 files (automation, music mapper, scheduler, weather, pihole, API routes, WebSocket). GitHub Actions CI runs full suite on push
 - ✓ **Observability tooling** — python-json-logger (structured JSON to file), Uptime Kuma monitoring on port 3002 (Home Hub + Pi-hole health checks with alerting), vite-plugin-visualizer for bundle analysis
 - ✓ **Ops tooling** — py-spy for production profiling, httpie for readable API testing (requirements-ops.txt on Latitude)
@@ -1823,7 +1823,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 - **Edge-tts requires internet** — TTS falls back to gTTS (also internet). No offline TTS option currently.
 - **1080p landscape primary** — Animated backgrounds and layout designed for this resolution. Must degrade gracefully on mobile.
 - **Indiana timezone** — America/Indiana/Indianapolis has unique DST rules. All scheduling must use this timezone explicitly.
-- **Apartment router locked** — UISP Fiber router has no admin access; DNS must be configured per-device. Hue Bridge and Sonos cannot be configured for custom DNS (they use DHCP DNS from the router).
+- **Google Wifi DNS model (post-2026-06 migration)** — the apartment now runs behind a self-owned Google Wifi (`192.168.86.0/24`, double-NAT). Network-wide Pi-hole DNS is set on the router (no per-device config), but Google Wifi **proxies** DNS: clients see `.86.1`, per-device Pi-hole attribution is lost, and the router answers `.lan` with an authoritative NXDOMAIN (never forwarding it upstream) — so `.lan` names resolve only for devices pointed directly at Pi-hole (`192.168.86.210`). The working zero-config hostname is **mDNS** (`homehub-dashboard.local:8000`, avahi on the Latitude); never put `.local` records in Pi-hole. Hue Bridge and Sonos use DHCP DNS and can't be reconfigured. (Pre-migration this read "UISP Fiber router locked — DNS per-device.")
 - **Pi-hole on same machine** — Pi-hole Docker runs on the Latitude alongside Home Hub. If Docker or the container goes down, DNS resolution fails for devices using Pi-hole. Fallback DNS (1.1.1.1) configured on desktop and phone.
 
 ## Non-Goals

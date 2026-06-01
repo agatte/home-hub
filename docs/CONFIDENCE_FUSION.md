@@ -69,7 +69,7 @@ Fusion changes the fundamental model: instead of a sequential cascade where the 
 | Service | Its Job | Did It Act Directly? |
 |---------|---------|----------------------|
 | Behavioral Predictor (LightGBM) | Predict next mode from time + behavior patterns | Shadow mode only |
-| Audio Classifier (YAMNet) | Classify ambient sound (speech, silence, game, doorbell, etc.) | Reported mode via activity |
+| Audio Classifier (YAMNet) | Classify ambient sound (speech, silence, game, doorbell, etc.) | Feeds fusion lane only via `POST /api/learning/audio-decision` (activity-report path retired 2026-05-16, `cd8e078` — idle POSTs were displacing rescue overrides) |
 | Lighting Preference Learner | Learn per-light brightness/color preferences | **Yes** — overlays on light states |
 | Music Bandit (Thompson Sampling) | Pick best playlist per mode | **Yes** — used by music_mapper |
 | Camera Presence (MediaPipe) | Detect if you're in front of the webcam | Reported mode via activity |

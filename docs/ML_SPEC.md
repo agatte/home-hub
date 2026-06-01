@@ -56,7 +56,7 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s absent detection), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15s absent detection (vs 10-min idle timer); engine reports `idle`, not `away` (`away` mode retired 2026-04-28). Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
+| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s absent detection), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15s absent detection (vs 10-min idle timer); engine reports `idle`, not `away` (`away` mode retired 2026-04-27). Post 2026-05-27 Latitude→living-room relocation: camera emits only `ZONE_COUCH`; original desk/bed zone split retired; `zone=desk` now sourced exclusively from the desktop pc_agent. Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
 | **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
 | **Phase 4 (sibling track): AI Personality Layer** | Phase A live 2026-05-18; B/C/D queued | Mood-vector inference (V/A/F) from face blendshapes (Phase A shadow log), passive mood-ring accent light (Phase B, gated on Spearman ρ > 0.4), Claude (Haiku) vibe-intent router (Phase C, backend-side), cost dashboard + hardening (Phase D) | Spearman ρ > 0.4 across V/A/F on 30+ paired calibration rows → Phase B promote. Full spec: `docs/PERSONALITY_LAYER.md`. Not a classifier lane — interpretable linear projection from 52 ARKit blendshapes; calibration loop fits per-axis bias from self-report. Sibling to but distinct from the Phase 1-3 ML lanes (no fusion-math contribution in v1 — cosmetic + suggestion-only). |
 
@@ -300,7 +300,7 @@ that learns from richer features.
 | **Promote / auto-demote** | Manual promote via `POST /api/learning/predictor/promote`, gated on `compute_prediction_diversity` over the last 7d (≥50 samples, top mode <95%). The opposite direction is automatic: a daily 03:45 ET ScheduledTask (`predictor_auto_demote_check`) calls the same helper and demotes a promoted predictor whose recent shadow outputs collapse to a single class. Anti-flap: only `single_class` / `near_single_class` reasons trigger demotion — `insufficient_samples` / `query_failed` are treated as "don't know yet". |
 | **Cold start** | Rule engine runs alone until enough activity_events accumulate. Predictor begins training in shadow mode and stays there until manually promoted. |
 | **Minimum data** | 500+ activity events (~1 week of normal use). |
-| **Expected accuracy** | 75-85% on active modes; rule-engine baseline 60-70%. The predictor lane was stripped from `ConfidenceFusion` 2026-04-27 after the first model collapsed to single-class output (see §15 v3 changelog). It still trains nightly and writes shadow rows; re-adding the lane is gated on diversity + per-class accuracy after the 14-feature retrain accumulates a week of observations. |
+| **Expected accuracy** | 75-85% on active modes; rule-engine baseline 60-70%. The predictor lane was stripped from `ConfidenceFusion` 2026-04-27 after the first model collapsed to single-class output (see §15 v3 changelog). It still trains nightly and writes shadow rows. **Blocked as of 2026-06-01:** the 2026-05-27 camera relocation introduced a spurious lux distribution shift (lux≈49.5 always post-move); `watching`-class accuracy dropped to 0%. Fix is to drop `lux` from `FEATURE_COLUMNS` and retrain on post-5/27 data before re-evaluating for fusion promotion. See `project_predictor_lux_distribution_shift.md`. |
 
 **Feature engineering details:**
 
@@ -331,7 +331,11 @@ features.update({
                           #   speech_multiple=2, music=3, mechanical_noise=4,
                           #   doorbell=5, game_audio=6, other=7
     "lux": 165.0,         # EMA lux from camera_service.ema_lux; float("nan")
-                          #   when missing (LightGBM handles natively)
+                          #   when missing (LightGBM handles natively).
+                          #   NOTE (2026-06-01): the 2026-05-27 camera relocation baked a
+                          #   spurious lux≈49.5→watching correlation; `lux` is BLOCKED for
+                          #   removal from FEATURE_COLUMNS pending a post-5/27 retrain —
+                          #   see project_predictor_lux_distribution_shift.md.
     "previous_zone_enc": 0,  # Zone from the prior activity_event; same ZONE_ENCODING.
                              #   Added 2026-05-26 (commit 7bbd885) for leaving-desk
                              #   → kitchen/cooking and late-night rescue transitions.
@@ -448,7 +452,7 @@ else:
 | watching (process) | reclined | watching (confirmed) |
 | idle (no process) | upright at desk *(desktop pc_agent)* | likely working (browser) |
 | idle (no process) | reclined at couch *(Latitude)* | likely watching/relaxing |
-| any | absent (≥30s) | idle (engine signals `signal_presence("camera")` on return; `away` mode retired 2026-04-28) |
+| any | absent (≥30s) | idle (engine signals `signal_presence("camera")` on return; `away` mode retired 2026-04-27) |
 
 *Note: post 2026-05-27 Latitude relocation, `zone=desk` is sourced from the desktop pc_agent (not the Latitude camera). The Latitude sees only the couch.*
 
