@@ -129,6 +129,59 @@ async def require_api_key(
             )
 
 
+async def require_api_key_strict(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_skill_token: Optional[str] = Header(default=None, alias="X-Skill-Token"),
+) -> None:
+    """Like `require_api_key` but WITHOUT the RFC1918 / TRUSTED_LAN bypass.
+
+    Localhost (the kiosk) still passes unconditionally; every other caller —
+    including ordinary LAN devices — must present a valid `X-API-Key`. Used
+    for privacy-sensitive endpoints (the camera JPEG) so a guest or
+    compromised LAN device can't pull imagery even though the apartment's
+    broad write-auth deliberately trusts the LAN ("trust the room"). The
+    server-side MCP already sends the key, so legitimate snapshot pulls keep
+    working; the dashboard never pulls raw JPEGs.
+    """
+    client_host = request.client.host if request.client else ""
+    is_tunnel = (
+        request.headers.get(TUNNEL_ORIGIN_HEADER, "").strip().lower()
+        == TUNNEL_ORIGIN_VALUE
+    )
+
+    # Localhost kiosk passes (but tunnel-origin callers never get the bypass).
+    if not is_tunnel and client_host in TRUSTED_LOCAL:
+        return
+
+    # NB: no LAN bypass here — fall straight through to the key check.
+    expected = settings.HOME_HUB_API_KEY
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Auth disabled — HOME_HUB_API_KEY not set",
+        )
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
+    if is_tunnel:
+        skill_expected = settings.HOME_HUB_SKILL_TOKEN
+        if not skill_expected:
+            raise HTTPException(
+                status_code=503,
+                detail="Tunnel auth disabled — HOME_HUB_SKILL_TOKEN not set",
+            )
+        if not x_skill_token or not hmac.compare_digest(
+            x_skill_token, skill_expected
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing skill token",
+            )
+
+
 def source_from_request(request: Request, fallback: str) -> str:
     """Extract the X-Source header for telemetry, with a route-specific fallback.
 

@@ -9,7 +9,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, require_api_key_strict
 from backend.config import DATA_DIR
 from backend.services.presence_fusion import KNOWN_SOURCES, PresenceReading
 
@@ -144,7 +144,7 @@ async def post_observation(
     return {"status": "ok"}
 
 
-@router.get("/snapshot", dependencies=[Depends(require_api_key)])
+@router.get("/snapshot", dependencies=[Depends(require_api_key_strict)])
 async def get_snapshot(request: Request, annotate: bool = False) -> Response:
     """Return a single JPEG frame from the webcam.
 

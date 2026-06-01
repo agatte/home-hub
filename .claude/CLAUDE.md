@@ -315,7 +315,7 @@ Keys you **hand-edit** (no UI; edit the row directly):
 | Sonos Era 100 | 192.168.86.157 | Living room. `SONOS_IP` hardcoded in `.env` to defeat cold-boot SSDP race. |
 | Android Tablet | 192.168.86.209 | Kiosk display (blank page deferred) |
 
-**iOS WiFi-rejoin caveat:** Rejoining the home network on iPhone resets per-device settings (iOS treats each join as a clean profile — not a Pi-hole bug). After any rejoin, restore Settings → WiFi → (i): manual IP `192.168.86.148`, DNS → Pi-hole `192.168.86.210`, Private WiFi Address → Fixed.
+**Network (post-2026-06 Google Wifi migration):** Apartment runs behind a personal Google Wifi (`192.168.86.0/24`, double-NAT behind the ISP router). Network-wide Pi-hole DNS is set on the router, so devices use Pi-hole automatically — **no per-device DNS needed**. Google Wifi proxies DNS (clients see `.86.1`), so per-device Pi-hole attribution is lost and local `.lan` names don't resolve through the router. Guests join the **main** network — full-trust "trust the room" by design (`auth.py` trusts all LAN callers, so an admitted guest can drive the apartment + read the behavioral DB; `GET /api/camera/snapshot` is the one exception, locked to localhost+key). iOS: only set Private WiFi Address → Fixed (+ optional DHCP reservation `192.168.86.148`) for a stable IP.
 
 ---
 
