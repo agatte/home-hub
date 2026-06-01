@@ -64,6 +64,14 @@ PRESENT_CLEAR_SECONDS = 2
 # Matches the deadline passed to ``apply_transit_override``.
 HARD_TIMEOUT_SECONDS = 600
 
+# Re-fire cooldown after a deactivate. A presence flicker right after a
+# deactivate can't immediately re-arm transit — the dwell is held off this
+# long so the worst case is ≤1 transit pulse per cooldown window rather than
+# a rapid re-grab. Invisible on a genuine long absence (the cooldown lapses
+# well before a fresh ABSENT_TRIGGER_SECONDS dwell would complete). Mirrored
+# in DeskExitKitchenService.
+REFIRE_COOLDOWN_SECONDS = 45
+
 # Modes where kitchen / living room are dim or off and transit lighting is
 # worth firing. Intentionally conservative — cooking is already bright, social
 # has a medium palette, sleeping wants to stay dark, gameday is handled
@@ -157,6 +165,10 @@ class TransitLightingService:
         # the STATIONARY_ZONES gate when sustained — see BED_EXIT_ABSENT_FRAMES.
         # Resets to 0 on any strongly-present frame.
         self._strong_absent_streak: int = 0
+        # When transit last deactivated — gates the re-fire cooldown so a
+        # presence flicker can't immediately re-grab the lights (see
+        # REFIRE_COOLDOWN_SECONDS).
+        self._last_deactivated_at: Optional[datetime] = None
         # Lights this service actually painted on the most recent _activate.
         # Used to scope _deactivate's clear to only OUR keys in the shared
         # `_transit_light_overrides` dict — `DeskExitKitchenService` also
@@ -276,6 +288,17 @@ class TransitLightingService:
         # ── Not active: look for conditions to activate ──
         if mode not in TRIGGER_MODES:
             self._record_block(f"mode={mode} (not in trigger set)")
+            return
+
+        # Re-fire cooldown — after a deactivate, hold off re-arming so a
+        # presence flicker can't immediately re-grab the lights and resume a
+        # strobe. _record_block clears the absent/flap timers, so a fresh full
+        # ABSENT_TRIGGER_SECONDS dwell is still required once the cooldown
+        # lapses.
+        if self._last_deactivated_at is not None and (
+            now - self._last_deactivated_at
+        ).total_seconds() < REFIRE_COOLDOWN_SECONDS:
+            self._record_block("refire cooldown")
             return
 
         # Watching + reclined: user is consuming content, not navigating —
@@ -451,6 +474,7 @@ class TransitLightingService:
         self._presence_during_absent_since = None
         self._transit_start = None
         self._owned_lights = set()
+        self._last_deactivated_at = datetime.now(tz=TZ)
         logger.info("Transit lighting deactivated (%s)", reason)
 
     async def close(self) -> None:

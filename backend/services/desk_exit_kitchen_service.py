@@ -41,6 +41,27 @@ POLL_INTERVAL_SECONDS = 2
 # fills 4–8s gaps but doesn't sustain past 10s when Anthony is actually present.
 ABSENT_TRIGGER_SECONDS = 10
 
+# Return-to-desk debounce on the evening/night kitchen-only path. The override
+# must see is_at_desk_fresh() True across this streak before it deactivates —
+# WITHOUT this the path deactivated on the FIRST True frame, and since the
+# desktop pc_agent's face_present signal is last-write-wins with no debounce
+# (a single missed/low-confidence frame flips it false→true around the trust
+# threshold during gaming), a lone recovered frame released the kitchen, the
+# mode-apply loop repainted the gaming palette, then a real ≥10s gap re-armed
+# and re-fired warm — the warm↔gaming strobe (2026-05-31, same bug class as
+# the 2026-05-12 transit face-flutter incident). 3s + the 2s poll requires ≥2
+# consecutive non-flicker True frames; well under perceptible "I'm back"
+# latency. Mirrors the corridor's CORRIDOR_RETURN_DESK_SECONDS streak.
+RETURN_DESK_SUSTAIN_SECONDS = 3
+
+# Re-fire cooldown after a deactivate. A presence flicker right after a
+# deactivate can't immediately re-arm the override — the dwell is held off for
+# this long so the worst case is ≤1 warm pulse per cooldown window instead of
+# the 30–80s strobe. Invisible on a genuine long absence (the cooldown lapses
+# long before the 10s dwell + activate would complete). Mirrored in
+# TransitLightingService.
+REFIRE_COOLDOWN_SECONDS = 45
+
 # Modes that imply "Anthony might be heading to the kitchen for a snack /
 # water / break." Skips sleeping (lights stay off), social/relax (deliberate
 # ambient palette), cooking (kitchen is already bright), gameday (own logic).
@@ -174,6 +195,15 @@ class DeskExitKitchenService:
         self._camera_absent_since: Optional[datetime] = None
         self._activate_ts: Optional[datetime] = None
         self._active_period: Optional[str] = None
+        # Leading edge of a sustained is_at_desk_fresh() streak on the
+        # evening/night kitchen-only path — debounces the return-to-desk
+        # deactivate against single-frame presence flicker (see
+        # RETURN_DESK_SUSTAIN_SECONDS). Distinct from the corridor's own
+        # _corridor_return_streak_start.
+        self._return_streak_start: Optional[datetime] = None
+        # When the kitchen-only path last deactivated — gates the re-fire
+        # cooldown (see REFIRE_COOLDOWN_SECONDS).
+        self._last_deactivated_at: Optional[datetime] = None
         # Only log block-reason transitions, not every silent tick.
         self._last_block_reason: Optional[str] = None
 
@@ -268,8 +298,20 @@ class DeskExitKitchenService:
                 await self._deactivate(f"period left trigger set ({period})")
                 return
             if self._automation.is_at_desk_fresh():
-                await self._deactivate("returned to desk")
+                # Require a SUSTAINED return before deactivating — a single
+                # recovered face_present frame must not release the kitchen
+                # (that was the warm↔gaming strobe driver). Mirrors the
+                # corridor return-streak.
+                if self._return_streak_start is None:
+                    self._return_streak_start = now
+                elif (
+                    now - self._return_streak_start
+                ).total_seconds() >= RETURN_DESK_SUSTAIN_SECONDS:
+                    await self._deactivate("returned to desk")
                 return
+            # Lost the fresh-desk signal again — reset the return streak so a
+            # later flicker has to re-accumulate from scratch.
+            self._return_streak_start = None
             if self._activate_ts and (
                 now - self._activate_ts
             ).total_seconds() >= HARD_TIMEOUT_SECONDS:
@@ -289,6 +331,18 @@ class DeskExitKitchenService:
             return
         if period not in TRIGGER_PERIODS:
             self._record_block(f"period={period} (not in trigger set)")
+            return
+
+        # Re-fire cooldown — after a deactivate, hold off re-arming so a
+        # presence flicker can't immediately re-grab the kitchen and resume
+        # the strobe. Reset the absent timer too so the dwell can't pre-charge
+        # during the cooldown; a fresh full ABSENT_TRIGGER_SECONDS dwell is
+        # still required once the cooldown lapses.
+        if self._last_deactivated_at is not None and (
+            now - self._last_deactivated_at
+        ).total_seconds() < REFIRE_COOLDOWN_SECONDS:
+            self._camera_absent_since = None
+            self._record_block("refire cooldown")
             return
 
         # While Anthony is still at the desk, reset the absent timer. We use
@@ -535,6 +589,7 @@ class DeskExitKitchenService:
         self._active = True
         if not repaint:
             self._activate_ts = datetime.now(tz=TZ)
+            self._return_streak_start = None
         self._active_period = target_period
         logger.info(
             "DeskExit %s (mode=%s period=%s bri=%d)",
@@ -550,6 +605,8 @@ class DeskExitKitchenService:
         self._camera_absent_since = None
         self._activate_ts = None
         self._active_period = None
+        self._return_streak_start = None
+        self._last_deactivated_at = datetime.now(tz=TZ)
         logger.info("DeskExit deactivated (%s)", reason)
 
     async def close(self) -> None:

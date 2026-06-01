@@ -18,6 +18,7 @@ from backend.services.transit_lighting_service import (
     ABSENT_TRIGGER_SECONDS,
     HARD_TIMEOUT_SECONDS,
     PRESENT_CLEAR_SECONDS,
+    REFIRE_COOLDOWN_SECONDS,
     STATIONARY_ZONES,
     TRIGGER_MODES,
     TransitLightingService,
@@ -654,6 +655,57 @@ class TestNavigationStates:
         assert "1" in states
         assert "3" not in states
         assert "4" not in states
+
+
+class TestRefireCooldown:
+    """After a deactivate, a presence flicker must not immediately re-arm
+    transit. The re-fire cooldown holds off re-activation for
+    REFIRE_COOLDOWN_SECONDS so the 2026-05-31 warm↔gaming strobe can't
+    resume (deactivate → flicker → re-grab → ...)."""
+
+    async def test_deactivate_stamps_cooldown(self):
+        svc, _, _ = _make_service(mode="working")
+        assert svc._last_deactivated_at is None
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        await svc._deactivate("test")
+        assert svc._last_deactivated_at is not None
+
+    async def test_first_activation_is_not_blocked(self):
+        # Cooldown unset on a fresh service → first fire is unaffected.
+        svc, auto, _ = _make_service(mode="working")
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
+
+    async def test_cooldown_blocks_immediate_refire(self):
+        svc, auto, cam = _make_service(mode="working")
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        await svc._deactivate("test")
+        assert len(auto.transit_calls) == 1
+
+        # Immediately try to re-arm with the camera absent. The frozen clock
+        # means ~0s have elapsed since the deactivate — well under the
+        # cooldown — so the dwell can't even seed.
+        cam.last_detection = "absent"
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert svc._camera_absent_since is None  # cooldown cleared the dwell
+        assert len(auto.transit_calls) == 1  # no second fire
+
+    async def test_refire_allowed_after_cooldown_lapses(self):
+        from datetime import timedelta
+        svc, auto, cam = _make_service(mode="working")
+        await _drive_absent_window(svc)
+        await svc._deactivate("test")
+
+        # Lapse the cooldown, then a real sustained absence should fire again.
+        svc._last_deactivated_at -= timedelta(seconds=REFIRE_COOLDOWN_SECONDS + 1)
+        cam.last_detection = "absent"
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 2
 
 
 class _FrozenDatetime:
