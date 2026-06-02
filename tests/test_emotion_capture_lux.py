@@ -73,3 +73,43 @@ class TestSearchExposure:
 
         search_exposure(m, max_iter=3)
         assert len(calls) == 3
+
+
+class TestShouldSampleLux:
+    """Part A cadence gate: calibrated + interval elapsed → sample."""
+
+    def _agent(self):
+        from backend.services.pc_agent.emotion_capture import EmotionCapture
+        return EmotionCapture("http://test:8000")
+
+    def test_uncalibrated_never_samples(self):
+        a = self._agent()
+        try:
+            a._lux_exposure = None
+            assert a._should_sample_lux(1000.0) is False
+        finally:
+            a.close()
+
+    def test_first_sample_fires_when_calibrated(self):
+        a = self._agent()
+        try:
+            a._lux_exposure = -5.0
+            a._last_lux_sample_at = None
+            assert a._should_sample_lux(1000.0) is True
+        finally:
+            a.close()
+
+    def test_waits_for_interval_then_fires(self):
+        from backend.services.pc_agent.emotion_capture import LUX_SAMPLE_INTERVAL_S
+        a = self._agent()
+        try:
+            a._lux_exposure = -5.0
+            a._last_lux_sample_at = 1000.0
+            # Just before the interval → no sample.
+            assert a._should_sample_lux(
+                1000.0 + LUX_SAMPLE_INTERVAL_S - 0.5
+            ) is False
+            # At/after the interval → sample.
+            assert a._should_sample_lux(1000.0 + LUX_SAMPLE_INTERVAL_S) is True
+        finally:
+            a.close()

@@ -30,6 +30,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -131,6 +132,13 @@ LUX_ACCEPT_LO = 60.0
 LUX_ACCEPT_HI = 180.0
 LUX_EXPOSURE_MIN = -12.0
 LUX_EXPOSURE_MAX = 0.0
+
+# Part A periodic sampling. ~25s keeps the backend bedroom_lux channel under
+# its 30s staleness gate while bounding how often the brief flip-to-fixed-
+# exposure interrupts face capture. A sample skips ONE presence tick.
+LUX_SAMPLE_INTERVAL_S = 25.0
+LUX_SAMPLE_SETTLE_S = 0.4   # AGC settle after switching to the fixed exposure
+LUX_SAMPLE_FRAMES = 3       # frames averaged for one lux reading
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +507,8 @@ class EmotionCapture:
         # exposure, loaded for the Part A sampler.
         self._calibrate_pending: bool = False
         self._lux_exposure: Optional[float] = None
+        # Part A: monotonic timestamp of the last lux sample (None = never).
+        self._last_lux_sample_at: Optional[float] = None
 
         self._client = httpx.Client(timeout=HTTP_TIMEOUT_S)
 
@@ -682,6 +692,15 @@ class EmotionCapture:
         # restores auto-exposure so capture resumes next tick.
         if self._take_calibrate_pending():
             self._run_lux_calibration(cv2)
+            return
+
+        # Bedroom-lux sampling (D4 Part A) — periodic flip-sample-flip. A brief
+        # (~1s) switch to the calibrated fixed exposure for one lux reading,
+        # then restore auto. Skips THIS tick's presence POST so the dark
+        # fixed-exposure frames never register as "no face". Gated on a
+        # calibrated exposure existing.
+        if self._should_sample_lux(time.monotonic()):
+            self._sample_lux(cv2)
             return
 
         frame = None
@@ -1060,7 +1079,6 @@ class EmotionCapture:
         manual (the 2026-06-01 black-out failure, see
         ``project_desktop_webcam_dshow``).
         """
-        import time
 
         cap = self._cap
         if cap is None or not cap.isOpened():
@@ -1130,6 +1148,77 @@ class EmotionCapture:
         except httpx.HTTPError as exc:
             logger.warning("POST /lux/calibration failed: %s", exc)
 
+    # ── bedroom-lux sampling (D4 Part A) ────────────────────────────
+
+    def _should_sample_lux(self, now_monotonic: float) -> bool:
+        """True iff it's time for a lux sample.
+
+        Requires a calibrated exposure (``_lux_exposure`` set, loaded from
+        ``desktop_lux_calibration_config``) and that at least
+        ``LUX_SAMPLE_INTERVAL_S`` has passed since the last sample. Pure given
+        ``now_monotonic`` so the cadence is unit-testable without a clock.
+        """
+        if self._lux_exposure is None:
+            return False
+        if self._last_lux_sample_at is None:
+            return True
+        return (now_monotonic - self._last_lux_sample_at) >= LUX_SAMPLE_INTERVAL_S
+
+    def _sample_lux(self, cv2: Any) -> None:
+        """Flip to the calibrated fixed exposure, read one lux value, restore auto.
+
+        Runs on the capture thread (owns ``_cap``). Full-frame ``gray.mean()``
+        (D4 micro-decision). ALWAYS restores auto-exposure in a ``finally`` —
+        on the SAME handle, since ``_ensure_cap`` only force-autos on *open*
+        (see ``project_desktop_webcam_dshow``). Stamps ``_last_lux_sample_at``
+        even on failure so a wedged read doesn't hot-loop the sampler.
+        """
+        self._last_lux_sample_at = time.monotonic()
+        cap = self._cap
+        exposure = self._lux_exposure
+        if cap is None or not cap.isOpened() or exposure is None:
+            return
+        lux: Optional[float] = None
+        try:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_MANUAL)
+            cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+            time.sleep(LUX_SAMPLE_SETTLE_S)
+            cap.read()  # drop the first post-switch frame
+            vals: list[float] = []
+            for _ in range(LUX_SAMPLE_FRAMES):
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    vals.append(
+                        float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
+                    )
+            if vals:
+                lux = sum(vals) / len(vals)
+        finally:
+            try:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
+            except Exception:
+                pass
+        if lux is None:
+            logger.debug("Lux sample skipped — no frame read")
+            return
+        self._post_lux(lux)
+
+    def _post_lux(self, ambient_lux: float) -> None:
+        """POST one ambient-lux sample to the bedroom channel. Best-effort."""
+        payload = {
+            "ambient_lux": round(ambient_lux, 1),
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            resp = self._client.post(self._lux_endpoint, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "POST /desktop/lux returned %d: %s",
+                    resp.status_code, resp.text[:200],
+                )
+        except httpx.HTTPError as exc:
+            logger.debug("POST /desktop/lux failed: %s", exc)
+
     # ── settings poll ───────────────────────────────────────────────
 
     def poll_settings(self) -> None:
@@ -1187,6 +1276,19 @@ class EmotionCapture:
                 with self._enabled_lock:
                     self._calibrate_pending = True
         except (httpx.HTTPError, ValueError):
+            pass
+
+        # Load the calibrated exposure (D4 Part A) so the sampler can pin it.
+        # Lives in app_settings, so this survives an agent restart (the
+        # in-process _lux_exposure set during a calibration run is the live
+        # path; this GET is the cold-start / cross-session path).
+        try:
+            cfg_resp = self._client.get(self._lux_calibration_endpoint)
+            if cfg_resp.status_code == 200:
+                exp = cfg_resp.json().get("exposure")
+                if exp is not None:
+                    self._lux_exposure = float(exp)
+        except (httpx.HTTPError, ValueError, TypeError):
             pass
 
 

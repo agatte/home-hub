@@ -521,6 +521,19 @@ async def get_desktop_lux_calibrate_pending(request: Request) -> dict:
     return {"pending": bool(cfg.get("requested"))}
 
 
+@router.get("/desktop/lux/calibration", dependencies=[Depends(require_api_key)])
+async def get_desktop_lux_calibration(request: Request) -> dict:
+    """Return the persisted bedroom-lux calibration config (D4 Part A).
+
+    The desktop agent loads ``exposure`` from here to pin its periodic lux
+    samples, so a calibration survives an agent restart. Empty dict when the
+    bedroom webcam hasn't been calibrated yet.
+    """
+    from backend.api.routes.routines import load_setting
+
+    return await load_setting("desktop_lux_calibration_config") or {}
+
+
 @router.post("/desktop/lux/calibration", dependencies=[Depends(require_api_key)])
 async def post_desktop_lux_calibration(
     payload: DesktopLuxCalibration, request: Request,

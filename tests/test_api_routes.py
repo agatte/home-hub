@@ -274,3 +274,10 @@ class TestBedroomLuxAPI:
         resp = client.get("/api/camera/desktop/lux/calibrate/pending")
         assert resp.status_code == 200
         assert isinstance(resp.json().get("pending"), bool)
+
+    def test_get_calibration_config_shape(self, client):
+        # Read-only — the agent loads `exposure` from here (Part A). Returns
+        # {} when uncalibrated, or the persisted config dict.
+        resp = client.get("/api/camera/desktop/lux/calibration")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), dict)
