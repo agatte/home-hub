@@ -495,6 +495,32 @@ async def get_desktop_lux(request: Request) -> dict:
     return {"status": "ok", **channel.status()}
 
 
+@router.post("/desktop/lux/calibrate/request", dependencies=[Depends(require_api_key)])
+async def request_desktop_lux_calibration(request: Request) -> dict:
+    """Flag a bedroom-lux calibration for the desktop agent to run (D4 Part B).
+
+    The desktop pc_agent polls ``/desktop/lux/calibrate/pending`` on its 30s
+    settings cadence; when this flag is set it runs the exposure sweep (at
+    comfortable-bright bedroom light) on its capture thread and POSTs the
+    result to ``/desktop/lux/calibration``, which clears the flag. Persisted
+    in ``app_settings`` so the request survives a backend restart.
+    """
+    from backend.api.routes.routines import save_setting
+
+    await save_setting("desktop_lux_calibrate_requested", {"requested": True})
+    logger.info("Bedroom lux calibration requested — agent will run on next poll")
+    return {"status": "ok", "pending": True}
+
+
+@router.get("/desktop/lux/calibrate/pending", dependencies=[Depends(require_api_key)])
+async def get_desktop_lux_calibrate_pending(request: Request) -> dict:
+    """Polled by the desktop agent — runs calibration when ``pending`` is true."""
+    from backend.api.routes.routines import load_setting
+
+    cfg = await load_setting("desktop_lux_calibrate_requested") or {}
+    return {"pending": bool(cfg.get("requested"))}
+
+
 @router.post("/desktop/lux/calibration", dependencies=[Depends(require_api_key)])
 async def post_desktop_lux_calibration(
     payload: DesktopLuxCalibration, request: Request,

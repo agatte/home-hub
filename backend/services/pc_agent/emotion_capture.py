@@ -119,10 +119,58 @@ HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER = 0.40  # for confidence calc
 
 HTTP_TIMEOUT_S = 5.0
 
+# Bedroom-lux calibration + sampling (D4). DirectShow exposure conventions
+# mirror CameraService: 0.75 = auto, 0.25 = manual.
+EXPOSURE_AUTO = 0.75
+EXPOSURE_MANUAL = 0.25
+LUX_CALIBRATION_TARGET = 100.0   # gray.mean() we aim for at comfortable-bright
+# Acceptable steady-state mean band to stop the search in (mirrors
+# camera_service._calibrate_exposure_sync). Outside [60,180] the room is
+# too dark / too bright to anchor a useful baseline.
+LUX_ACCEPT_LO = 60.0
+LUX_ACCEPT_HI = 180.0
+LUX_EXPOSURE_MIN = -12.0
+LUX_EXPOSURE_MAX = 0.0
+
 
 # ---------------------------------------------------------------------------
 # Pure classifier helpers (testable without MediaPipe installed)
 # ---------------------------------------------------------------------------
+
+
+def search_exposure(
+    measure_fn,
+    *,
+    start: float = -6.0,
+    lo: float = LUX_ACCEPT_LO,
+    hi: float = LUX_ACCEPT_HI,
+    exp_min: float = LUX_EXPOSURE_MIN,
+    exp_max: float = LUX_EXPOSURE_MAX,
+    max_iter: int = 6,
+) -> tuple[float, float]:
+    """Find a fixed exposure whose steady ``gray.mean()`` lands in ``[lo, hi]``.
+
+    Pure + camera-agnostic: ``measure_fn(exposure) -> float`` returns the
+    steady-state mean at that exposure (or a negative value on read failure).
+    Starts at ``start`` and steps ±2 stops (each ≈ halve/double brightness)
+    toward the band, clamped to ``[exp_min, exp_max]``. Returns
+    ``(exposure, measured)`` — the last exposure tried and its mean. A
+    negative ``measured`` signals a read failure; a measured outside
+    ``[lo, hi]`` means the search exhausted ``max_iter`` without landing
+    (room too dark/bright — caller should warn). Mirrors the binary-ish
+    sweep in ``camera_service._calibrate_exposure_sync`` but full-frame.
+    """
+    exposure = start
+    measured = -1.0
+    for _ in range(max_iter):
+        measured = measure_fn(exposure)
+        if measured < 0:
+            return exposure, measured  # read failure — abort
+        if lo <= measured <= hi:
+            break
+        exposure += -2.0 if measured > hi else 2.0
+        exposure = max(exp_min, min(exp_max, exposure))
+    return exposure, measured
 
 
 def _compute_head_drop_ratio(
@@ -395,6 +443,13 @@ class EmotionCapture:
         # transmitted in normal operation.
         self._snapshot_pending_endpoint = f"{self._server_url}/api/camera/desktop/snapshot/pending"
         self._snapshot_upload_endpoint = f"{self._server_url}/api/camera/desktop/snapshot/upload"
+        # Bedroom-lux endpoints (D4). The agent POSTs lux samples (Part A),
+        # POSTs calibration results, and polls the calibrate-pending flag.
+        self._lux_endpoint = f"{self._server_url}/api/camera/desktop/lux"
+        self._lux_calibration_endpoint = f"{self._server_url}/api/camera/desktop/lux/calibration"
+        self._lux_calibrate_pending_endpoint = (
+            f"{self._server_url}/api/camera/desktop/lux/calibrate/pending"
+        )
 
         # Runtime toggles, refreshed by the settings-poll thread. Defaults
         # to False so we don't capture before the user has opted in via
@@ -436,6 +491,14 @@ class EmotionCapture:
         # single WARN on transition rather than flooding the log when
         # Zoom / Discord holds the device.
         self._last_unavailable_reason: Optional[str] = None
+
+        # Bedroom-lux calibration (D4 Part B). The settings-poll thread sets
+        # _calibrate_pending when the backend flags a calibration; the capture
+        # thread (which owns _cap) runs it and clears the flag — so all webcam
+        # access stays single-threaded. _lux_exposure is the calibrated fixed
+        # exposure, loaded for the Part A sampler.
+        self._calibrate_pending: bool = False
+        self._lux_exposure: Optional[float] = None
 
         self._client = httpx.Client(timeout=HTTP_TIMEOUT_S)
 
@@ -553,7 +616,7 @@ class EmotionCapture:
             # capture again. (D4 will flip to a fixed exposure only briefly
             # per lux sample, then restore auto here.)
             try:
-                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
             except Exception:
                 pass
             self._cap = cap
@@ -611,6 +674,14 @@ class EmotionCapture:
             import cv2  # type: ignore
         except ImportError:
             self._note_webcam_unavailable("opencv_not_installed")
+            return
+
+        # Bedroom-lux calibration (D4 Part B) runs on THIS thread (it owns
+        # _cap). A deliberate user-triggered exposure sweep (~15s) — skip the
+        # normal presence capture for this tick; _run_lux_calibration always
+        # restores auto-exposure so capture resumes next tick.
+        if self._take_calibrate_pending():
+            self._run_lux_calibration(cv2)
             return
 
         frame = None
@@ -963,6 +1034,102 @@ class EmotionCapture:
         except httpx.HTTPError as exc:
             logger.warning("Snapshot upload failed: %s", exc)
 
+    # ── bedroom-lux calibration (D4 Part B) ─────────────────────────
+
+    def _take_calibrate_pending(self) -> bool:
+        """Atomically read-and-clear the calibrate-pending flag.
+
+        Consume-on-take: the request is cleared when picked up, so a
+        transient read failure during calibration loses the request and the
+        user re-triggers (deliberate UI action with feedback). Keeps webcam
+        access single-threaded — only the capture thread touches ``_cap``.
+        """
+        with self._enabled_lock:
+            if self._calibrate_pending:
+                self._calibrate_pending = False
+                return True
+            return False
+
+    def _run_lux_calibration(self, cv2: Any) -> None:
+        """Sweep exposure → ``gray.mean()≈target`` under current bedroom light,
+        then POST ``{exposure, baseline_lux}``.
+
+        Runs on the capture thread (owns ``_cap``). Full-frame mean (no zone
+        weighting — D4 micro-decision). ALWAYS restores auto-exposure in a
+        ``finally`` so presence capture resumes — never leave the Brio pinned
+        manual (the 2026-06-01 black-out failure, see
+        ``project_desktop_webcam_dshow``).
+        """
+        import time
+
+        cap = self._cap
+        if cap is None or not cap.isOpened():
+            logger.warning("Lux calibration skipped — webcam not open")
+            return
+        logger.info("Bedroom lux calibration starting (exposure sweep)...")
+        try:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_MANUAL)
+
+            def measure(exposure: float) -> float:
+                # Set exposure, let auto-gain settle, then take a poll-cadence
+                # measurement (mirrors camera_service so the baseline matches
+                # what a live sampler would read).
+                cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+                time.sleep(3.0)
+                cap.read()  # drop the first frame after settle
+                vals: list[float] = []
+                for _ in range(3):
+                    ok, frame = cap.read()
+                    if ok and frame is not None:
+                        vals.append(
+                            float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
+                        )
+                    time.sleep(0.5)
+                return sum(vals) / len(vals) if vals else -1.0
+
+            exposure, measured = search_exposure(measure)
+        finally:
+            try:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
+            except Exception:
+                pass
+
+        if measured < 0:
+            logger.warning(
+                "Lux calibration failed (camera read) — re-request to retry",
+            )
+            return
+        if not (LUX_ACCEPT_LO <= measured <= LUX_ACCEPT_HI):
+            logger.warning(
+                "Lux calibration: room mean %.1f outside [%.0f,%.0f] — too %s; "
+                "recalibrate at comfortable-bright bedroom light",
+                measured, LUX_ACCEPT_LO, LUX_ACCEPT_HI,
+                "dark" if measured < LUX_ACCEPT_LO else "bright",
+            )
+        self._lux_exposure = exposure
+        self._post_lux_calibration(exposure, measured)
+        logger.info(
+            "Bedroom lux calibration done: exposure=%.1f baseline=%.1f",
+            exposure, measured,
+        )
+
+    def _post_lux_calibration(self, exposure: float, baseline_lux: float) -> None:
+        """POST the calibration result; the backend persists it + clears the flag."""
+        payload = {
+            "exposure": round(exposure, 2),
+            "baseline_lux": round(baseline_lux, 1),
+            "target_lux": LUX_CALIBRATION_TARGET,
+        }
+        try:
+            resp = self._client.post(self._lux_calibration_endpoint, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "POST /lux/calibration returned %d: %s",
+                    resp.status_code, resp.text[:200],
+                )
+        except httpx.HTTPError as exc:
+            logger.warning("POST /lux/calibration failed: %s", exc)
+
     # ── settings poll ───────────────────────────────────────────────
 
     def poll_settings(self) -> None:
@@ -1009,6 +1176,18 @@ class EmotionCapture:
             return
         mode = (mode_data.get("mode") or "").lower()
         self.set_mode_sleeping(mode == "sleeping")
+
+        # Bedroom-lux calibration request (D4 Part B). Cheap flag poll on the
+        # same 30s cadence; the capture thread actually runs the sweep. Only
+        # flips the flag on (the capture thread consumes + clears it), so a
+        # missed poll just delays calibration to the next cycle.
+        try:
+            cal_resp = self._client.get(self._lux_calibrate_pending_endpoint)
+            if cal_resp.status_code == 200 and bool(cal_resp.json().get("pending")):
+                with self._enabled_lock:
+                    self._calibrate_pending = True
+        except (httpx.HTTPError, ValueError):
+            pass
 
 
 # ---------------------------------------------------------------------------

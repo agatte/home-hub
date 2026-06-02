@@ -267,3 +267,10 @@ class TestBedroomLuxAPI:
     def test_post_lux_rejects_out_of_range(self, client):
         r = client.post("/api/camera/desktop/lux", json={"ambient_lux": 999})
         assert r.status_code == 422  # > 255 fails the Field(le=255) bound
+
+    def test_get_calibrate_pending_shape(self, client):
+        # Read-only flag poll (the POST .../calibrate/request writes the shared
+        # settings DB, so it's exercised live rather than here).
+        resp = client.get("/api/camera/desktop/lux/calibrate/pending")
+        assert resp.status_code == 200
+        assert isinstance(resp.json().get("pending"), bool)
