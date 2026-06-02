@@ -257,6 +257,11 @@
   visible `.chip-pct` text and the composite aria-label below, not from
   a slider valuetext.
 -->
+<!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions
+     Intentional composite widget (see comment above): a focusable role="group" that owns the
+     keyboard brightness/power model and a full-card pointer hit area. ARIA forbids interactive
+     descendants inside role="slider", so we keep role="group" + the nested swatch/power buttons.
+     role + aria-label are already present; the linter just can't model this pattern. -->
 <div
   class="light-chip"
   class:light-on={displayOn}
