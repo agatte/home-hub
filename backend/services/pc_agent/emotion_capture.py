@@ -535,13 +535,29 @@ class EmotionCapture:
             self._note_webcam_unavailable("opencv_not_installed")
             return False
         try:
-            cap = cv2.VideoCapture(0)
+            # CAP_DSHOW (DirectShow) over the default MSMF backend: on the
+            # Logitech Brio, MSMF intermittently hangs on open and stalls the
+            # stream (the LED-cycling "can't see me" failure, 2026-06-01).
+            # DSHOW opens reliably and is the only backend that controls
+            # exposure on this cam — which the D4 lux work also needs.
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
             if not cap.isOpened():
                 self._note_webcam_unavailable("open_failed")
                 cap.release()
                 return False
+            # Force AUTO exposure on every open. The Brio retains exposure
+            # state in firmware across handle opens; the D4 exposure spike
+            # left it pinned manual-dark (EXPOSURE=-10), blacking out face
+            # detection until reset. 0.75 = auto in DirectShow's convention.
+            # Defensive: a stray manual state can never persist into presence
+            # capture again. (D4 will flip to a fixed exposure only briefly
+            # per lux sample, then restore auto here.)
+            try:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+            except Exception:
+                pass
             self._cap = cap
-            logger.info("Webcam opened (cv2.VideoCapture(0))")
+            logger.info("Webcam opened (cv2.VideoCapture(0, CAP_DSHOW))")
             self._last_unavailable_reason = None
             return True
         except Exception as exc:
