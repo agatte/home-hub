@@ -108,9 +108,11 @@ class NotifierService:
                 "NTFY_TOPIC unset; WS broadcast still active)",
             )
         else:
+            # Topic deliberately omitted — it's the auth secret on hosted
+            # ntfy.sh and must not land in journalctl (this fires every boot).
             logger.info(
-                "NotifierService initialized (ntfy.sh push at %s/%s)",
-                self._ntfy_server, self._ntfy_topic,
+                "NotifierService initialized (ntfy.sh push enabled at %s)",
+                self._ntfy_server,
             )
 
     # ------------------------------------------------------------------
