@@ -628,18 +628,7 @@ class CameraService:
         self._enabled = True
         if self._heartbeat is not None:
             self._heartbeat.register("camera", float(POLL_INTERVAL))
-        if self._source_trust is not None:
-            from backend.services.source_trust import (
-                CAMERA_MAX_SAMPLES,
-                CAMERA_WINDOW_SECONDS,
-                camera_sanity,
-            )
-            self._source_trust.register(
-                "camera",
-                predicate=camera_sanity,
-                window_seconds=CAMERA_WINDOW_SECONDS,
-                max_samples=CAMERA_MAX_SAMPLES,
-            )
+        self._register_camera_sanity()
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
 
     @staticmethod
@@ -1155,6 +1144,30 @@ class CameraService:
         sanity predicate on enable/resume and deregisters on pause/disable.
         """
         self._source_trust = registry
+
+    def _register_camera_sanity(self) -> None:
+        """Register the camera lane with source-trust using the long-horizon
+        buffer the ``camera_sanity`` predicate needs (2h window / 4000 samples).
+
+        Shared by the enable + post-sleep-resume sites so they can't drift: the
+        resume site silently falling back to the 300s/300-sample defaults
+        defeated ``lux_variance_collapse`` (needs a 90-min span + 600 samples)
+        every morning after the first sleep cycle — caught by pr-review-backend
+        2026-06-02. No-op when no registry is wired.
+        """
+        if self._source_trust is None:
+            return
+        from backend.services.source_trust import (
+            CAMERA_MAX_SAMPLES,
+            CAMERA_WINDOW_SECONDS,
+            camera_sanity,
+        )
+        self._source_trust.register(
+            "camera",
+            predicate=camera_sanity,
+            window_seconds=CAMERA_WINDOW_SECONDS,
+            max_samples=CAMERA_MAX_SAMPLES,
+        )
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan).
@@ -2267,9 +2280,7 @@ class CameraService:
                 self._paused = False
                 if self._heartbeat is not None:
                     self._heartbeat.register("camera", float(POLL_INTERVAL))
-                if self._source_trust is not None:
-                    from backend.services.source_trust import camera_sanity
-                    self._source_trust.register("camera", predicate=camera_sanity)
+                self._register_camera_sanity()
                 # The pause spanned at least the sleep cycle — any committed
                 # zone/posture from before sleep is stale and would otherwise
                 # leak into the morning's first overlay decisions.

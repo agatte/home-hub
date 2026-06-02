@@ -162,6 +162,50 @@ class TestQuarantineGate:
 # RemediationService: guardrails
 # ---------------------------------------------------------------------------
 
+class _RecordingTrust:
+    """Captures the register() call so we can assert the buffer config."""
+
+    def __init__(self):
+        self.register_kwargs = None
+
+    def register(self, name, **kwargs):
+        self.register_kwargs = (name, kwargs)
+
+
+class TestCameraRegistration:
+    """Guards against the 2026-06-02 drift: the post-sleep resume site had
+    silently fallen back to the 300s/300-sample defaults, which defeated the
+    90-min lux_variance_collapse check every morning. Both sites now route
+    through CameraService._register_camera_sanity, so this one test covers
+    enable + resume."""
+
+    def test_register_camera_sanity_uses_long_horizon_buffer(self):
+        from backend.services.camera_service import CameraService
+        from backend.services.source_trust import (
+            CAMERA_MAX_SAMPLES,
+            CAMERA_WINDOW_SECONDS,
+        )
+
+        cam = CameraService(ws_manager=None, automation_engine=None)
+        trust = _RecordingTrust()
+        cam.set_source_trust_registry(trust)
+        cam._register_camera_sanity()
+
+        assert trust.register_kwargs is not None, "register() was never called"
+        name, kwargs = trust.register_kwargs
+        assert name == "camera"
+        assert kwargs["window_seconds"] == CAMERA_WINDOW_SECONDS
+        assert kwargs["max_samples"] == CAMERA_MAX_SAMPLES
+        assert kwargs["predicate"] is not None
+
+    def test_register_camera_sanity_noop_without_registry(self):
+        from backend.services.camera_service import CameraService
+
+        cam = CameraService(ws_manager=None, automation_engine=None)
+        # No registry wired — must be a safe no-op, not an AttributeError.
+        cam._register_camera_sanity()
+
+
 class _FakeApp:
     def __init__(self, notifier):
         class _State:
