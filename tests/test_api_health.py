@@ -267,6 +267,39 @@ class TestHealthSchedulerTasks:
         assert "retention_sweep" in names
 
 
+class TestHealthAutomationBlock:
+    """Verify the engine weather/lux state surface on /health (GH #67)."""
+
+    def test_automation_block_present(self, client):
+        data = client.get("/health").json()
+        assert "automation" in data
+        assert isinstance(data["automation"], dict)
+        if getattr(app.state, "automation", None) is None:
+            pytest.skip("automation engine not initialized — partial lifespan")
+        block = data["automation"]
+        for key in ("current_mode", "last_weather_class", "last_lux_multiplier"):
+            assert key in block, f"automation block missing {key}"
+
+    def test_reflects_engine_state(self, client):
+        # Mutate the engine's weather/lux state and confirm /health mirrors it
+        # (mirrors the breaker/heartbeat mutate-restore pattern above).
+        automation = getattr(app.state, "automation", None)
+        if automation is None:
+            pytest.skip("automation engine not initialized — partial lifespan")
+        orig_class = automation._last_weather_class
+        orig_mult = automation._last_lux_multiplier
+        try:
+            automation._last_weather_class = "rain"
+            automation._last_lux_multiplier = 1.25
+            block = client.get("/health").json()["automation"]
+            assert block["last_weather_class"] == "rain"
+            assert block["last_lux_multiplier"] == 1.25
+            assert block["current_mode"] == automation.current_mode
+        finally:
+            automation._last_weather_class = orig_class
+            automation._last_lux_multiplier = orig_mult
+
+
 class TestLightsAPI:
     """Basic smoke tests for /api/lights."""
 
