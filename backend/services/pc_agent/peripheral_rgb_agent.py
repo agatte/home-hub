@@ -1,6 +1,9 @@
 """
-Peripheral RGB agent — drives the desk peripherals' RGB (Keychron K10
-keyboard + Glorious Model O mouse) to track the apartment's lighting.
+Peripheral RGB agent — drives the desk hardware's RGB (Glorious Model O
+mouse + PowerColor Red Devil RX5700XT GPU) to track the apartment's
+lighting. The Keychron K10 keyboard is also targeted, but the non-Pro K10
+cannot be driven by OpenRGB (it accepts writes but never renders them —
+confirmed at the GUI level), so in practice only the mouse + GPU light up.
 
 Runs as a standalone agent on Anthony's Windows desktop (192.168.86.30),
 managed by the pc_agent ``supervisor``. Talks to two endpoints:
@@ -9,7 +12,7 @@ managed by the pc_agent ``supervisor``. Talks to two endpoints:
     live kitchen-pair color and to learn about League champions + Colts
     scoring plays.
   • A local OpenRGB SDK server (127.0.0.1:6742) — to actually set the
-    LEDs. OpenRGB is the only software path that controls *both* devices
+    LEDs. OpenRGB is the only software path that controls these devices
     (Glorious CORE dropped the V1 mouse; the Keychron has no desktop app).
 
 Color policy (per Anthony, 2026-06-01):
@@ -351,10 +354,10 @@ class OpenRGBController:
 
             targets = [
                 d for d in client.devices
-                if d.type in (DeviceType.MOUSE, DeviceType.KEYBOARD)
+                if d.type in (DeviceType.MOUSE, DeviceType.KEYBOARD, DeviceType.GPU)
             ]
             if not targets:
-                logger.warning("OpenRGB connected but no mouse/keyboard detected")
+                logger.warning("OpenRGB connected but no mouse/keyboard/GPU detected")
                 self._client = client
                 self._targets = []
                 return False
