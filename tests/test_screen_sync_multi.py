@@ -59,7 +59,7 @@ async def test_per_light_ema_state_independent():
 
 @pytest.mark.asyncio
 async def test_gaming_caps_differ_per_light():
-    """L2 gaming max is 240, L5 gaming max is 180 — bright white must clamp differently."""
+    """L2 gaming max is 240, L5 gaming max is 75 — bright white must clamp differently."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
@@ -72,9 +72,9 @@ async def test_gaming_caps_differ_per_light():
     l5_bri = hue.last_for("5")["bri"]
 
     assert l2_bri > l5_bri, f"L2 should outshine L5 on bright frames (L2={l2_bri}, L5={l5_bri})"
-    # L2 clamps to 240, L5 clamps to 60 (per MODE_MAX_BRIGHTNESS).
+    # L2 clamps to 240, L5 clamps to 75 (per MODE_MAX_BRIGHTNESS; 60→75 curator 6/02).
     assert l2_bri <= 240
-    assert l5_bri <= 60
+    assert l5_bri <= 75
 
 
 @pytest.mark.asyncio
@@ -165,27 +165,29 @@ async def test_l5_luma_comp_dampens_yellow_more_than_blue():
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Moderate-bright yellow (80,80,0) — v=0.314 chroma_luma~0.886, with
-    # comp the target lands below the cap so the damping is visible.
+    # Brighter yellow (160,160,0) so the comp-scaled target lands ABOVE the
+    # raised L5 floor (40) — otherwise the floor masks the damping. High
+    # chroma_luma → comp scales it down toward (but not to) the floor.
     for _ in range(20):
-        await sync.apply_color("5", 80, 80, 0, mode="gaming")
+        await sync.apply_color("5", 160, 160, 0, mode="gaming")
     yellow_bri = hue.last_for("5")["bri"]
 
-    # Same channel intensity, pure blue (0,0,80) — chroma_luma~0.114, scale
+    # Same channel intensity, pure blue (0,0,160) — chroma_luma low, scale
     # clamped to 1.0 → target hits the cap.
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
     for _ in range(20):
-        await sync2.apply_color("5", 0, 0, 80, mode="gaming")
+        await sync2.apply_color("5", 0, 0, 160, mode="gaming")
     blue_bri = hue2.last_for("5")["bri"]
 
-    # Both should land near or within the L5 [25, 60] gaming band — allow
-    # one bri unit of slack for EMA asymptotic convergence + int-cast.
-    assert 24 <= yellow_bri <= 60
-    assert 24 <= blue_bri <= 60
-    # At ref=0.25 yellow scales hard (~28% of HSV value); blue is unaffected
-    # (clamped to 1.0). Expect yellow ≤ ~half of blue at this input level.
-    assert yellow_bri < blue_bri * 0.55, (
+    # Both land within the L5 [40, 75] gaming band (floor 25→40, cap 60→75,
+    # curator 6/02). Allow slack for EMA asymptotic convergence + int-cast.
+    assert 38 <= yellow_bri <= 76
+    assert 38 <= blue_bri <= 76
+    # Yellow (high luma) is damped below blue (low luma, clamped to 1.0). The
+    # raised floor compresses the low end, so the gap is smaller than the old
+    # [25,60] band gave — but the damping direction must still hold clearly.
+    assert yellow_bri < blue_bri * 0.85, (
         f"luma comp not damping yellow enough: yellow={yellow_bri} blue={blue_bri}"
     )
 
@@ -199,7 +201,7 @@ async def test_period_keyed_caps_take_precedence():
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Saturate pure deep-blue (low-luma → no comp damping). Day uses flat cap=60.
+    # Saturate pure deep-blue (low-luma → no comp damping). Day uses flat cap=75.
     for _ in range(20):
         await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
     day_bri = hue.last_for("5")["bri"]
@@ -212,12 +214,12 @@ async def test_period_keyed_caps_take_precedence():
     evening_bri = hue2.last_for("5")["bri"]
 
     # The period table takes precedence: evening's 95 cap lands above the day
-    # flat 60, proving the (mode, period, light) lookup wins.
+    # flat 75, proving the (mode, period, light) lookup wins.
     assert evening_bri > day_bri, (
-        f"evening period cap (95) should exceed day flat cap (60) "
+        f"evening period cap (95) should exceed day flat cap (75) "
         f"(day={day_bri} evening={evening_bri})"
     )
-    assert day_bri <= 60
+    assert day_bri <= 75
     assert evening_bri <= 95
 
 
@@ -329,7 +331,8 @@ def test_get_floor_gaming_day_clouds_lifts_l2():
         "gaming", "2", period="day",
         lux_multiplier=1.07, weather_condition="clouds",
     )
-    assert floor == 153
+    # L2 gaming-day floor 130→150 (curator 6/02) × 1.07 lux × ~1.10 clouds.
+    assert floor == 176
 
 
 def test_get_cap_gaming_day_clouds_lifts_l2():

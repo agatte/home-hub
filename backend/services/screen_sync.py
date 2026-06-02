@@ -58,12 +58,15 @@ SCREEN_SYNC_LOG_INTERVAL_S = 5.0
 MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
     ("gaming",   "2"): 240,
     ("watching", "2"):  80,
-    ("gaming",   "5"):  60,   # Clear seeded-glass housing reads ~2× brighter
+    ("gaming",   "5"):  75,   # Clear seeded-glass housing reads ~2× brighter
                               # than L2's fabric shade at the same numeric bri.
                               # Cap is now backed up by per-light luma
                               # compensation (see PER_LIGHT_LUMA_COMP below) —
                               # the cap handles peak amplitude, luma comp handles
                               # the hue-perception punch that cap alone can't fix.
+                              # 60→75 2026-06-02 (curator): headroom for vivid
+                              # blue frames to lift the accent in a blinds-closed
+                              # day; 90 is the hard glare ceiling — do NOT exceed.
     ("watching", "5"):  50,
 }
 DEFAULT_MAX_BRIGHTNESS = 80
@@ -99,12 +102,18 @@ MODE_MAX_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
 # Per-(mode, light_id) minimum brightness. Gaming stays visible even on
 # dark scenes; watching allows dim bias lighting.
 MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
-    ("gaming", "2"): 130,    # Sits at L2's gaming evening/night baseline (140/150).
-    ("gaming", "5"):  25,    # Lower than L5's static baseline so dark scenes
+    # L2 (fabric shade) carries the ROOM-brightness load — it throws diffuse
+    # light, unlike L5's clear point-source. 130→150 2026-06-02 (curator): the
+    # single highest-value lever for the "bedroom dim while gaming" complaint.
+    ("gaming", "2"): 150,
+    ("gaming", "5"):  40,    # Lower than L5's static baseline so dark scenes
                              # can actually dim L5's visible bulb instead of
                              # holding it bright on a black frame. Paired with
                              # the perceptual luma compensation, this widens
                              # L5's usable dynamic range without raising the cap.
+                             # 25→40 2026-06-02 (curator): lift the clear-pendant
+                             # accent off "dim spark"; modest because raising a
+                             # point source adds glare, not room light.
 }
 
 # Time-period overrides for floors — same pattern as the cap override table.
@@ -114,6 +123,11 @@ MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
 # actually dim L2 toward its late_night static baseline.
 MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
     ("gaming", "late_night", "2"): 110,
+    # Day-specific floors 2026-06-02 (curator): blinds-closed "day" is the dim
+    # complaint case the day-only caps wrongly assume is bright. L2 carries the
+    # room light; L5 gets a slightly-more-present accent than a bright-sun day.
+    ("gaming", "day", "2"): 150,
+    ("gaming", "day", "5"): 45,
 }
 
 # PER_LIGHT_SAT_BOOST, PER_LIGHT_LUMA_COMP, and the underlying conversion
