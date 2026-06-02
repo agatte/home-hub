@@ -3,6 +3,7 @@
   import SettingsSection from '$lib/components/settings/SettingsSection.svelte'
   import LearnedRulesCard from '$lib/components/LearnedRulesCard.svelte'
   import RuleSuggestionHistoryCard from '$lib/components/RuleSuggestionHistoryCard.svelte'
+  import RemediationStatusCard from '$lib/components/RemediationStatusCard.svelte'
 </script>
 
 <SettingsSection
@@ -14,6 +15,7 @@
   <div class="learning-stack">
     <LearnedRulesCard />
     <RuleSuggestionHistoryCard />
+    <RemediationStatusCard />
   </div>
 </SettingsSection>
 
