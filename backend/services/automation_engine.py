@@ -176,6 +176,9 @@ PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "timeout_4h",
     "desk_exit_kitchen",
     "corridor",
+    # Bounded auto-remediation clearing a *wedged mode override* is autonomous —
+    # it must not also nuke the user's independent per-light slider stamps.
+    "remediator:clear_stuck_override",
 })
 
 
