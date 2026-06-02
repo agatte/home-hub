@@ -18,6 +18,9 @@ soco==0.31.0              # Sonos control via UPnP
 fauxmo==0.8.0             # WeMo emulation for local Alexa voice control
                           # NOTE: upstream abandoned Apr 2024. Tracked
                           # in flag queue for replacement / removal.
+openrgb-python==0.3.6     # Desktop keyboard/mouse RGB (peripheral_rgb_agent).
+                          # Windows-only (desk peripherals); not used on the
+                          # Latitude. Talks to a local OpenRGB SDK server.
 
 # TTS
 edge-tts==7.2.8           # Free Microsoft TTS (primary)

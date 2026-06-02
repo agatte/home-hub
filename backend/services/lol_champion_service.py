@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from backend.api.schemas.automation import ActivityReport
     from backend.services.automation_engine import AutomationEngine
     from backend.services.hue_service import HueService
+    from backend.services.websocket_manager import WebSocketManager
 
 logger = logging.getLogger("home_hub.lol_champion")
 
@@ -90,9 +91,14 @@ class LoLChampionService:
         self,
         hue_service: "HueService",
         automation_engine: "AutomationEngine",
+        ws_manager: "Optional[WebSocketManager]" = None,
     ) -> None:
         self._hue = hue_service
         self._engine = automation_engine
+        # Optional — when present, apply/clear broadcast a ``champion_color``
+        # event so off-bridge surfaces (the desktop peripheral-RGB agent)
+        # can mirror the champion's color onto the keyboard + mouse.
+        self._ws_manager = ws_manager
         self._current_champion: Optional[str] = None
         self._current_rgb: Optional[tuple[int, int, int]] = None
         self._owned: set[str] = set()
@@ -151,7 +157,7 @@ class LoLChampionService:
 
     async def apply(self, champion_name: str) -> None:
         """Look up champion color, write it to both bedroom lamps."""
-        rgb = await self._resolve_color(champion_name)
+        rgb, seeded = await self._resolve_color(champion_name)
         period = self._resolve_period()
         max_bri = LOL_BRIGHTNESS_CAPS.get(period, LOL_BRIGHTNESS_CAPS["night"])
 
@@ -180,6 +186,7 @@ class LoLChampionService:
             "Applied champion color: %s -> rgb=%s, period=%s, lights=%s",
             champion_name, rgb, period, sorted(self._owned),
         )
+        await self._broadcast_champion(champion_name, rgb, seeded)
 
     async def clear(self) -> None:
         """Drop ownership stamps so screen-sync resumes on next color post."""
@@ -193,13 +200,23 @@ class LoLChampionService:
             "Cleared champion color (was %s); screen-sync will resume",
             prior_champion,
         )
+        await self._broadcast_champion(None, None, False)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    async def _resolve_color(self, champion_name: str) -> tuple[int, int, int]:
-        """Read champion_color_map from app_settings, fall back if absent."""
+    async def _resolve_color(
+        self, champion_name: str,
+    ) -> tuple[tuple[int, int, int], bool]:
+        """Read champion_color_map from app_settings, fall back if absent.
+
+        Returns ``(rgb, seeded)`` — ``seeded`` is True only when the
+        champion had an explicit entry in the map (a real signature
+        color), False when we dropped to the generic fallback. Downstream
+        surfaces (the peripheral-RGB agent) use ``seeded`` to decide
+        whether to override their default behavior.
+        """
         from backend.api.routes.routines import load_setting
 
         try:
@@ -214,7 +231,7 @@ class LoLChampionService:
                 "Champion '%s' not in color map — using fallback %s",
                 champion_name, DEFAULT_FALLBACK_RGB,
             )
-            return DEFAULT_FALLBACK_RGB
+            return DEFAULT_FALLBACK_RGB, False
 
         try:
             r = int(entry["r"])
@@ -225,13 +242,36 @@ class LoLChampionService:
                 "champion_color_map entry for '%s' is malformed (%r) — using fallback",
                 champion_name, entry,
             )
-            return DEFAULT_FALLBACK_RGB
+            return DEFAULT_FALLBACK_RGB, False
 
         return (
             max(0, min(255, r)),
             max(0, min(255, g)),
             max(0, min(255, b)),
-        )
+        ), True
+
+    async def _broadcast_champion(
+        self,
+        champion: Optional[str],
+        rgb: Optional[tuple[int, int, int]],
+        seeded: bool,
+    ) -> None:
+        """Emit a ``champion_color`` WS event (best-effort, no-op if unwired).
+
+        Payload: ``{champion, rgb: [r,g,b] | None, seeded}``. ``rgb`` is a
+        plain list for JSON; ``seeded`` lets a consumer ignore generic
+        fallback colors. A null ``champion`` signals the override cleared.
+        """
+        if self._ws_manager is None:
+            return
+        try:
+            await self._ws_manager.broadcast("champion_color", {
+                "champion": champion,
+                "rgb": list(rgb) if rgb is not None else None,
+                "seeded": seeded,
+            })
+        except Exception:
+            logger.debug("champion_color broadcast failed", exc_info=True)
 
     def _resolve_period(self) -> str:
         """Pull the engine's current time period; default to ``night`` if unavailable."""

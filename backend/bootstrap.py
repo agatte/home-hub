@@ -399,7 +399,9 @@ async def lifespan(app: FastAPI):
     # League champion → bedroom-lamp color override. Service is gaming-mode-
     # gated internally; the mode-change callback clears its state when the
     # engine leaves gaming so screen-sync resumes on the bedroom lamps.
-    lol_champion = LoLChampionService(hue_service=hue, automation_engine=automation)
+    lol_champion = LoLChampionService(
+        hue_service=hue, automation_engine=automation, ws_manager=ws_manager,
+    )
     app.state.lol_champion_service = lol_champion
     automation.register_on_mode_change(lol_champion.on_mode_change)
 
