@@ -629,8 +629,17 @@ class CameraService:
         if self._heartbeat is not None:
             self._heartbeat.register("camera", float(POLL_INTERVAL))
         if self._source_trust is not None:
-            from backend.services.source_trust import camera_sanity
-            self._source_trust.register("camera", predicate=camera_sanity)
+            from backend.services.source_trust import (
+                CAMERA_MAX_SAMPLES,
+                CAMERA_WINDOW_SECONDS,
+                camera_sanity,
+            )
+            self._source_trust.register(
+                "camera",
+                predicate=camera_sanity,
+                window_seconds=CAMERA_WINDOW_SECONDS,
+                max_samples=CAMERA_MAX_SAMPLES,
+            )
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
 
     @staticmethod

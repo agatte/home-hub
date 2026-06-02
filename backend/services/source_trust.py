@@ -47,13 +47,29 @@ DEFAULT_WINDOW_SECONDS = 300.0
 DEFAULT_MAX_SAMPLES = 300
 
 # --- camera sanity tunables ---------------------------------------------------
-# Need a minimum of evidence before judging — a freshly-(re)started camera or a
-# brief window must read trusted, not be quarantined on two frames.
-CAMERA_MIN_SAMPLES = 30
-CAMERA_MIN_SPAN_SECONDS = 120.0
-# Smoothed lux carries sensor noise; a population stddev below this over 2+ min
-# while presence is *changing* means the reading is frozen/decoupled from the
-# room (the 5/27 "≈49.5 always" signature), not merely a steady-lit room.
+# Camera sanity is judged over a LONG horizon. The hard lesson (2026-06-02,
+# first hour in prod): a 5-min variance window false-positives whenever the room
+# is steadily lit and the person is just moving in and out of frame — flat lux +
+# toggling presence looks identical to a decoupled sensor over minutes. The
+# genuine 2026-05-27 fault held ONE lux value for *days*; a healthy camera over
+# ~90 min almost always sees lighting actually change (lamp on/off, dimming,
+# day→evening). So `lux_variance_collapse` now requires the freeze to PERSIST
+# ~90 min while presence still toggles. The fast checks (uncalibrated,
+# implausible) keep a short horizon — they read the latest sample / recent
+# median and need no long buffer. Detection latency for a real decoupling rises
+# from minutes to ~90 min, which is still a massive win over the 5-DAY miss it
+# was built to catch, and the quarantine gate's only cost in the meantime is a
+# few dropped training rows (retrained nightly).
+CAMERA_WINDOW_SECONDS = 7200.0        # 2h observation buffer (holds the 90-min span + margin)
+CAMERA_MAX_SAMPLES = 4000             # ~2h at the 2s poll, with headroom
+CAMERA_MIN_SAMPLES = 30               # floor before any judgement at all
+CAMERA_RECENT_SAMPLES = 60            # ~2 min — window for the responsive implausibility median
+# lux_variance_collapse: the freeze must persist at least this long, with at
+# least this many samples, while presence toggles, before we distrust the lane.
+LUX_COLLAPSE_MIN_SPAN_SECONDS = 5400.0   # 90 min
+LUX_COLLAPSE_MIN_SAMPLES = 600           # ~20 min of frames even allowing camera pauses
+# Smoothed lux carries sensor noise; a population stddev below this across the
+# long window (with presence changing) is a frozen/decoupled reading.
 LUX_VARIANCE_EPSILON = 0.5
 # Median lux this far outside the calibrated baseline band is physically
 # implausible (stuck-at-zero / runaway sensor), independent of presence.
@@ -273,15 +289,18 @@ def camera_sanity(observations: list[_Observation], now: datetime) -> "tuple[boo
     Each observation value carries ``{ema_lux, baseline_lux, calibrated,
     present, consecutive_absent}``. Trips (returns untrusted) on:
 
-    * ``uncalibrated`` — camera reports it has no lux baseline yet.
-    * ``lux_variance_collapse`` — smoothed lux is effectively frozen
-      (population stddev < ``LUX_VARIANCE_EPSILON``) over 2+ min while presence
-      *toggled* between present/absent. This is the 2026-05-27 "≈49.5 always"
-      signature: the reading decoupled from the room.
-    * ``lux_implausible`` — median lux sits far outside the calibrated baseline
-      band, independent of presence (stuck-at-zero / runaway sensor).
+    * ``uncalibrated`` — camera reports it has no lux baseline yet (fast).
+    * ``lux_implausible`` — RECENT median lux sits far outside the calibrated
+      baseline band (stuck-at-zero / runaway sensor), independent of presence.
+      Uses the last ``CAMERA_RECENT_SAMPLES`` so it reacts in ~2 min.
+    * ``lux_variance_collapse`` — smoothed lux is frozen (population stddev <
+      ``LUX_VARIANCE_EPSILON``) across a LONG horizon (≥ ``LUX_COLLAPSE_MIN_SPAN``)
+      while presence keeps toggling. This is the decoupled-sensor signature
+      (2026-05-27 "≈49.5 for days"). The long horizon is deliberate: a steady-lit
+      room with a person sitting still reads flat over minutes but virtually
+      never over 90 min, whereas a decoupled sensor stays flat indefinitely.
 
-    Fail-open: insufficient samples or span → trusted.
+    Fail-open: insufficient evidence at any stage → trusted.
     """
     n = len(observations)
     if n < CAMERA_MIN_SAMPLES:
@@ -292,9 +311,6 @@ def camera_sanity(observations: list[_Observation], now: datetime) -> "tuple[boo
         return False, "uncalibrated", {"samples": n}
 
     span = (observations[-1].at - observations[0].at).total_seconds()
-    if span < CAMERA_MIN_SPAN_SECONDS:
-        return True, "insufficient_span", {"span_seconds": round(span, 1)}
-
     lux_values = [
         float(o.value["ema_lux"])
         for o in observations
@@ -307,18 +323,21 @@ def camera_sanity(observations: list[_Observation], now: datetime) -> "tuple[boo
     presence_toggled = len(presence_flags) > 1
     stdev_lux = statistics.pstdev(lux_values)
     median_lux = statistics.median(lux_values)
+    # Responsive implausibility: judge the RECENT median, not the whole 2h, so a
+    # sensor that lurches to a stuck-at-zero/runaway value is caught in ~2 min.
+    recent_lux = lux_values[-CAMERA_RECENT_SAMPLES:]
+    recent_median = statistics.median(recent_lux)
 
     metrics = {
         "lux_stdev": round(stdev_lux, 3),
         "lux_median": round(median_lux, 2),
+        "recent_lux_median": round(recent_median, 2),
         "presence_toggled": presence_toggled,
         "span_seconds": round(span, 1),
-        "samples": n,
+        "lux_samples": len(lux_values),
     }
 
-    if stdev_lux < LUX_VARIANCE_EPSILON and presence_toggled:
-        return False, "lux_variance_collapse", metrics
-
+    # Fast: physically implausible recent reading vs the calibrated baseline.
     baseline = latest.get("baseline_lux")
     if baseline:
         baseline = float(baseline)
@@ -326,8 +345,19 @@ def camera_sanity(observations: list[_Observation], now: datetime) -> "tuple[boo
             baseline * LUX_IMPLAUSIBLE_LOW_FACTOR,
             baseline * LUX_IMPLAUSIBLE_HIGH_FACTOR,
         )
-        if median_lux < low or median_lux > high:
+        if recent_median < low or recent_median > high:
             return False, "lux_implausible", {**metrics, "baseline": round(baseline, 2)}
+
+    # Slow: variance collapse requires a SUSTAINED freeze, not a few steady
+    # minutes. This is the guard against the 2026-06-02 false positive (4 min of
+    # steady ~35 lux while settling in post-boot tripped the old 5-min window).
+    if (
+        span >= LUX_COLLAPSE_MIN_SPAN_SECONDS
+        and len(lux_values) >= LUX_COLLAPSE_MIN_SAMPLES
+        and stdev_lux < LUX_VARIANCE_EPSILON
+        and presence_toggled
+    ):
+        return False, "lux_variance_collapse", metrics
 
     return True, "ok", metrics
 

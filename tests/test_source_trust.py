@@ -10,7 +10,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.services.source_trust import (
+    CAMERA_MAX_SAMPLES,
     CAMERA_MIN_SAMPLES,
+    CAMERA_WINDOW_SECONDS,
+    LUX_COLLAPSE_MIN_SAMPLES,
     SourceTrust,
     camera_sanity,
     variance_collapse_predicate,
@@ -22,6 +25,17 @@ BASE = datetime(2026, 6, 1, 20, 0, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def st() -> SourceTrust:
     return SourceTrust()
+
+
+def _register_camera(st):
+    """Register the camera with production window/buffer so long-horizon feeds
+    aren't pruned away before the variance-collapse check can see them."""
+    st.register(
+        "camera",
+        predicate=camera_sanity,
+        window_seconds=CAMERA_WINDOW_SECONDS,
+        max_samples=CAMERA_MAX_SAMPLES,
+    )
 
 
 def _feed(st, name, samples, *, start=BASE, step_seconds=2.0):
@@ -113,16 +127,39 @@ class TestCameraSanity:
         """The 2026-05-27 signature: ema_lux pinned at ~49.5 for the whole
         window while the user comes and goes. Liveness stays green; sanity
         must catch it."""
-        st.register("camera", predicate=camera_sanity)
-        samples = [
-            _camera_sample(49.5, present=(i % 3 == 0))  # presence toggles
-            for i in range(90)
-        ]
-        _feed(st, "camera", samples)
-        v = st.verdict("camera", now=BASE + timedelta(seconds=190))
+        _register_camera(st)
+        # Frozen lux that PERSISTS past the 90-min horizon while presence toggles
+        # — the decoupled-sensor signature. 720 samples × 8s ≈ 96 min span.
+        n = max(720, LUX_COLLAPSE_MIN_SAMPLES + 120)
+        step = 8.0
+        samples = [_camera_sample(49.5, present=(i % 3 == 0)) for i in range(n)]
+        _feed(st, "camera", samples, step_seconds=step)
+        v = st.verdict("camera", now=BASE + timedelta(seconds=(n - 1) * step))
         assert v["trusted"] is False
         assert v["reason"] == "lux_variance_collapse"
         assert v["metrics"]["presence_toggled"] is True
+
+    def test_short_steady_episode_is_trusted(self, st):
+        """Regression for the 2026-06-02 false positive: ~4 min of steady lux
+        while presence toggles (person settling in under constant light) must
+        NOT trip — the freeze hasn't persisted long enough to mean decoupling."""
+        _register_camera(st)
+        samples = [_camera_sample(35.0, present=(i % 3 == 0)) for i in range(120)]
+        _feed(st, "camera", samples, step_seconds=2.0)  # ~4 min span
+        v = st.verdict("camera", now=BASE + timedelta(seconds=240))
+        assert v["trusted"] is True
+        assert v["reason"] == "ok"
+
+    def test_long_steady_no_presence_toggle_is_trusted(self, st):
+        """Person sitting still under constant light for 90+ min (presence never
+        toggles) is not conclusive of a decoupled sensor — stay trusted."""
+        _register_camera(st)
+        n = max(720, LUX_COLLAPSE_MIN_SAMPLES + 120)
+        step = 8.0
+        samples = [_camera_sample(49.5, present=True) for _ in range(n)]
+        _feed(st, "camera", samples, step_seconds=step)
+        v = st.verdict("camera", now=BASE + timedelta(seconds=(n - 1) * step))
+        assert v["trusted"] is True
 
     def test_flat_lux_without_presence_change_is_trusted(self, st):
         """A frozen lux while the user sits steadily present is NOT conclusive
@@ -168,11 +205,17 @@ class TestManualOverride:
         assert v["trusted"] is True
 
     def test_mark_trusted_overrides_a_tripped_predicate(self, st):
-        st.register("camera", predicate=camera_sanity)
-        # Tripping (frozen + presence toggling) but operator forces trust.
-        _feed(st, "camera", [_camera_sample(49.5, present=(i % 3 == 0)) for i in range(60)])
+        _register_camera(st)
+        # Genuinely tripping (frozen lux past the 90-min horizon + presence
+        # toggling) but operator forces trust — the mark must win.
+        n = max(720, LUX_COLLAPSE_MIN_SAMPLES + 120)
+        step = 8.0
+        _feed(st, "camera", [_camera_sample(49.5, present=(i % 3 == 0)) for i in range(n)],
+              step_seconds=step)
+        # Sanity: without the mark this would be untrusted.
+        assert st.verdict("camera", now=BASE + timedelta(seconds=(n - 1) * step))["trusted"] is False
         st.mark("camera", trusted=True, reason="known_good")
-        assert st.verdict("camera", now=BASE + timedelta(seconds=130))["trusted"] is True
+        assert st.verdict("camera", now=BASE + timedelta(seconds=(n - 1) * step))["trusted"] is True
 
 
 class TestVarianceCollapseFactory:
