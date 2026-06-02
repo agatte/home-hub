@@ -1,9 +1,19 @@
 """
 Peripheral RGB agent — drives the desk hardware's RGB (Glorious Model O
-mouse + PowerColor Red Devil RX5700XT GPU) to track the apartment's
-lighting. The Keychron K10 keyboard is also targeted, but the non-Pro K10
-cannot be driven by OpenRGB (it accepts writes but never renders them —
-confirmed at the GUI level), so in practice only the mouse + GPU light up.
+mouse) to track the apartment's lighting.
+
+In practice only the MOUSE works. Two other devices were tried and target
+the same code path, but neither can be driven by OpenRGB on this setup:
+  • Keychron K10 (non-Pro) keyboard — accepts writes but never renders
+    them (confirmed at the OpenRGB GUI level). It's left out of the target
+    set; revisit only with a QMK-native board (Keychron V/Q, GMMK Pro).
+  • PowerColor Red Devil RX5700XT GPU — its AMD RGB controller takes a
+    single write then wedges (won't accept further updates, even after an
+    OpenRGB server restart), so it can't track a changing color. Not
+    targeted. (2026-06-01)
+The mouse uses a continuously-updatable ``Static`` mode; the wedging
+devices both relied on per-LED ``Custom``, which this setup renders once
+then freezes.
 
 Runs as a standalone agent on Anthony's Windows desktop (192.168.86.30),
 managed by the pc_agent ``supervisor``. Talks to two endpoints:
@@ -12,8 +22,8 @@ managed by the pc_agent ``supervisor``. Talks to two endpoints:
     live kitchen-pair color and to learn about League champions + Colts
     scoring plays.
   • A local OpenRGB SDK server (127.0.0.1:6742) — to actually set the
-    LEDs. OpenRGB is the only software path that controls these devices
-    (Glorious CORE dropped the V1 mouse; the Keychron has no desktop app).
+    LEDs. OpenRGB is the only software path that controls the mouse
+    (Glorious CORE dropped the V1 mouse).
 
 Color policy (per Anthony, 2026-06-01):
   • Default: mirror the kitchen pair (Hue light id "3"). "Match the
@@ -354,10 +364,10 @@ class OpenRGBController:
 
             targets = [
                 d for d in client.devices
-                if d.type in (DeviceType.MOUSE, DeviceType.KEYBOARD, DeviceType.GPU)
+                if d.type in (DeviceType.MOUSE, DeviceType.KEYBOARD)
             ]
             if not targets:
-                logger.warning("OpenRGB connected but no mouse/keyboard/GPU detected")
+                logger.warning("OpenRGB connected but no mouse/keyboard detected")
                 self._client = client
                 self._targets = []
                 return False
