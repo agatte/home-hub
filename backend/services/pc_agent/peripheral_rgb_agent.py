@@ -100,6 +100,20 @@ PULSE_HALF_PERIOD_S = 0.22
 # hammering the USB devices on sub-perceptual kitchen drift.
 WRITE_EPSILON = 4
 
+# Peripherals sit on the desk — a sub-perceptual kitchen brightness (e.g.
+# bri=37 mood lighting scales to value ~0.15 → RGB(7,19,37)) renders the
+# keyboard/mouse near-black and reads as "off". Floor the value so the *hue*
+# stays visible while brighter kitchen states still glow brighter. Off
+# (on=False) stays black — we mirror an off kitchen as dark peripherals.
+MIN_PERIPHERAL_VALUE = 0.40
+
+# Re-assert the base color on a heartbeat even when it hasn't changed, so the
+# agent reclaims the LEDs after any external writer (the on-keyboard effect
+# keys, a stray SDK client, a dropped pulse) leaves them on a stale color.
+# The WRITE_EPSILON dedup otherwise skips the corrective write because the
+# agent's own cache still matches the target it's trying to set.
+REFRESH_EVERY_POLLS = 6  # × POLL_INTERVAL_S (5s) ≈ 30s
+
 # Per-device color mode, in preference order. We need a mode that honors
 # per-LED writes (``set_color`` writes the per-LED array): the Keychron's
 # ``Custom`` is its per-key direct mode, while its ``Static`` is a single
@@ -239,7 +253,7 @@ def kitchen_rgb(light: dict[str, Any]) -> tuple[int, int, int]:
         return (0, 0, 0)
 
     bri = light.get("bri") or 0
-    value = max(0.0, min(1.0, bri / 254.0))
+    value = max(MIN_PERIPHERAL_VALUE, min(1.0, bri / 254.0))
 
     if light.get("colormode") == "ct":
         base = _ct_to_rgb(int(light.get("ct") or 366))
@@ -377,7 +391,11 @@ class OpenRGBController:
     def set_color(self, rgb: tuple[int, int, int], *, force: bool = False) -> None:
         """Set both peripherals to ``rgb``, skipping sub-epsilon no-ops.
 
-        Raises on SDK failure so the caller can trigger a reconnect.
+        Always raises ``RuntimeError`` on SDK failure (incl. a dropped/dead
+        socket) so the caller can trigger a reconnect. The raw SDK raises
+        ``OSError`` on a dead socket, which the poll loop would otherwise
+        swallow as a benign kitchen-fetch error and never reconnect — leaving
+        the agent wedged on a stale color after the OpenRGB server restarts.
         """
         with self._lock:
             if not (self._client and self._targets):
@@ -386,8 +404,11 @@ class OpenRGBController:
                 if all(abs(a - b) < WRITE_EPSILON for a, b in zip(rgb, self._last_rgb)):
                     return
             color = RGBColor(*rgb)
-            for d in self._targets:
-                d.set_color(color)
+            try:
+                for d in self._targets:
+                    d.set_color(color)
+            except Exception as e:
+                raise RuntimeError(f"OpenRGB SDK write failed: {e}") from e
             self._last_rgb = rgb
 
     def pulse(self, base: tuple[int, int, int]) -> None:
@@ -600,10 +621,12 @@ def run_agent(
 
     logger.info("Peripheral RGB agent started — server=%s", http_base)
 
+    poll_count = 0
     try:
         with httpx.Client() as client:
             while not _stop.wait(POLL_INTERVAL_S):
                 try:
+                    poll_count += 1
                     if not controller.ready:
                         controller.connect()
                         if not controller.ready:
@@ -620,7 +643,11 @@ def run_agent(
                         continue
                     rgb = kitchen_rgb(light)
                     state.remember_base(rgb)
-                    controller.set_color(rgb)
+                    # Heartbeat: periodically force the write so we reclaim the
+                    # LEDs if anything external drifted them off the base color.
+                    controller.set_color(
+                        rgb, force=(poll_count % REFRESH_EVERY_POLLS == 0),
+                    )
                 except (httpx.HTTPError, OSError) as e:
                     logger.debug("kitchen poll transient error: %s", e)
                 except RuntimeError:
