@@ -351,6 +351,13 @@ class AmbientMonitor:
         if result is None:
             return None
 
+        # TODO(flag flag_2026-06-02T03-01-53_y1mdgj): the source-trust watchdog
+        # has an unwired audio lane. result.confidence/top_class here is the
+        # series a variance-collapse predicate would watch (flat output = stuck
+        # classifier). The observe site is the backend endpoint that ingests
+        # this — POST /api/learning/audio-decision (see the anchor there).
+        # Wiring it makes the ML quarantine gate + sweep Check O cover audio.
+
         now = time.time()
         mode_signal = self._scene_state.update(
             result.top_class, result.confidence, now
