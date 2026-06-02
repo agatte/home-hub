@@ -267,6 +267,13 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    │                            (FaceLandmarker blendshapes → EmotionService mood vector + presence observation.
    │                             Opt-in via desktop_emotion_enabled / desktop_presence_enabled. EmotionService
    │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.)
+   ├── peripheral_rgb_agent.py  ON dev machine (Windows-only) ──> GET http://192.168.86.210:8000/api/lights + WS sub /ws
+   │                            (Mirrors the kitchen-pair color onto the Glorious Model O mouse via a local OpenRGB
+   │                             SDK server (127.0.0.1:6742); seeded-champion override (League) + Colts scoring pulse.
+   │                             Shipped 2026-06-01. MOUSE-ONLY: the Keychron K10 (non-Pro) keyboard + PowerColor
+   │                             Red Devil RX5700XT GPU both wedge under OpenRGB — per-LED Custom mode renders once
+   │                             then freezes; only the mouse's Static mode updates continuously. Keyboard would need
+   │                             a QMK-native board. Diagnostic: scripts/probe_openrgb_keyboard.py.)
    └── sleep_watcher.py         ON dev machine (Windows-only)
                                 (Suspends the PC 60min after sleeping mode is set; cancels on any non-sleeping
                                  mode change. Registered by supervisor on win32 only.
@@ -1633,8 +1640,8 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   `RestartCount=999 / RestartInterval=1m` on observed failure. Manages
   the pc_agent fleet as in-process daemon threads — activity_detector,
   ambient_monitor, screen_sync_agent, and (Windows-only)
-  monitor_brightness; emotion_capture + sleep_watcher round out the
-  list. Pointed at the Latitude via
+  monitor_brightness; emotion_capture, sleep_watcher, and (Windows-only)
+  peripheral_rgb round out the list. Pointed at the Latitude via
   `--server http://192.168.86.210:8000`. The watchdog catches the class
   of failure where the supervisor dies but Task Scheduler doesn't see
   a launcher failure (e.g. a Bash background subprocess reaped along
