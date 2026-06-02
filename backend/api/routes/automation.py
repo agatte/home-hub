@@ -265,15 +265,25 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
-    # Gaming-day envelope lift: lux + weather scale the cap+floor so dark
-    # game content on a cloudy daytime doesn't drag L2/L5 to eye-strain
-    # dimness. The screen-sync service applies the same gate as
-    # ``apply_functional_weather_brightness`` (gaming mode + day period
-    # only); watching gets unscaled values so cinematic contrast stays.
+    # Gaming-day envelope lift: lux + weather scale the cap+floor so dim game
+    # content in a dim room doesn't drag L2/L5 to eye-strain dimness. The
+    # screen-sync service applies the same gate as
+    # ``apply_functional_weather_brightness`` (gaming mode + day period only);
+    # watching gets unscaled values so cinematic contrast stays.
+    #
+    # D4 Part E: source the lux from the BEDROOM desktop-webcam channel, NOT
+    # the living-room Latitude camera — L2/L5 are bedroom lamps, and a bright
+    # living room must not dim them (the cross-room contamination that got
+    # gaming dropped from LUX_MODES; bit us live 2026-06-02, living-room
+    # mult 0.897 was throttling the bedroom gaming floors). Falls back to
+    # neutral 1.0 when the channel is uncalibrated or stale (>60s ≈ 2.4×
+    # the ~25s sample cadence, so a single missed sample can't flicker the
+    # floor). Widening the gate beyond gaming-day is the tracked follow-up.
     lux_mult = 1.0
-    if camera is not None:
-        ema_lux = getattr(camera, "ema_lux", None)
-        baseline_lux = getattr(camera, "baseline_lux", None)
+    bedroom_lux = getattr(request.app.state, "bedroom_lux", None)
+    if bedroom_lux is not None and bedroom_lux.is_fresh(60.0):
+        ema_lux = bedroom_lux.ema_lux
+        baseline_lux = bedroom_lux.baseline_lux
         if ema_lux is not None and baseline_lux is not None:
             lux_mult = lux_to_multiplier(ema_lux, baseline_lux)
     weather_condition = engine._get_current_weather_condition()

@@ -120,3 +120,56 @@ async def test_all_lights_overridden_returns_skip_list():
     assert result["applied"] is False
     assert set(result["skipped"]) == {"2", "5"}
     assert hue.calls == []
+
+
+def _calibrated_bedroom_lux(ema, baseline=127.0):
+    """A calibrated, fresh bedroom LuxChannel for the route to read (D4 Part E)."""
+    from backend.services.lux_channel import LuxChannel
+    ch = LuxChannel("bedroom", baseline_lux=baseline)
+    ch.update(ema)  # stamps last_update=now → is_fresh(60) True
+    return ch
+
+
+@pytest.mark.asyncio
+async def test_gaming_floor_scales_with_bedroom_lux_not_camera():
+    """D4 Part E: the gaming-day envelope is scaled by the BEDROOM lux channel,
+    not the living-room camera. Hold the camera BRIGHT in both runs (it must be
+    ignored for lux) and vary only the bedroom: a dark bedroom must lift the
+    floor above a bright one."""
+    # Camera reads bright (mult < 1) in BOTH runs — proves it's not the source.
+    bright_camera = SimpleNamespace(
+        zone=None, posture=None, ema_lux=180.0, baseline_lux=127.0,
+    )
+    engine = _fake_engine("gaming", period="day")
+
+    async def run(bedroom_ema):
+        hue = _FakeHue()
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        req = _make_request(engine, sync, camera=bright_camera)
+        req.app.state.bedroom_lux = _calibrated_bedroom_lux(bedroom_ema)
+        # Black frame → bri target sits at the (lux-scaled) floor.
+        for _ in range(30):
+            await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+        return next(s["bri"] for lid, s in reversed(hue.calls) if lid == "2")
+
+    l2_dark = await run(80.0)    # bedroom darker than baseline 127 → lift
+    l2_bright = await run(180.0)  # bedroom brighter than baseline → dim
+
+    assert l2_dark > l2_bright, (
+        f"a dark bedroom must lift the gaming floor above a bright one "
+        f"(dark={l2_dark} bright={l2_bright}); if equal, the route is still "
+        f"reading the (constant) camera lux, not the bedroom channel"
+    )
+
+
+@pytest.mark.asyncio
+async def test_uncalibrated_bedroom_lux_is_neutral():
+    """No calibration → no scaling (lux_mult 1.0), route still applies cleanly."""
+    from backend.services.lux_channel import LuxChannel
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _fake_engine("gaming", period="day")
+    req = _make_request(engine, sync)
+    req.app.state.bedroom_lux = LuxChannel("bedroom")  # uncalibrated
+    result = await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+    assert result["applied"] is True
