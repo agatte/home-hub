@@ -236,3 +236,34 @@ class TestPredictorPromoteGate:
                     bp.demote()
                 except Exception:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# Bedroom lux channel (D4 Part C) — store-only endpoints
+# ---------------------------------------------------------------------------
+
+class TestBedroomLuxAPI:
+    """The /api/camera/desktop/lux store. In-memory channel only — these
+    tests deliberately avoid the calibration POST, which writes to the
+    shared on-disk settings DB."""
+
+    def test_get_lux_status_shape(self, client):
+        resp = client.get("/api/camera/desktop/lux")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["room"] == "bedroom"
+        for k in ("ema_lux", "baseline_lux", "calibrated", "last_update"):
+            assert k in body
+
+    def test_post_lux_lands_a_reading(self, client):
+        r = client.post("/api/camera/desktop/lux", json={"ambient_lux": 42.5})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+        # The raw smoothed value is observable even before calibration.
+        got = client.get("/api/camera/desktop/lux").json()
+        assert got["ema_lux"] is not None
+
+    def test_post_lux_rejects_out_of_range(self, client):
+        r = client.post("/api/camera/desktop/lux", json={"ambient_lux": 999})
+        assert r.status_code == 422  # > 255 fails the Field(le=255) bound

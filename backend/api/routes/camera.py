@@ -54,6 +54,32 @@ class PresenceObservation(BaseModel):
     pose_visible_landmarks: Optional[int] = Field(default=None, ge=0)
 
 
+class DesktopLuxReading(BaseModel):
+    """One ambient-lux sample from the desktop pc_agent's bedroom webcam (D4).
+
+    The agent flips to its calibrated fixed exposure, averages ``gray.mean()``
+    over a few frames, restores auto-exposure, and POSTs the value here. Range
+    is 0–255 (8-bit grayscale mean), matching CameraService's lux scale.
+    """
+
+    ambient_lux: float = Field(ge=0.0, le=255.0)
+    captured_at: Optional[datetime] = None
+
+
+class DesktopLuxCalibration(BaseModel):
+    """Result of a desktop bedroom-lux calibration run (D4).
+
+    Mirrors CameraService's lux calibration: the agent binary-searches
+    exposure until ``gray.mean()`` hits ``target_lux`` under comfortable-bright
+    bedroom light, then reports the settled fixed ``exposure`` + measured
+    ``baseline_lux``. The agent pins ``exposure`` for every future sample.
+    """
+
+    exposure: float
+    baseline_lux: float = Field(gt=0.0, le=255.0)
+    target_lux: float = Field(default=100.0, gt=0.0, le=255.0)
+
+
 def _current_multiplier(service) -> float:
     """Current lux multiplier for the UI readout (1.0 if uncalibrated / stale)."""
     from backend.services.automation_engine import LUX_STALE_SECONDS, lux_to_multiplier
@@ -430,3 +456,71 @@ async def get_desktop_snapshot_latest(request: Request) -> Response:
         media_type="image/jpeg",
         headers=headers,
     )
+
+
+# ── Bedroom lux channel (D4) ────────────────────────────────────────────
+# The desktop pc_agent's bedroom webcam reports its own ambient lux here so
+# bedroom modes (gaming / working / watching) can adapt brightness against a
+# room-correct baseline — the living-room Latitude camera can't see the
+# bedroom. ``app.state.bedroom_lux`` is a ``LuxChannel`` wired in main.py.
+# Part C is store-only: nothing consumes the channel yet (Part D does).
+
+
+@router.post("/desktop/lux", dependencies=[Depends(require_api_key)])
+async def post_desktop_lux(payload: DesktopLuxReading, request: Request) -> dict:
+    """Ingest one ambient-lux sample from the desktop bedroom webcam.
+
+    Best-effort like ``/observation``: if the channel isn't wired yet
+    (early boot / unit test) we drop silently rather than 503 an agent that
+    POSTs every ~25s. LAN-bypass in ``auth.py`` covers the desktop.
+    """
+    channel = getattr(request.app.state, "bedroom_lux", None)
+    if channel is None:
+        logger.debug("bedroom lux dropped — channel not initialized")
+        return {"status": "ok", "detail": "bedroom lux channel unavailable"}
+    channel.update(float(payload.ambient_lux), captured_at=payload.captured_at)
+    return {"status": "ok"}
+
+
+@router.get("/desktop/lux", dependencies=[Depends(require_api_key)])
+async def get_desktop_lux(request: Request) -> dict:
+    """Bedroom lux channel snapshot (ema / baseline / freshness).
+
+    Gated like ``/status`` — the baseline + readings are reconnaissance.
+    Used for shadow-logging the bedroom readings before Part D consumes them.
+    """
+    channel = getattr(request.app.state, "bedroom_lux", None)
+    if channel is None:
+        raise HTTPException(status_code=503, detail="bedroom lux channel not initialized")
+    return {"status": "ok", **channel.status()}
+
+
+@router.post("/desktop/lux/calibration", dependencies=[Depends(require_api_key)])
+async def post_desktop_lux_calibration(
+    payload: DesktopLuxCalibration, request: Request,
+) -> dict:
+    """Persist a bedroom-lux calibration result + apply it to the live channel.
+
+    Saves ``desktop_lux_calibration_config`` (the agent reloads ``exposure``
+    to pin every future sample), sets the live channel's baseline so the
+    multiplier is centered immediately, and clears the calibrate-request flag.
+    """
+    from backend.api.routes.routines import save_setting
+
+    config = {
+        "exposure": payload.exposure,
+        "baseline_lux": payload.baseline_lux,
+        "target_lux": payload.target_lux,
+        "calibrated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await save_setting("desktop_lux_calibration_config", config)
+    # Clear the request flag (Part B sets it; harmless no-op until then).
+    await save_setting("desktop_lux_calibrate_requested", {"requested": False})
+    channel = getattr(request.app.state, "bedroom_lux", None)
+    if channel is not None:
+        channel.set_baseline(float(payload.baseline_lux))
+    logger.info(
+        "bedroom lux calibrated: exposure=%.2f baseline_lux=%.1f",
+        payload.exposure, payload.baseline_lux,
+    )
+    return {"status": "ok", "config": config}

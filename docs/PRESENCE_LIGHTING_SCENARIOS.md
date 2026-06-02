@@ -234,6 +234,21 @@ Curator rules carried into the build: compute the ramped `bri` **once** then ass
 4. Engine — `MODE_ROOM = {relax: living_room, gaming|working|watching: bedroom}`; `_apply_lux_multiplier` selects `(ema, baseline)` by the mode's room; re-expand `LUX_MODES → {relax, gaming, working, watching}`. Scope the engine multiplier to L1+kitchen in gaming/watching (L2/L5 owned by sync).
 5. Screen-sync — feed the **bedroom** lux_multiplier into `apply_color` for gaming/watching (swap the source at `automation.py:273`); **extend `_scale_for_ambient`'s gate** from gaming-day to evening/night/late_night + watching. **Curator-validate the L5 clear-housing ceiling** at evening/night — the code comment flags this lift was never validated (`feedback_clear_housing_perceptual_luma`).
 
+### D4 implementation breakdown (locked 2026-06-01)
+
+**Foundation already shipped tonight** (`347e684`): `emotion_capture._ensure_cap` opens the Brio via `CAP_DSHOW` + forces auto-exposure on every open. So D4's two riskiest unknowns are answered — exposure control works (spike) and auto-restore works (mean 10→91). See [[project_desktop_webcam_dshow]].
+
+Component-level changes (file → what):
+- **C. Store + endpoints** — new `LuxChannel` helper (`ema_lux` via `LUX_EMA_ALPHA`, `baseline_lux`, `last_update`, staleness; factored from `camera_service._update_ema_lux` so living-room is untouched). `app.state.bedroom_lux`. `POST /api/camera/desktop/lux {ambient_lux, captured_at}` → `bedroom_lux.update()` (LAN-bypass auth like `/observation`). `POST /api/camera/desktop/lux/calibration {exposure, baseline_lux, target_lux}` → persists `app_settings.desktop_lux_calibration_config`, sets channel baseline, clears the request flag.
+- **B. Calibration** — `desktop_lux_calibration_config` + a `desktop_lux_calibrate_requested` flag surfaced on the `/api/personality/settings` poll. Agent routine mirrors `camera_service.calibrate_exposure` (binary-search exposure → `gray.mean()≈100` at comfortable-bright bedroom → POST → clear flag).
+- **A. Sampling** (`emotion_capture.py`) — flip-sample-flip every ~25s: set manual exposure → settle → average `gray.mean()` → **restore auto on the SAME handle** (the agent only force-autos on *open*, so a same-handle restore is mandatory — pr-review constraint) → settle → POST lux. Skip the presence POST that tick. Gated on `calibrated`.
+- **D. Engine** — `LUX_MODES → {relax, gaming, working, watching}`; `MODE_ROOM = {relax: living_room, gaming|working|watching: bedroom}`. `automation_engine._read_fresh_room_lux(room)` picks the source; `_apply_lux_multiplier` selects by mode's room; multiplier scoped to L1+kitchen in gaming/watching.
+- **E. Screen-sync** — bedroom lux_multiplier into the screen-color route; extend `_scale_for_ambient` gate to gaming/watching × evening/night/late_night; curator-validate the L5 ceiling.
+
+**Build order** (each a deployable increment): **C → B → A → shadow-log bedroom lux ~1 day → D → E.**
+
+Micro-decisions: (1) **shadow-log before flipping `LUX_MODES`** — yes (cross-room-contamination history). (2) **full-frame `gray.mean()` v1**, zone-weighting later if it reads off. (3) D4 lux sampler restores auto on the same handle (see A).
+
 ### Risks tracked
 - **L5 perceptual overdrive** (clear housing) at evening/night — the one genuinely unvalidated piece; curator gates it.
 - **Flip-sample vs face-flicker** — mitigated by suppressing the POST during the flip; non-negotiable given this whole initiative came from the warm↔gaming strobe.

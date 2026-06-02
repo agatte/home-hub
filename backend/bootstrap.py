@@ -272,6 +272,23 @@ async def lifespan(app: FastAPI):
     app.state.presence = presence
     app_logger.info("Presence fusion initialized")
 
+    # Bedroom lux channel (D4) — per-room ambient lux for the bedroom, fed by
+    # the desktop pc_agent's webcam lux POSTs (/api/camera/desktop/lux). The
+    # living-room channel lives on camera_service; this is the bedroom's, so
+    # bedroom modes (gaming/working/watching) can adapt against a room-correct
+    # baseline. Seeded from the saved calibration; None baseline until the
+    # desktop cam is calibrated, in which case the channel returns no usable
+    # reading (store-only in Part C — no consumer yet).
+    from backend.services.lux_channel import LuxChannel
+    _lux_cal = await load_setting("desktop_lux_calibration_config") or {}
+    app.state.bedroom_lux = LuxChannel(
+        "bedroom", baseline_lux=_lux_cal.get("baseline_lux"),
+    )
+    app_logger.info(
+        "Bedroom lux channel initialized (calibrated=%s)",
+        _lux_cal.get("baseline_lux") is not None,
+    )
+
     # Music bandit — Thompson sampling playlist selection. Built before
     # MusicMapper so it can be passed via constructor.
     from backend.services.ml.music_bandit import MusicBandit
