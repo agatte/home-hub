@@ -151,7 +151,27 @@ class ConfidenceFusion:
     def __init__(self) -> None:
         self._signals: dict[str, Signal] = {}
         self._weights: dict[str, float] = dict(DEFAULT_WEIGHTS)
+        # SourceTrust registry — injected in bootstrap. An untrusted lane is
+        # dropped from the vote immediately (a stronger, faster signal than the
+        # 300s staleness timeout): a live-but-garbage camera shouldn't keep
+        # voting presence into the fused mode while we wait for it to go stale.
+        # None → fail-open (every lane trusted), so existing tests are inert.
+        self._source_trust: Any = None
         logger.info("ConfidenceFusion initialized with %d sources", len(SIGNAL_SOURCES))
+
+    def set_source_trust_registry(self, registry: Any) -> None:
+        """Inject the SourceTrust registry (called from bootstrap)."""
+        self._source_trust = registry
+
+    def _is_untrusted(self, source: str) -> bool:
+        """True only when SourceTrust has a positive untrusted verdict for the
+        source. Fail-open: no registry / untracked source / error → trusted."""
+        if self._source_trust is None:
+            return False
+        try:
+            return not self._source_trust.verdict(source).get("trusted", True)
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Public API
@@ -205,12 +225,20 @@ class ConfidenceFusion:
         """
         now = datetime.now(timezone.utc)
 
-        # Classify each source as active or stale
+        # Classify each source as active, stale, or untrusted. An untrusted
+        # lane (SourceTrust verdict, e.g. camera lux frozen) is excluded from
+        # the vote exactly like a stale one — but immediately, not after the
+        # 300s staleness window. Tracked separately so signal detail can show
+        # *why* a present-but-mute lane isn't counting.
         active: dict[str, Signal] = {}
         stale_sources: set[str] = set()
+        untrusted_sources: set[str] = set()
         for src in SIGNAL_SOURCES:
             sig = self._signals.get(src)
-            if sig and (now - sig.timestamp).total_seconds() <= STALE_SIGNAL_SECONDS:
+            fresh = bool(sig) and (now - sig.timestamp).total_seconds() <= STALE_SIGNAL_SECONDS
+            if sig and self._is_untrusted(src):
+                untrusted_sources.add(src)
+            elif fresh:
                 active[src] = sig
             else:
                 stale_sources.add(src)
@@ -262,13 +290,19 @@ class ConfidenceFusion:
         signals_detail: dict[str, dict[str, Any]] = {}
         for src in SIGNAL_SOURCES:
             sig = self._signals.get(src)
-            is_stale = src in stale_sources
+            is_untrusted = src in untrusted_sources
+            # An untrusted lane is excluded from the vote and surfaced with
+            # stale=True (it isn't counting) plus an explicit untrusted flag so
+            # the analytics view + the source-trust sweep can explain why a
+            # live lane went mute.
+            is_stale = src in stale_sources or is_untrusted
             if sig:
                 signals_detail[src] = {
                     "mode": sig.mode,
                     "confidence": sig.confidence,
                     "weight": self._weights.get(src, 0.0),
                     "stale": is_stale,
+                    "untrusted": is_untrusted,
                     "agrees": sig.mode == fused_mode and not is_stale,
                     "last_update": sig.timestamp.isoformat(),
                     "factors": list(sig.factors),

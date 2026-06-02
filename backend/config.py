@@ -127,6 +127,23 @@ class Settings(BaseSettings):
     NTFY_TOPIC: Optional[str] = None
     NTFY_SERVER: str = "https://ntfy.sh"
 
+    # Bounded auto-remediation (source-trust watchdog). Two-stage kill-switch:
+    # REMEDIATION_ENABLED gates the whole subsystem (status endpoint + audit
+    # log); REMEDIATION_AUTONOMOUS additionally permits the remediator agent to
+    # *execute* whitelisted fixes. With ENABLED=true + AUTONOMOUS=false the
+    # remediator runs propose-only: it records what it *would* do and notifies,
+    # but mutates nothing. Ship propose-only; flip to autonomous per-action only
+    # after the audit log shows clean proposals. Both default false → the
+    # subsystem is inert until explicitly turned on.
+    REMEDIATION_ENABLED: bool = False
+    REMEDIATION_AUTONOMOUS: bool = False
+    # Rate ceilings so a misfiring policy can't storm the apartment: at most N
+    # auto-executed fixes per rolling 24h, and a per-action cooldown (seconds)
+    # so the same fix can't repeat in a tight loop (mirrors the celebration
+    # cooldown + rule-refractory patterns).
+    REMEDIATION_MAX_AUTO_PER_DAY: int = 6
+    REMEDIATION_ACTION_COOLDOWN_SECONDS: int = 1800
+
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
     ESPN_POLL_INTERVAL: int = 5

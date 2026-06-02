@@ -4,12 +4,13 @@
 
 This is a durable strategy document, not a plan-of-record. Shipping any individual agent or tool is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
 
-## Current fleet at a glance (30 agents)
+## Current fleet at a glance (31 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
 | `homehub-verifier` | core | shipped | auto (checkback-loop) + manual recipe |
 | `homehub-investigator` | core | shipped | auto (watcher-loop) |
+| `homehub-remediator` | core | shipped | auto (watcher-loop, post-diagnosis, policy-matched + `REMEDIATION_ENABLED`) — the one fix-mode agent: bounded `remediate` MCP tool, propose-only until `REMEDIATION_AUTONOMOUS` |
 | `deploy-verifier` | core | shipped | auto (`/deploy-home` step 7) |
 | `lighting-curator` | 1 | shipped | hook-gated (pre-commit) + manual |
 | `lighting-shopper` | 1 | shipped | manual |
@@ -252,6 +253,7 @@ The fleet is 30 agents. Most fire automatically — the manual spawns left are d
 |---|---|---|---|
 | `homehub-verifier` | `/checkback-loop` dispatches | hourly anomaly sweep + dated entries | digest block in `~/.claude/runbooks/digests/YYYY-MM-DD.md` |
 | `homehub-investigator` | `/watcher-loop` polls digests | always-on, ~30s polling for un-diagnosed warns | inline `**Diagnosis (HH:MM):**` subsection appended to the warn block |
+| `homehub-remediator` | `/watcher-loop`, post-diagnosis, ONLY when the diagnosis matches a remediation policy (Check O source-trust, Check B→recover_camera) AND `REMEDIATION_ENABLED` | reactive (one action per spawn) | `## Remediation` block under the warn + `remediation_log` row + notification (all written by the backend `remediate` path). Propose-only until `REMEDIATION_AUTONOMOUS`. |
 | `ml-model-evaluator` | runbook entry #1 | weekly Mon 10:00 ET | digest block (agent writes its own) |
 | `override-rate-tracker` | runbook entry #7 | weekly Sun 16:00 ET | digest block (agent writes its own) |
 | `fusion-lane-auditor` | runbook entry #23 | weekly Mon 11:00 ET | digest block (agent writes its own) |

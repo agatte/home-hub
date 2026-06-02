@@ -35,6 +35,15 @@ class MLDecisionLogger:
         # Populated by on_mode_change; prior mode + its start time.
         self._last_mode: Optional[str] = None
         self._last_transition_at: Optional[datetime] = None
+        # SourceTrust registry — injected in bootstrap. When a decision's
+        # source is untrusted at log time, the row is stamped quarantined so
+        # it stays for forensics but drops out of training. None → fail-open
+        # (every row trusted), so tests + minimal wiring keep logging.
+        self._source_trust: Any = None
+
+    def set_source_trust_registry(self, registry: Any) -> None:
+        """Inject the SourceTrust registry (called from bootstrap)."""
+        self._source_trust = registry
 
     async def log_decision(
         self,
@@ -61,6 +70,23 @@ class MLDecisionLogger:
         Returns:
             The decision row ID, or None on failure.
         """
+        # Quarantine gate: if the originating source is currently untrusted
+        # (SourceTrust verdict), stamp the row so it stays for forensics but
+        # is excluded from every learner's training set. Fail-open — an
+        # untracked source, or no registry wired, leaves the row trusted.
+        quarantined = False
+        if self._source_trust is not None:
+            try:
+                verdict = self._source_trust.verdict(decision_source)
+                if not verdict.get("trusted", True):
+                    quarantined = True
+                    reason = verdict.get("reason", "untrusted")
+                    if factors is None:
+                        factors = {}
+                    factors = {**factors, "quarantine_reason": reason}
+            except Exception:  # never let the gate break logging
+                logger.debug("source-trust verdict failed; logging untagged", exc_info=True)
+
         try:
             async with async_session() as session:
                 decision = MLDecision(
@@ -69,6 +95,7 @@ class MLDecisionLogger:
                     decision_source=decision_source,
                     factors=factors,
                     applied=applied,
+                    quarantined=quarantined,
                 )
                 session.add(decision)
                 await session.commit()
@@ -294,6 +321,7 @@ class MLDecisionLogger:
                     .where(
                         MLDecision.applied.is_(True),
                         MLDecision.actual_mode.isnot(None),
+                        MLDecision.quarantined.is_(False),
                         MLDecision.timestamp >= cutoff,
                     )
                 )
@@ -336,6 +364,7 @@ class MLDecisionLogger:
                     .where(
                         MLDecision.decision_source == "fusion",
                         MLDecision.actual_mode.isnot(None),
+                        MLDecision.quarantined.is_(False),
                         MLDecision.timestamp >= cutoff,
                     )
                 )
@@ -464,6 +493,7 @@ class MLDecisionLogger:
                     select(MLDecision.predicted_mode, func.count().label("n"))
                     .where(
                         MLDecision.decision_source == "ml",
+                        MLDecision.quarantined.is_(False),
                         MLDecision.timestamp >= cutoff,
                     )
                     .group_by(MLDecision.predicted_mode)
@@ -527,6 +557,7 @@ class MLDecisionLogger:
                     .where(
                         MLDecision.decision_source == "fusion",
                         MLDecision.actual_mode.isnot(None),
+                        MLDecision.quarantined.is_(False),
                         MLDecision.timestamp >= cutoff,
                     )
                 )

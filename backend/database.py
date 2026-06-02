@@ -146,10 +146,23 @@ async def _run_migrations(conn) -> None:
                 applied BOOLEAN NOT NULL,
                 confidence FLOAT,
                 decision_source VARCHAR(30) NOT NULL,
-                factors JSON
+                factors JSON,
+                quarantined BOOLEAN DEFAULT 0 NOT NULL
             )
         """))
         await conn.execute(text("CREATE INDEX ix_ml_decisions_timestamp ON ml_decisions(timestamp)"))
+
+    # 2026-06-01: quarantine flag on ml_decisions. Rows whose originating
+    # source was untrusted at log time (SourceTrust verdict) stay for
+    # forensics but drop out of every learner's training set. NULL/0 on
+    # pre-migration rows reads as "not quarantined" (trusted), so existing
+    # history is unaffected. See backend/services/source_trust.py.
+    result = await conn.execute(text("PRAGMA table_info(ml_decisions)"))
+    mld_cols = {row[1] for row in result.fetchall()}
+    if "quarantined" not in mld_cols:
+        await conn.execute(text(
+            "ALTER TABLE ml_decisions ADD COLUMN quarantined BOOLEAN DEFAULT 0 NOT NULL"
+        ))
 
     result = await conn.execute(
         text("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_metrics'")

@@ -390,6 +390,11 @@ class MLDecision(Base):
     # decision_source: "ml", "rule", "time", "manual"
     decision_source: Mapped[str] = mapped_column(String(30), nullable=False)
     factors: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Set True when the originating source was untrusted (SourceTrust verdict)
+    # at log time. Rows stay for forensics/analytics but are excluded from
+    # every learner's training set — the gate that would have stopped the
+    # 2026-05-27 lux pin from poisoning the predictor. See source_trust.py.
+    quarantined: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class MLMetric(Base):
@@ -402,6 +407,41 @@ class MLMetric(Base):
     metric_name: Mapped[str] = mapped_column(String(50), nullable=False)
     value: Mapped[float] = mapped_column(Float, nullable=False)
     extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class RemediationLog(Base):
+    """Audit trail for the bounded auto-remediation subsystem.
+
+    One row per remediation decision — whether executed (autonomous), proposed
+    (propose-only mode or a propose-tier policy), skipped (rate-limited /
+    cooldown / disabled), or errored. The forensic record behind every change
+    the remediator agent makes or recommends; nothing in the subsystem mutates
+    state without a row here first. See backend/services/remediation_service.py.
+    """
+
+    __tablename__ = "remediation_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    # The troubled source the action targets (e.g. "camera"); nullable for
+    # actions that aren't source-scoped.
+    source: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # "auto" (executed) | "propose" (recommended, awaiting human).
+    tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    # "executed" | "proposed" | "skipped" | "error".
+    result: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Pointer back to the digest warn / investigator diagnosis that triggered
+    # this (e.g. "2026-06-01#source-trust"); free-form, nullable.
+    diagnosis_ref: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    detail: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Set True if a later manual/auto step reverted this action.
+    reverted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 # ---------------------------------------------------------------------------

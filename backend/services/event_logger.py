@@ -83,10 +83,19 @@ class EventLogger:
         )
         self._retry_task: Optional[asyncio.Task] = None
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
+        # SourceTrust registry — gates camera enrichment. When the camera
+        # source is untrusted (e.g. lux frozen), zone/posture/lux are written
+        # NULL instead of the garbage values, so the predictor never trains on
+        # poisoned features. None → fail-open (enrich as before).
+        self._source_trust = None
 
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_source_trust_registry(self, registry) -> None:
+        """Inject the source-trust registry (called from lifespan)."""
+        self._source_trust = registry
 
     def set_camera_service(self, camera_service) -> None:
         """Inject the camera service (called from lifespan after camera starts)."""
@@ -220,6 +229,18 @@ class EventLogger:
         cs = self._camera_service
         if cs is None:
             return None, None, None
+        # Source-trust gate: an untrusted camera (lux variance collapse, etc.)
+        # must not poison the predictor's training features. Drop enrichment to
+        # NULLs for the untrusted window rather than baking in garbage — this
+        # is the boundary that would have stopped the 2026-05-27 lux pin from
+        # poisoning watching-class accuracy for five days. The transition row
+        # itself is still written; only the camera-derived fields go NULL.
+        if self._source_trust is not None:
+            try:
+                if not self._source_trust.verdict("camera").get("trusted", True):
+                    return None, None, None
+            except Exception:  # never block the write path on the gate
+                pass
         try:
             return (
                 getattr(cs, "zone", None),

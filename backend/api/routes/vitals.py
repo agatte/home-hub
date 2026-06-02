@@ -203,6 +203,20 @@ async def get_vitals(request: Request) -> dict[str, Any]:
                 logger.warning("vitals: pihole summary failed: %s", e)
                 metrics["pihole"] = {"status": "error"}
 
+    # Source trust — sanity of each tracked input source. A live-but-garbage
+    # source (camera lux frozen, classifier output flat) reads `warn` here so
+    # it flows into the kiosk strip + roll-up, even while the device heartbeat
+    # stays green. Trusted/no-tracked-sources → `ok`.
+    source_trust = getattr(app.state, "source_trust", None)
+    if source_trust is not None:
+        verdicts = source_trust.snapshot()
+        untrusted = [v["name"] for v in verdicts if not v["trusted"]]
+        metrics["sources"] = {
+            "tracked": len(verdicts),
+            "untrusted": untrusted,
+            "status": "warn" if untrusted else "ok",
+        }
+
     # System metrics (psutil)
     metrics.update(_read_psutil_metrics())
 

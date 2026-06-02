@@ -376,6 +376,12 @@ class CameraService:
         # disable / pause to avoid false-flagging legitimate downtime.
         self._heartbeat = None
 
+        # Source-trust registry — set via set_source_trust_registry. Same
+        # opt-in lifecycle as the heartbeat: register the camera's sanity
+        # predicate on enable, deregister on pause/disable so it isn't judged
+        # during legitimate downtime. Pushes one observation per frame.
+        self._source_trust = None
+
         # poll_loop task handle — set by the spawner (bootstrap or the
         # API/watchdog respawn path). close() cancels and awaits it so a
         # respawn doesn't leave an orphan loop ticking against a released
@@ -622,6 +628,9 @@ class CameraService:
         self._enabled = True
         if self._heartbeat is not None:
             self._heartbeat.register("camera", float(POLL_INTERVAL))
+        if self._source_trust is not None:
+            from backend.services.source_trust import camera_sanity
+            self._source_trust.register("camera", predicate=camera_sanity)
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
 
     @staticmethod
@@ -1130,6 +1139,14 @@ class CameraService:
         # call site that has access to the automation engine's wiring.
         return factors[:4]
 
+    def set_source_trust_registry(self, registry) -> None:
+        """Inject the source-trust registry (called from lifespan).
+
+        Same opt-in lifecycle as the heartbeat: the camera registers its
+        sanity predicate on enable/resume and deregisters on pause/disable.
+        """
+        self._source_trust = registry
+
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan).
 
@@ -1390,6 +1407,25 @@ class CameraService:
                     baseline = self._baseline_lux if self._baseline_lux is not None else 90.0
                     current_multiplier = lux_to_multiplier(
                         float(self._ema_lux), float(baseline)
+                    )
+
+                # Push a sanity observation for the source-trust registry —
+                # liveness (heartbeat) says the camera is polling; this says
+                # whether the lux it reports is trustworthy. The predicate
+                # (camera_sanity) trips on the 5/27 "lux frozen while presence
+                # toggles" signature so the ML quarantine gate can drop the
+                # camera lane before it poisons the predictor again.
+                if self._source_trust is not None:
+                    self._source_trust.observe(
+                        "camera",
+                        {
+                            "ema_lux": self._ema_lux,
+                            "baseline_lux": self._baseline_lux,
+                            "calibrated": self._calibrated,
+                            "present": status == "present",
+                            "consecutive_absent": self._consecutive_absent,
+                            "confidence": confidence,
+                        },
                     )
 
                 # Build factors once and reuse for both the freshness report
@@ -2194,6 +2230,8 @@ class CameraService:
                 self._paused = True
                 if self._heartbeat is not None:
                     self._heartbeat.deregister("camera")
+                if self._source_trust is not None:
+                    self._source_trust.deregister("camera")
                 # Release camera so the LED turns off. Hand the handle off to
                 # an executor (bounded) and null _cap first: release() can
                 # block joining a V4L2 worker thread parked in read(), which
@@ -2220,6 +2258,9 @@ class CameraService:
                 self._paused = False
                 if self._heartbeat is not None:
                     self._heartbeat.register("camera", float(POLL_INTERVAL))
+                if self._source_trust is not None:
+                    from backend.services.source_trust import camera_sanity
+                    self._source_trust.register("camera", predicate=camera_sanity)
                 # The pause spanned at least the sleep cycle — any committed
                 # zone/posture from before sleep is stale and would otherwise
                 # leak into the morning's first overlay decisions.
@@ -2246,6 +2287,8 @@ class CameraService:
         self._enabled = False
         if self._heartbeat is not None:
             self._heartbeat.deregister("camera")
+        if self._source_trust is not None:
+            self._source_trust.deregister("camera")
         if self._poll_task is not None and not self._poll_task.done():
             self._poll_task.cancel()
             try:
@@ -2385,10 +2428,13 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
     ws_manager = app.state.ws_manager
     ml_logger = getattr(app.state, "ml_logger", None)
     heartbeats = getattr(app.state, "heartbeats", None)
+    source_trust = getattr(app.state, "source_trust", None)
 
     camera = CameraService(ws_manager, automation, ml_logger)
     if heartbeats is not None:
         camera.set_heartbeat_registry(heartbeats)
+    if source_trust is not None:
+        camera.set_source_trust_registry(source_trust)
 
     await camera.start()
 

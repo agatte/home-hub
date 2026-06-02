@@ -530,7 +530,11 @@ async def query_db(sql: str) -> list[dict]:
       scene_activations     id, timestamp, scene_id, scene_name, source,
                             mode_at_time
       ml_decisions          id, timestamp, predicted_mode, actual_mode,
-                            applied, confidence, decision_source, factors (JSON)
+                            applied, confidence, decision_source, factors (JSON),
+                            quarantined (0/1 — rows logged while the source was
+                            untrusted; kept for forensics, excluded from training)
+      remediation_log       id, timestamp, action, source, tier, result,
+                            diagnosis_ref, params (JSON), detail, reverted
       ml_metrics            id, date, metric_name, value, extra (JSON)
                             (date is a Date, not DateTime — no time component)
       learned_rules         id, day_of_week, hour, predicted_mode, confidence,
@@ -707,6 +711,83 @@ async def get_state_history(minutes: int = 30) -> dict:
         "scene_activations": scenes,
         "sonos_events": sonos_evts,
     }
+
+
+# ---------------------------------------------------------------------------
+# Bounded auto-remediation — the only MCP write into the remediation subsystem
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_remediation_status() -> dict:
+    """
+    Read the source-trust remediation subsystem state.
+
+    Returns the kill-switch flags (enabled / autonomous / mode), the action
+    policy map (action → auto|propose tier), the rolling 24h auto-execution
+    count against the daily ceiling, and the recent audit-log tail. Read this
+    BEFORE calling ``remediate`` so you know whether you're in autonomous or
+    propose-only mode and which actions are even permitted.
+    """
+    async with _client() as c:
+        r = await c.get("/api/remediation/status")
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+async def remediate(
+    action: str,
+    source: str | None = None,
+    reason: str = "",
+    diagnosis_ref: str | None = None,
+    params: dict | None = None,
+) -> dict:
+    """
+    Execute (or propose) a single whitelisted remediation action.
+
+    This is the ONLY mutate path into the remediation subsystem and is
+    deliberately narrow — it can do nothing the backend's ACTION_POLICY
+    doesn't allow. The backend decides whether to actually run the action
+    (autonomous + auto-tier + within rate limits) or merely record it as a
+    proposal; either way it writes a remediation_log row and notifies. You
+    cannot bypass the kill-switch or the rate ceiling from here.
+
+    Whitelisted actions (confirm against get_remediation_status().policy):
+      - recover_camera            — respawn the camera service (frees a stuck
+                                    V4L2 handle).
+      - recalibrate_camera_lux    — re-run lux calibration. Only when the room
+                                    is at representative brightness.
+      - set_source_trust          — params {"source": str, "trusted": bool,
+                                    "reason"?: str}. trusted=true clears a
+                                    quarantine (predicate resumes); false marks
+                                    the source untrusted.
+      - clear_stuck_override      — clear a wedged manual mode override.
+      - clear_stuck_dnd           — clear a stuck Do-Not-Disturb.
+
+    Args:
+        action: One of the whitelisted action names above.
+        source: The troubled source the action targets (e.g. "camera").
+        reason: Short human-readable why — recorded in the audit row.
+        diagnosis_ref: Pointer to the digest warn / diagnosis that triggered
+            this (e.g. "2026-06-01#check-O").
+        params: Action-specific parameters (see set_source_trust).
+
+    Returns:
+        The decision dict: {status, action, tier, result (executed|proposed|
+        skipped|error), detail, log_id}.
+    """
+    body: dict[str, Any] = {"action": action, "reason": reason}
+    if source is not None:
+        body["source"] = source
+    if diagnosis_ref is not None:
+        body["diagnosis_ref"] = diagnosis_ref
+    if params is not None:
+        body["params"] = params
+    async with _client() as c:
+        r = await c.post("/api/remediation/action", json=body)
+        r.raise_for_status()
+        return r.json()
 
 
 if __name__ == "__main__":

@@ -116,6 +116,15 @@ async def lifespan(app: FastAPI):
     heartbeats = HeartbeatRegistry()
     app.state.heartbeats = heartbeats
 
+    # Source-trust registry — sanity (not just liveness) per source. Services
+    # push one observation per poll via .observe(name, {...}); /health merges
+    # the verdict with heartbeat + breaker state. The ML quarantine gate
+    # consults verdict(source) before logging a learnable sample so a live-but-
+    # garbage source (the 2026-05-27 lux-pin) can't poison the predictor again.
+    from backend.services.source_trust import SourceTrust
+    source_trust = SourceTrust()
+    app.state.source_trust = source_trust
+
     # Hue Bridge (v1 — basic light control)
     hue = HueService(
         bridge_ip=settings.HUE_BRIDGE_IP,
@@ -238,6 +247,7 @@ async def lifespan(app: FastAPI):
         logger.exception("Boot-time lighting_learner.recalculate() failed")
 
     ml_logger = MLDecisionLogger(ws_manager=ws_manager)
+    ml_logger.set_source_trust_registry(source_trust)
     app.state.ml_logger = ml_logger
 
     # Behavioral predictor — graceful degradation if lightgbm missing.
@@ -257,6 +267,7 @@ async def lifespan(app: FastAPI):
     app.state.behavioral_predictor = behavioral_predictor
 
     confidence_fusion = ConfidenceFusion()
+    confidence_fusion.set_source_trust_registry(source_trust)
     app.state.confidence_fusion = confidence_fusion
     app_logger.info("Confidence fusion initialized")
 
@@ -880,6 +891,24 @@ async def lifespan(app: FastAPI):
     app.state.notifier = notifier
     automation.register_on_mode_change(notifier.on_mode_change)
 
+    # Bounded auto-remediation — the only backend path that turns a
+    # source-trust diagnosis into a state change. Constructed after notifier
+    # (it notifies on every decision) and after automation/source_trust exist.
+    # Inert unless REMEDIATION_ENABLED; propose-only until REMEDIATION_AUTONOMOUS.
+    from backend.services.remediation_service import RemediationService
+    remediation = RemediationService(
+        app,
+        enabled=settings.REMEDIATION_ENABLED,
+        autonomous=settings.REMEDIATION_AUTONOMOUS,
+        max_auto_per_day=settings.REMEDIATION_MAX_AUTO_PER_DAY,
+        action_cooldown_seconds=settings.REMEDIATION_ACTION_COOLDOWN_SECONDS,
+    )
+    app.state.remediation = remediation
+    app_logger.info(
+        "Remediation subsystem: enabled=%s autonomous=%s",
+        settings.REMEDIATION_ENABLED, settings.REMEDIATION_AUTONOMOUS,
+    )
+
     # Late-bind brightness-suggestion collaborators on rule_engine. Built
     # in this order because rule_engine is constructed early (line ~274)
     # but the notifier comes online here. Public base url defaults to the
@@ -931,6 +960,7 @@ async def lifespan(app: FastAPI):
     # loop. Each service publishes liveness via .tick(name) once per
     # iteration; /health reads heartbeats.snapshot() to flag stale tasks.
     event_logger.set_heartbeat_registry(heartbeats)
+    event_logger.set_source_trust_registry(source_trust)
     hue.set_heartbeat_registry(heartbeats)
     hue_v2.set_heartbeat_registry(heartbeats)
     sonos.set_heartbeat_registry(heartbeats)
@@ -1006,6 +1036,7 @@ async def lifespan(app: FastAPI):
             from backend.services.camera_service import CameraService
             camera_service = CameraService(ws_manager, automation, ml_logger)
             camera_service.set_heartbeat_registry(heartbeats)
+            camera_service.set_source_trust_registry(source_trust)
             await camera_service.start()
             if camera_service.enabled:
                 app.state.camera_service = camera_service

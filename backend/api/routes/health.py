@@ -185,6 +185,21 @@ async def health_check(request: Request) -> dict:
     if any(p.get("status") == "unhealthy" for p in ml.values()):
         status = "degraded"
 
+    # Per-source data-validity ("sanity") verdicts. The heartbeat surface
+    # above says a source is *ticking*; this says whether the data it produces
+    # is *trustworthy*. A live-but-garbage source (the 2026-05-27 camera lux
+    # pin held for five days while the heartbeat stayed green) degrades
+    # /health here and gates ML learning via the quarantine path in
+    # ml_logger. Liveness + breaker state for Hue/Sonos already live in
+    # `tasks` / `circuit_breakers`; this block is the sanity layer.
+    sources: list[dict] = []
+    sources_untrusted: list[str] = []
+    if hasattr(app.state, "source_trust"):
+        sources = app.state.source_trust.snapshot()
+        sources_untrusted = [s["name"] for s in sources if not s["trusted"]]
+        if sources_untrusted:
+            status = "degraded"
+
     scheduler_tasks: list[dict] = []
     if hasattr(app.state, "scheduler"):
         scheduler_tasks = app.state.scheduler.get_tasks()
@@ -209,5 +224,7 @@ async def health_check(request: Request) -> dict:
         "scheduler_tasks": scheduler_tasks,
         "circuit_breakers": circuit_breakers,
         "ml": ml,
+        "sources": sources,
+        "sources_untrusted": sources_untrusted,
         "details": details,
     }
