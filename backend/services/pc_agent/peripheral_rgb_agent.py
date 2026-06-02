@@ -34,6 +34,7 @@ backoff WS reconnect). Entry point: ``run_agent(server_url, stop_event)``.
 from __future__ import annotations
 
 import argparse
+import atexit
 import colorsys
 import json
 import logging
@@ -49,6 +50,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+import psutil
 
 # Top-level import so the supervisor's ImportError guard cleanly skips
 # this agent on a host without openrgb-python (e.g. the Latitude, which
@@ -110,6 +112,7 @@ COLOR_MODE_PREFERENCE = ("direct", "custom", "static")
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / "peripheral_rgb.log"
+PID_FILE = LOG_DIR / "peripheral_rgb.pid"
 
 
 def _configure_standalone_logging() -> None:
@@ -131,6 +134,61 @@ def _configure_standalone_logging() -> None:
     )
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
+
+
+# ---------------------------------------------------------------------------
+# Singleton guard — one agent per machine, across processes
+# ---------------------------------------------------------------------------
+#
+# Two instances both driving the OpenRGB SDK fight over the LEDs (each
+# re-paints every poll; the pulse can double-fire). A PID-file lock keeps
+# a stray standalone launch from running alongside the supervisor-managed
+# instance. Unlike desktop_notifier (always standalone, one process), this
+# agent also runs as a *thread* inside the supervisor — so os.getpid()
+# inside run_agent is the supervisor's PID, and a restart of just our
+# thread must NOT read the file we ourselves wrote as a foreign conflict.
+
+def _acquire_singleton() -> bool:
+    """Claim the agent PID lock. Return False if another LIVE process owns it.
+
+    A PID file owned by our *own* PID is a thread restart within the same
+    (supervisor) process, not a conflict — we take it over. A file owned by
+    a dead PID is stale and reclaimed. FS errors never block the feature.
+    """
+    try:
+        if PID_FILE.exists():
+            try:
+                owner = int(PID_FILE.read_text().strip())
+            except (ValueError, OSError):
+                owner = -1
+            if owner > 0 and owner != os.getpid() and psutil.pid_exists(owner):
+                logger.warning(
+                    "Another peripheral_rgb agent owns PID %d — refusing to "
+                    "start a duplicate (would fight over the OpenRGB SDK)",
+                    owner,
+                )
+                return False
+            if owner > 0 and owner != os.getpid():
+                logger.info("Stale PID file (PID %d not alive) — taking over", owner)
+        PID_FILE.write_text(str(os.getpid()))
+        return True
+    except OSError:
+        logger.warning(
+            "Could not write PID lock %s — continuing without singleton guard",
+            PID_FILE, exc_info=True,
+        )
+        return True
+
+
+def _release_singleton() -> None:
+    """Remove the PID lock iff this process still owns it (ownership-checked)."""
+    try:
+        if PID_FILE.exists():
+            stored = int(PID_FILE.read_text().strip())
+            if stored == os.getpid():
+                PID_FILE.unlink()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +585,9 @@ def run_agent(
     _configure_standalone_logging()
     _stop = stop_event or threading.Event()
 
+    if not _acquire_singleton():
+        return
+
     http_base = server_url.rstrip("/")
     ws_url = http_base.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
 
@@ -539,37 +600,40 @@ def run_agent(
 
     logger.info("Peripheral RGB agent started — server=%s", http_base)
 
-    with httpx.Client() as client:
-        while not _stop.wait(POLL_INTERVAL_S):
-            try:
-                if not controller.ready:
-                    controller.connect()
+    try:
+        with httpx.Client() as client:
+            while not _stop.wait(POLL_INTERVAL_S):
+                try:
                     if not controller.ready:
-                        _stop.wait(SDK_RETRY_S)
+                        controller.connect()
+                        if not controller.ready:
+                            _stop.wait(SDK_RETRY_S)
+                            continue
+
+                    # Champion override and the celebration pulse own the LEDs
+                    # while active — skip the kitchen mirror so we don't fight.
+                    if state.champion_rgb is not None or state.pulsing:
                         continue
 
-                # Champion override and the celebration pulse own the LEDs
-                # while active — skip the kitchen mirror so we don't fight.
-                if state.champion_rgb is not None or state.pulsing:
-                    continue
-
-                light = _fetch_kitchen_light(client, http_base)
-                if light is None:
-                    continue
-                rgb = kitchen_rgb(light)
-                state.remember_base(rgb)
-                controller.set_color(rgb)
-            except (httpx.HTTPError, OSError) as e:
-                logger.debug("kitchen poll transient error: %s", e)
-            except RuntimeError:
-                # Controller dropped — force a reconnect next tick.
-                controller.close()
-            except Exception:
-                logger.exception("peripheral rgb loop error")
-
-    ws_worker.join(timeout=3.0)
-    controller.close()
-    logger.info("Peripheral RGB agent stopped")
+                    light = _fetch_kitchen_light(client, http_base)
+                    if light is None:
+                        continue
+                    rgb = kitchen_rgb(light)
+                    state.remember_base(rgb)
+                    controller.set_color(rgb)
+                except (httpx.HTTPError, OSError) as e:
+                    logger.debug("kitchen poll transient error: %s", e)
+                except RuntimeError:
+                    # Controller dropped — force a reconnect next tick.
+                    controller.close()
+                except Exception:
+                    logger.exception("peripheral rgb loop error")
+    finally:
+        _stop.set()
+        ws_worker.join(timeout=3.0)
+        controller.close()
+        _release_singleton()
+        logger.info("Peripheral RGB agent stopped")
 
 
 def main() -> int:
@@ -582,6 +646,7 @@ def main() -> int:
     args = parser.parse_args()
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    atexit.register(_release_singleton)
     stop = threading.Event()
     try:
         run_agent(server_url=args.server, stop_event=stop)
