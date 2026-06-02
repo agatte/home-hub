@@ -252,6 +252,79 @@ class TestBackfillActualRange:
 
 
 @pytest.mark.asyncio
+class TestBackfillDSTWindow:
+    """Regression guard: the backfill window is bounded by elapsed *real*
+    time (UTC duration), so it must stay correct across a US DST boundary.
+
+    Context (issue #30): an audit flagged this path as "naive UTC arithmetic
+    that could mis-window by 1h across the Indianapolis DST transition." The
+    code is actually already DST-immune — it computes the cap as
+    ``datetime.now(timezone.utc) - timedelta(hours=2)``, and UTC has no DST,
+    so subtracting a duration always yields the correct absolute instant.
+    This test pins that behavior: it fails the moment anyone "fixes" the
+    window by reintroducing local wall-clock arithmetic (the only way the
+    1h DST shift the issue feared could actually occur).
+
+    Scenario: freeze "now" just after 2026 spring-forward
+    (2026-03-08 07:00 UTC, 02:00 EST → 03:00 EDT). With now = 08:00 UTC
+    (04:00 EDT) the 2h cap_cutoff = 06:00 UTC (01:00 EST), straddling the
+    transition.
+    """
+
+    @staticmethod
+    def _freeze_now(monkeypatch, frozen_utc):
+        """Pin ml_logger's ``datetime.now(tz)`` to a fixed aware instant."""
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen_utc if tz is None else frozen_utc.astimezone(tz)
+
+        monkeypatch.setattr(
+            "backend.services.ml.ml_logger.datetime", _FrozenDatetime,
+        )
+
+    async def test_window_bounded_by_real_elapsed_time_across_dst(
+        self, logger, ml_db, monkeypatch,
+    ):
+        # Just after 2026 spring-forward: 08:00 UTC == 04:00 EDT.
+        now = datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc)
+        # 1.5h real before now, but on the EST side of the jump → its local
+        # wall clock reads 01:30 (2.5h "earlier" in naive local terms). A
+        # naive-local reimplementation would wrongly drop it; correct UTC
+        # math keeps it inside the 2h window.
+        canary = datetime(2026, 3, 8, 6, 30, tzinfo=timezone.utc)
+        # 2.5h real before now → genuinely outside the 2h cap.
+        too_old = datetime(2026, 3, 8, 5, 30, tzinfo=timezone.utc)
+
+        async with ml_db() as session:
+            session.add(MLDecision(
+                timestamp=canary, predicted_mode="working", confidence=0.9,
+                decision_source="fusion", applied=True,
+            ))
+            session.add(MLDecision(
+                timestamp=too_old, predicted_mode="gaming", confidence=0.8,
+                decision_source="fusion", applied=True,
+            ))
+            await session.commit()
+
+        self._freeze_now(monkeypatch, now)
+
+        # since=None → the 2h cap (06:00 UTC) governs the window.
+        n = await logger.backfill_actual_range("working", since=None)
+        assert n == 1  # only the canary, not the 2.5h-old row
+
+        async with ml_db() as session:
+            rows = (await session.execute(
+                select(MLDecision).order_by(MLDecision.timestamp.asc())
+            )).scalars().all()
+        # too_old (05:30) untouched; canary (06:30) tagged.
+        assert rows[0].timestamp.replace(tzinfo=timezone.utc) == too_old
+        assert rows[0].actual_mode is None
+        assert rows[1].actual_mode == "working"
+
+
+@pytest.mark.asyncio
 class TestGetRecent:
     async def test_returns_descending_limited(self, logger, ml_db):
         for i in range(5):
