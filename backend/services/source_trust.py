@@ -79,6 +79,14 @@ LUX_IMPLAUSIBLE_HIGH_FACTOR = 5.0
 # --- generic variance-collapse tunables (audio classifier, etc.) --------------
 AUDIO_MIN_SAMPLES = 20
 AUDIO_SCORE_VARIANCE_EPSILON = 1e-3
+# The audio_ml lane is fed by ambient_monitor POSTs at its SHADOW_LOG_INTERVAL
+# (30s) steady-state cadence. The 300s registry default holds only ~10 samples —
+# below AUDIO_MIN_SAMPLES — so the predicate could never reach quorum and would
+# fail-open forever. A 30-min window holds ≥20 samples with margin. (Same
+# default-fallback trap that defeated camera's lux_variance_collapse — see
+# camera_service._register_camera_sanity.)
+AUDIO_WINDOW_SECONDS = 1800.0
+AUDIO_MAX_SAMPLES = 200
 
 
 @dataclass
@@ -391,3 +399,27 @@ def variance_collapse_predicate(
         return True, "ok", metrics
 
     return _predicate
+
+
+def register_audio_ml(source_trust: SourceTrust) -> None:
+    """Register the ``audio_ml`` lane with its variance-collapse predicate.
+
+    Shared by ``bootstrap`` and the tests so the window sizing can't drift
+    (mirrors camera's ``_register_camera_sanity``). The lane has no backend
+    service object — it's fed by ``ambient_monitor`` POSTs to
+    ``/api/learning/audio-decision`` — so it's registered at bootstrap rather
+    than from a service. The window is sized for the monitor's ≤30s shadow-log
+    cadence so the predicate can reach ``AUDIO_MIN_SAMPLES``; see the tunable
+    comment above. Catches a stuck classifier emitting flat ``top_score`` (the
+    abandoned YAMNet ~0.088 tell).
+    """
+    source_trust.register(
+        "audio_ml",
+        predicate=variance_collapse_predicate(
+            "top_score",
+            min_samples=AUDIO_MIN_SAMPLES,
+            epsilon=AUDIO_SCORE_VARIANCE_EPSILON,
+        ),
+        window_seconds=AUDIO_WINDOW_SECONDS,
+        max_samples=AUDIO_MAX_SAMPLES,
+    )

@@ -121,9 +121,13 @@ async def lifespan(app: FastAPI):
     # the verdict with heartbeat + breaker state. The ML quarantine gate
     # consults verdict(source) before logging a learnable sample so a live-but-
     # garbage source (the 2026-05-27 lux-pin) can't poison the predictor again.
-    from backend.services.source_trust import SourceTrust
+    from backend.services.source_trust import SourceTrust, register_audio_ml
     source_trust = SourceTrust()
     app.state.source_trust = source_trust
+    # audio_ml has no backend service object (fed by ambient_monitor POSTs to
+    # /api/learning/audio-decision), so register its sanity predicate here. The
+    # camera lane self-registers from CameraService on enable/resume.
+    register_audio_ml(source_trust)
 
     # Hue Bridge (v1 — basic light control)
     hue = HueService(

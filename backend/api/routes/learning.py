@@ -145,21 +145,18 @@ async def log_audio_decision(body: AudioDecisionReport, request: Request) -> dic
     shadow-mode (or active-mode) classification results for accuracy
     comparison against the RMS-based detector.
     """
-    # TODO(flag flag_2026-06-02T03-01-53_y1mdgj): wire the audio_ml SourceTrust
-    # sanity predicate HERE. The source-trust watchdog (a73e9f4) only wired the
-    # camera; the quarantine gate in log_decision already consults
-    # source_trust.verdict("audio_ml") but nothing registers/observes that lane
-    # yet, so it's always "untracked"→trusted. To close it:
-    #   1. bootstrap: source_trust.register("audio_ml",
-    #        predicate=variance_collapse_predicate("top_score",
-    #          min_samples=AUDIO_MIN_SAMPLES, epsilon=AUDIO_SCORE_VARIANCE_EPSILON))
-    #   2. here: source_trust = getattr(request.app.state, "source_trust", None);
-    #        if source_trust: source_trust.observe("audio_ml",
-    #          {"top_score": body.confidence, "top_class": body.predicted_mode})
-    # Then the quarantine gate + sweep Check O cover audio with zero further work.
-    # Low priority — the audio_ml lane is largely shadow/abandoned (social gate
-    # dropped 2026-05-09). See project_source_trust_watchdog.md +
-    # project_audio_classifier_shadow_followup.md.
+    # Feed the audio_ml SourceTrust lane so the ML quarantine gate + Check O
+    # sweep can catch a stuck classifier (flat top_score — the abandoned YAMNet
+    # ~0.088 tell). The lane is registered at bootstrap via register_audio_ml.
+    # Observe BEFORE log_decision so this decision's own score is part of the
+    # evidence the gate's verdict("audio_ml") evaluates.
+    source_trust = getattr(request.app.state, "source_trust", None)
+    if source_trust is not None:
+        source_trust.observe(
+            "audio_ml",
+            {"top_score": body.confidence, "top_class": body.predicted_mode},
+        )
+
     ml_log = _get_ml_logger(request)
     await ml_log.log_decision(
         predicted_mode=body.predicted_mode,
