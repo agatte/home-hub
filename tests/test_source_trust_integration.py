@@ -288,6 +288,38 @@ class TestRemediationGuardrails:
         assert st.cleared == ["camera"]
         await engine.dispose()
 
+    async def test_dnd_suppresses_push_but_keeps_audit(self, monkeypatch):
+        maker, engine = await _memory_sessionmaker()
+        svc, notifier = _make_service(monkeypatch, maker, enabled=True, autonomous=False)
+
+        class _Automation:
+            def is_dnd_active(self):
+                return True
+        svc._app.state.automation = _Automation()
+
+        out = await svc.execute_or_propose("recover_camera", source="camera", reason="t")
+        # Proposal still recorded...
+        assert out["result"] == "proposed"
+        async with maker() as s:
+            row = (await s.execute(select(RemediationLog))).scalar_one()
+        assert row.result == "proposed"
+        # ...but no push fired during DND.
+        assert len(notifier.calls) == 0
+        await engine.dispose()
+
+    async def test_no_dnd_fires_push(self, monkeypatch):
+        maker, engine = await _memory_sessionmaker()
+        svc, notifier = _make_service(monkeypatch, maker, enabled=True, autonomous=False)
+
+        class _Automation:
+            def is_dnd_active(self):
+                return False
+        svc._app.state.automation = _Automation()
+
+        await svc.execute_or_propose("recover_camera", source="camera", reason="t")
+        assert len(notifier.calls) == 1
+        await engine.dispose()
+
     async def test_disabled_status_reports_disabled(self, monkeypatch):
         maker, engine = await _memory_sessionmaker()
         svc, _ = _make_service(monkeypatch, maker, enabled=False, autonomous=False)

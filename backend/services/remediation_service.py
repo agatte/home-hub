@@ -359,6 +359,24 @@ class RemediationService:
         notifier = getattr(self._app.state, "notifier", None)
         if notifier is None:
             return
+        # Respect Do-Not-Disturb. A remediation proposal is non-urgent and goes
+        # through the notifier's synthetic path, which otherwise BYPASSES DND —
+        # so without this a camera-lux proposal would buzz the phone at 3am.
+        # The audit row in remediation_log is written before _notify regardless,
+        # so suppressing the push loses nothing durable: the proposal still
+        # surfaces in `GET /api/remediation/status` + the check-back digest when
+        # DND lifts. Mirrors NotifierService._maybe_emit's DND gate.
+        automation = getattr(self._app.state, "automation", None)
+        if automation is not None:
+            try:
+                if automation.is_dnd_active():
+                    logger.info(
+                        "remediation notify suppressed (DND active) — audit row "
+                        "stands; action=%s result=%s", action, result,
+                    )
+                    return
+            except Exception:
+                logger.debug("DND check failed; notifying anyway", exc_info=True)
         verb = {
             _EXECUTED: "Auto-remediation fired",
             _PROPOSED: "Remediation proposed",

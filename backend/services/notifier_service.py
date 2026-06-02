@@ -411,9 +411,13 @@ class NotifierService:
                 url, content=body.encode("utf-8"), headers=headers,
             )
             if resp.status_code >= 400:
+                # Never log the topic — on hosted ntfy.sh the topic name IS the
+                # auth (anyone who reads it can publish/subscribe), so it must
+                # not leak into journalctl. The server is single-topic, so the
+                # value adds no diagnostic signal anyway.
                 logger.warning(
-                    "ntfy.sh push returned %d for topic %s: %s",
-                    resp.status_code, self._ntfy_topic, resp.text[:200],
+                    "ntfy.sh push returned %d: %s",
+                    resp.status_code, resp.text[:200],
                 )
             else:
                 logger.debug(
@@ -421,7 +425,8 @@ class NotifierService:
                     payload.get("correlation_id"),
                 )
         except Exception:
-            logger.exception("ntfy.sh push failed (topic=%s)", self._ntfy_topic)
+            # Topic deliberately omitted — it's the auth secret (see above).
+            logger.exception("ntfy.sh push failed")
 
     # ntfy.sh sends headers as latin-1 over HTTP/1.1; any UTF-8 char that
     # isn't representable (→, •, …, em-dash, curly quotes) raises
