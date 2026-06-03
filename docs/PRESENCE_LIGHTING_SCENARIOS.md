@@ -33,7 +33,7 @@
 
 **D. Implementation (after design sign-off)**
 - [x] **D1 — lux-adaptive desk-exit/transit/corridor path brightness** — SHIPPED + DEPLOYED 2026-06-01 (`9163c39`, curator + pr-review + deploy-verifier GO). `path_light_brightness()` helper + measure-then-hold; camera-down → pre-D1 fixed fallback. Live-verified: first post-deploy activation scaled to bri=55 (room at 125 lux vs 74 baseline → lands on `lo`). **Perceptual follow-up:** watch a genuinely dark evening desk-exit to confirm the dark-end (`hi`) caps feel right.
-- [ ] **D4 — bedroom lux channel** (full plan in Part 7.5) — next build: webcam flip-sample-flip + settings-flag self-calibrate + per-room `LuxChannel` + re-expand `LUX_MODES` + screen-sync gate extension.
+- [x] **D4 — bedroom lux channel** (full plan in Part 7.5) — SHIPPED + DEPLOYED 2026-06-02. Parts C/B/A/E + gaming-floor bump + task #7 gate-widening + watching-desk fused-zone fix all live; Part D (engine `LUX_MODES` re-expansion) deprioritized (self-limiting feedback loop). See the **D4 — SHIPPED** block in Part 7.5.
 - [ ] `PresenceResolver` — shadow build (log-only), validate vs reality
 - [ ] Migrate transit + desk_exit onto resolver transitions (delete local dwell/sustain/cooldown)
 - [ ] Migrate relax setters (`ambient_relax`, `late_night_rescue`) onto `on_afk`/`on_away`
@@ -249,8 +249,24 @@ Component-level changes (file → what):
 
 Micro-decisions: (1) **shadow-log before flipping `LUX_MODES`** — yes (cross-room-contamination history). (2) **full-frame `gray.mean()` v1**, zone-weighting later if it reads off. (3) D4 lux sampler restores auto on the same handle (see A).
 
+### D4 — SHIPPED + DEPLOYED 2026-06-02
+
+All live on master, deployed, curator + pr-review + deploy-verifier GO at each step.
+
+- **C — store + endpoints** (`4574f60`): `LuxChannel` (`backend/services/lux_channel.py`), `app.state.bedroom_lux`, 5 `/api/camera/desktop/lux*` endpoints, `desktop_lux_calibration_config` + `desktop_lux_calibrate_requested` app_settings.
+- **B + A — calibration + sampler** (`2f361db`, `ab17d63`): flip-sample-flip every ~25s, restore auto on the same handle, presence POST suppressed on the sample tick; settings-flag self-calibration. **Calibrated 2026-06-02 at blinds-closed working light** (Anthony's normal): `exposure=-6.0, baseline_lux=127.3`.
+- **E — screen-sync source swap** (`29c8018`): gaming/watching lux now from `app.state.bedroom_lux`, NOT the living-room Latitude (closed a live bug — a bright living room mult 0.897 was *dimming* the bedroom gaming floors).
+- **Gaming bedroom-floor bump** (`2288b6e`, curator): the original "bedroom too dim while gaming" fix. Curator reframe — **L2 (fabric shade, diffuse) carries room light; L5 (clear seeded-glass pendant) is a glare-prone point source.** `MODE_MIN ("gaming","2") 130→150, ("gaming","5") 25→40`; `MODE_MAX ("gaming","5") 60→75` (≤90 glare ceiling); day-period floors L2=150/L5=45.
+- **Task #7 — gate-widening** (`aca6dee`): `_scale_for_ambient` widened gaming-DAY-only → `{gaming, watching}` × all periods. **L5 EXCLUDED from the lift** (`_AMBIENT_LIFT_EXCLUDE_LIGHTS`) — the L5 clear-housing risk (the one unvalidated item below) is resolved not by validating a ceiling but by removing L5 from the lift entirely; it rides its static per-period caps. This also closed a latent day bug (L5 day cap 75 × 1.40 = 105 > the 90 glare ceiling).
+- **Watching-at-desk fused-zone fix** (`0f8804f`): `receive_screen_color` now sources zone/posture from `app.state.presence` (PresenceFusion `latest_zone()`/`latest_posture()`), not the raw Latitude camera. The Latitude moved to the living room (sees couch), so its `zone` was null and the watching-at-desk L2 cap (180) had silently stopped firing for screen-sync. Live result: L2 peak 103→**147+**, avg 97→122.
+
+**Divergences from the locked plan:**
+- **Part D deprioritized** (engine `LUX_MODES` re-expansion + `MODE_ROOM` + L1/kitchen multiplier). Reason: the bedroom lux multiplier is **self-limiting** — lifting the lamps brightens the room the webcam measures, so it settles ~1.02. The static screen-sync floors are the real brightness lever; the lux lift is a gentle top-up. Revisit only if non-synced L1/kitchen gaming/watching need an adaptive top-up. (GH#106)
+- **L5 risk closed by exclusion, not validation** (see task #7).
+- **Effective watching-desk cap** is now 180 × ambient-lift, ceiling-bounded ~252. Curator: desirable for "brighter at the desk"; if it ever reads glary at the desk, lever = the 1.40 ceiling or a watching-desk no-lift exclusion.
+
 ### Risks tracked
-- **L5 perceptual overdrive** (clear housing) at evening/night — the one genuinely unvalidated piece; curator gates it.
+- **L5 perceptual overdrive** (clear housing) at evening/night — ~~the one genuinely unvalidated piece; curator gates it.~~ **RESOLVED 2026-06-02:** L5 excluded from the ambient lift entirely (task #7), so it never overdrives — it rides its static per-period caps. L2 (diffuse fabric shade) carries the lift instead.
 - **Flip-sample vs face-flicker** — mitigated by suppressing the POST during the flip; non-negotiable given this whole initiative came from the warm↔gaming strobe.
 - **Bedroom calibration drift** — re-measure if the webcam moves or its resolution changes (same rule as the Latitude).
 

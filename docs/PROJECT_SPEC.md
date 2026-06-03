@@ -46,7 +46,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal) with 5-min cache on bridge scene fetches
 - Social mode — "Velvet Speakeasy" single static palette (dusty rose statement on L1 + cognac amber L2 + matched burnt-orange kitchen pendants). Sub-styles removed in favor of a grown-up cocktail-lounge aesthetic tuned for small hangouts.
 - Relax mode — "Moss & Candlelight" biophilic palette: warm ember on living-room lamps (L1/L2) with muted moss/sage kitchen pendants (L3/L4) that echo the plants and olive/sage/teal accents in the room. Candle/fire effects are scoped to L1/L2 so the moss pendants stay static. Late-night variant ("Moss & Ember") kicks in after 23:00 — deeper ember + hunter-green shadow for the cave/den feel.
-- Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when `zone=desk` is committed (sourced from the desktop pc_agent since the 2026-05-27 Latitude→living-room relocation — YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default.
+- Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when `zone=desk` is committed (sourced from the desktop pc_agent since the 2026-05-27 Latitude→living-room relocation — YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default. **Ambient lux lift (D4):** for gaming and watching across all time periods, L2's screen-sync cap + floor are scaled by `bedroom_lux × weather_multiplier` so a dim room lifts brightness without the user touching anything — `ScreenSyncService._scale_for_ambient`. The bedroom lux comes from `app.state.bedroom_lux` (the desktop Brio webcam's `LuxChannel`, NOT the living-room Latitude camera — cross-room contamination would dim the bedroom lamps when the living room is bright). L5 is excluded from the lift (clear seeded-glass housing is glare-prone and keeps its static per-period caps). Zone/posture sourcing for the watching-desk cap uses `app.state.presence` (PresenceFusion) rather than the raw Latitude camera, so the `zone=desk` detection the desktop pc_agent owns flows through correctly.
 - Manual override with 4-hour auto-timeout
 - Configurable per-mode brightness multipliers
 
@@ -266,7 +266,13 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    ├── emotion_capture.py       ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/personality/blendshape
    │                            (FaceLandmarker blendshapes → EmotionService mood vector + presence observation.
    │                             Opt-in via desktop_emotion_enabled / desktop_presence_enabled. EmotionService
-   │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.)
+   │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.
+   │                             Also: flip-sample-flip bedroom lux sampler (D4). Every ~25s, flips from
+   │                             auto-exposure to a calibrated fixed exposure (from desktop_lux_calibration_config),
+   │                             reads gray.mean() over a few frames, restores auto-exposure, and POSTs to
+   │                             POST http://192.168.86.210:8000/api/camera/desktop/lux. Self-calibration via
+   │                             search_exposure + _run_lux_calibration runs when desktop_lux_calibrate_requested
+   │                             is set. Uses CAP_DSHOW per project_desktop_webcam_dshow.md.)
    ├── peripheral_rgb_agent.py  ON dev machine (Windows-only) ──> GET http://192.168.86.210:8000/api/lights + WS sub /ws
    │                            (Mirrors the kitchen-pair color onto the Glorious Model O mouse via a local OpenRGB
    │                             SDK server (127.0.0.1:6742); seeded-champion override (League) + Colts scoring pulse.
@@ -401,6 +407,8 @@ Additional keys:
 - `ambient_streams` — curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play with a health check (file fallback when down); other keys manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)`.
 - `screen_sync_laptop_enabled` — `{enabled: bool}`; laptop screen→bedroom-lamp sync toggle, independent of `camera_enabled`.
 - `camera_wedge_last_restart` — `{at, detail}`; last camera-watchdog process-restart escalation, rate-limited to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart`.
+- `desktop_lux_calibration_config` — `{exposure, baseline_lux, target_lux, calibrated_at}`; bedroom webcam calibration result from the desktop Brio (D4). Written by `POST /api/camera/desktop/lux/calibration`; read at boot by `bootstrap.py` to seed `app.state.bedroom_lux` (`LuxChannel`). The `exposure` value is pinned by `emotion_capture.py` for every subsequent flip-sample-flip lux read. Empty dict until the bedroom webcam is calibrated.
+- `desktop_lux_calibrate_requested` — `{requested: bool}`; flag set by `POST /api/camera/desktop/lux/calibrate/request` and cleared when the agent POSTs its calibration result. Polled every 30s by `emotion_capture.py` so calibration can be triggered server-side without a separate UI flow.
 - Personality bundle (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) — master kill switch + sub-toggles for the AI Personality Layer (spec: `docs/PERSONALITY_LAYER.md`).
 - `mood_calibration_nudge_state` — `{last_nudge_at_utc, last_nudge_bucket}`; `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges), survives restart so a deploy mid-day doesn't reset the gate.
 - `gameday_playoff_state` — cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot (spec: `docs/GAMEDAY_SPEC.md`).
@@ -846,6 +854,15 @@ All messages are JSON with `type` + `data` fields.
 | POST | `/api/learning/retune-weights` | Manually trigger the fusion weight-tuning job (normally 3:30 AM cron) |
 | DELETE | `/api/learning/reset` | Wipe all ML models and decision/metric tables |
 
+#### Remediation — `/api/remediation/`
+
+Bounded auto-remediation for the source-trust watchdog (camera lux decoupling etc.). Propose-only unless `REMEDIATION_AUTONOMOUS=true`; the `homehub-remediator` agent drives it via the MCP `remediate`/`get_remediation_status` tools. Every action writes a `remediation_log` audit row; the `RemediationStatusCard` (Settings → Learning) polls `/status`. Proposals respect DND (push suppressed, audit row still written). Full design: memory `project_source_trust_watchdog`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/remediation/status` | Mode badge (propose-only / autonomous / disabled), 24h auto-fix count vs ceiling (6/day), recent proposals with result badges |
+| POST | `/api/remediation/action` | Execute (or propose) one whitelisted fix — recover camera, recalibrate lux, set source trust, clear stuck override/DND. API-key gated; 1800s per-action cooldown |
+
 #### Events — `/api/events/`
 
 | Method | Path | Purpose |
@@ -880,6 +897,12 @@ All messages are JSON with `type` + `data` fields.
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
+| POST | `/api/camera/desktop/lux` | Ingest one ambient-lux sample (`{ambient_lux, captured_at?}`) from the desktop bedroom webcam (D4). Best-effort; drops silently if the channel isn't initialized. Called ~every 25s by `emotion_capture.py` after its flip-sample-flip read |
+| GET | `/api/camera/desktop/lux` | Bedroom lux channel snapshot — `{ema_lux, baseline_lux, calibrated, last_update}` from `app.state.bedroom_lux` |
+| POST | `/api/camera/desktop/lux/calibrate/request` | Flag a bedroom-lux calibration run for the desktop agent (persists `desktop_lux_calibrate_requested`). Agent picks it up on its next 30s settings poll and runs the exposure search |
+| GET | `/api/camera/desktop/lux/calibrate/pending` | Polled by the desktop agent — `{pending: bool}` so it knows when to run calibration |
+| GET | `/api/camera/desktop/lux/calibration` | Return persisted `desktop_lux_calibration_config` `{exposure, baseline_lux, target_lux, calibrated_at}` — agent loads `exposure` to pin every future sample |
+| POST | `/api/camera/desktop/lux/calibration` | Persist a calibration result (`{exposure, baseline_lux, target_lux?}`); applies baseline immediately to the live `LuxChannel` and clears the pending flag |
 
 #### Guest — `/api/guest/`
 
