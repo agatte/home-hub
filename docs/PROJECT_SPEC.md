@@ -1014,6 +1014,8 @@ Core brain — combines time rules with activity detection.
 
 **Rescue priority floor** (added 2026-05-16) — `RESCUE_OVERRIDE_SOURCES = {"late_night_rescue", "zone_posture_rule", "watching_sleep_guard"}`. These sources push manual-only target modes (`relax`, `sleeping`) whose default `MODE_PRIORITY` is 0. The displacement guard in `report_activity` computes the override's effective priority as `max(MODE_PRIORITY.get(target, 0), MODE_PRIORITY["idle"])` when the source is in this set — so an `idle (p=1)` sensor report can't silently undo the rescue (`1 > 1` is False), while real activity (`working` p=2, `watching` p=3, `gaming` p=5) still displaces. Bug fixed by this floor: 2026-05-15 night, a rogue `source=ambient` idle POST every 60s displaced the `late_night_rescue → relax` override 47 times across 47 minutes (4-h apartment-stuck-in-idle). The ambient-monitor mode-POST path was the trigger and is gone (see PC Agent section); the floor exists for defense-in-depth against any future source that might post idle/sleeping.
 
+**Sleeping floor** (added 2026-06-03) — a companion protection for the *other* kind of sleeping. `MODE_PRIORITY["sleeping"] = 0` is the global floor, so the displacement guard's `new_priority < current_priority` can never protect a current `sleeping` mode — any `idle (p=1)` sensor report walks straight through. A *manual* sleeping override is protected downstream (the `AUTONOMOUS_PUSH_SOURCES` displacement gate + the manual-override early-return), but once that override lapses and sleeping survives only as a *detected* `_current_mode` (re-asserted by the PC sleep-watcher via `source=process`), nothing guarded it — observed 2026-06-03, `audio_ml` idle displaced a non-override sleeping at 08:20 and again 12:28 UTC (GH#108). The fix, in `report_activity` right after the priority guard: while `_current_mode == "sleeping"` and there is no manual override, only a foreground `source == "process"` report of a mode above idle (working/watching/gaming) wakes the apartment; idle/sleeping reports and non-process sources (audio_ml/camera/ambient) are ignored. Deliberately **not** subject to `SOURCE_STALE_SECONDS`, so sleep persists even if the owning process source goes quiet (the PC itself suspends).
+
 **Override persistence** — `_manual_override` / `_override_mode` / `_override_time` and the zone+posture rule's `_zone_posture_last_fired_at` stamp are written to `app_settings["override_state"]` on every set/clear/rule-fire and restored at boot. Before this fix (2026-05-01), a deploy mid-relax would briefly snap to whatever the PC agent was reporting until the rule re-fired after its 120s dwell. On restore, the engine drops anything past `override_timeout_hours` (sleeping exempt — no timeout by design); the rule stamp is always restored so gate 2's post-expiry refractory window survives intact.
 
 #### LoLChampionService
@@ -1116,6 +1118,7 @@ The "why" — top-3 factors — comes from flattening `engine._last_fusion_resul
 | `on_mode_change` | `(new_mode, **kwargs) → None` | Registered callback — fires the threshold-check path |
 | `poll_loop` | `() → None` | 5s loop; catches brightness shifts between mode flips |
 | `emit_synthetic` | `(title, body) → dict` | Verification path used by `POST /api/notification/test` — bypasses gating, exercises full dispatch |
+| `emit_alert` | `(*, title, body, kind, force) → bool` | Operational-alert path (watchdogs / health). Honors DND (returns `False` if suppressed) unlike `emit_synthetic`; reuses the same `_dispatch`. Used by `AgentHealthMonitor`. |
 | `close` | `() → None` | Releases the httpx client on shutdown |
 
 **Suppression rules:** DND active (consults `engine.is_dnd_active()`); inside the 10s coalesce window after a previous emit (next emit collapses into the most recent state); first 30s after backend boot (skip fusion-settling noise); mode flips whose source starts with `api:` / `alexa:` / `guest:` or equals `manual` (Anthony pressed it — no toast).
@@ -1123,6 +1126,9 @@ The "why" — top-3 factors — comes from flattening `engine._last_fusion_resul
 **Config:** `NTFY_TOPIC` doubles as the auth boundary on hosted ntfy.sh (topic name = secret). Unset → desktop toast still works, phone push silently skipped. `NTFY_SERVER` defaults to `https://ntfy.sh`; override for self-hosting.
 
 **Desktop wiring (2026-05-17).** The `desktop_notifier.py` widget is PyInstaller-built (`--onefile --windowed`) via `scripts/build_desktop_notifier.ps1` and installed to `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`. Autostart is a dedicated Task Scheduler entry `"Home Hub Desktop Notifier"` (At-Logon for the desktop user, `RestartCount=3` on crash, working-directory pinned to the install path so `logs\desktop_notifier.log` lives alongside the exe rather than in the repo). Kept separate from the PC Agent Supervisor because PyQt6 requires the main thread — the supervisor's thread-per-agent model can't host it.
+
+#### AgentHealthMonitor (shipped 2026-06-03)
+Latitude-side watchdog over the desktop agent-supervisor's heartbeats (POSTed to `/api/automation/agent-health` every ~30s). Closes the gap the in-supervisor self-heal can't cover — the supervisor going silent *entirely* (process crash, desktop asleep/off, network drop), which on 2026-06-03 degraded desktop presence for hours with no alert. A 60s `poll_loop` fires a DND-respecting `notifier.emit_alert` when the supervisor has been silent > 5 min, or when an individual agent stays `stopped`/`hung` > 3 min (the supervisor's own restart isn't clearing it). Alerts are edge-triggered — one per incident plus a recovery notice — and suppressed while the desktop is *expected* offline (`current_mode == "sleeping"` or the apartment-empty `_external_off_detected` state); DND gates the phone push. `GET /api/automation/agent-health` returns a `watchdog` freshness snapshot (`online`, `silent_for_seconds`, `stuck_agents`, …) for the check-back sweep + deploy-verifier. The watchdog registers its own `agent_health_monitor` heartbeat (60s) in the `HeartbeatRegistry`, so a hung watchdog is itself surfaced as stale in `/health`.
 
 ---
 
@@ -1669,7 +1675,20 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   of failure where the supervisor dies but Task Scheduler doesn't see
   a launcher failure (e.g. a Bash background subprocess reaped along
   with its parent session — observed 2026-05-15→16, 17h apartment
-  stuck in idle). `MultipleInstancesPolicy=IgnoreNew` plus the
+  stuck in idle). **In-supervisor heartbeat hang-detection (2026-06-03):**
+  each managed agent pulses an injected `heartbeat()` per loop iteration;
+  the monitor restarts an agent whose beat is stale beyond a per-agent
+  timeout (emotion_capture 90s, others 60s) even when `thread.is_alive()`
+  is still `True` — the case a wedged native `cv2` read created on
+  2026-06-03, invisible to the prior liveness check. Because a hung thread
+  can't be killed and keeps its device handle, recovery recycles the whole
+  process: it releases the singleton mutex (the wedged process used to keep
+  it, so every scheduled respawn exited as a duplicate — the second-order
+  deadlock behind that day's hours-long outage), kicks an immediate
+  `schtasks /run`, and `os._exit`s so the OS frees the camera handle for a
+  clean respawn. The Latitude-side `AgentHealthMonitor` (see Additional
+  Services) catches the complementary case where the supervisor stops
+  reporting entirely. `MultipleInstancesPolicy=IgnoreNew` plus the
   supervisor's PID-file mutex prevent duplicate spawns during the
   5-min polls. Install/reinstall via
   `scripts/setup-supervisor-task.ps1` (elevated).
