@@ -22,6 +22,7 @@ Usage:
     pythonw -m backend.services.pc_agent.supervisor --server http://192.168.86.210:8000 --classifier --active
 """
 import argparse
+import inspect
 import logging
 import os
 import signal
@@ -83,6 +84,23 @@ INITIAL_BACKOFF = 5.0      # First restart delay (seconds)
 MAX_BACKOFF = 300.0        # 5 minutes max restart delay
 STABLE_THRESHOLD = 300.0   # 5 minutes of uptime = reset backoff
 
+# Per-agent heartbeat staleness ceilings (seconds). An agent whose run-loop
+# accepts and calls the injected `heartbeat()` is monitored for *hangs* — a
+# thread that's alive() but blocked in a native call (e.g. a wedged cv2 read,
+# the 2026-06-03 emotion_capture outage). Agents absent from this map fall back
+# to is_alive()-only monitoring. Values are generous multiples of each agent's
+# loop period to tolerate slow first-tick init (FaceLandmarker/PoseLandmarker).
+HEARTBEAT_TIMEOUTS = {
+    "activity_detector": 60.0,
+    "ambient_monitor": 60.0,
+    "screen_sync": 60.0,
+    "emotion_capture": 90.0,
+}
+
+# Scheduled Task that ensure-runs the supervisor every 5 min (the backstop that
+# respawns a fresh process after a hang-triggered exit releases the mutex).
+RESPAWN_TASK_NAME = "Home Hub Agent Supervisor"
+
 
 # ---------------------------------------------------------------------------
 # Singleton mutex (Windows kernel-level, survives PID reuse)
@@ -114,6 +132,24 @@ def _acquire_mutex() -> bool:
     return True
 
 
+def _release_mutex() -> None:
+    """Release + close the singleton mutex so a replacement supervisor can
+    acquire it. Called on a hang-triggered process restart — without this the
+    wedged process keeps the mutex and every scheduled respawn exits as a
+    duplicate (the second-order failure behind the 2026-06-03 hour-long outage,
+    where the hung supervisor blocked its own replacement)."""
+    global _mutex_handle
+    if _mutex_handle is None or sys.platform != "win32":
+        return
+    import ctypes
+    try:
+        ctypes.windll.kernel32.ReleaseMutex(_mutex_handle)
+    except Exception:
+        pass
+    ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+    _mutex_handle = None
+
+
 # ---------------------------------------------------------------------------
 # Agent state tracking
 # ---------------------------------------------------------------------------
@@ -130,6 +166,51 @@ class AgentState:
     last_start: float = 0.0
     last_error: Optional[str] = None
     enabled: bool = True
+    # Heartbeat-based hang detection. `heartbeat_timeout` is the staleness
+    # ceiling (None = not hang-monitored). `last_progress_at` is stamped by the
+    # injected heartbeat() callback each loop iteration. `heartbeat_wired` is set
+    # true only when _start_agent actually injected the callback (the target's
+    # signature accepts it) — the guard that prevents a misconfigured timeout
+    # from flagging an agent that never beats.
+    heartbeat_timeout: Optional[float] = None
+    last_progress_at: float = 0.0
+    heartbeat_wired: bool = False
+
+
+def _accepts_kwarg(func: Callable, name: str) -> bool:
+    """True if `func` accepts a keyword argument `name` (explicitly or via
+    **kwargs). Used to inject `heartbeat` only into agents wired to call it, so
+    unwired agents stay on is_alive()-only monitoring."""
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _agent_hung(state: AgentState, now: float) -> bool:
+    """True when an agent thread is alive but its heartbeat has gone stale.
+    Requires the heartbeat to have been wired AND at least one beat recorded, so
+    a misconfigured timeout on an unwired agent can never trip this."""
+    return (
+        state.heartbeat_wired
+        and state.heartbeat_timeout is not None
+        and state.last_progress_at > 0.0
+        and (now - state.last_progress_at) > state.heartbeat_timeout
+    )
+
+
+def _agent_status(state: AgentState, now: float) -> str:
+    """Health-report status string for one agent."""
+    if not state.enabled:
+        return "disabled"
+    if not (state.thread and state.thread.is_alive()):
+        return "stopped"
+    if _agent_hung(state, now):
+        return "hung"
+    return "running"
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +256,7 @@ class AgentSupervisor:
                 name="activity_detector",
                 target=run_agent,
                 kwargs={"server_url": self._server_url},
+                heartbeat_timeout=HEARTBEAT_TIMEOUTS["activity_detector"],
             )
             logger.info("Registered: activity_detector")
         except ImportError as e:
@@ -193,6 +275,7 @@ class AgentSupervisor:
                     "classifier_enabled": classifier,
                     "shadow_mode": shadow,
                 },
+                heartbeat_timeout=HEARTBEAT_TIMEOUTS["ambient_monitor"],
             )
             logger.info("Registered: ambient_monitor")
         except ImportError as e:
@@ -205,6 +288,7 @@ class AgentSupervisor:
                 name="screen_sync",
                 target=run_agent,
                 kwargs={"server_url": self._server_url},
+                heartbeat_timeout=HEARTBEAT_TIMEOUTS["screen_sync"],
             )
             logger.info("Registered: screen_sync")
         except ImportError as e:
@@ -220,6 +304,7 @@ class AgentSupervisor:
                 name="emotion_capture",
                 target=run_agent,
                 kwargs={"server_url": self._server_url},
+                heartbeat_timeout=HEARTBEAT_TIMEOUTS["emotion_capture"],
             )
             logger.info("Registered: emotion_capture")
         except ImportError as e:
@@ -284,9 +369,21 @@ class AgentSupervisor:
 
     def _start_agent(self, state: AgentState) -> None:
         """Launch an agent in a new daemon thread."""
+        call_kwargs = dict(state.kwargs)
+        # Inject a heartbeat callback for agents whose run-loop accepts one, so a
+        # hung-but-alive thread can be told apart from a healthy one. Gated on
+        # the signature so unwired agents are untouched (is_alive-only).
+        if _accepts_kwarg(state.target, "heartbeat"):
+            def _beat(_s: AgentState = state) -> None:
+                _s.last_progress_at = time.time()
+            call_kwargs["heartbeat"] = _beat
+            state.heartbeat_wired = True
+        else:
+            state.heartbeat_wired = False
+
         def _wrapper() -> None:
             try:
-                state.target(stop_event=self._stop, **state.kwargs)
+                state.target(stop_event=self._stop, **call_kwargs)
             except Exception as e:
                 state.last_error = str(e)
                 logger.error(
@@ -297,6 +394,10 @@ class AgentSupervisor:
             target=_wrapper, name=f"agent-{state.name}", daemon=True,
         )
         state.last_start = time.time()
+        # Seed the heartbeat at start so a slow first-tick init (FaceLandmarker /
+        # PoseLandmarker / webcam open) doesn't read as an immediate hang; the
+        # agent's own beats take over from the first loop iteration.
+        state.last_progress_at = state.last_start
         state.thread.start()
         logger.info(
             "Started agent: %s (thread=%s)", state.name, state.thread.name,
@@ -318,6 +419,42 @@ class AgentSupervisor:
 
         self._start_agent(state)
 
+    def _handle_hung_agent(self, state: AgentState, stale: float) -> None:
+        """Recover from an agent whose thread is alive but wedged in a native
+        call. A Python thread blocked in C (a hung cv2 read) cannot be killed,
+        and the zombie keeps its device handle so a fresh thread couldn't
+        reclaim the camera. The only reliable reclaim is to recycle the whole
+        process: the OS frees every handle on exit, the mutex is released, and
+        the ensure-running Scheduled Task (plus an immediate kick) brings up a
+        clean supervisor. Does not return — exits the process."""
+        logger.critical(
+            "Agent %s HUNG — alive but no heartbeat for %.0fs (> %.0fs timeout). "
+            "Recycling the supervisor process to reclaim its handles.",
+            state.name, stale, state.heartbeat_timeout,
+        )
+        state.last_error = f"hung: no heartbeat for {stale:.0f}s"
+        try:
+            self._report_health()  # best-effort: let the backend see the hang
+        except Exception:
+            pass
+        _release_mutex()
+        # Best-effort immediate respawn; the task's 5-min repetition is the
+        # backstop if this kick fails.
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                subprocess.Popen(
+                    ["schtasks", "/run", "/tn", RESPAWN_TASK_NAME],
+                    creationflags=0x08000000,  # CREATE_NO_WINDOW
+                    close_fds=True,
+                )
+            except Exception:
+                logger.exception(
+                    "Respawn kick failed; relying on scheduled repetition",
+                )
+        logging.shutdown()  # flush log handlers before the hard exit
+        os._exit(1)
+
     # ── Health heartbeat ──────────────────────────────────────────────
 
     def _report_health(self) -> None:
@@ -329,18 +466,17 @@ class AgentSupervisor:
 
         agents = {}
         for name, state in self._agents.items():
-            if not state.enabled:
-                status = "disabled"
-            elif state.thread and state.thread.is_alive():
-                status = "running"
-            else:
-                status = "stopped"
-
+            heartbeat_age = (
+                int(now - state.last_progress_at)
+                if state.heartbeat_wired and state.last_progress_at
+                else None
+            )
             agents[name] = {
-                "status": status,
+                "status": _agent_status(state, now),
                 "uptime": int(now - state.last_start) if state.last_start else 0,
                 "restarts": state.restarts,
                 "last_error": state.last_error,
+                "heartbeat_age": heartbeat_age,
             }
 
         try:
@@ -383,8 +519,16 @@ class AgentSupervisor:
                         continue
 
                     if state.thread and state.thread.is_alive():
-                        # Running — reset backoff if stable long enough
-                        if (now - state.last_start) > STABLE_THRESHOLD:
+                        if _agent_hung(state, now):
+                            # Alive but blocked in a native call — is_alive()
+                            # can't see this. The thread can't be killed, so
+                            # recover by recycling the whole process.
+                            self._handle_hung_agent(
+                                state, now - state.last_progress_at,
+                            )
+                            # does not return — process exits
+                        elif (now - state.last_start) > STABLE_THRESHOLD:
+                            # Stable — reset backoff
                             if state.backoff > INITIAL_BACKOFF:
                                 logger.info(
                                     "Agent %s stable for %.0fs — resetting backoff",

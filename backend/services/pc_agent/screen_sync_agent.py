@@ -30,7 +30,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 import mss
@@ -242,6 +242,7 @@ def capture_dominant_color() -> Optional[tuple[int, int, int]]:
 def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
+    heartbeat: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Main loop — capture, POST, sleep, repeat. Backs off on HTTP errors.
@@ -249,6 +250,9 @@ def run_agent(
     Args:
         server_url: Base URL of the Home Hub backend.
         stop_event: Optional threading event for clean shutdown (set by supervisor).
+        heartbeat: Optional supervisor liveness pulse, called once per loop
+            iteration so a hung-but-alive thread (e.g. wedged screen grab) is
+            detectable.
     """
     endpoint = f"{server_url.rstrip('/')}/api/automation/screen-color"
     backoff = 1
@@ -260,6 +264,8 @@ def run_agent(
 
     try:
         while not _stop.is_set():
+            if heartbeat is not None:
+                heartbeat()
             try:
                 rgb = capture_dominant_color()
                 if rgb is not None:

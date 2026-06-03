@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 import psutil
@@ -899,6 +899,7 @@ def _describe_allgamedata_miss(data: Any) -> str:
 def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
+    heartbeat: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Main loop — poll processes, report mode changes to the Home Hub server.
@@ -909,6 +910,9 @@ def run_agent(
     Args:
         server_url: Base URL of the Home Hub backend (e.g., http://localhost:8000).
         stop_event: Optional threading event for clean shutdown (set by supervisor).
+        heartbeat: Optional supervisor liveness pulse, called once per loop
+            iteration so a hung-but-alive thread can be distinguished from a
+            healthy one.
     """
     detector = ActivityDetector()
     endpoint = f"{server_url.rstrip('/')}/api/automation/activity"
@@ -923,6 +927,8 @@ def run_agent(
 
     try:
         while not _stop.is_set():
+            if heartbeat is not None:
+                heartbeat()
             try:
                 mode = detector.detect()
                 now = time.time()
