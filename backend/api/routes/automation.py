@@ -265,11 +265,11 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
-    # Gaming-day envelope lift: lux + weather scale the cap+floor so dim game
-    # content in a dim room doesn't drag L2/L5 to eye-strain dimness. The
-    # screen-sync service applies the same gate as
-    # ``apply_functional_weather_brightness`` (gaming mode + day period only);
-    # watching gets unscaled values so cinematic contrast stays.
+    # Ambient envelope lift: lux + weather scale the cap+floor so dim content
+    # in a dim room doesn't drag L2 to eye-strain dimness. The screen-sync
+    # service gates this internally (``_scale_for_ambient``): gaming + watching,
+    # all periods, L2 only (L5's clear housing keeps its static caps to avoid
+    # glare). Widened from gaming-day-only on 2026-06-02 (D4 task #7).
     #
     # D4 Part E: source the lux from the BEDROOM desktop-webcam channel, NOT
     # the living-room Latitude camera — L2/L5 are bedroom lamps, and a bright
@@ -278,7 +278,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # mult 0.897 was throttling the bedroom gaming floors). Falls back to
     # neutral 1.0 when the channel is uncalibrated or stale (>60s ≈ 2.4×
     # the ~25s sample cadence, so a single missed sample can't flicker the
-    # floor). Widening the gate beyond gaming-day is the tracked follow-up.
+    # floor).
     lux_mult = 1.0
     bedroom_lux = getattr(request.app.state, "bedroom_lux", None)
     if bedroom_lux is not None and bedroom_lux.is_fresh(60.0):

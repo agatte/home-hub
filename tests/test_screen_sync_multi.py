@@ -280,37 +280,58 @@ def test_scale_for_ambient_gaming_day_clouds_lifts_envelope():
     assert out == 153
 
 
-def test_scale_for_ambient_watching_unchanged():
-    """Watching's flat envelope is preserved — cinematic dim intent intact."""
+def test_scale_for_ambient_watching_l2_now_lifts():
+    """D4 task #7: watching L2 (fabric room-light) now tracks ambient too —
+    the user wants the bedroom brighter when dark while watching, not just
+    gaming. Bounded by the 1.40 combined ceiling."""
     out = ss.ScreenSyncService._scale_for_ambient(
         25, mode="watching", period="day",
         lux_multiplier=1.30, weather_condition="thunderstorm",
+        light_id="2",
     )
-    assert out == 25
+    # watching-day thunderstorm = 1.10; 25 × min(1.40, 1.30 × 1.10 = 1.43) =
+    # 25 × 1.40 = 35
+    assert out == 35
 
 
-def test_scale_for_ambient_evening_unchanged():
-    """Evening gaming skips the lift — period-stepped caps stay flat."""
+def test_scale_for_ambient_evening_now_lifts():
+    """D4 task #7: gaming evening L2 lifts — the gate is widened past day-only
+    so the night-time room (when the user actually games) gets the top-up."""
     out = ss.ScreenSyncService._scale_for_ambient(
         150, mode="gaming", period="evening",
         lux_multiplier=1.20, weather_condition="rain",
+        light_id="2",
     )
-    assert out == 150
+    # gaming-evening rain = 1.07; 150 × min(1.40, 1.20 × 1.07 = 1.284) =
+    # 150 × 1.284 = 192.6 → 192
+    assert out == 192
 
 
-def test_scale_for_ambient_ceiling_caps_l5_below_overdrive():
-    """L5 gaming-day cap 60 worst-case (thunderstorm + dim ambient) stays
-    under the 90-bri perceptual overdrive threshold from build 4adce9f.
+def test_scale_for_ambient_l5_excluded_from_lift():
+    """L5's clear seeded-glass housing is a glare-prone point source, NOT a
+    room-light lever — it is excluded from the ambient lift entirely and rides
+    its static per-period caps regardless of mode/period/multiplier. This also
+    closes the latent day-path gap (L5 day cap 75 × 1.40 = 105 > the 90 glare
+    ceiling from build 4adce9f)."""
+    for period in ("day", "evening", "night", "late_night"):
+        out = ss.ScreenSyncService._scale_for_ambient(
+            95, mode="gaming", period=period,
+            lux_multiplier=1.30, weather_condition="thunderstorm",
+            light_id="5",
+        )
+        assert out == 95, f"L5 must not be lifted (period={period})"
 
-    Naive stacking: 60 × 1.30 × 1.20 = 93.6 → would breach. With the 1.40
-    ceiling: 60 × min(1.40, 1.56) = 60 × 1.40 = 84.
-    """
+
+def test_scale_for_ambient_l2_ceiling_bounds_lift():
+    """The 1.40 combined ceiling still bounds L2's lift so a dark-room storm
+    can't run the fabric shade away (worst case lux 1.30 × weather 1.20)."""
     out = ss.ScreenSyncService._scale_for_ambient(
-        60, mode="gaming", period="day",
+        150, mode="gaming", period="day",
         lux_multiplier=1.30, weather_condition="thunderstorm",
+        light_id="2",
     )
-    assert out == 84
-    assert out < 90, "L5 cap breached perceptual overdrive ceiling"
+    # 150 × min(1.40, 1.30 × 1.20 = 1.56) = 150 × 1.40 = 210
+    assert out == 210
 
 
 def test_scale_for_ambient_no_weather_uses_lux_only():
