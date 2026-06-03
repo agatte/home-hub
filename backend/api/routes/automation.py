@@ -251,15 +251,25 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
-    # Pull zone + posture from the camera service so the sync cap can differ
-    # between watching-at-desk (brighter bias) and (historically) the
-    # watching-in-bed-reclined / upright variants. Post 2026-05-27 Latitude→
-    # living-room move: no camera produces zone="bed", so only the desk arm
-    # fires in practice. Bed-variant caps stay in MODE_ZONE_MAX_BRIGHTNESS
-    # for revival pending a future bed-zone source.
+    # Pull zone + posture so the sync cap can differ between watching-at-desk
+    # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source
+    # from PresenceFusion, NOT the raw Latitude camera: since the 2026-05-27
+    # living-room move the Latitude sees the COUCH (its ``zone`` is null when
+    # nobody's there), so reading it directly hid the ``desk`` zone the desktop
+    # pc_agent owns — the watching-desk L2 cap silently stopped firing for
+    # screen-sync while the user watches at the desk. ``latest_zone()`` fuses
+    # both sources (falls back to "desk" on a fresh desktop face), mirroring how
+    # the engine's own light application already resolves zone. Falls back to
+    # the raw camera if fusion isn't wired (boot / tests). Bed-variant caps stay
+    # in MODE_ZONE_MAX_BRIGHTNESS for revival pending a future bed-zone source.
+    presence = getattr(request.app.state, "presence", None)
     camera = getattr(request.app.state, "camera_service", None)
-    zone = getattr(camera, "zone", None) if camera else None
-    posture = getattr(camera, "posture", None) if camera else None
+    if presence is not None:
+        zone = presence.latest_zone()
+        posture = presence.latest_posture()
+    else:
+        zone = getattr(camera, "zone", None) if camera else None
+        posture = getattr(camera, "posture", None) if camera else None
 
     # Time period drives the per-period cap/floor envelope so the lamps
     # dim alongside the room as evening rolls into night.
