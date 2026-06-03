@@ -26,6 +26,8 @@ import logging
 import time
 from typing import Any, Callable, Optional
 
+from backend.services.heartbeat import HeartbeatRegistry
+
 logger = logging.getLogger("home_hub.agent_health")
 
 # How often the watchdog evaluates freshness.
@@ -58,6 +60,7 @@ class AgentHealthMonitor:
         self._engine = automation_engine
         self._notifier = notifier
         self._clock = clock
+        self._heartbeat: Optional[HeartbeatRegistry] = None
 
         self._last_report_at: Optional[float] = None
         self._last_report: Optional[dict] = None
@@ -67,6 +70,12 @@ class AgentHealthMonitor:
         self._supervisor_alerted = False
         self._agent_bad_since: dict[str, float] = {}
         self._agent_alerted: set[str] = set()
+
+    def set_heartbeat_registry(self, registry: HeartbeatRegistry) -> None:
+        """Inject the heartbeat registry (called from lifespan). The watchdog
+        publishes its own liveness via .tick() so /health can flag a hung
+        watchdog — the monitor shouldn't be the one untracked loop."""
+        self._heartbeat = registry
 
     # ------------------------------------------------------------------
     # Inbound — called by the agent-health route on each POST
@@ -109,6 +118,8 @@ class AgentHealthMonitor:
     async def poll_loop(self) -> None:
         while True:
             try:
+                if self._heartbeat is not None:
+                    self._heartbeat.tick("agent_health_monitor")
                 await self.check()
             except asyncio.CancelledError:
                 raise

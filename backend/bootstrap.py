@@ -981,6 +981,7 @@ async def lifespan(app: FastAPI):
     automation.set_heartbeat_registry(heartbeats)
     scheduler.set_heartbeat_registry(heartbeats)
     rule_engine.set_heartbeat_registry(heartbeats)
+    agent_health_monitor.set_heartbeat_registry(heartbeats)
 
     # Register expected polling cadences. Camera self-registers on enable
     # and deregisters on disable / pause (handled in CameraService) so
@@ -1004,6 +1005,7 @@ async def lifespan(app: FastAPI):
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
     heartbeats.register("desk_exit_kitchen", 2.0)
+    heartbeats.register("agent_health_monitor", 60.0)  # CHECK_INTERVAL_S
 
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)

@@ -6,6 +6,8 @@ Scenario it guards: the desktop agent supervisor stops POSTing heartbeats
 (crash / desktop asleep / network drop) and the Latitude silently degrades —
 the 2026-06-03 hours-long presence outage that nothing alerted on.
 """
+import asyncio
+
 import pytest
 
 from backend.services.agent_health_monitor import (
@@ -189,6 +191,35 @@ class TestSnapshot:
             "activity_detector": {"status": "running"},
         }})
         assert mon.snapshot()["stuck_agents"] == ["emotion_capture"]
+
+
+# ── Heartbeat self-tracking (so a hung watchdog is itself detectable) ───
+
+class TestHeartbeatTick:
+    async def test_poll_loop_ticks_own_heartbeat(self, monkeypatch):
+        mon, _, _, _ = _make()
+
+        class FakeReg:
+            def __init__(self):
+                self.ticks: list[str] = []
+
+            def tick(self, name):
+                self.ticks.append(name)
+
+        reg = FakeReg()
+        mon.set_heartbeat_registry(reg)
+
+        # Break out of the infinite loop after exactly one iteration.
+        import backend.services.agent_health_monitor as mod
+
+        async def _boom(_):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(mod.asyncio, "sleep", _boom)
+        with pytest.raises(asyncio.CancelledError):
+            await mon.poll_loop()
+
+        assert reg.ticks == ["agent_health_monitor"]
 
 
 # ── Notifier emit_alert (DND transport behavior) ────────────────────────
