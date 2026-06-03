@@ -1144,6 +1144,37 @@ class AutomationEngine:
                     self._last_mode_source_report_at[source] = now
                     return
 
+        # Sleeping floor — sleeping carries MODE_PRIORITY=0 (the global floor),
+        # so the priority guard above can never protect it: `new_priority < 0`
+        # is never true, and any idle sensor report (audio_ml/camera, p=1) walks
+        # straight through and breaks sleep. A *manual* sleeping override is
+        # protected downstream (the AUTONOMOUS_PUSH_SOURCES displacement gate +
+        # the manual-override early-return), but once that override lapses and
+        # sleeping survives only as a *detected* `_current_mode` — re-asserted by
+        # the PC sleep-watcher via source=process — nothing guarded it. This bit
+        # twice on 2026-06-03: audio_ml `idle` displaced a non-override sleeping
+        # at 08:20 and again at 12:28 UTC (flag b064a0). Mirror the
+        # RESCUE_OVERRIDE_SOURCES floor: while sleeping is held without a manual
+        # override, only a foreground *process* report of a real activity mode
+        # (anything above idle — working / watching / gaming) may wake the
+        # apartment. Idle/sleeping reports and non-process sources (audio_ml,
+        # camera, ambient) cannot. User actions take the set_manual_override /
+        # clear_override paths and are unaffected. Deliberately NOT subject to
+        # SOURCE_STALE_SECONDS — sleep must persist even if the owning process
+        # source goes quiet (e.g. the PC itself suspends).
+        if (
+            self._current_mode == "sleeping"
+            and not self._manual_override
+            and not (source == "process" and new_priority > MODE_PRIORITY["idle"])
+        ):
+            logger.debug(
+                "Sleeping floor: ignored %s %s (p=%d) — non-override sleeping "
+                "only wakes on a foreground process activity report",
+                source, mode, new_priority,
+            )
+            self._last_mode_source_report_at[source] = now
+            return
+
         # Record this source's last-seen time regardless of whether the report
         # caused a mode change. Source freshness tracks liveness, not edges.
         self._last_mode_source_report_at[source] = now
