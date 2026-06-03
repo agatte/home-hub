@@ -107,16 +107,22 @@ async def report_agent_health(request: Request) -> dict:
     """Receive health heartbeat from the PC agent supervisor."""
     body = await request.json()
     request.app.state.agent_health = body
+    # Feed the watchdog so it can detect silence / stuck agents and alert.
+    monitor = getattr(request.app.state, "agent_health_monitor", None)
+    if monitor is not None:
+        await monitor.record_report(body)
     return {"status": "ok"}
 
 
 @router.get("/agent-health")
 async def get_agent_health(request: Request) -> dict:
-    """Get the latest agent supervisor health report."""
+    """Get the latest agent supervisor health report + watchdog freshness."""
     health = getattr(request.app.state, "agent_health", None)
+    monitor = getattr(request.app.state, "agent_health_monitor", None)
+    watchdog = monitor.snapshot() if monitor is not None else None
     if not health:
-        return {"status": "no_report", "agents": {}}
-    return health
+        return {"status": "no_report", "agents": {}, "watchdog": watchdog}
+    return {**health, "watchdog": watchdog}
 
 
 @router.get("/status")

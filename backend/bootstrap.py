@@ -891,6 +891,20 @@ async def lifespan(app: FastAPI):
     app.state.notifier = notifier
     automation.register_on_mode_change(notifier.on_mode_change)
 
+    # AgentHealthMonitor — Latitude-side watchdog over the desktop agent
+    # supervisor's heartbeats (POSTed to /api/automation/agent-health). Task #2
+    # made the supervisor self-heal hung threads; this catches the case it
+    # can't — the supervisor going silent entirely (crash / desktop asleep /
+    # network drop), which on 2026-06-03 degraded presence for hours unnoticed.
+    # Fires a DND-respecting alert via the notifier; suppressed while the
+    # desktop is expected offline (sleeping / apartment-empty).
+    from backend.services.agent_health_monitor import AgentHealthMonitor
+    agent_health_monitor = AgentHealthMonitor(
+        automation_engine=automation,
+        notifier=notifier,
+    )
+    app.state.agent_health_monitor = agent_health_monitor
+
     # Bounded auto-remediation — the only backend path that turns a
     # source-trust diagnosis into a state change. Constructed after notifier
     # (it notifies on every decision) and after automation/source_trust exist.
@@ -1023,6 +1037,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(rule_engine.brightness_scan_loop()))
     tasks.append(asyncio.create_task(gameday.poll_state_loop()))
     tasks.append(asyncio.create_task(notifier.poll_loop()))
+    tasks.append(asyncio.create_task(agent_health_monitor.poll_loop()))
     # Re-evaluate ambient sound whenever the cached weather class changes
     # (rain ↔ clear, etc.). Same loop seeds the first _evaluate ~5s after
     # startup, which re-arms playback when load_from_db rehydrates
