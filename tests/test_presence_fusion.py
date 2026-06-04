@@ -35,6 +35,49 @@ def _ago(seconds: float) -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# seconds_since_at_desk — flicker-robust high-water mark (GH#109)
+# ---------------------------------------------------------------------------
+
+
+def test_seconds_since_at_desk_none_when_never_confirmed() -> None:
+    fusion = PresenceFusion()
+    assert fusion.seconds_since_at_desk() is None
+    # A non-confirming reading must not start the clock.
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+    ))
+    assert fusion.seconds_since_at_desk() is None
+
+
+def test_seconds_since_at_desk_tracks_last_confirmation() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(4), face_present=True, zone="desk",
+    ))
+    since = fusion.seconds_since_at_desk()
+    assert since is not None and 3.5 <= since <= 6.0
+
+
+def test_seconds_since_at_desk_not_reset_by_later_absent_frame() -> None:
+    """The crux of the transit/desk-exit fix: a face_present=False frame
+    landing on top of a recent desk confirmation (last-write-wins) must NOT
+    move the high-water mark. is_at_desk_fresh() flips false on that frame,
+    but seconds_since_at_desk() stays anchored to the real last confirmation,
+    so the sticky-desk gate survives per-frame flicker.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(2), face_present=True, zone="desk",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+    ))
+    assert fusion.is_at_desk_fresh() is False  # latest frame says no face
+    since = fusion.seconds_since_at_desk()
+    assert since is not None and since <= 6.0  # but recency is preserved
+
+
+# ---------------------------------------------------------------------------
 # is_at_desk_fresh
 # ---------------------------------------------------------------------------
 

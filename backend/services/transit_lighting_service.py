@@ -110,6 +110,25 @@ STATIONARY_ZONES = frozenset({"bed", "desk", "couch"})
 # git-history continuity — the constant gates both bed and desk zones.
 BED_EXIT_ABSENT_FRAMES = 5
 
+# How recently PresenceFusion must have confirmed the desk for transit to
+# treat the user as stationary-at-desk. The desktop pc_agent posts a raw,
+# un-debounced face_present every frame and PresenceFusion keeps only the
+# latest reading per source, so `latest_zone()`/`is_at_desk_fresh()` flip to
+# null on a single head-down / lean-back frame. Reading the Latitude camera
+# zone (the pre-fix source) was even worse: post-2026-05-27 relocation it
+# sees only the living-room couch and reports `zone=null` while Anthony is at
+# the BEDROOM desk, so the STATIONARY_ZONES gate never engaged and transit
+# fired on every desk-gaming flicker (~3,491 writes/7d, GH#109). This sticky
+# window bridges those per-frame drops via the fusion high-water mark
+# (`seconds_since_at_desk`, never reset by a non-confirming frame). 15s
+# matches camera_service's committed-zone hysteresis; combined with the 10s
+# absent dwell a genuine desk exit still fires transit within ~25s, while
+# desk-gaming flicker (sub-15s gaps) never crosses it. Unlike the couch/bed
+# committed-zone path below, the desk-sticky block does NOT honor the
+# BED_EXIT_ABSENT_FRAMES bypass — the sticky-window release IS its real-exit
+# detector, so a long head-down streak isn't mistaken for leaving.
+DESK_STICKY_SECONDS = 15
+
 # Face confidence below which transit treats the detection as "not really
 # there." Imported from camera_service so the two stay in lockstep — values
 # below this are commonly chair-backs / picture frames / wall art that
@@ -231,9 +250,26 @@ class TransitLightingService:
             return
 
         detection = cam_status.get("last_detection", "unknown")
-        zone = cam_status.get("zone")
         src = cam_status.get("detection_source")
         conf = cam_status.get("confidence", 0.0) or 0.0
+
+        # Stationary-zone signal. The Latitude camera zone alone is wrong
+        # post-relocation — it sees the couch, so it reports null while
+        # Anthony is at the bedroom desk (the desktop owns that zone via
+        # PresenceFusion). Prefer the fused zone, fall back to the raw
+        # Latitude reading for boot/test paths where fusion isn't wired.
+        fused_zone = None
+        if self._presence_fusion is not None:
+            fused_zone = self._presence_fusion.latest_zone()
+        zone = fused_zone or cam_status.get("zone")
+        # Desk is flicker-prone (raw per-frame face_present, last-write-wins
+        # in fusion), so latest_zone() drops to null on a single head-down
+        # frame. The sticky high-water mark survives those drops — treat a
+        # desk confirmation within DESK_STICKY_SECONDS as stationary-at-desk.
+        desk_sticky = False
+        if self._presence_fusion is not None:
+            since = self._presence_fusion.seconds_since_at_desk()
+            desk_sticky = since is not None and since <= DESK_STICKY_SECONDS
 
         # Strong presence = pose detection OR face above the trust threshold.
         # Weak-face-only counts as absent for transit's purposes — chair-back /
@@ -262,11 +298,13 @@ class TransitLightingService:
                 await self._deactivate(f"mode exited trigger set (mode={mode})")
                 return
 
-            # Camera now sees him in a stationary zone (bed) — he didn't walk
-            # to the kitchen, he sat back down. Revert immediately so the
-            # transit lift doesn't linger after he's clearly settled.
-            if zone in STATIONARY_ZONES:
-                await self._deactivate(f"zone={zone} (user stationary)")
+            # Camera now sees him in a stationary zone (couch/bed) or the
+            # desk is freshly confirmed again — he didn't walk to the kitchen,
+            # he sat back down. Revert immediately so the transit lift doesn't
+            # linger after he's clearly settled.
+            if desk_sticky or zone in STATIONARY_ZONES:
+                where = "desk" if desk_sticky else zone
+                await self._deactivate(f"zone={where} (user stationary)")
                 return
 
             # Hard timeout — belt-and-suspenders against stuck state
@@ -315,14 +353,26 @@ class TransitLightingService:
             self._record_block("watching+reclined (user not navigating)")
             return
 
-        # Last committed zone is "bed" → he's reclined in the bedroom. Camera
-        # absences in this state are usually detection flicker (face/pose
-        # tossing under blankets in low light), not navigation. Block before
-        # the absent-dwell timer accumulates so a flap-storm can't fire
+        # Desk freshly confirmed (within the sticky window) → he's at the
+        # desk, not navigating. Block unconditionally — the sticky-window
+        # release (seconds_since_at_desk > DESK_STICKY_SECONDS) is itself the
+        # real-exit detector, so the BED_EXIT_ABSENT_FRAMES bypass must NOT
+        # apply: a long head-down / lean-back streak climbs the absent streak
+        # but is not an exit. This is the gate that was silently dead pre-fix
+        # (Latitude zone=null at the bedroom desk → never matched, GH#109).
+        if desk_sticky:
+            self._record_block("zone=desk (sticky — user at desk)")
+            return
+
+        # Last committed zone is couch/bed → he's settled in the living room
+        # or bedroom. Camera absences in this state are usually detection
+        # flicker (face/pose tossing in low light), not navigation. Block
+        # before the absent-dwell timer accumulates so a flap-storm can't fire
         # transit. Exception: if we've had BED_EXIT_ABSENT_FRAMES consecutive
-        # polls without strong presence, that's real bedroom exit (pose-flicker
-        # under blankets always includes some strong frames; chair-back false
-        # positives don't count toward the streak).
+        # polls without strong presence, that's a real exit (flicker always
+        # includes some strong frames; chair-back false positives don't count
+        # toward the streak). Couch/bed use the Latitude committed zone, which
+        # already carries 15s hysteresis in camera_service.
         if zone in STATIONARY_ZONES:
             if self._strong_absent_streak < BED_EXIT_ABSENT_FRAMES:
                 self._record_block(f"zone={zone} (user stationary)")

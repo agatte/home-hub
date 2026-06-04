@@ -222,6 +222,31 @@ class PresenceFusion:
                 return True
         return False
 
+    def seconds_since_at_desk(self) -> Optional[float]:
+        """Age (seconds) of the most recent at-desk confirmation, or None.
+
+        Backed by ``_last_at_desk_at``, a high-water mark that is updated on
+        every confirming reading and **never reset by a non-confirming
+        frame** (see ``on_observation``). This is the flicker-robust counter
+        the transit / desk-exit lighting services need: the desktop posts a
+        raw, un-debounced ``face_present`` every frame and ``PresenceFusion``
+        keeps only the latest reading per source, so ``is_at_desk_fresh`` and
+        ``latest_zone`` both flip on a single head-down / lean-back frame.
+        This getter instead answers "how long since *any* source last
+        confirmed the desk," which survives those sub-second drops while
+        still releasing within seconds of a genuine exit.
+
+        Unlike ``get_at_desk_attribution`` this does NOT apply the
+        ``_latitude_says_bed`` veto — callers want the raw "was recently at
+        the desk" recency for a stationary-zone gate, and the bed veto is
+        dormant post-relocation (no camera produces ``zone=bed``).
+        """
+        if self._last_at_desk_at is None:
+            return None
+        return (
+            datetime.now(timezone.utc) - self._last_at_desk_at
+        ).total_seconds()
+
     def get_at_desk_attribution(self) -> Optional[str]:
         """Most recent source to confirm at-desk, or None if stale.
 

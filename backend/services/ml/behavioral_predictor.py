@@ -41,8 +41,21 @@ MIN_TRAINING_EVENTS = 500
 
 # Features used by the model (order matters for LightGBM — APPEND only;
 # reordering invalidates feature_importance and breaks any saved model).
-# The four trailing entries (zone_enc / posture_enc / audio_class_enc /
-# lux) were added 2026-05-04 as part of the camera+audio enrichment work.
+# The camera/audio enrichment entries (zone_enc / posture_enc /
+# audio_class_enc) were added 2026-05-04.
+#
+# `lux` was REMOVED 2026-06-04 (GH#109): the 2026-05-27 Latitude→living-room
+# relocation collapsed lux into a near-constant ~49.5 band, so the model
+# learned a spurious `lux≈49.5 → watching` rule and watching-class accuracy
+# fell to 0% (predicted watching 51% of the time, always wrong). Dropping a
+# mid-list feature reorders the trailing columns, which is safe ONLY because
+# the load-time feature-count guard (_load_existing) discards the stale
+# 15-feature model and forces a clean retrain against this list. The 60-day
+# rolling window still mixes pre/post-relocation rows for now (only ~421
+# post-reloc events, < MIN_TRAINING_EVENTS) — it self-heals to all-post once
+# the relocation date ages past the window (~2026-07-26). zone_enc/posture_enc
+# are intentionally KEPT: unlike the now-constant lux they remain predictive.
+# See project_predictor_lux_distribution_shift.md.
 FEATURE_COLUMNS = [
     "hour",
     "minute_bucket",
@@ -57,7 +70,6 @@ FEATURE_COLUMNS = [
     "zone_enc",
     "posture_enc",
     "audio_class_enc",
-    "lux",
     "previous_zone_enc",
 ]
 
@@ -94,7 +106,6 @@ _FEATURE_LABELS: dict[str, str] = {
     "zone_enc": "Zone",
     "posture_enc": "Posture",
     "audio_class_enc": "Audio",
-    "lux": "Lux",
     "previous_zone_enc": "Prev Zone",
 }
 
