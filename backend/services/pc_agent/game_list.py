@@ -49,6 +49,8 @@ GAME_PROCESSES: set[str] = {
     "palworld-win64-shipping.exe",
     "helldivers2.exe",
     "oxygennotincluded.exe",
+    # Rust (Facepunch Studios) — via Steam
+    "rustclient.exe",
     # Epic / launchers (only count if a game is also running)
     # Not included: epicgameslauncher.exe, steam.exe (launcher ≠ gaming)
 }
