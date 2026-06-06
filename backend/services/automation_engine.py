@@ -2724,6 +2724,41 @@ class AutomationEngine:
         """
         logger.info("Automation engine started")
 
+        # Seed _last_process_working_at from DB so the late-night rescue and
+        # ambient-relax attendance vetoes are live immediately after a restart.
+        # Without this, there's a window (up to RECENT_PROCESS_WORKING_SECONDS)
+        # where a fresh process=working report can't defend against a rescue
+        # that evaluates on the first tick post-restart. Confirmed incident:
+        # 2026-06-02 03:13 UTC rescue fired 46s after a working POST.
+        try:
+            from backend.database import async_session
+            from backend.models import ActivityEvent
+            from sqlalchemy import select
+
+            async with async_session() as _seed_db:
+                _seed_row = (await _seed_db.execute(
+                    select(ActivityEvent.timestamp)
+                    .where(ActivityEvent.source == "process")
+                    .where(ActivityEvent.mode == "working")
+                    .order_by(ActivityEvent.timestamp.desc())
+                    .limit(1)
+                )).fetchone()
+                if _seed_row:
+                    _seed_ts = _seed_row[0]
+                    if _seed_ts.tzinfo is None:
+                        _seed_ts = _seed_ts.replace(tzinfo=timezone.utc)
+                    _seed_age = (datetime.now(tz=TZ) - _seed_ts).total_seconds()
+                    if _seed_age < RECENT_PROCESS_WORKING_SECONDS:
+                        self._last_process_working_at = _seed_ts
+                        logger.info(
+                            "Seeded _last_process_working_at from DB (age=%.0fs)",
+                            _seed_age,
+                        )
+        except Exception:
+            logger.warning(
+                "Could not seed _last_process_working_at from DB", exc_info=True,
+            )
+
         while True:
             try:
                 if self._heartbeat is not None:
@@ -2788,26 +2823,43 @@ class AutomationEngine:
                 # over "still working" or idle when no Sonos media is playing.
                 # Catches the 02:00+ edge when someone's still at the desk.
                 # Guarded so real gaming/watching/social/sleeping are respected,
-                # music playback counts as intentional activity, and a fresh
-                # camera 'at desk' reading means the user is actively present
-                # and shouldn't be pushed into relax. DND suppresses this —
-                # set_manual_override would block the call anyway, but
-                # skipping early avoids the log noise + the Sonos polling
-                # round-trip.
+                # and music playback counts as intentional activity. Attendance
+                # vetoes (camera at desk / recent process working) are checked
+                # inside the block so suppressed rescues are logged to
+                # ml_decisions for observability — mirrors the predictor path.
                 if (
                     not self._manual_override
                     and not self.is_dnd_active()
-                    and not self.is_at_desk_fresh()
-                    and not self.is_recent_process_working()
                     and self._get_time_period() == "late_night"
                     and self._current_mode in ("working", "idle")
                     and not await self._sonos_is_playing()
                 ):
-                    logger.info(
-                        "Late-night rescue: switching to relax from %s",
-                        self._current_mode,
-                    )
-                    await self.set_manual_override("relax", source="late_night_rescue")
+                    _rescue_veto: str | None = None
+                    if self.is_at_desk_fresh():
+                        _rescue_veto = "camera_at_desk"
+                    elif self.is_recent_process_working():
+                        _rescue_veto = "process_working_recent"
+
+                    if _rescue_veto is None:
+                        logger.info(
+                            "Late-night rescue: switching to relax from %s",
+                            self._current_mode,
+                        )
+                        await self.set_manual_override("relax", source="late_night_rescue")
+                    else:
+                        logger.debug(
+                            "Late-night rescue suppressed (%s)", _rescue_veto,
+                        )
+                        _rescue_ml = getattr(self, "_ml_logger", None)
+                        if _rescue_ml:
+                            await _rescue_ml.log_decision(
+                                predicted_mode="relax",
+                                confidence=1.0,
+                                decision_source="late_night_rescue",
+                                factors={"vetoed_by": _rescue_veto},
+                                applied=False,
+                                broadcast=False,
+                            )
 
                 # Ambient relax — soft default when nothing's happening. Idle
                 # held for IDLE_AMBIENT_RELAX_DWELL_SECONDS without any
@@ -2815,15 +2867,13 @@ class AutomationEngine:
                 # the late_night branch above handles the post-23:00 case where
                 # mode is still "working" (vs idle) at the desk.
                 #
-                # The is_present_in_room() veto (added with the 2026-05-27
-                # Latitude→living-room move) blocks the flip when the camera
-                # can SEE someone here — previously, sitting on the couch read
-                # as "absent" and force-flipped relax + auto-played the Sonos.
+                # is_present_in_room() stays in the outer elif (camera sees
+                # someone on the couch → just not our trigger, not a veto).
+                # Attendance vetoes (at-desk / recent-process-working) move
+                # inside for the same ml_decisions observability as the rescue.
                 elif (
                     not self._manual_override
                     and not self.is_dnd_active()
-                    and not self.is_at_desk_fresh()
-                    and not self.is_recent_process_working()
                     and not self.is_present_in_room()
                     and self._current_mode == "idle"
                     and self._idle_entered_at is not None
@@ -2831,12 +2881,33 @@ class AutomationEngine:
                         >= IDLE_AMBIENT_RELAX_DWELL_SECONDS
                     and not await self._sonos_is_playing()
                 ):
-                    logger.info(
-                        "Ambient relax: idle held %.0fs without presence "
-                        "— switching to relax",
-                        (now - self._idle_entered_at).total_seconds(),
-                    )
-                    await self.set_manual_override("relax", source="ambient_relax")
+                    _relax_veto: str | None = None
+                    if self.is_at_desk_fresh():
+                        _relax_veto = "camera_at_desk"
+                    elif self.is_recent_process_working():
+                        _relax_veto = "process_working_recent"
+
+                    if _relax_veto is None:
+                        logger.info(
+                            "Ambient relax: idle held %.0fs without presence "
+                            "— switching to relax",
+                            (now - self._idle_entered_at).total_seconds(),
+                        )
+                        await self.set_manual_override("relax", source="ambient_relax")
+                    else:
+                        logger.debug(
+                            "Ambient relax suppressed (%s)", _relax_veto,
+                        )
+                        _relax_ml = getattr(self, "_ml_logger", None)
+                        if _relax_ml:
+                            await _relax_ml.log_decision(
+                                predicted_mode="relax",
+                                confidence=1.0,
+                                decision_source="ambient_relax",
+                                factors={"vetoed_by": _relax_veto},
+                                applied=False,
+                                broadcast=False,
+                            )
 
                 # If no activity override and no manual override, apply time-based
                 if (
