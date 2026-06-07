@@ -332,7 +332,8 @@ and `CLAUDE.md` for operational details.
           │                        │                        │
    ┌──────▼──────┐    ┌───────────▼────────┐    ┌──────────▼───────┐
    │ Gaming PC   │    │ Hue Bridge         │    │ Sonos Era 100    │
-   │ (ethernet)  │    │ (Zigbee → lights)  │    │ (UPnP)          │
+   │ (WiFi, USB  │    │ (Zigbee → lights)  │    │ (UPnP)          │
+   │  adapter)   │    │                    │    │                  │
    │ PC Agent ───┼──> │                    │    │                  │
    │ POST /api/  │    └────────────────────┘    └──────────────────┘
    └─────────────┘
@@ -358,7 +359,7 @@ External APIs (cloud):
 - **Two-process model:** Main server handles real-time control. Learning engine runs separately, reads events from the shared DB, computes patterns, and exposes an internal API for predictions. Main server queries the learning engine before making automation decisions.
 - **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) when event volume grows. SQLAlchemy abstraction makes the switch straightforward. Event data uses 90-day rolling window with older data aggregated into daily/weekly summaries.
 - **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
-- **PC Agent over network:** Gaming PC (wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery.
+- **PC Agent over network:** Gaming PC (WiFi via TP-Link USB adapter since the 2026-06 Google Wifi migration — formerly wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery. NB: the desktop's MAC (and thus its `192.168.86.30` DHCP reservation) travels with the USB adapter, not the motherboard.
 - **Alexa two-phase:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel for full flexibility later.
 
 ### Tech Stack
@@ -897,7 +898,8 @@ Bounded auto-remediation for the source-trust watchdog (camera lux decoupling et
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
-| POST | `/api/camera/desktop/lux` | Ingest one ambient-lux sample (`{ambient_lux, captured_at?}`) from the desktop bedroom webcam (D4). Best-effort; drops silently if the channel isn't initialized. Called ~every 25s by `emotion_capture.py` after its flip-sample-flip read |
+| POST | `/api/camera/observation` | Ingest one `PresenceReading` from an off-host source (desktop pc_agent, ~2s cadence) → `PresenceFusion.on_observation`. Validates `source` against `KNOWN_SOURCES`; best-effort (drops silently pre-init). Client `captured_at` is **clamped to server now** when >2s in the future (`clamp_client_timestamp`, added 2026-06-07 after a fast desktop CMOS clock wedged the lane) — journal warning `clamped future timestamp` means the agent's clock is skewed |
+| POST | `/api/camera/desktop/lux` | Ingest one ambient-lux sample (`{ambient_lux, captured_at?}`) from the desktop bedroom webcam (D4). Best-effort; drops silently if the channel isn't initialized. Called ~every 25s by `emotion_capture.py` after its flip-sample-flip read. `captured_at` server-clamped like `/observation` |
 | GET | `/api/camera/desktop/lux` | Bedroom lux channel snapshot — `{ema_lux, baseline_lux, calibrated, last_update}` from `app.state.bedroom_lux` |
 | POST | `/api/camera/desktop/lux/calibrate/request` | Flag a bedroom-lux calibration run for the desktop agent (persists `desktop_lux_calibrate_requested`). Agent picks it up on its next 30s settings poll and runs the exposure search |
 | GET | `/api/camera/desktop/lux/calibrate/pending` | Polled by the desktop agent — `{pending: bool}` so it knows when to run calibration |
@@ -939,8 +941,9 @@ WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `
 | GET | `/api/personality/calibration/history?limit=N` | Self-report rows newest-first, limit ≤ 500 |
 | GET | `/api/personality/settings` | All five sub-toggles + current `calibration_bias` (read-only snapshot) |
 | POST | `/api/personality/settings` | Partial-update any of `personality_enabled`, `emotion_enabled`, `mood_ring_enabled`, `mood_ring_light_id`. Flipping `emotion_enabled` calls `EmotionService.set_enabled(...)` which lazy-loads FaceLandmarker on first true-flip |
+| POST | `/api/personality/blendshape` | Ingest a desktop-captured FaceLandmarker reading (`{blendshapes: dict[str,float], face_confidence, source, timestamp?}`) → `EmotionService.on_blendshape` (GH#64, shipped 2026-05-18). Validates per-value [0,1] bounds; client `timestamp` clamped to server now when >2s in the future (`clamp_client_timestamp` — see `/api/camera/observation`) |
 
-Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`). Full spec: `docs/PERSONALITY_LAYER.md`. Phase B endpoints (`/blendshape` POST for desktop-camera capture, GH#64) and Phase C (`/vibe` POST for Claude routing, GH#59) ship in their respective phases.
+Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`). Full spec: `docs/PERSONALITY_LAYER.md`. Phase C's `/vibe` POST (Claude routing, GH#59) ships in its phase.
 
 #### Widgets — `/api/widgets/` **(future)**
 
