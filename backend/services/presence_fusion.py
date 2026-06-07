@@ -66,6 +66,12 @@ LATITUDE_STRONG_FACE_THRESHOLD = 0.70
 # inbound payloads against this set.
 KNOWN_SOURCES = frozenset({"latitude", "desktop"})
 
+# Forward skew beyond which a STORED reading is considered invalid by
+# construction (no honest capture happens in the future). Mirrors the
+# route-layer ``clamp_client_timestamp`` tolerance; kept here too as
+# defense-in-depth for in-process callers and future ingest paths.
+FUTURE_SKEW_TOLERANCE_S = 2.0
+
 
 @dataclass(frozen=True)
 class PresenceReading:
@@ -116,14 +122,41 @@ class PresenceFusion:
             return
         prior = self._readings.get(reading.source)
         if prior is not None and reading.captured_at < prior.captured_at:
-            # Out-of-order arrival (clock skew, network reorder) — drop
-            # rather than overwrite fresher state with stale data.
-            return
+            prior_skew_s = (
+                prior.captured_at - datetime.now(timezone.utc)
+            ).total_seconds()
+            if prior_skew_s <= FUTURE_SKEW_TOLERANCE_S:
+                # Out-of-order arrival (clock skew, network reorder) — drop
+                # rather than overwrite fresher state with stale data.
+                return
+            # The STORED reading is future-stamped — invalid by
+            # construction (a fast source clock that has since been
+            # corrected, e.g. fresh-CMOS after the 2026-06-07 mobo swap).
+            # Without this branch every honest report looks out-of-order
+            # and the source wedges until real time catches up; replace
+            # the bad reading instead.
+            logger.warning(
+                "replacing future-stamped %s reading (+%.0fs ahead of "
+                "server) with current observation",
+                reading.source, prior_skew_s,
+            )
         self._readings[reading.source] = reading
 
         if self._is_at_desk(reading):
             self._last_at_desk_source = reading.source
             self._last_at_desk_at = reading.captured_at
+        elif self._last_at_desk_at is not None:
+            # Heal a future-stamped high-water mark even when the current
+            # reading is non-confirming — otherwise ``seconds_since_at_desk``
+            # reads negative ("just confirmed") with nobody at the desk
+            # until real time catches up to the bad stamp. Clamping to now
+            # preserves the stamp's intent (confirmed as recently as
+            # possible) and lets the gate age out naturally.
+            now = datetime.now(timezone.utc)
+            if (
+                self._last_at_desk_at - now
+            ).total_seconds() > FUTURE_SKEW_TOLERANCE_S:
+                self._last_at_desk_at = now
 
     # ------------------------------------------------------------------
     # Attendance queries

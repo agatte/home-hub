@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
+from backend.api._guards import clamp_client_timestamp
 from backend.api.auth import require_api_key
 from backend.api.routes.routines import load_setting, save_setting
 from backend.database import async_session
@@ -278,7 +279,13 @@ async def post_blendshape(payload: BlendshapeSubmit, request: Request) -> dict:
                 detail=f"blendshape '{name}' out of range [0, 1]: {value}",
             )
 
-    ts = payload.timestamp or datetime.now(timezone.utc)
+    # Server clock wins on forward skew — EmotionService stores this
+    # timestamp verbatim (``_last_source_seen`` / mood-sample ``ts``); a
+    # future stamp would suppress the Latitude lane and freeze freshness
+    # checks until real time catches up.
+    ts = clamp_client_timestamp(
+        payload.timestamp, source=f"{payload.source}:blendshape",
+    )
     await svc.on_blendshape(
         payload.blendshapes,
         float(payload.face_confidence),

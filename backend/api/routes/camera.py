@@ -9,6 +9,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
+from backend.api._guards import clamp_client_timestamp
 from backend.api.auth import require_api_key, require_api_key_strict
 from backend.config import DATA_DIR
 from backend.services.presence_fusion import KNOWN_SOURCES, PresenceReading
@@ -157,7 +158,12 @@ async def post_observation(
 
     reading = PresenceReading(
         source=payload.source,
-        captured_at=payload.captured_at or datetime.now(timezone.utc),
+        # Server clock wins on forward skew — a future-stamped reading
+        # would wedge PresenceFusion's out-of-order guard (see
+        # clamp_client_timestamp docstring).
+        captured_at=clamp_client_timestamp(
+            payload.captured_at, source=f"{payload.source}:observation",
+        ),
         face_present=payload.face_present,
         face_confidence=payload.face_confidence,
         detection_source=payload.detection_source,
@@ -478,7 +484,14 @@ async def post_desktop_lux(payload: DesktopLuxReading, request: Request) -> dict
     if channel is None:
         logger.debug("bedroom lux dropped — channel not initialized")
         return {"status": "ok", "detail": "bedroom lux channel unavailable"}
-    channel.update(float(payload.ambient_lux), captured_at=payload.captured_at)
+    channel.update(
+        float(payload.ambient_lux),
+        # Server clock wins on forward skew — LuxChannel's out-of-order
+        # guard wedges on a future-stamped sample otherwise.
+        captured_at=clamp_client_timestamp(
+            payload.captured_at, source="desktop:lux",
+        ),
+    )
     return {"status": "ok"}
 
 

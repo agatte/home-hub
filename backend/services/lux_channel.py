@@ -15,12 +15,20 @@ Part C is store-only: nothing consumes the channel yet, so wiring it up is a
 no-op on lighting behavior.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger("home_hub.lux_channel")
 
 # Match CameraService (camera_service.py) so both rooms smooth identically.
 LUX_EMA_ALPHA = 0.3              # α*raw + (1-α)*ema — ~20s to 95%
 LUX_EMA_STALE_RESET_SECONDS = 300  # snap (not blend) after a gap this long
+
+# Forward skew beyond which the STORED ``_last_update`` is invalid by
+# construction — mirrors ``presence_fusion.FUTURE_SKEW_TOLERANCE_S``.
+# Defense-in-depth behind the route-layer ``clamp_client_timestamp``.
+FUTURE_SKEW_TOLERANCE_S = 2.0
 
 
 class LuxChannel:
@@ -54,7 +62,18 @@ class LuxChannel:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         if self._last_update is not None and now < self._last_update:
-            return  # stale / out-of-order — keep the fresher value
+            stored_skew_s = (
+                self._last_update - datetime.now(timezone.utc)
+            ).total_seconds()
+            if stored_skew_s <= FUTURE_SKEW_TOLERANCE_S:
+                return  # stale / out-of-order — keep the fresher value
+            # Stored stamp is future-dated (corrected client clock — see
+            # presence_fusion.on_observation) — invalid by construction;
+            # accept the new sample instead of wedging the channel.
+            logger.warning(
+                "%s lux channel: replacing future-stamped last_update "
+                "(+%.0fs ahead of server)", self.room, stored_skew_s,
+            )
         stale = (
             self._last_update is None
             or (now - self._last_update).total_seconds()
