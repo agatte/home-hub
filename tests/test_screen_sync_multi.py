@@ -426,3 +426,41 @@ async def test_screen_sync_no_event_logger_is_safe():
     # No set_event_logger call.
     await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
     assert hue.last_for("2")["bri"] > 0  # the bridge write still happened
+
+
+@pytest.mark.asyncio
+async def test_apply_rust_brightness_holds_ember_and_dims_when_dark():
+    """Rust path holds the fixed ember color and maps luma → brightness.
+
+    Pitch-black Rust (luma≈floor input) drops L2 to the period floor; a bright
+    daytime scene lifts it toward the cap. Color stays ember regardless — the
+    chaotic on-screen color is not synced.
+    """
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    # Pitch-black night frame → night floor. EMA glides hue/sat/bri from the
+    # 0 prior, so drive enough frames to converge (the glide itself is the
+    # desired smooth handoff from the color path; steady state is exact ember).
+    for _ in range(30):
+        await sync.apply_rust_brightness("2", luma=5, period="night")
+    dark = hue.last_for("2")
+    assert abs(dark["hue"] - ss.RUST_EMBER_HUE) <= 5
+    assert abs(dark["sat"] - ss.RUST_EMBER_SAT) <= 2
+    assert abs(dark["bri"] - ss.RUST_BRI_ENVELOPE["night"][0]) <= 2, dark["bri"]
+
+    # Bright daytime frame → day cap.
+    for _ in range(30):
+        await sync.apply_rust_brightness("2", luma=200, period="day")
+    bright = hue.last_for("2")
+    assert abs(bright["bri"] - ss.RUST_BRI_ENVELOPE["day"][1]) <= 2, bright["bri"]
+    # Still ember — never the screen color.
+    assert abs(bright["hue"] - ss.RUST_EMBER_HUE) <= 5
+
+
+@pytest.mark.asyncio
+async def test_apply_rust_brightness_unknown_light_is_noop():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    await sync.apply_rust_brightness("5", luma=100, period="day")  # 5 not a target
+    assert hue.calls == []

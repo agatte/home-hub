@@ -191,13 +191,17 @@ def _acquire_singleton_lock() -> bool:
         return False
 
 
-def capture_dominant_color() -> Optional[tuple[int, int, int]]:
+def capture_dominant_color() -> Optional[tuple[tuple[int, int, int], int]]:
     """
-    Capture the primary screen and extract the dominant color.
+    Capture the primary screen and extract the dominant color + scene luma.
 
     Grabs the full screen, downsamples the center 60% region (skip 20% on
     every edge to ignore taskbar / window chrome / corner UI), runs the
-    sticky-k-means picker. Returns a single RGB triple, or None if the
+    sticky-k-means picker for the dominant color AND computes the overall
+    scene luminance (Rec.601 over the *mean* of every sampled pixel, not the
+    dominant cluster — we want "how bright is the whole frame", which the
+    Rust profile maps to room brightness so the lamps dim when the game goes
+    dark). Returns ``((r, g, b), luma)`` with luma 0-255, or None if the
     capture failed.
     """
     try:
@@ -230,9 +234,23 @@ def capture_dominant_color() -> Optional[tuple[int, int, int]]:
                 return None
 
             pixel_array = np.array(pixels, dtype=np.float32)
+
+            # Scene luma = Rec.601 over the frame mean. Computed before the
+            # picker so it reflects the whole crop's brightness, independent
+            # of which saturated cluster the picker chooses for color.
+            scene_mean = pixel_array.mean(axis=0)
+            luma = int(
+                0.299 * scene_mean[0]
+                + 0.587 * scene_mean[1]
+                + 0.114 * scene_mean[2]
+            )
+            luma = max(0, min(255, luma))
+
             if _HAS_KMEANS and len(pixels) >= 8:
-                return _PICKER.pick(pixel_array)
-            return _pick_dominant_average(pixel_array)
+                rgb = _PICKER.pick(pixel_array)
+            else:
+                rgb = _pick_dominant_average(pixel_array)
+            return rgb, luma
 
     except Exception as e:
         logger.error(f"Screen capture error: {e}")
@@ -267,13 +285,19 @@ def run_agent(
             if heartbeat is not None:
                 heartbeat()
             try:
-                rgb = capture_dominant_color()
-                if rgb is not None:
+                captured = capture_dominant_color()
+                if captured is not None:
+                    rgb, luma = captured
                     body = {
                         "source": "desktop",
                         "r": rgb[0],
                         "g": rgb[1],
                         "b": rgb[2],
+                        # Whole-frame brightness (Rec.601). The backend uses it
+                        # for the Rust profile's room-dims-with-the-game path;
+                        # the color screen-sync path ignores it. Optional field
+                        # — older backends drop it harmlessly.
+                        "luma": luma,
                     }
                     try:
                         resp = client.post(endpoint, json=body)

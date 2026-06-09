@@ -236,6 +236,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
     classify_weather as _classify_weather_pure,
+    get_mode_state_table as _get_mode_state_table,
     get_time_period as _calc_get_time_period,
     lerp_light_state as _lerp_light_state,
     lux_to_multiplier,
@@ -298,6 +299,26 @@ WEEKEND_TIME_RULES = [
 ]
 
 
+def _extract_game_factor(factors: Optional[list[dict]]) -> Optional[str]:
+    """Pull the ``game`` factor's value off an activity report's factor list.
+
+    The PC-agent emits ``{"key": "game", "value": "<slug>", ...}`` when a game
+    with a dedicated lighting profile is active (see
+    ``pc_agent.activity_detector._resolve_active_game``). Returns the stripped
+    slug, or None when no game factor is present. Mirrors ``lol_champion_service.
+    _extract_champion``.
+    """
+    if not factors:
+        return None
+    for f in factors:
+        if not isinstance(f, dict) or f.get("key") != "game":
+            continue
+        val = f.get("value") or f.get("display")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 class AutomationEngine:
     """
     Combines time-of-day rules and activity reports to control lights.
@@ -352,6 +373,11 @@ class AutomationEngine:
 
         # Current state
         self._current_mode: str = "idle"
+        # Active game slug (from the PC-agent's `game` factor) when a game with
+        # a dedicated lighting profile is running in gaming mode; None otherwise.
+        # Drives GAME_LIGHT_PROFILES (e.g. Rust "Rusted Ember"). Kept in lockstep
+        # with _current_mode — set/cleared alongside it in report_activity.
+        self._current_game: Optional[str] = None
         self._mode_source: str = "time"
         self._manual_override: bool = False
         self._override_mode: Optional[str] = None
@@ -503,6 +529,15 @@ class AutomationEngine:
         if self._manual_override:
             return self._override_mode or self._current_mode
         return self._current_mode
+
+    @property
+    def current_game(self) -> Optional[str]:
+        """Active game slug driving GAME_LIGHT_PROFILES, or None.
+
+        Read by the screen-color route to switch L2 into the Rust luma
+        brightness-sync path. Only set in gaming mode.
+        """
+        return self._current_game
 
     @property
     def mode_source(self) -> str:
@@ -1187,9 +1222,15 @@ class AutomationEngine:
             self._last_process_working_at = now
 
         old_mode = self._current_mode
+        old_game = self._current_game
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
+        # Track the active game (drives GAME_LIGHT_PROFILES). Only meaningful in
+        # gaming mode; any other mode clears it so a stale profile can't linger.
+        # Set in lockstep with _current_mode so the next _apply_mode resolves the
+        # right palette on the same report that first carries the `game` factor.
+        self._current_game = _extract_game_factor(factors) if mode == "gaming" else None
         self._mode_source = source
         self._last_activity = mode
         self._last_activity_change = now
@@ -1279,7 +1320,13 @@ class AutomationEngine:
         # 05-06 audit found this branch was unconditionally clearing the
         # cache on every report, producing ~3.5 no-op bridge writes per
         # minute on L2 with bri_before=null in the log timeline.
-        await self._apply_mode(mode, force_resend=(old_mode != mode))
+        # force_resend on a game change too (e.g. launching/quitting Rust while
+        # staying in gaming mode) so the GAME_LIGHT_PROFILES swap repaints
+        # immediately instead of riding the per-light dedup cache.
+        await self._apply_mode(
+            mode,
+            force_resend=(old_mode != mode or old_game != self._current_game),
+        )
 
         # Fire mode change callbacks (e.g., music auto-play)
         if old_mode != mode:
@@ -2191,8 +2238,13 @@ class AutomationEngine:
                 mode, period,
             )
 
-        if mode in ACTIVITY_LIGHT_STATES:
-            mode_states = ACTIVITY_LIGHT_STATES[mode]
+        # A per-game profile (GAME_LIGHT_PROFILES, e.g. Rust) overrides the
+        # generic gaming palette when self._current_game is set — resolved
+        # through the same table helper the resolver uses, so the lerp /
+        # overlay / multiplier pipeline below is identical.
+        game = self._current_game
+        mode_states = _get_mode_state_table(mode, game)
+        if mode_states is not None:
             if "day" in mode_states:
                 # Time-aware mode: blend evening → night during the 30-min ramp window
                 now = datetime.now(tz=TZ)
@@ -2207,13 +2259,13 @@ class AutomationEngine:
 
                 if 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES:
                     progress = (WINDDOWN_RAMP_MINUTES - minutes_until_winddown) / WINDDOWN_RAMP_MINUTES
-                    evening_state = _resolve_activity_state(mode, "evening")
-                    night_state = _resolve_activity_state(mode, "night")
+                    evening_state = _resolve_activity_state(mode, "evening", game)
+                    night_state = _resolve_activity_state(mode, "night", game)
                     state = _lerp_light_state(evening_state, night_state, progress)
                 else:
-                    state = _resolve_activity_state(mode, period)
+                    state = _resolve_activity_state(mode, period, game)
             else:
-                state = _resolve_activity_state(mode, period)
+                state = _resolve_activity_state(mode, period, game)
 
             # Apply learned lighting preferences as overlay (ML Phase 1).
             # Learned values replace hardcoded defaults per-light, per-property.

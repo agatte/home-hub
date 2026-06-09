@@ -281,6 +281,32 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
+    # Rust profile: hold a fixed ember color and drive L2's BRIGHTNESS from the
+    # screen's whole-frame luma, so the room dims as Rust's day/night cycle goes
+    # dark (the user's "dark in game → dimmer room" ask). Color is NOT synced —
+    # Rust has no coherent ambient color. L5 keeps its static ember spark from
+    # GAME_LIGHT_PROFILES (engine-owned, not luma-driven). Other games fall
+    # through to the standard per-frame color screen-sync below.
+    if getattr(engine, "current_game", None) == "rust":
+        luma = report.luma
+        if luma is None:
+            # Transitional fallback for an agent that predates the `luma` field
+            # — derive it from the dominant color (a worse signal than real
+            # frame luma, but keeps the path live until the desktop agent
+            # restart ships it).
+            luma = int(0.299 * report.r + 0.587 * report.g + 0.114 * report.b)
+        target = "2"
+        if target not in sync.target_lights:
+            return {"status": "ok", "applied": False, "lights": [], "profile": "rust",
+                    "reason": "no_target"}
+        if target in engine.manual_light_overrides:
+            return {"status": "ok", "applied": False, "lights": [], "profile": "rust",
+                    "reason": "manual_override"}
+        await sync.apply_rust_brightness(
+            target, luma, period=period, source=report.source,
+        )
+        return {"status": "ok", "applied": True, "lights": [target], "profile": "rust"}
+
     # Ambient envelope lift: lux + weather scale the cap+floor so dim content
     # in a dim room doesn't drag L2 to eye-strain dimness. The screen-sync
     # service gates this internally (``_scale_for_ambient``): gaming + watching,

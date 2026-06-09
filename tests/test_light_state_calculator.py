@@ -929,3 +929,38 @@ class TestPathLightBrightness:
         assert path_light_brightness(
             0.0, 74.0, "late_night", kind="corridor_l1", fallback=100,
         ) == 100
+
+
+class TestGameLightProfiles:
+    """Per-game lighting profile resolution (Rust 'Rusted Ember')."""
+
+    def test_rust_profile_selected_only_for_gaming(self):
+        from backend.services.light_state_calculator import (
+            GAME_LIGHT_PROFILES,
+            get_mode_state_table,
+        )
+        assert get_mode_state_table("gaming", "rust") is GAME_LIGHT_PROFILES["rust"]
+        # Generic gaming when no game / unknown game.
+        assert get_mode_state_table("gaming", None) is ACTIVITY_LIGHT_STATES["gaming"]
+        assert get_mode_state_table("gaming", "valorant") is ACTIVITY_LIGHT_STATES["gaming"]
+        # Profile never leaks into other modes.
+        assert get_mode_state_table("working", "rust") is ACTIVITY_LIGHT_STATES["working"]
+
+    def test_rust_state_is_ember_with_paired_moss_kitchen(self):
+        from backend.services.light_state_calculator import resolve_activity_state
+        for period in ("day", "evening", "night", "late_night"):
+            st = resolve_activity_state("gaming", period, "rust")
+            # L2 ember matches the screen_sync RUST_EMBER constants (lock-step).
+            from backend.services.screen_sync import RUST_EMBER_HUE, RUST_EMBER_SAT
+            assert st["2"]["hue"] == RUST_EMBER_HUE and st["2"]["sat"] == RUST_EMBER_SAT
+            # Kitchen pair rule: L3 == L4, muted moss.
+            assert st["3"] == st["4"], f"kitchen pair must match in {period}"
+            assert st["3"]["hue"] == 20000
+            # L1 stays above the night hallway-spill visibility floor.
+            assert st["1"]["bri"] >= 45
+
+    def test_rust_dims_toward_late_night(self):
+        from backend.services.light_state_calculator import resolve_activity_state
+        day_l2 = resolve_activity_state("gaming", "day", "rust")["2"]["bri"]
+        late_l2 = resolve_activity_state("gaming", "late_night", "rust")["2"]["bri"]
+        assert late_l2 < day_l2

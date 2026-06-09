@@ -154,6 +154,39 @@ MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Rust profile — luma-driven brightness on a fixed ember color
+# ---------------------------------------------------------------------------
+# The Rust gaming profile holds a fixed warm ember on L2 and drives its
+# BRIGHTNESS from the screen's whole-frame luminance, so the room dims when
+# Rust goes dark (deliberately pitch-black nights) and lifts on bright day
+# scenes. Color is intentionally NOT screen-driven — Rust has no coherent
+# ambient color, so the dominant-color picker latched onto on-screen noise.
+#
+# Ember hue/sat are kept in lock-step with GAME_LIGHT_PROFILES["rust"] L2 in
+# light_state_calculator.py so the resting engine base and the synced color
+# match (no hue jump when sync starts/stops).
+RUST_EMBER_HUE = 6000
+RUST_EMBER_SAT = 200
+
+# Per-period (floor, cap) brightness envelope for L2 under the Rust profile.
+# "Dim hard at night" (user choice 2026-06-08): pitch-black Rust drops L2 to
+# the floor; a bright daytime scene lifts it toward the cap. Floors step down
+# through the evening so a dark scene at midnight is genuinely dim. First-pass
+# values — tune live against an actual Rust session.
+RUST_BRI_ENVELOPE: dict[str, tuple[int, int]] = {
+    "day":        (60, 200),
+    "evening":    (45, 175),
+    "night":      (35, 150),
+    "late_night": (22, 110),
+}
+# Screen-luma input window mapped onto the envelope. Rust daytime scenes read
+# ~100-150; the pitch-black night floor is ~5-15. Below RUST_LUMA_DARK → floor,
+# above RUST_LUMA_BRIGHT → cap, linear between.
+RUST_LUMA_DARK = 12
+RUST_LUMA_BRIGHT = 135
+
+
 class ScreenSyncService:
     """
     Receives RGB colors from any source and applies them to one or more Hue lights.
@@ -491,6 +524,7 @@ class ScreenSyncService:
 
     async def _maybe_log_adjustment(
         self, light_id: str, hue: int, sat: int, bri: int, mode: str,
+        trigger: str = "screen_sync",
     ) -> None:
         """Throttled event-log of a synced bridge write (closes syncfight-3).
 
@@ -498,8 +532,10 @@ class ScreenSyncService:
         event logger, so without this the synced colors never reach
         ``light_adjustments`` / analytics. Throttled to one row per light per
         ``SCREEN_SYNC_LOG_INTERVAL_S`` so the ~2.5s capture cadence doesn't
-        flood the table. Logs the post-EMA applied values with
-        ``trigger='screen_sync'``. No-op when no event logger is wired."""
+        flood the table. Logs the post-EMA applied values. ``trigger``
+        distinguishes the color path (``screen_sync``) from the Rust
+        luma-brightness path (``rust_brightness_sync``) in analytics. No-op
+        when no event logger is wired."""
         if self._event_logger is None:
             return
         now = datetime.now(timezone.utc)
@@ -513,7 +549,56 @@ class ScreenSyncService:
             sat_after=sat,
             bri_after=bri,
             mode_at_time=mode,
-            trigger="screen_sync",
+            trigger=trigger,
+        )
+
+    async def apply_rust_brightness(
+        self,
+        light_id: str,
+        luma: int,
+        period: Optional[str] = None,
+        source: str = "desktop",
+    ) -> None:
+        """Drive a lamp's BRIGHTNESS from screen luma, holding a fixed ember color.
+
+        The Rust profile's L2 path. Instead of mirroring the (chaotic)
+        on-screen color, hold ``RUST_EMBER_*`` and map the whole-frame
+        luminance onto the period's ``RUST_BRI_ENVELOPE`` (floor, cap) so the
+        lamp dims when Rust goes dark and lifts on bright scenes. EMA smoothing
+        reuses the per-light state — hue/sat are constant, so only ``bri``
+        moves. Deliberately NO ambient lux lift: brightness is screen-driven,
+        and the lux feedback loop (lamp brightens room → webcam reads brighter
+        → lifts the cap) would fight the luma signal.
+
+        Args:
+            light_id: Target lamp; no-op if not in ``target_lights``.
+            luma: Whole-frame brightness 0-255 (Rec.601) from the capture agent.
+            period: Time period for the envelope lookup; falls back to night.
+            source: Reporting source, recorded for status only.
+        """
+        if light_id not in self._targets:
+            return
+        floor, cap = RUST_BRI_ENVELOPE.get(
+            period or "night", RUST_BRI_ENVELOPE["night"],
+        )
+        span = max(1, RUST_LUMA_BRIGHT - RUST_LUMA_DARK)
+        frac = max(0.0, min(1.0, (luma - RUST_LUMA_DARK) / span))
+        target_bri = floor + (cap - floor) * frac
+        sh, ss, sb = self._smooth(
+            light_id, float(RUST_EMBER_HUE), float(RUST_EMBER_SAT), target_bri,
+        )
+        await self._hue.set_light(light_id, {
+            "on": True,
+            "hue": int(sh),
+            "sat": int(ss),
+            "bri": int(sb),
+            "transitiontime": 20,  # 2s — smooth brightness glide, no flicker
+        })
+        self._last_color_at = datetime.now(timezone.utc)
+        self._last_source = source
+        await self._maybe_log_adjustment(
+            light_id, int(sh), int(ss), int(sb), "gaming",
+            trigger="rust_brightness_sync",
         )
 
 

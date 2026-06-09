@@ -211,6 +211,15 @@ class ScreenColorReport(BaseModel):
     r: int = Field(..., ge=0, le=255, description="Red channel 0-255")
     g: int = Field(..., ge=0, le=255, description="Green channel 0-255")
     b: int = Field(..., ge=0, le=255, description="Blue channel 0-255")
+    luma: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=255,
+        description="Whole-frame brightness (Rec.601), 0-255. Used by the Rust "
+        "profile's room-dims-with-the-game path; ignored by the color "
+        "screen-sync path. Optional — older agents omit it, in which case the "
+        "backend derives a fallback luma from r/g/b.",
+    )
     source: str = Field(
         default="desktop",
         description="Reporting source — 'desktop' or 'laptop'",

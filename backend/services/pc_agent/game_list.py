@@ -55,6 +55,16 @@ GAME_PROCESSES: set[str] = {
     # Not included: epicgameslauncher.exe, steam.exe (launcher ≠ gaming)
 }
 
+# Canonical game-name resolution for per-game lighting profiles. Maps a
+# specific game binary to a stable slug the backend keys profiles off (e.g.
+# the Rust "Rusted Ember" profile in light_state_calculator.GAME_LIGHT_PROFILES).
+# Only games with a dedicated lighting profile need an entry; every other game
+# falls through to the generic saturated gaming palette + color screen-sync.
+# Process names are lowercased before lookup (matching is case-insensitive).
+GAME_NAME_BY_PROCESS: dict[str, str] = {
+    "rustclient.exe": "rust",
+}
+
 # Media player processes — any of these running = "watching" mode
 MEDIA_PROCESSES: set[str] = {
     "vlc.exe",
