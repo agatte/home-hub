@@ -166,7 +166,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Lights | `/api/lights` | `lights.py` — per-light + bulk set (on/bri/hue/sat/ct) |
 | Scenes | `/api/scenes` | `scenes.py` — curated/custom/bridge scenes + effects (per-light or all) |
 | Weather | `/api/weather` | `weather.py` — NWS conditions (5-min cache), alerts |
-| Automation | `/api/automation` | `automation.py` — mode status/override, schedule, brightness mult, social styles, screen sync, mode→scene, DND |
+| Automation | `/api/automation` | `automation.py` — mode status/override, schedule, brightness mult, social styles, screen sync, mode→scene, DND, watching-posture + `rust-lighting` (GET/PUT live Rust luma-bri envelope tuning, no redeploy → `rust_lighting_config`) |
 | Sonos | `/api/sonos` | `sonos.py` — transport, volume, TTS, favorites |
 | Music | `/api/music` | `music.py` — mode→playlist, import, recs+feedback, iTunes `POST /preview` (DIDL-Lite), `GET /bandit-status` |
 | Routines | `/api/routines` | `routines.py` — morning routine config/toggle/test |
