@@ -35,6 +35,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from backend.services.automation_engine import AutomationEngine
     from backend.services.hue_service import HueService
     from backend.services.screen_sync import ScreenSyncService
     from backend.services.websocket_manager import WebSocketManager
@@ -77,10 +78,14 @@ class RustEventService:
         self,
         hue_service: "HueService",
         screen_sync: "ScreenSyncService",
+        automation_engine: "Optional[AutomationEngine]" = None,
         ws_manager: "Optional[WebSocketManager]" = None,
     ) -> None:
         self._hue = hue_service
         self._screen_sync = screen_sync
+        # Optional — used only to skip lamps the user is manually holding
+        # (manual_light_overrides) in the flinch, mirroring receive_screen_color.
+        self._engine = automation_engine
         self._ws = ws_manager
         self._cfg: dict = dict(_DEFAULTS)
 
@@ -89,6 +94,9 @@ class RustEventService:
         self._flinch_cooldown_until: float = 0.0
         self._under_fire: bool = False
         self._flinching: bool = False
+        # Strong ref to the in-flight flinch task so the loop can't GC it
+        # mid-restore (RUF006 — every other task in this app is held too).
+        self._flinch_task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
 
     # ------------------------------------------------------------------
@@ -136,7 +144,7 @@ class RustEventService:
         fired = False
         if now >= self._flinch_cooldown_until and not self._flinching:
             self._flinch_cooldown_until = now + float(self._cfg["flinch_cooldown_s"])
-            asyncio.create_task(self._do_flinch())
+            self._flinch_task = asyncio.create_task(self._do_flinch())
             fired = True
 
         return {"reaction": "flinch" if fired else "under_fire", "score": score}
@@ -157,8 +165,16 @@ class RustEventService:
             dip_factor = float(self._cfg["flinch_dip_factor"])
             flinch_hue = int(self._cfg["flinch_hue"])
             flinch_sat = int(self._cfg["flinch_sat"])
+            # Skip any lamp the user is manually holding — a flinch must not
+            # stomp an explicit slider drag (feedback_manual_light_overrides_persist;
+            # same gate receive_screen_color uses for the per-frame writes).
+            held = (
+                self._engine.manual_light_overrides
+                if self._engine is not None else set()
+            )
+            targets = [lid for lid in REACT_LIGHT_IDS if lid not in held]
             baselines: dict[str, int] = {}
-            for lid in REACT_LIGHT_IDS:
+            for lid in targets:
                 base = int(self._screen_sync.last_applied_bri(lid))
                 baselines[lid] = base
                 await self._hue.set_light(lid, {
@@ -179,7 +195,7 @@ class RustEventService:
                     RUST_EMBER_HUE, RUST_EMBER_SAT,
                 )
                 hue, sat, bri_factor = RUST_EMBER_HUE, RUST_EMBER_SAT, 1.0
-            for lid in REACT_LIGHT_IDS:
+            for lid in targets:
                 await self._hue.set_light(lid, {
                     "on": True,
                     "hue": int(hue),

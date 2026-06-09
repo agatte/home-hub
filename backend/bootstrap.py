@@ -441,7 +441,8 @@ async def lifespan(app: FastAPI):
     # feel knobs; the release loop is added to `tasks` below.
     from backend.services.rust_event_service import RustEventService
     rust_event = RustEventService(
-        hue_service=hue, screen_sync=screen_sync, ws_manager=ws_manager,
+        hue_service=hue, screen_sync=screen_sync,
+        automation_engine=automation, ws_manager=ws_manager,
     )
     if saved_rust_event:
         rust_event.apply_config(saved_rust_event)

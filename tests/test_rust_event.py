@@ -24,6 +24,15 @@ class _FakeSync:
         return 120.0
 
 
+class _FakeEngine:
+    def __init__(self, held=()) -> None:
+        self._held = set(held)
+
+    @property
+    def manual_light_overrides(self):
+        return self._held
+
+
 def _svc() -> RustEventService:
     return RustEventService(hue_service=_FakeHue(), screen_sync=_FakeSync())
 
@@ -71,6 +80,22 @@ async def test_first_hit_flinches_and_sets_under_fire():
     hue = svc._hue
     assert any(lid == "2" for lid, _ in hue.calls)
     assert any(lid == "5" for lid, _ in hue.calls)
+
+
+@pytest.mark.asyncio
+async def test_flinch_skips_manually_held_lamp():
+    """A damage flinch must not stomp a lamp the user is manually holding."""
+    hue = _FakeHue()
+    svc = RustEventService(
+        hue_service=hue, screen_sync=_FakeSync(),
+        automation_engine=_FakeEngine(held={"2"}),
+    )
+    svc.apply_config({"damage_threshold": 40, "flinch_hold_s": 0.0})
+    await svc.report_damage(score=120)
+    await svc._flinch_task  # task is held (RUF006) — await it to completion
+    lamps = {lid for lid, _ in hue.calls}
+    assert "2" not in lamps   # held lamp untouched
+    assert "5" in lamps       # the other reacting lamp still flinches
 
 
 @pytest.mark.asyncio
