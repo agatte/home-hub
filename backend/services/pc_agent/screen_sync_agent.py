@@ -48,7 +48,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("home_hub.screen_sync_agent")
 
-CAPTURE_INTERVAL = 2.5  # seconds between captures
+CAPTURE_INTERVAL = 2.5  # seconds between color+luma posts
+
+# Phase 2 — Rust damage detection. The loop ticks faster than the color
+# cadence so it can catch Rust's brief red damage vignette; color/luma still
+# only computes (the expensive k-means) every CAPTURE_INTERVAL off the same
+# grab. The vignette score = edge-redness minus center-redness (a red flash
+# concentrated at the screen edges = getting hit, vs. fire/sunset which redden
+# the whole frame). Posted only above a cheap floor + throttled; the backend
+# holds the real, runtime-tunable damage threshold + the flinch/cooldown logic.
+DAMAGE_TICK = 0.2                  # 5 Hz base loop
+DAMAGE_POST_FLOOR = 16            # agent-side cheap pre-filter (backend gates for real)
+DAMAGE_POST_MIN_INTERVAL = 0.25  # ≤4 damage posts/sec
 LOG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "home-hub" / "logs"
 PID_FILE = LOG_DIR / "screen_sync_agent.pid"
 
@@ -191,67 +202,78 @@ def _acquire_singleton_lock() -> bool:
         return False
 
 
-def capture_dominant_color() -> Optional[tuple[tuple[int, int, int], int]]:
-    """
-    Capture the primary screen and extract the dominant color + scene luma.
+def _grab_array(sct: "mss.mss") -> Optional["np.ndarray"]:
+    """Grab the primary monitor as an ``(h, w, 3)`` uint8 RGB array.
 
-    Grabs the full screen, downsamples the center 60% region (skip 20% on
-    every edge to ignore taskbar / window chrome / corner UI), runs the
-    sticky-k-means picker for the dominant color AND computes the overall
-    scene luminance (Rec.601 over the *mean* of every sampled pixel, not the
-    dominant cluster — we want "how bright is the whole frame", which the
-    Rust profile maps to room brightness so the lamps dim when the game goes
-    dark). Returns ``((r, g, b), luma)`` with luma 0-255, or None if the
-    capture failed.
-    """
+    Takes an existing ``mss`` instance so the fast loop reuses one grabber
+    instead of constructing one per tick. Returns None on failure."""
+    try:
+        shot = sct.grab(sct.monitors[1])
+        return np.frombuffer(shot.rgb, dtype=np.uint8).reshape(
+            shot.height, shot.width, 3
+        )
+    except Exception as e:
+        logger.error(f"Screen grab error: {e}")
+        return None
+
+
+def compute_vignette_score(arr: "np.ndarray") -> float:
+    """Edge-concentrated redness score — high when a red flash hugs the screen
+    edges (Rust's damage vignette) but not the center (fire/sunset redden the
+    whole frame). Score = mean edge redness − mean center redness, ≥0.
+
+    ``redness(px) = max(0, R − max(G, B))``. The array is strided to ~quarter
+    resolution first (the vignette is a coarse spatial feature) so this stays
+    cheap at 5 Hz."""
+    a = arr[::4, ::4].astype(np.int16)
+    h, w = a.shape[:2]
+    if h < 8 or w < 8:
+        return 0.0
+    redness = np.clip(a[:, :, 0] - np.maximum(a[:, :, 1], a[:, :, 2]), 0, 255)
+    by, bx = max(1, int(h * 0.12)), max(1, int(w * 0.12))
+    edge = np.concatenate([
+        redness[:by, :].ravel(), redness[-by:, :].ravel(),
+        redness[by:-by, :bx].ravel(), redness[by:-by, -bx:].ravel(),
+    ])
+    center = redness[int(h * 0.3):int(h * 0.7), int(w * 0.3):int(w * 0.7)]
+    edge_red = float(edge.mean()) if edge.size else 0.0
+    center_red = float(center.mean()) if center.size else 0.0
+    return max(0.0, edge_red - center_red)
+
+
+def _color_luma_from_array(
+    arr: "np.ndarray",
+) -> Optional[tuple[tuple[int, int, int], int]]:
+    """Dominant color (sticky-k-means) + scene luma (Rec.601 frame mean) from
+    a grabbed array. Center 60% crop, strided to a ~50×30 grid. Returns
+    ``((r, g, b), luma)`` or None."""
+    h, w = arr.shape[:2]
+    crop = arr[
+        int(h * 0.20):int(h * 0.80):max(1, h // 30),
+        int(w * 0.20):int(w * 0.80):max(1, w // 50),
+    ]
+    pixels = crop.reshape(-1, 3).astype(np.float32)
+    if pixels.shape[0] == 0:
+        return None
+    scene_mean = pixels.mean(axis=0)
+    luma = int(max(0, min(255,
+        0.299 * scene_mean[0] + 0.587 * scene_mean[1] + 0.114 * scene_mean[2]
+    )))
+    if _HAS_KMEANS and pixels.shape[0] >= 8:
+        rgb = _PICKER.pick(pixels)
+    else:
+        rgb = _pick_dominant_average(pixels)
+    return rgb, luma
+
+
+def capture_dominant_color() -> Optional[tuple[tuple[int, int, int], int]]:
+    """Back-compat one-shot: grab + dominant color + luma. Used by tests and
+    any caller that wants a single sample; the live agent loop uses the split
+    grab/compute helpers so one grab feeds both the color and damage paths."""
     try:
         with mss.mss() as sct:
-            monitor = sct.monitors[1]  # Primary monitor
-            screenshot = sct.grab(monitor)
-
-            width = screenshot.width
-            height = screenshot.height
-            raw = screenshot.rgb
-
-            # ~50×30 sample grid across the center crop — enough points for
-            # k-means to find clusters without burning CPU.
-            step_x = max(1, width // 50)
-            step_y = max(1, height // 30)
-
-            x_start = int(width * 0.20)
-            x_end   = int(width * 0.80)
-            y_start = int(height * 0.20)
-            y_end   = int(height * 0.80)
-
-            pixels: list[tuple[int, int, int]] = []
-            for y in range(y_start, y_end, step_y):
-                for x in range(x_start, x_end, step_x):
-                    idx = (y * width + x) * 3
-                    if idx + 2 < len(raw):
-                        pixels.append((raw[idx], raw[idx + 1], raw[idx + 2]))
-
-            if not pixels:
-                return None
-
-            pixel_array = np.array(pixels, dtype=np.float32)
-
-            # Scene luma = Rec.601 over the frame mean. Computed before the
-            # picker so it reflects the whole crop's brightness, independent
-            # of which saturated cluster the picker chooses for color.
-            scene_mean = pixel_array.mean(axis=0)
-            luma = int(
-                0.299 * scene_mean[0]
-                + 0.587 * scene_mean[1]
-                + 0.114 * scene_mean[2]
-            )
-            luma = max(0, min(255, luma))
-
-            if _HAS_KMEANS and len(pixels) >= 8:
-                rgb = _PICKER.pick(pixel_array)
-            else:
-                rgb = _pick_dominant_average(pixel_array)
-            return rgb, luma
-
+            arr = _grab_array(sct)
+        return _color_luma_from_array(arr) if arr is not None else None
     except Exception as e:
         logger.error(f"Screen capture error: {e}")
         return None
@@ -272,42 +294,80 @@ def run_agent(
             iteration so a hung-but-alive thread (e.g. wedged screen grab) is
             detectable.
     """
-    endpoint = f"{server_url.rstrip('/')}/api/automation/screen-color"
+    color_endpoint = f"{server_url.rstrip('/')}/api/automation/screen-color"
+    event_endpoint = f"{server_url.rstrip('/')}/api/automation/rust-event"
     backoff = 1
 
     _stop = stop_event or threading.Event()
     client = httpx.Client(timeout=5.0)
 
-    logger.info(f"Screen Sync Agent started — reporting to {endpoint}")
+    logger.info(f"Screen Sync Agent started — color→{color_endpoint}, damage→{event_endpoint}")
 
+    last_color = 0.0
+    last_damage_post = 0.0
+    # The fast 5Hz damage loop only runs while we're actually in a Rust
+    # session — we learn that from the `profile: "rust"` field the screen-color
+    # response returns. Outside Rust the agent stays at the cheap 2.5s color
+    # cadence (no continuous-grab CPU cost), and flips to 5Hz within one color
+    # post of Rust starting.
+    rust_active = False
+    # One reusable grabber for the fast loop (don't reconstruct mss per tick).
+    sct = mss.mss()
     try:
         while not _stop.is_set():
             if heartbeat is not None:
                 heartbeat()
             try:
-                captured = capture_dominant_color()
-                if captured is not None:
-                    rgb, luma = captured
-                    body = {
-                        "source": "desktop",
-                        "r": rgb[0],
-                        "g": rgb[1],
-                        "b": rgb[2],
-                        # Whole-frame brightness (Rec.601). The backend uses it
-                        # for the Rust profile's room-dims-with-the-game path;
-                        # the color screen-sync path ignores it. Optional field
-                        # — older backends drop it harmlessly.
-                        "luma": luma,
-                    }
-                    try:
-                        resp = client.post(endpoint, json=body)
-                        resp.raise_for_status()
-                        backoff = 1
-                    except httpx.HTTPError as e:
-                        logger.warning(f"Failed to report color: {e}")
-                        backoff = min(backoff * 2, 60)
+                now = time.monotonic()
+                need_color = now - last_color >= CAPTURE_INTERVAL
+                if rust_active or need_color:
+                    arr = _grab_array(sct)
+                else:
+                    arr = None
 
-                _stop.wait(CAPTURE_INTERVAL if backoff == 1 else backoff)
+                if arr is not None:
+                    # Damage path — only while Rust is active. Cheap edge-
+                    # vignette score, posted above the floor + throttled; the
+                    # backend holds the real threshold + flinch logic.
+                    if rust_active:
+                        score = compute_vignette_score(arr)
+                        if (score >= DAMAGE_POST_FLOOR
+                                and now - last_damage_post >= DAMAGE_POST_MIN_INTERVAL):
+                            last_damage_post = now
+                            try:
+                                client.post(event_endpoint,
+                                            json={"type": "damage", "score": round(score, 1)})
+                            except httpx.HTTPError as e:
+                                logger.debug(f"Failed to post rust-event: {e}")
+
+                    # Color + luma — every CAPTURE_INTERVAL, off the same grab.
+                    # The response tells us whether the Rust profile is live,
+                    # which gates the fast loop above.
+                    if need_color:
+                        last_color = now
+                        cl = _color_luma_from_array(arr)
+                        if cl is not None:
+                            rgb, luma = cl
+                            try:
+                                resp = client.post(color_endpoint, json={
+                                    "source": "desktop",
+                                    "r": rgb[0], "g": rgb[1], "b": rgb[2],
+                                    "luma": luma,
+                                })
+                                resp.raise_for_status()
+                                backoff = 1
+                                try:
+                                    rust_active = resp.json().get("profile") == "rust"
+                                except (ValueError, AttributeError):
+                                    rust_active = False
+                            except httpx.HTTPError as e:
+                                logger.warning(f"Failed to report color: {e}")
+                                backoff = min(backoff * 2, 60)
+
+                if backoff != 1:
+                    _stop.wait(backoff)
+                else:
+                    _stop.wait(DAMAGE_TICK if rust_active else CAPTURE_INTERVAL)
 
             except KeyboardInterrupt:
                 logger.info("Screen sync agent stopped")
@@ -318,6 +378,10 @@ def run_agent(
                 backoff = min(backoff * 2, 60)
     finally:
         client.close()
+        try:
+            sct.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

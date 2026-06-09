@@ -24,6 +24,7 @@ from backend.api.schemas.automation import (
     MicCalibrationResult,
     ModeBrightnessConfig,
     ModeVolumeCurvesConfig,
+    RustEventReport,
     ScreenColorReport,
     TimeScheduleConfig,
 )
@@ -43,6 +44,7 @@ BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
 SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
 RUST_LIGHTING_KEY = "rust_lighting_config"
+RUST_EVENT_CONFIG_KEY = "rust_event_config"
 DND_STATE_KEY = "dnd_state"
 OVERRIDE_STATE_KEY = "override_state"
 
@@ -298,6 +300,14 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             # frame luma, but keeps the path live until the desktop agent
             # restart ships it).
             luma = int(0.299 * report.r + 0.587 * report.g + 0.114 * report.b)
+        # Under-fire glow (Phase 2): while RustEventService says the player is
+        # taking sustained damage, tint the ember toward danger-red instead of
+        # re-flashing. None = normal ember.
+        rust_event = getattr(request.app.state, "rust_event", None)
+        tint = rust_event.tint_for("2") if (
+            rust_event is not None and rust_event.under_fire
+        ) else None
+
         applied_rust: list[str] = []
         skipped_rust: dict[str, str] = {}
         for target in ("2", "5"):
@@ -308,7 +318,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
                 skipped_rust[target] = "manual_override"
                 continue
             await sync.apply_rust_brightness(
-                target, luma, period=period, source=report.source,
+                target, luma, period=period, source=report.source, tint=tint,
             )
             applied_rust.append(target)
         resp: dict = {
@@ -694,6 +704,50 @@ async def update_rust_lighting(config: dict, request: Request) -> dict:
     merged = sync.apply_rust_config(config)
     await save_setting(RUST_LIGHTING_KEY, merged)
     logger.info("Rust lighting config updated: %s", config)
+    return {"status": "ok", "config": merged}
+
+
+@router.post("/rust-event", dependencies=[Depends(require_api_key)])
+async def receive_rust_event(report: RustEventReport, request: Request) -> dict:
+    """Ingest a Rust in-game event from the desktop screen agent (Phase 2).
+
+    Damage pings drive the L2/L5 flinch + under-fire glow. Cheaply gated to
+    gaming+rust (the agent only posts during Rust anyway); off-context pings
+    are accepted and dropped so the agent never errors."""
+    rust_event = getattr(request.app.state, "rust_event", None)
+    engine = getattr(request.app.state, "automation", None)
+    if rust_event is None or engine is None:
+        raise HTTPException(status_code=503, detail="Rust event service not initialized")
+
+    if engine.current_mode != "gaming" or getattr(engine, "current_game", None) != "rust":
+        return {"status": "ok", "reaction": "not_rust"}
+    if report.type != "damage":
+        return {"status": "ok", "reaction": "ignored_type"}
+
+    result = await rust_event.report_damage(report.score, period=engine._get_time_period())
+    return {"status": "ok", **result}
+
+
+@router.get("/rust-event-config")
+async def get_rust_event_config(request: Request) -> dict:
+    """Return the live Rust event-reaction config (flinch/tint/cooldown knobs)."""
+    svc = getattr(request.app.state, "rust_event", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Rust event service not initialized")
+    return {"status": "ok", "config": svc.get_config()}
+
+
+@router.put("/rust-event-config", dependencies=[Depends(require_api_key)])
+async def update_rust_event_config(config: dict, request: Request) -> dict:
+    """Live-tune the damage reaction (cooldown, release, threshold, flinch +
+    tint colors) WITHOUT a redeploy. Partial-merge + validate + persist, same
+    no-deploy loop as the brightness envelope. Applies to the next event."""
+    svc = getattr(request.app.state, "rust_event", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Rust event service not initialized")
+    merged = svc.apply_config(config)
+    await save_setting(RUST_EVENT_CONFIG_KEY, merged)
+    logger.info("Rust event config updated: %s", config)
     return {"status": "ok", "config": merged}
 
 

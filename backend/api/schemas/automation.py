@@ -230,3 +230,20 @@ class LaptopLoopbackToggle(BaseModel):
     """Toggle for the in-process laptop screen capture (TV-on-laptop escape hatch)."""
 
     enabled: bool = Field(..., description="True to start the loopback, False to stop")
+
+
+class RustEventReport(BaseModel):
+    """In-game Rust event detected by the desktop screen agent (Phase 2).
+
+    Currently only ``damage`` — the red edge-vignette spike when the player is
+    hit. ``score`` is the agent's vignette intensity; the backend gates it
+    against a runtime-tunable threshold before reacting."""
+
+    type: str = Field(
+        default="damage",
+        description="Event type — only 'damage' is handled today",
+    )
+    score: float = Field(
+        default=0.0, ge=0,
+        description="Vignette intensity score from the agent (edge red - center red)",
+    )

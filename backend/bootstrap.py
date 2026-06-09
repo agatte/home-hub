@@ -180,6 +180,7 @@ async def lifespan(app: FastAPI):
     from backend.api.routes.automation import (
         SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, SCREEN_SYNC_LAPTOP_KEY,
         WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS, RUST_LIGHTING_KEY,
+        RUST_EVENT_CONFIG_KEY,
         _dict_to_schedule_config,
     )
     from backend.services.automation_engine import ScheduleConfig
@@ -193,6 +194,7 @@ async def lifespan(app: FastAPI):
     saved_brightness = await load_setting(BRIGHTNESS_CONFIG_KEY)
     saved_watching_posture = await load_setting(WATCHING_POSTURE_KEY)
     saved_rust_lighting = await load_setting(RUST_LIGHTING_KEY)
+    saved_rust_event = await load_setting(RUST_EVENT_CONFIG_KEY)
 
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
@@ -433,6 +435,17 @@ async def lifespan(app: FastAPI):
     )
     app.state.lol_champion_service = lol_champion
     automation.register_on_mode_change(lol_champion.on_mode_change)
+
+    # Rust damage-reaction (Phase 2): L2/L5 flinch + under-fire glow driven by
+    # the desktop agent's screen-edge vignette detection. Restore persisted
+    # feel knobs; the release loop is added to `tasks` below.
+    from backend.services.rust_event_service import RustEventService
+    rust_event = RustEventService(
+        hue_service=hue, screen_sync=screen_sync, ws_manager=ws_manager,
+    )
+    if saved_rust_event:
+        rust_event.apply_config(saved_rust_event)
+    app.state.rust_event = rust_event
 
     # Per-mode Sonos volume curves (GH#17). Fades the speaker to a mode-shaped
     # target on transition. Pure-policy split: see mode_volume_policy.py.
@@ -1116,6 +1129,10 @@ async def lifespan(app: FastAPI):
     app.state.transit_lighting = transit_lighting
     tasks.append(asyncio.create_task(transit_lighting.poll_loop()))
     app_logger.info("Transit lighting service started")
+
+    # Rust under-fire release loop (Phase 2) — clears the danger glow ~2s after
+    # the last damage ping so the lamps hand back to the normal luma sync.
+    tasks.append(asyncio.create_task(rust_event.release_loop()))
 
     # Desk-exit kitchen — when Anthony leaves the desk in productive evening/
     # night, brighten the kitchen pair (L3 + L4) and hold until he returns.

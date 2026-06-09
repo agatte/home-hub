@@ -582,12 +582,18 @@ class ScreenSyncService:
             trigger=trigger,
         )
 
+    def last_applied_bri(self, light_id: str) -> float:
+        """Last smoothed brightness applied to ``light_id`` (RustEventService's
+        flinch borrows this as its dip baseline). Mid-value before first frame."""
+        return self._last_bri.get(light_id, 100.0)
+
     async def apply_rust_brightness(
         self,
         light_id: str,
         luma: int,
         period: Optional[str] = None,
         source: str = "desktop",
+        tint: Optional[tuple[int, int, float]] = None,
     ) -> None:
         """Drive a lamp's BRIGHTNESS from screen luma, holding a fixed ember color.
 
@@ -608,6 +614,10 @@ class ScreenSyncService:
             luma: Whole-frame brightness 0-255 (Rec.601) from the capture agent.
             period: Time period for the envelope lookup; falls back to night.
             source: Reporting source, recorded for status only.
+            tint: Optional ``(hue, sat, bri_factor)`` for the Rust under-fire
+                danger glow — replaces the ember hue/sat and scales the target
+                brightness, while the lamp still rides the luma envelope (so the
+                glow tracks scene brightness, just red-shifted). None = ember.
         """
         if light_id not in self._targets:
             return
@@ -616,10 +626,12 @@ class ScreenSyncService:
         span = max(1, self._rust_luma_bright - self._rust_luma_dark)
         frac = max(0.0, min(1.0, (luma - self._rust_luma_dark) / span))
         target_bri = floor + (cap - floor) * frac
-        sh, ss, sb = self._smooth(
-            light_id, float(self._rust_ember_hue), float(self._rust_ember_sat),
-            target_bri,
-        )
+        if tint is not None:
+            hue, sat, bri_factor = tint
+            target_bri *= bri_factor
+        else:
+            hue, sat = self._rust_ember_hue, self._rust_ember_sat
+        sh, ss, sb = self._smooth(light_id, float(hue), float(sat), target_bri)
         await self._hue.set_light(light_id, {
             "on": True,
             "hue": int(sh),
