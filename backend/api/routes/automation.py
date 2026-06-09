@@ -42,6 +42,7 @@ SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
 SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
+RUST_LIGHTING_KEY = "rust_lighting_config"
 DND_STATE_KEY = "dnd_state"
 OVERRIDE_STATE_KEY = "override_state"
 
@@ -660,6 +661,39 @@ async def update_watching_posture(config: dict, request: Request) -> dict:
         engine.set_bed_reclined_l1_night(merged["reclined_l1_night"])
 
     logger.info(f"Watching posture tuning updated: {cleaned}")
+    return {"status": "ok", "config": merged}
+
+
+@router.get("/rust-lighting")
+async def get_rust_lighting(request: Request) -> dict:
+    """Return the live Rust luma-brightness config (envelope + ember + luma).
+
+    Reads from the live screen_sync service so it reflects defaults merged with
+    any persisted tweaks. Shape matches the PUT body. 503 if screen_sync isn't
+    wired (boot/tests)."""
+    sync = getattr(request.app.state, "screen_sync", None)
+    if sync is None:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+    return {"status": "ok", "config": sync.get_rust_config()}
+
+
+@router.put("/rust-lighting", dependencies=[Depends(require_api_key)])
+async def update_rust_lighting(config: dict, request: Request) -> dict:
+    """Live-tune the Rust luma-brightness profile WITHOUT a redeploy.
+
+    Accepts a full or partial config — e.g. ``{"envelope": {"2": {"night":
+    [50, 170]}}}`` bumps only L2's night range. The service validates/clamps,
+    applies it to the live knobs (effective on the next screen-color frame,
+    ~2.5s), and the full resolved config is persisted to app_settings so it
+    survives restarts. This is the no-deploy tuning loop for "a tad dimmer /
+    brighter" feedback."""
+    sync = getattr(request.app.state, "screen_sync", None)
+    if sync is None:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+
+    merged = sync.apply_rust_config(config)
+    await save_setting(RUST_LIGHTING_KEY, merged)
+    logger.info("Rust lighting config updated: %s", config)
     return {"status": "ok", "config": merged}
 
 

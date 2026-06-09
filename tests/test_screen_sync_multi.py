@@ -483,3 +483,38 @@ async def test_apply_rust_brightness_unknown_light_is_noop():
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
     await sync.apply_rust_brightness("5", luma=100, period="day")  # 5 not a target
     assert hue.calls == []
+
+
+@pytest.mark.asyncio
+async def test_rust_config_partial_merge_and_validation():
+    """Runtime Rust knob: partial PUT merges, validates, and drives apply."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    base = sync.get_rust_config()
+    assert base["envelope"]["2"]["night"] == list(ss.RUST_BRI_ENVELOPE["2"]["night"])
+    assert base["ember"]["hue"] == ss.RUST_EMBER_HUE
+
+    # Partial: bump only L2 night; everything else untouched.
+    out = sync.apply_rust_config({"envelope": {"2": {"night": [50, 170]}}})
+    assert out["envelope"]["2"]["night"] == [50, 170]
+    assert out["envelope"]["2"]["day"] == base["envelope"]["2"]["day"]
+    assert out["envelope"]["5"]["night"] == base["envelope"]["5"]["night"]
+
+    # Validation: floor>cap swaps; unknown light/period ignored; clamps.
+    out = sync.apply_rust_config(
+        {"envelope": {"2": {"day": [240, 30]}, "9": {"night": [1, 2]},
+                      "5": {"noon": [1, 2]}}}
+    )
+    assert out["envelope"]["2"]["day"] == [30, 240]
+    assert "9" not in out["envelope"]
+    assert "noon" not in out["envelope"]["5"]
+
+    # luma dark<bright enforced.
+    out = sync.apply_rust_config({"luma": {"dark": 100, "bright": 50}})
+    assert out["luma"]["dark"] == 100 and out["luma"]["bright"] == 101
+
+    # The live knob actually drives apply_rust_brightness.
+    for _ in range(40):
+        await sync.apply_rust_brightness("2", luma=255, period="night")
+    assert abs(hue.last_for("2")["bri"] - 170) <= 3

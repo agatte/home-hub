@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
     from backend.api.routes.routines import load_setting
     from backend.api.routes.automation import (
         SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, SCREEN_SYNC_LAPTOP_KEY,
-        WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS,
+        WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS, RUST_LIGHTING_KEY,
         _dict_to_schedule_config,
     )
     from backend.services.automation_engine import ScheduleConfig
@@ -192,6 +192,7 @@ async def lifespan(app: FastAPI):
     )
     saved_brightness = await load_setting(BRIGHTNESS_CONFIG_KEY)
     saved_watching_posture = await load_setting(WATCHING_POSTURE_KEY)
+    saved_rust_lighting = await load_setting(RUST_LIGHTING_KEY)
 
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
@@ -519,6 +520,11 @@ async def lifespan(app: FastAPI):
         "watching", "bed", "upright", posture_cfg["upright_sync_cap"]
     )
     automation.set_bed_reclined_l1_night(posture_cfg["reclined_l1_night"])
+
+    # Restore persisted Rust luma-brightness tuning (no-redeploy knob —
+    # PUT /api/automation/rust-lighting). Partial or full; merges over defaults.
+    if saved_rust_lighting:
+        screen_sync.apply_rust_config(saved_rust_lighting)
 
     # Restore laptop loopback state from persisted setting (default off)
     saved_loopback = await load_setting(SCREEN_SYNC_LAPTOP_KEY)

@@ -253,6 +253,19 @@ class ScreenSyncService:
         self._event_logger = None
         self._last_log_at: dict[str, datetime] = {}
 
+        # Runtime-tunable Rust profile knobs (seeded from the module defaults).
+        # Live-adjustable via PUT /api/automation/rust-lighting + persisted in
+        # app_settings, so "a tad dimmer/brighter" tweaks apply instantly with
+        # no redeploy. apply_rust_brightness reads these, not the constants.
+        self._rust_envelope: dict[str, dict[str, list[int]]] = {
+            lid: {period: list(fc) for period, fc in periods.items()}
+            for lid, periods in RUST_BRI_ENVELOPE.items()
+        }
+        self._rust_ember_hue: int = RUST_EMBER_HUE
+        self._rust_ember_sat: int = RUST_EMBER_SAT
+        self._rust_luma_dark: int = RUST_LUMA_DARK
+        self._rust_luma_bright: int = RUST_LUMA_BRIGHT
+
     def set_cap_override(
         self,
         mode: str,
@@ -579,13 +592,16 @@ class ScreenSyncService:
         """Drive a lamp's BRIGHTNESS from screen luma, holding a fixed ember color.
 
         The Rust profile's L2 path. Instead of mirroring the (chaotic)
-        on-screen color, hold ``RUST_EMBER_*`` and map the whole-frame
-        luminance onto the period's ``RUST_BRI_ENVELOPE`` (floor, cap) so the
-        lamp dims when Rust goes dark and lifts on bright scenes. EMA smoothing
-        reuses the per-light state — hue/sat are constant, so only ``bri``
-        moves. Deliberately NO ambient lux lift: brightness is screen-driven,
-        and the lux feedback loop (lamp brightens room → webcam reads brighter
-        → lifts the cap) would fight the luma signal.
+        on-screen color, hold the ember color and map the whole-frame luminance
+        onto the period's (floor, cap) envelope so the lamp dims when Rust goes
+        dark and lifts on bright scenes. Reads the runtime-tunable instance
+        knobs (``_rust_envelope`` / ``_rust_ember_*`` / ``_rust_luma_*``),
+        seeded from the module defaults and live-adjustable via
+        ``PUT /api/automation/rust-lighting``. EMA smoothing reuses the per-light
+        state — hue/sat are constant, so only ``bri`` moves. Deliberately NO
+        ambient lux lift: brightness is screen-driven, and the lux feedback loop
+        (lamp brightens room → webcam reads brighter → lifts the cap) would
+        fight the luma signal.
 
         Args:
             light_id: Target lamp; no-op if not in ``target_lights``.
@@ -595,13 +611,14 @@ class ScreenSyncService:
         """
         if light_id not in self._targets:
             return
-        light_env = RUST_BRI_ENVELOPE.get(light_id, RUST_BRI_ENVELOPE["2"])
+        light_env = self._rust_envelope.get(light_id, self._rust_envelope["2"])
         floor, cap = light_env.get(period or "night", light_env["night"])
-        span = max(1, RUST_LUMA_BRIGHT - RUST_LUMA_DARK)
-        frac = max(0.0, min(1.0, (luma - RUST_LUMA_DARK) / span))
+        span = max(1, self._rust_luma_bright - self._rust_luma_dark)
+        frac = max(0.0, min(1.0, (luma - self._rust_luma_dark) / span))
         target_bri = floor + (cap - floor) * frac
         sh, ss, sb = self._smooth(
-            light_id, float(RUST_EMBER_HUE), float(RUST_EMBER_SAT), target_bri,
+            light_id, float(self._rust_ember_hue), float(self._rust_ember_sat),
+            target_bri,
         )
         await self._hue.set_light(light_id, {
             "on": True,
@@ -616,6 +633,74 @@ class ScreenSyncService:
             light_id, int(sh), int(ss), int(sb), "gaming",
             trigger="rust_brightness_sync",
         )
+
+    # ------------------------------------------------------------------
+    # Runtime Rust-profile tuning (no-redeploy knob)
+    # ------------------------------------------------------------------
+
+    def get_rust_config(self) -> dict:
+        """Return the live Rust luma-brightness config as a JSON-safe dict.
+
+        Shape: ``{"envelope": {light: {period: [floor, cap]}}, "ember":
+        {"hue", "sat"}, "luma": {"dark", "bright"}}``. Backs
+        ``GET /api/automation/rust-lighting`` and is the exact shape
+        ``apply_rust_config`` accepts (full or partial)."""
+        return {
+            "envelope": {
+                lid: {period: list(fc) for period, fc in periods.items()}
+                for lid, periods in self._rust_envelope.items()
+            },
+            "ember": {"hue": self._rust_ember_hue, "sat": self._rust_ember_sat},
+            "luma": {"dark": self._rust_luma_dark, "bright": self._rust_luma_bright},
+        }
+
+    def apply_rust_config(self, cfg: dict) -> dict:
+        """Merge a (possibly partial) Rust config into the live knobs.
+
+        Only the keys present in ``cfg`` are touched — e.g. PUT just
+        ``{"envelope": {"2": {"night": [50, 170]}}}`` to bump L2's night
+        range, leaving everything else. Values are validated/clamped:
+        bri floor/cap to [1, 254] with floor ≤ cap, hue to [0, 65535], sat
+        to [0, 254], luma dark/bright to [0, 255] with dark < bright. Unknown
+        light ids / periods are ignored. Returns the full resolved config
+        (``get_rust_config()``)."""
+        if not isinstance(cfg, dict):
+            return self.get_rust_config()
+
+        env = cfg.get("envelope")
+        if isinstance(env, dict):
+            for lid, periods in env.items():
+                if lid not in self._rust_envelope or not isinstance(periods, dict):
+                    continue
+                for period, fc in periods.items():
+                    if period not in self._rust_envelope[lid]:
+                        continue
+                    if not isinstance(fc, (list, tuple)) or len(fc) != 2:
+                        continue
+                    floor = max(1, min(254, int(fc[0])))
+                    cap = max(1, min(254, int(fc[1])))
+                    if floor > cap:
+                        floor, cap = cap, floor
+                    self._rust_envelope[lid][period] = [floor, cap]
+
+        ember = cfg.get("ember")
+        if isinstance(ember, dict):
+            if ember.get("hue") is not None:
+                self._rust_ember_hue = max(0, min(65535, int(ember["hue"])))
+            if ember.get("sat") is not None:
+                self._rust_ember_sat = max(0, min(254, int(ember["sat"])))
+
+        luma = cfg.get("luma")
+        if isinstance(luma, dict):
+            if luma.get("dark") is not None:
+                self._rust_luma_dark = max(0, min(255, int(luma["dark"])))
+            if luma.get("bright") is not None:
+                self._rust_luma_bright = max(0, min(255, int(luma["bright"])))
+            # Keep dark < bright so the span never collapses/inverts.
+            if self._rust_luma_dark >= self._rust_luma_bright:
+                self._rust_luma_bright = self._rust_luma_dark + 1
+
+        return self.get_rust_config()
 
 
 class LaptopLoopbackCapture:
