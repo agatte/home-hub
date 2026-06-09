@@ -447,15 +447,34 @@ async def test_apply_rust_brightness_holds_ember_and_dims_when_dark():
     dark = hue.last_for("2")
     assert abs(dark["hue"] - ss.RUST_EMBER_HUE) <= 5
     assert abs(dark["sat"] - ss.RUST_EMBER_SAT) <= 2
-    assert abs(dark["bri"] - ss.RUST_BRI_ENVELOPE["night"][0]) <= 2, dark["bri"]
+    assert abs(dark["bri"] - ss.RUST_BRI_ENVELOPE["2"]["night"][0]) <= 2, dark["bri"]
 
     # Bright daytime frame → day cap.
     for _ in range(30):
         await sync.apply_rust_brightness("2", luma=200, period="day")
     bright = hue.last_for("2")
-    assert abs(bright["bri"] - ss.RUST_BRI_ENVELOPE["day"][1]) <= 2, bright["bri"]
+    assert abs(bright["bri"] - ss.RUST_BRI_ENVELOPE["2"]["day"][1]) <= 2, bright["bri"]
     # Still ember — never the screen color.
     assert abs(bright["hue"] - ss.RUST_EMBER_HUE) <= 5
+
+
+@pytest.mark.asyncio
+async def test_apply_rust_brightness_l5_subordinate_to_l2():
+    """L5 must dim WITH L2 and stay below it at the same luma/period — the
+    fix for the static-L5-towers-over-dimming-L2 glare-pop (2026-06-08)."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    for period in ("day", "night", "late_night"):
+        # Same bright scene to both lamps — converge each.
+        for _ in range(30):
+            await sync.apply_rust_brightness("2", luma=180, period=period)
+            await sync.apply_rust_brightness("5", luma=180, period=period)
+        assert hue.last_for("5")["bri"] < hue.last_for("2")["bri"], period
+        # Same dark scene — L5 still ≤ L2 (both floor, L5's floor is lower).
+        for _ in range(30):
+            await sync.apply_rust_brightness("2", luma=4, period=period)
+            await sync.apply_rust_brightness("5", luma=4, period=period)
+        assert hue.last_for("5")["bri"] <= hue.last_for("2")["bri"], period
 
 
 @pytest.mark.asyncio

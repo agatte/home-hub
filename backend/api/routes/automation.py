@@ -281,12 +281,14 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
-    # Rust profile: hold a fixed ember color and drive L2's BRIGHTNESS from the
-    # screen's whole-frame luma, so the room dims as Rust's day/night cycle goes
-    # dark (the user's "dark in game → dimmer room" ask). Color is NOT synced —
-    # Rust has no coherent ambient color. L5 keeps its static ember spark from
-    # GAME_LIGHT_PROFILES (engine-owned, not luma-driven). Other games fall
-    # through to the standard per-frame color screen-sync below.
+    # Rust profile: hold a fixed ember color and drive the bedroom lamps'
+    # BRIGHTNESS from the screen's whole-frame luma, so the room dims as Rust's
+    # day/night cycle goes dark (the user's "dark in game → dimmer room" ask).
+    # Color is NOT synced — Rust has no coherent ambient color. Both L2 and L5
+    # are luma-driven on per-light envelopes (L5 subordinate, ~50-55% of L2) so
+    # the clear-housing accent dims WITH L2 instead of towering over it when L2
+    # floors out (the glare-pop the curator flagged + live feedback confirmed
+    # 2026-06-08). Other games fall through to the per-frame color sync below.
     if getattr(engine, "current_game", None) == "rust":
         luma = report.luma
         if luma is None:
@@ -295,17 +297,26 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             # frame luma, but keeps the path live until the desktop agent
             # restart ships it).
             luma = int(0.299 * report.r + 0.587 * report.g + 0.114 * report.b)
-        target = "2"
-        if target not in sync.target_lights:
-            return {"status": "ok", "applied": False, "lights": [], "profile": "rust",
-                    "reason": "no_target"}
-        if target in engine.manual_light_overrides:
-            return {"status": "ok", "applied": False, "lights": [], "profile": "rust",
-                    "reason": "manual_override"}
-        await sync.apply_rust_brightness(
-            target, luma, period=period, source=report.source,
-        )
-        return {"status": "ok", "applied": True, "lights": [target], "profile": "rust"}
+        applied_rust: list[str] = []
+        skipped_rust: dict[str, str] = {}
+        for target in ("2", "5"):
+            if target not in sync.target_lights:
+                skipped_rust[target] = "no_target"
+                continue
+            if target in engine.manual_light_overrides:
+                skipped_rust[target] = "manual_override"
+                continue
+            await sync.apply_rust_brightness(
+                target, luma, period=period, source=report.source,
+            )
+            applied_rust.append(target)
+        resp: dict = {
+            "status": "ok", "applied": bool(applied_rust),
+            "lights": applied_rust, "profile": "rust",
+        }
+        if skipped_rust:
+            resp["skipped"] = skipped_rust
+        return resp
 
     # Ambient envelope lift: lux + weather scale the cap+floor so dim content
     # in a dim room doesn't drag L2 to eye-strain dimness. The screen-sync

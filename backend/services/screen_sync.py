@@ -169,16 +169,30 @@ MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
 RUST_EMBER_HUE = 6000
 RUST_EMBER_SAT = 200
 
-# Per-period (floor, cap) brightness envelope for L2 under the Rust profile.
-# "Dim hard at night" (user choice 2026-06-08): pitch-black Rust drops L2 to
-# the floor; a bright daytime scene lifts it toward the cap. Floors step down
-# through the evening so a dark scene at midnight is genuinely dim. First-pass
-# values — tune live against an actual Rust session.
-RUST_BRI_ENVELOPE: dict[str, tuple[int, int]] = {
-    "day":        (60, 200),
-    "evening":    (45, 175),
-    "night":      (35, 150),
-    "late_night": (22, 110),
+# Per-light, per-period (floor, cap) brightness envelope under the Rust profile.
+# "Dim hard at night" (user choice 2026-06-08): pitch-black Rust drops the lamp
+# to its floor; a bright daytime scene lifts it toward the cap. Floors step down
+# through the evening so a dark scene at midnight is genuinely dim.
+#
+# BOTH bedroom lamps are luma-driven (2026-06-08 live fix): L5 was originally a
+# *static* ember spark, but live it towered over an L2 that dims with the screen
+# (the curator-predicted glare-pop). Making L5 track luma at a subordinate
+# envelope (~50-55% of L2) keeps the two proportional — L5 dims alongside L2 and
+# never becomes the brightest desk element. L5's clear seeded-glass housing
+# reads sharper than L2's fabric shade, so its caps stay well below L2's.
+RUST_BRI_ENVELOPE: dict[str, dict[str, tuple[int, int]]] = {
+    "2": {  # L2 — diffuse fabric shade, the room-light primary
+        "day":        (60, 200),
+        "evening":    (45, 175),
+        "night":      (35, 150),
+        "late_night": (22, 110),
+    },
+    "5": {  # L5 — clear-housing accent, subordinate, dims with L2
+        "day":        (32, 105),
+        "evening":    (26, 90),
+        "night":      (18, 72),
+        "late_night": (14, 50),
+    },
 }
 # Screen-luma input window mapped onto the envelope. Rust daytime scenes read
 # ~100-150; the pitch-black night floor is ~5-15. Below RUST_LUMA_DARK → floor,
@@ -578,9 +592,8 @@ class ScreenSyncService:
         """
         if light_id not in self._targets:
             return
-        floor, cap = RUST_BRI_ENVELOPE.get(
-            period or "night", RUST_BRI_ENVELOPE["night"],
-        )
+        light_env = RUST_BRI_ENVELOPE.get(light_id, RUST_BRI_ENVELOPE["2"])
+        floor, cap = light_env.get(period or "night", light_env["night"])
         span = max(1, RUST_LUMA_BRIGHT - RUST_LUMA_DARK)
         frac = max(0.0, min(1.0, (luma - RUST_LUMA_DARK) / span))
         target_bri = floor + (cap - floor) * frac
