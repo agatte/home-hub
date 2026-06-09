@@ -181,17 +181,20 @@ RUST_EMBER_SAT = 200
 # never becomes the brightest desk element. L5's clear seeded-glass housing
 # reads sharper than L2's fabric shade, so its caps stay well below L2's.
 RUST_BRI_ENVELOPE: dict[str, dict[str, tuple[int, int]]] = {
+    # evening/night/late_night lifted ~10-15% on 2026-06-08 ("a tad dim" at
+    # 9:45pm live feedback) — eases the floor+cap without abandoning the
+    # dim-hard-at-night intent. Day untouched (already bright).
     "2": {  # L2 — diffuse fabric shade, the room-light primary
         "day":        (60, 200),
-        "evening":    (45, 175),
-        "night":      (35, 150),
-        "late_night": (22, 110),
+        "evening":    (50, 182),
+        "night":      (43, 162),
+        "late_night": (27, 120),
     },
     "5": {  # L5 — clear-housing accent, subordinate, dims with L2
         "day":        (32, 105),
-        "evening":    (26, 90),
-        "night":      (18, 72),
-        "late_night": (14, 50),
+        "evening":    (29, 97),
+        "night":      (23, 84),
+        "late_night": (16, 58),
     },
 }
 # Screen-luma input window mapped onto the envelope. Rust daytime scenes read
