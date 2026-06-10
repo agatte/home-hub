@@ -50,6 +50,7 @@ from backend.services.automation_constants import (
     ScheduleConfig as ScheduleConfig,
 )
 from backend.services.dnd_manager import DndManager
+from backend.services.pipeline_broadcaster import PipelineBroadcaster
 
 logger = logging.getLogger("home_hub.automation")
 
@@ -303,9 +304,15 @@ class AutomationEngine:
         # that screen sync owns so we don't fight it on watching/gaming.
         self._screen_sync = screen_sync
 
-        # Decision pipeline — real-time snapshot of all inputs → output
-        self._pipeline_history: list[dict] = []
-        self._last_pipeline_broadcast: Optional[datetime] = None
+        # Decision pipeline — real-time snapshot of all inputs → output.
+        # Ring + throttle + WS emit live in pipeline_broadcaster.py (GH#86
+        # step 3); _build_pipeline_state stays on the engine (reads live
+        # engine state). Getters defer to call time — WS manager is
+        # assigned post-construction.
+        self._pipeline = PipelineBroadcaster(
+            ws_manager_getter=lambda: self._ws_manager,
+            state_builder=self._build_pipeline_state,
+        )
 
         # Heartbeat registry — set via set_heartbeat_registry from lifespan
         # so /health can flag a stalled run_loop.
@@ -3525,22 +3532,14 @@ class AutomationEngine:
         hours = minutes // 60
         return f"{hours}h {minutes % 60}m ago"
 
+    @property
+    def pipeline_history(self) -> list[dict]:
+        """Pipeline snapshot ring for the /api/automation/pipeline view."""
+        return self._pipeline.history
+
     async def _broadcast_pipeline(self) -> None:
         """Broadcast pipeline state to all WebSocket clients (throttled)."""
-        now = datetime.now(tz=TZ)
-        if (
-            self._last_pipeline_broadcast
-            and (now - self._last_pipeline_broadcast).total_seconds() < 1.0
-        ):
-            return
-        self._last_pipeline_broadcast = now
-
-        state = self._build_pipeline_state()
-        self._pipeline_history.append(state)
-        if len(self._pipeline_history) > 30:
-            self._pipeline_history.pop(0)
-
-        await self._ws_manager.broadcast("pipeline_state", state)
+        await self._pipeline.broadcast()
 
     async def _broadcast_mode(self) -> None:
         """Broadcast the current mode to all WebSocket clients."""
