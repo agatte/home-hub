@@ -51,6 +51,7 @@ from backend.services.automation_constants import (
 )
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
+from backend.services.light_override_manager import LightOverrideManager
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
 
 logger = logging.getLogger("home_hub.automation")
@@ -211,6 +212,22 @@ class AutomationEngine:
         # deadline. Reconciliation skips these lights the same way
         # _manual_light_overrides does.
         self._state = EngineState()
+
+        # Per-light override verbs (manual stamps, dedup discipline,
+        # transit/desk-exit/corridor lifecycle) — GH#87 step 4. Getters
+        # defer to call time: hue/event_logger can be (re)wired after
+        # construction, current_mode must be the override-aware property,
+        # and _apply_mode is the revert path for transit clears.
+        self._overrides = LightOverrideManager(
+            state=self._state,
+            hue_getter=lambda: self._hue,
+            event_logger_getter=lambda: self._event_logger,
+            current_mode_getter=lambda: self.current_mode,
+            # Late-bound through self so a rebound _apply_mode (tests spy on
+            # it; future wrappers may decorate it) is honored at call time —
+            # a bound method captured here would go stale.
+            reapply_mode=lambda mode: self._apply_mode(mode),
+        )
 
         # Track if lights were turned off externally (Alexa geofence)
         self._external_off_detected: bool = False
@@ -1532,69 +1549,39 @@ class AutomationEngine:
         """
         await self._dnd.load_state()
 
+    # ── Per-light override verbs ────────────────────────────────────────
+    # Implementations live in light_override_manager.py (GH#87 step 4).
+    # These delegates keep the original method names for external callers
+    # (TransitLightingService, DeskExitKitchenService, WS handler, tests).
+
     def mark_light_manual(self, light_id: str) -> None:
         """Mark a light as manually adjusted — protects it from automation.
 
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
-        self._manual_light_overrides[light_id] = datetime.now(tz=TZ)
-        logger.info(f"Light {light_id} marked as manually overridden")
+        self._overrides.mark_manual(light_id)
 
     def _clear_per_light_overrides(self) -> None:
         """Clear all per-light manual overrides."""
-        if self._manual_light_overrides:
-            logger.info(
-                f"Clearing per-light overrides: {list(self._manual_light_overrides)}"
-            )
-            self._manual_light_overrides.clear()
+        self._overrides.clear_manual_stamps()
 
     def _invalidate_dedup_cache(self) -> None:
         """Drop the per-light dedup cache so the next ``_apply_state`` re-sends
-        to every light instead of being suppressed as a no-op.
-
-        Single owner for the "force re-apply" discipline. Call wherever the
-        bridge may have diverged from ``_last_applied_per_light`` (mode
-        transitions across a colorspace switch, effect stop/start, config
-        hot-reloads, sleep-fade steps, scene drift). Centralized so a new code
-        path can't silently reintroduce the stale-cache dedup-skip behind the
-        kitchen-pair drift of 2026-05-09 (project_transit_lighting_cache_pop_churn).
+        to every light. See LightOverrideManager.invalidate_dedup_cache for
+        the full force-re-apply discipline rationale.
         """
-        self._last_applied_per_light = {}
+        self._overrides.invalidate_dedup_cache()
 
     def _forget_dedup_light(self, light_id: str) -> None:
         """Drop one light from the dedup cache so the next reconcile re-sends
-        the mode's state to it. Used when a transit override is cleared/expired
-        and the cache would otherwise retain the stale transit value and
-        dedup-skip the revert.
+        the mode's state to it.
         """
-        self._last_applied_per_light.pop(light_id, None)
+        self._overrides.forget_dedup_light(light_id)
 
     def _prune_expired_transit_overrides(self) -> None:
-        """Remove transit overrides whose deadline has passed.
-
-        Called before the skip filter consults the dict so expired entries
-        don't stale-lock automation from reasserting a light.
-        """
-        if not self._transit_light_overrides:
-            return
-        now = datetime.now(tz=TZ)
-        expired = [
-            lid for lid, deadline in self._transit_light_overrides.items()
-            if deadline <= now
-        ]
-        for lid in expired:
-            del self._transit_light_overrides[lid]
-            # Mirrors clear_transit_override's pop. Without it, the dedup
-            # cache retains transit values after deadline expiry and the
-            # next reconcile dedup-skips on stale data (kitchen-pair drift
-            # 2026-05-09; memory project_transit_lighting_cache_pop_churn).
-            self._forget_dedup_light(lid)
-        if expired:
-            logger.info(
-                "Transit overrides auto-expired for lights %s",
-                expired,
-            )
+        """Remove transit overrides whose deadline has passed."""
+        self._overrides.prune_expired_transit()
 
     async def apply_transit_override(
         self,
@@ -1622,73 +1609,12 @@ class AutomationEngine:
                 ``"desk_exit_kitchen"`` so analytics can distinguish the two
                 paths.
         """
-        if not self._hue or not self._hue.connected:
-            return
-
-        # Kitchen-pair atomicity: L3 + L4 must move as a unit in functional
-        # modes. If the user has manually set one (e.g., L4 at bri=114),
-        # transit-overriding only the unstamped one splits the pendants —
-        # writes go to L3 directly here, but the next _apply_per_light cycle
-        # re-protects L4 (manual stamp) and not L3, leaving them mismatched.
-        # Skip the pair entirely when either is manual; L1 still applies.
-        # Symptom that motivated this guard: 21 solo-L3 writes / 11 min split
-        # on 2026-05-09. Memory: project_transit_lighting_cache_pop_churn.md.
-        if "3" in states and "4" in states:
-            kitchen_manual = (
-                "3" in self._manual_light_overrides
-                or "4" in self._manual_light_overrides
-            )
-            if kitchen_manual:
-                stamped = next(
-                    lid for lid in ("3", "4")
-                    if lid in self._manual_light_overrides
-                )
-                logger.info(
-                    "%s skipped kitchen pair (L3/L4) — manual override on light %s",
-                    trigger, stamped,
-                )
-                states = {
-                    lid: s for lid, s in states.items() if lid not in ("3", "4")
-                }
-                if not states:
-                    return
-
-        deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
-        tasks = []
-        # Capture before-state for event logging — same pattern as
-        # _apply_per_light. Without this, transit writes were invisible to
-        # light_adjustments queries (2026-05-12 incident: 107 transit cycles
-        # in 30 min produced zero rows in the analytics surface).
-        pre_values: dict[str, dict] = {}
-        for light_id, state in states.items():
-            pre_values[light_id] = (
-                self._last_applied_per_light.get(light_id) or {}
-            ).copy()
-            cmd = {**state, "transitiontime": transition_time}
-            tasks.append(self._hue.set_light(light_id, cmd))
-            self._transit_light_overrides[light_id] = deadline
-            # Seed dedup so a concurrent reconcile cycle doesn't re-send the
-            # previous mode state for these lights before the skip filter runs.
-            self._last_applied_per_light[light_id] = {k: v for k, v in state.items() if k != "transitiontime"}
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info(
-            "%s override applied to lights %s (expires %s)",
-            trigger, list(states.keys()),
-            deadline.strftime("%H:%M:%S"),
+        await self._overrides.apply_transit_override(
+            states,
+            duration_seconds=duration_seconds,
+            transition_time=transition_time,
+            trigger=trigger,
         )
-        if self._event_logger:
-            for light_id, state in states.items():
-                prev = pre_values.get(light_id, {})
-                await self._event_logger.log_light_adjustment(
-                    light_id=light_id,
-                    bri_before=prev.get("bri"), bri_after=state.get("bri"),
-                    hue_before=prev.get("hue"), hue_after=state.get("hue"),
-                    sat_before=prev.get("sat"), sat_after=state.get("sat"),
-                    ct_before=prev.get("ct"), ct_after=state.get("ct"),
-                    mode_at_time=self.current_mode,
-                    trigger=trigger,
-                )
 
     async def apply_desk_exit_override(
         self,
@@ -1795,36 +1721,9 @@ class AutomationEngine:
             light_ids: lights to clear. If None, clears all active transit overrides.
             transition_time: deciseconds for the revert (30 = 3s — fast-but-not-jarring).
         """
-        _ = transition_time  # API-compat shim — revert uses mode-default transition speed
-        if not self._transit_light_overrides:
-            return
-        if light_ids is None:
-            light_ids = list(self._transit_light_overrides.keys())
-        cleared = []
-        for lid in light_ids:
-            if lid in self._transit_light_overrides:
-                del self._transit_light_overrides[lid]
-                cleared.append(lid)
-        if not cleared:
-            return
-        # Drop dedup cache for reverted lights so _apply_mode will actually
-        # re-send the mode's state to them.
-        for lid in cleared:
-            self._forget_dedup_light(lid)
-        # Reapply against the EFFECTIVE (override-aware) mode. Using the raw
-        # `_current_mode` field here discards an active manual override and
-        # snaps lights to whatever the PC activity detector last reported —
-        # the bug where a brief camera flicker in a dim bedroom rendered
-        # working late_night brightness right over a relax override.
-        effective_mode = self.current_mode
-        logger.info(
-            "Transit override cleared for lights %s — reverting to mode %s",
-            cleared, effective_mode,
+        await self._overrides.clear_transit_override(
+            light_ids=light_ids, transition_time=transition_time,
         )
-        # Re-apply the current mode's full light state. Dedup cache will no-op
-        # on any lights that weren't in the transit set, so only the cleared
-        # lights receive new Hue commands.
-        await self._apply_mode(effective_mode)
 
     # ------------------------------------------------------------------
     # Light state application
@@ -2585,18 +2484,9 @@ class AutomationEngine:
                 # Expire stale per-light overrides (same 4h window as the
                 # mode-level override, tracked per-entry via the datetime
                 # stamped in mark_light_manual).
-                if self._manual_light_overrides:
-                    cutoff = timedelta(hours=self._override_timeout_hours)
-                    expired = [
-                        lid for lid, ts in self._manual_light_overrides.items()
-                        if now - ts > cutoff
-                    ]
-                    for lid in expired:
-                        del self._manual_light_overrides[lid]
-                        logger.info(
-                            f"Per-light override on light {lid} expired "
-                            f"after {self._override_timeout_hours}h"
-                        )
+                self._overrides.expire_manual_stamps(
+                    now, self._override_timeout_hours,
+                )
 
                 # Check for external off (Alexa geofence)
                 if await self._check_external_off():
