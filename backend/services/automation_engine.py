@@ -50,6 +50,7 @@ from backend.services.automation_constants import (
     ScheduleConfig as ScheduleConfig,
 )
 from backend.services.dnd_manager import DndManager
+from backend.services.engine_state import EngineState
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
 
 logger = logging.getLogger("home_hub.automation")
@@ -195,19 +196,21 @@ class AutomationEngine:
         # pushing to relax. Set/cleared in report_activity below.
         self._idle_entered_at: Optional[datetime] = None
 
-        # Per-light state tracking for deduplication
-        self._last_applied_per_light: dict[str, dict] = {}
-
-        # Per-light manual overrides — maps light_id → timestamp
-        # Lights in this dict are protected from automation until next mode change
-        self._manual_light_overrides: dict[str, datetime] = {}
-
-        # Per-light transit-lighting overrides — maps light_id → expiration deadline.
-        # Set by TransitLightingService when Anthony steps out of the bedroom while
-        # kitchen/living-room are dim. Cleared by the service when the camera sees
-        # him again, or auto-expired at the deadline. Reconciliation skips these
-        # lights the same way _manual_light_overrides does.
-        self._transit_light_overrides: dict[str, datetime] = {}
+        # Shared per-light state: dedup cache + manual/transit override
+        # stamps. Grouped on EngineState (GH#87 step 4a) so the step-4/5
+        # extractions can share one owner object. The original attribute
+        # names (_last_applied_per_light, _manual_light_overrides,
+        # _transit_light_overrides) remain available as property facades
+        # below — every existing call site, test rebind, and the
+        # notifier's getattr reach-through work unchanged.
+        #
+        # _transit_light_overrides semantics: set by TransitLightingService
+        # when Anthony steps out of the bedroom while kitchen/living-room
+        # are dim (DeskExitKitchenService shares the dict). Cleared by the
+        # service when the camera sees him again, or auto-expired at the
+        # deadline. Reconciliation skips these lights the same way
+        # _manual_light_overrides does.
+        self._state = EngineState()
 
         # Track if lights were turned off externally (Alexa geofence)
         self._external_off_detected: bool = False
@@ -369,6 +372,38 @@ class AutomationEngine:
     def manual_light_overrides(self) -> dict[str, datetime]:
         """Light IDs with active per-light manual overrides."""
         return self._manual_light_overrides
+
+    # ── EngineState facades (GH#87 step 4a) ────────────────────────────
+    # The dicts live on self._state so the step-4/5 extractions can share
+    # one owner object. These keep the original attribute names working —
+    # internal call sites, tests that rebind the dicts wholesale, and
+    # notifier_service's getattr(engine, "_last_applied_per_light", ...)
+    # reach-through are all unchanged. Property access is attribute-speed;
+    # the hot-path dict operations themselves stay direct O(1) (critic #4).
+
+    @property
+    def _last_applied_per_light(self) -> dict[str, dict]:
+        return self._state.last_applied_per_light
+
+    @_last_applied_per_light.setter
+    def _last_applied_per_light(self, value: dict[str, dict]) -> None:
+        self._state.last_applied_per_light = value
+
+    @property
+    def _manual_light_overrides(self) -> dict[str, datetime]:
+        return self._state.manual_light_overrides
+
+    @_manual_light_overrides.setter
+    def _manual_light_overrides(self, value: dict[str, datetime]) -> None:
+        self._state.manual_light_overrides = value
+
+    @property
+    def _transit_light_overrides(self) -> dict[str, datetime]:
+        return self._state.transit_light_overrides
+
+    @_transit_light_overrides.setter
+    def _transit_light_overrides(self, value: dict[str, datetime]) -> None:
+        self._state.transit_light_overrides = value
 
     @property
     def enabled(self) -> bool:
