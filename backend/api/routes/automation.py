@@ -206,7 +206,7 @@ async def get_pipeline(request: Request) -> dict:
         return {"current": None, "history": []}
     return {
         "current": engine._build_pipeline_state(),
-        "history": list(engine._pipeline_history),
+        "history": list(engine.pipeline_history),
     }
 
 
