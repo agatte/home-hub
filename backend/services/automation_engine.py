@@ -231,6 +231,15 @@ class AutomationEngine:
 
         # Track if lights were turned off externally (Alexa geofence)
         self._external_off_detected: bool = False
+        # Hard hold on the suppression above — armed ONLY by a geofence
+        # LEAVE (AwayManager). While held, residual PC process reports
+        # (the foreground process lingers up to ~10 min after walking
+        # out, until the Win32 idle threshold trips) can NOT clear the
+        # suppression — only signal_presence (camera sees a person /
+        # geofence arrive) releases it. The soft path (_check_external_off
+        # detecting the Hue app's all-off) never sets this, preserving
+        # its original "any non-idle activity resumes" semantics.
+        self._away_hold: bool = False
 
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
@@ -734,17 +743,19 @@ class AutomationEngine:
         fires with a non-idle mode — which can't happen if the user
         walks in but doesn't touch the PC.
 
-        Camera service calls this on absent→present transitions (today's
-        only caller). A future Latitude-mic audio classifier could call
-        it on high-confidence human-sound events. Idempotent: no-op when
-        the flag is already clear.
+        Camera absent→present and the geofence arrive both route here —
+        physical presence is the ONLY thing that releases a hard
+        (geofence-armed) hold; residual process reports are not it.
+        Idempotent: no-op when nothing is armed.
 
         Args:
-            source: Caller identifier for telemetry ("camera" today;
-                "audio" if/when the parked Latitude-mic path ships).
+            source: Caller identifier for telemetry ("camera",
+                "geofence:<src>"; "audio" if/when the parked
+                Latitude-mic path ships).
         """
-        if not self._external_off_detected:
+        if not self._external_off_detected and not self._away_hold:
             return
+        self._away_hold = False
         self._external_off_detected = False
         logger.info(
             "Presence signal from %s — clearing external-off suppression "
@@ -753,25 +764,39 @@ class AutomationEngine:
         )
 
     def arm_away_suppression(self, source: str) -> None:
-        """Arm the external-off run_loop suppression explicitly.
+        """Arm the external-off run_loop suppression with a HARD hold.
 
         Same flag `_check_external_off` sets when it detects an
         externally-darkened apartment — but armed proactively by the
-        AwayManager on a geofence LEAVE, so there is no race window
-        between its lights-off write and the next run_loop detection
-        tick (up to 60s) where an autonomous setter could re-light the
-        empty apartment. Released by `signal_presence` (geofence arrive,
-        camera absent→present) or a non-idle `report_activity`.
-        Idempotent.
+        AwayManager on a geofence LEAVE (no 60s detection race), and
+        with `_away_hold` set so residual PC process reports can't
+        clear it (see report_activity). Released ONLY by
+        `signal_presence` (geofence arrive, camera absent→present).
+
+        Also invalidates the per-light dedup cache: the apartment is
+        being forced dark, so the cache no longer reflects the bridge.
+        Without this, a camera-walk-in release (phone left in the car,
+        geofence missed) would dedup-skip the re-light and leave the
+        user standing in a dark, unsuppressed apartment.
+
+        Idempotent; upgrades a soft (Hue-app-detected) suppression to a
+        hard one when both fire on the same departure.
         """
-        if self._external_off_detected:
-            return
+        already_armed = self._external_off_detected
         self._external_off_detected = True
-        logger.info(
-            "Away suppression armed by %s — run_loop will skip "
-            "autonomous setters until presence returns",
-            source,
-        )
+        self._away_hold = True
+        self._invalidate_dedup_cache()
+        if not already_armed:
+            logger.info(
+                "Away suppression armed by %s (hard hold) — run_loop will "
+                "skip autonomous setters until presence returns",
+                source,
+            )
+        else:
+            logger.info(
+                "Away suppression upgraded to hard hold by %s",
+                source,
+            )
 
     async def reapply_current_mode(self, *, force_resend: bool = True) -> None:
         """Re-apply the current effective mode's lighting on demand.
@@ -1193,9 +1218,38 @@ class AutomationEngine:
             await self._broadcast_mode()
             return
 
-        # Clear external off detection on any activity
-        if mode not in ("idle",):
+        # Clear external off detection on any activity — UNLESS the
+        # suppression is hard-held by a geofence LEAVE. The PC's
+        # foreground process lingers up to ~10 min after walking out
+        # (until the Win32 idle threshold), so post-departure `working`
+        # heartbeats are residue, not presence. Only signal_presence
+        # (camera sees a person / geofence arrive) releases a hard hold.
+        if mode not in ("idle",) and not self._away_hold:
             self._external_off_detected = False
+
+        # While suppressed (away hard-hold, or the soft Hue-app all-off
+        # that an idle report doesn't clear): keep the mode bookkeeping
+        # above + the event log + WS broadcast, but do NOT actuate
+        # lights or fire mode-change callbacks — a working→idle
+        # transition 10 min after a departure would otherwise re-light
+        # an empty apartment via the evening time rules (force_resend
+        # bypasses the dedup cache on transitions) and auto-play music
+        # to nobody. Found live 2026-06-10 during D2/D6 testing.
+        if self._external_off_detected:
+            if old_mode != mode:
+                logger.info(
+                    "Mode %s → %s while away/external-off suppressed — "
+                    "tracked, not actuated",
+                    old_mode, mode,
+                )
+                if self._event_logger:
+                    await self._event_logger.log_mode_change(
+                        mode=mode,
+                        previous_mode=old_mode,
+                        source=source,
+                    )
+            await self._broadcast_mode()
+            return
 
         # Apply the appropriate light state. force_resend=True only on a
         # real mode change — invalidates the per-light dedup cache so any

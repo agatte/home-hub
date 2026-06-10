@@ -97,6 +97,11 @@ class AwayManager:
             "suppression_armed": bool(
                 getattr(self._engine, "_external_off_detected", False)
             ),
+            # Hard hold = geofence-armed; residual process reports can't
+            # clear it (only camera presence / geofence arrive can).
+            "suppression_hold": bool(
+                getattr(self._engine, "_away_hold", False)
+            ),
         }
 
     async def load_state(self) -> None:

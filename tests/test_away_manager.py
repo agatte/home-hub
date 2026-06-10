@@ -264,11 +264,57 @@ class TestEngineHooks:
         assert engine._external_off_detected is False
         engine.arm_away_suppression("geofence:test")
         assert engine._external_off_detected is True
+        assert engine._away_hold is True
         engine.arm_away_suppression("geofence:test")  # idempotent
         assert engine._external_off_detected is True
 
         await engine.signal_presence("geofence:test")
         assert engine._external_off_detected is False
+        assert engine._away_hold is False
+
+    async def test_hard_hold_survives_residual_process_reports(self, engine):
+        """The leak found live 2026-06-10: post-departure `working`
+        heartbeats (foreground process lingers ~10 min) must NOT clear a
+        geofence-armed suppression, must NOT actuate lights, and must NOT
+        fire mode-change callbacks (music auto-play to an empty apartment).
+        """
+        engine._apply_mode = AsyncMock()
+        callback = AsyncMock()
+        engine.register_on_mode_change(callback)
+
+        engine.arm_away_suppression("geofence:test")
+        await engine.report_activity("working", source="process")
+
+        assert engine._external_off_detected is True
+        assert engine._away_hold is True
+        engine._apply_mode.assert_not_awaited()
+        callback.assert_not_awaited()
+
+        # The working→idle transition at ~10 min must not re-light either
+        # (this is the path that bypassed dedup via force_resend).
+        await engine.report_activity("idle", source="process")
+        engine._apply_mode.assert_not_awaited()
+        callback.assert_not_awaited()
+        assert engine._external_off_detected is True
+
+    async def test_soft_suppression_still_cleared_by_activity(self, engine):
+        """Hue-app path (_check_external_off) keeps its original
+        semantics: a non-idle report clears the flag and resumes
+        actuation."""
+        engine._apply_mode = AsyncMock()
+        engine._external_off_detected = True  # soft — no hold
+
+        await engine.report_activity("working", source="process")
+
+        assert engine._external_off_detected is False
+        engine._apply_mode.assert_awaited_once()
+
+    async def test_arm_invalidates_dedup_cache(self, engine):
+        """Camera-walk-in release (geofence missed) must not dedup-skip
+        the re-light against pre-departure cached values."""
+        engine._last_applied_per_light = {"1": {"on": True, "bri": 200}}
+        engine.arm_away_suppression("geofence:test")
+        assert engine._last_applied_per_light == {}
 
     async def test_reapply_current_mode_uses_effective_mode_and_forces(
         self, engine,
