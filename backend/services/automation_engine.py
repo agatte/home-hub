@@ -2167,6 +2167,18 @@ class AutomationEngine:
             transitiontime: Transition duration in deciseconds (10 = 1s).
                             Injected into each light command if provided.
         """
+        # Away/external-off chokepoint, lower verb. _apply_mode is gated too
+        # (it alone covers the scene-override + effect-reconcile actuations),
+        # but _apply_time_based and scene drift call THIS verb directly —
+        # and clear_override(source="timeout_4h") fires in run_loop BEFORE
+        # the external-off continue, so a manual override expiring 4h into
+        # an away window would re-light the empty apartment through
+        # _apply_time_based (pr-review-backend block finding, 2026-06-10).
+        # Paths that legitimately re-light clear the flag first.
+        if self._external_off_detected:
+            logger.debug("_apply_state skipped — away/external-off suppressed")
+            return
+
         if not self._hue or not self._hue.connected:
             return
 

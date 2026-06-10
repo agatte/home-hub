@@ -341,6 +341,28 @@ class TestEngineHooks:
         )
         assert engine._transit_light_overrides == {}
 
+    async def test_timeout_clear_override_gated_while_suppressed(self, engine):
+        """pr-review block finding 2026-06-10: clear_override's idle branch
+        calls _apply_time_based → _apply_state DIRECTLY (not _apply_mode),
+        and run_loop fires clear_override(source='timeout_4h') BEFORE the
+        external-off continue — a manual override expiring 4h into an away
+        window re-lit the empty apartment. _apply_state must be gated too."""
+        engine._apply_per_light = AsyncMock()
+        engine._apply_uniform = AsyncMock()
+        engine._effect_manager.reconcile = AsyncMock()
+        await engine.set_manual_override("relax", source="api:test")
+        engine._apply_per_light.reset_mock()
+        engine._apply_uniform.reset_mock()
+
+        engine.arm_away_suppression("geofence:test")
+        engine._current_mode = "idle"  # the normal away state (PC idled)
+        await engine.clear_override(source="timeout_4h")
+
+        engine._apply_per_light.assert_not_awaited()
+        engine._apply_uniform.assert_not_awaited()
+        assert engine._external_off_detected is True
+        assert engine._away_hold is True
+
     async def test_user_override_releases_suppression(self, engine):
         """Explicit user mode pick while away = deliberate remote
         actuation (dog-sitter case) — releases the hold and renders."""
