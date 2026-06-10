@@ -752,6 +752,39 @@ class AutomationEngine:
             source,
         )
 
+    def arm_away_suppression(self, source: str) -> None:
+        """Arm the external-off run_loop suppression explicitly.
+
+        Same flag `_check_external_off` sets when it detects an
+        externally-darkened apartment — but armed proactively by the
+        AwayManager on a geofence LEAVE, so there is no race window
+        between its lights-off write and the next run_loop detection
+        tick (up to 60s) where an autonomous setter could re-light the
+        empty apartment. Released by `signal_presence` (geofence arrive,
+        camera absent→present) or a non-idle `report_activity`.
+        Idempotent.
+        """
+        if self._external_off_detected:
+            return
+        self._external_off_detected = True
+        logger.info(
+            "Away suppression armed by %s — run_loop will skip "
+            "autonomous setters until presence returns",
+            source,
+        )
+
+    async def reapply_current_mode(self, *, force_resend: bool = True) -> None:
+        """Re-apply the current effective mode's lighting on demand.
+
+        Public surface for the AwayManager's welcome-home sequence (and
+        any future caller that needs a deterministic re-light): after an
+        away window the bridge is dark but the dedup cache still holds
+        pre-departure values, so the default apply would dedup-skip.
+        Uses the override-aware ``current_mode`` property — never the raw
+        ``_current_mode`` field (see feedback_current_mode_field_footgun).
+        """
+        await self._apply_mode(self.current_mode, force_resend=force_resend)
+
     def is_recent_process_working(
         self, window_seconds: int = RECENT_PROCESS_WORKING_SECONDS,
     ) -> bool:

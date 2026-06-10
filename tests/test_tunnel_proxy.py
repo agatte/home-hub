@@ -213,6 +213,9 @@ ALLOWED_PATHS_FROM_LAMBDA = [
     ("POST", "/api/sonos/volume/up"),
     ("POST", "/api/sonos/volume/down"),
     ("GET", "/api/sonos/status"),
+    # iOS Shortcut geofence webhook (D2, GH#107) — not a Lambda caller,
+    # but rides the same tunnel with the same strict auth pair.
+    ("POST", "/api/presence/geofence"),
 ]
 
 
@@ -252,6 +255,7 @@ DISALLOWED_PATHS = [
     ("POST", "/api/camera/enable"),        # toggle camera from public side
     ("POST", "/api/automation/clear"),     # not the dnd endpoint
     ("GET", "/api/debug/query"),           # SELECT-only but still gated
+    ("GET", "/api/presence/status"),       # away-state read stays LAN-only
 ]
 
 

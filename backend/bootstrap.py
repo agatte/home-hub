@@ -925,6 +925,30 @@ async def lifespan(app: FastAPI):
     )
     app.state.agent_health_monitor = agent_health_monitor
 
+    # AwayManager — explicit away/home occupancy state (D2/D6, GH#107),
+    # fed by the iOS Shortcut geofence webhook at /api/presence/geofence.
+    # LEAVE: lights off + run_loop suppression (reuses external-off) +
+    # one notification. ARRIVE: signal_presence + forced mode reapply +
+    # optional welcome TTS. Constructed after notifier (it notifies) and
+    # after automation/hue/sonos/tts exist; state restored so a restart
+    # while away doesn't resume autonomous control of an empty apartment.
+    from backend.api.routes.routines import (
+        load_setting as _away_load_setting,
+        save_setting as _away_save_setting,
+    )
+    from backend.services.away_manager import AwayManager
+    away_manager = AwayManager(
+        engine=automation,
+        hue_getter=lambda: hue,
+        sonos_getter=lambda: sonos,
+        tts_getter=lambda: tts,
+        notifier_getter=lambda: app.state.notifier,
+        save_setting=_away_save_setting,
+        load_setting=_away_load_setting,
+    )
+    await away_manager.load_state()
+    app.state.away_manager = away_manager
+
     # Bounded auto-remediation — the only backend path that turns a
     # source-trust diagnosis into a state change. Constructed after notifier
     # (it notifies on every decision) and after automation/source_trust exist.
