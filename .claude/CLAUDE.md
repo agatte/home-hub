@@ -185,6 +185,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Ambient | `/api/ambient` | `ambient.py` — browser ambient audio state/volume/map/weather config |
 | Notification | `/api/notification` | `notification.py` — `POST /test` synthetic notification; bypasses DND/coalesce/boot gating |
 | Personality | `/api/personality` | `personality.py` — mood current/history, calibration, settings; backs `/personality`; spec PERSONALITY_LAYER |
+| Presence | `/api/presence` | `presence.py` — `POST /geofence` (iOS Shortcut leave/arrive via tunnel, strict auth) + `GET /status`; backs AwayManager (D2/D6) |
 | Analytics | `/api/analytics` | `analytics.py` — digest entries/daily/highlights/{date} for `/analytics` |
 | Debug | `/api/debug` | `debug.py` — ad-hoc read-only SQL + event-summary (LAN/localhost gated) |
 
@@ -259,7 +260,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Ambient-relax soft default:** When `_current_mode == "idle"` continuously ≥180s (`IDLE_AMBIENT_RELAX_DWELL_SECONDS`) with no Sonos and both attendance vetoes negative, `run_loop` pushes `set_manual_override("relax", source="ambient_relax")`. Day-agnostic; catches the "stepped away after dinner" gap.
 
-**Apartment-empty handling (no `away` mode):** When the Hue iOS app's "Leaving home" automation recalls a bridge_home all-off recipe, `_check_external_off` detects the all-off state, sets `_external_off_detected = True`, and `run_loop` `continue`s past every autonomous setter. Lights stay off until either `report_activity` fires a non-idle mode or `automation.signal_presence(source)` is called. **CameraService** calls `signal_presence("camera")` on absent→present so walking in releases the suppression before any PC activity. `away` mode shelved 2026-05-21 — see `project_away_mode_shelved.md` (a Latitude-mic audio source is parked: `project_latitude_audio_parked.md`).
+**Apartment-empty handling (away state, not a mode):** `AwayManager` (`away_manager.py`, D2/D6) owns an explicit away/home state fed by iOS Shortcut geofence webhooks (`POST /api/presence/geofence`, tunnel + strict auth). LEAVE: arms `engine.arm_away_suppression()` (the same `_external_off_detected` flag `_check_external_off` sets when the Hue app's "Leaving home" recipe darkens the bridge — that fallback path still works), pauses Sonos, all-lights-off, ONE notification; state persists (`away_state`) and re-arms on restart. ARRIVE (or `report_activity` non-idle, or **CameraService** `signal_presence("camera")` on absent→present): suppression releases; geofence arrive also force-reapplies the mode (`reapply_current_mode`) + optional welcome TTS (`away_config`). Pre-D2 dead-ends: `project_away_mode_shelved.md`; Latitude-mic source parked: `project_latitude_audio_parked.md`.
 
 ---
 
