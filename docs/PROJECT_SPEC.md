@@ -357,7 +357,7 @@ External APIs (cloud):
 ### Key Architecture Decisions
 
 - **Two-process model:** Main server handles real-time control. Learning engine runs separately, reads events from the shared DB, computes patterns, and exposes an internal API for predictions. Main server queries the learning engine before making automation decisions.
-- **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) when event volume grows. SQLAlchemy abstraction makes the switch straightforward. Event data uses 90-day rolling window with older data aggregated into daily/weekly summaries.
+- **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) if event volume ever forces it. **Deprioritized 2026-06-09:** the nightly per-table retention sweep (90-day rolling; `ml_decisions` capped at 21 days, ~1.1–1.2 GB plateau) removed the forcing function — no migration is planned absent a new driver. SQLAlchemy abstraction keeps the switch straightforward if revisited; `models.py` ↔ raw-migration schema drift (GH#29) is the prerequisite either way.
 - **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
 - **PC Agent over network:** Gaming PC (WiFi via TP-Link USB adapter since the 2026-06 Google Wifi migration — formerly wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery. NB: the desktop's MAC (and thus its `192.168.86.30` DHCP reservation) travels with the USB adapter, not the motherboard.
 - **Alexa two-phase:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel for full flexibility later.
@@ -385,7 +385,7 @@ External APIs (cloud):
 
 | Layer | Technology | Notes |
 |-------|-----------|-------|
-| Database | PostgreSQL (Supabase) | Migration from SQLite for event volume |
+| Database | PostgreSQL (Supabase) | Deprioritized 2026-06-09 — retention sweep removed the volume driver; see "Database migration path" above |
 | Voice Control | Fauxmo (phase 1), Custom Alexa Skill + Lambda (phase 2) | Local UPnP → cloud skill |
 | Tunnel | Cloudflare Tunnel (free) | For Alexa Skill → local API |
 | Learning | Separate Python process, scikit-learn or rule-based | Reads events, writes predictions |

@@ -32,7 +32,9 @@ from backend.services.mode_volume_service import (
     MODE_VOLUME_CURVES_KEY,
     ModeVolumeService,
 )
-from backend.services.automation_engine import (
+from backend.services.automation_constants import (
+    # Canonical home is automation_constants (engine re-exports for back-compat).
+    DND_STATE_KEY as DND_STATE_KEY,
     SCREEN_SYNC_MODES,
     DaySchedule,
     ScheduleConfig,
@@ -45,7 +47,6 @@ SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
 RUST_LIGHTING_KEY = "rust_lighting_config"
 RUST_EVENT_CONFIG_KEY = "rust_event_config"
-DND_STATE_KEY = "dnd_state"
 OVERRIDE_STATE_KEY = "override_state"
 
 # Settings-page defaults for the watching-posture tuning knobs. The values
