@@ -46,12 +46,17 @@ class LightOverrideManager:
         event_logger_getter: Callable[[], Any],
         current_mode_getter: Callable[[], str],
         reapply_mode: Callable[[str], Awaitable[None]],
+        suppressed_getter: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._st = state
         self._hue_getter = hue_getter
         self._event_logger_getter = event_logger_getter
         self._current_mode_getter = current_mode_getter
         self._reapply_mode = reapply_mode
+        # Away/external-off check — transit/desk-exit/corridor triggers are
+        # absence-shaped (camera sees nobody), so while the apartment is
+        # suppressed they would churn path-lighting for an empty room.
+        self._suppressed_getter = suppressed_getter or (lambda: False)
 
     # ── Manual stamps ───────────────────────────────────────────────────
 
@@ -168,6 +173,15 @@ class LightOverrideManager:
                 ``"desk_exit_kitchen"`` so analytics can distinguish the two
                 paths.
         """
+        # Away/external-off: never path-light an empty apartment. The
+        # absence-based triggers (desk-loss) fire constantly while away —
+        # observed live 2026-06-10, transit cycling every ~70s post-LEAVE.
+        if self._suppressed_getter():
+            logger.debug(
+                "%s override skipped — away/external-off suppressed", trigger,
+            )
+            return
+
         hue = self._hue_getter()
         if not hue or not hue.connected:
             return

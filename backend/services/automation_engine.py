@@ -227,6 +227,7 @@ class AutomationEngine:
             # it; future wrappers may decorate it) is honored at call time —
             # a bound method captured here would go stale.
             reapply_mode=lambda mode: self._apply_mode(mode),
+            suppressed_getter=lambda: self._external_off_detected,
         )
 
         # Track if lights were turned off externally (Alexa geofence)
@@ -1303,6 +1304,23 @@ class AutomationEngine:
             )
             return
 
+        # Away/external-off interplay. An explicit USER mode pick while the
+        # apartment is suppressed is deliberate remote actuation ("light the
+        # place for the dog-sitter" via Alexa/dashboard) — release the
+        # suppression so the pick renders past the _apply_mode chokepoint.
+        # Autonomous sources must NOT pierce it: they are exactly what
+        # away-suppression silences (run_loop is gated; this guards direct
+        # callers).
+        if self._external_off_detected:
+            if source in AUTONOMOUS_PUSH_SOURCES:
+                logger.info(
+                    "Away/external-off suppressed — blocking autonomous "
+                    "override %s (source=%s)",
+                    mode, source,
+                )
+                return
+            await self.signal_presence(f"override:{source}")
+
         # User-respect cooldown — if the user just cleared an override via
         # the dashboard, block autonomous-source pushes for the cooldown
         # window so "auto" actually means auto. User-initiated actions
@@ -1835,6 +1853,19 @@ class AutomationEngine:
                 of sync with the cache). Leave False on periodic reapply
                 ticks so dedup can no-op when nothing changed.
         """
+        # Away/external-off CHOKEPOINT: while the apartment is suppressed,
+        # NO path may actuate lights — not just run_loop (gated upstream)
+        # but the side doors live testing found 2026-06-10: the transit/
+        # desk-exit clear-revert (reapply_mode), scheduled routines, and
+        # any future caller. Paths that legitimately re-light clear the
+        # flag FIRST (signal_presence on arrive/camera; user override in
+        # set_manual_override).
+        if self._external_off_detected:
+            logger.debug(
+                "_apply_mode(%s) skipped — away/external-off suppressed", mode,
+            )
+            return
+
         # Cancel any in-progress sleep fade if switching to an active mode
         if mode != "sleeping" and self._sleep_fade_task and not self._sleep_fade_task.done():
             self._sleep_fade_task.cancel()
@@ -2136,6 +2167,18 @@ class AutomationEngine:
             transitiontime: Transition duration in deciseconds (10 = 1s).
                             Injected into each light command if provided.
         """
+        # Away/external-off chokepoint, lower verb. _apply_mode is gated too
+        # (it alone covers the scene-override + effect-reconcile actuations),
+        # but _apply_time_based and scene drift call THIS verb directly —
+        # and clear_override(source="timeout_4h") fires in run_loop BEFORE
+        # the external-off continue, so a manual override expiring 4h into
+        # an away window would re-light the empty apartment through
+        # _apply_time_based (pr-review-backend block finding, 2026-06-10).
+        # Paths that legitimately re-light clear the flag first.
+        if self._external_off_detected:
+            logger.debug("_apply_state skipped — away/external-off suppressed")
+            return
+
         if not self._hue or not self._hue.connected:
             return
 
