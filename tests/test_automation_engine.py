@@ -2392,9 +2392,12 @@ class TestWatchingSleepGuard:
         engine._watching_sleep_dwell_since = (
             self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
         )
-        # DND active for the next hour.
-        engine._dnd_enabled = True
-        engine._dnd_expiry = self.LATE_NIGHT + timedelta(hours=1)
+        # DND active for the next hour. State lives on the DndManager since
+        # the GH#86 step-2 extraction; its is_active() reads the real clock
+        # (dnd_manager module datetime isn't patched here), so anchor the
+        # expiry to real now rather than the mocked engine clock.
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
 
         await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
 
