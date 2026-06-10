@@ -316,6 +316,57 @@ class TestEngineHooks:
         engine.arm_away_suppression("geofence:test")
         assert engine._last_applied_per_light == {}
 
+    async def test_apply_mode_chokepoint_blocks_all_actuation(self, engine):
+        """The 2026-06-10 live leak #2: the transit clear-revert (and any
+        other direct _apply_mode caller) re-lit a suppressed apartment.
+        _apply_mode itself must no-op while suppressed."""
+        engine._apply_state = AsyncMock()
+        engine._effect_manager.reconcile = AsyncMock()
+
+        engine.arm_away_suppression("geofence:test")
+        await engine._apply_mode("working", force_resend=True)
+        engine._apply_state.assert_not_awaited()
+
+        await engine.signal_presence("camera")
+        await engine._apply_mode("working", force_resend=True)
+        engine._apply_state.assert_awaited()
+
+    async def test_transit_apply_gated_while_suppressed(self, engine):
+        """Transit/desk-exit triggers are absence-shaped and churn while
+        away (observed live: transit cycling ~70s post-LEAVE). The apply
+        verb must no-op while suppressed — no bridge writes, no stamps."""
+        engine.arm_away_suppression("geofence:test")
+        await engine.apply_transit_override(
+            {"1": {"on": True, "bri": 55}}, trigger="transit",
+        )
+        assert engine._transit_light_overrides == {}
+
+    async def test_user_override_releases_suppression(self, engine):
+        """Explicit user mode pick while away = deliberate remote
+        actuation (dog-sitter case) — releases the hold and renders."""
+        engine._apply_mode = AsyncMock()
+        engine.arm_away_suppression("geofence:test")
+
+        await engine.set_manual_override("social", source="api:1.2.3.4")
+
+        assert engine._external_off_detected is False
+        assert engine._away_hold is False
+        engine._apply_mode.assert_awaited_once_with("social", force_resend=True)
+
+    async def test_autonomous_override_blocked_while_suppressed(self, engine):
+        """Autonomous setters must not pierce the suppression via direct
+        set_manual_override calls (run_loop is gated; this guards the
+        rest)."""
+        engine._apply_mode = AsyncMock()
+        engine.arm_away_suppression("geofence:test")
+
+        await engine.set_manual_override("relax", source="ambient_relax")
+
+        assert engine._manual_override is False
+        assert engine._external_off_detected is True
+        assert engine._away_hold is True
+        engine._apply_mode.assert_not_awaited()
+
     async def test_reapply_current_mode_uses_effective_mode_and_forces(
         self, engine,
     ):

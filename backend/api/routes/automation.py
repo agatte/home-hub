@@ -261,6 +261,12 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
+    # Away/external-off: a game/video left running keeps streaming colors
+    # after a departure — while the apartment is suppressed, accept the
+    # report but never re-light the bedroom lamps with it.
+    if getattr(engine, "_external_off_detected", False):
+        return {"status": "ok", "applied": False}
+
     # Pull zone + posture so the sync cap can differ between watching-at-desk
     # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source
     # from PresenceFusion, NOT the raw Latitude camera: since the 2026-05-27
