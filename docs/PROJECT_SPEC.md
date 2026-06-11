@@ -999,8 +999,8 @@ UPnP control via SoCo. Polls every 2s, broadcasts changes.
 | `play_uri` | `(uri: str, volume?: int) → bool` | Play HTTP URL |
 | `play_favorite` | `(title: str) → bool` | Play by name |
 | `get_favorites` | `() → list[dict]` | List favorites |
-| `get_current_playback_snapshot` | `() → Optional[dict]` | For duck-and-resume |
-| `restore_playback` | `(snapshot: dict) → None` | Resume from snapshot |
+| `get_current_playback_snapshot` | `() → Optional[soco.snapshot.Snapshot]` | For duck-and-resume; captures even when idle; None = capture failed |
+| `restore_playback` | `(snapshot: Optional[Snapshot]) → None` | Resume from snapshot (queue pos + seek + play_mode, or stream URI + metadata; parks idle transport) |
 
 #### AutomationEngine
 Core brain — combines time rules with activity detection.
