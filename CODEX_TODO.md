@@ -13,7 +13,7 @@ Current branch: `refactor/engine-step5-light-applicator`
 - [x] Verify adjacent transit, desk-exit, and screen-sync tests.
 - [x] Commit Codex docs separately from the LightApplicator refactor.
 - [ ] Optional: port selected Claude checks into repo-native scripts or git hooks if we want automatic enforcement outside Claude.
-- [ ] Define an issue-to-test checklist for future feature work.
+- [x] Define an issue-to-test checklist for future feature work.
 - [ ] Decide how to handle issue #87 after pushing/PRing this branch: comment with local validation, link PR, or close after merge.
 
 ## Recommended Workflow
@@ -50,6 +50,31 @@ gh pr list --limit 20 --json number,title,headRefName,baseRefName,state,updatedA
 gh pr checks <number>
 ```
 
+## Issue-To-Test Checklist Summary
+
+For each GitHub issue, read the issue first, classify the subsystem, map likely
+files and existing tests, define concrete acceptance criteria, then choose the
+smallest validation set that covers the blast radius.
+
+Default mapping:
+
+- Backend route: happy path, auth/write gate, bad input, source attribution.
+- Service/automation: fake hardware/unit tests for side effects, callbacks,
+  dedup/override state, and event logging.
+- ML/fusion/source-trust: deterministic fixtures, stale-signal behavior,
+  accuracy/diversity guardrails, persistence where relevant.
+- Scheduler/background task: registration, manual trigger, idempotency, failure
+  logging.
+- Frontend store/WS: dispatch, store update, API helper, error path tests.
+- Frontend UI/3D: Svelte check, unit test where useful, browser/screenshot
+  verification for layout-heavy or Three.js changes.
+- Lighting palette/state: targeted automation tests plus lighting-curator review.
+- Ops/deploy/live-system: dry-run/read-only commands first, then MCP verification
+  plan with exact endpoints or queries.
+- Docs-only: no runtime tests unless commands/config examples changed.
+
+Record validation commands and results in the PR body or issue comment before
+closing an issue.
 ## External Claude Resources Found
 
 - `C:\Users\antho\.claude\agents\` contains 31 global agents.

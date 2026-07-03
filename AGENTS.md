@@ -89,6 +89,41 @@ branch/PR, then map the issue to targeted tests before editing. For backlog
 hygiene, mirror the rubric in
 `C:\Users\antho\.claude\agents\gh-backlog-triager.md`.
 
+## Issue-To-Test Checklist
+
+Before editing for a GitHub issue:
+
+1. Read the issue body and comments with `gh issue view <number>`.
+2. Identify the subsystem: backend route, service/engine, ML lane, scheduler,
+   frontend route/component/store, ops/deploy, docs, or hardware/live behavior.
+3. Map the likely files and existing tests before coding. Prefer `rg` over broad
+   recursive listing.
+4. Define acceptance criteria in concrete terms: API shape, state transition,
+   event row, WebSocket message, UI state, or live verification result.
+5. Pick the smallest validation set that covers the blast radius.
+
+Default test mapping:
+
+- Backend route: route tests for happy path, auth/write gate, bad input, and
+  source attribution when events are logged.
+- Service or automation engine: focused unit tests with fake Hue/Sonos/WS and
+  assertions on side effects, dedup state, callbacks, and event logging.
+- ML/fusion/source-trust: deterministic fixtures, stale-signal behavior, class
+  diversity/accuracy guardrails, and persistence if model state changes.
+- Scheduler/background task: registration in health/scheduler state, manual
+  trigger behavior, idempotency, and failure logging.
+- Frontend store/WebSocket: unit tests for message dispatch, store updates, API
+  helper behavior, and error paths.
+- Frontend UI/component: Svelte check, relevant unit test, and screenshot/browser
+  verification for layout-heavy or 3D changes.
+- Lighting palette/state: targeted automation tests plus lighting-curator static
+  review; use visual references for palette-sensitive changes.
+- Ops/deploy/live-system issue: dry-run or read-only command where possible,
+  then live MCP verification plan with exact endpoints/queries.
+- Docs-only issue: no runtime tests unless commands/config examples changed.
+
+Before closing or marking an issue fixed, capture the validation commands and
+results in the PR body or issue comment.
 ## Editing Rules
 
 - Preserve user work. This repo may have active uncommitted refactors; inspect
