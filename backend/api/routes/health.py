@@ -204,6 +204,19 @@ async def health_check(request: Request) -> dict:
     if hasattr(app.state, "scheduler"):
         scheduler_tasks = app.state.scheduler.get_tasks()
 
+    # Engine weather/lux state — lets the stateful Check K verifier read the
+    # last weather class + settled lux multiplier directly, instead of
+    # recomputing statelessly and false-flagging a correct within-epsilon
+    # steady state (GH #67). Purely informational — never flips `status`.
+    automation_block: dict = {}
+    _automation = getattr(app.state, "automation", None)
+    if _automation is not None:
+        automation_block = {
+            "current_mode": _automation.current_mode,
+            "last_weather_class": _automation.last_weather_class,
+            "last_lux_multiplier": round(_automation.last_lux_multiplier, 4),
+        }
+
     return {
         "status": status,
         "service": "Home Hub",
@@ -224,6 +237,7 @@ async def health_check(request: Request) -> dict:
         "scheduler_tasks": scheduler_tasks,
         "circuit_breakers": circuit_breakers,
         "ml": ml,
+        "automation": automation_block,
         "sources": sources,
         "sources_untrusted": sources_untrusted,
         "details": details,

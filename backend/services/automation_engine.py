@@ -389,6 +389,20 @@ class AutomationEngine:
         return self._current_mode
 
     @property
+    def last_weather_class(self) -> Optional[str]:
+        """Most recent weather class applied to the lux-multiplier curve.
+
+        Exposed on /health so the stateful Check K verifier can tell a
+        within-epsilon steady state apart from a never-fired transition.
+        """
+        return self._last_weather_class
+
+    @property
+    def last_lux_multiplier(self) -> float:
+        """Most recent lux brightness multiplier the engine settled on."""
+        return self._last_lux_multiplier
+
+    @property
     def current_game(self) -> Optional[str]:
         """Active game slug driving GAME_LIGHT_PROFILES, or None.
 
@@ -396,7 +410,6 @@ class AutomationEngine:
         brightness-sync path. Only set in gaming mode.
         """
         return self._current_game
-
     @property
     def mode_source(self) -> str:
         return "manual" if self._manual_override else self._mode_source
