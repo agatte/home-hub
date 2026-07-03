@@ -15,6 +15,30 @@ Latitude machine.
 - For personality/mood work, read `docs/PERSONALITY_LAYER.md`.
 - Keep `.env.example` and `backend/config.py` in sync for environment changes.
 
+## External Claude Resources
+
+These live outside the repo and require explicit filesystem approval before
+Codex can read them:
+
+- `C:\Users\antho\.claude\agents\` - global Claude subagent specs. Use these as
+  checklists, not as code to copy. Especially relevant:
+  - `lighting-curator.md` for static review of lighting palette/state diffs.
+  - `pr-review-backend.md` and `pr-review-frontend.md` for pre-push review
+    rubrics.
+  - `gh-backlog-triager.md` for read-only GitHub issue hygiene.
+  - `homehub-verifier.md` for read-only live-system verification via MCP.
+  - `deploy-verifier.md` for post-deploy semantic checks.
+  - `test-coverage-prospector.md` for deciding what tests to add.
+- `C:\Users\antho\.claude\agents\reference\lighting-curator\INDEX.md` -
+  captioned apartment/light reference photos. Read the index first, then only
+  the specific image relevant to a lighting diff.
+- `C:\Users\antho\.claude\projects\C--Users-antho-Desktop-home-hub\memory\` -
+  project memories and footguns. Read only the memory files relevant to the
+  touched subsystem.
+
+Do not read `.claude/settings.local.json` or other local settings unless the
+user explicitly asks; they may contain private machine-specific data.
+
 ## Stack
 
 - Backend: Python, FastAPI, async services, SQLite via SQLAlchemy/aiosqlite.
@@ -76,9 +100,6 @@ server proxies API calls to port 8000 and normally runs on port 3001.
 - `AutomationEngine` is the central mode policy coordinator. It combines time,
   activity, overrides, ML, DND, away suppression, scene overrides, brightness
   multipliers, weather, screen sync, and event logging.
-- The current branch is `refactor/engine-step5-light-applicator`; the active
-  uncommitted work extracts the low-level bridge write layer into
-  `backend/services/light_applicator.py`.
 - Do not bypass the automation apply chokepoints unless the feature explicitly
   owns bridge writes, as screen sync and celebration sequences do.
 - Respect protected lights: manual per-light overrides, transit overrides, and
@@ -110,6 +131,23 @@ server proxies API calls to port 8000 and normally runs on port 3001.
 - Run `cd frontend-svelte && npm run test` for frontend logic edits.
 - Hardware-dependent behavior should be verified with mocks/tests unless the
   user explicitly asks to hit live devices.
+
+## Review Checklists
+
+- Backend changes: use the `pr-review-backend.md` rubric when touching
+  automation, API routes, scheduler tasks, source attribution, event logging,
+  Hue/Sonos calls, DB schema, or service lifecycle.
+- Frontend changes: use the `pr-review-frontend.md` rubric when touching
+  Svelte routes/components/stores, WebSocket dispatch, theme/mode config, or
+  responsive dashboard layout.
+- Lighting-state changes: use `lighting-curator.md` plus the visual reference
+  index before committing changes to `light_state_calculator.py`, `scenes.py`,
+  or `celebration_orchestrator.py`.
+- Live verification: use read-only Home Hub MCP checks first. Start with
+  `get_live_state`; use bounded `query_db` SELECTs for event/history questions.
+- Deploy verification: capture pre-deploy `build_id`, deploy, then confirm
+  build rollover, health, live state shape, API smoke endpoints, and the
+  post-restart event window.
 
 ## Operational Cautions
 

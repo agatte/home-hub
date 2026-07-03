@@ -6,19 +6,31 @@ Current branch: `refactor/engine-step5-light-applicator`
 
 - [x] Add Codex repo guide in `AGENTS.md`.
 - [x] Read existing Claude guide, project spec, test layout, CI workflow, and MCP config.
+- [x] Read key global Claude agents: lighting curator, PR reviewers, GitHub triager, verifier, deploy verifier, and test coverage prospector.
+- [x] Record external Claude agents, lighting references, and memory paths in `AGENTS.md`.
 - [x] Verify active LightApplicator refactor with targeted automation tests.
 - [x] Verify adjacent transit, desk-exit, and screen-sync tests.
-- [ ] Decide whether to commit the Codex guide and LightApplicator refactor together or separately.
+- [x] Commit Codex docs separately from the LightApplicator refactor.
+- [ ] Optional: port selected Claude checks into repo-native scripts or git hooks if we want automatic enforcement outside Claude.
 - [ ] Connect Codex workflow to live GitHub Issues/PRs via `gh` when needed.
 - [ ] Define an issue-to-test checklist for future feature work.
 
 ## Recommended Workflow
 
-1. Finish the active LightApplicator refactor before starting new feature work.
-2. Use `AGENTS.md` as the Codex entry guide and `.claude/CLAUDE.md` for deeper project context.
-3. For backend edits, run targeted pytest plus `python -m ruff check`.
-4. For frontend edits, run `cd frontend-svelte && npm run check` and `npm run test`.
-5. Ignore `.claude/worktrees` during normal work unless doing archaeology on an old experiment.
+1. Use `AGENTS.md` as the Codex entry guide and `.claude/CLAUDE.md` for deeper project context.
+2. For backend edits, run targeted pytest plus `python -m ruff check`.
+3. For frontend edits, run `cd frontend-svelte && npm run check` and `npm run test`.
+4. For lighting-state diffs, consult `C:\Users\antho\.claude\agents\lighting-curator.md` and the lighting reference `INDEX.md` before committing.
+5. For broad backend/frontend diffs, mirror the static review rubrics from `pr-review-backend.md` or `pr-review-frontend.md`.
+6. For live questions, prefer read-only MCP verification: `get_live_state` first, bounded `query_db` SELECTs for history.
+7. Ignore `.claude/worktrees` during normal work unless doing archaeology on an old experiment.
+
+## External Claude Resources Found
+
+- `C:\Users\antho\.claude\agents\` contains 31 global agents.
+- `C:\Users\antho\.claude\agents\reference\lighting-curator\INDEX.md` indexes the apartment lighting reference photos.
+- `C:\Users\antho\.claude\projects\C--Users-antho-Desktop-home-hub\memory\` contains Home Hub-specific memory/footgun files.
+- `.claude/settings.local.json` was intentionally not read; treat it as sensitive unless explicitly approved.
 
 ## Current Validation
 
