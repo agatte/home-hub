@@ -51,6 +51,7 @@ from backend.services.automation_constants import (
 )
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
+from backend.services.light_applicator import LightApplicator
 from backend.services.light_override_manager import LightOverrideManager
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
 
@@ -228,6 +229,31 @@ class AutomationEngine:
             # a bound method captured here would go stale.
             reapply_mode=lambda mode: self._apply_mode(mode),
             suppressed_getter=lambda: self._external_off_detected,
+        )
+
+        # Bridge-write layer (away-gate, dedup compare/record, protected-light
+        # skip filter, uniform/per-light fan-out + event logging) — GH#87
+        # step 5. Operates on the SAME EngineState dicts as the override
+        # manager (critic #4: direct O(1) dict access on the 0.5s hot path),
+        # and consults the override manager for transit-prune. Getters defer
+        # to call time so hue/event_logger/screen_sync can be (re)wired after
+        # construction and current_mode stays the override-aware property.
+        # _apply_mode stays on the engine as the policy coordinator and calls
+        # into here via apply_state; the engine keeps thin _apply_* delegates
+        # below so existing callers + test spies are honored.
+        self._applicator = LightApplicator(
+            state=self._state,
+            overrides=self._overrides,
+            hue_getter=lambda: self._hue,
+            event_logger_getter=lambda: self._event_logger,
+            current_mode_getter=lambda: self.current_mode,
+            screen_sync_getter=lambda: self._screen_sync,
+            suppressed_getter=lambda: self._external_off_detected,
+            # Cross-dispatch routes back through the engine's _apply_* delegates
+            # so spies that patch engine._apply_per_light / _apply_uniform are
+            # honored from inside the apply chain (step-4 reapply_mode pattern).
+            dispatch_per_light=lambda s, t=None: self._apply_per_light(s, t),
+            dispatch_uniform=lambda s, t=None: self._apply_uniform(s, t),
         )
 
         # Track if lights were turned off externally (Alexa geofence)
@@ -2158,167 +2184,32 @@ class AutomationEngine:
     async def _apply_state(
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
+        """Apply a light state (uniform or per-light) — GH#87 step-5 delegate
+        to :class:`LightApplicator`. Kept as a method (not just an attribute)
+        so callers (``_apply_mode``, ``_apply_time_based``, ``_sleep_fade``,
+        ``_maybe_drift``) and test spies that patch ``engine._apply_state``
+        are honored unchanged.
         """
-        Apply a light state — supports both uniform and per-light formats.
-
-        Args:
-            state: Either a flat dict (applied to all lights) or a dict keyed
-                   by light ID with individual states per light.
-            transitiontime: Transition duration in deciseconds (10 = 1s).
-                            Injected into each light command if provided.
-        """
-        # Away/external-off chokepoint, lower verb. _apply_mode is gated too
-        # (it alone covers the scene-override + effect-reconcile actuations),
-        # but _apply_time_based and scene drift call THIS verb directly —
-        # and clear_override(source="timeout_4h") fires in run_loop BEFORE
-        # the external-off continue, so a manual override expiring 4h into
-        # an away window would re-light the empty apartment through
-        # _apply_time_based (pr-review-backend block finding, 2026-06-10).
-        # Paths that legitimately re-light clear the flag first.
-        if self._external_off_detected:
-            logger.debug("_apply_state skipped — away/external-off suppressed")
-            return
-
-        if not self._hue or not self._hue.connected:
-            return
-
-        # Detect format: per-light dicts have string keys like "1", "2"
-        is_per_light = all(
-            isinstance(v, dict) for v in state.values()
-        ) and any(k in ALL_LIGHT_IDS for k in state.keys())
-
-        if is_per_light:
-            await self._apply_per_light(state, transitiontime)
-        else:
-            await self._apply_uniform(state, transitiontime)
+        await self._applicator.apply_state(state, transitiontime)
 
     def _protected_light_ids(self) -> set[str]:
-        """Light ids the mode-apply pipeline must NOT write this tick.
-
-        Always includes manual + transit per-light overrides. Additionally
-        includes the screen-sync target lamps (L2/L5) while sync is actively
-        owning them — current mode is a SCREEN_SYNC_MODE and a color was
-        pushed within ``SCREEN_SYNC_FRESH_SECONDS``. Screen sync writes those
-        lamps directly to the bridge (bypassing the per-light dedup cache),
-        so without this guard the periodic mode-reapply — and every
-        ``notify_camera_commit`` force-resend — re-writes them to their
-        static state, fighting sync and producing the visible L2/L5 flicker
-        (audit 2026-05-30, syncfight-1). When sync goes quiet the freshness
-        gate lapses and the engine reclaims the lamps on the next tick.
+        """Light ids the mode-apply pipeline must NOT write this tick — GH#87
+        step-5 delegate to :class:`LightApplicator`. (manual + transit
+        overrides, plus sync-owned L2/L5 while sync is fresh.)
         """
-        protected = set(self._manual_light_overrides) | set(self._transit_light_overrides)
-        sync = self._screen_sync
-        if sync is not None and self.current_mode in SCREEN_SYNC_MODES:
-            last = sync.last_color_at
-            if last is not None:
-                age = (datetime.now(timezone.utc) - last).total_seconds()
-                if age < SCREEN_SYNC_FRESH_SECONDS:
-                    protected |= set(sync.target_lights)
-        return protected
+        return self._applicator.protected_light_ids()
 
     async def _apply_uniform(
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
-        """Apply the same state to all lights (backward-compatible path)."""
-        # Prune expired transit overrides before consulting them.
-        self._prune_expired_transit_overrides()
-
-        # If any lights are protected (manual / transit overrides, or sync-
-        # owned L2/L5), fall through to the per-light path so the filter can
-        # skip them instead of stomping them via set_all_lights.
-        if self._protected_light_ids():
-            per_light = {lid: state for lid in ALL_LIGHT_IDS}
-            await self._apply_per_light(per_light, transitiontime)
-            return
-
-        # Convert to per-light for dedup tracking
-        per_light = {lid: state for lid in ALL_LIGHT_IDS}
-        if per_light == self._last_applied_per_light:
-            return
-
-        prev_snapshot = {lid: (self._last_applied_per_light.get(lid) or {}).copy() for lid in ALL_LIGHT_IDS}
-        self._last_applied_per_light = {lid: state.copy() for lid in ALL_LIGHT_IDS}
-        cmd = {**state}
-        if transitiontime is not None:
-            cmd["transitiontime"] = transitiontime
-        await self._hue.set_all_lights(cmd)
-        logger.info(f"Applied uniform state: bri={state.get('bri')}, hue={state.get('hue')}")
-        if self._event_logger:
-            for lid in ALL_LIGHT_IDS:
-                prev = prev_snapshot.get(lid, {})
-                await self._event_logger.log_light_adjustment(
-                    light_id=lid,
-                    bri_before=prev.get("bri"), bri_after=state.get("bri"),
-                    hue_before=prev.get("hue"), hue_after=state.get("hue"),
-                    sat_before=prev.get("sat"), sat_after=state.get("sat"),
-                    ct_before=prev.get("ct"), ct_after=state.get("ct"),
-                    mode_at_time=self.current_mode,
-                    trigger="automation",
-                )
+        """Apply the same state to all lights — GH#87 step-5 delegate."""
+        await self._applicator.apply_uniform(state, transitiontime)
 
     async def _apply_per_light(
         self, states: dict[str, dict], transitiontime: int | None = None,
     ) -> None:
-        """Apply individual states to each light (parallel when possible)."""
-        # Drop any transit overrides whose deadline has passed before we check.
-        self._prune_expired_transit_overrides()
-
-        # Filter out protected lights: manual + transit per-light overrides,
-        # plus screen-sync-owned L2/L5 while sync is fresh (see
-        # _protected_light_ids — stops the static-vs-sync flicker).
-        protected = self._protected_light_ids()
-        if protected:
-            skipped = [lid for lid in states if lid in protected]
-            if skipped:
-                states = {
-                    lid: s for lid, s in states.items() if lid not in protected
-                }
-                logger.debug(f"Skipping overridden lights: {skipped}")
-                if not states:
-                    return
-
-        # Optimization: if all lights get the same state, use the uniform path
-        unique_states = list(states.values())
-        if not protected and all(
-            s == unique_states[0] for s in unique_states
-        ):
-            await self._apply_uniform(unique_states[0], transitiontime)
-            return
-
-        # Build list of lights that actually changed
-        tasks = []
-        changed_ids = []
-        # Keep the pre-change value per light so we can log accurate before/after pairs
-        pre_values: dict[str, dict] = {}
-        for light_id, state in states.items():
-            last = self._last_applied_per_light.get(light_id)
-            if state != last:
-                pre_values[light_id] = (last or {}).copy()
-                cmd = {**state}
-                if transitiontime is not None:
-                    cmd["transitiontime"] = transitiontime
-                tasks.append(self._hue.set_light(light_id, cmd))
-                self._last_applied_per_light[light_id] = state.copy()
-                changed_ids.append(light_id)
-
-        if tasks:
-            await asyncio.gather(*tasks)
-            on_ids = [lid for lid in changed_ids if states[lid].get("on", True)]
-            off_ids = [lid for lid in changed_ids if not states[lid].get("on", True)]
-            logger.info(f"Applied per-light state: on={on_ids}, off={off_ids}")
-            if self._event_logger:
-                for lid in changed_ids:
-                    new = states[lid]
-                    prev = pre_values.get(lid, {})
-                    await self._event_logger.log_light_adjustment(
-                        light_id=lid,
-                        bri_before=prev.get("bri"), bri_after=new.get("bri"),
-                        hue_before=prev.get("hue"), hue_after=new.get("hue"),
-                        sat_before=prev.get("sat"), sat_after=new.get("sat"),
-                        ct_before=prev.get("ct"), ct_after=new.get("ct"),
-                        mode_at_time=self.current_mode,
-                        trigger="automation",
-                    )
+        """Apply individual states to each light — GH#87 step-5 delegate."""
+        await self._applicator.apply_per_light(states, transitiontime)
 
     async def _maybe_drift(self) -> None:
         """
