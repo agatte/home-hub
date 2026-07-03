@@ -25,8 +25,8 @@ class Rule:
 RULES: tuple[Rule, ...] = (
     Rule(
         name="Backend Python",
-        patterns=("backend/**/*.py", "run.py", "tests/**/*.py"),
-        checks=("python -m ruff check backend/ tests/",),
+        patterns=("backend/*.py", "backend/**/*.py", "run.py"),
+        checks=("python -m ruff check backend/",),
     ),
     Rule(
         name="Backend routes/API",
@@ -90,6 +90,14 @@ RULES: tuple[Rule, ...] = (
         checks=("python -m pytest tests -q",),
         notes=(
             "Check registration, manual trigger, idempotency, failure logging, and health visibility.",
+        ),
+    ),
+    Rule(
+        name="Tests",
+        patterns=("tests/*.py", "tests/**/*.py"),
+        checks=("python -m pytest <targeted test files> -q",),
+        notes=(
+            "Use the smallest pytest set that covers the changed behavior; broaden when touching shared contracts.",
         ),
     ),
     Rule(
