@@ -69,6 +69,26 @@ cd frontend-svelte && npm run test:e2e
 The backend serves `frontend-svelte/build/` on port 8000. The frontend dev
 server proxies API calls to port 8000 and normally runs on port 3001.
 
+## GitHub Workflow
+
+`gh` is installed and authenticated for `agatte/home-hub`. Use it read-only
+first, then ask before mutating issues, PRs, labels, comments, or releases.
+
+Common commands:
+
+```bash
+gh auth status
+gh issue list --limit 30 --json number,title,labels,state,updatedAt,url
+gh issue view <number> --json number,title,body,labels,state,url,comments
+gh pr list --limit 20 --json number,title,headRefName,baseRefName,state,updatedAt,url
+gh pr checks <number>
+```
+
+When starting issue work, read the issue body and comments, inspect any linked
+branch/PR, then map the issue to targeted tests before editing. For backlog
+hygiene, mirror the rubric in
+`C:\Users\antho\.claude\agents\gh-backlog-triager.md`.
+
 ## Editing Rules
 
 - Preserve user work. This repo may have active uncommitted refactors; inspect

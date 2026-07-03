@@ -8,12 +8,13 @@ Current branch: `refactor/engine-step5-light-applicator`
 - [x] Read existing Claude guide, project spec, test layout, CI workflow, and MCP config.
 - [x] Read key global Claude agents: lighting curator, PR reviewers, GitHub triager, verifier, deploy verifier, and test coverage prospector.
 - [x] Record external Claude agents, lighting references, and memory paths in `AGENTS.md`.
+- [x] Connect Codex workflow to live GitHub Issues/PRs via `gh`.
 - [x] Verify active LightApplicator refactor with targeted automation tests.
 - [x] Verify adjacent transit, desk-exit, and screen-sync tests.
 - [x] Commit Codex docs separately from the LightApplicator refactor.
 - [ ] Optional: port selected Claude checks into repo-native scripts or git hooks if we want automatic enforcement outside Claude.
-- [ ] Connect Codex workflow to live GitHub Issues/PRs via `gh` when needed.
 - [ ] Define an issue-to-test checklist for future feature work.
+- [ ] Decide how to handle issue #87 after pushing/PRing this branch: comment with local validation, link PR, or close after merge.
 
 ## Recommended Workflow
 
@@ -23,7 +24,31 @@ Current branch: `refactor/engine-step5-light-applicator`
 4. For lighting-state diffs, consult `C:\Users\antho\.claude\agents\lighting-curator.md` and the lighting reference `INDEX.md` before committing.
 5. For broad backend/frontend diffs, mirror the static review rubrics from `pr-review-backend.md` or `pr-review-frontend.md`.
 6. For live questions, prefer read-only MCP verification: `get_live_state` first, bounded `query_db` SELECTs for history.
-7. Ignore `.claude/worktrees` during normal work unless doing archaeology on an old experiment.
+7. For GitHub issue work, read the issue body/comments first, map it to files/tests, then edit.
+8. Ignore `.claude/worktrees` during normal work unless doing archaeology on an old experiment.
+
+## GitHub Snapshot
+
+Checked with `gh` on 2026-07-03:
+
+- Authenticated as `agatte` for `github.com`; token has `repo` scope.
+- Open issues: 73.
+- Open PRs: 4.
+- Current branch matches issue #87: `automation_engine.py decomposition steps 4-5 (light_override_manager + light_applicator) -- HIGH risk, deferred`.
+- Open PRs at snapshot:
+  - #104 `fix(a11y): silence LightCard composite-widget warnings with reason (#31)` (`issue-31-build-warnings` -> `master`)
+  - #103 `feat(health): expose engine weather/lux state on /health (#67)` (`issue-67-health-weather-lux` -> `master`)
+  - #102 `feat(source-trust): wire the audio_ml sanity predicate (#98)` (`issue-98-audio-ml-source-trust` -> `master`)
+  - #101 `test(ml-logger): DST-boundary regression guard for backfill window` (`issue-30-dst-backfill-guard-test` -> `master`)
+
+Useful read-only commands:
+
+```bash
+gh issue list --limit 30 --json number,title,labels,state,updatedAt,url
+gh issue view <number> --json number,title,body,labels,state,url,comments
+gh pr list --limit 20 --json number,title,headRefName,baseRefName,state,updatedAt,url
+gh pr checks <number>
+```
 
 ## External Claude Resources Found
 
