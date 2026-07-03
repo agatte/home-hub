@@ -10,14 +10,22 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.services.source_trust import (
+    AUDIO_MIN_SAMPLES,
+    AUDIO_WINDOW_SECONDS,
     CAMERA_MAX_SAMPLES,
     CAMERA_MIN_SAMPLES,
     CAMERA_WINDOW_SECONDS,
     LUX_COLLAPSE_MIN_SAMPLES,
     SourceTrust,
     camera_sanity,
+    register_audio_ml,
     variance_collapse_predicate,
 )
+
+# The ambient monitor's steady-state shadow-log cadence (ambient_monitor.py
+# SHADOW_LOG_INTERVAL). Hardcoded rather than imported — that module pulls in
+# httpx/audio deps at import time. Kept in sync by the sizing-guard test below.
+AMBIENT_SHADOW_LOG_INTERVAL = 30
 
 BASE = datetime(2026, 6, 1, 20, 0, 0, tzinfo=timezone.utc)
 
@@ -243,3 +251,55 @@ class TestVarianceCollapseFactory:
         # A crashing predicate must never make /health crash or drop data.
         assert v["trusted"] is True
         assert v["reason"].startswith("predicate_error")
+
+
+class TestAudioLaneWiring:
+    """The audio_ml lane registration (GH #98). register_audio_ml is the single
+    source bootstrap + this test share, so the production window sizing is what's
+    exercised here."""
+
+    def _now(self, n, step=AMBIENT_SHADOW_LOG_INTERVAL):
+        # Verdict time = last sample's timestamp, so the window prune keeps the
+        # whole feed (n samples at `step`s span well under AUDIO_WINDOW_SECONDS).
+        return BASE + timedelta(seconds=(n - 1) * step)
+
+    def test_stuck_classifier_trips(self, st):
+        # The abandoned YAMNet speech_multiple tell: a flat ~0.088 top_score.
+        register_audio_ml(st)
+        n = 25
+        _feed(st, "audio_ml", [{"top_score": 0.088, "top_class": "speech"}
+                               for _ in range(n)],
+              step_seconds=AMBIENT_SHADOW_LOG_INTERVAL)
+        v = st.verdict("audio_ml", now=self._now(n))
+        assert v["trusted"] is False
+        assert v["reason"] == "variance_collapse"
+
+    def test_varying_scores_ok(self, st):
+        register_audio_ml(st)
+        n = 25
+        _feed(st, "audio_ml",
+              [{"top_score": 0.2 + (i % 7) * 0.05, "top_class": "music"}
+               for i in range(n)],
+              step_seconds=AMBIENT_SHADOW_LOG_INTERVAL)
+        v = st.verdict("audio_ml", now=self._now(n))
+        assert v["trusted"] is True
+        assert v["reason"] == "ok"
+
+    def test_below_quorum_fails_open(self, st):
+        # Fewer than AUDIO_MIN_SAMPLES → no judgement, stays trusted.
+        register_audio_ml(st)
+        n = AUDIO_MIN_SAMPLES - 5
+        _feed(st, "audio_ml", [{"top_score": 0.088, "top_class": "speech"}
+                               for _ in range(n)],
+              step_seconds=AMBIENT_SHADOW_LOG_INTERVAL)
+        v = st.verdict("audio_ml", now=self._now(n))
+        assert v["trusted"] is True
+        assert v["reason"] == "insufficient_samples"
+
+    def test_window_holds_quorum_at_shadow_cadence(self):
+        # Regression guard: the window MUST be wide enough to accumulate
+        # AUDIO_MIN_SAMPLES at the ambient monitor's shadow-log cadence.
+        # The 300s registry default holds only ~10 samples and would make the
+        # predicate fail-open forever (the resume-defaults trap from the camera
+        # lane). This assertion fails loudly if anyone reverts the sizing.
+        assert AUDIO_WINDOW_SECONDS / AMBIENT_SHADOW_LOG_INTERVAL >= AUDIO_MIN_SAMPLES
