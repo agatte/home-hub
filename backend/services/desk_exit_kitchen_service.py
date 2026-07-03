@@ -98,6 +98,19 @@ HARD_TIMEOUT_SECONDS = 4 * 3600
 # false positives below 0.70 conf are not Anthony).
 KITCHEN_FACE_TRUST_THRESHOLD = FACE_TRUST_THRESHOLD
 
+# Sticky desk-confirmation window — mirrors TransitLightingService's
+# DESK_STICKY_SECONDS (kept local rather than imported to avoid a
+# cross-service dependency, same pattern as FACE_TRUST_THRESHOLD above).
+# The desktop pc_agent posts a raw, un-debounced face_present every frame
+# and PresenceFusion retains only the latest reading per source, so
+# is_at_desk_fresh() flips false on a single head-down / lean-back frame.
+# During desk gaming that let the absent-dwell timer accumulate and fire
+# the kitchen brighten on flicker (GH#109). Treating a desk confirmation
+# within this window as "still at desk" bridges the per-frame drops via the
+# fusion high-water mark while a genuine exit still arms within ~25s
+# (15s sticky + 10s absent dwell).
+DESK_STICKY_SECONDS = 15
+
 
 # ── Late-night corridor brighten ────────────────────────────────────────
 #
@@ -355,11 +368,11 @@ class DeskExitKitchenService:
             self._record_block("refire cooldown")
             return
 
-        # While Anthony is still at the desk, reset the absent timer. We use
-        # the engine's freshness gate (zone=desk + fresh) rather than the raw
-        # `last_detection == present` to inherit the 5-min freshness window —
-        # a brief weak-face miss doesn't restart the dwell timer.
-        if self._automation.is_at_desk_fresh():
+        # While Anthony is still at the desk, reset the absent timer. Use the
+        # sticky gate (fresh zone=desk OR a recent fusion confirmation) so a
+        # per-frame face_present flicker during desk gaming doesn't restart
+        # the dwell timer and fire the kitchen brighten (GH#109).
+        if self._at_desk_or_recent():
             self._camera_absent_since = None
             self._record_unblock()
             return
@@ -413,8 +426,9 @@ class DeskExitKitchenService:
             return
 
         # Arming phase — same shape as the kitchen-only path but with
-        # the corridor-specific dwell threshold.
-        if self._automation.is_at_desk_fresh():
+        # the corridor-specific dwell threshold. Sticky gate (see
+        # _at_desk_or_recent) so desk-gaming flicker doesn't arm the corridor.
+        if self._at_desk_or_recent():
             self._camera_absent_since = None
             self._record_unblock()
             return
@@ -593,6 +607,29 @@ class DeskExitKitchenService:
         if self._last_block_reason is not None:
             logger.info("DeskExit: unblocked (was %s)", self._last_block_reason)
             self._last_block_reason = None
+
+    def _at_desk_or_recent(self) -> bool:
+        """Flicker-robust 'is Anthony at the desk?' for the arming paths.
+
+        ``is_at_desk_fresh()`` alone flips false on a single un-debounced
+        face_present=False frame from the desktop pc_agent (PresenceFusion
+        keeps only the latest reading per source), which let the absent-dwell
+        timer accumulate and fire the kitchen brighten during desk gaming
+        (GH#109). Fall back to the fusion high-water mark — a desk
+        confirmation within DESK_STICKY_SECONDS bridges those per-frame drops
+        without delaying a genuine exit beyond the sticky window.
+
+        Used only on the ARMING side. The active-clear / return-to-desk
+        paths keep their own debounce streaks (RETURN_DESK_SUSTAIN_SECONDS /
+        CORRIDOR_RETURN_DESK_SECONDS) and are intentionally left on the raw
+        fresh signal.
+        """
+        if self._automation.is_at_desk_fresh():
+            return True
+        if self._presence_fusion is not None:
+            since = self._presence_fusion.seconds_since_at_desk()
+            return since is not None and since <= DESK_STICKY_SECONDS
+        return False
 
     def _sample_lux(self) -> None:
         """Sample the Latitude (living-room) lux once for measure-then-hold.

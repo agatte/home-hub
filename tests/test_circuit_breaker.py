@@ -158,6 +158,27 @@ class TestTimeout:
                 await breaker.call(_slow)
         assert breaker._state == CircuitBreaker.OPEN
 
+    @pytest.mark.asyncio
+    async def test_per_call_timeout_override(self):
+        """call_timeout kwarg extends the budget for known-slow composite
+        calls (SoCo Snapshot bundles ~8-13 UPnP round-trips)."""
+        breaker = CircuitBreaker(
+            name="t", failure_threshold=3, cooldown_seconds=0.05, call_timeout=0.05
+        )
+
+        async def _slowish() -> str:
+            await asyncio.sleep(0.2)
+            return "ok"
+
+        # Without override: breaker-wide 0.05s budget times out.
+        with pytest.raises(asyncio.TimeoutError):
+            await breaker.call(_slowish)
+        assert breaker.snapshot()["consecutive_failures"] == 1
+
+        # With override: same call succeeds and resets the counter.
+        assert await breaker.call(_slowish, call_timeout=1.0) == "ok"
+        assert breaker.snapshot()["consecutive_failures"] == 0
+
 
 class TestSnapshot:
     @pytest.mark.asyncio

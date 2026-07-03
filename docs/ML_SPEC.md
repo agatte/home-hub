@@ -526,29 +526,27 @@ default curve center of 90, preserving old behavior until recalibration.
 - `frontend-svelte/src/lib/stores/camera.js` + `init.js` — camera store, WS handler
 - `tests/test_camera_service.py` + `tests/test_lux_multiplier.py` — 55 tests
 
-#### 3.4.1 Planned: dual-source lux fusion (desktop + Latitude)
+#### 3.4.1 Shipped: bedroom lux channel (D4, 2026-06-01/02)
 
-**Status:** flagged for follow-up — `flag_2026-05-18T21-47-00_1zt38c` ("Desktop camera as second lux source for brightness fusion"). Not yet implemented. Captured here as the architectural direction so the design is consistent when it ships.
+**Status:** Shipped — `LuxChannel` (`backend/services/lux_channel.py`) + desktop lux API routes + `emotion_capture.py` flip-sample-flip lux sampler. The pre-ship design described below ("fuse at `_read_fresh_camera_lux`") was revised during implementation; the actual shipping architecture differs in several key ways but the original rationale (two baselines required, zone-weighting stays Latitude-only, no cross-room contamination) still holds and is documented in `screen_sync.py`.
 
-**Context.** As of 2026-05-18 the apartment has two cameras: the Latitude's built-in webcam (corner-mounted, runs `CameraService` with zone-weighted half-frame lux sampling — `project_camera_zone_weighted_lux.md`) and the desktop's webcam (frontal close-range, runs `backend/services/pc_agent/emotion_capture.py` for opt-in blendshape capture + presence observations posted to `/api/camera/observation`). The desktop camera is higher quality and more centrally positioned, but is currently used only for emotion + presence; its frame is captured every 2s for the FaceLandmarker but the same frame's `gray.mean()` lux is discarded.
+**What shipped.**
+- New `backend/services/lux_channel.py` — `LuxChannel` class: `ema_lux` / `baseline_lux` / `last_lux_update`, `update()` (EMA + stale-reset semantics matching `CameraService`), `is_fresh()`, `set_baseline()`, `status()`. Property names are duck-typed against `CameraService` so a consumer can read either source identically.
+- `app.state.bedroom_lux` wired in `backend/bootstrap.py` as `LuxChannel("bedroom")`, seeded from `desktop_lux_calibration_config` at boot.
+- `backend/api/routes/camera.py` — 5 new `/api/camera/desktop/lux*` endpoints: `POST /desktop/lux` (ingest sample), `GET /desktop/lux` (snapshot), `POST /desktop/lux/calibrate/request` (flag calibration for agent), `GET /desktop/lux/calibrate/pending` (agent poll), `GET/POST /desktop/lux/calibration` (load/persist `{exposure, baseline_lux, target_lux, calibrated_at}`). App_settings keys: `desktop_lux_calibration_config` + `desktop_lux_calibrate_requested`.
+- `backend/services/pc_agent/emotion_capture.py` — flip-sample-flip lux sampler: every ~25s flips from auto-exposure to the calibrated fixed `exposure`, averages `gray.mean()` over a few frames, restores auto-exposure on the same handle (CAP_DSHOW — per `project_desktop_webcam_dshow.md`), POSTs to `/api/camera/desktop/lux`. Self-calibration via `search_exposure` + `_run_lux_calibration` runs when the agent sees the pending flag on its 30s settings poll.
+- `backend/services/screen_sync.py` — the bedroom channel is consumed HERE (NOT fused at `_read_fresh_camera_lux`). The screen-sync route (`receive_screen_color` in `automation.py`) reads `app.state.bedroom_lux` directly and passes the multiplier into `ScreenSyncService.get_cap` / `get_floor` via `_scale_for_ambient`. Gaming + watching across all time periods; L5 excluded (glare source). `_AMBIENT_LIFT_MODES = frozenset({"gaming", "watching"})`, `_AMBIENT_LIFT_EXCLUDE_LIGHTS = frozenset({"5"})`, ceiling 1.40×.
+- Zone / posture for the watching-desk L2 cap is now sourced from `app.state.presence` (PresenceFusion) in the screen-color route, not the raw Latitude camera — fixes the silent regression where the watching-at-desk L2 cap (180) stopped firing for screen-sync after the 2026-05-27 camera relocation.
 
-**Decision.** When this work is taken up, the desktop camera will become a **second lux source** that fuses with the Latitude reading at the read site (`_read_fresh_camera_lux` in `automation_engine.py`). The Latitude remains the primary because it does zone-weighted lux (needed for zone-specific lighting reasoning); the desktop contributes whole-frame lux only (its viewport is too narrow — face fills most of the frame — for zone weighting). Failover semantics: when both sources are fresh, the read site picks the more recent or weighted-averages them favoring the desktop's higher sensor quality; when one is stale or paused, the other becomes authoritative.
+**How implementation diverged from the pre-ship plan.**
+- The store is `LuxChannel` (not a separate `desktop_lux_service.py`).
+- Endpoints are `/api/camera/desktop/lux*` (not `/api/desktop_camera/*`).
+- The bedroom channel is NOT fused at `_read_fresh_camera_lux`; the standard automation lux path (Latitude camera only) is unchanged. The desktop channel feeds screen-sync only — the scoped consumer for the room the lamps live in.
+- The app_setting is `desktop_lux_calibration_config` (not `desktop_camera_baseline_lux`).
+- No separate `desktop_camera_lux_enabled` toggle; the sampler piggybacks on the existing `emotion_capture.py` capture cadence.
+- D1 path lighting (`PATH_LIGHT_CURVE` + `path_light_brightness` in `light_state_calculator.py`) also shipped in this wave — `desk_exit_kitchen_service.py` and `transit_lighting_service.py` now measure-then-hold lux before boosting corridor/kitchen brightness so the boosted fixtures don't feed back into the reading.
 
-**Why two cameras, not just a better Latitude.** (a) Redundancy — if the Latitude pauses (camera_enabled toggle, V4L2 lock, sleep mode), the desktop can keep the lux signal alive without users noticing the gap. (b) Viewpoint diversity — the corner-mounted Latitude can be fooled by a desk lamp shining directly into it (inflates its baseline); the desktop's central position is less susceptible to single-fixture glare. (c) No new privacy boundary — the desktop frame is already captured for emotion/presence under the opt-in gate; adding `gray.mean()` adds zero new exposure if `desktop_emotion_enabled` or `desktop_presence_enabled` is already on.
-
-**Caveats baked into the design.**
-- **Two baselines required.** Each camera has its own optics + exposure curve; raw lux values can differ 30–50% from sensor characteristics alone. The decision requires a separate `desktop_camera_baseline_lux` app_setting and a calibration endpoint that takes a `source=` parameter (or a sibling `POST /api/desktop_camera/calibrate`). Without this, naïve fusion produces oscillating multipliers.
-- **Zone-weighting stays Latitude-only.** The desktop camera contributes a single whole-frame lux number — no zone weighting because the user's face occupies most of the viewport. Code paths that need zone-specific lux (anything calling `_read_fresh_camera_lux` for zone reasoning) must fall back to the Latitude.
-- **Privacy gates remain independent.** The desktop lux capture should be its own `desktop_camera_lux_enabled` app_setting, NOT inherited from `desktop_emotion_enabled` — users may want lux-only contribution without emotion inference.
-- **Composes above Layer 2 of the weather-aware brightness work.** The Layer 2 `LUX_WEATHER_BASELINE_SHIFT` operates on whatever baseline `_read_fresh_camera_lux` returns. Dual-source fusion just changes how that value is computed; the shift logic doesn't need updates.
-
-**Files that will change when this ships.**
-- New: `backend/services/desktop_lux_service.py` (consumes POSTs, holds desktop `_ema_lux`, `baseline_lux`, exposes `get_fresh_lux()`)
-- Extend: `backend/api/routes/camera.py` — `/observation` POST shape adds optional `lux: float` field; new `POST /api/desktop_camera/calibrate` endpoint
-- Extend: `backend/services/automation_engine.py:_read_fresh_camera_lux` — fuse Latitude + desktop readings with the failover/weighting policy above
-- Extend: `backend/services/pc_agent/emotion_capture.py` — compute `gray.mean()` on the captured frame and include in the existing POST payload (gated on the new toggle)
-- New: `desktop_camera_lux_enabled` + `desktop_camera_baseline_lux` app_settings
-- Frontend: Settings page toggle + "Calibrate desktop camera" button mirroring the Latitude UX
+**Original design rationale (still valid).** The cross-room contamination argument that motivated this work (a bright living room must not dim bedroom lamps during gaming) is confirmed by the live bug it closed on 2026-06-02: the living-room Latitude mult of 0.897 was throttling the bedroom gaming floors before Part E switched screen-sync to the bedroom channel. Zone-weighting stays Latitude-only (the desktop's face-filling viewport can't be meaningfully zone-weighted). Two baselines are required (`lux_calibration_config` for the Latitude, `desktop_lux_calibration_config` for the bedroom Brio).
 
 **Why this lives here and not in a separate ADR.** This project doesn't use formal ADRs — architectural decisions live alongside the spec they extend. The decision is a natural successor to §3.4's single-source camera model, and the trade-offs (Latitude vs desktop, zone vs whole-frame, baseline divergence) compose with the existing camera service. Carving it into a separate doc would fragment the read path.
 

@@ -154,6 +154,56 @@ MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Rust profile — luma-driven brightness on a fixed ember color
+# ---------------------------------------------------------------------------
+# The Rust gaming profile holds a fixed warm ember on L2 and drives its
+# BRIGHTNESS from the screen's whole-frame luminance, so the room dims when
+# Rust goes dark (deliberately pitch-black nights) and lifts on bright day
+# scenes. Color is intentionally NOT screen-driven — Rust has no coherent
+# ambient color, so the dominant-color picker latched onto on-screen noise.
+#
+# Ember hue/sat are kept in lock-step with GAME_LIGHT_PROFILES["rust"] L2 in
+# light_state_calculator.py so the resting engine base and the synced color
+# match (no hue jump when sync starts/stops).
+RUST_EMBER_HUE = 6000
+RUST_EMBER_SAT = 200
+
+# Per-light, per-period (floor, cap) brightness envelope under the Rust profile.
+# "Dim hard at night" (user choice 2026-06-08): pitch-black Rust drops the lamp
+# to its floor; a bright daytime scene lifts it toward the cap. Floors step down
+# through the evening so a dark scene at midnight is genuinely dim.
+#
+# BOTH bedroom lamps are luma-driven (2026-06-08 live fix): L5 was originally a
+# *static* ember spark, but live it towered over an L2 that dims with the screen
+# (the curator-predicted glare-pop). Making L5 track luma at a subordinate
+# envelope (~50-55% of L2) keeps the two proportional — L5 dims alongside L2 and
+# never becomes the brightest desk element. L5's clear seeded-glass housing
+# reads sharper than L2's fabric shade, so its caps stay well below L2's.
+RUST_BRI_ENVELOPE: dict[str, dict[str, tuple[int, int]]] = {
+    # evening/night/late_night lifted ~10-15% on 2026-06-08 ("a tad dim" at
+    # 9:45pm live feedback) — eases the floor+cap without abandoning the
+    # dim-hard-at-night intent. Day untouched (already bright).
+    "2": {  # L2 — diffuse fabric shade, the room-light primary
+        "day":        (60, 200),
+        "evening":    (50, 182),
+        "night":      (43, 162),
+        "late_night": (27, 120),
+    },
+    "5": {  # L5 — clear-housing accent, subordinate, dims with L2
+        "day":        (32, 105),
+        "evening":    (29, 97),
+        "night":      (23, 84),
+        "late_night": (16, 58),
+    },
+}
+# Screen-luma input window mapped onto the envelope. Rust daytime scenes read
+# ~100-150; the pitch-black night floor is ~5-15. Below RUST_LUMA_DARK → floor,
+# above RUST_LUMA_BRIGHT → cap, linear between.
+RUST_LUMA_DARK = 12
+RUST_LUMA_BRIGHT = 135
+
+
 class ScreenSyncService:
     """
     Receives RGB colors from any source and applies them to one or more Hue lights.
@@ -203,6 +253,19 @@ class ScreenSyncService:
         self._event_logger = None
         self._last_log_at: dict[str, datetime] = {}
 
+        # Runtime-tunable Rust profile knobs (seeded from the module defaults).
+        # Live-adjustable via PUT /api/automation/rust-lighting + persisted in
+        # app_settings, so "a tad dimmer/brighter" tweaks apply instantly with
+        # no redeploy. apply_rust_brightness reads these, not the constants.
+        self._rust_envelope: dict[str, dict[str, list[int]]] = {
+            lid: {period: list(fc) for period, fc in periods.items()}
+            for lid, periods in RUST_BRI_ENVELOPE.items()
+        }
+        self._rust_ember_hue: int = RUST_EMBER_HUE
+        self._rust_ember_sat: int = RUST_EMBER_SAT
+        self._rust_luma_dark: int = RUST_LUMA_DARK
+        self._rust_luma_bright: int = RUST_LUMA_BRIGHT
+
     def set_cap_override(
         self,
         mode: str,
@@ -240,41 +303,40 @@ class ScreenSyncService:
         because they reflect specific physical setups (projector-in-bed) that
         should hard-cap regardless of time of day.
 
-        Gaming-mode envelope lift: when ``mode == "gaming"`` and ``period ==
-        "day"``, the resolved cap is scaled by ``lux_multiplier *
-        get_functional_weather_multiplier(mode, period, weather_condition)``
-        (cloudy 1.10×, rain 1.15×, etc.). Screen-sync envelope is gated to
-        gaming-day only on purpose (L5 clear-housing perceptual ceiling);
-        the bri pipeline applies the same weather multipliers across more
-        (mode, period) buckets. Watching's caps stay flat to preserve
-        cinematic dim.
+        Ambient envelope lift: for ``mode`` in ``_AMBIENT_LIFT_MODES``
+        (gaming + watching) across ALL periods, the resolved cap is scaled by
+        ``lux_multiplier * get_functional_weather_multiplier(mode, period,
+        weather_condition)`` (cloudy 1.10×, rain 1.15×, etc.) — see
+        ``_scale_for_ambient``. L5 is excluded from the lift (glare-prone clear
+        housing keeps its static per-period caps); only L2's fabric shade,
+        the room-light lever, tracks ambient.
         """
         if zone is not None and posture is not None:
             override = self._cap_overrides.get((mode, zone, posture, light_id))
             if override is not None:
                 return self._scale_for_ambient(
-                    override, mode, period, lux_multiplier, weather_condition,
+                    override, mode, period, lux_multiplier, weather_condition, light_id,
                 )
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture, light_id))
             if cap is not None:
                 return self._scale_for_ambient(
-                    cap, mode, period, lux_multiplier, weather_condition,
+                    cap, mode, period, lux_multiplier, weather_condition, light_id,
                 )
         if zone is not None:
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, light_id))
             if cap is not None:
                 return self._scale_for_ambient(
-                    cap, mode, period, lux_multiplier, weather_condition,
+                    cap, mode, period, lux_multiplier, weather_condition, light_id,
                 )
         if period is not None:
             cap = MODE_MAX_BRIGHTNESS_PERIOD.get((mode, period, light_id))
             if cap is not None:
                 return self._scale_for_ambient(
-                    cap, mode, period, lux_multiplier, weather_condition,
+                    cap, mode, period, lux_multiplier, weather_condition, light_id,
                 )
         base = MODE_MAX_BRIGHTNESS.get((mode, light_id), DEFAULT_MAX_BRIGHTNESS)
         return self._scale_for_ambient(
-            base, mode, period, lux_multiplier, weather_condition,
+            base, mode, period, lux_multiplier, weather_condition, light_id,
         )
 
     def get_floor(
@@ -290,28 +352,48 @@ class ScreenSyncService:
         Lookup order: MODE_MIN_BRIGHTNESS_PERIOD (mode, period, light_id) →
         MODE_MIN_BRIGHTNESS (mode, light_id) → MIN_BRIGHTNESS default.
 
-        Subject to the same gaming-day ambient lift as ``get_cap`` — the
-        floor lifting is the main eye-comfort payoff (dark game content
-        no longer drags L2 down to fabric-shade dimness on a cloudy day).
+        Subject to the same ambient lift as ``get_cap`` (gaming + watching,
+        all periods, L2 only) — the floor lifting is the main eye-comfort
+        payoff: dark content no longer drags L2 down to fabric-shade dimness
+        when the bedroom itself is dark.
         """
         if period is not None:
             floor = MODE_MIN_BRIGHTNESS_PERIOD.get((mode, period, light_id))
             if floor is not None:
                 return self._scale_for_ambient(
-                    floor, mode, period, lux_multiplier, weather_condition,
+                    floor, mode, period, lux_multiplier, weather_condition, light_id,
                 )
         base = MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
         return self._scale_for_ambient(
-            base, mode, period, lux_multiplier, weather_condition,
+            base, mode, period, lux_multiplier, weather_condition, light_id,
         )
+
+    # Modes whose screen-sync envelope tracks ambient lux + weather. Both
+    # gaming and watching run in the dim bedroom and the user's stated intent
+    # is "brighter when the room is dark" for BOTH (2026-06-02). Widened from
+    # gaming-day-only on 2026-06-02 (D4 task #7) — the night-time risk is
+    # contained by the lift being self-limiting (lifting the lamps brightens
+    # the room the webcam measures, so the lux mult settles ~1.02) and by the
+    # weather grid tapering to 1.0 at night/late_night.
+    _AMBIENT_LIFT_MODES: frozenset[str] = frozenset({"gaming", "watching"})
+
+    # Lights EXCLUDED from the ambient lift. L5 (clear seeded-glass pendant) is
+    # a glare-prone point source, NOT a room-light lever — that's L2's job (the
+    # diffuse fabric shade). Lifting L5 adds glare, not room light, so it keeps
+    # its deliberate per-period caps (evening 95 / night 80) untouched. This
+    # also closes a latent day-path gap: the L5 day cap was raised 60→75 on
+    # 2026-06-02, so the old 75 × 1.40 = 105 lift exceeded L5's 90 glare ceiling
+    # (build 4adce9f). See [[feedback_clear_housing_perceptual_luma]] + this
+    # session's "L2 carries the room light" curator reframe.
+    _AMBIENT_LIFT_EXCLUDE_LIGHTS: frozenset[str] = frozenset({"5"})
 
     # Worst-case stacked multiplier ceiling: LUX_CURVE peaks at 1.30 (20 lux
     # baseline-shifted) and FUNCTIONAL_WEATHER_BRIGHTNESS peaks at 1.20
-    # (thunderstorm), so naive stacking allows 1.56×. L5's clear housing
-    # crosses the documented perceptual overdrive threshold (gaming-day cap
-    # 60 × 1.56 = 93, above the 90 ceiling from build 4adce9f). 1.40 keeps
-    # L5 worst-case at 84 and still passes through the cloudy-daytime lift
-    # this change was written for (1.07 × 1.10 ≈ 1.18).
+    # (thunderstorm), so naive stacking allows 1.56×. 1.40 bounds the combined
+    # lift. NOTE: 1.40 was originally derived from L5's clear-housing glare
+    # threshold, but L5 is now excluded from the lift entirely (above), so this
+    # ceiling is retained purely as a conservative over-bright-room bound on L2
+    # (fabric shade, no point-source glare) — it is no longer a glare guard.
     _AMBIENT_LIFT_CEILING: float = 1.40
 
     @staticmethod
@@ -321,24 +403,23 @@ class ScreenSyncService:
         period: Optional[str],
         lux_multiplier: float,
         weather_condition: Optional[str],
+        light_id: str = "2",
     ) -> int:
-        """Apply gaming-day lux × functional-weather scaling to a cap/floor.
+        """Apply ambient lux × functional-weather scaling to a cap/floor.
 
-        Mirrors the gate in ``apply_functional_weather_brightness``: gaming
-        mode only, daytime only. Watching keeps its flat envelope so the
-        projector contrast intent isn't disturbed. The combined multiplier
-        is capped at ``_AMBIENT_LIFT_CEILING`` to protect L5's clear-housing
-        perceptual ceiling. Final value clamped to [1, 254].
+        Gated to ``_AMBIENT_LIFT_MODES`` (gaming + watching) and to lamps NOT
+        in ``_AMBIENT_LIFT_EXCLUDE_LIGHTS`` (L5 rides its static per-period
+        caps to avoid point-source glare). All time periods are eligible: the
+        weather grid already tapers to 1.0 at night/late_night and the lux
+        multiplier is self-limiting, so the night-time lift is a gentle top-up
+        on L2's floor — the eye-comfort payoff for a dark room. The combined
+        multiplier is capped at ``_AMBIENT_LIFT_CEILING``; final value clamped
+        to [1, 254].
         """
-        if mode != "gaming":
+        if mode not in ScreenSyncService._AMBIENT_LIFT_MODES:
             return value
-        if period != "day":
+        if light_id in ScreenSyncService._AMBIENT_LIFT_EXCLUDE_LIGHTS:
             return value
-        # Screen-sync caps stay gating-restricted to gaming-day on purpose:
-        # the L5 clear-housing perceptual ceiling (build 4adce9f) wasn't
-        # validated for evening/working lifts. The bri pipeline now applies
-        # weather multipliers across more buckets, but the sync envelope
-        # holds its narrower scope.
         weather_mult = get_functional_weather_multiplier(
             mode, period, weather_condition,
         )
@@ -402,13 +483,13 @@ class ScreenSyncService:
                 time-agnostic fallbacks so the lamp's bri envelope tracks
                 the room's ambient.
             lux_multiplier: Camera-derived brightness multiplier (from
-                ``lux_to_multiplier``). Only consumed for gaming-day; lifts
-                the cap+floor envelope on dim ambient. Defaults to 1.0
-                (no lift).
+                ``lux_to_multiplier``). Consumed for gaming + watching across
+                all periods (L2 only — L5 is excluded); lifts the cap+floor
+                envelope on dim ambient. Defaults to 1.0 (no lift).
             weather_condition: Classified weather string ("clouds" / "rain"
-                / "thunderstorm" / "snow" / None). Only consumed for
-                gaming-day; stacks multiplicatively with ``lux_multiplier``
-                to lift the envelope on overcast conditions.
+                / "thunderstorm" / "snow" / None). Same gate as
+                ``lux_multiplier``; stacks multiplicatively with it to lift
+                the envelope on overcast conditions.
         """
         if light_id not in self._targets:
             return
@@ -473,6 +554,7 @@ class ScreenSyncService:
 
     async def _maybe_log_adjustment(
         self, light_id: str, hue: int, sat: int, bri: int, mode: str,
+        trigger: str = "screen_sync",
     ) -> None:
         """Throttled event-log of a synced bridge write (closes syncfight-3).
 
@@ -480,8 +562,10 @@ class ScreenSyncService:
         event logger, so without this the synced colors never reach
         ``light_adjustments`` / analytics. Throttled to one row per light per
         ``SCREEN_SYNC_LOG_INTERVAL_S`` so the ~2.5s capture cadence doesn't
-        flood the table. Logs the post-EMA applied values with
-        ``trigger='screen_sync'``. No-op when no event logger is wired."""
+        flood the table. Logs the post-EMA applied values. ``trigger``
+        distinguishes the color path (``screen_sync``) from the Rust
+        luma-brightness path (``rust_brightness_sync``) in analytics. No-op
+        when no event logger is wired."""
         if self._event_logger is None:
             return
         now = datetime.now(timezone.utc)
@@ -495,8 +579,140 @@ class ScreenSyncService:
             sat_after=sat,
             bri_after=bri,
             mode_at_time=mode,
-            trigger="screen_sync",
+            trigger=trigger,
         )
+
+    def last_applied_bri(self, light_id: str) -> float:
+        """Last smoothed brightness applied to ``light_id`` (RustEventService's
+        flinch borrows this as its dip baseline). Mid-value before first frame."""
+        return self._last_bri.get(light_id, 100.0)
+
+    async def apply_rust_brightness(
+        self,
+        light_id: str,
+        luma: int,
+        period: Optional[str] = None,
+        source: str = "desktop",
+        tint: Optional[tuple[int, int, float]] = None,
+    ) -> None:
+        """Drive a lamp's BRIGHTNESS from screen luma, holding a fixed ember color.
+
+        The Rust profile's L2 path. Instead of mirroring the (chaotic)
+        on-screen color, hold the ember color and map the whole-frame luminance
+        onto the period's (floor, cap) envelope so the lamp dims when Rust goes
+        dark and lifts on bright scenes. Reads the runtime-tunable instance
+        knobs (``_rust_envelope`` / ``_rust_ember_*`` / ``_rust_luma_*``),
+        seeded from the module defaults and live-adjustable via
+        ``PUT /api/automation/rust-lighting``. EMA smoothing reuses the per-light
+        state — hue/sat are constant, so only ``bri`` moves. Deliberately NO
+        ambient lux lift: brightness is screen-driven, and the lux feedback loop
+        (lamp brightens room → webcam reads brighter → lifts the cap) would
+        fight the luma signal.
+
+        Args:
+            light_id: Target lamp; no-op if not in ``target_lights``.
+            luma: Whole-frame brightness 0-255 (Rec.601) from the capture agent.
+            period: Time period for the envelope lookup; falls back to night.
+            source: Reporting source, recorded for status only.
+            tint: Optional ``(hue, sat, bri_factor)`` for the Rust under-fire
+                danger glow — replaces the ember hue/sat and scales the target
+                brightness, while the lamp still rides the luma envelope (so the
+                glow tracks scene brightness, just red-shifted). None = ember.
+        """
+        if light_id not in self._targets:
+            return
+        light_env = self._rust_envelope.get(light_id, self._rust_envelope["2"])
+        floor, cap = light_env.get(period or "night", light_env["night"])
+        span = max(1, self._rust_luma_bright - self._rust_luma_dark)
+        frac = max(0.0, min(1.0, (luma - self._rust_luma_dark) / span))
+        target_bri = floor + (cap - floor) * frac
+        if tint is not None:
+            hue, sat, bri_factor = tint
+            target_bri *= bri_factor
+        else:
+            hue, sat = self._rust_ember_hue, self._rust_ember_sat
+        sh, ss, sb = self._smooth(light_id, float(hue), float(sat), target_bri)
+        await self._hue.set_light(light_id, {
+            "on": True,
+            "hue": int(sh),
+            "sat": int(ss),
+            "bri": int(sb),
+            "transitiontime": 20,  # 2s — smooth brightness glide, no flicker
+        })
+        self._last_color_at = datetime.now(timezone.utc)
+        self._last_source = source
+        await self._maybe_log_adjustment(
+            light_id, int(sh), int(ss), int(sb), "gaming",
+            trigger="rust_brightness_sync",
+        )
+
+    # ------------------------------------------------------------------
+    # Runtime Rust-profile tuning (no-redeploy knob)
+    # ------------------------------------------------------------------
+
+    def get_rust_config(self) -> dict:
+        """Return the live Rust luma-brightness config as a JSON-safe dict.
+
+        Shape: ``{"envelope": {light: {period: [floor, cap]}}, "ember":
+        {"hue", "sat"}, "luma": {"dark", "bright"}}``. Backs
+        ``GET /api/automation/rust-lighting`` and is the exact shape
+        ``apply_rust_config`` accepts (full or partial)."""
+        return {
+            "envelope": {
+                lid: {period: list(fc) for period, fc in periods.items()}
+                for lid, periods in self._rust_envelope.items()
+            },
+            "ember": {"hue": self._rust_ember_hue, "sat": self._rust_ember_sat},
+            "luma": {"dark": self._rust_luma_dark, "bright": self._rust_luma_bright},
+        }
+
+    def apply_rust_config(self, cfg: dict) -> dict:
+        """Merge a (possibly partial) Rust config into the live knobs.
+
+        Only the keys present in ``cfg`` are touched — e.g. PUT just
+        ``{"envelope": {"2": {"night": [50, 170]}}}`` to bump L2's night
+        range, leaving everything else. Values are validated/clamped:
+        bri floor/cap to [1, 254] with floor ≤ cap, hue to [0, 65535], sat
+        to [0, 254], luma dark/bright to [0, 255] with dark < bright. Unknown
+        light ids / periods are ignored. Returns the full resolved config
+        (``get_rust_config()``)."""
+        if not isinstance(cfg, dict):
+            return self.get_rust_config()
+
+        env = cfg.get("envelope")
+        if isinstance(env, dict):
+            for lid, periods in env.items():
+                if lid not in self._rust_envelope or not isinstance(periods, dict):
+                    continue
+                for period, fc in periods.items():
+                    if period not in self._rust_envelope[lid]:
+                        continue
+                    if not isinstance(fc, (list, tuple)) or len(fc) != 2:
+                        continue
+                    floor = max(1, min(254, int(fc[0])))
+                    cap = max(1, min(254, int(fc[1])))
+                    if floor > cap:
+                        floor, cap = cap, floor
+                    self._rust_envelope[lid][period] = [floor, cap]
+
+        ember = cfg.get("ember")
+        if isinstance(ember, dict):
+            if ember.get("hue") is not None:
+                self._rust_ember_hue = max(0, min(65535, int(ember["hue"])))
+            if ember.get("sat") is not None:
+                self._rust_ember_sat = max(0, min(254, int(ember["sat"])))
+
+        luma = cfg.get("luma")
+        if isinstance(luma, dict):
+            if luma.get("dark") is not None:
+                self._rust_luma_dark = max(0, min(255, int(luma["dark"])))
+            if luma.get("bright") is not None:
+                self._rust_luma_bright = max(0, min(255, int(luma["bright"])))
+            # Keep dark < bright so the span never collapses/inverts.
+            if self._rust_luma_dark >= self._rust_luma_bright:
+                self._rust_luma_bright = self._rust_luma_dark + 1
+
+        return self.get_rust_config()
 
 
 class LaptopLoopbackCapture:

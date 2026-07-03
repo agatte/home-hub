@@ -66,6 +66,12 @@ LATITUDE_STRONG_FACE_THRESHOLD = 0.70
 # inbound payloads against this set.
 KNOWN_SOURCES = frozenset({"latitude", "desktop"})
 
+# Forward skew beyond which a STORED reading is considered invalid by
+# construction (no honest capture happens in the future). Mirrors the
+# route-layer ``clamp_client_timestamp`` tolerance; kept here too as
+# defense-in-depth for in-process callers and future ingest paths.
+FUTURE_SKEW_TOLERANCE_S = 2.0
+
 
 @dataclass(frozen=True)
 class PresenceReading:
@@ -116,14 +122,41 @@ class PresenceFusion:
             return
         prior = self._readings.get(reading.source)
         if prior is not None and reading.captured_at < prior.captured_at:
-            # Out-of-order arrival (clock skew, network reorder) — drop
-            # rather than overwrite fresher state with stale data.
-            return
+            prior_skew_s = (
+                prior.captured_at - datetime.now(timezone.utc)
+            ).total_seconds()
+            if prior_skew_s <= FUTURE_SKEW_TOLERANCE_S:
+                # Out-of-order arrival (clock skew, network reorder) — drop
+                # rather than overwrite fresher state with stale data.
+                return
+            # The STORED reading is future-stamped — invalid by
+            # construction (a fast source clock that has since been
+            # corrected, e.g. fresh-CMOS after the 2026-06-07 mobo swap).
+            # Without this branch every honest report looks out-of-order
+            # and the source wedges until real time catches up; replace
+            # the bad reading instead.
+            logger.warning(
+                "replacing future-stamped %s reading (+%.0fs ahead of "
+                "server) with current observation",
+                reading.source, prior_skew_s,
+            )
         self._readings[reading.source] = reading
 
         if self._is_at_desk(reading):
             self._last_at_desk_source = reading.source
             self._last_at_desk_at = reading.captured_at
+        elif self._last_at_desk_at is not None:
+            # Heal a future-stamped high-water mark even when the current
+            # reading is non-confirming — otherwise ``seconds_since_at_desk``
+            # reads negative ("just confirmed") with nobody at the desk
+            # until real time catches up to the bad stamp. Clamping to now
+            # preserves the stamp's intent (confirmed as recently as
+            # possible) and lets the gate age out naturally.
+            now = datetime.now(timezone.utc)
+            if (
+                self._last_at_desk_at - now
+            ).total_seconds() > FUTURE_SKEW_TOLERANCE_S:
+                self._last_at_desk_at = now
 
     # ------------------------------------------------------------------
     # Attendance queries
@@ -221,6 +254,31 @@ class PresenceFusion:
             if reading.zone is not None or reading.posture is not None:
                 return True
         return False
+
+    def seconds_since_at_desk(self) -> Optional[float]:
+        """Age (seconds) of the most recent at-desk confirmation, or None.
+
+        Backed by ``_last_at_desk_at``, a high-water mark that is updated on
+        every confirming reading and **never reset by a non-confirming
+        frame** (see ``on_observation``). This is the flicker-robust counter
+        the transit / desk-exit lighting services need: the desktop posts a
+        raw, un-debounced ``face_present`` every frame and ``PresenceFusion``
+        keeps only the latest reading per source, so ``is_at_desk_fresh`` and
+        ``latest_zone`` both flip on a single head-down / lean-back frame.
+        This getter instead answers "how long since *any* source last
+        confirmed the desk," which survives those sub-second drops while
+        still releasing within seconds of a genuine exit.
+
+        Unlike ``get_at_desk_attribution`` this does NOT apply the
+        ``_latitude_says_bed`` veto — callers want the raw "was recently at
+        the desk" recency for a stationary-zone gate, and the bed veto is
+        dormant post-relocation (no camera produces ``zone=bed``).
+        """
+        if self._last_at_desk_at is None:
+            return None
+        return (
+            datetime.now(timezone.utc) - self._last_at_desk_at
+        ).total_seconds()
 
     def get_at_desk_attribution(self) -> Optional[str]:
         """Most recent source to confirm at-desk, or None if stale.

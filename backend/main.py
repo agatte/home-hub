@@ -44,6 +44,7 @@ from backend.api.routes.debug import router as debug_router
 from backend.api.routes.notification import router as notification_router
 from backend.api.routes.remediation import router as remediation_router
 from backend.api.routes.personality import router as personality_router
+from backend.api.routes.presence import router as presence_router
 from backend.api.routes.pihole_proxy import router as pihole_proxy_router
 from backend.bootstrap import lifespan
 from backend.config import DATA_DIR, PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
@@ -291,6 +292,7 @@ app.include_router(debug_router)
 app.include_router(notification_router)
 app.include_router(remediation_router)
 app.include_router(personality_router)
+app.include_router(presence_router)
 
 # Pi-hole reverse proxy — must come AFTER all API routers so our own
 # /api/* routes match first.  Only unmatched /api/* paths (Pi-hole's

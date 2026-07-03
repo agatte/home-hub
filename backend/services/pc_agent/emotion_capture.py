@@ -34,7 +34,7 @@ import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -1300,6 +1300,7 @@ class EmotionCapture:
 def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
+    heartbeat: Optional[Callable[[], None]] = None,
 ) -> None:
     """Supervisor entry point. Runs capture + settings polling until stopped.
 
@@ -1307,6 +1308,10 @@ def run_agent(
     supervisor's AgentState dispatcher can drop this in without special
     casing. The capture and settings loops share the same stop_event,
     so a single supervisor stop tears down both.
+
+    `heartbeat` (injected by the supervisor) is pulsed at the top of each
+    capture iteration; if it stops — e.g. a wedged cv2 read leaves the thread
+    alive but blocked — the supervisor detects the stale beat and recovers.
     """
     _stop = stop_event or threading.Event()
     capture = EmotionCapture(server_url)
@@ -1333,6 +1338,8 @@ def run_agent(
 
     try:
         while not _stop.is_set():
+            if heartbeat is not None:
+                heartbeat()
             try:
                 capture.tick()
             except Exception:

@@ -46,7 +46,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Native Hue scenes and dynamic effects (candlelight, fireplace, sparkle, prism, glisten, opal) with 5-min cache on bridge scene fetches
 - Social mode — "Velvet Speakeasy" single static palette (dusty rose statement on L1 + cognac amber L2 + matched burnt-orange kitchen pendants). Sub-styles removed in favor of a grown-up cocktail-lounge aesthetic tuned for small hangouts.
 - Relax mode — "Moss & Candlelight" biophilic palette: warm ember on living-room lamps (L1/L2) with muted moss/sage kitchen pendants (L3/L4) that echo the plants and olive/sage/teal accents in the room. Candle/fire effects are scoped to L1/L2 so the moss pendants stay static. Late-night variant ("Moss & Ember") kicks in after 23:00 — deeper ember + hunter-green shadow for the cave/den feel.
-- Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when `zone=desk` is committed (sourced from the desktop pc_agent since the 2026-05-27 Latitude→living-room relocation — YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default.
+- Screen sync for gaming and watching (bedroom lamp mirrors dominant screen color via mss capture on the dev PC; the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when `zone=desk` is committed (sourced from the desktop pc_agent since the 2026-05-27 Latitude→living-room relocation — YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default. **Ambient lux lift (D4):** for gaming and watching across all time periods, L2's screen-sync cap + floor are scaled by `bedroom_lux × weather_multiplier` so a dim room lifts brightness without the user touching anything — `ScreenSyncService._scale_for_ambient`. The bedroom lux comes from `app.state.bedroom_lux` (the desktop Brio webcam's `LuxChannel`, NOT the living-room Latitude camera — cross-room contamination would dim the bedroom lamps when the living room is bright). L5 is excluded from the lift (clear seeded-glass housing is glare-prone and keeps its static per-period caps). Zone/posture sourcing for the watching-desk cap uses `app.state.presence` (PresenceFusion) rather than the raw Latitude camera, so the `zone=desk` detection the desktop pc_agent owns flows through correctly.
 - Manual override with 4-hour auto-timeout
 - Configurable per-mode brightness multipliers
 
@@ -266,7 +266,13 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    ├── emotion_capture.py       ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/personality/blendshape
    │                            (FaceLandmarker blendshapes → EmotionService mood vector + presence observation.
    │                             Opt-in via desktop_emotion_enabled / desktop_presence_enabled. EmotionService
-   │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.)
+   │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.
+   │                             Also: flip-sample-flip bedroom lux sampler (D4). Every ~25s, flips from
+   │                             auto-exposure to a calibrated fixed exposure (from desktop_lux_calibration_config),
+   │                             reads gray.mean() over a few frames, restores auto-exposure, and POSTs to
+   │                             POST http://192.168.86.210:8000/api/camera/desktop/lux. Self-calibration via
+   │                             search_exposure + _run_lux_calibration runs when desktop_lux_calibrate_requested
+   │                             is set. Uses CAP_DSHOW per project_desktop_webcam_dshow.md.)
    ├── peripheral_rgb_agent.py  ON dev machine (Windows-only) ──> GET http://192.168.86.210:8000/api/lights + WS sub /ws
    │                            (Mirrors the kitchen-pair color onto the Glorious Model O mouse via a local OpenRGB
    │                             SDK server (127.0.0.1:6742); seeded-champion override (League) + Colts scoring pulse.
@@ -326,7 +332,8 @@ and `CLAUDE.md` for operational details.
           │                        │                        │
    ┌──────▼──────┐    ┌───────────▼────────┐    ┌──────────▼───────┐
    │ Gaming PC   │    │ Hue Bridge         │    │ Sonos Era 100    │
-   │ (ethernet)  │    │ (Zigbee → lights)  │    │ (UPnP)          │
+   │ (WiFi, USB  │    │ (Zigbee → lights)  │    │ (UPnP)          │
+   │  adapter)   │    │                    │    │                  │
    │ PC Agent ───┼──> │                    │    │                  │
    │ POST /api/  │    └────────────────────┘    └──────────────────┘
    └─────────────┘
@@ -350,9 +357,9 @@ External APIs (cloud):
 ### Key Architecture Decisions
 
 - **Two-process model:** Main server handles real-time control. Learning engine runs separately, reads events from the shared DB, computes patterns, and exposes an internal API for predictions. Main server queries the learning engine before making automation decisions.
-- **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) when event volume grows. SQLAlchemy abstraction makes the switch straightforward. Event data uses 90-day rolling window with older data aggregated into daily/weekly summaries.
+- **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) if event volume ever forces it. **Deprioritized 2026-06-09:** the nightly per-table retention sweep (90-day rolling; `ml_decisions` capped at 21 days, ~1.1–1.2 GB plateau) removed the forcing function — no migration is planned absent a new driver. SQLAlchemy abstraction keeps the switch straightforward if revisited; `models.py` ↔ raw-migration schema drift (GH#29) is the prerequisite either way.
 - **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
-- **PC Agent over network:** Gaming PC (wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery.
+- **PC Agent over network:** Gaming PC (WiFi via TP-Link USB adapter since the 2026-06 Google Wifi migration — formerly wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery. NB: the desktop's MAC (and thus its `192.168.86.30` DHCP reservation) travels with the USB adapter, not the motherboard.
 - **Alexa two-phase:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel for full flexibility later.
 
 ### Tech Stack
@@ -378,7 +385,7 @@ External APIs (cloud):
 
 | Layer | Technology | Notes |
 |-------|-----------|-------|
-| Database | PostgreSQL (Supabase) | Migration from SQLite for event volume |
+| Database | PostgreSQL (Supabase) | Deprioritized 2026-06-09 — retention sweep removed the volume driver; see "Database migration path" above |
 | Voice Control | Fauxmo (phase 1), Custom Alexa Skill + Lambda (phase 2) | Local UPnP → cloud skill |
 | Tunnel | Cloudflare Tunnel (free) | For Alexa Skill → local API |
 | Learning | Separate Python process, scikit-learn or rule-based | Reads events, writes predictions |
@@ -400,7 +407,13 @@ Additional keys:
 - `ambient_config` — browser-side ambient-sound config + Sonos mirroring (`sonos_enabled`, `sonos_present_volume`, `sonos_away_volume`); written via `/api/ambient/*`.
 - `ambient_streams` — curated internet-radio nature streams `{wclass: [{id, label, url}]}`. Weather-class keys (rain/thunderstorm/snow/wind) auto-play with a health check (file fallback when down); other keys manual-pick. Hand-edit; seeded from `DEFAULT_STREAM_LIBRARY`; play via `play_uri(force_radio=True)`.
 - `screen_sync_laptop_enabled` — `{enabled: bool}`; laptop screen→bedroom-lamp sync toggle, independent of `camera_enabled`.
+- `away_state` — `{away, since_utc, source}`; the AwayManager's persisted away/home occupancy state (D2/D6, GH#107). Restored at boot by `away_manager.load_state()` — a restart while away re-arms the run_loop suppression. Written on every geofence leave/arrive.
+- `away_config` — away/home behavior knobs: `{welcome_tts: bool (default true), welcome_tts_text, pause_music_on_leave: bool (default true)}`. Hand-edit; welcome TTS is additionally suppressed during DND/sleeping/late_night regardless of the flag.
+- `rust_lighting_config` — runtime tuning for the **Rust** per-game lighting profile (the bedroom lamps' luma-driven brightness). Shape: `{"envelope": {light_id: {period: [floor, cap]}}, "ember": {hue, sat}, "luma": {dark, bright}}`. Live-editable via `GET`/`PUT /api/automation/rust-lighting` (partial-merge + validate/clamp; applies on the next screen-color frame ~2.5s, **no redeploy**) and restored at boot into `ScreenSyncService`. Defaults live in `screen_sync.py` (`RUST_BRI_ENVELOPE` etc.). This is the no-deploy "a tad dimmer/brighter" tuning loop; from the desktop, `curl -X PUT http://192.168.86.210:8000/api/automation/rust-lighting -H 'Content-Type: application/json' -d '{"envelope":{"2":{"night":[50,170]}}}'` (RFC1918 LAN auto-bypasses the API key).
+- `rust_event_config` — runtime feel knobs for the **Rust Phase 2** damage reactions (L2/L5 flinch + under-fire glow). The desktop agent detects Rust's red edge-vignette (`compute_vignette_score` in `screen_sync_agent.py`) and POSTs `/api/automation/rust-event {type:"damage", score}`; `RustEventService` fires a cooldown-gated red flinch + holds a danger-red tint while damage continues. Shape: `{enabled, damage_threshold, flinch_cooldown_s, release_s, flinch_hue/sat/dip_factor/hold_s, tint_hue/sat/bri_factor}`. Live-editable via `GET`/`PUT /api/automation/rust-event-config` (partial-merge + clamp, **no redeploy**), restored at boot. `damage_threshold` is the main live-tune (Rust's vignette intensity vs the gate).
 - `camera_wedge_last_restart` — `{at, detail}`; last camera-watchdog process-restart escalation, rate-limited to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart`.
+- `desktop_lux_calibration_config` — `{exposure, baseline_lux, target_lux, calibrated_at}`; bedroom webcam calibration result from the desktop Brio (D4). Written by `POST /api/camera/desktop/lux/calibration`; read at boot by `bootstrap.py` to seed `app.state.bedroom_lux` (`LuxChannel`). The `exposure` value is pinned by `emotion_capture.py` for every subsequent flip-sample-flip lux read. Empty dict until the bedroom webcam is calibrated.
+- `desktop_lux_calibrate_requested` — `{requested: bool}`; flag set by `POST /api/camera/desktop/lux/calibrate/request` and cleared when the agent POSTs its calibration result. Polled every 30s by `emotion_capture.py` so calibration can be triggered server-side without a separate UI flow.
 - Personality bundle (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) — master kill switch + sub-toggles for the AI Personality Layer (spec: `docs/PERSONALITY_LAYER.md`).
 - `mood_calibration_nudge_state` — `{last_nudge_at_utc, last_nudge_bucket}`; `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges), survives restart so a deploy mid-day doesn't reset the gate.
 - `gameday_playoff_state` — cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot (spec: `docs/GAMEDAY_SPEC.md`).
@@ -846,6 +859,15 @@ All messages are JSON with `type` + `data` fields.
 | POST | `/api/learning/retune-weights` | Manually trigger the fusion weight-tuning job (normally 3:30 AM cron) |
 | DELETE | `/api/learning/reset` | Wipe all ML models and decision/metric tables |
 
+#### Remediation — `/api/remediation/`
+
+Bounded auto-remediation for the source-trust watchdog (camera lux decoupling etc.). Propose-only unless `REMEDIATION_AUTONOMOUS=true`; the `homehub-remediator` agent drives it via the MCP `remediate`/`get_remediation_status` tools. Every action writes a `remediation_log` audit row; the `RemediationStatusCard` (Settings → Learning) polls `/status`. Proposals respect DND (push suppressed, audit row still written). Full design: memory `project_source_trust_watchdog`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/remediation/status` | Mode badge (propose-only / autonomous / disabled), 24h auto-fix count vs ceiling (6/day), recent proposals with result badges |
+| POST | `/api/remediation/action` | Execute (or propose) one whitelisted fix — recover camera, recalibrate lux, set source trust, clear stuck override/DND. API-key gated; 1800s per-action cooldown |
+
 #### Events — `/api/events/`
 
 | Method | Path | Purpose |
@@ -880,6 +902,13 @@ All messages are JSON with `type` + `data` fields.
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
+| POST | `/api/camera/observation` | Ingest one `PresenceReading` from an off-host source (desktop pc_agent, ~2s cadence) → `PresenceFusion.on_observation`. Validates `source` against `KNOWN_SOURCES`; best-effort (drops silently pre-init). Client `captured_at` is **clamped to server now** when >2s in the future (`clamp_client_timestamp`, added 2026-06-07 after a fast desktop CMOS clock wedged the lane) — journal warning `clamped future timestamp` means the agent's clock is skewed |
+| POST | `/api/camera/desktop/lux` | Ingest one ambient-lux sample (`{ambient_lux, captured_at?}`) from the desktop bedroom webcam (D4). Best-effort; drops silently if the channel isn't initialized. Called ~every 25s by `emotion_capture.py` after its flip-sample-flip read. `captured_at` server-clamped like `/observation` |
+| GET | `/api/camera/desktop/lux` | Bedroom lux channel snapshot — `{ema_lux, baseline_lux, calibrated, last_update}` from `app.state.bedroom_lux` |
+| POST | `/api/camera/desktop/lux/calibrate/request` | Flag a bedroom-lux calibration run for the desktop agent (persists `desktop_lux_calibrate_requested`). Agent picks it up on its next 30s settings poll and runs the exposure search |
+| GET | `/api/camera/desktop/lux/calibrate/pending` | Polled by the desktop agent — `{pending: bool}` so it knows when to run calibration |
+| GET | `/api/camera/desktop/lux/calibration` | Return persisted `desktop_lux_calibration_config` `{exposure, baseline_lux, target_lux, calibrated_at}` — agent loads `exposure` to pin every future sample |
+| POST | `/api/camera/desktop/lux/calibration` | Persist a calibration result (`{exposure, baseline_lux, target_lux?}`); applies baseline immediately to the live `LuxChannel` and clears the pending flag |
 
 #### Guest — `/api/guest/`
 
@@ -916,8 +945,9 @@ WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `
 | GET | `/api/personality/calibration/history?limit=N` | Self-report rows newest-first, limit ≤ 500 |
 | GET | `/api/personality/settings` | All five sub-toggles + current `calibration_bias` (read-only snapshot) |
 | POST | `/api/personality/settings` | Partial-update any of `personality_enabled`, `emotion_enabled`, `mood_ring_enabled`, `mood_ring_light_id`. Flipping `emotion_enabled` calls `EmotionService.set_enabled(...)` which lazy-loads FaceLandmarker on first true-flip |
+| POST | `/api/personality/blendshape` | Ingest a desktop-captured FaceLandmarker reading (`{blendshapes: dict[str,float], face_confidence, source, timestamp?}`) → `EmotionService.on_blendshape` (GH#64, shipped 2026-05-18). Validates per-value [0,1] bounds; client `timestamp` clamped to server now when >2s in the future (`clamp_client_timestamp` — see `/api/camera/observation`) |
 
-Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`). Full spec: `docs/PERSONALITY_LAYER.md`. Phase B endpoints (`/blendshape` POST for desktop-camera capture, GH#64) and Phase C (`/vibe` POST for Claude routing, GH#59) ship in their respective phases.
+Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`). Full spec: `docs/PERSONALITY_LAYER.md`. Phase C's `/vibe` POST (Claude routing, GH#59) ships in its phase.
 
 #### Widgets — `/api/widgets/` **(future)**
 
@@ -969,8 +999,8 @@ UPnP control via SoCo. Polls every 2s, broadcasts changes.
 | `play_uri` | `(uri: str, volume?: int) → bool` | Play HTTP URL |
 | `play_favorite` | `(title: str) → bool` | Play by name |
 | `get_favorites` | `() → list[dict]` | List favorites |
-| `get_current_playback_snapshot` | `() → Optional[dict]` | For duck-and-resume |
-| `restore_playback` | `(snapshot: dict) → None` | Resume from snapshot |
+| `get_current_playback_snapshot` | `() → Optional[soco.snapshot.Snapshot]` | For duck-and-resume; captures even when idle; None = capture failed |
+| `restore_playback` | `(snapshot: Optional[Snapshot]) → None` | Resume from snapshot (queue pos + seek + play_mode, or stream URI + metadata; parks idle transport) |
 
 #### AutomationEngine
 Core brain — combines time rules with activity detection.
@@ -990,6 +1020,8 @@ Core brain — combines time rules with activity detection.
 **Late-night rescue** — inside `run_loop`, after the external-off check and before time-based application: if `_get_time_period() == "late_night"` (23:00+), no manual override is active, `_current_mode ∈ {"working", "idle"}`, and `_sonos_is_playing()` returns False, the engine auto-applies `set_manual_override("relax")`. Respects real entertainment modes (gaming, watching, social, sleeping) and music playback as intentional signals. Complements the winddown routine (which runs at 22:00 and sets a 4h override) by covering the 02:00+ edge after that override expires.
 
 **Rescue priority floor** (added 2026-05-16) — `RESCUE_OVERRIDE_SOURCES = {"late_night_rescue", "zone_posture_rule", "watching_sleep_guard"}`. These sources push manual-only target modes (`relax`, `sleeping`) whose default `MODE_PRIORITY` is 0. The displacement guard in `report_activity` computes the override's effective priority as `max(MODE_PRIORITY.get(target, 0), MODE_PRIORITY["idle"])` when the source is in this set — so an `idle (p=1)` sensor report can't silently undo the rescue (`1 > 1` is False), while real activity (`working` p=2, `watching` p=3, `gaming` p=5) still displaces. Bug fixed by this floor: 2026-05-15 night, a rogue `source=ambient` idle POST every 60s displaced the `late_night_rescue → relax` override 47 times across 47 minutes (4-h apartment-stuck-in-idle). The ambient-monitor mode-POST path was the trigger and is gone (see PC Agent section); the floor exists for defense-in-depth against any future source that might post idle/sleeping.
+
+**Sleeping floor** (added 2026-06-03) — a companion protection for the *other* kind of sleeping. `MODE_PRIORITY["sleeping"] = 0` is the global floor, so the displacement guard's `new_priority < current_priority` can never protect a current `sleeping` mode — any `idle (p=1)` sensor report walks straight through. A *manual* sleeping override is protected downstream (the `AUTONOMOUS_PUSH_SOURCES` displacement gate + the manual-override early-return), but once that override lapses and sleeping survives only as a *detected* `_current_mode` (re-asserted by the PC sleep-watcher via `source=process`), nothing guarded it — observed 2026-06-03, `audio_ml` idle displaced a non-override sleeping at 08:20 and again 12:28 UTC (GH#108). The fix, in `report_activity` right after the priority guard: while `_current_mode == "sleeping"` and there is no manual override, only a foreground `source == "process"` report of a mode above idle (working/watching/gaming) wakes the apartment; idle/sleeping reports and non-process sources (audio_ml/camera/ambient) are ignored. Deliberately **not** subject to `SOURCE_STALE_SECONDS`, so sleep persists even if the owning process source goes quiet (the PC itself suspends).
 
 **Override persistence** — `_manual_override` / `_override_mode` / `_override_time` and the zone+posture rule's `_zone_posture_last_fired_at` stamp are written to `app_settings["override_state"]` on every set/clear/rule-fire and restored at boot. Before this fix (2026-05-01), a deploy mid-relax would briefly snap to whatever the PC agent was reporting until the rule re-fired after its 120s dwell. On restore, the engine drops anything past `override_timeout_hours` (sleeping exempt — no timeout by design); the rule stamp is always restored so gate 2's post-expiry refractory window survives intact.
 
@@ -1093,6 +1125,7 @@ The "why" — top-3 factors — comes from flattening `engine._last_fusion_resul
 | `on_mode_change` | `(new_mode, **kwargs) → None` | Registered callback — fires the threshold-check path |
 | `poll_loop` | `() → None` | 5s loop; catches brightness shifts between mode flips |
 | `emit_synthetic` | `(title, body) → dict` | Verification path used by `POST /api/notification/test` — bypasses gating, exercises full dispatch |
+| `emit_alert` | `(*, title, body, kind, force) → bool` | Operational-alert path (watchdogs / health). Honors DND (returns `False` if suppressed) unlike `emit_synthetic`; reuses the same `_dispatch`. Used by `AgentHealthMonitor`. |
 | `close` | `() → None` | Releases the httpx client on shutdown |
 
 **Suppression rules:** DND active (consults `engine.is_dnd_active()`); inside the 10s coalesce window after a previous emit (next emit collapses into the most recent state); first 30s after backend boot (skip fusion-settling noise); mode flips whose source starts with `api:` / `alexa:` / `guest:` or equals `manual` (Anthony pressed it — no toast).
@@ -1100,6 +1133,9 @@ The "why" — top-3 factors — comes from flattening `engine._last_fusion_resul
 **Config:** `NTFY_TOPIC` doubles as the auth boundary on hosted ntfy.sh (topic name = secret). Unset → desktop toast still works, phone push silently skipped. `NTFY_SERVER` defaults to `https://ntfy.sh`; override for self-hosting.
 
 **Desktop wiring (2026-05-17).** The `desktop_notifier.py` widget is PyInstaller-built (`--onefile --windowed`) via `scripts/build_desktop_notifier.ps1` and installed to `%LOCALAPPDATA%\HomeHub\HomeHubNotifier.exe`. Autostart is a dedicated Task Scheduler entry `"Home Hub Desktop Notifier"` (At-Logon for the desktop user, `RestartCount=3` on crash, working-directory pinned to the install path so `logs\desktop_notifier.log` lives alongside the exe rather than in the repo). Kept separate from the PC Agent Supervisor because PyQt6 requires the main thread — the supervisor's thread-per-agent model can't host it.
+
+#### AgentHealthMonitor (shipped 2026-06-03)
+Latitude-side watchdog over the desktop agent-supervisor's heartbeats (POSTed to `/api/automation/agent-health` every ~30s). Closes the gap the in-supervisor self-heal can't cover — the supervisor going silent *entirely* (process crash, desktop asleep/off, network drop), which on 2026-06-03 degraded desktop presence for hours with no alert. A 60s `poll_loop` fires a DND-respecting `notifier.emit_alert` when the supervisor has been silent > 5 min, or when an individual agent stays `stopped`/`hung` > 3 min (the supervisor's own restart isn't clearing it). Alerts are edge-triggered — one per incident plus a recovery notice — and suppressed while the desktop is *expected* offline (`current_mode == "sleeping"` or the apartment-empty `_external_off_detected` state); DND gates the phone push. `GET /api/automation/agent-health` returns a `watchdog` freshness snapshot (`online`, `silent_for_seconds`, `stuck_agents`, …) for the check-back sweep + deploy-verifier. The watchdog registers its own `agent_health_monitor` heartbeat (60s) in the `HeartbeatRegistry`, so a hung watchdog is itself surfaced as stale in `/health`.
 
 ---
 
@@ -1646,7 +1682,20 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   of failure where the supervisor dies but Task Scheduler doesn't see
   a launcher failure (e.g. a Bash background subprocess reaped along
   with its parent session — observed 2026-05-15→16, 17h apartment
-  stuck in idle). `MultipleInstancesPolicy=IgnoreNew` plus the
+  stuck in idle). **In-supervisor heartbeat hang-detection (2026-06-03):**
+  each managed agent pulses an injected `heartbeat()` per loop iteration;
+  the monitor restarts an agent whose beat is stale beyond a per-agent
+  timeout (emotion_capture 90s, others 60s) even when `thread.is_alive()`
+  is still `True` — the case a wedged native `cv2` read created on
+  2026-06-03, invisible to the prior liveness check. Because a hung thread
+  can't be killed and keeps its device handle, recovery recycles the whole
+  process: it releases the singleton mutex (the wedged process used to keep
+  it, so every scheduled respawn exited as a duplicate — the second-order
+  deadlock behind that day's hours-long outage), kicks an immediate
+  `schtasks /run`, and `os._exit`s so the OS frees the camera handle for a
+  clean respawn. The Latitude-side `AgentHealthMonitor` (see Additional
+  Services) catches the complementary case where the supervisor stops
+  reporting entirely. `MultipleInstancesPolicy=IgnoreNew` plus the
   supervisor's PID-file mutex prevent duplicate spawns during the
   5-min polls. Install/reinstall via
   `scripts/setup-supervisor-task.ps1` (elevated).

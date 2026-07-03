@@ -13,17 +13,19 @@ The late_night corridor path has its own debounce and is not exercised here
 (period is pinned to evening/night so the corridor branch is never taken).
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from backend.services.desk_exit_kitchen_service import (
     ABSENT_TRIGGER_SECONDS,
+    DESK_STICKY_SECONDS,
     HARD_TIMEOUT_SECONDS,
     REFIRE_COOLDOWN_SECONDS,
     RETURN_DESK_SUSTAIN_SECONDS,
     DeskExitKitchenService,
 )
+from backend.services.presence_fusion import PresenceFusion, PresenceReading
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -140,6 +142,57 @@ class TestActivate:
         svc, auto, _ = _make_service(mode="gaming", period="day")
         await _drive_absent_window(svc)
         assert svc.active is False
+
+
+class TestStickyDeskArming:
+    """GH#109: is_at_desk_fresh() flips false on a single un-debounced
+    face_present=False desktop frame (last-write-wins in PresenceFusion),
+    which let the absent-dwell timer accumulate and fire the kitchen brighten
+    during desk gaming. The arming path now also consults the fusion at-desk
+    high-water mark (DESK_STICKY_SECONDS), so a recent desk confirmation
+    suppresses the brighten through per-frame flicker.
+    """
+
+    @staticmethod
+    def _fusion_at_desk(age_seconds: float):
+        fusion = PresenceFusion()
+        now = datetime.now(timezone.utc)
+        fusion.on_observation(PresenceReading(
+            source="desktop",
+            captured_at=now - timedelta(seconds=age_seconds),
+            face_present=True, face_confidence=0.9, zone="desk",
+        ))
+        # A current no-face frame on top → is_at_desk_fresh() is False, but
+        # the high-water mark is unmoved.
+        fusion.on_observation(PresenceReading(
+            source="desktop", captured_at=now, face_present=False,
+        ))
+        return fusion
+
+    async def test_recent_desk_suppresses_brighten_despite_flicker(self):
+        # Engine reports NOT at desk (flicker frame), but fusion confirmed the
+        # desk 2s ago → arming must stay blocked.
+        auto = _FakeAutomation(mode="gaming", period="evening", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(
+            auto, cam, presence_fusion=self._fusion_at_desk(2.0),
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.apply_calls == []
+
+    async def test_fires_once_sticky_window_lapses(self):
+        # Last desk confirmation older than the sticky window and engine says
+        # not-at-desk → genuine exit, kitchen brightens.
+        auto = _FakeAutomation(mode="gaming", period="evening", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(
+            auto, cam,
+            presence_fusion=self._fusion_at_desk(DESK_STICKY_SECONDS + 5),
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.apply_calls) == 1
 
 
 class TestReleaseHysteresis:

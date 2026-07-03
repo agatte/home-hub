@@ -211,6 +211,15 @@ class ScreenColorReport(BaseModel):
     r: int = Field(..., ge=0, le=255, description="Red channel 0-255")
     g: int = Field(..., ge=0, le=255, description="Green channel 0-255")
     b: int = Field(..., ge=0, le=255, description="Blue channel 0-255")
+    luma: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=255,
+        description="Whole-frame brightness (Rec.601), 0-255. Used by the Rust "
+        "profile's room-dims-with-the-game path; ignored by the color "
+        "screen-sync path. Optional — older agents omit it, in which case the "
+        "backend derives a fallback luma from r/g/b.",
+    )
     source: str = Field(
         default="desktop",
         description="Reporting source — 'desktop' or 'laptop'",
@@ -221,3 +230,20 @@ class LaptopLoopbackToggle(BaseModel):
     """Toggle for the in-process laptop screen capture (TV-on-laptop escape hatch)."""
 
     enabled: bool = Field(..., description="True to start the loopback, False to stop")
+
+
+class RustEventReport(BaseModel):
+    """In-game Rust event detected by the desktop screen agent (Phase 2).
+
+    Currently only ``damage`` — the red edge-vignette spike when the player is
+    hit. ``score`` is the agent's vignette intensity; the backend gates it
+    against a runtime-tunable threshold before reacting."""
+
+    type: str = Field(
+        default="damage",
+        description="Event type — only 'damage' is handled today",
+    )
+    score: float = Field(
+        default=0.0, ge=0,
+        description="Vignette intensity score from the agent (edge red - center red)",
+    )

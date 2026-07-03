@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     # light_state_calculator + effect_manager, which is heavier than this
     # module needs at load time. String-annotated below.
     from soco import SoCo
+    from soco.snapshot import Snapshot
     from backend.services.automation_engine import AutomationEngine
     from backend.services.event_logger import EventLogger
     from backend.services.heartbeat import HeartbeatRegistry
@@ -412,6 +413,17 @@ class SonosService:
                     device.volume = max(0, min(100, vol))
                     logger.info(f"Sonos volume set to {vol} before play_uri")
                 logger.info(f"Sonos actual volume now: {device.volume}")
+                if not radio:
+                    # play_mode is a persistent player setting; SHUFFLE
+                    # (= shuffle + repeat-all, set by _shuffle_and_play)
+                    # makes a single finite file loop forever — TTS clips
+                    # repeated until manually paused. Force NORMAL for
+                    # finite files; favorites re-apply SHUFFLE per play.
+                    try:
+                        if device.play_mode != "NORMAL":
+                            device.play_mode = "NORMAL"
+                    except Exception as exc:
+                        logger.warning(f"play_mode reset failed: {exc}")
                 if meta_xml:
                     device.play_uri(uri, meta=meta_xml, force_radio=radio)
                 else:
@@ -424,35 +436,63 @@ class SonosService:
             logger.error(f"Sonos play_uri error: {e}")
             return False
 
-    async def get_current_playback_snapshot(self) -> Optional[dict]:
-        """
-        Capture current playback state for duck-and-resume.
+    # Snapshot.snapshot()/.restore() bundle ~8-13 UPnP round-trips into one
+    # sync call; the breaker's default 5s budget is sized for single calls.
+    _SNAPSHOT_CALL_TIMEOUT = 15.0
 
-        Returns:
-            Snapshot dict or None if nothing is playing.
-        """
-        status = await self.get_status()
-        if status.get("state") == "PLAYING":
-            return {
-                "uri": (await self._safe_call(
-                    self._device.get_current_track_info
-                )).get("uri"),
-                "position": status.get("position"),
-                "volume": status.get("volume"),
-            }
-        return None
+    async def get_current_playback_snapshot(self) -> Optional["Snapshot"]:
+        """Capture full player state for duck-and-resume via SoCo Snapshot.
 
-    async def restore_playback(self, snapshot: dict) -> None:
-        """Restore playback from a snapshot taken by get_current_playback_snapshot."""
-        if not snapshot:
+        Captures ALWAYS — even when paused/stopped/idle — so restore()
+        parks the TTS clip and returns the transport to its prior state
+        (otherwise an idle-at-bedtime TTS leaves the transport sitting on
+        the clip with nothing to stop it).
+
+        Returns None on ANY failure (breaker open, UPnP error): TTS must
+        still speak without a snapshot; tts_service keeps its own volume
+        capture/restore as defense-in-depth.
+        """
+        if not self._connected or not self._device:
+            return None
+        try:
+            # Lazy import, matching the module's no-soco-at-load policy.
+            from soco.snapshot import Snapshot
+
+            # snapshot_queue=False: play_uri doesn't clear the queue, so
+            # the queue contents survive TTS without being re-captured.
+            snap = Snapshot(self._device)
+            await self._breaker.call(
+                asyncio.to_thread, snap.snapshot,
+                call_timeout=self._SNAPSHOT_CALL_TIMEOUT,
+            )
+            return snap
+        except CircuitBreakerOpen:
+            return None
+        except Exception as e:
+            logger.error(f"Sonos snapshot capture failed: {e}")
+            return None
+
+    async def restore_playback(self, snapshot: Optional["Snapshot"]) -> None:
+        """Restore from a Snapshot taken by get_current_playback_snapshot.
+
+        Snapshot.restore() pauses a still-playing TTS clip, rebuilds the
+        transport (queue position + seek + play_mode for queue playback;
+        URI + DIDL metadata for streams — its raw device.play_uri bypasses
+        is_allowed_play_uri intentionally, the URI came from the device
+        itself), restores volume/mute/EQ, then play()s only if the prior
+        state was PLAYING / stop()s if STOPPED. The stream branch never
+        touches play_mode, so repeat-all is never re-applied to a bare
+        finite URI (the TTS-loop bug).
+
+        Snapshot objects are single-use — never reuse across speak() calls.
+        """
+        if snapshot is None or not self._connected or not self._device:
             return
         try:
-            uri = snapshot.get("uri")
-            if uri:
-                await self._safe_call(self._device.play_uri, uri)
-            volume = snapshot.get("volume")
-            if volume is not None:
-                await self.set_volume(volume)
+            await self._breaker.call(
+                asyncio.to_thread, snapshot.restore,
+                call_timeout=self._SNAPSHOT_CALL_TIMEOUT,
+            )
         except CircuitBreakerOpen:
             return
         except Exception as e:

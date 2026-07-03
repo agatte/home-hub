@@ -35,7 +35,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 import numpy as np
@@ -426,6 +426,7 @@ def run_monitor(
     classifier_enabled: bool = False,
     shadow_mode: bool = True,
     stop_event: Optional[threading.Event] = None,
+    heartbeat: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Main loop — monitor ambient noise, report social/quiet changes to server.
@@ -435,6 +436,9 @@ def run_monitor(
         classifier_enabled: Whether to run YAMNet classifier.
         shadow_mode: If True, log ML results but don't act on them.
         stop_event: Optional threading event for clean shutdown (set by supervisor).
+        heartbeat: Optional supervisor liveness pulse, called once per loop
+            iteration so a hung-but-alive thread (e.g. wedged on a mic read) is
+            detectable.
     """
     monitor = AmbientMonitor(
         classifier_enabled=classifier_enabled,
@@ -475,6 +479,8 @@ def run_monitor(
 
     try:
         while not _stop.is_set():
+            if heartbeat is not None:
+                heartbeat()
             # ── RMS-based detection (always runs) ──────────────
             # Historical: RMS quiet edges (and a heartbeat fallback) used to
             # POST `mode=idle, source=ambient` to /api/automation/activity to

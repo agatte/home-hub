@@ -24,6 +24,7 @@ from backend.api.schemas.automation import (
     MicCalibrationResult,
     ModeBrightnessConfig,
     ModeVolumeCurvesConfig,
+    RustEventReport,
     ScreenColorReport,
     TimeScheduleConfig,
 )
@@ -31,7 +32,9 @@ from backend.services.mode_volume_service import (
     MODE_VOLUME_CURVES_KEY,
     ModeVolumeService,
 )
-from backend.services.automation_engine import (
+from backend.services.automation_constants import (
+    # Canonical home is automation_constants (engine re-exports for back-compat).
+    DND_STATE_KEY as DND_STATE_KEY,
     SCREEN_SYNC_MODES,
     DaySchedule,
     ScheduleConfig,
@@ -42,7 +45,8 @@ SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
 SCREEN_SYNC_LAPTOP_KEY = "screen_sync_laptop_enabled"
 WATCHING_POSTURE_KEY = "watching_posture_config"
-DND_STATE_KEY = "dnd_state"
+RUST_LIGHTING_KEY = "rust_lighting_config"
+RUST_EVENT_CONFIG_KEY = "rust_event_config"
 OVERRIDE_STATE_KEY = "override_state"
 
 # Settings-page defaults for the watching-posture tuning knobs. The values
@@ -107,16 +111,22 @@ async def report_agent_health(request: Request) -> dict:
     """Receive health heartbeat from the PC agent supervisor."""
     body = await request.json()
     request.app.state.agent_health = body
+    # Feed the watchdog so it can detect silence / stuck agents and alert.
+    monitor = getattr(request.app.state, "agent_health_monitor", None)
+    if monitor is not None:
+        await monitor.record_report(body)
     return {"status": "ok"}
 
 
 @router.get("/agent-health")
 async def get_agent_health(request: Request) -> dict:
-    """Get the latest agent supervisor health report."""
+    """Get the latest agent supervisor health report + watchdog freshness."""
     health = getattr(request.app.state, "agent_health", None)
+    monitor = getattr(request.app.state, "agent_health_monitor", None)
+    watchdog = monitor.snapshot() if monitor is not None else None
     if not health:
-        return {"status": "no_report", "agents": {}}
-    return health
+        return {"status": "no_report", "agents": {}, "watchdog": watchdog}
+    return {**health, "watchdog": watchdog}
 
 
 @router.get("/status")
@@ -196,7 +206,7 @@ async def get_pipeline(request: Request) -> dict:
         return {"current": None, "history": []}
     return {
         "current": engine._build_pipeline_state(),
-        "history": list(engine._pipeline_history),
+        "history": list(engine.pipeline_history),
     }
 
 
@@ -251,25 +261,86 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
-    # Pull zone + posture from the camera service so the sync cap can differ
-    # between watching-at-desk (brighter bias) and (historically) the
-    # watching-in-bed-reclined / upright variants. Post 2026-05-27 Latitude→
-    # living-room move: no camera produces zone="bed", so only the desk arm
-    # fires in practice. Bed-variant caps stay in MODE_ZONE_MAX_BRIGHTNESS
-    # for revival pending a future bed-zone source.
+    # Away/external-off: a game/video left running keeps streaming colors
+    # after a departure — while the apartment is suppressed, accept the
+    # report but never re-light the bedroom lamps with it.
+    if getattr(engine, "_external_off_detected", False):
+        return {"status": "ok", "applied": False}
+
+    # Pull zone + posture so the sync cap can differ between watching-at-desk
+    # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source
+    # from PresenceFusion, NOT the raw Latitude camera: since the 2026-05-27
+    # living-room move the Latitude sees the COUCH (its ``zone`` is null when
+    # nobody's there), so reading it directly hid the ``desk`` zone the desktop
+    # pc_agent owns — the watching-desk L2 cap silently stopped firing for
+    # screen-sync while the user watches at the desk. ``latest_zone()`` fuses
+    # both sources (falls back to "desk" on a fresh desktop face), mirroring how
+    # the engine's own light application already resolves zone. Falls back to
+    # the raw camera if fusion isn't wired (boot / tests). Bed-variant caps stay
+    # in MODE_ZONE_MAX_BRIGHTNESS for revival pending a future bed-zone source.
+    presence = getattr(request.app.state, "presence", None)
     camera = getattr(request.app.state, "camera_service", None)
-    zone = getattr(camera, "zone", None) if camera else None
-    posture = getattr(camera, "posture", None) if camera else None
+    if presence is not None:
+        zone = presence.latest_zone()
+        posture = presence.latest_posture()
+    else:
+        zone = getattr(camera, "zone", None) if camera else None
+        posture = getattr(camera, "posture", None) if camera else None
 
     # Time period drives the per-period cap/floor envelope so the lamps
     # dim alongside the room as evening rolls into night.
     period = engine._get_time_period()
 
-    # Gaming-day envelope lift: lux + weather scale the cap+floor so dim game
-    # content in a dim room doesn't drag L2/L5 to eye-strain dimness. The
-    # screen-sync service applies the same gate as
-    # ``apply_functional_weather_brightness`` (gaming mode + day period only);
-    # watching gets unscaled values so cinematic contrast stays.
+    # Rust profile: hold a fixed ember color and drive the bedroom lamps'
+    # BRIGHTNESS from the screen's whole-frame luma, so the room dims as Rust's
+    # day/night cycle goes dark (the user's "dark in game → dimmer room" ask).
+    # Color is NOT synced — Rust has no coherent ambient color. Both L2 and L5
+    # are luma-driven on per-light envelopes (L5 subordinate, ~50-55% of L2) so
+    # the clear-housing accent dims WITH L2 instead of towering over it when L2
+    # floors out (the glare-pop the curator flagged + live feedback confirmed
+    # 2026-06-08). Other games fall through to the per-frame color sync below.
+    if getattr(engine, "current_game", None) == "rust":
+        luma = report.luma
+        if luma is None:
+            # Transitional fallback for an agent that predates the `luma` field
+            # — derive it from the dominant color (a worse signal than real
+            # frame luma, but keeps the path live until the desktop agent
+            # restart ships it).
+            luma = int(0.299 * report.r + 0.587 * report.g + 0.114 * report.b)
+        # Under-fire glow (Phase 2): while RustEventService says the player is
+        # taking sustained damage, tint the ember toward danger-red instead of
+        # re-flashing. None = normal ember.
+        rust_event = getattr(request.app.state, "rust_event", None)
+        tint = rust_event.tint_for("2") if (
+            rust_event is not None and rust_event.under_fire
+        ) else None
+
+        applied_rust: list[str] = []
+        skipped_rust: dict[str, str] = {}
+        for target in ("2", "5"):
+            if target not in sync.target_lights:
+                skipped_rust[target] = "no_target"
+                continue
+            if target in engine.manual_light_overrides:
+                skipped_rust[target] = "manual_override"
+                continue
+            await sync.apply_rust_brightness(
+                target, luma, period=period, source=report.source, tint=tint,
+            )
+            applied_rust.append(target)
+        resp: dict = {
+            "status": "ok", "applied": bool(applied_rust),
+            "lights": applied_rust, "profile": "rust",
+        }
+        if skipped_rust:
+            resp["skipped"] = skipped_rust
+        return resp
+
+    # Ambient envelope lift: lux + weather scale the cap+floor so dim content
+    # in a dim room doesn't drag L2 to eye-strain dimness. The screen-sync
+    # service gates this internally (``_scale_for_ambient``): gaming + watching,
+    # all periods, L2 only (L5's clear housing keeps its static caps to avoid
+    # glare). Widened from gaming-day-only on 2026-06-02 (D4 task #7).
     #
     # D4 Part E: source the lux from the BEDROOM desktop-webcam channel, NOT
     # the living-room Latitude camera — L2/L5 are bedroom lamps, and a bright
@@ -278,7 +349,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # mult 0.897 was throttling the bedroom gaming floors). Falls back to
     # neutral 1.0 when the channel is uncalibrated or stale (>60s ≈ 2.4×
     # the ~25s sample cadence, so a single missed sample can't flicker the
-    # floor). Widening the gate beyond gaming-day is the tracked follow-up.
+    # floor).
     lux_mult = 1.0
     bedroom_lux = getattr(request.app.state, "bedroom_lux", None)
     if bedroom_lux is not None and bedroom_lux.is_fresh(60.0):
@@ -607,6 +678,83 @@ async def update_watching_posture(config: dict, request: Request) -> dict:
         engine.set_bed_reclined_l1_night(merged["reclined_l1_night"])
 
     logger.info(f"Watching posture tuning updated: {cleaned}")
+    return {"status": "ok", "config": merged}
+
+
+@router.get("/rust-lighting")
+async def get_rust_lighting(request: Request) -> dict:
+    """Return the live Rust luma-brightness config (envelope + ember + luma).
+
+    Reads from the live screen_sync service so it reflects defaults merged with
+    any persisted tweaks. Shape matches the PUT body. 503 if screen_sync isn't
+    wired (boot/tests)."""
+    sync = getattr(request.app.state, "screen_sync", None)
+    if sync is None:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+    return {"status": "ok", "config": sync.get_rust_config()}
+
+
+@router.put("/rust-lighting", dependencies=[Depends(require_api_key)])
+async def update_rust_lighting(config: dict, request: Request) -> dict:
+    """Live-tune the Rust luma-brightness profile WITHOUT a redeploy.
+
+    Accepts a full or partial config — e.g. ``{"envelope": {"2": {"night":
+    [50, 170]}}}`` bumps only L2's night range. The service validates/clamps,
+    applies it to the live knobs (effective on the next screen-color frame,
+    ~2.5s), and the full resolved config is persisted to app_settings so it
+    survives restarts. This is the no-deploy tuning loop for "a tad dimmer /
+    brighter" feedback."""
+    sync = getattr(request.app.state, "screen_sync", None)
+    if sync is None:
+        raise HTTPException(status_code=503, detail="Screen sync not initialized")
+
+    merged = sync.apply_rust_config(config)
+    await save_setting(RUST_LIGHTING_KEY, merged)
+    logger.info("Rust lighting config updated: %s", config)
+    return {"status": "ok", "config": merged}
+
+
+@router.post("/rust-event", dependencies=[Depends(require_api_key)])
+async def receive_rust_event(report: RustEventReport, request: Request) -> dict:
+    """Ingest a Rust in-game event from the desktop screen agent (Phase 2).
+
+    Damage pings drive the L2/L5 flinch + under-fire glow. Cheaply gated to
+    gaming+rust (the agent only posts during Rust anyway); off-context pings
+    are accepted and dropped so the agent never errors."""
+    rust_event = getattr(request.app.state, "rust_event", None)
+    engine = getattr(request.app.state, "automation", None)
+    if rust_event is None or engine is None:
+        raise HTTPException(status_code=503, detail="Rust event service not initialized")
+
+    if engine.current_mode != "gaming" or getattr(engine, "current_game", None) != "rust":
+        return {"status": "ok", "reaction": "not_rust"}
+    if report.type != "damage":
+        return {"status": "ok", "reaction": "ignored_type"}
+
+    result = await rust_event.report_damage(report.score, period=engine._get_time_period())
+    return {"status": "ok", **result}
+
+
+@router.get("/rust-event-config")
+async def get_rust_event_config(request: Request) -> dict:
+    """Return the live Rust event-reaction config (flinch/tint/cooldown knobs)."""
+    svc = getattr(request.app.state, "rust_event", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Rust event service not initialized")
+    return {"status": "ok", "config": svc.get_config()}
+
+
+@router.put("/rust-event-config", dependencies=[Depends(require_api_key)])
+async def update_rust_event_config(config: dict, request: Request) -> dict:
+    """Live-tune the damage reaction (cooldown, release, threshold, flinch +
+    tint colors) WITHOUT a redeploy. Partial-merge + validate + persist, same
+    no-deploy loop as the brightness envelope. Applies to the next event."""
+    svc = getattr(request.app.state, "rust_event", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Rust event service not initialized")
+    merged = svc.apply_config(config)
+    await save_setting(RUST_EVENT_CONFIG_KEY, merged)
+    logger.info("Rust event config updated: %s", config)
     return {"status": "ok", "config": merged}
 
 
