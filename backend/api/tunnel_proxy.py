@@ -33,6 +33,11 @@ Alexa intent without updating this file silently breaks that intent
 through the tunnel. The constant values (mode/scene/effect literals) are
 duplicated from the Lambda by design — the proxy is a separate process
 and shouldn't import Lambda code or backend internals.
+
+A second tunnel client exists since D2 (GH#107): the iOS Shortcut
+geofence automations POST /api/presence/geofence with the same
+X-API-Key + X-Skill-Token pair the Lambda carries (the phone is on
+cellular when geofences fire, so the webhook always rides the tunnel).
 """
 from __future__ import annotations
 
@@ -89,6 +94,8 @@ _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(rf"^/api/scenes/{_SCENE_IDS}/activate$")),
     ("POST", re.compile(rf"^/api/scenes/effects/{_EFFECTS}$")),
     ("POST", re.compile(r"^/api/scenes/effects/stop$")),
+    # presence — iOS Shortcut geofence webhook (D2, GH#107)
+    ("POST", re.compile(r"^/api/presence/geofence$")),
     # sonos
     ("POST", re.compile(r"^/api/sonos/smart-play$")),
     ("POST", re.compile(r"^/api/sonos/pause$")),

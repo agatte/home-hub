@@ -179,7 +179,8 @@ async def lifespan(app: FastAPI):
     from backend.api.routes.routines import load_setting
     from backend.api.routes.automation import (
         SCHEDULE_CONFIG_KEY, BRIGHTNESS_CONFIG_KEY, SCREEN_SYNC_LAPTOP_KEY,
-        WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS,
+        WATCHING_POSTURE_KEY, WATCHING_POSTURE_DEFAULTS, RUST_LIGHTING_KEY,
+        RUST_EVENT_CONFIG_KEY,
         _dict_to_schedule_config,
     )
     from backend.services.automation_engine import ScheduleConfig
@@ -192,6 +193,8 @@ async def lifespan(app: FastAPI):
     )
     saved_brightness = await load_setting(BRIGHTNESS_CONFIG_KEY)
     saved_watching_posture = await load_setting(WATCHING_POSTURE_KEY)
+    saved_rust_lighting = await load_setting(RUST_LIGHTING_KEY)
+    saved_rust_event = await load_setting(RUST_EVENT_CONFIG_KEY)
 
     # Event logger — captures mode transitions, light adjustments, Sonos events
     event_logger = EventLogger()
@@ -433,6 +436,18 @@ async def lifespan(app: FastAPI):
     app.state.lol_champion_service = lol_champion
     automation.register_on_mode_change(lol_champion.on_mode_change)
 
+    # Rust damage-reaction (Phase 2): L2/L5 flinch + under-fire glow driven by
+    # the desktop agent's screen-edge vignette detection. Restore persisted
+    # feel knobs; the release loop is added to `tasks` below.
+    from backend.services.rust_event_service import RustEventService
+    rust_event = RustEventService(
+        hue_service=hue, screen_sync=screen_sync,
+        automation_engine=automation, ws_manager=ws_manager,
+    )
+    if saved_rust_event:
+        rust_event.apply_config(saved_rust_event)
+    app.state.rust_event = rust_event
+
     # Per-mode Sonos volume curves (GH#17). Fades the speaker to a mode-shaped
     # target on transition. Pure-policy split: see mode_volume_policy.py.
     # ambient_sound passed in so the service can skip its fade when ambient is
@@ -519,6 +534,11 @@ async def lifespan(app: FastAPI):
         "watching", "bed", "upright", posture_cfg["upright_sync_cap"]
     )
     automation.set_bed_reclined_l1_night(posture_cfg["reclined_l1_night"])
+
+    # Restore persisted Rust luma-brightness tuning (no-redeploy knob —
+    # PUT /api/automation/rust-lighting). Partial or full; merges over defaults.
+    if saved_rust_lighting:
+        screen_sync.apply_rust_config(saved_rust_lighting)
 
     # Restore laptop loopback state from persisted setting (default off)
     saved_loopback = await load_setting(SCREEN_SYNC_LAPTOP_KEY)
@@ -891,6 +911,44 @@ async def lifespan(app: FastAPI):
     app.state.notifier = notifier
     automation.register_on_mode_change(notifier.on_mode_change)
 
+    # AgentHealthMonitor — Latitude-side watchdog over the desktop agent
+    # supervisor's heartbeats (POSTed to /api/automation/agent-health). Task #2
+    # made the supervisor self-heal hung threads; this catches the case it
+    # can't — the supervisor going silent entirely (crash / desktop asleep /
+    # network drop), which on 2026-06-03 degraded presence for hours unnoticed.
+    # Fires a DND-respecting alert via the notifier; suppressed while the
+    # desktop is expected offline (sleeping / apartment-empty).
+    from backend.services.agent_health_monitor import AgentHealthMonitor
+    agent_health_monitor = AgentHealthMonitor(
+        automation_engine=automation,
+        notifier=notifier,
+    )
+    app.state.agent_health_monitor = agent_health_monitor
+
+    # AwayManager — explicit away/home occupancy state (D2/D6, GH#107),
+    # fed by the iOS Shortcut geofence webhook at /api/presence/geofence.
+    # LEAVE: lights off + run_loop suppression (reuses external-off) +
+    # one notification. ARRIVE: signal_presence + forced mode reapply +
+    # optional welcome TTS. Constructed after notifier (it notifies) and
+    # after automation/hue/sonos/tts exist; state restored so a restart
+    # while away doesn't resume autonomous control of an empty apartment.
+    from backend.api.routes.routines import (
+        load_setting as _away_load_setting,
+        save_setting as _away_save_setting,
+    )
+    from backend.services.away_manager import AwayManager
+    away_manager = AwayManager(
+        engine=automation,
+        hue_getter=lambda: hue,
+        sonos_getter=lambda: sonos,
+        tts_getter=lambda: tts,
+        notifier_getter=lambda: app.state.notifier,
+        save_setting=_away_save_setting,
+        load_setting=_away_load_setting,
+    )
+    await away_manager.load_state()
+    app.state.away_manager = away_manager
+
     # Bounded auto-remediation — the only backend path that turns a
     # source-trust diagnosis into a state change. Constructed after notifier
     # (it notifies on every decision) and after automation/source_trust exist.
@@ -967,6 +1025,7 @@ async def lifespan(app: FastAPI):
     automation.set_heartbeat_registry(heartbeats)
     scheduler.set_heartbeat_registry(heartbeats)
     rule_engine.set_heartbeat_registry(heartbeats)
+    agent_health_monitor.set_heartbeat_registry(heartbeats)
 
     # Register expected polling cadences. Camera self-registers on enable
     # and deregisters on disable / pause (handled in CameraService) so
@@ -990,6 +1049,7 @@ async def lifespan(app: FastAPI):
     heartbeats.register("rule_engine", 6 * 3600.0)
     heartbeats.register("transit_lighting", 2.0)
     heartbeats.register("desk_exit_kitchen", 2.0)
+    heartbeats.register("agent_health_monitor", 60.0)  # CHECK_INTERVAL_S
 
     # Event logger retry task was started above — register for teardown here.
     tasks.append(event_logger_retry_task)
@@ -1023,6 +1083,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(rule_engine.brightness_scan_loop()))
     tasks.append(asyncio.create_task(gameday.poll_state_loop()))
     tasks.append(asyncio.create_task(notifier.poll_loop()))
+    tasks.append(asyncio.create_task(agent_health_monitor.poll_loop()))
     # Re-evaluate ambient sound whenever the cached weather class changes
     # (rain ↔ clear, etc.). Same loop seeds the first _evaluate ~5s after
     # startup, which re-arms playback when load_from_db rehydrates
@@ -1093,6 +1154,10 @@ async def lifespan(app: FastAPI):
     app.state.transit_lighting = transit_lighting
     tasks.append(asyncio.create_task(transit_lighting.poll_loop()))
     app_logger.info("Transit lighting service started")
+
+    # Rust under-fire release loop (Phase 2) — clears the danger glow ~2s after
+    # the last damage ping so the lamps hand back to the normal luma sync.
+    tasks.append(asyncio.create_task(rust_event.release_loop()))
 
     # Desk-exit kitchen — when Anthony leaves the desk in productive evening/
     # night, brighten the kitchen pair (L3 + L4) and hold until he returns.

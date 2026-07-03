@@ -13,206 +13,54 @@ others off; fire-and-ice party: warm/cool split across rooms).
 import asyncio
 import logging
 import random
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
 from backend.config import settings
 
+# Mode priority, autonomous-source sets, schedule dataclasses, time rules, and
+# tuning constants live in automation_constants.py (step 1 of the GH#86
+# decomposition). Imported with explicit `X as X` re-export aliases so existing
+# `from backend.services.automation_engine import X` callers (tests, routes)
+# keep working and ruff's unused-import fix leaves them alone.
+from backend.services.automation_constants import (
+    ASLEEP_STAMP_FAILSAFE_HOURS as ASLEEP_STAMP_FAILSAFE_HOURS,
+    AUTONOMOUS_PUSH_SOURCES as AUTONOMOUS_PUSH_SOURCES,
+    DND_STATE_KEY as DND_STATE_KEY,
+    IDLE_AMBIENT_RELAX_DWELL_SECONDS as IDLE_AMBIENT_RELAX_DWELL_SECONDS,
+    MODE_PRIORITY as MODE_PRIORITY,
+    PRESERVE_PER_LIGHT_OVERRIDE_SOURCES as PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
+    RECENT_PROCESS_WORKING_SECONDS as RECENT_PROCESS_WORKING_SECONDS,
+    RESCUE_OVERRIDE_SOURCES as RESCUE_OVERRIDE_SOURCES,
+    SCREEN_SYNC_FRESH_SECONDS as SCREEN_SYNC_FRESH_SECONDS,
+    SCREEN_SYNC_MODES as SCREEN_SYNC_MODES,
+    SOURCE_STALE_SECONDS as SOURCE_STALE_SECONDS,
+    TZ as TZ,
+    USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS as USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS,
+    WATCHING_SLEEP_GUARD_DWELL_SECONDS as WATCHING_SLEEP_GUARD_DWELL_SECONDS,
+    WATCHING_SLEEP_GUARD_OVERRIDE_MIN_AGE_SECONDS as WATCHING_SLEEP_GUARD_OVERRIDE_MIN_AGE_SECONDS,
+    WEEKDAY_TIME_RULES as WEEKDAY_TIME_RULES,
+    WEEKEND_TIME_RULES as WEEKEND_TIME_RULES,
+    ZONE_POSTURE_RULE_DWELL_SECONDS as ZONE_POSTURE_RULE_DWELL_SECONDS,
+    ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS as ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS,
+    ZONE_POSTURE_RULE_ELIGIBLE_MODES as ZONE_POSTURE_RULE_ELIGIBLE_MODES,
+    ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS as ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS,
+    ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR as ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR,
+    DaySchedule as DaySchedule,
+    ScheduleConfig as ScheduleConfig,
+)
+from backend.services.dnd_manager import DndManager
+from backend.services.engine_state import EngineState
+from backend.services.light_applicator import LightApplicator
+from backend.services.light_override_manager import LightOverrideManager
+from backend.services.pipeline_broadcaster import PipelineBroadcaster
+
 logger = logging.getLogger("home_hub.automation")
-
-# Indianapolis timezone (Indiana doesn't follow standard Eastern DST rules)
-TZ = ZoneInfo("America/Indiana/Indianapolis")
-
-# Modes during which screen sync colors should be applied. The receiver
-# endpoint at POST /api/automation/screen-color drops colors silently when
-# the current mode isn't in this set.
-SCREEN_SYNC_MODES = frozenset(("gaming", "watching"))
-# How recently screen sync must have pushed a color for the engine to treat
-# its target lamps (L2/L5) as sync-owned and skip re-applying the mode's
-# static state to them. Sync captures every ~2.5s; 8s ≈ 3 frames of grace.
-# Past this with no push, the engine reclaims the lamps on the next tick.
-SCREEN_SYNC_FRESH_SECONDS = 8.0
 
 # Effect lifecycle (Hue v2 dynamic effects + weather-effect mapping +
 # WEATHER_SKIP_MODES) lives in effect_manager.py. Re-exported below at
 # module scope for back-compat with callers that import them from this
 # module.
-
-# Zone+posture → relax rule — first mode-changing sensor actuation. Auto-
-# applies the "relax" manual override when the camera sees bed+reclined for
-# a sustained window. Ships in shadow mode (settings.ZONE_POSTURE_RULE_APPLY
-# defaults False) so the firing pattern can be observed via ml_decisions
-# before flipping to live actuation. Full spec in docs/PROJECT_SPEC.md.
-#
-# Design notes:
-# - Dwell (2 min idle/working, 3 min social) filters brief lean-backs.
-# - Projector-from-bed carves itself out: sitting up against the headboard
-#   keeps posture=upright, so the (bed, reclined) gate never trips.
-# - Re-fire suppression reuses `_override_timeout_hours` so shadow and live
-#   cadence match: once the rule logs/fires, it won't re-fire for 4h.
-# - Eligible modes are idle/working/social. Social is included because the
-#   override often outlives its context (guest left, Anthony stays in social
-#   then goes to bed — observed 6× in 30 days). Gated by minimum
-#   override age so actively-set social isn't instantly stomped.
-# - Time gate: evening always; weekend afternoons (≥13:00) also eligible.
-ZONE_POSTURE_RULE_DWELL_SECONDS = 120
-ZONE_POSTURE_RULE_DWELL_SOCIAL_SECONDS = 180
-# Minimum age of a social override before the rule may supersede it.
-# Below this, treat the social setting as fresh user intent and stay out.
-ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS = 30 * 60
-ZONE_POSTURE_RULE_WEEKEND_AFTERNOON_HOUR = 13
-ZONE_POSTURE_RULE_ELIGIBLE_MODES = frozenset(("idle", "working", "social"))
-
-
-# ---------------------------------------------------------------------------
-# Watching-sleep guard rule
-# ---------------------------------------------------------------------------
-# Catches the "fell asleep with YouTube on the projector" case the
-# late_night_rescue can't reach (rescue is gated to working/idle and skips
-# while a video player is foregrounded). Fires watching → sleeping after a
-# sustained late-night dwell with the camera observing bed+reclined.
-#
-# Reference incident (2026-05-13 → 2026-05-14): manual `watching` set at
-# 22:26 from the bed, YouTube ran on the projector all night, mode held
-# `watching` for 7h 39m. Lights stayed on the bed-watching cycle the whole
-# time. No existing rule could catch it because a real video player was
-# foregrounded — process detector kept reporting watching, late_night_rescue
-# correctly stayed out.
-WATCHING_SLEEP_GUARD_DWELL_SECONDS = 90 * 60  # 90 minutes
-# Minimum age of a manual `watching` override before the guard may supersede
-# it. Mirrors the social-supersede pattern in zone_posture_rule — fresh user
-# intent (just set watching, sat down) is protected; sustained watching that
-# pre-dates the late-night window by >90min is fair game.
-WATCHING_SLEEP_GUARD_OVERRIDE_MIN_AGE_SECONDS = 90 * 60
-
-# Failsafe expiry for the "user is likely still asleep" stamp. After this
-# many hours since the last bed+reclined observation (during watching mode),
-# the stamp is treated as stale and `_is_likely_still_asleep` returns False
-# even without an attendance signal. Catches the case where the user left
-# for the day without the camera ever seeing them re-enter the desk zone
-# (e.g., walked straight out the door). 12h covers a long night plus most
-# of a morning; anyone still in bed past that is on their own.
-ASLEEP_STAMP_FAILSAFE_HOURS = 12
-
-
-# User-respect cooldown — when the user clears an override via the dashboard
-# (api:* source), suppress autonomous mode-pushes for this window so "auto"
-# actually means auto. Explicit user actions (api:*, rule_suggestion_accept:*)
-# bypass.
-USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
-
-# Process-attendance veto window for autonomous relax pushes (late-night
-# rescue). Camera-zone freshness is the primary "user is here"
-# signal, but the camera blips in dark rooms / pose-only conditions and the
-# 5-min freshness window can lapse. The PC agent reporting `working` is an
-# independent attendance signal — if it's been < this window, treat the user
-# as attended and skip the relax push. 10 minutes tolerates idle thinking
-# gaps while staying conservative against "user left for the night."
-# (2026-05-07: late-night rescue fired during a dev session because camera
-# zone went stale; PC agent had reported working 1.4s before the fire.)
-RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
-
-# Ambient-relax dwell — how long the apartment must sit in `idle` (no manual
-# override, no Sonos, both attendance vetoes negative, not away) before the
-# soft-default kicks in and pushes to `relax`. Shorter than late_night_rescue
-# because it's day-agnostic — the trigger is "nothing's happening for a few
-# minutes," not "it's past 23:00." 180s is short enough to feel responsive
-# when the user actually steps away, long enough to ignore brief micro-gaps.
-IDLE_AMBIENT_RELAX_DWELL_SECONDS = 180
-
-# Source labels that get blocked by the cooldown above. These are the
-# sensor-driven autonomous pushes — they should defer to a recent user
-# choice. User-API actions (api:*) and rule-suggestion accepts
-# (rule_suggestion_accept:*) are deliberately absent: those represent
-# direct user intent, not sensor reactivity.
-AUTONOMOUS_PUSH_SOURCES = frozenset({
-    "late_night_rescue",
-    "ambient_relax",
-    "zone_posture_rule",
-    "watching_sleep_guard",
-    "behavioral_predictor",
-    "fusion_can_override",
-    "fusion_auto_apply",
-    "internal",
-})
-
-# Autonomous sources whose target modes are typically manual-only (relax,
-# sleeping, cooking, social) and thus carry a default `MODE_PRIORITY=0`.
-# Without a floor, an `idle` sensor report (p=1) silently displaces these
-# rescue overrides — observed bug night of 2026-05-15: ambient `idle`
-# reports churned `late_night_rescue → relax` every 60s for 47 minutes
-# until the user manually changed modes. Members of this set get their
-# override's effective priority floored at `MODE_PRIORITY["idle"]` in the
-# displacement guard, so idle/sleeping sensor reports can no longer
-# undo the rescue; real-activity signals (working+) still displace.
-RESCUE_OVERRIDE_SOURCES = frozenset({
-    "late_night_rescue",
-    "ambient_relax",
-    "zone_posture_rule",
-    "watching_sleep_guard",
-})
-
-
-# Sources that should preserve per-light manual overrides across mode changes.
-# When the user manually drags a brightness slider, mark_light_manual stamps
-# that light so automation reconcile skips it. Picking a new mode normally
-# wipes those stamps so the user gets the new mode's full default state — but
-# only when the user themselves chose the new mode. Autonomous mode-setters
-# (late-night rescue, fusion, predictor, zone+posture rule) should respect
-# manual brightness; the user's stated rule is "manual sticks until I change
-# it." Plus timeout_4h on clear_override: the override expiring isn't a user
-# action, so per-light stamps shouldn't get wiped along with it (their own
-# 4h expiry runs independently in run_loop).
-PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
-    "late_night_rescue",
-    "ambient_relax",
-    "behavioral_predictor",
-    "fusion_can_override",
-    "fusion_auto_apply",
-    "zone_posture_rule",
-    "watching_sleep_guard",
-    "timeout_4h",
-    "desk_exit_kitchen",
-    "corridor",
-    # Bounded auto-remediation clearing a *wedged mode override* is autonomous —
-    # it must not also nuke the user's independent per-light slider stamps.
-    "remediator:clear_stuck_override",
-})
-
-
-# ---------------------------------------------------------------------------
-# Configurable schedule dataclasses
-# ---------------------------------------------------------------------------
-
-@dataclass
-class DaySchedule:
-    """Time-based lighting schedule for one day type (weekday or weekend)."""
-
-    wake_hour: int = 5
-    wake_brightness: int = 40
-    ramp_start_hour: int = 6
-    ramp_duration_minutes: int = 60
-    evening_start_hour: int = 18
-    winddown_start_hour: int = 21
-    # Late-night period (relax-only override). From this hour until wake_hour
-    # the relax palette switches to "Moss & Ember" — deeper, mossier, cave/den.
-    # Modes that don't define a late_night state fall back to their night state.
-    late_night_start_hour: int = 23
-
-
-@dataclass
-class ScheduleConfig:
-    """Combined weekday + weekend schedule configuration."""
-
-    weekday: DaySchedule = field(default_factory=DaySchedule)
-    weekend: DaySchedule = field(default_factory=lambda: DaySchedule(
-        wake_hour=8,
-        ramp_start_hour=8,
-        ramp_duration_minutes=120,
-    ))
-
 
 # Lighting tunables + the per-light state lookup table live in
 # light_state_calculator.py. Re-exported below at module scope for
@@ -236,6 +84,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
     classify_weather as _classify_weather_pure,
+    get_mode_state_table as _get_mode_state_table,
     get_time_period as _calc_get_time_period,
     lerp_light_state as _lerp_light_state,
     lux_to_multiplier,
@@ -248,54 +97,24 @@ from backend.services.effect_manager import (  # noqa: E402
 )
 
 
-# Mode priority — higher index wins when multiple sources report.
-# Enforced universally by the priority guard in report_activity().
-MODE_PRIORITY = {
-    "sleeping": 0,
-    "idle": 1,
-    "working": 2,
-    "watching": 3,
-    "cooking": 3,
-    "social": 4,
-    "gaming": 5,
-    "gameday": 6,
-    # Pregameday shares priority 6 with gameday by design (GAMEDAY_SPEC §10.1).
-    # gameday_service flips pregameday→gameday at T-30 from the same source —
-    # same-source updates always pass the priority guard, so the flip lands
-    # without priority gymnastics. Any other source trying to displace
-    # pregameday must outrank 6 (impossible — pregameday/gameday is the top).
-    "pregameday": 6,
-}
+def _extract_game_factor(factors: Optional[list[dict]]) -> Optional[str]:
+    """Pull the ``game`` factor's value off an activity report's factor list.
 
-# Source-staleness cutoff for the priority guard. A current-mode source that
-# hasn't reported in this many seconds is considered dead, and a lower-priority
-# report from a different source may take over. Prevents an abandoned
-# high-priority signal (e.g. stale social) from permanently locking out fresh
-# lower-priority reports. 300s matches the confidence-fusion stale window.
-SOURCE_STALE_SECONDS = 300
-
-
-# ---------------------------------------------------------------------------
-# Time-based rules — weekday vs weekend
-# ---------------------------------------------------------------------------
-
-WEEKDAY_TIME_RULES = [
-    # (start_hour, end_hour, light_state_or_ramp)
-    (0, 5, {"on": False}),                                          # Overnight — off
-    (5, 6, {"on": True, "bri": 40, "hue": 6000, "sat": 200}),     # Early sniping — very dim warm
-    (6, 7, ("morning_ramp", 6, 60)),                                # Getting ready (60 min ramp)
-    (7, 18, {"on": False}),                                         # At work — off
-    (18, 21, {"on": True, "bri": 180, "hue": 8000, "sat": 160}),  # Warm evening
-    (21, 24, {"on": True, "bri": 60, "hue": 5500, "sat": 220}),   # Dim wind-down
-]
-
-WEEKEND_TIME_RULES = [
-    (0, 8, {"on": False}),                                          # Sleeping in — off
-    (8, 10, ("morning_ramp", 8, 120)),                              # Gentle weekend ramp (120 min)
-    (10, 18, {"on": True, "bri": 220, "hue": 20000, "sat": 80}),  # Daytime neutral bright
-    (18, 21, {"on": True, "bri": 180, "hue": 8000, "sat": 160}),  # Warm evening
-    (21, 24, {"on": True, "bri": 60, "hue": 5500, "sat": 220}),   # Dim wind-down
-]
+    The PC-agent emits ``{"key": "game", "value": "<slug>", ...}`` when a game
+    with a dedicated lighting profile is active (see
+    ``pc_agent.activity_detector._resolve_active_game``). Returns the stripped
+    slug, or None when no game factor is present. Mirrors ``lol_champion_service.
+    _extract_champion``.
+    """
+    if not factors:
+        return None
+    for f in factors:
+        if not isinstance(f, dict) or f.get("key") != "game":
+            continue
+        val = f.get("value") or f.get("display")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
 
 
 class AutomationEngine:
@@ -352,6 +171,11 @@ class AutomationEngine:
 
         # Current state
         self._current_mode: str = "idle"
+        # Active game slug (from the PC-agent's `game` factor) when a game with
+        # a dedicated lighting profile is running in gaming mode; None otherwise.
+        # Drives GAME_LIGHT_PROFILES (e.g. Rust "Rusted Ember"). Kept in lockstep
+        # with _current_mode — set/cleared alongside it in report_activity.
+        self._current_game: Optional[str] = None
         self._mode_source: str = "time"
         self._manual_override: bool = False
         self._override_mode: Optional[str] = None
@@ -374,22 +198,75 @@ class AutomationEngine:
         # pushing to relax. Set/cleared in report_activity below.
         self._idle_entered_at: Optional[datetime] = None
 
-        # Per-light state tracking for deduplication
-        self._last_applied_per_light: dict[str, dict] = {}
+        # Shared per-light state: dedup cache + manual/transit override
+        # stamps. Grouped on EngineState (GH#87 step 4a) so the step-4/5
+        # extractions can share one owner object. The original attribute
+        # names (_last_applied_per_light, _manual_light_overrides,
+        # _transit_light_overrides) remain available as property facades
+        # below — every existing call site, test rebind, and the
+        # notifier's getattr reach-through work unchanged.
+        #
+        # _transit_light_overrides semantics: set by TransitLightingService
+        # when Anthony steps out of the bedroom while kitchen/living-room
+        # are dim (DeskExitKitchenService shares the dict). Cleared by the
+        # service when the camera sees him again, or auto-expired at the
+        # deadline. Reconciliation skips these lights the same way
+        # _manual_light_overrides does.
+        self._state = EngineState()
 
-        # Per-light manual overrides — maps light_id → timestamp
-        # Lights in this dict are protected from automation until next mode change
-        self._manual_light_overrides: dict[str, datetime] = {}
+        # Per-light override verbs (manual stamps, dedup discipline,
+        # transit/desk-exit/corridor lifecycle) — GH#87 step 4. Getters
+        # defer to call time: hue/event_logger can be (re)wired after
+        # construction, current_mode must be the override-aware property,
+        # and _apply_mode is the revert path for transit clears.
+        self._overrides = LightOverrideManager(
+            state=self._state,
+            hue_getter=lambda: self._hue,
+            event_logger_getter=lambda: self._event_logger,
+            current_mode_getter=lambda: self.current_mode,
+            # Late-bound through self so a rebound _apply_mode (tests spy on
+            # it; future wrappers may decorate it) is honored at call time —
+            # a bound method captured here would go stale.
+            reapply_mode=lambda mode: self._apply_mode(mode),
+            suppressed_getter=lambda: self._external_off_detected,
+        )
 
-        # Per-light transit-lighting overrides — maps light_id → expiration deadline.
-        # Set by TransitLightingService when Anthony steps out of the bedroom while
-        # kitchen/living-room are dim. Cleared by the service when the camera sees
-        # him again, or auto-expired at the deadline. Reconciliation skips these
-        # lights the same way _manual_light_overrides does.
-        self._transit_light_overrides: dict[str, datetime] = {}
+        # Bridge-write layer (away-gate, dedup compare/record, protected-light
+        # skip filter, uniform/per-light fan-out + event logging) — GH#87
+        # step 5. Operates on the SAME EngineState dicts as the override
+        # manager (critic #4: direct O(1) dict access on the 0.5s hot path),
+        # and consults the override manager for transit-prune. Getters defer
+        # to call time so hue/event_logger/screen_sync can be (re)wired after
+        # construction and current_mode stays the override-aware property.
+        # _apply_mode stays on the engine as the policy coordinator and calls
+        # into here via apply_state; the engine keeps thin _apply_* delegates
+        # below so existing callers + test spies are honored.
+        self._applicator = LightApplicator(
+            state=self._state,
+            overrides=self._overrides,
+            hue_getter=lambda: self._hue,
+            event_logger_getter=lambda: self._event_logger,
+            current_mode_getter=lambda: self.current_mode,
+            screen_sync_getter=lambda: self._screen_sync,
+            suppressed_getter=lambda: self._external_off_detected,
+            # Cross-dispatch routes back through the engine's _apply_* delegates
+            # so spies that patch engine._apply_per_light / _apply_uniform are
+            # honored from inside the apply chain (step-4 reapply_mode pattern).
+            dispatch_per_light=lambda s, t=None: self._apply_per_light(s, t),
+            dispatch_uniform=lambda s, t=None: self._apply_uniform(s, t),
+        )
 
         # Track if lights were turned off externally (Alexa geofence)
         self._external_off_detected: bool = False
+        # Hard hold on the suppression above — armed ONLY by a geofence
+        # LEAVE (AwayManager). While held, residual PC process reports
+        # (the foreground process lingers up to ~10 min after walking
+        # out, until the Win32 idle threshold trips) can NOT clear the
+        # suppression — only signal_presence (camera sees a person /
+        # geofence arrive) releases it. The soft path (_check_external_off
+        # detecting the Hue app's all-off) never sets this, preserving
+        # its original "any non-idle activity resumes" semantics.
+        self._away_hold: bool = False
 
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
@@ -474,17 +351,24 @@ class AutomationEngine:
         # fusion, behavioral predictor, zone+posture rule, routines, music
         # auto-play, weather suggestions) gates on `is_dnd_active()`. State
         # persists to app_settings["dnd_state"] so it survives a restart.
-        self._dnd_enabled: bool = False
-        self._dnd_expiry: Optional[datetime] = None
-        self._dnd_duration_minutes: int = 0
+        # State machine lives in dnd_manager.py (GH#86 step 2); the engine
+        # keeps thin delegates below. WS manager is read through a getter
+        # because it's assigned after construction.
+        self._dnd = DndManager(ws_manager_getter=lambda: self._ws_manager)
 
         # Screen sync — passed via constructor; reconciliation skips lights
         # that screen sync owns so we don't fight it on watching/gaming.
         self._screen_sync = screen_sync
 
-        # Decision pipeline — real-time snapshot of all inputs → output
-        self._pipeline_history: list[dict] = []
-        self._last_pipeline_broadcast: Optional[datetime] = None
+        # Decision pipeline — real-time snapshot of all inputs → output.
+        # Ring + throttle + WS emit live in pipeline_broadcaster.py (GH#86
+        # step 3); _build_pipeline_state stays on the engine (reads live
+        # engine state). Getters defer to call time — WS manager is
+        # assigned post-construction.
+        self._pipeline = PipelineBroadcaster(
+            ws_manager_getter=lambda: self._ws_manager,
+            state_builder=self._build_pipeline_state,
+        )
 
         # Heartbeat registry — set via set_heartbeat_registry from lifespan
         # so /health can flag a stalled run_loop.
@@ -519,6 +403,14 @@ class AutomationEngine:
         return self._last_lux_multiplier
 
     @property
+    def current_game(self) -> Optional[str]:
+        """Active game slug driving GAME_LIGHT_PROFILES, or None.
+
+        Read by the screen-color route to switch L2 into the Rust luma
+        brightness-sync path. Only set in gaming mode.
+        """
+        return self._current_game
+    @property
     def mode_source(self) -> str:
         return "manual" if self._manual_override else self._mode_source
 
@@ -546,6 +438,38 @@ class AutomationEngine:
     def manual_light_overrides(self) -> dict[str, datetime]:
         """Light IDs with active per-light manual overrides."""
         return self._manual_light_overrides
+
+    # ── EngineState facades (GH#87 step 4a) ────────────────────────────
+    # The dicts live on self._state so the step-4/5 extractions can share
+    # one owner object. These keep the original attribute names working —
+    # internal call sites, tests that rebind the dicts wholesale, and
+    # notifier_service's getattr(engine, "_last_applied_per_light", ...)
+    # reach-through are all unchanged. Property access is attribute-speed;
+    # the hot-path dict operations themselves stay direct O(1) (critic #4).
+
+    @property
+    def _last_applied_per_light(self) -> dict[str, dict]:
+        return self._state.last_applied_per_light
+
+    @_last_applied_per_light.setter
+    def _last_applied_per_light(self, value: dict[str, dict]) -> None:
+        self._state.last_applied_per_light = value
+
+    @property
+    def _manual_light_overrides(self) -> dict[str, datetime]:
+        return self._state.manual_light_overrides
+
+    @_manual_light_overrides.setter
+    def _manual_light_overrides(self, value: dict[str, datetime]) -> None:
+        self._state.manual_light_overrides = value
+
+    @property
+    def _transit_light_overrides(self) -> dict[str, datetime]:
+        return self._state.transit_light_overrides
+
+    @_transit_light_overrides.setter
+    def _transit_light_overrides(self, value: dict[str, datetime]) -> None:
+        self._state.transit_light_overrides = value
 
     @property
     def enabled(self) -> bool:
@@ -859,23 +783,72 @@ class AutomationEngine:
         fires with a non-idle mode — which can't happen if the user
         walks in but doesn't touch the PC.
 
-        Camera service calls this on absent→present transitions (today's
-        only caller). A future Latitude-mic audio classifier could call
-        it on high-confidence human-sound events. Idempotent: no-op when
-        the flag is already clear.
+        Camera absent→present and the geofence arrive both route here —
+        physical presence is the ONLY thing that releases a hard
+        (geofence-armed) hold; residual process reports are not it.
+        Idempotent: no-op when nothing is armed.
 
         Args:
-            source: Caller identifier for telemetry ("camera" today;
-                "audio" if/when the parked Latitude-mic path ships).
+            source: Caller identifier for telemetry ("camera",
+                "geofence:<src>"; "audio" if/when the parked
+                Latitude-mic path ships).
         """
-        if not self._external_off_detected:
+        if not self._external_off_detected and not self._away_hold:
             return
+        self._away_hold = False
         self._external_off_detected = False
         logger.info(
             "Presence signal from %s — clearing external-off suppression "
             "so automation can resume",
             source,
         )
+
+    def arm_away_suppression(self, source: str) -> None:
+        """Arm the external-off run_loop suppression with a HARD hold.
+
+        Same flag `_check_external_off` sets when it detects an
+        externally-darkened apartment — but armed proactively by the
+        AwayManager on a geofence LEAVE (no 60s detection race), and
+        with `_away_hold` set so residual PC process reports can't
+        clear it (see report_activity). Released ONLY by
+        `signal_presence` (geofence arrive, camera absent→present).
+
+        Also invalidates the per-light dedup cache: the apartment is
+        being forced dark, so the cache no longer reflects the bridge.
+        Without this, a camera-walk-in release (phone left in the car,
+        geofence missed) would dedup-skip the re-light and leave the
+        user standing in a dark, unsuppressed apartment.
+
+        Idempotent; upgrades a soft (Hue-app-detected) suppression to a
+        hard one when both fire on the same departure.
+        """
+        already_armed = self._external_off_detected
+        self._external_off_detected = True
+        self._away_hold = True
+        self._invalidate_dedup_cache()
+        if not already_armed:
+            logger.info(
+                "Away suppression armed by %s (hard hold) — run_loop will "
+                "skip autonomous setters until presence returns",
+                source,
+            )
+        else:
+            logger.info(
+                "Away suppression upgraded to hard hold by %s",
+                source,
+            )
+
+    async def reapply_current_mode(self, *, force_resend: bool = True) -> None:
+        """Re-apply the current effective mode's lighting on demand.
+
+        Public surface for the AwayManager's welcome-home sequence (and
+        any future caller that needs a deterministic re-light): after an
+        away window the bridge is dark but the dedup cache still holds
+        pre-departure values, so the default apply would dedup-skip.
+        Uses the override-aware ``current_mode`` property — never the raw
+        ``_current_mode`` field (see feedback_current_mode_field_footgun).
+        """
+        await self._apply_mode(self.current_mode, force_resend=force_resend)
 
     def is_recent_process_working(
         self, window_seconds: int = RECENT_PROCESS_WORKING_SECONDS,
@@ -1158,6 +1131,37 @@ class AutomationEngine:
                     self._last_mode_source_report_at[source] = now
                     return
 
+        # Sleeping floor — sleeping carries MODE_PRIORITY=0 (the global floor),
+        # so the priority guard above can never protect it: `new_priority < 0`
+        # is never true, and any idle sensor report (audio_ml/camera, p=1) walks
+        # straight through and breaks sleep. A *manual* sleeping override is
+        # protected downstream (the AUTONOMOUS_PUSH_SOURCES displacement gate +
+        # the manual-override early-return), but once that override lapses and
+        # sleeping survives only as a *detected* `_current_mode` — re-asserted by
+        # the PC sleep-watcher via source=process — nothing guarded it. This bit
+        # twice on 2026-06-03: audio_ml `idle` displaced a non-override sleeping
+        # at 08:20 and again at 12:28 UTC (flag b064a0). Mirror the
+        # RESCUE_OVERRIDE_SOURCES floor: while sleeping is held without a manual
+        # override, only a foreground *process* report of a real activity mode
+        # (anything above idle — working / watching / gaming) may wake the
+        # apartment. Idle/sleeping reports and non-process sources (audio_ml,
+        # camera, ambient) cannot. User actions take the set_manual_override /
+        # clear_override paths and are unaffected. Deliberately NOT subject to
+        # SOURCE_STALE_SECONDS — sleep must persist even if the owning process
+        # source goes quiet (e.g. the PC itself suspends).
+        if (
+            self._current_mode == "sleeping"
+            and not self._manual_override
+            and not (source == "process" and new_priority > MODE_PRIORITY["idle"])
+        ):
+            logger.debug(
+                "Sleeping floor: ignored %s %s (p=%d) — non-override sleeping "
+                "only wakes on a foreground process activity report",
+                source, mode, new_priority,
+            )
+            self._last_mode_source_report_at[source] = now
+            return
+
         # Record this source's last-seen time regardless of whether the report
         # caused a mode change. Source freshness tracks liveness, not edges.
         self._last_mode_source_report_at[source] = now
@@ -1170,9 +1174,15 @@ class AutomationEngine:
             self._last_process_working_at = now
 
         old_mode = self._current_mode
+        old_game = self._current_game
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
+        # Track the active game (drives GAME_LIGHT_PROFILES). Only meaningful in
+        # gaming mode; any other mode clears it so a stale profile can't linger.
+        # Set in lockstep with _current_mode so the next _apply_mode resolves the
+        # right palette on the same report that first carries the `game` factor.
+        self._current_game = _extract_game_factor(factors) if mode == "gaming" else None
         self._mode_source = source
         self._last_activity = mode
         self._last_activity_change = now
@@ -1248,9 +1258,38 @@ class AutomationEngine:
             await self._broadcast_mode()
             return
 
-        # Clear external off detection on any activity
-        if mode not in ("idle",):
+        # Clear external off detection on any activity — UNLESS the
+        # suppression is hard-held by a geofence LEAVE. The PC's
+        # foreground process lingers up to ~10 min after walking out
+        # (until the Win32 idle threshold), so post-departure `working`
+        # heartbeats are residue, not presence. Only signal_presence
+        # (camera sees a person / geofence arrive) releases a hard hold.
+        if mode not in ("idle",) and not self._away_hold:
             self._external_off_detected = False
+
+        # While suppressed (away hard-hold, or the soft Hue-app all-off
+        # that an idle report doesn't clear): keep the mode bookkeeping
+        # above + the event log + WS broadcast, but do NOT actuate
+        # lights or fire mode-change callbacks — a working→idle
+        # transition 10 min after a departure would otherwise re-light
+        # an empty apartment via the evening time rules (force_resend
+        # bypasses the dedup cache on transitions) and auto-play music
+        # to nobody. Found live 2026-06-10 during D2/D6 testing.
+        if self._external_off_detected:
+            if old_mode != mode:
+                logger.info(
+                    "Mode %s → %s while away/external-off suppressed — "
+                    "tracked, not actuated",
+                    old_mode, mode,
+                )
+                if self._event_logger:
+                    await self._event_logger.log_mode_change(
+                        mode=mode,
+                        previous_mode=old_mode,
+                        source=source,
+                    )
+            await self._broadcast_mode()
+            return
 
         # Apply the appropriate light state. force_resend=True only on a
         # real mode change — invalidates the per-light dedup cache so any
@@ -1262,7 +1301,13 @@ class AutomationEngine:
         # 05-06 audit found this branch was unconditionally clearing the
         # cache on every report, producing ~3.5 no-op bridge writes per
         # minute on L2 with bri_before=null in the log timeline.
-        await self._apply_mode(mode, force_resend=(old_mode != mode))
+        # force_resend on a game change too (e.g. launching/quitting Rust while
+        # staying in gaming mode) so the GAME_LIGHT_PROFILES swap repaints
+        # immediately instead of riding the per-light dedup cache.
+        await self._apply_mode(
+            mode,
+            force_resend=(old_mode != mode or old_game != self._current_game),
+        )
 
         # Fire mode change callbacks (e.g., music auto-play)
         if old_mode != mode:
@@ -1297,6 +1342,23 @@ class AutomationEngine:
                 mode, source,
             )
             return
+
+        # Away/external-off interplay. An explicit USER mode pick while the
+        # apartment is suppressed is deliberate remote actuation ("light the
+        # place for the dog-sitter" via Alexa/dashboard) — release the
+        # suppression so the pick renders past the _apply_mode chokepoint.
+        # Autonomous sources must NOT pierce it: they are exactly what
+        # away-suppression silences (run_loop is gated; this guards direct
+        # callers).
+        if self._external_off_detected:
+            if source in AUTONOMOUS_PUSH_SOURCES:
+                logger.info(
+                    "Away/external-off suppressed — blocking autonomous "
+                    "override %s (source=%s)",
+                    mode, source,
+                )
+                return
+            await self.signal_presence(f"override:{source}")
 
         # User-respect cooldown — if the user just cleared an override via
         # the dashboard, block autonomous-source pushes for the cooldown
@@ -1441,93 +1503,25 @@ class AutomationEngine:
     def is_dnd_active(self) -> bool:
         """True iff DND is enabled and the expiry is still in the future.
 
-        Pure check — no side effects. Expiry actuation (broadcast +
-        persist) happens once per tick in ``run_loop`` so callers can
-        invoke this freely from gating paths.
+        Delegates to :class:`DndManager` — kept as an engine method so the
+        many gating callers (routes, notifier, celebrations, run_loop) are
+        untouched by the extraction.
         """
-        if not self._dnd_enabled:
-            return False
-        if self._dnd_expiry is None:
-            return False
-        return datetime.now(tz=TZ) < self._dnd_expiry
+        return self._dnd.is_active()
 
     def dnd_status(self) -> dict:
         """Return DND state as a JSON-serializable dict for API responses."""
-        active = self.is_dnd_active()
-        if not active or self._dnd_expiry is None:
-            return {
-                "enabled": False,
-                "expiry_utc": None,
-                "minutes_remaining": 0,
-                "duration_minutes": 0,
-            }
-        remaining = (self._dnd_expiry - datetime.now(tz=TZ)).total_seconds()
-        return {
-            "enabled": True,
-            "expiry_utc": self._dnd_expiry.astimezone(timezone.utc).isoformat(),
-            "minutes_remaining": max(0, int(remaining // 60)),
-            "duration_minutes": self._dnd_duration_minutes,
-        }
+        return self._dnd.status()
 
     async def enable_dnd(
         self, duration_minutes: int = 120, source: str = "internal",
     ) -> dict:
         """Activate DND for ``duration_minutes`` (clamped to [1, 720])."""
-        clamped = max(1, min(720, int(duration_minutes)))
-        now = datetime.now(tz=TZ)
-        self._dnd_enabled = True
-        self._dnd_expiry = now + timedelta(minutes=clamped)
-        self._dnd_duration_minutes = clamped
-        logger.info(
-            "DND enabled: %d minutes (expiry=%s, source=%s)",
-            clamped, self._dnd_expiry.isoformat(), source,
-        )
-        await self._persist_dnd_state()
-        await self._broadcast_dnd()
-        return self.dnd_status()
+        return await self._dnd.enable(duration_minutes, source=source)
 
     async def clear_dnd(self, source: str = "internal") -> dict:
         """Clear DND immediately."""
-        was_enabled = self._dnd_enabled
-        self._dnd_enabled = False
-        self._dnd_expiry = None
-        self._dnd_duration_minutes = 0
-        if was_enabled:
-            logger.info("DND cleared (source=%s)", source)
-        await self._persist_dnd_state()
-        await self._broadcast_dnd()
-        return self.dnd_status()
-
-    async def _persist_dnd_state(self) -> None:
-        """Write current DND state to app_settings."""
-        from backend.api.routes.automation import DND_STATE_KEY
-        from backend.api.routes.routines import save_setting
-
-        if self._dnd_enabled and self._dnd_expiry is not None:
-            payload = {
-                "enabled": True,
-                "expiry_utc": self._dnd_expiry.astimezone(timezone.utc).isoformat(),
-                "duration_minutes": self._dnd_duration_minutes,
-            }
-        else:
-            payload = {
-                "enabled": False,
-                "expiry_utc": None,
-                "duration_minutes": 0,
-            }
-        try:
-            await save_setting(DND_STATE_KEY, payload)
-        except Exception as e:
-            logger.error("Failed to persist DND state: %s", e, exc_info=True)
-
-    async def _broadcast_dnd(self) -> None:
-        """Broadcast DND state change to all WebSocket clients."""
-        if not self._ws_manager:
-            return
-        try:
-            await self._ws_manager.broadcast("dnd_update", self.dnd_status())
-        except Exception as e:
-            logger.error("Failed to broadcast DND state: %s", e, exc_info=True)
+        return await self._dnd.clear(source=source)
 
     async def _persist_override_state(self) -> None:
         """Write current manual-override state to app_settings.
@@ -1695,42 +1689,14 @@ class AutomationEngine:
     async def load_dnd_state(self) -> None:
         """Restore DND state from app_settings on startup.
 
-        If the persisted expiry has passed, treat as cleared and persist
-        the cleared state so the dashboard renders correctly on first load.
+        Delegates to :class:`DndManager.load_state` (bootstrap calls this).
         """
-        from backend.api.routes.automation import DND_STATE_KEY
-        from backend.api.routes.routines import load_setting
+        await self._dnd.load_state()
 
-        try:
-            saved = await load_setting(DND_STATE_KEY)
-        except Exception as e:
-            logger.error("Failed to load DND state: %s", e, exc_info=True)
-            return
-        if not saved or not saved.get("enabled"):
-            return
-        expiry_str = saved.get("expiry_utc")
-        if not expiry_str:
-            return
-        try:
-            expiry = datetime.fromisoformat(expiry_str).astimezone(TZ)
-        except (TypeError, ValueError):
-            logger.warning("Invalid DND expiry on load: %r", expiry_str)
-            return
-        if expiry <= datetime.now(tz=TZ):
-            logger.info(
-                "DND expiry (%s) had passed on startup — treating as cleared",
-                expiry.isoformat(),
-            )
-            await self.clear_dnd(source="startup_expired")
-            return
-        self._dnd_enabled = True
-        self._dnd_expiry = expiry
-        self._dnd_duration_minutes = int(saved.get("duration_minutes", 0))
-        logger.info(
-            "DND restored from app_settings: expiry=%s (%d min remaining)",
-            expiry.isoformat(),
-            int((expiry - datetime.now(tz=TZ)).total_seconds() // 60),
-        )
+    # ── Per-light override verbs ────────────────────────────────────────
+    # Implementations live in light_override_manager.py (GH#87 step 4).
+    # These delegates keep the original method names for external callers
+    # (TransitLightingService, DeskExitKitchenService, WS handler, tests).
 
     def mark_light_manual(self, light_id: str) -> None:
         """Mark a light as manually adjusted — protects it from automation.
@@ -1738,63 +1704,28 @@ class AutomationEngine:
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
-        self._manual_light_overrides[light_id] = datetime.now(tz=TZ)
-        logger.info(f"Light {light_id} marked as manually overridden")
+        self._overrides.mark_manual(light_id)
 
     def _clear_per_light_overrides(self) -> None:
         """Clear all per-light manual overrides."""
-        if self._manual_light_overrides:
-            logger.info(
-                f"Clearing per-light overrides: {list(self._manual_light_overrides)}"
-            )
-            self._manual_light_overrides.clear()
+        self._overrides.clear_manual_stamps()
 
     def _invalidate_dedup_cache(self) -> None:
         """Drop the per-light dedup cache so the next ``_apply_state`` re-sends
-        to every light instead of being suppressed as a no-op.
-
-        Single owner for the "force re-apply" discipline. Call wherever the
-        bridge may have diverged from ``_last_applied_per_light`` (mode
-        transitions across a colorspace switch, effect stop/start, config
-        hot-reloads, sleep-fade steps, scene drift). Centralized so a new code
-        path can't silently reintroduce the stale-cache dedup-skip behind the
-        kitchen-pair drift of 2026-05-09 (project_transit_lighting_cache_pop_churn).
+        to every light. See LightOverrideManager.invalidate_dedup_cache for
+        the full force-re-apply discipline rationale.
         """
-        self._last_applied_per_light = {}
+        self._overrides.invalidate_dedup_cache()
 
     def _forget_dedup_light(self, light_id: str) -> None:
         """Drop one light from the dedup cache so the next reconcile re-sends
-        the mode's state to it. Used when a transit override is cleared/expired
-        and the cache would otherwise retain the stale transit value and
-        dedup-skip the revert.
+        the mode's state to it.
         """
-        self._last_applied_per_light.pop(light_id, None)
+        self._overrides.forget_dedup_light(light_id)
 
     def _prune_expired_transit_overrides(self) -> None:
-        """Remove transit overrides whose deadline has passed.
-
-        Called before the skip filter consults the dict so expired entries
-        don't stale-lock automation from reasserting a light.
-        """
-        if not self._transit_light_overrides:
-            return
-        now = datetime.now(tz=TZ)
-        expired = [
-            lid for lid, deadline in self._transit_light_overrides.items()
-            if deadline <= now
-        ]
-        for lid in expired:
-            del self._transit_light_overrides[lid]
-            # Mirrors clear_transit_override's pop. Without it, the dedup
-            # cache retains transit values after deadline expiry and the
-            # next reconcile dedup-skips on stale data (kitchen-pair drift
-            # 2026-05-09; memory project_transit_lighting_cache_pop_churn).
-            self._forget_dedup_light(lid)
-        if expired:
-            logger.info(
-                "Transit overrides auto-expired for lights %s",
-                expired,
-            )
+        """Remove transit overrides whose deadline has passed."""
+        self._overrides.prune_expired_transit()
 
     async def apply_transit_override(
         self,
@@ -1822,73 +1753,12 @@ class AutomationEngine:
                 ``"desk_exit_kitchen"`` so analytics can distinguish the two
                 paths.
         """
-        if not self._hue or not self._hue.connected:
-            return
-
-        # Kitchen-pair atomicity: L3 + L4 must move as a unit in functional
-        # modes. If the user has manually set one (e.g., L4 at bri=114),
-        # transit-overriding only the unstamped one splits the pendants —
-        # writes go to L3 directly here, but the next _apply_per_light cycle
-        # re-protects L4 (manual stamp) and not L3, leaving them mismatched.
-        # Skip the pair entirely when either is manual; L1 still applies.
-        # Symptom that motivated this guard: 21 solo-L3 writes / 11 min split
-        # on 2026-05-09. Memory: project_transit_lighting_cache_pop_churn.md.
-        if "3" in states and "4" in states:
-            kitchen_manual = (
-                "3" in self._manual_light_overrides
-                or "4" in self._manual_light_overrides
-            )
-            if kitchen_manual:
-                stamped = next(
-                    lid for lid in ("3", "4")
-                    if lid in self._manual_light_overrides
-                )
-                logger.info(
-                    "%s skipped kitchen pair (L3/L4) — manual override on light %s",
-                    trigger, stamped,
-                )
-                states = {
-                    lid: s for lid, s in states.items() if lid not in ("3", "4")
-                }
-                if not states:
-                    return
-
-        deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
-        tasks = []
-        # Capture before-state for event logging — same pattern as
-        # _apply_per_light. Without this, transit writes were invisible to
-        # light_adjustments queries (2026-05-12 incident: 107 transit cycles
-        # in 30 min produced zero rows in the analytics surface).
-        pre_values: dict[str, dict] = {}
-        for light_id, state in states.items():
-            pre_values[light_id] = (
-                self._last_applied_per_light.get(light_id) or {}
-            ).copy()
-            cmd = {**state, "transitiontime": transition_time}
-            tasks.append(self._hue.set_light(light_id, cmd))
-            self._transit_light_overrides[light_id] = deadline
-            # Seed dedup so a concurrent reconcile cycle doesn't re-send the
-            # previous mode state for these lights before the skip filter runs.
-            self._last_applied_per_light[light_id] = {k: v for k, v in state.items() if k != "transitiontime"}
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info(
-            "%s override applied to lights %s (expires %s)",
-            trigger, list(states.keys()),
-            deadline.strftime("%H:%M:%S"),
+        await self._overrides.apply_transit_override(
+            states,
+            duration_seconds=duration_seconds,
+            transition_time=transition_time,
+            trigger=trigger,
         )
-        if self._event_logger:
-            for light_id, state in states.items():
-                prev = pre_values.get(light_id, {})
-                await self._event_logger.log_light_adjustment(
-                    light_id=light_id,
-                    bri_before=prev.get("bri"), bri_after=state.get("bri"),
-                    hue_before=prev.get("hue"), hue_after=state.get("hue"),
-                    sat_before=prev.get("sat"), sat_after=state.get("sat"),
-                    ct_before=prev.get("ct"), ct_after=state.get("ct"),
-                    mode_at_time=self.current_mode,
-                    trigger=trigger,
-                )
 
     async def apply_desk_exit_override(
         self,
@@ -1995,36 +1865,9 @@ class AutomationEngine:
             light_ids: lights to clear. If None, clears all active transit overrides.
             transition_time: deciseconds for the revert (30 = 3s — fast-but-not-jarring).
         """
-        _ = transition_time  # API-compat shim — revert uses mode-default transition speed
-        if not self._transit_light_overrides:
-            return
-        if light_ids is None:
-            light_ids = list(self._transit_light_overrides.keys())
-        cleared = []
-        for lid in light_ids:
-            if lid in self._transit_light_overrides:
-                del self._transit_light_overrides[lid]
-                cleared.append(lid)
-        if not cleared:
-            return
-        # Drop dedup cache for reverted lights so _apply_mode will actually
-        # re-send the mode's state to them.
-        for lid in cleared:
-            self._forget_dedup_light(lid)
-        # Reapply against the EFFECTIVE (override-aware) mode. Using the raw
-        # `_current_mode` field here discards an active manual override and
-        # snaps lights to whatever the PC activity detector last reported —
-        # the bug where a brief camera flicker in a dim bedroom rendered
-        # working late_night brightness right over a relax override.
-        effective_mode = self.current_mode
-        logger.info(
-            "Transit override cleared for lights %s — reverting to mode %s",
-            cleared, effective_mode,
+        await self._overrides.clear_transit_override(
+            light_ids=light_ids, transition_time=transition_time,
         )
-        # Re-apply the current mode's full light state. Dedup cache will no-op
-        # on any lights that weren't in the transit set, so only the cleared
-        # lights receive new Hue commands.
-        await self._apply_mode(effective_mode)
 
     # ------------------------------------------------------------------
     # Light state application
@@ -2049,6 +1892,19 @@ class AutomationEngine:
                 of sync with the cache). Leave False on periodic reapply
                 ticks so dedup can no-op when nothing changed.
         """
+        # Away/external-off CHOKEPOINT: while the apartment is suppressed,
+        # NO path may actuate lights — not just run_loop (gated upstream)
+        # but the side doors live testing found 2026-06-10: the transit/
+        # desk-exit clear-revert (reapply_mode), scheduled routines, and
+        # any future caller. Paths that legitimately re-light clear the
+        # flag FIRST (signal_presence on arrive/camera; user override in
+        # set_manual_override).
+        if self._external_off_detected:
+            logger.debug(
+                "_apply_mode(%s) skipped — away/external-off suppressed", mode,
+            )
+            return
+
         # Cancel any in-progress sleep fade if switching to an active mode
         if mode != "sleeping" and self._sleep_fade_task and not self._sleep_fade_task.done():
             self._sleep_fade_task.cancel()
@@ -2174,8 +2030,13 @@ class AutomationEngine:
                 mode, period,
             )
 
-        if mode in ACTIVITY_LIGHT_STATES:
-            mode_states = ACTIVITY_LIGHT_STATES[mode]
+        # A per-game profile (GAME_LIGHT_PROFILES, e.g. Rust) overrides the
+        # generic gaming palette when self._current_game is set — resolved
+        # through the same table helper the resolver uses, so the lerp /
+        # overlay / multiplier pipeline below is identical.
+        game = self._current_game
+        mode_states = _get_mode_state_table(mode, game)
+        if mode_states is not None:
             if "day" in mode_states:
                 # Time-aware mode: blend evening → night during the 30-min ramp window
                 now = datetime.now(tz=TZ)
@@ -2190,13 +2051,13 @@ class AutomationEngine:
 
                 if 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES:
                     progress = (WINDDOWN_RAMP_MINUTES - minutes_until_winddown) / WINDDOWN_RAMP_MINUTES
-                    evening_state = _resolve_activity_state(mode, "evening")
-                    night_state = _resolve_activity_state(mode, "night")
+                    evening_state = _resolve_activity_state(mode, "evening", game)
+                    night_state = _resolve_activity_state(mode, "night", game)
                     state = _lerp_light_state(evening_state, night_state, progress)
                 else:
-                    state = _resolve_activity_state(mode, period)
+                    state = _resolve_activity_state(mode, period, game)
             else:
-                state = _resolve_activity_state(mode, period)
+                state = _resolve_activity_state(mode, period, game)
 
             # Apply learned lighting preferences as overlay (ML Phase 1).
             # Learned values replace hardcoded defaults per-light, per-property.
@@ -2336,155 +2197,32 @@ class AutomationEngine:
     async def _apply_state(
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
+        """Apply a light state (uniform or per-light) — GH#87 step-5 delegate
+        to :class:`LightApplicator`. Kept as a method (not just an attribute)
+        so callers (``_apply_mode``, ``_apply_time_based``, ``_sleep_fade``,
+        ``_maybe_drift``) and test spies that patch ``engine._apply_state``
+        are honored unchanged.
         """
-        Apply a light state — supports both uniform and per-light formats.
-
-        Args:
-            state: Either a flat dict (applied to all lights) or a dict keyed
-                   by light ID with individual states per light.
-            transitiontime: Transition duration in deciseconds (10 = 1s).
-                            Injected into each light command if provided.
-        """
-        if not self._hue or not self._hue.connected:
-            return
-
-        # Detect format: per-light dicts have string keys like "1", "2"
-        is_per_light = all(
-            isinstance(v, dict) for v in state.values()
-        ) and any(k in ALL_LIGHT_IDS for k in state.keys())
-
-        if is_per_light:
-            await self._apply_per_light(state, transitiontime)
-        else:
-            await self._apply_uniform(state, transitiontime)
+        await self._applicator.apply_state(state, transitiontime)
 
     def _protected_light_ids(self) -> set[str]:
-        """Light ids the mode-apply pipeline must NOT write this tick.
-
-        Always includes manual + transit per-light overrides. Additionally
-        includes the screen-sync target lamps (L2/L5) while sync is actively
-        owning them — current mode is a SCREEN_SYNC_MODE and a color was
-        pushed within ``SCREEN_SYNC_FRESH_SECONDS``. Screen sync writes those
-        lamps directly to the bridge (bypassing the per-light dedup cache),
-        so without this guard the periodic mode-reapply — and every
-        ``notify_camera_commit`` force-resend — re-writes them to their
-        static state, fighting sync and producing the visible L2/L5 flicker
-        (audit 2026-05-30, syncfight-1). When sync goes quiet the freshness
-        gate lapses and the engine reclaims the lamps on the next tick.
+        """Light ids the mode-apply pipeline must NOT write this tick — GH#87
+        step-5 delegate to :class:`LightApplicator`. (manual + transit
+        overrides, plus sync-owned L2/L5 while sync is fresh.)
         """
-        protected = set(self._manual_light_overrides) | set(self._transit_light_overrides)
-        sync = self._screen_sync
-        if sync is not None and self.current_mode in SCREEN_SYNC_MODES:
-            last = sync.last_color_at
-            if last is not None:
-                age = (datetime.now(timezone.utc) - last).total_seconds()
-                if age < SCREEN_SYNC_FRESH_SECONDS:
-                    protected |= set(sync.target_lights)
-        return protected
+        return self._applicator.protected_light_ids()
 
     async def _apply_uniform(
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
-        """Apply the same state to all lights (backward-compatible path)."""
-        # Prune expired transit overrides before consulting them.
-        self._prune_expired_transit_overrides()
-
-        # If any lights are protected (manual / transit overrides, or sync-
-        # owned L2/L5), fall through to the per-light path so the filter can
-        # skip them instead of stomping them via set_all_lights.
-        if self._protected_light_ids():
-            per_light = {lid: state for lid in ALL_LIGHT_IDS}
-            await self._apply_per_light(per_light, transitiontime)
-            return
-
-        # Convert to per-light for dedup tracking
-        per_light = {lid: state for lid in ALL_LIGHT_IDS}
-        if per_light == self._last_applied_per_light:
-            return
-
-        prev_snapshot = {lid: (self._last_applied_per_light.get(lid) or {}).copy() for lid in ALL_LIGHT_IDS}
-        self._last_applied_per_light = {lid: state.copy() for lid in ALL_LIGHT_IDS}
-        cmd = {**state}
-        if transitiontime is not None:
-            cmd["transitiontime"] = transitiontime
-        await self._hue.set_all_lights(cmd)
-        logger.info(f"Applied uniform state: bri={state.get('bri')}, hue={state.get('hue')}")
-        if self._event_logger:
-            for lid in ALL_LIGHT_IDS:
-                prev = prev_snapshot.get(lid, {})
-                await self._event_logger.log_light_adjustment(
-                    light_id=lid,
-                    bri_before=prev.get("bri"), bri_after=state.get("bri"),
-                    hue_before=prev.get("hue"), hue_after=state.get("hue"),
-                    sat_before=prev.get("sat"), sat_after=state.get("sat"),
-                    ct_before=prev.get("ct"), ct_after=state.get("ct"),
-                    mode_at_time=self.current_mode,
-                    trigger="automation",
-                )
+        """Apply the same state to all lights — GH#87 step-5 delegate."""
+        await self._applicator.apply_uniform(state, transitiontime)
 
     async def _apply_per_light(
         self, states: dict[str, dict], transitiontime: int | None = None,
     ) -> None:
-        """Apply individual states to each light (parallel when possible)."""
-        # Drop any transit overrides whose deadline has passed before we check.
-        self._prune_expired_transit_overrides()
-
-        # Filter out protected lights: manual + transit per-light overrides,
-        # plus screen-sync-owned L2/L5 while sync is fresh (see
-        # _protected_light_ids — stops the static-vs-sync flicker).
-        protected = self._protected_light_ids()
-        if protected:
-            skipped = [lid for lid in states if lid in protected]
-            if skipped:
-                states = {
-                    lid: s for lid, s in states.items() if lid not in protected
-                }
-                logger.debug(f"Skipping overridden lights: {skipped}")
-                if not states:
-                    return
-
-        # Optimization: if all lights get the same state, use the uniform path
-        unique_states = list(states.values())
-        if not protected and all(
-            s == unique_states[0] for s in unique_states
-        ):
-            await self._apply_uniform(unique_states[0], transitiontime)
-            return
-
-        # Build list of lights that actually changed
-        tasks = []
-        changed_ids = []
-        # Keep the pre-change value per light so we can log accurate before/after pairs
-        pre_values: dict[str, dict] = {}
-        for light_id, state in states.items():
-            last = self._last_applied_per_light.get(light_id)
-            if state != last:
-                pre_values[light_id] = (last or {}).copy()
-                cmd = {**state}
-                if transitiontime is not None:
-                    cmd["transitiontime"] = transitiontime
-                tasks.append(self._hue.set_light(light_id, cmd))
-                self._last_applied_per_light[light_id] = state.copy()
-                changed_ids.append(light_id)
-
-        if tasks:
-            await asyncio.gather(*tasks)
-            on_ids = [lid for lid in changed_ids if states[lid].get("on", True)]
-            off_ids = [lid for lid in changed_ids if not states[lid].get("on", True)]
-            logger.info(f"Applied per-light state: on={on_ids}, off={off_ids}")
-            if self._event_logger:
-                for lid in changed_ids:
-                    new = states[lid]
-                    prev = pre_values.get(lid, {})
-                    await self._event_logger.log_light_adjustment(
-                        light_id=lid,
-                        bri_before=prev.get("bri"), bri_after=new.get("bri"),
-                        hue_before=prev.get("hue"), hue_after=new.get("hue"),
-                        sat_before=prev.get("sat"), sat_after=new.get("sat"),
-                        ct_before=prev.get("ct"), ct_after=new.get("ct"),
-                        mode_at_time=self.current_mode,
-                        trigger="automation",
-                    )
+        """Apply individual states to each light — GH#87 step-5 delegate."""
+        await self._applicator.apply_per_light(states, transitiontime)
 
     async def _maybe_drift(self) -> None:
         """
@@ -2707,6 +2445,41 @@ class AutomationEngine:
         """
         logger.info("Automation engine started")
 
+        # Seed _last_process_working_at from DB so the late-night rescue and
+        # ambient-relax attendance vetoes are live immediately after a restart.
+        # Without this, there's a window (up to RECENT_PROCESS_WORKING_SECONDS)
+        # where a fresh process=working report can't defend against a rescue
+        # that evaluates on the first tick post-restart. Confirmed incident:
+        # 2026-06-02 03:13 UTC rescue fired 46s after a working POST.
+        try:
+            from backend.database import async_session
+            from backend.models import ActivityEvent
+            from sqlalchemy import select
+
+            async with async_session() as _seed_db:
+                _seed_row = (await _seed_db.execute(
+                    select(ActivityEvent.timestamp)
+                    .where(ActivityEvent.source == "process")
+                    .where(ActivityEvent.mode == "working")
+                    .order_by(ActivityEvent.timestamp.desc())
+                    .limit(1)
+                )).fetchone()
+                if _seed_row:
+                    _seed_ts = _seed_row[0]
+                    if _seed_ts.tzinfo is None:
+                        _seed_ts = _seed_ts.replace(tzinfo=timezone.utc)
+                    _seed_age = (datetime.now(tz=TZ) - _seed_ts).total_seconds()
+                    if _seed_age < RECENT_PROCESS_WORKING_SECONDS:
+                        self._last_process_working_at = _seed_ts
+                        logger.info(
+                            "Seeded _last_process_working_at from DB (age=%.0fs)",
+                            _seed_age,
+                        )
+        except Exception:
+            logger.warning(
+                "Could not seed _last_process_working_at from DB", exc_info=True,
+            )
+
         while True:
             try:
                 if self._heartbeat is not None:
@@ -2720,11 +2493,7 @@ class AutomationEngine:
                 # DND auto-expiry — once-per-tick lazy clear. is_dnd_active()
                 # itself is side-effect free; we run the persist + WS broadcast
                 # here so the dashboard learns about expiry within ~60s.
-                if (
-                    self._dnd_enabled
-                    and self._dnd_expiry is not None
-                    and now >= self._dnd_expiry
-                ):
+                if self._dnd.should_expire(now):
                     logger.info("DND auto-expired at %s", now.isoformat())
                     await self.clear_dnd(source="auto_expiry")
 
@@ -2749,18 +2518,9 @@ class AutomationEngine:
                 # Expire stale per-light overrides (same 4h window as the
                 # mode-level override, tracked per-entry via the datetime
                 # stamped in mark_light_manual).
-                if self._manual_light_overrides:
-                    cutoff = timedelta(hours=self._override_timeout_hours)
-                    expired = [
-                        lid for lid, ts in self._manual_light_overrides.items()
-                        if now - ts > cutoff
-                    ]
-                    for lid in expired:
-                        del self._manual_light_overrides[lid]
-                        logger.info(
-                            f"Per-light override on light {lid} expired "
-                            f"after {self._override_timeout_hours}h"
-                        )
+                self._overrides.expire_manual_stamps(
+                    now, self._override_timeout_hours,
+                )
 
                 # Check for external off (Alexa geofence)
                 if await self._check_external_off():
@@ -2771,26 +2531,43 @@ class AutomationEngine:
                 # over "still working" or idle when no Sonos media is playing.
                 # Catches the 02:00+ edge when someone's still at the desk.
                 # Guarded so real gaming/watching/social/sleeping are respected,
-                # music playback counts as intentional activity, and a fresh
-                # camera 'at desk' reading means the user is actively present
-                # and shouldn't be pushed into relax. DND suppresses this —
-                # set_manual_override would block the call anyway, but
-                # skipping early avoids the log noise + the Sonos polling
-                # round-trip.
+                # and music playback counts as intentional activity. Attendance
+                # vetoes (camera at desk / recent process working) are checked
+                # inside the block so suppressed rescues are logged to
+                # ml_decisions for observability — mirrors the predictor path.
                 if (
                     not self._manual_override
                     and not self.is_dnd_active()
-                    and not self.is_at_desk_fresh()
-                    and not self.is_recent_process_working()
                     and self._get_time_period() == "late_night"
                     and self._current_mode in ("working", "idle")
                     and not await self._sonos_is_playing()
                 ):
-                    logger.info(
-                        "Late-night rescue: switching to relax from %s",
-                        self._current_mode,
-                    )
-                    await self.set_manual_override("relax", source="late_night_rescue")
+                    _rescue_veto: str | None = None
+                    if self.is_at_desk_fresh():
+                        _rescue_veto = "camera_at_desk"
+                    elif self.is_recent_process_working():
+                        _rescue_veto = "process_working_recent"
+
+                    if _rescue_veto is None:
+                        logger.info(
+                            "Late-night rescue: switching to relax from %s",
+                            self._current_mode,
+                        )
+                        await self.set_manual_override("relax", source="late_night_rescue")
+                    else:
+                        logger.debug(
+                            "Late-night rescue suppressed (%s)", _rescue_veto,
+                        )
+                        _rescue_ml = getattr(self, "_ml_logger", None)
+                        if _rescue_ml:
+                            await _rescue_ml.log_decision(
+                                predicted_mode="relax",
+                                confidence=1.0,
+                                decision_source="late_night_rescue",
+                                factors={"vetoed_by": _rescue_veto},
+                                applied=False,
+                                broadcast=False,
+                            )
 
                 # Ambient relax — soft default when nothing's happening. Idle
                 # held for IDLE_AMBIENT_RELAX_DWELL_SECONDS without any
@@ -2798,15 +2575,13 @@ class AutomationEngine:
                 # the late_night branch above handles the post-23:00 case where
                 # mode is still "working" (vs idle) at the desk.
                 #
-                # The is_present_in_room() veto (added with the 2026-05-27
-                # Latitude→living-room move) blocks the flip when the camera
-                # can SEE someone here — previously, sitting on the couch read
-                # as "absent" and force-flipped relax + auto-played the Sonos.
+                # is_present_in_room() stays in the outer elif (camera sees
+                # someone on the couch → just not our trigger, not a veto).
+                # Attendance vetoes (at-desk / recent-process-working) move
+                # inside for the same ml_decisions observability as the rescue.
                 elif (
                     not self._manual_override
                     and not self.is_dnd_active()
-                    and not self.is_at_desk_fresh()
-                    and not self.is_recent_process_working()
                     and not self.is_present_in_room()
                     and self._current_mode == "idle"
                     and self._idle_entered_at is not None
@@ -2814,12 +2589,33 @@ class AutomationEngine:
                         >= IDLE_AMBIENT_RELAX_DWELL_SECONDS
                     and not await self._sonos_is_playing()
                 ):
-                    logger.info(
-                        "Ambient relax: idle held %.0fs without presence "
-                        "— switching to relax",
-                        (now - self._idle_entered_at).total_seconds(),
-                    )
-                    await self.set_manual_override("relax", source="ambient_relax")
+                    _relax_veto: str | None = None
+                    if self.is_at_desk_fresh():
+                        _relax_veto = "camera_at_desk"
+                    elif self.is_recent_process_working():
+                        _relax_veto = "process_working_recent"
+
+                    if _relax_veto is None:
+                        logger.info(
+                            "Ambient relax: idle held %.0fs without presence "
+                            "— switching to relax",
+                            (now - self._idle_entered_at).total_seconds(),
+                        )
+                        await self.set_manual_override("relax", source="ambient_relax")
+                    else:
+                        logger.debug(
+                            "Ambient relax suppressed (%s)", _relax_veto,
+                        )
+                        _relax_ml = getattr(self, "_ml_logger", None)
+                        if _relax_ml:
+                            await _relax_ml.log_decision(
+                                predicted_mode="relax",
+                                confidence=1.0,
+                                decision_source="ambient_relax",
+                                factors={"vetoed_by": _relax_veto},
+                                applied=False,
+                                broadcast=False,
+                            )
 
                 # If no activity override and no manual override, apply time-based
                 if (
@@ -3695,22 +3491,14 @@ class AutomationEngine:
         hours = minutes // 60
         return f"{hours}h {minutes % 60}m ago"
 
+    @property
+    def pipeline_history(self) -> list[dict]:
+        """Pipeline snapshot ring for the /api/automation/pipeline view."""
+        return self._pipeline.history
+
     async def _broadcast_pipeline(self) -> None:
         """Broadcast pipeline state to all WebSocket clients (throttled)."""
-        now = datetime.now(tz=TZ)
-        if (
-            self._last_pipeline_broadcast
-            and (now - self._last_pipeline_broadcast).total_seconds() < 1.0
-        ):
-            return
-        self._last_pipeline_broadcast = now
-
-        state = self._build_pipeline_state()
-        self._pipeline_history.append(state)
-        if len(self._pipeline_history) > 30:
-            self._pipeline_history.pop(0)
-
-        await self._ws_manager.broadcast("pipeline_state", state)
+        await self._pipeline.broadcast()
 
     async def _broadcast_mode(self) -> None:
         """Broadcast the current mode to all WebSocket clients."""

@@ -35,6 +35,106 @@ def _ago(seconds: float) -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# seconds_since_at_desk — flicker-robust high-water mark (GH#109)
+# ---------------------------------------------------------------------------
+
+
+def test_seconds_since_at_desk_none_when_never_confirmed() -> None:
+    fusion = PresenceFusion()
+    assert fusion.seconds_since_at_desk() is None
+    # A non-confirming reading must not start the clock.
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+    ))
+    assert fusion.seconds_since_at_desk() is None
+
+
+def test_seconds_since_at_desk_tracks_last_confirmation() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(4), face_present=True, zone="desk",
+    ))
+    since = fusion.seconds_since_at_desk()
+    assert since is not None and 3.5 <= since <= 6.0
+
+
+def test_seconds_since_at_desk_not_reset_by_later_absent_frame() -> None:
+    """The crux of the transit/desk-exit fix: a face_present=False frame
+    landing on top of a recent desk confirmation (last-write-wins) must NOT
+    move the high-water mark. is_at_desk_fresh() flips false on that frame,
+    but seconds_since_at_desk() stays anchored to the real last confirmation,
+    so the sticky-desk gate survives per-frame flicker.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(2), face_present=True, zone="desk",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+    ))
+    assert fusion.is_at_desk_fresh() is False  # latest frame says no face
+    since = fusion.seconds_since_at_desk()
+    assert since is not None and since <= 6.0  # but recency is preserved
+
+
+# ---------------------------------------------------------------------------
+# Future-stamped reading self-heal (2026-06-07 mobo-swap clock incident)
+# ---------------------------------------------------------------------------
+
+
+def test_future_stamped_reading_replaced_by_honest_report() -> None:
+    """Regression: a source clock running hours fast (fresh CMOS after a
+    motherboard swap) stores a future-stamped reading; once the client
+    clock is corrected, every honest report looked out-of-order and was
+    dropped — wedging the source (age_s=-16742, fresh=True forever)
+    until real time caught up. The guard must treat a future-stamped
+    PRIOR as invalid and let the honest report replace it.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now() + timedelta(hours=4),
+        face_present=True, face_confidence=0.83, zone="desk",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+    ))
+    # The honest (non-confirming) report won — not the wedged future one.
+    assert fusion.is_at_desk_fresh() is False
+
+
+def test_future_stamped_high_water_mark_heals() -> None:
+    """A future-stamped at-desk confirmation must not leave
+    seconds_since_at_desk() negative ("just confirmed") after honest
+    non-confirming reports resume — the desk-exit/transit gates would
+    treat the desk as occupied for hours.
+    """
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now() + timedelta(hours=4),
+        face_present=True, zone="desk",
+    ))
+    assert fusion.seconds_since_at_desk() < 0  # wedged state, pre-heal
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+    ))
+    since = fusion.seconds_since_at_desk()
+    assert since is not None and since >= 0
+
+
+def test_genuine_out_of_order_still_dropped() -> None:
+    """The skew self-heal must not weaken the real out-of-order guard:
+    an older-stamped report against a sane (non-future) prior drops."""
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=True,
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_ago(10), face_present=False,
+    ))
+    assert fusion.is_at_desk_fresh() is True  # fresher reading kept
+
+
+# ---------------------------------------------------------------------------
 # is_at_desk_fresh
 # ---------------------------------------------------------------------------
 

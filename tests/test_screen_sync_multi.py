@@ -280,37 +280,58 @@ def test_scale_for_ambient_gaming_day_clouds_lifts_envelope():
     assert out == 153
 
 
-def test_scale_for_ambient_watching_unchanged():
-    """Watching's flat envelope is preserved — cinematic dim intent intact."""
+def test_scale_for_ambient_watching_l2_now_lifts():
+    """D4 task #7: watching L2 (fabric room-light) now tracks ambient too —
+    the user wants the bedroom brighter when dark while watching, not just
+    gaming. Bounded by the 1.40 combined ceiling."""
     out = ss.ScreenSyncService._scale_for_ambient(
         25, mode="watching", period="day",
         lux_multiplier=1.30, weather_condition="thunderstorm",
+        light_id="2",
     )
-    assert out == 25
+    # watching-day thunderstorm = 1.10; 25 × min(1.40, 1.30 × 1.10 = 1.43) =
+    # 25 × 1.40 = 35
+    assert out == 35
 
 
-def test_scale_for_ambient_evening_unchanged():
-    """Evening gaming skips the lift — period-stepped caps stay flat."""
+def test_scale_for_ambient_evening_now_lifts():
+    """D4 task #7: gaming evening L2 lifts — the gate is widened past day-only
+    so the night-time room (when the user actually games) gets the top-up."""
     out = ss.ScreenSyncService._scale_for_ambient(
         150, mode="gaming", period="evening",
         lux_multiplier=1.20, weather_condition="rain",
+        light_id="2",
     )
-    assert out == 150
+    # gaming-evening rain = 1.07; 150 × min(1.40, 1.20 × 1.07 = 1.284) =
+    # 150 × 1.284 = 192.6 → 192
+    assert out == 192
 
 
-def test_scale_for_ambient_ceiling_caps_l5_below_overdrive():
-    """L5 gaming-day cap 60 worst-case (thunderstorm + dim ambient) stays
-    under the 90-bri perceptual overdrive threshold from build 4adce9f.
+def test_scale_for_ambient_l5_excluded_from_lift():
+    """L5's clear seeded-glass housing is a glare-prone point source, NOT a
+    room-light lever — it is excluded from the ambient lift entirely and rides
+    its static per-period caps regardless of mode/period/multiplier. This also
+    closes the latent day-path gap (L5 day cap 75 × 1.40 = 105 > the 90 glare
+    ceiling from build 4adce9f)."""
+    for period in ("day", "evening", "night", "late_night"):
+        out = ss.ScreenSyncService._scale_for_ambient(
+            95, mode="gaming", period=period,
+            lux_multiplier=1.30, weather_condition="thunderstorm",
+            light_id="5",
+        )
+        assert out == 95, f"L5 must not be lifted (period={period})"
 
-    Naive stacking: 60 × 1.30 × 1.20 = 93.6 → would breach. With the 1.40
-    ceiling: 60 × min(1.40, 1.56) = 60 × 1.40 = 84.
-    """
+
+def test_scale_for_ambient_l2_ceiling_bounds_lift():
+    """The 1.40 combined ceiling still bounds L2's lift so a dark-room storm
+    can't run the fabric shade away (worst case lux 1.30 × weather 1.20)."""
     out = ss.ScreenSyncService._scale_for_ambient(
-        60, mode="gaming", period="day",
+        150, mode="gaming", period="day",
         lux_multiplier=1.30, weather_condition="thunderstorm",
+        light_id="2",
     )
-    assert out == 84
-    assert out < 90, "L5 cap breached perceptual overdrive ceiling"
+    # 150 × min(1.40, 1.30 × 1.20 = 1.56) = 150 × 1.40 = 210
+    assert out == 210
 
 
 def test_scale_for_ambient_no_weather_uses_lux_only():
@@ -405,3 +426,95 @@ async def test_screen_sync_no_event_logger_is_safe():
     # No set_event_logger call.
     await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
     assert hue.last_for("2")["bri"] > 0  # the bridge write still happened
+
+
+@pytest.mark.asyncio
+async def test_apply_rust_brightness_holds_ember_and_dims_when_dark():
+    """Rust path holds the fixed ember color and maps luma → brightness.
+
+    Pitch-black Rust (luma≈floor input) drops L2 to the period floor; a bright
+    daytime scene lifts it toward the cap. Color stays ember regardless — the
+    chaotic on-screen color is not synced.
+    """
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    # Pitch-black night frame → night floor. EMA glides hue/sat/bri from the
+    # 0 prior, so drive enough frames to converge (the glide itself is the
+    # desired smooth handoff from the color path; steady state is exact ember).
+    for _ in range(30):
+        await sync.apply_rust_brightness("2", luma=5, period="night")
+    dark = hue.last_for("2")
+    assert abs(dark["hue"] - ss.RUST_EMBER_HUE) <= 5
+    assert abs(dark["sat"] - ss.RUST_EMBER_SAT) <= 2
+    assert abs(dark["bri"] - ss.RUST_BRI_ENVELOPE["2"]["night"][0]) <= 2, dark["bri"]
+
+    # Bright daytime frame → day cap.
+    for _ in range(30):
+        await sync.apply_rust_brightness("2", luma=200, period="day")
+    bright = hue.last_for("2")
+    assert abs(bright["bri"] - ss.RUST_BRI_ENVELOPE["2"]["day"][1]) <= 2, bright["bri"]
+    # Still ember — never the screen color.
+    assert abs(bright["hue"] - ss.RUST_EMBER_HUE) <= 5
+
+
+@pytest.mark.asyncio
+async def test_apply_rust_brightness_l5_subordinate_to_l2():
+    """L5 must dim WITH L2 and stay below it at the same luma/period — the
+    fix for the static-L5-towers-over-dimming-L2 glare-pop (2026-06-08)."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    for period in ("day", "night", "late_night"):
+        # Same bright scene to both lamps — converge each.
+        for _ in range(30):
+            await sync.apply_rust_brightness("2", luma=180, period=period)
+            await sync.apply_rust_brightness("5", luma=180, period=period)
+        assert hue.last_for("5")["bri"] < hue.last_for("2")["bri"], period
+        # Same dark scene — L5 still ≤ L2 (both floor, L5's floor is lower).
+        for _ in range(30):
+            await sync.apply_rust_brightness("2", luma=4, period=period)
+            await sync.apply_rust_brightness("5", luma=4, period=period)
+        assert hue.last_for("5")["bri"] <= hue.last_for("2")["bri"], period
+
+
+@pytest.mark.asyncio
+async def test_apply_rust_brightness_unknown_light_is_noop():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    await sync.apply_rust_brightness("5", luma=100, period="day")  # 5 not a target
+    assert hue.calls == []
+
+
+@pytest.mark.asyncio
+async def test_rust_config_partial_merge_and_validation():
+    """Runtime Rust knob: partial PUT merges, validates, and drives apply."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    base = sync.get_rust_config()
+    assert base["envelope"]["2"]["night"] == list(ss.RUST_BRI_ENVELOPE["2"]["night"])
+    assert base["ember"]["hue"] == ss.RUST_EMBER_HUE
+
+    # Partial: bump only L2 night; everything else untouched.
+    out = sync.apply_rust_config({"envelope": {"2": {"night": [50, 170]}}})
+    assert out["envelope"]["2"]["night"] == [50, 170]
+    assert out["envelope"]["2"]["day"] == base["envelope"]["2"]["day"]
+    assert out["envelope"]["5"]["night"] == base["envelope"]["5"]["night"]
+
+    # Validation: floor>cap swaps; unknown light/period ignored; clamps.
+    out = sync.apply_rust_config(
+        {"envelope": {"2": {"day": [240, 30]}, "9": {"night": [1, 2]},
+                      "5": {"noon": [1, 2]}}}
+    )
+    assert out["envelope"]["2"]["day"] == [30, 240]
+    assert "9" not in out["envelope"]
+    assert "noon" not in out["envelope"]["5"]
+
+    # luma dark<bright enforced.
+    out = sync.apply_rust_config({"luma": {"dark": 100, "bright": 50}})
+    assert out["luma"]["dark"] == 100 and out["luma"]["bright"] == 101
+
+    # The live knob actually drives apply_rust_brightness.
+    for _ in range(40):
+        await sync.apply_rust_brightness("2", luma=255, period="night")
+    assert abs(hue.last_for("2")["bri"] - 170) <= 3

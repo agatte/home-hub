@@ -22,13 +22,14 @@ import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 import psutil
 
 from backend.services.pc_agent.game_list import (
     BROWSER_PROCESSES,
+    GAME_NAME_BY_PROCESS,
     GAME_PROCESSES,
     LOL_PROCESSES,
     MEDIA_PROCESSES,
@@ -701,6 +702,29 @@ class ActivityDetector:
         logger.warning("LoL Live Client poll failed: %s", reason)
         self._lol_last_failure_reason = reason
 
+    @staticmethod
+    def _resolve_active_game(
+        fg_proc: Optional[str], processes: set[str],
+    ) -> Optional[str]:
+        """Resolve the active game to a lighting-profile slug, or None.
+
+        Prefers the foreground process (the game actually on screen); falls
+        back to any profiled game in the running set so a brief alt-tab to the
+        desktop doesn't drop the profile mid-session. Only games in
+        ``GAME_NAME_BY_PROCESS`` resolve — every other game is generic gaming.
+        ``fg_proc`` / ``processes`` are already lowercased upstream (they're
+        matched against the lowercase ``GAME_PROCESSES``), so the map lookup
+        is direct.
+        """
+        if fg_proc:
+            slug = GAME_NAME_BY_PROCESS.get(fg_proc)
+            if slug:
+                return slug
+        for proc, slug in GAME_NAME_BY_PROCESS.items():
+            if proc in processes:
+                return slug
+        return None
+
     def build_factors(self) -> list[dict]:
         """Build sub-factor list describing what this lane is seeing.
 
@@ -773,6 +797,21 @@ class ActivityDetector:
             },
         ]
 
+        # Per-game lighting profile factor — present only when a game with a
+        # dedicated backend profile (e.g. Rust → "Rusted Ember") is active.
+        # Drives GAME_LIGHT_PROFILES on the engine + the Rust L2 luma
+        # brightness-sync. Placed before the optional browser/champion
+        # factors so the [:6] cap can't truncate it.
+        active_game = self._resolve_active_game(fg_proc, processes)
+        if active_game:
+            factors.append({
+                "key": "game",
+                "label": "Game",
+                "value": active_game,
+                "display": active_game,
+                "impact": 1.0,
+            })
+
         # Only surface browser flag when it's actually load-bearing (late night).
         current_hour = datetime.now().hour
         is_late = current_hour >= LATE_NIGHT_START or current_hour < 6
@@ -799,7 +838,9 @@ class ActivityDetector:
                 "impact": 1.0,
             })
 
-        return factors[:5]
+        # Cap at 6 (was 5) so a load-bearing `game` factor (and the late-night
+        # League `champion` factor) survives alongside the base four + browser.
+        return factors[:6]
 
     def close(self) -> None:
         """Release resources held by the detector (LoL HTTPS client).
@@ -899,6 +940,7 @@ def _describe_allgamedata_miss(data: Any) -> str:
 def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
+    heartbeat: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Main loop — poll processes, report mode changes to the Home Hub server.
@@ -909,6 +951,9 @@ def run_agent(
     Args:
         server_url: Base URL of the Home Hub backend (e.g., http://localhost:8000).
         stop_event: Optional threading event for clean shutdown (set by supervisor).
+        heartbeat: Optional supervisor liveness pulse, called once per loop
+            iteration so a hung-but-alive thread can be distinguished from a
+            healthy one.
     """
     detector = ActivityDetector()
     endpoint = f"{server_url.rstrip('/')}/api/automation/activity"
@@ -923,6 +968,8 @@ def run_agent(
 
     try:
         while not _stop.is_set():
+            if heartbeat is not None:
+                heartbeat()
             try:
                 mode = detector.detect()
                 now = time.time()

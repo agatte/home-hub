@@ -57,6 +57,19 @@ class TestEMA:
         assert c.status()["ema_lux"] == 80.0
         assert c.last_lux_update.tzinfo is not None
 
+    def test_future_stamped_last_update_self_heals(self):
+        """Regression (2026-06-07 mobo-swap clock incident): a sample
+        stamped hours ahead by a fast client clock must not wedge the
+        channel — once honest samples resume they replace the bad stamp
+        instead of being dropped as out-of-order."""
+        c = LuxChannel("bedroom")
+        now = datetime.now(timezone.utc)
+        c.update(100.0, captured_at=now + timedelta(hours=4))
+        c.update(50.0, captured_at=now)
+        # Blended (0.3*50 + 0.7*100) — proof the honest sample was accepted.
+        assert c.status()["ema_lux"] == 85.0
+        assert c.last_lux_update <= datetime.now(timezone.utc)
+
 
 class TestCalibrationGating:
     def test_ema_lux_none_until_calibrated(self):

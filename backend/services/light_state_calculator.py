@@ -804,9 +804,99 @@ def get_time_period(schedule, now: Optional[datetime] = None) -> str:
     return "night"
 
 
+# ---------------------------------------------------------------------------
+# Per-game lighting profiles
+# ---------------------------------------------------------------------------
+#
+# A game with a dedicated profile overrides the generic ``gaming`` palette in
+# ``ACTIVITY_LIGHT_STATES`` while that game is the active one (the engine sets
+# ``current_game`` from the PC-agent's ``game`` factor; see
+# ``automation_engine.report_activity`` + ``pc_agent.activity_detector``). Same
+# per-period shape as an ACTIVITY_LIGHT_STATES mode entry so it flows through
+# the identical resolve → lerp → multiplier → overlay pipeline.
+#
+# RUST — "Rusted Ember" (user-approved 2026-06-08). Rust is a gritty,
+# desaturated survival game (rust/ash/forest, deliberately pitch-black nights);
+# the saturated blue/teal gamer palette fought it and per-frame color
+# screen-sync latched onto on-screen noise. This profile holds a FIXED warm
+# ember palette (no color screen-sync) and lets L2's *brightness* track the
+# screen's luminance instead (see ScreenSyncService.apply_rust_brightness) so
+# the room dims with the in-game day/night cycle.
+#   • L1 / L2 / L5 — warm ember (reuses relax's proven ember band on these
+#     bulbs); L2 is the screen-sync brightness target (its ember hue/sat is
+#     kept in lock-step with RUST_EMBER_* in screen_sync.py).
+#   • L3 / L4 — muted moss pendants (hue 20000/sat 100, relax's proven moss),
+#     matched per the kitchen-pair rule — Rust's forests ↔ the room's sage.
+# Hue/sat are fixed across periods (Rust's ember reads the same day or night);
+# only ``bri`` steps down toward late-night. Brightness scale mirrors the
+# generic gaming surround so the room isn't a cave (L1 night ≥ the bri-45
+# hallway-spill visibility floor; kitchen ~ gaming's lifted surround).
+GAME_LIGHT_PROFILES: dict[str, dict[str, Any]] = {
+    "rust": {
+        "day": {
+            "1": {"on": True, "bri": 120, "hue": 5500, "sat": 215},
+            "2": {"on": True, "bri": 150, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 35,  "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 35,  "hue": 20000, "sat": 100},
+            "5": {"on": True, "bri": 105, "hue": 6500, "sat": 195},
+        },
+        "evening": {
+            "1": {"on": True, "bri": 70,  "hue": 5500, "sat": 215},
+            "2": {"on": True, "bri": 130, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 40,  "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 40,  "hue": 20000, "sat": 100},
+            "5": {"on": True, "bri": 80,  "hue": 6500, "sat": 195},
+        },
+        "night": {
+            "1": {"on": True, "bri": 70,  "hue": 5500, "sat": 215},
+            "2": {"on": True, "bri": 120, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 38,  "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 38,  "hue": 20000, "sat": 100},
+            # L5 trimmed 70→58 (curator a495d62): on a dark Rust night L2 floors
+            # to ~35 via luma-sync; a clear-housing point source much above that
+            # pops as the brightest desk element (clear_housing_perceptual_luma).
+            # Keeps the ember "spark" present without becoming the glare point.
+            "5": {"on": True, "bri": 58,  "hue": 6500, "sat": 195},
+        },
+        # L2 holds the canonical ember (hue 6000/sat 200) in EVERY period so it
+        # stays in lock-step with RUST_EMBER_* in screen_sync.py — only its bri
+        # steps down. L1/L5 are free to deepen by period for warmth/depth (they
+        # are not screen-sync targets, so no lock-step constraint).
+        "late_night": {
+            "1": {"on": True, "bri": 50,  "hue": 5000, "sat": 220},
+            "2": {"on": True, "bri": 100, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 28,  "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 28,  "hue": 20000, "sat": 100},
+            # L5 trimmed 55→46 (curator a495d62): same glare-pop guard as night,
+            # L2 floors to ~22 at late_night.
+            "5": {"on": True, "bri": 46,  "hue": 6000, "sat": 195},
+        },
+    },
+}
+
+
+def get_mode_state_table(
+    mode: str,
+    game: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Return the period→state table for ``mode``, honoring a per-game profile.
+
+    When ``game`` has an entry in ``GAME_LIGHT_PROFILES`` and ``mode`` is
+    ``gaming``, that profile replaces ``ACTIVITY_LIGHT_STATES["gaming"]``.
+    Returns ``None`` for an unknown mode with no matching profile (callers
+    fall back to time-based lighting).
+    """
+    if game and mode == "gaming":
+        profile = GAME_LIGHT_PROFILES.get(game)
+        if profile is not None:
+            return profile
+    return ACTIVITY_LIGHT_STATES.get(mode)
+
+
 def resolve_activity_state(
     mode: str,
     time_period: Optional[str] = None,
+    game: Optional[str] = None,
 ) -> dict[str, Any]:
     """Look up the time-appropriate light state for an activity mode.
 
@@ -817,8 +907,11 @@ def resolve_activity_state(
         mode: Activity mode name.
         time_period: Override time period. Uses the static default
             when None.
+        game: Optional active-game slug. When it matches a
+            ``GAME_LIGHT_PROFILES`` entry (and ``mode`` is gaming), the
+            game's palette is resolved instead of the generic mode palette.
     """
-    entry = ACTIVITY_LIGHT_STATES.get(mode)
+    entry = get_mode_state_table(mode, game)
     if entry is None:
         return {}
     if "day" in entry:

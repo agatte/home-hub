@@ -173,3 +173,48 @@ async def test_uncalibrated_bedroom_lux_is_neutral():
     req.app.state.bedroom_lux = LuxChannel("bedroom")  # uncalibrated
     result = await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
     assert result["applied"] is True
+
+
+class _FakePresence:
+    """Minimal PresenceFusion stand-in returning a fixed fused zone/posture."""
+
+    def __init__(self, zone=None, posture=None) -> None:
+        self._zone = zone
+        self._posture = posture
+
+    def latest_zone(self, max_age_s: int = 30):
+        return self._zone
+
+    def latest_posture(self, max_age_s: int = 30):
+        return self._posture
+
+
+@pytest.mark.asyncio
+async def test_watching_desk_cap_fires_off_fused_zone():
+    """The watching-at-desk L2 cap (180) must fire off the FUSED desk zone
+    (PresenceFusion), not the Latitude couch camera. Post-2026-05-27 the
+    Latitude sees the couch, so the route reads ``app.state.presence`` — a
+    fresh desktop face makes ``latest_zone()`` return "desk". A white frame at
+    the desk drives L2 well above the dim base watching cap (80); with no fused
+    desk zone it stays clamped to it."""
+    async def run(presence):
+        hue = _FakeHue()
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        engine = _fake_engine("watching", period="night")
+        req = _make_request(engine, sync)
+        if presence is not None:
+            req.app.state.presence = presence
+        # White frame → max luma → L2 target rides its cap; converge the EMA.
+        for _ in range(40):
+            await receive_screen_color(ScreenColorReport(r=255, g=255, b=255), req)
+        return next(s["bri"] for lid, s in reversed(hue.calls) if lid == "2")
+
+    desk = await run(_FakePresence(zone="desk", posture="slouched"))
+    couch = await run(None)  # no fusion → camera fallback (zone None) → cap 80
+
+    assert desk > 80, (
+        f"watching-at-desk should lift L2 above the dim 80 cap via the fused "
+        f"zone (got {desk}); if ≤80 the route is ignoring app.state.presence"
+    )
+    assert couch <= 80, f"no desk zone → L2 holds the dim watching cap (got {couch})"
+    assert desk > couch

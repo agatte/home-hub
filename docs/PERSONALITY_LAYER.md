@@ -1,6 +1,6 @@
 # AI Personality Layer
 
-> **Status:** Phase A shipped 2026-05-18 (commits e57fdad → a2d0e2a → 9d6e534). Phase B gated on validation. Phases C–D queued.
+> **Status:** Phase A shipped 2026-05-18 (commits e57fdad → a2d0e2a → 9d6e534). Phase B gated on validation — **gate checked 2026-06-09: WAIT, insufficient data** (6/30 paired samples; see "Validation gate" below). Phases C–D queued.
 > **Plan origin:** 2026-05-17 brainstorm — user picked "AI Personality" as one cohesive big build over a menu of smaller ideas. Twitch/streaming explicitly dropped from scope.
 
 ---
@@ -84,6 +84,8 @@ What landed (commits `a2d0e2a` + `9d6e534`):
 - Auto-fit per-axis bias on POST `/calibration` once ≥10 self-report rows accumulate.
 
 **Validation gate:** 2-week shadow log + once-daily calibration prompts. Phase B ships only if Spearman ρ > 0.4 on all three axes over 30+ samples.
+
+**Gate status (checked 2026-06-09): WAIT — not evaluable yet.** Paired self-report-vs-detector accrual only began 2026-05-29 when `calibration_nudge.py` came online (the original 5/18 ship had the form but no prompt mechanism), so the effective clock started then, not at Phase A ship. 6/30 pairs accumulated; at the observed ~1 pair per 1.5 days the gate matures **~mid-July 2026**. Pipeline is healthy: ~26k `mood_samples` rows/7d, all toggles on, nudges firing on schedule. Provisional ρ on n=6 (statistically meaningless, recorded for trend): valence +0.06, arousal +0.20, focus −0.12. **Early warning:** detected valence is nearly flat (−0.19..−0.11) at calibration moments while self-report spans −0.15..+0.35 — if that persists at n=30, the valence axis fails the gate; suspect the blendshape→valence coefficients saturate near neutral on a working face.
 
 ### Phase B — Mood Ring Light (gated on Phase A validation)
 

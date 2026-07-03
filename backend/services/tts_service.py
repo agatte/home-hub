@@ -21,8 +21,10 @@ class TTSService:
     Flow: text → edge-tts generates MP3 → save to static/tts/ →
           FastAPI serves the file → SoCo play_uri() → Sonos plays it.
 
-    Implements duck-and-resume: if music is playing, saves state,
-    lowers volume, plays TTS, then restores playback.
+    Implements duck-and-resume via SoCo Snapshot: full player state is
+    captured before every TTS (even when idle), volume is set for the
+    clip, then restore rebuilds the transport — resuming music where it
+    left off, or parking a finished clip when the speaker was idle.
     """
 
     def __init__(
@@ -106,7 +108,10 @@ class TTSService:
 
             # Duck-and-resume: capture state BEFORE play_uri changes anything,
             # so the finally block can always restore even when play_uri raises
-            # mid-volume-bump.
+            # mid-volume-bump. Snapshot is captured even when nothing is
+            # playing — restore() then parks the TTS clip and returns the
+            # transport to its prior (paused/stopped) state. None here means
+            # capture FAILED (breaker open / UPnP error), not "idle".
             snapshot = await self._sonos.get_current_playback_snapshot()
             status = await self._sonos.get_status()
             original_volume = status.get("volume", vol)

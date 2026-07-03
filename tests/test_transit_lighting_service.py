@@ -14,8 +14,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from backend.services.presence_fusion import PresenceFusion, PresenceReading
 from backend.services.transit_lighting_service import (
     ABSENT_TRIGGER_SECONDS,
+    DESK_STICKY_SECONDS,
     HARD_TIMEOUT_SECONDS,
     PRESENT_CLEAR_SECONDS,
     REFIRE_COOLDOWN_SECONDS,
@@ -387,6 +389,106 @@ class TestStationaryZoneGate:
         await svc._check()
         assert svc._strong_absent_streak == 1
         assert svc.active is False
+
+
+class TestStickyDeskGate:
+    """Post-2026-05-27 relocation regression (GH#109): the Latitude camera
+    sees only the living-room couch, so it reports zone=null while Anthony is
+    at the BEDROOM desk. Desk presence lives in PresenceFusion (desktop
+    pc_agent), but its raw per-frame face_present + last-write-wins storage
+    makes latest_zone()/is_at_desk_fresh() flicker to null on a single
+    head-down frame. Transit's STATIONARY_ZONES gate read the now-dead
+    Latitude zone and never engaged → ~3,491 transit writes/7d. The fix
+    sources a flicker-robust sticky desk signal from PresenceFusion's
+    at-desk high-water mark (seconds_since_at_desk).
+    """
+
+    @staticmethod
+    def _fusion_with_desk(age_seconds: float = 0.0, *, then_absent: bool = False):
+        """A PresenceFusion whose last desk confirmation is ``age_seconds`` old.
+
+        With ``then_absent`` a CURRENT face_present=False desktop frame is
+        layered on top (last-write-wins) to model "Anthony just left the desk;
+        the desktop now sees no face" — the realistic exit shape where
+        latest_zone() returns null but the at-desk high-water mark still holds
+        until the sticky window lapses.
+        """
+        from datetime import timedelta, timezone as _tz
+        fusion = PresenceFusion()
+        now = datetime.now(_tz.utc)
+        fusion.on_observation(PresenceReading(
+            source="desktop",
+            captured_at=now - timedelta(seconds=age_seconds),
+            face_present=True,
+            face_confidence=0.9,
+            zone="desk",
+        ))
+        if then_absent:
+            fusion.on_observation(PresenceReading(
+                source="desktop",
+                captured_at=now,
+                face_present=False,
+            ))
+        return fusion
+
+    def _make(self, fusion, mode="gaming"):
+        auto = _FakeAutomation(mode=mode)
+        # Latitude sees the empty couch → zone null while at the bedroom desk.
+        cam = _FakeCamera(enabled=True, last_detection="absent", zone=None)
+        return (
+            TransitLightingService(auto, cam, presence_fusion=fusion),
+            auto,
+            cam,
+        )
+
+    async def test_blocks_when_desktop_freshly_at_desk_despite_null_cam_zone(self):
+        # The core regression: cam zone is null (Latitude on the couch), but
+        # the desktop confirms the desk. Transit must NOT fire even after a
+        # full absent window.
+        svc, auto, _ = self._make(self._fusion_with_desk(age_seconds=0.0))
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.transit_calls == []
+
+    async def test_sticky_survives_single_false_flicker_frame(self):
+        # A head-down frame (face_present=False) lands on top of a recent desk
+        # confirmation. The high-water mark is unmoved → still blocks. This is
+        # the exact flicker a naive latest_zone() swap would have fired on.
+        svc, auto, _ = self._make(
+            self._fusion_with_desk(age_seconds=2.0, then_absent=True)
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.transit_calls == []
+
+    async def test_fires_after_sticky_window_lapses(self):
+        # Last desk confirmation older than DESK_STICKY_SECONDS and the latest
+        # desktop frame is face_present=False (he left). Sticky releases →
+        # transit fires on the genuine exit.
+        svc, auto, _ = self._make(
+            self._fusion_with_desk(
+                age_seconds=DESK_STICKY_SECONDS + 5, then_absent=True
+            )
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        assert len(auto.transit_calls) == 1
+
+    async def test_deactivates_when_desk_resticks_mid_transit(self):
+        # Transit fired during a walk (no fresh desk); he sat back down at the
+        # desk → fresh confirmation → revert.
+        svc, auto, _ = self._make(
+            self._fusion_with_desk(
+                age_seconds=DESK_STICKY_SECONDS + 5, then_absent=True
+            )
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        # He returns to the desk — a fresh confirmation lands.
+        svc._presence_fusion = self._fusion_with_desk(age_seconds=0.0)
+        await svc._check()
+        assert svc.active is False
+        assert len(auto.clear_calls) == 1
 
 
 class TestWatchingReclinedGate:

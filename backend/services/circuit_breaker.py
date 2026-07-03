@@ -146,7 +146,13 @@ class CircuitBreaker:
 
     # ---- call -----------------------------------------------------------
 
-    async def call(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    async def call(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        call_timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Run ``fn(*args, **kwargs)`` (which must return an awaitable)
         under the breaker.
 
@@ -158,6 +164,12 @@ class CircuitBreaker:
         - On success: record and return the result.
         - On any exception (including ``asyncio.TimeoutError`` from the
           per-call timeout): record as failure and re-raise.
+
+        ``call_timeout`` overrides the breaker-wide per-call budget for
+        known-slow composite operations (e.g. SoCo ``Snapshot`` bundles
+        ~8-13 UPnP round-trips into one sync call). Keyword-only so it
+        can never collide with positional args destined for ``fn``; no
+        wrapped service function takes a kwarg of this name.
         """
         # Promotion + gate, atomic under the lock.
         with self._lock:
@@ -170,7 +182,9 @@ class CircuitBreaker:
 
         try:
             awaitable = fn(*args, **kwargs)
-            result = await asyncio.wait_for(awaitable, timeout=self.call_timeout)
+            result = await asyncio.wait_for(
+                awaitable, timeout=call_timeout or self.call_timeout
+            )
         except BaseException:
             with self._lock:
                 self._record_failure_locked()

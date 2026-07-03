@@ -13,6 +13,7 @@ import pytest
 
 from backend.services.automation_engine import (
     MODE_PRIORITY,
+    SOURCE_STALE_SECONDS,
     AutomationEngine,
     DaySchedule,
     _resolve_activity_state,
@@ -474,6 +475,91 @@ class TestAutonomousOverrideDisplacement:
 
         assert engine.manual_override is False
         assert engine.current_mode == "idle"
+
+
+# ---------------------------------------------------------------------------
+# Sleeping floor — non-override sleeping must survive idle sensor reports.
+# Closes flag b064a0 (2026-06-03): sleeping carries MODE_PRIORITY=0, the global
+# floor, so the priority guard can never protect it; once a manual "good night"
+# override lapsed and sleeping survived only as a detected _current_mode
+# (re-asserted by the PC sleep-watcher via source=process), an audio_ml `idle`
+# report (p=1) walked straight through and broke sleep — twice that day. Only a
+# foreground process activity report (working/watching/gaming) may now wake it.
+# ---------------------------------------------------------------------------
+
+class TestSleepingFloor:
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+
+    async def _enter_detected_sleeping(self, engine):
+        """Establish non-override sleeping (source=process, no manual override),
+        mirroring the PC sleep-watcher re-asserting sleeping after the original
+        Alexa override lapsed."""
+        await engine.report_activity("sleeping", source="process")
+        assert engine.current_mode == "sleeping"
+        assert engine.manual_override is False
+
+    async def test_audio_ml_idle_does_not_break_detected_sleeping(self, engine):
+        # The exact 2026-06-03 repro: audio_ml idle@1 vs non-override sleeping.
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("idle", source="audio_ml")
+        assert engine.current_mode == "sleeping"
+
+    async def test_ambient_idle_does_not_break_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("idle", source="ambient")
+        assert engine.current_mode == "sleeping"
+
+    async def test_camera_does_not_break_detected_sleeping(self, engine):
+        # Even a non-idle mode from a non-process source can't wake sleep —
+        # only the foreground process detector should.
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("working", source="camera")
+        assert engine.current_mode == "sleeping"
+
+    async def test_process_idle_does_not_break_detected_sleeping(self, engine):
+        # Same-source process, but idle (p==idle, not above) must not wake.
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("idle", source="process")
+        assert engine.current_mode == "sleeping"
+
+    async def test_process_working_wakes_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("working", source="process")
+        assert engine.current_mode == "working"
+
+    async def test_process_gaming_wakes_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("gaming", source="process")
+        assert engine.current_mode == "gaming"
+
+    async def test_process_watching_wakes_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity("watching", source="process")
+        assert engine.current_mode == "watching"
+
+    async def test_floor_persists_across_stale_owning_source(self, engine):
+        # Sleep must stick even if the process source that set it goes stale —
+        # the floor is deliberately NOT subject to SOURCE_STALE_SECONDS, so an
+        # idle report long after the last process heartbeat still can't wake it.
+        await self._enter_detected_sleeping(engine)
+        stale = datetime.now(tz=TZ) - timedelta(seconds=SOURCE_STALE_SECONDS + 60)
+        engine._last_mode_source_report_at["process"] = stale
+        await engine.report_activity("idle", source="audio_ml")
+        assert engine.current_mode == "sleeping"
+
+    async def test_manual_sleeping_override_unaffected_by_floor(self, engine):
+        # The floor is gated on `not manual_override`; a user/Alexa sleeping
+        # override keeps its existing (downstream) protection.
+        await engine.set_manual_override("sleeping", source="api:1.2.3.4")
+        await engine.report_activity("idle", source="audio_ml")
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
 
 
 # ---------------------------------------------------------------------------
@@ -2306,9 +2392,12 @@ class TestWatchingSleepGuard:
         engine._watching_sleep_dwell_since = (
             self.LATE_NIGHT - timedelta(seconds=self.DWELL_OFFSET_FIRES)
         )
-        # DND active for the next hour.
-        engine._dnd_enabled = True
-        engine._dnd_expiry = self.LATE_NIGHT + timedelta(hours=1)
+        # DND active for the next hour. State lives on the DndManager since
+        # the GH#86 step-2 extraction; its is_active() reads the real clock
+        # (dnd_manager module datetime isn't patched here), so anchor the
+        # expiry to real now rather than the mocked engine clock.
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
 
         await engine._evaluate_watching_sleep_guard(self.LATE_NIGHT)
 

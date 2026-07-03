@@ -622,3 +622,43 @@ class NotifierService:
             }
         await self._dispatch(payload)
         return payload
+
+    async def emit_alert(
+        self,
+        *,
+        title: str,
+        body: str,
+        kind: str = "alert",
+        force: bool = False,
+    ) -> bool:
+        """Fire an operational alert (watchdog / health) through the real
+        dispatch path — desktop toast (WS) + ntfy.sh phone push.
+
+        Unlike :meth:`emit_synthetic` (a test fire that bypasses every gate),
+        this is for real autonomous alerts, so it honors DND: a silenced
+        apartment shouldn't buzz the phone at 3am. Returns True if dispatched,
+        False if suppressed by DND. Callers own the higher-level policy
+        (dedup / edge-triggering / domain suppression) — this is the transport.
+        """
+        if not force and self._engine.is_dnd_active():
+            logger.info("Alert suppressed by DND: %s", title)
+            return False
+        mode = self._engine.current_mode
+        payload = {
+            "title": title,
+            "subtitle": body,
+            "body": body,
+            "factors": [
+                {"lane": "watchdog", "label": kind, "value": body, "impact": 1.0},
+            ],
+            "output_delta": None,
+            "mode_changed": False,
+            "brightness_shifted": False,
+            "kind": kind,
+            "old_mode": mode,
+            "new_mode": mode,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "correlation_id": str(uuid.uuid4()),
+        }
+        await self._dispatch(payload)
+        return True
