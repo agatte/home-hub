@@ -1,6 +1,6 @@
 # Codex Todo
 
-Current branch: `refactor/engine-step5-light-applicator`
+Current branch: `master`
 
 ## Status
 
@@ -12,9 +12,9 @@ Current branch: `refactor/engine-step5-light-applicator`
 - [x] Verify active LightApplicator refactor with targeted automation tests.
 - [x] Verify adjacent transit, desk-exit, and screen-sync tests.
 - [x] Commit Codex docs separately from the LightApplicator refactor.
-- [ ] Optional: port selected Claude checks into repo-native scripts or git hooks if we want automatic enforcement outside Claude.
+- [x] Ported the issue-to-test/change-scope checklist into `scripts/validate_change_scope.py` and `.githooks/pre-push` as advisory validation output.
 - [x] Define an issue-to-test checklist for future feature work.
-- [ ] Decide how to handle issue #87 after pushing/PRing this branch: comment with local validation, link PR, or close after merge.
+- [x] Closed issue #87 by merging PR #127 after local validation, CI checks, deploy, and post-deploy verification.
 
 ## Recommended Workflow
 
@@ -75,6 +75,7 @@ Default mapping:
 
 Record validation commands and results in the PR body or issue comment before
 closing an issue.
+
 ## External Claude Resources Found
 
 - `C:\Users\antho\.claude\agents\` contains 31 global agents.
