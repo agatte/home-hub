@@ -37,6 +37,15 @@ class TestHealthEndpoint:
         assert isinstance(data["devices"]["hue_bridge"], bool)
         assert isinstance(data["devices"]["sonos"], bool)
 
+    def test_fauxmo_device_reports_enabled_and_connected_state(self, client):
+        fauxmo = client.get("/health").json()["devices"]["fauxmo"]
+        assert set(fauxmo) == {"enabled", "connected", "status"}
+        assert isinstance(fauxmo["enabled"], bool)
+        assert isinstance(fauxmo["connected"], bool)
+        assert fauxmo["status"] in {"disabled", "healthy", "unhealthy"}
+        if not fauxmo["enabled"]:
+            assert fauxmo["status"] == "disabled"
+
 
 class TestApiPing:
     """Verify the minimal public-facing liveness probe."""

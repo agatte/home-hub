@@ -63,10 +63,16 @@ async def health_check(request: Request) -> dict:
     if hasattr(app.state, "pihole_service"):
         pihole_connected = app.state.pihole_service.connected
 
+    fauxmo_enabled = False
     fauxmo_connected = False
     if hasattr(app.state, "fauxmo"):
+        fauxmo_enabled = app.state.fauxmo.enabled
         fauxmo_connected = app.state.fauxmo.connected
-
+    fauxmo_status = (
+        "disabled"
+        if not fauxmo_enabled
+        else "healthy" if fauxmo_connected else "unhealthy"
+    )
     ws_count = 0
     if hasattr(app.state, "ws_manager"):
         ws_count = app.state.ws_manager.connection_count
@@ -226,7 +232,11 @@ async def health_check(request: Request) -> dict:
             "hue_bridge": hue_connected,
             "sonos": sonos_connected,
             "pihole": pihole_connected,
-            "fauxmo": fauxmo_connected,
+            "fauxmo": {
+                "enabled": fauxmo_enabled,
+                "connected": fauxmo_connected,
+                "status": fauxmo_status,
+            },
         },
         "websocket_clients": ws_count,
         "event_logger_drops": event_logger_drops,
