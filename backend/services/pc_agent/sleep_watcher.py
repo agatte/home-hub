@@ -11,6 +11,8 @@ agent in ``backend/services/pc_agent/supervisor.py``.
 """
 import logging
 import sys
+import ctypes
+import ctypes.wintypes
 import threading
 import time
 from logging.handlers import RotatingFileHandler
@@ -46,6 +48,33 @@ logger.addHandler(_file_handler)
 
 POLL_INTERVAL = 5            # Seconds between mode polls
 SLEEP_DELAY_SECONDS = 3600   # 60 minutes — hardcoded per plan
+LOCAL_INPUT_IDLE_VETO_SECONDS = 600  # 10 minutes — active keyboard/mouse vetoes suspend
+
+
+def _get_local_input_idle_seconds() -> Optional[int]:
+    """Return seconds since local keyboard/mouse input, or None if unavailable."""
+    if sys.platform != "win32":
+        return None
+
+    try:
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.wintypes.UINT),
+                ("dwTime", ctypes.wintypes.DWORD),
+            ]
+
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return None
+
+        ctypes.windll.kernel32.GetTickCount.restype = ctypes.wintypes.DWORD
+        now_tick = ctypes.windll.kernel32.GetTickCount()
+        return ((now_tick - lii.dwTime) & 0xFFFFFFFF) // 1000
+    except Exception as e:
+        logger.debug("Local input idle read failed: %s", e)
+        return None
 
 
 def _suspend_pc() -> None:
@@ -111,10 +140,27 @@ def run_agent(
                     )
                     timer_deadline = None
 
-            if timer_deadline is not None and time.time() >= timer_deadline:
-                logger.info("Sleep timer fired — suspending PC")
-                timer_deadline = None
-                _suspend_pc()
+            if timer_deadline is not None:
+                now = time.time()
+                if now >= timer_deadline:
+                    idle_seconds = _get_local_input_idle_seconds()
+                    if (
+                        idle_seconds is not None
+                        and idle_seconds < LOCAL_INPUT_IDLE_VETO_SECONDS
+                    ):
+                        timer_deadline = now + SLEEP_DELAY_SECONDS
+                        logger.info(
+                            "Sleep timer fired but local input is active "
+                            "(idle=%ds < %ds) — re-arming for %ds",
+                            idle_seconds,
+                            LOCAL_INPUT_IDLE_VETO_SECONDS,
+                            SLEEP_DELAY_SECONDS,
+                        )
+                        continue
+
+                    logger.info("Sleep timer fired — suspending PC")
+                    timer_deadline = None
+                    _suspend_pc()
                 # On resume, the next poll re-evaluates from the current mode.
                 # If user is still in sleeping (rare — they'd have woken to
                 # use it), the timer re-arms and we cycle again.

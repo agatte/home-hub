@@ -21,6 +21,7 @@ import pytest
 from backend.services.pc_agent import sleep_watcher
 from backend.services.pc_agent.sleep_watcher import (
     SLEEP_DELAY_SECONDS,
+    _get_local_input_idle_seconds,
     _fetch_mode,
     _suspend_pc,
     run_agent,
@@ -116,6 +117,19 @@ class TestFetchMode:
 
 
 # ---------------------------------------------------------------------------
+# _get_local_input_idle_seconds
+# ---------------------------------------------------------------------------
+
+
+class TestLocalInputIdleSeconds:
+    """Local input idle reads are Windows-only and optional."""
+
+    def test_non_windows_returns_none(self):
+        with patch.object(sleep_watcher.sys, "platform", "linux"):
+            assert _get_local_input_idle_seconds() is None
+
+
+# ---------------------------------------------------------------------------
 # _suspend_pc
 # ---------------------------------------------------------------------------
 
@@ -152,6 +166,7 @@ def _run_with(
     modes: list[Optional[str]],
     times: list[float],
     suspend_mock: Optional[MagicMock] = None,
+    idle_seconds: Optional[list[Optional[int]]] = None,
 ):
     """Drive ``run_agent`` for ``len(modes)`` iterations.
 
@@ -166,14 +181,16 @@ def _run_with(
     suspend_mock = suspend_mock or MagicMock()
     fetch_mock = MagicMock(side_effect=modes)
     time_mock = MagicMock(side_effect=times)
+    idle_mock = MagicMock(side_effect=idle_seconds or [None])
     stop = _FakeStopEvent(n_iterations=len(modes))
 
     with patch.object(sleep_watcher, "_fetch_mode", fetch_mock), \
          patch.object(sleep_watcher, "_suspend_pc", suspend_mock), \
+         patch.object(sleep_watcher, "_get_local_input_idle_seconds", idle_mock), \
          patch.object(sleep_watcher.time, "time", time_mock):
         run_agent("http://x", stop_event=stop)
 
-    return suspend_mock, fetch_mock, time_mock
+    return suspend_mock, fetch_mock, time_mock, idle_mock
 
 
 class TestRunAgentStateMachine:
@@ -184,7 +201,7 @@ class TestRunAgentStateMachine:
         # time.time is called twice per "armed" iteration: once to set
         # deadline, once to check fire condition. 1000 + 3600 = 4600;
         # 1001 < 4600 so no fire.
-        suspend, _, _ = _run_with(
+        suspend, _, _, _ = _run_with(
             modes=["sleeping"],
             times=[1000.0, 1001.0],
         )
@@ -194,7 +211,7 @@ class TestRunAgentStateMachine:
         # Three sleeping iterations, time advances slightly each tick.
         # Deadline=4600 (set at t=1000); subsequent checks at t=1001, 1002.
         # No fire.
-        suspend, _, _ = _run_with(
+        suspend, _, _, _ = _run_with(
             modes=["sleeping", "sleeping", "sleeping"],
             times=[1000.0, 1001.0, 1002.0, 1003.0],
         )
@@ -203,17 +220,48 @@ class TestRunAgentStateMachine:
     def test_fires_when_deadline_passes(self):
         # Iter 1 arms at t=1000; iter 2 checks at t=5000 which is past
         # the t=4600 deadline → fire.
-        suspend, _, _ = _run_with(
+        suspend, _, _, _ = _run_with(
             modes=["sleeping", "sleeping"],
             times=[1000.0, 1001.0, 5000.0],
         )
         assert suspend.call_count == 1
 
+    def test_recent_local_input_vetoes_suspend_and_rearms(self):
+        # First deadline fires at t=5000, but local input was seen 60s ago,
+        # so the watcher skips suspend and re-arms for a fresh 60 minutes.
+        # The second deadline at t=8601 sees stale input and suspends.
+        suspend, _, _, idle_mock = _run_with(
+            modes=["sleeping", "sleeping", "sleeping"],
+            times=[1000.0, 1001.0, 5000.0, 8601.0],
+            idle_seconds=[60, 1000],
+        )
+        assert suspend.call_count == 1
+        assert idle_mock.call_count == 2
+
+    def test_stale_local_input_allows_suspend(self):
+        suspend, _, _, idle_mock = _run_with(
+            modes=["sleeping", "sleeping"],
+            times=[1000.0, 1001.0, 5000.0],
+            idle_seconds=[601],
+        )
+        assert suspend.call_count == 1
+        assert idle_mock.call_count == 1
+
+    def test_unavailable_local_input_preserves_suspend_behavior(self):
+        suspend, _, _, idle_mock = _run_with(
+            modes=["sleeping", "sleeping"],
+            times=[1000.0, 1001.0, 5000.0],
+            idle_seconds=[None],
+        )
+        assert suspend.call_count == 1
+        assert idle_mock.call_count == 1
+
+
     def test_disarms_when_mode_changes(self):
         # Arm at iter 1, mode flips to working at iter 2 → disarmed.
         # Iter 3 still working — no fire even though we'd be past the
         # original deadline. Confirms the cancel actually cleared state.
-        suspend, _, _ = _run_with(
+        suspend, _, _, _ = _run_with(
             modes=["sleeping", "working", "working"],
             times=[
                 1000.0, 1001.0,  # iter 1 arms (2 calls: set + check)
@@ -230,7 +278,7 @@ class TestRunAgentStateMachine:
         # Arm at iter 1 (sleeping). Iter 2 returns None (transient backend
         # blip) — must NOT cancel the timer. Iter 3 returns sleeping again,
         # by which point time has advanced past the deadline → fire.
-        suspend, _, _ = _run_with(
+        suspend, _, _, _ = _run_with(
             modes=["sleeping", None, "sleeping"],
             times=[
                 1000.0, 1001.0,  # iter 1: set + check
@@ -245,7 +293,7 @@ class TestRunAgentStateMachine:
         # FRESH timer (the cancel cleared the old one). Since we don't
         # advance past 60 minutes in test time, no fire — but the loop
         # exits cleanly with a deadline set.
-        suspend, _, _ = _run_with(
+        suspend, _, _, _ = _run_with(
             modes=["sleeping", "working", "sleeping"],
             times=[
                 1000.0, 1001.0,  # iter 1 arm
@@ -262,7 +310,7 @@ class TestRunAgentStateMachine:
         # treating the absence of a prior arm as "user just got up."
         # First observation is "sleeping" — must arm even though there
         # was no prior non-sleeping state.
-        suspend, _, time_mock = _run_with(
+        suspend, _, time_mock, _ = _run_with(
             modes=["sleeping"],
             times=[1000.0, 1001.0],
         )
