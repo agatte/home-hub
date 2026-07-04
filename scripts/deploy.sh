@@ -62,6 +62,7 @@ fi
 
 RESTART_BACKEND=0
 RESTART_AMBIENT=0
+RESTART_LATITUDE_STREAMING=0
 RESTART_TUNNEL=0
 REBUILD_FRONTEND=0
 
@@ -77,6 +78,7 @@ if [[ -z "$LAST_DEPLOYED" ]]; then
     REBUILD_FRONTEND=1
     RESTART_BACKEND=1
     RESTART_AMBIENT=1
+    RESTART_LATITUDE_STREAMING=1
     RESTART_TUNNEL=1
 else
     echo "Deploying ${LAST_DEPLOYED:0:7} → ${NEW_HEAD:0:7}"
@@ -109,6 +111,10 @@ else
 
     if echo "$CHANGED" | grep -q "^backend/services/pc_agent/ambient_monitor\.py$"; then
         RESTART_AMBIENT=1
+    fi
+
+    if echo "$CHANGED" | grep -qE "^(backend/services/pc_agent/latitude_streaming_detector\.py|deployment/home-hub-latitude-streaming\.service)$"; then
+        RESTART_LATITUDE_STREAMING=1
     fi
 
     # Tunnel proxy is its own uvicorn process — restart when its sources
@@ -199,6 +205,9 @@ rollback() {
             systemctl --user restart home-hub-ambient.service || \
                 echo "  (ambient restart failed; main service is still healthy)"
         fi
+        if [[ "$RESTART_LATITUDE_STREAMING" == "1" ]]; then
+            restart_latitude_streaming "rollback"
+        fi
         return 0
     fi
 
@@ -207,6 +216,21 @@ rollback() {
     return 1
 }
 
+restart_latitude_streaming() {
+    local suffix="${1:-}"
+    if systemctl --user list-unit-files home-hub-latitude-streaming.service \
+            --no-pager | grep -q "home-hub-latitude-streaming.service"; then
+        if [[ -n "$suffix" ]]; then
+            echo "→ Restarting home-hub-latitude-streaming.service (${suffix})..."
+        else
+            echo "→ Restarting home-hub-latitude-streaming.service..."
+        fi
+        systemctl --user restart home-hub-latitude-streaming.service || \
+            echo "  (latitude streaming restart failed; main backend is unaffected)"
+    else
+        echo "  (home-hub-latitude-streaming.service not installed — see deployment/home-hub-latitude-streaming.service)"
+    fi
+}
 if [[ "$RESTART_BACKEND" == "1" ]]; then
     echo "→ Restarting home-hub.service..."
     systemctl --user restart home-hub.service
@@ -240,6 +264,10 @@ fi
 if [[ "$RESTART_AMBIENT" == "1" ]]; then
     echo "→ Restarting home-hub-ambient.service..."
     systemctl --user restart home-hub-ambient.service
+fi
+
+if [[ "$RESTART_LATITUDE_STREAMING" == "1" ]]; then
+    restart_latitude_streaming
 fi
 
 if [[ "$RESTART_TUNNEL" == "1" ]]; then

@@ -1,0 +1,27 @@
+# Home Hub Latitude streaming detector - systemd user unit for the Latitude
+#
+# Reports active Stremio/media playback as mode=watching using playback evidence
+# (MPRIS/PipeWire), not app-open state alone.
+#
+# Install:
+#   cp deployment/home-hub-latitude-streaming.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable home-hub-latitude-streaming.service
+#   systemctl --user start home-hub-latitude-streaming.service
+
+[Unit]
+Description=Home Hub Latitude Streaming Detector
+After=home-hub.service
+Wants=home-hub.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/home-hub
+ExecStartPre=/bin/bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
+ExecStart=%h/home-hub/venv/bin/python -m backend.services.pc_agent.latitude_streaming_detector --server http://localhost:8000
+Restart=always
+RestartSec=10
+Environment="PATH=%h/home-hub/venv/bin:/usr/bin"
+
+[Install]
+WantedBy=default.target

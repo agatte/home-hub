@@ -63,6 +63,36 @@ logger = logging.getLogger("home_hub.automation")
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 
 
+def _agent_health_origin(body: dict) -> str:
+    origin = body.get("origin") if isinstance(body, dict) else None
+    if isinstance(origin, str) and origin.strip():
+        return origin.strip().lower()
+    return "desktop"
+
+
+def _merge_agent_health_reports(reports: dict[str, dict]) -> dict:
+    """Merge per-origin agent health while preserving origin details."""
+    if not reports:
+        return {"status": "no_report", "agents": {}, "origins": {}}
+
+    origins = dict(reports)
+    desktop = origins.get("desktop") or {}
+    merged = {
+        key: value for key, value in desktop.items()
+        if key not in {"agents", "origin"}
+    }
+    agents: dict[str, dict] = {}
+    for origin, report in origins.items():
+        for name, info in (report.get("agents") or {}).items():
+            if name in agents:
+                agents[f"{origin}:{name}"] = info
+            else:
+                agents[name] = info
+    merged["agents"] = agents
+    merged["origins"] = origins
+    return merged
+
+
 @router.post("/activity", dependencies=[Depends(require_api_key)])
 async def report_activity(report: ActivityReport, request: Request) -> dict:
     """
@@ -108,26 +138,36 @@ async def get_activity(request: Request) -> dict:
 
 @router.post("/agent-health", dependencies=[Depends(require_api_key)])
 async def report_agent_health(request: Request) -> dict:
-    """Receive health heartbeat from the PC agent supervisor."""
+    """Receive health heartbeats from desktop and Latitude agents."""
     body = await request.json()
-    request.app.state.agent_health = body
-    # Feed the watchdog so it can detect silence / stuck agents and alert.
-    monitor = getattr(request.app.state, "agent_health_monitor", None)
-    if monitor is not None:
-        await monitor.record_report(body)
-    return {"status": "ok"}
+    origin = _agent_health_origin(body)
+    reports = getattr(request.app.state, "agent_health_reports", None)
+    if not isinstance(reports, dict):
+        reports = {}
+    reports[origin] = body
+    request.app.state.agent_health_reports = reports
+    request.app.state.agent_health = _merge_agent_health_reports(reports)
+
+    # The watchdog is desktop-supervisor-specific. Latitude service health is
+    # exposed in the merged payload but must not reset desktop silence timers.
+    if origin == "desktop":
+        monitor = getattr(request.app.state, "agent_health_monitor", None)
+        if monitor is not None:
+            await monitor.record_report(body)
+    return {"status": "ok", "origin": origin}
 
 
 @router.get("/agent-health")
 async def get_agent_health(request: Request) -> dict:
-    """Get the latest agent supervisor health report + watchdog freshness."""
-    health = getattr(request.app.state, "agent_health", None)
+    """Get latest agent health reports + desktop watchdog freshness."""
+    reports = getattr(request.app.state, "agent_health_reports", None)
+    if not isinstance(reports, dict):
+        legacy = getattr(request.app.state, "agent_health", None)
+        reports = {"desktop": legacy} if isinstance(legacy, dict) else {}
+    health = _merge_agent_health_reports(reports)
     monitor = getattr(request.app.state, "agent_health_monitor", None)
     watchdog = monitor.snapshot() if monitor is not None else None
-    if not health:
-        return {"status": "no_report", "agents": {}, "watchdog": watchdog}
     return {**health, "watchdog": watchdog}
-
 
 @router.get("/status")
 async def get_status(request: Request) -> AutomationStatus:
