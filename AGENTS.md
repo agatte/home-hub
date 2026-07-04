@@ -124,6 +124,19 @@ Default test mapping:
 
 Before closing or marking an issue fixed, capture the validation commands and
 results in the PR body or issue comment.
+
+### Issue Completion Default
+
+When the user asks Codex to work a GitHub issue or PR, treat the expected
+end-state as: inspect the issue/PR, implement or validate the fix, run the
+mapped tests/checks, push the branch, wait for GitHub checks where applicable,
+merge/close linked work when the fix is complete, add a concise validation
+comment, deploy runtime backend/frontend changes, and verify production health.
+
+If the issue/PR should not be merged, closed, deployed, or commented after
+validation, the user will say so up front. Otherwise, continue through the
+completion workflow without waiting for extra prompts.
+
 ## Editing Rules
 
 - Preserve user work. This repo may have active uncommitted refactors; inspect
