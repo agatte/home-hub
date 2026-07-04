@@ -1356,6 +1356,59 @@ class TestWatchingPostureRuntimeTuning:
 
 
 # ---------------------------------------------------------------------------
+# Process source device ownership — process reports from different machines
+# should not all count as the same owner. This lets fresh Latitude/TV watching
+# beat stale desktop gaming, while stale desktop work cannot demote an active
+# Latitude watching session just because both reports use source="process".
+# ---------------------------------------------------------------------------
+
+class TestProcessSourceDeviceOwnership:
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+
+    async def test_latitude_watching_displaces_stale_desktop_gaming(self, engine):
+        stale = datetime.now(tz=TZ) - timedelta(seconds=SOURCE_STALE_SECONDS + 60)
+        engine._current_mode = "gaming"
+        engine._current_game = "rust"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+        engine._last_mode_source_report_at["process:desktop"] = stale
+
+        await engine.report_activity(
+            mode="watching",
+            source="process",
+            factors=[
+                {"key": "device", "value": "latitude"},
+                {"key": "foreground_kind", "value": "media"},
+            ],
+        )
+
+        assert engine.current_mode == "watching"
+        assert engine.current_game is None
+        assert engine._mode_source_key == "process:latitude"
+
+    async def test_desktop_working_does_not_demote_fresh_latitude_watching(self, engine):
+        recent = datetime.now(tz=TZ) - timedelta(seconds=5)
+        engine._current_mode = "watching"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:latitude"
+        engine._last_mode_source_report_at["process:latitude"] = recent
+
+        await engine.report_activity(
+            mode="working",
+            source="process",
+            factors=[
+                {"key": "device", "value": "desktop"},
+                {"key": "foreground_kind", "value": "dev"},
+            ],
+        )
+
+        assert engine.current_mode == "watching"
+        assert engine._mode_source_key == "process:latitude"
+        assert engine._last_mode_source_report_at["process:desktop"] is not None
+
+# ---------------------------------------------------------------------------
 # is_at_desk_fresh — camera-aware veto helper
 # ---------------------------------------------------------------------------
 
@@ -2110,6 +2163,35 @@ class TestIsRecentProcessWorking:
     async def test_report_activity_does_not_stamp_for_idle(self, engine):
         await engine.report_activity(mode="idle", source="process")
         assert engine._last_process_working_at is None
+
+    async def test_report_activity_idle_is_vetoed_by_fresh_desk_presence(self, engine):
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=recent,
+        )
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+
+        await engine.report_activity(mode="idle", source="process")
+
+        assert engine.current_mode == "working"
+        assert engine._last_mode_source_report_at["process"] is not None
+        assert engine._idle_entered_at is None
+
+    async def test_report_activity_idle_clears_gaming_despite_fresh_desk_presence(self, engine):
+        recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+        engine._camera_service = _FakeEnabledCamera(
+            zone="desk", enabled=True, zone_committed_at=recent,
+        )
+        engine._current_mode = "gaming"
+        engine._current_game = "Hades II"
+        engine._mode_source = "process"
+
+        await engine.report_activity(mode="idle", source="process")
+
+        assert engine.current_mode == "idle"
+        assert engine.current_game is None
+        assert engine._idle_entered_at is not None
 
     async def test_report_activity_does_not_stamp_for_gaming(self, engine):
         await engine.report_activity(mode="gaming", source="process")

@@ -16,6 +16,7 @@ import ctypes.wintypes
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ from typing import Any, Callable, Optional
 import httpx
 import psutil
 
+from backend.config import settings
 from backend.services.pc_agent.game_list import (
     BROWSER_PROCESSES,
     GAME_NAME_BY_PROCESS,
@@ -127,6 +129,22 @@ NIGHT_END_HOUR = 6
 # scrolling). Walking away from the PC = idle climbs past the threshold and
 # the gaming hold releases, allowing late-night rescue / fusion to take over.
 GAMING_IDLE_THRESHOLD = 180  # seconds
+
+
+
+def _device_role() -> str:
+    """Stable activity-source role for backend source ownership decisions."""
+    configured = (
+        os.environ.get("HOME_HUB_AGENT_DEVICE")
+        or settings.HOME_HUB_AGENT_DEVICE
+        or ""
+    ).strip().lower()
+    if configured:
+        return configured
+    hostname = socket.gethostname().strip().lower()
+    if "latitude" in hostname:
+        return "latitude"
+    return "desktop"
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +780,15 @@ class ActivityDetector:
             idle_display = f"{idle_seconds // 60}m idle"
             idle_impact = 0.3
 
+        device = _device_role()
         factors: list[dict] = [
+            {
+                "key": "device",
+                "label": "Device",
+                "value": device,
+                "display": device,
+                "impact": 1.0,
+            },
             {
                 "key": "foreground",
                 "label": "Foreground",
@@ -839,9 +865,9 @@ class ActivityDetector:
                 "impact": 1.0,
             })
 
-        # Cap at 6 (was 5) so a load-bearing `game` factor (and the late-night
-        # League `champion` factor) survives alongside the base four + browser.
-        return factors[:6]
+        # Cap at 8 so the device role plus load-bearing `game` and late-night
+        # League `champion` factors survive alongside the base foreground rows.
+        return factors[:8]
 
     def close(self) -> None:
         """Release resources held by the detector (LoL HTTPS client).

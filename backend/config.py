@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # App
     APP_ENV: str = "development"
     LOCAL_IP: str = "127.0.0.1"
+    # Optional stable role for pc_agent activity reports: desktop or latitude.
+    HOME_HUB_AGENT_DEVICE: Optional[str] = None
     # Relative path from PROJECT_ROOT to the SvelteKit static build directory.
     FRONTEND_BUILD: str = "frontend-svelte/build"
 

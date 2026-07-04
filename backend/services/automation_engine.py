@@ -117,6 +117,34 @@ def _extract_game_factor(factors: Optional[list[dict]]) -> Optional[str]:
     return None
 
 
+
+def _factor_value(factors: Optional[list[dict]], key: str) -> object:
+    """Return a factor value by key, tolerating older/partial factor rows."""
+    if not factors:
+        return None
+    for factor in factors:
+        if isinstance(factor, dict) and factor.get("key") == key:
+            return factor.get("value")
+    return None
+
+
+def _activity_device(factors: Optional[list[dict]]) -> Optional[str]:
+    """Best-effort device role for a process report, e.g. desktop/latitude."""
+    value = _factor_value(factors, "device")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _activity_source_key(source: str, factors: Optional[list[dict]]) -> str:
+    """Device-qualified source key for freshness/ownership bookkeeping."""
+    device = _activity_device(factors)
+    if source == "process" and device:
+        return f"{source}:{device}"
+    return source
+
+
 class AutomationEngine:
     """
     Combines time-of-day rules and activity reports to control lights.
@@ -177,6 +205,7 @@ class AutomationEngine:
         # with _current_mode — set/cleared alongside it in report_activity.
         self._current_game: Optional[str] = None
         self._mode_source: str = "time"
+        self._mode_source_key: str = "time"
         self._manual_override: bool = False
         self._override_mode: Optional[str] = None
         self._override_source: Optional[str] = None
@@ -1068,6 +1097,8 @@ class AutomationEngine:
         if not self._enabled:
             return
 
+        source_key = _activity_source_key(source, factors)
+
         # Report to confidence fusion BEFORE mode-change guards — fusion is a
         # voting system, every signal should be heard even when it loses the
         # mode-change vote. "ambient" (RMS) aliases to the audio_ml lane.
@@ -1114,8 +1145,11 @@ class AutomationEngine:
         now = datetime.now(tz=TZ)
         current_priority = MODE_PRIORITY.get(self._current_mode, 0)
         new_priority = MODE_PRIORITY.get(mode, 0)
-        if new_priority < current_priority and source != self._mode_source:
-            last_report = self._last_mode_source_report_at.get(self._mode_source)
+        if new_priority < current_priority and source_key != self._mode_source_key:
+            last_report = self._last_mode_source_report_at.get(
+                self._mode_source_key,
+                self._last_mode_source_report_at.get(self._mode_source),
+            )
             if last_report is not None:
                 age = (now - last_report).total_seconds()
                 if age < SOURCE_STALE_SECONDS:
@@ -1128,6 +1162,7 @@ class AutomationEngine:
                     )
                     # Still update liveness for the reporting source so a fresh
                     # source doesn't age out while being guarded against.
+                    self._last_mode_source_report_at[source_key] = now
                     self._last_mode_source_report_at[source] = now
                     return
 
@@ -1159,12 +1194,31 @@ class AutomationEngine:
                 "only wakes on a foreground process activity report",
                 source, mode, new_priority,
             )
+            self._last_mode_source_report_at[source_key] = now
             self._last_mode_source_report_at[source] = now
             return
 
         # Record this source's last-seen time regardless of whether the report
         # caused a mode change. Source freshness tracks liveness, not edges.
+        self._last_mode_source_report_at[source_key] = now
         self._last_mode_source_report_at[source] = now
+
+        # Fresh desk presence is stronger evidence than a passive idle detector
+        # for desk-bound modes. Windows input can sit idle while Anthony is
+        # visibly at the desk reading, thinking, or watching. Do not apply this
+        # to gaming: if a game closes while camera presence remains fresh, the
+        # process idle report must still clear the stale gaming profile.
+        if (
+            mode == "idle"
+            and self._current_mode in {"working", "watching"}
+            and self.is_at_desk_fresh()
+        ):
+            logger.info(
+                "Desk-presence veto: ignored %s idle while %s is at desk",
+                source,
+                self._current_mode,
+            )
+            return
 
         # Stamp process-working liveness for the late-night rescue veto.
         # Updated on every confirming report, not just on mode edges, so a
@@ -1184,6 +1238,7 @@ class AutomationEngine:
         # right palette on the same report that first carries the `game` factor.
         self._current_game = _extract_game_factor(factors) if mode == "gaming" else None
         self._mode_source = source
+        self._mode_source_key = source_key
         self._last_activity = mode
         self._last_activity_change = now
 

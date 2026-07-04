@@ -284,6 +284,25 @@ class TestDetectHysteresis:
 
 
 # ---------------------------------------------------------------------------
+# Factor payload — source/device context for backend ownership policy
+# ---------------------------------------------------------------------------
+
+
+def test_build_factors_includes_configured_device_role(monkeypatch):
+    monkeypatch.setenv("HOME_HUB_AGENT_DEVICE", "latitude")
+    d = _make_detector(
+        processes={"stremio.exe"},
+        fg_proc="stremio.exe",
+        idle_seconds=0,
+    )
+
+    factors = d.build_factors()
+
+    assert factors[0]["key"] == "device"
+    assert factors[0]["value"] == "latitude"
+    assert len(factors) <= 8
+
+# ---------------------------------------------------------------------------
 # Steam discovery — installed Steam games auto-join generic gaming detection
 # ---------------------------------------------------------------------------
 
