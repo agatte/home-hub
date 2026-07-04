@@ -24,6 +24,10 @@ from backend.services.pc_agent.activity_detector import (
     DWELL_LEAVE_WORKING_NIGHT,
     GAMING_IDLE_THRESHOLD,
 )
+from backend.services.pc_agent.game_list import (
+    GAME_PROCESSES,
+    _steam_game_processes_from_library,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +74,28 @@ class TestGamingGate:
             processes={"leagueclient.exe", "firefox.exe"},
             fg_proc="firefox.exe",
             idle_seconds=GAMING_IDLE_THRESHOLD - 30,
+        )
+        assert d._classify() == "gaming"
+
+
+    def test_planet_zoo_foreground_commits_gaming(self):
+        d = _make_detector(
+            processes={"planetzoo.exe"},
+            fg_proc="planetzoo.exe",
+            idle_seconds=0,
+        )
+        assert "planetzoo.exe" in GAME_PROCESSES
+        assert d._classify() == "gaming"
+
+    def test_discovered_steam_game_commits_gaming(self, monkeypatch):
+        monkeypatch.setattr(
+            "backend.services.pc_agent.activity_detector.get_game_processes",
+            lambda: GAME_PROCESSES | {"futuregame.exe"},
+        )
+        d = _make_detector(
+            processes={"futuregame.exe"},
+            fg_proc="futuregame.exe",
+            idle_seconds=0,
         )
         assert d._classify() == "gaming"
 
@@ -255,3 +281,50 @@ class TestDetectHysteresis:
             f"45s peek should not commit a new mode under 60s default dwell, "
             f"got {committed}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Steam discovery — installed Steam games auto-join generic gaming detection
+# ---------------------------------------------------------------------------
+
+
+def test_steam_library_manifest_discovers_game_exe(tmp_path):
+    steamapps = tmp_path / "steamapps"
+    app_dir = steamapps / "common" / "Future Game"
+    app_dir.mkdir(parents=True)
+    (app_dir / "FutureGame.exe").write_text("", encoding="utf-8")
+    (app_dir / "UnityCrashHandler64.exe").write_text("", encoding="utf-8")
+    redist = app_dir / "_CommonRedist" / "vcredist"
+    redist.mkdir(parents=True)
+    (redist / "setup.exe").write_text("", encoding="utf-8")
+    (steamapps / "appmanifest_999.acf").write_text(
+        """"AppState"
+{
+    "appid" "999"
+    "name" "Future Game"
+    "installdir" "Future Game"
+}
+""",
+        encoding="utf-8",
+    )
+
+    assert _steam_game_processes_from_library(tmp_path) == {"futuregame.exe"}
+
+
+def test_steam_library_manifest_skips_redistributable_apps(tmp_path):
+    steamapps = tmp_path / "steamapps"
+    app_dir = steamapps / "common" / "Steamworks Shared"
+    app_dir.mkdir(parents=True)
+    (app_dir / "helper.exe").write_text("", encoding="utf-8")
+    (steamapps / "appmanifest_228980.acf").write_text(
+        """"AppState"
+{
+    "appid" "228980"
+    "name" "Steamworks Common Redistributables"
+    "installdir" "Steamworks Shared"
+}
+""",
+        encoding="utf-8",
+    )
+
+    assert _steam_game_processes_from_library(tmp_path) == set()

@@ -30,8 +30,8 @@ import psutil
 from backend.services.pc_agent.game_list import (
     BROWSER_PROCESSES,
     GAME_NAME_BY_PROCESS,
-    GAME_PROCESSES,
     LOL_PROCESSES,
+    get_game_processes,
     MEDIA_PROCESSES,
     WATCHING_TITLE_KEYWORDS,
     WORK_PROCESSES,
@@ -450,9 +450,10 @@ class ActivityDetector:
         # Promote to gaming only when the game is foregrounded OR input has
         # been active recently with a game running. See GAMING_IDLE_THRESHOLD
         # docstring above.
-        if processes & GAME_PROCESSES:
+        game_processes = get_game_processes()
+        if processes & game_processes:
             fg_proc, _ = self._get_foreground_window()
-            if fg_proc in GAME_PROCESSES:
+            if fg_proc in game_processes:
                 return "gaming"
             if idle_seconds < GAMING_IDLE_THRESHOLD:
                 return "gaming"
@@ -712,9 +713,8 @@ class ActivityDetector:
         back to any profiled game in the running set so a brief alt-tab to the
         desktop doesn't drop the profile mid-session. Only games in
         ``GAME_NAME_BY_PROCESS`` resolve — every other game is generic gaming.
-        ``fg_proc`` / ``processes`` are already lowercased upstream (they're
-        matched against the lowercase ``GAME_PROCESSES``), so the map lookup
-        is direct.
+        ``fg_proc`` / ``processes`` are already lowercased upstream, so the
+        map lookup is direct.
         """
         if fg_proc:
             slug = GAME_NAME_BY_PROCESS.get(fg_proc)
@@ -737,7 +737,8 @@ class ActivityDetector:
         processes = self._get_running_process_names()
 
         # Foreground bucket — what category is the current focus?
-        if fg_proc and fg_proc in GAME_PROCESSES:
+        game_processes = get_game_processes()
+        if fg_proc and fg_proc in game_processes:
             fg_kind = "game"
         elif fg_proc and fg_proc in MEDIA_PROCESSES:
             fg_kind = "media"
