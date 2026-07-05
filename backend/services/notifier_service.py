@@ -198,6 +198,14 @@ class NotifierService:
                 self._state.last_brightness = brightness
                 return
 
+            # Brightness-only changes are too noisy for push/desktop surfaces.
+            # Learned brightness preference prompts still go through
+            # emit_suggestion(), which bypasses this generic state-change path.
+            if brightness_shifted and not mode_changed:
+                self._state.last_mode = mode
+                self._state.last_brightness = brightness
+                return
+
             # Coalesce burst events. A mode flip + brightness shift within
             # the same poll cycle are one "change" — fire once.
             if now - self._state.last_emit_at < COALESCE_WINDOW_S:
@@ -209,7 +217,7 @@ class NotifierService:
 
             # User-initiated mode flips don't get notified — Anthony pressed
             # the button; he doesn't need a toast telling him what he just did.
-            if mode_changed and not brightness_shifted:
+            if mode_changed:
                 source = (self._engine.mode_source or "").strip()
                 if (
                     source in USER_INITIATED_SOURCES

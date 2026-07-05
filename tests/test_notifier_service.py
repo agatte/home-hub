@@ -139,6 +139,21 @@ async def test_user_initiated_mode_change_suppressed(notifier, ws, engine):
 
 
 @pytest.mark.asyncio
+async def test_user_initiated_mode_change_with_brightness_suppressed(
+    notifier, ws, engine,
+):
+    await notifier._maybe_emit(reason="poll")
+    engine.current_mode = "cooking"
+    engine.mode_source = "api:192.168.1.30"
+    for state in engine._last_applied_per_light.values():
+        state["bri"] = 70
+
+    await notifier._maybe_emit(reason="mode_change")
+
+    assert ws.calls == []
+
+
+@pytest.mark.asyncio
 async def test_manual_source_suppressed(notifier, ws, engine):
     await notifier._maybe_emit(reason="poll")
     engine.current_mode = "social"
@@ -148,8 +163,8 @@ async def test_manual_source_suppressed(notifier, ws, engine):
 
 
 @pytest.mark.asyncio
-async def test_brightness_shift_above_threshold_fires(notifier, ws, engine):
-    """A 20% brightness drop on the per-light state fires."""
+async def test_brightness_shift_above_threshold_skipped(notifier, ws, engine):
+    """A brightness-only drop does not fire a generic notification."""
     await notifier._maybe_emit(reason="poll")  # seed at bri=127 avg
 
     # Drop all brightness by ~40% — should easily clear the 15% threshold.
@@ -157,13 +172,8 @@ async def test_brightness_shift_above_threshold_fires(notifier, ws, engine):
         state["bri"] = 70
     await notifier._maybe_emit(reason="poll")
 
-    assert len(ws.calls) == 1
-    msg_type, payload = ws.calls[0]
-    assert msg_type == "notification"
-    assert payload["brightness_shifted"] is True
-    assert payload["mode_changed"] is False
-    assert "dimmer" in payload["title"]
-    assert payload["output_delta"] is not None
+    assert ws.calls == []
+    assert notifier._state.last_brightness < 0.3
 
 
 @pytest.mark.asyncio

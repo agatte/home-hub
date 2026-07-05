@@ -133,6 +133,35 @@ async def dismiss_suggestion(request: Request) -> dict:
 
 
 # ---------------------------------------------------------------------------
+
+@router.post("/suggestion/accept/{sid}", dependencies=[Depends(require_api_key)])
+async def accept_suggestion_by_id(sid: int, request: Request) -> dict:
+    """Accept a specific pending mode suggestion and apply it."""
+    service = _get_service(request)
+    remote = getattr(request.client, "host", None) or "unknown"
+    suggestion = await service.accept_suggestion_by_id(sid, remote=remote)
+    if not suggestion:
+        raise HTTPException(
+            status_code=410, detail="suggestion no longer pending",
+        )
+
+    automation = request.app.state.automation
+    await automation.set_manual_override(
+        suggestion["predicted_mode"], source=f"rule_suggestion_accept:{remote}",
+    )
+    return {"status": "ok", "applied_mode": suggestion["predicted_mode"]}
+
+
+@router.post("/suggestion/dismiss/{sid}", dependencies=[Depends(require_api_key)])
+async def dismiss_suggestion_by_id(sid: int, request: Request) -> dict:
+    """Dismiss a specific pending mode suggestion. Idempotent for callers."""
+    service = _get_service(request)
+    remote = getattr(request.client, "host", None) or "unknown"
+    await service.dismiss_suggestion_by_id(sid, remote=remote)
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Brightness-kind suggestions — addressable by id (ntfy.sh action targets
 # need a stable URL per suggestion, can't always read "latest pending").
 # ---------------------------------------------------------------------------

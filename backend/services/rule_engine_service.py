@@ -421,7 +421,10 @@ class RuleEngineService:
         try:
             async with async_session() as session:
                 prior_pending = (await session.execute(
-                    select(RuleSuggestion).where(RuleSuggestion.status == "pending")
+                    select(RuleSuggestion).where(
+                        RuleSuggestion.status == "pending",
+                        RuleSuggestion.kind == "mode",
+                    )
                 )).scalars().all()
 
                 new_row = RuleSuggestion(
@@ -432,6 +435,7 @@ class RuleEngineService:
                     sample_count=int(rule.sample_count),
                     current_mode_at_fire=current_mode,
                     status="pending",
+                    kind="mode",
                 )
                 session.add(new_row)
                 await session.flush()  # populate new_row.id
@@ -466,6 +470,37 @@ class RuleEngineService:
         self._last_suggestion = suggestion
 
         await self._ws_manager.broadcast("mode_suggestion", suggestion)
+        if self._notifier:
+            try:
+                accept_url = (
+                    f"{self._public_base_url}"
+                    f"/api/rules/suggestion/accept/{new_id}"
+                )
+                dismiss_url = (
+                    f"{self._public_base_url}"
+                    f"/api/rules/suggestion/dismiss/{new_id}"
+                )
+                await self._notifier.emit_suggestion(
+                    suggestion_id=new_id,
+                    title="Mode suggestion",
+                    body=suggestion["message"],
+                    accept_url=accept_url,
+                    dismiss_url=dismiss_url,
+                    api_key=self._api_key,
+                    extra={
+                        "kind": "suggestion",
+                        "suggestion_kind": "mode",
+                        "predicted_mode": rule.predicted_mode,
+                        "confidence": pct,
+                        "sample_count": rule.sample_count,
+                        "rule_id": rule.id,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "NotifierService.emit_suggestion failed for mode sid=%d",
+                    new_id,
+                )
         logger.info(
             "Rule nudge: %s at day=%d hour=%d (%d%% confidence) suggestion_id=%d",
             rule.predicted_mode, day, hour, pct, new_id,
@@ -550,6 +585,25 @@ class RuleEngineService:
             broadcast_dismiss=False,
         )
 
+    async def accept_suggestion_by_id(
+        self,
+        suggestion_id: int,
+        remote: str = "unknown",
+    ) -> Optional[dict[str, Any]]:
+        """Accept one specific pending mode suggestion by id.
+
+        Desktop notification buttons are long-lived enough that "latest
+        pending" is the wrong target: a newer nudge could supersede the row
+        after the toast was shown. This method resolves only the row the
+        button was created for.
+        """
+        return await self._resolve_suggestion_by_id(
+            suggestion_id=suggestion_id,
+            new_status="accepted",
+            resolved_source=f"user_accept:{remote}",
+            broadcast_dismiss=False,
+        )
+
     async def dismiss_suggestion(self, remote: str = "unknown") -> Optional[dict[str, Any]]:
         """Dismiss the latest pending suggestion. DB-backed; idempotent.
 
@@ -557,6 +611,19 @@ class RuleEngineService:
         actually resolved — UI's optimistic dismiss should always settle.
         """
         return await self._resolve_pending(
+            new_status="dismissed",
+            resolved_source=f"user_dismiss:{remote}",
+            broadcast_dismiss=True,
+        )
+
+    async def dismiss_suggestion_by_id(
+        self,
+        suggestion_id: int,
+        remote: str = "unknown",
+    ) -> Optional[dict[str, Any]]:
+        """Dismiss one specific pending mode suggestion by id."""
+        return await self._resolve_suggestion_by_id(
+            suggestion_id=suggestion_id,
             new_status="dismissed",
             resolved_source=f"user_dismiss:{remote}",
             broadcast_dismiss=True,
@@ -894,7 +961,10 @@ class RuleEngineService:
         async with async_session() as session:
             latest = (await session.execute(
                 select(RuleSuggestion)
-                .where(RuleSuggestion.status == "pending")
+                .where(
+                    RuleSuggestion.status == "pending",
+                    RuleSuggestion.kind == "mode",
+                )
                 .order_by(RuleSuggestion.fired_at.desc())
                 .limit(1)
             )).scalar_one_or_none()
@@ -926,6 +996,59 @@ class RuleEngineService:
 
         if broadcast_dismiss:
             await self._ws_manager.broadcast("mode_suggestion_dismissed", {})
+
+        return resolved_dict
+
+    async def _resolve_suggestion_by_id(
+        self,
+        *,
+        suggestion_id: int,
+        new_status: str,
+        resolved_source: str,
+        broadcast_dismiss: bool,
+    ) -> Optional[dict[str, Any]]:
+        """Shared id-addressed mode suggestion accept/dismiss path."""
+        now_utc = datetime.now(timezone.utc)
+        async with async_session() as session:
+            row = (await session.execute(
+                select(RuleSuggestion).where(
+                    RuleSuggestion.id == suggestion_id,
+                    RuleSuggestion.kind == "mode",
+                    RuleSuggestion.status == "pending",
+                )
+            )).scalar_one_or_none()
+
+            resolved_dict: Optional[dict[str, Any]] = None
+            if row is not None:
+                result = await session.execute(
+                    update(RuleSuggestion)
+                    .where(
+                        RuleSuggestion.id == suggestion_id,
+                        RuleSuggestion.kind == "mode",
+                        RuleSuggestion.status == "pending",
+                    )
+                    .values(
+                        status=new_status,
+                        resolved_at=now_utc,
+                        resolved_source=resolved_source,
+                    )
+                )
+                await session.commit()
+                if result.rowcount > 0:
+                    resolved_dict = _suggestion_to_dict(row, override={
+                        "status": new_status,
+                        "resolved_at": now_utc,
+                        "resolved_source": resolved_source,
+                    })
+
+        cached_id = (self._last_suggestion or {}).get("suggestion_id")
+        if resolved_dict is not None and cached_id == suggestion_id:
+            self._last_suggestion = None
+
+        if broadcast_dismiss:
+            await self._ws_manager.broadcast(
+                "mode_suggestion_dismissed", {"id": suggestion_id},
+            )
 
         return resolved_dict
 
@@ -981,7 +1104,10 @@ class RuleEngineService:
         async with async_session() as session:
             latest = (await session.execute(
                 select(RuleSuggestion)
-                .where(RuleSuggestion.status == "pending")
+                .where(
+                    RuleSuggestion.status == "pending",
+                    RuleSuggestion.kind == "mode",
+                )
                 .order_by(RuleSuggestion.fired_at.desc())
                 .limit(1)
             )).scalar_one_or_none()
@@ -1008,6 +1134,7 @@ class RuleEngineService:
         }
         self._last_suggestion = suggestion
         await self._ws_manager.broadcast("mode_suggestion", suggestion)
+
         logger.info(
             "Restored pending suggestion %d (%s) on boot",
             latest.id, latest.predicted_mode,
@@ -1033,7 +1160,10 @@ class RuleEngineService:
         async with async_session() as session:
             latest = (await session.execute(
                 select(RuleSuggestion)
-                .where(RuleSuggestion.status == "pending")
+                .where(
+                    RuleSuggestion.status == "pending",
+                    RuleSuggestion.kind == "mode",
+                )
                 .order_by(RuleSuggestion.fired_at.desc())
                 .limit(1)
             )).scalar_one_or_none()

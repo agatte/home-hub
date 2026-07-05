@@ -27,6 +27,14 @@ class MockWS:
         self.broadcasts.append((msg_type, data))
 
 
+class MockNotifier:
+    def __init__(self):
+        self.suggestions = []
+
+    async def emit_suggestion(self, **kwargs):
+        self.suggestions.append(kwargs)
+
+
 @pytest.fixture
 async def db_and_service(monkeypatch):
     """In-memory DB with predictable activity events + RuleEngineService."""
@@ -46,8 +54,6 @@ async def db_and_service(monkeypatch):
     )
 
     now = datetime.now(timezone.utc)
-    local_now = now.astimezone(TZ)
-
     async with session_factory() as session:
         # Strong pattern: gaming on current weekday at current hour (5 events)
         for i in range(5):
@@ -248,6 +254,47 @@ class TestRuleChecking:
         suggestions = [b for b in ws.broadcasts if b[0] == "mode_suggestion"]
         assert len(suggestions) >= 1
 
+    async def test_mode_suggestion_emits_actionable_notification(self, db_and_service):
+        _, service, _, session_factory = db_and_service
+        notifier = MockNotifier()
+        service.set_brightness_suggestion_deps(
+            notifier_service=notifier,
+            api_key="test-key",
+            public_base_url="http://homehub.test",
+        )
+
+        now = datetime.now(TZ)
+        async with session_factory() as session:
+            from sqlalchemy import delete
+            await session.execute(
+                delete(LearnedRule).where(
+                    LearnedRule.day_of_week == now.weekday(),
+                    LearnedRule.hour == now.hour,
+                )
+            )
+            session.add(LearnedRule(
+                day_of_week=now.weekday(), hour=now.hour,
+                predicted_mode="working", confidence=0.90, sample_count=12,
+            ))
+            await session.commit()
+
+        result = await service.check_rules("idle")
+
+        assert result is not None
+        assert len(notifier.suggestions) == 1
+        payload = notifier.suggestions[0]
+        assert payload["suggestion_id"] == result["suggestion_id"]
+        assert payload["title"] == "Mode suggestion"
+        assert payload["accept_url"].endswith(
+            f"/api/rules/suggestion/accept/{result['suggestion_id']}"
+        )
+        assert payload["dismiss_url"].endswith(
+            f"/api/rules/suggestion/dismiss/{result['suggestion_id']}"
+        )
+        assert payload["api_key"] == "test-key"
+        assert payload["extra"]["suggestion_kind"] == "mode"
+        assert payload["extra"]["predicted_mode"] == "working"
+
     async def test_no_suggestion_when_active(self, db_and_service):
         _, service, _, _ = db_and_service
         result = await service.check_rules("gaming")
@@ -392,12 +439,66 @@ class TestSuggestions:
         """Second click loses the race (rowcount=0) → None (route maps to 410)."""
         _, service, _, session_factory = db_and_service
         rule_id = await _seed_rule(session_factory)
-        sug_id = await _seed_pending(session_factory, rule_id)
+        await _seed_pending(session_factory, rule_id)
 
         first = await service.accept_suggestion(remote="1.2.3.4")
         assert first is not None
         second = await service.accept_suggestion(remote="1.2.3.4")
         assert second is None  # already accepted; no pending row to find
+
+    async def test_accept_by_id_resolves_exact_pending_mode_suggestion(self, db_and_service):
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory, predicted_mode="working")
+        older_id = await _seed_pending(
+            session_factory,
+            rule_id,
+            predicted_mode="gaming",
+            fired_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        newer_id = await _seed_pending(
+            session_factory,
+            rule_id,
+            predicted_mode="working",
+        )
+        service._last_suggestion = {
+            "suggestion_id": newer_id,
+            "predicted_mode": "working",
+        }
+
+        result = await service.accept_suggestion_by_id(older_id, remote="1.2.3.4")
+
+        assert result is not None
+        assert result["id"] == older_id
+        assert result["predicted_mode"] == "gaming"
+        assert result["status"] == "accepted"
+        assert service.last_suggestion is not None
+        assert service.last_suggestion["suggestion_id"] == newer_id
+
+        latest = await service.get_latest_pending()
+        assert latest is not None
+        assert latest["id"] == newer_id
+
+    async def test_accept_by_id_ignores_superseded_or_wrong_kind(self, db_and_service):
+        _, service, _, session_factory = db_and_service
+        rule_id = await _seed_rule(session_factory)
+        mode_id = await _seed_pending(session_factory, rule_id)
+        async with session_factory() as session:
+            row = await session.get(RuleSuggestion, mode_id)
+            row.status = "superseded"
+            session.add(RuleSuggestion(
+                rule_id=None,
+                predicted_mode="working",
+                confidence=0.8,
+                sample_count=8,
+                current_mode_at_fire="working",
+                status="pending",
+                kind="brightness",
+                payload='{"light_id":"1"}',
+            ))
+            await session.commit()
+
+        assert await service.accept_suggestion_by_id(mode_id) is None
+        assert await service.get_latest_pending() is None
 
     async def test_dismiss_clears_and_broadcasts(self, db_and_service):
         _, service, ws, session_factory = db_and_service
