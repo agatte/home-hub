@@ -223,6 +223,30 @@ async def test_period_keyed_caps_take_precedence():
     assert evening_bri <= 95
 
 
+
+
+@pytest.mark.asyncio
+async def test_watching_desk_night_dark_frame_gets_small_floor_lift():
+    """Desk watching should not let dark frames drag L2 to projector-dim levels."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    for _ in range(30):
+        await sync.apply_color("2", 0, 0, 0, mode="watching", period="night")
+    non_desk = hue.last_for("2")["bri"]
+
+    hue2 = _FakeHue()
+    sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
+    for _ in range(30):
+        await sync2.apply_color(
+            "2", 0, 0, 0, mode="watching", zone="desk", period="night",
+        )
+    desk = hue2.last_for("2")["bri"]
+
+    assert 14 <= non_desk <= 16
+    assert 43 <= desk <= 47
+    assert desk > non_desk
+
 @pytest.mark.asyncio
 async def test_late_night_floor_drop_for_l2():
     """L2's late_night floor drops to 110 so dark scenes can dim past the

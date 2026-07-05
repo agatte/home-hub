@@ -48,6 +48,11 @@ async def _run_migrations(conn) -> None:
     # rows folds to "any" at retrain time.
     if "weather_class" not in la_cols:
         await conn.execute(text("ALTER TABLE light_adjustments ADD COLUMN weather_class TEXT"))
+    # 2026-07-05: presence context for zone-aware LightingLearner buckets.
+    # NULL on existing rows means legacy/generic preference history.
+    for col in ("zone_at_time", "posture_at_time"):
+        if col not in la_cols:
+            await conn.execute(text(f"ALTER TABLE light_adjustments ADD COLUMN {col} TEXT"))
 
     # Camera + audio context columns on activity_events (predictor enrichment)
     result = await conn.execute(text("PRAGMA table_info(activity_events)"))

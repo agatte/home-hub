@@ -198,6 +198,8 @@ class LightAdjustment(Base):
     ct_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ct_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    zone_at_time: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    posture_at_time: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # trigger: "ws", "rest", "scene", "automation", "all_lights"
     trigger: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     # weather_class: classify_for_bandit() output captured at adjustment time.

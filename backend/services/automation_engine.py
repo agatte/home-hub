@@ -768,17 +768,15 @@ class AutomationEngine:
         weak-face Latitude chair-back FP no longer hides Anthony when the
         desktop sees him head-on.
         """
-        # Prefer PresenceFusion when wired — it's the source-aware path.
+        # Prefer PresenceFusion when wired — it is the source-aware path.
         # Fall back to direct camera reading for boot-time / test paths
-        # where the fusion layer isn't built yet.
+        # where the fusion layer is not built yet.
         presence = self._presence_fusion
         if presence is not None:
             return presence.is_at_desk_fresh(ZONE_POSTURE_FRESHNESS_SECONDS)
-        camera = self._camera_service
-        if camera is None or not getattr(camera, "enabled", False):
-            return False
-        zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
+        zone, _ = self._current_zone_posture()
         return zone == "desk"
+
 
     def is_present_in_room(self) -> bool:
         """True iff a presence source shows the user is visibly here right now.
@@ -970,6 +968,22 @@ class AutomationEngine:
             return False
         return True
 
+    def _current_zone_posture(self) -> tuple[Optional[str], Optional[str]]:
+        """Return the freshest fused zone/posture, falling back to camera state."""
+        presence = self._presence_fusion
+        if presence is not None:
+            try:
+                return presence.latest_zone(), presence.latest_posture()
+            except Exception:
+                pass
+        camera = self._camera_service
+        zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
+        posture = self._fresh_camera_attr(
+            camera, "posture", "posture_committed_at"
+        )
+        return zone, posture
+
+
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
@@ -979,11 +993,7 @@ class AutomationEngine:
         freshness gate handled by ``_fresh_camera_attr``), then hands
         primitives to the pure calculator function.
         """
-        camera = self._camera_service
-        zone = self._fresh_camera_attr(camera, "zone", "zone_committed_at")
-        posture = self._fresh_camera_attr(
-            camera, "posture", "posture_committed_at"
-        )
+        zone, posture = self._current_zone_posture()
         l1_night = (
             getattr(self, "_bed_reclined_l1_night", None)
             or BED_RECLINED_L1_NIGHT_DEFAULT
@@ -2124,8 +2134,9 @@ class AutomationEngine:
                 weather_for_overlay = (
                     self._get_current_weather_condition() or "any"
                 )
+                zone_for_overlay, _ = self._current_zone_posture()
                 overlay = lighting_learner.get_overlay(
-                    mode, period, weather_for_overlay,
+                    mode, period, weather_for_overlay, zone=zone_for_overlay,
                 )
                 if overlay:
                     deltas: dict[str, dict] = {}

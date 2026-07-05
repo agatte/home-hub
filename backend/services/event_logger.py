@@ -53,6 +53,7 @@ class EventLogger:
         # light_adjustments with weather_class at adjustment time. Late-bound
         # via set_weather_service for the same boot-order reason.
         self._weather_service = weather_service
+        self._presence_fusion = None
         # Cumulative events dropped by family — both DB-error drops and
         # queue-overflow drops accumulate here so /health shows total loss.
         self._drop_count: dict[str, int] = {
@@ -104,6 +105,10 @@ class EventLogger:
     def set_weather_service(self, weather_service) -> None:
         """Inject the weather service (called from lifespan after weather starts)."""
         self._weather_service = weather_service
+
+    def set_presence_fusion(self, presence_fusion) -> None:
+        """Inject PresenceFusion for light-adjustment context enrichment."""
+        self._presence_fusion = presence_fusion
 
     def _resolve_weather_class(self) -> Optional[str]:
         """Return classify_for_bandit() of the cached observation, or None.
@@ -285,6 +290,8 @@ class EventLogger:
         mode_at_time: Optional[str] = None,
         trigger: Optional[str] = None,
         weather_class: Optional[str] = None,
+        zone_at_time: Optional[str] = None,
+        posture_at_time: Optional[str] = None,
     ) -> None:
         """Record a light change issued from the dashboard or an API client.
 
@@ -310,6 +317,8 @@ class EventLogger:
 
         if weather_class is None:
             weather_class = self._resolve_weather_class()
+        if zone_at_time is None and posture_at_time is None:
+            zone_at_time, posture_at_time = self._snapshot_presence_context()
 
         async def _write(session) -> None:
             session.add(LightAdjustment(
@@ -324,11 +333,23 @@ class EventLogger:
                 ct_before=ct_before,
                 ct_after=ct_after,
                 mode_at_time=mode_at_time,
+                zone_at_time=zone_at_time,
+                posture_at_time=posture_at_time,
                 trigger=trigger,
                 weather_class=weather_class,
             ))
 
         await self._write("light", _write)
+
+    def _snapshot_presence_context(self) -> tuple[Optional[str], Optional[str]]:
+        """Read current fused zone/posture for light-adjustment learning."""
+        presence = self._presence_fusion
+        if presence is None:
+            return None, None
+        try:
+            return presence.latest_zone(), presence.latest_posture()
+        except Exception:  # pragma: no cover - defensive enrichment path
+            return None, None
 
     async def log_scene_activation(
         self,

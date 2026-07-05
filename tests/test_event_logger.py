@@ -200,6 +200,43 @@ async def test_skipped_no_change_light_adjustment_does_not_touch_db():
     assert calls["n"] == 0
 
 
+
+
+class _FakePresenceFusion:
+    def __init__(self, zone=None, posture=None) -> None:
+        self._zone = zone
+        self._posture = posture
+
+    def latest_zone(self):
+        return self._zone
+
+    def latest_posture(self):
+        return self._posture
+
+
+@pytest.mark.asyncio
+async def test_log_light_adjustment_enriches_with_presence_context(ml_db):
+    """Manual light rows carry fused zone/posture for zone-aware learning."""
+    from sqlalchemy import select as sa_select
+
+    from backend.models import LightAdjustment
+
+    el = EventLogger()
+    el.set_presence_fusion(_FakePresenceFusion(zone="desk", posture="upright"))
+
+    await el.log_light_adjustment(
+        light_id="2",
+        bri_before=40,
+        bri_after=70,
+        mode_at_time="watching",
+        trigger="ws",
+    )
+
+    async with ml_db() as session:
+        row = (await session.execute(sa_select(LightAdjustment))).scalar_one()
+    assert row.zone_at_time == "desk"
+    assert row.posture_at_time == "upright"
+
 # ---------------------------------------------------------------------------
 # Enrichment — camera + audio context on activity_events rows
 # ---------------------------------------------------------------------------

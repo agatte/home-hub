@@ -170,6 +170,7 @@ async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
                 time_period=payload["period"],
                 weather_class=payload["weather_class"],
                 bri=int(payload["suggested_bri"]),
+                zone_at_time=payload.get("zone_at_time"),
             )
         except Exception as exc:
             # Resolution row is already accepted; surface a 500 so the

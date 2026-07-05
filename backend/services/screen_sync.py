@@ -121,6 +121,15 @@ MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
 # late_night (matching the existing floor), so without a matching floor drop
 # the dynamic range becomes a single point. 110 lets late-night dark scenes
 # actually dim L2 toward its late_night static baseline.
+# Desk-watching needs a small dark-frame floor so videos remain comfortable
+# at the monitor without turning projector/bed watching into working mode.
+MODE_ZONE_MIN_BRIGHTNESS: dict[tuple[str, str, str, str], int] = {
+    ("watching", "desk", "night",      "2"): 45,
+    ("watching", "desk", "late_night", "2"): 35,
+    ("watching", "desk", "night",      "5"): 24,
+    ("watching", "desk", "late_night", "5"): 20,
+}
+
 MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
     ("gaming", "late_night", "2"): 110,
     # Day-specific floors 2026-06-02 (curator): blinds-closed "day" is the dim
@@ -343,7 +352,9 @@ class ScreenSyncService:
         self,
         mode: str,
         light_id: str,
-        period: Optional[str],
+        zone: Optional[str] = None,
+        posture: Optional[str] = None,
+        period: Optional[str] = None,
         lux_multiplier: float = 1.0,
         weather_condition: Optional[str] = None,
     ) -> int:
@@ -357,11 +368,19 @@ class ScreenSyncService:
         payoff: dark content no longer drags L2 down to fabric-shade dimness
         when the bedroom itself is dark.
         """
+        if zone is not None and period is not None:
+            floor = MODE_ZONE_MIN_BRIGHTNESS.get((mode, zone, period, light_id))
+            if floor is not None:
+                return self._scale_for_ambient(
+                    floor, mode, period, lux_multiplier, weather_condition,
+                    light_id,
+                )
         if period is not None:
             floor = MODE_MIN_BRIGHTNESS_PERIOD.get((mode, period, light_id))
             if floor is not None:
                 return self._scale_for_ambient(
-                    floor, mode, period, lux_multiplier, weather_condition, light_id,
+                    floor, mode, period, lux_multiplier, weather_condition,
+                    light_id,
                 )
         base = MODE_MIN_BRIGHTNESS.get((mode, light_id), MIN_BRIGHTNESS)
         return self._scale_for_ambient(
@@ -498,7 +517,8 @@ class ScreenSyncService:
             lux_multiplier, weather_condition,
         )
         min_bri = self.get_floor(
-            mode, light_id, period, lux_multiplier, weather_condition,
+            mode, light_id, zone=zone, posture=posture, period=period,
+            lux_multiplier=lux_multiplier, weather_condition=weather_condition,
         )
         sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
         luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)

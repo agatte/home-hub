@@ -105,6 +105,22 @@ class TestGetOverlay:
         assert learner.get_overlay("working", "day", "rain") == {"1": {"bri": 180}}
 
 
+    def test_zone_specific_overrides_generic_only_when_zone_matches(self, learner):
+        learner._preferences = {
+            "watching:night:any": {"2": {"bri": 38}},
+            "watching:night:any:desk": {"2": {"bri": 90}},
+            "watching:night:rain:desk": {"2": {"bri": 120}},
+        }
+
+        assert learner.get_overlay("watching", "night") == {"2": {"bri": 38}}
+        assert learner.get_overlay(
+            "watching", "night", zone="desk",
+        ) == {"2": {"bri": 90}}
+        assert learner.get_overlay(
+            "watching", "night", "rain", zone="desk",
+        ) == {"2": {"bri": 120}}
+
+
 class TestHasWeatherPref:
     def test_empty_when_no_weather_bucket(self, learner):
         learner._preferences = {"working:day:any": {"1": {"bri": 180}}}
@@ -215,6 +231,27 @@ class TestRecalculate:
         assert "1" in learner._preferences["working:day:thunderstorm"]
         # The "any" baseline shouldn't appear — 3 samples < MIN_ADJUSTMENTS.
         assert "working:day:any" not in learner._preferences
+
+    async def test_zone_specific_bucket_after_recalc(self, learner, ml_db):
+        async with ml_db() as session:
+            for _ in range(MIN_ADJUSTMENTS):
+                session.add(_make_adjustment(
+                    mode="watching", hour=2, bri_after=35,
+                ))
+            for i in range(MIN_ADJUSTMENTS):
+                session.add(_make_adjustment(
+                    mode="watching", hour=2, bri_after=85 + i,
+                    zone_at_time="desk", posture_at_time="upright",
+                ))
+            await session.commit()
+
+        await learner.recalculate()
+
+        generic = learner.get_overlay("watching", "night")
+        desk = learner.get_overlay("watching", "night", zone="desk")
+        assert generic["1"]["bri"] < desk["1"]["bri"]
+        assert "watching:night:any:desk" in learner._preferences
+
 
     async def test_weather_specific_overrides_any_after_recalc(
         self, learner, ml_db,
@@ -357,8 +394,46 @@ class TestScanForSuggestions:
         assert s["light_id"] == "1"
         assert s["mode"] == "working"
         assert s["weather_class"] == "thunderstorm"
+        assert s["zone_at_time"] is None
         assert 208 <= s["suggested_bri"] <= 215
         assert s["sample_count"] == 3
+
+    async def test_zone_context_included_in_candidate(self, learner, ml_db):
+        async with ml_db() as session:
+            for v in (70, 72, 74):
+                session.add(self._recent_adjustment(
+                    mode_at_time="watching",
+                    bri_after=v,
+                    weather_class="clear",
+                    zone_at_time="desk",
+                    posture_at_time="upright",
+                ))
+            await session.commit()
+        suggestions = await learner.scan_for_suggestions()
+        assert len(suggestions) == 1
+        assert suggestions[0]["zone_at_time"] == "desk"
+
+    async def test_zone_candidate_not_deduped_by_generic_weather_pref(
+        self, learner, ml_db,
+    ):
+        learner._preferences = {
+            "watching:day:clear": {"1": {"bri": 110}},
+        }
+        async with ml_db() as session:
+            for v in (70, 72, 74):
+                session.add(self._recent_adjustment(
+                    mode_at_time="watching",
+                    bri_after=v,
+                    weather_class="clear",
+                    zone_at_time="desk",
+                    posture_at_time="upright",
+                ))
+            await session.commit()
+
+        suggestions = await learner.scan_for_suggestions()
+
+        assert len(suggestions) == 1
+        assert suggestions[0]["zone_at_time"] == "desk"
 
     async def test_high_variance_rejected(self, learner, ml_db):
         async with ml_db() as session:

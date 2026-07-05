@@ -585,6 +585,7 @@ class RuleEngineService:
         mode = candidate["mode"]
         period = candidate["period"]
         weather = candidate["weather_class"]
+        zone = candidate.get("zone_at_time")
 
         async with async_session() as session:
             # Deduplicate against pending rows for the same bucket.
@@ -606,6 +607,7 @@ class RuleEngineService:
                     and parsed.get("mode") == mode
                     and parsed.get("period") == period
                     and parsed.get("weather_class") == weather
+                    and parsed.get("zone_at_time") == zone
                 ):
                     return None  # already pending — don't double-emit
 

@@ -106,44 +106,39 @@ class LightingPreferenceLearner(HealthTrackable):
         mode: str,
         time_period: str,
         weather_class: str = WEATHER_ANY,
+        zone: Optional[str] = None,
     ) -> Optional[dict[str, dict]]:
-        """Return learned per-light values for a mode + period + weather, or None.
-
-        Looks up the weather-specific bucket first, then falls back to the
-        ``WEATHER_ANY`` bucket so legacy (pre-weather) learned values keep
-        applying during the transition. Per-light entries from the specific
-        bucket override the "any" entries for overlapping lights.
-
-        The returned dict maps light_id → {property: value}, matching
-        the structure inside ``ACTIVITY_LIGHT_STATES``.
-
-        Example return::
-
-            {"1": {"bri": 180}, "2": {"bri": 150, "ct": 300}}
-        """
+        """Return learned per-light values for a mode + period + context."""
         try:
-            specific = self._preferences.get(
-                f"{mode}:{time_period}:{weather_class}",
-            )
-            generic = self._preferences.get(
-                f"{mode}:{time_period}:{WEATHER_ANY}",
-            )
+            weather = weather_class or WEATHER_ANY
+            keys = [self._slot_key(mode, time_period, WEATHER_ANY)]
+            if weather != WEATHER_ANY:
+                keys.append(self._slot_key(mode, time_period, weather))
+            if zone:
+                keys.append(self._slot_key(mode, time_period, WEATHER_ANY, zone))
+                if weather != WEATHER_ANY:
+                    keys.append(self._slot_key(mode, time_period, weather, zone))
         except Exception as exc:
             self._track_predict(False, exc)
             logger.warning("Lighting overlay lookup failed: %s", exc)
             return None
         self._track_predict(True)
-        if not specific and not generic:
-            return None
-        # Merge: generic ("any") is the floor, specific overrides per-light.
+
         merged: dict[str, dict] = {}
-        if generic:
-            for lid, prefs in generic.items():
-                merged[lid] = dict(prefs)
-        if specific:
-            for lid, prefs in specific.items():
+        for key in keys:
+            for lid, prefs in (self._preferences.get(key) or {}).items():
                 merged[lid] = dict(prefs)
         return merged or None
+
+    @staticmethod
+    def _slot_key(
+        mode: str,
+        time_period: str,
+        weather_class: str,
+        zone: Optional[str] = None,
+    ) -> str:
+        base = f"{mode}:{time_period}:{weather_class}"
+        return f"{base}:{zone}" if zone else base
 
     def has_weather_pref(
         self,
@@ -173,6 +168,7 @@ class LightingPreferenceLearner(HealthTrackable):
         time_period: str,
         weather_class: str,
         bri: int,
+        zone_at_time: Optional[str] = None,
     ) -> None:
         """Persist a single learned bri value into the WEATHER-SPECIFIC bucket.
 
@@ -180,7 +176,7 @@ class LightingPreferenceLearner(HealthTrackable):
         when the user accepts a suggestion through the notification.
         Persists via ModelManager so the value survives restarts.
         """
-        slot_key = f"{mode}:{time_period}:{weather_class}"
+        slot_key = self._slot_key(mode, time_period, weather_class, zone_at_time)
         if slot_key not in self._preferences:
             self._preferences[slot_key] = {}
         # Preserve any other learned properties for this light_id.
@@ -293,10 +289,23 @@ class LightingPreferenceLearner(HealthTrackable):
                 period = get_time_period(adj.timestamp)
                 any_key = f"{adj.light_id}:{adj.mode_at_time}:{period}:{WEATHER_ANY}"
                 any_groups[any_key].append(adj)
+                zone = getattr(adj, "zone_at_time", None)
+                if zone:
+                    zone_key = (
+                        f"{adj.light_id}:{adj.mode_at_time}:{period}:"
+                        f"{WEATHER_ANY}:{zone}"
+                    )
+                    any_groups[zone_key].append(adj)
                 weather = getattr(adj, "weather_class", None)
                 if weather:
                     w_key = f"{adj.light_id}:{adj.mode_at_time}:{period}:{weather}"
                     weather_groups[w_key].append(adj)
+                    if zone:
+                        wz_key = (
+                            f"{adj.light_id}:{adj.mode_at_time}:{period}:"
+                            f"{weather}:{zone}"
+                        )
+                        weather_groups[wz_key].append(adj)
 
             # Kitchen-pair pooling: in pair-enforced modes, L3 and L4 share
             # one adjustment stream so they learn identical EMAs. Pooled
@@ -313,8 +322,8 @@ class LightingPreferenceLearner(HealthTrackable):
             for group_key, adjs in any_groups.items():
                 if len(adjs) < MIN_ADJUSTMENTS:
                     continue
-                light_id, mode, period, _ = group_key.split(":", 3)
-                slot_key = f"{mode}:{period}:{WEATHER_ANY}"
+                light_id, mode, period, tail = group_key.split(":", 3)
+                slot_key = f"{mode}:{period}:{tail}"
                 learned = self._compute_ema(adjs, min_count=MIN_ADJUSTMENTS)
                 if learned:
                     new_prefs.setdefault(slot_key, {})[light_id] = learned
@@ -323,8 +332,8 @@ class LightingPreferenceLearner(HealthTrackable):
             for group_key, adjs in weather_groups.items():
                 if len(adjs) < MIN_ADJUSTMENTS_WEATHER:
                     continue
-                light_id, mode, period, weather = group_key.split(":", 3)
-                slot_key = f"{mode}:{period}:{weather}"
+                light_id, mode, period, tail = group_key.split(":", 3)
+                slot_key = f"{mode}:{period}:{tail}"
                 learned = self._compute_ema(
                     adjs, min_count=MIN_ADJUSTMENTS_WEATHER,
                 )
@@ -401,19 +410,21 @@ class LightingPreferenceLearner(HealthTrackable):
         # Group by (light_id, mode, period, weather_class). Bri values per
         # group are kept ordered so the EMA can be computed for the
         # suggested_bri exactly the way the learner would on accept.
-        groups: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
+        groups: dict[
+            tuple[str, str, str, str, Optional[str]], list[int]
+        ] = defaultdict(list)
         for r in rows:
             period = get_time_period(r.timestamp)
-            groups[(r.light_id, r.mode_at_time, period, r.weather_class)].append(
-                int(r.bri_after),
-            )
+            groups[
+                (r.light_id, r.mode_at_time, period, r.weather_class, r.zone_at_time)
+            ].append(int(r.bri_after))
 
         # Avoid importing ACTIVITY_LIGHT_STATES at module-load (would create
         # a light_state_calculator → lighting_learner cycle). Late import.
         from backend.services.light_state_calculator import ACTIVITY_LIGHT_STATES
 
         suggestions: list[dict[str, Any]] = []
-        for (light_id, mode, period, weather), bris in groups.items():
+        for (light_id, mode, period, weather, zone), bris in groups.items():
             if len(bris) < MIN_ADJUSTMENTS_WEATHER:
                 continue
             mean = sum(bris) / len(bris)
@@ -421,8 +432,13 @@ class LightingPreferenceLearner(HealthTrackable):
                 continue
             if (max(bris) - min(bris)) / mean > 0.20:
                 continue  # too inconsistent to suggest as a stable pref
-            if light_id in self.has_weather_pref(mode, period, weather):
-                continue  # already learned
+            slot_key = self._slot_key(mode, period, weather, zone)
+            if zone is None and light_id in self.has_weather_pref(
+                mode, period, weather,
+            ):
+                continue  # already learned in the generic bucket
+            if light_id in (self._preferences.get(slot_key) or {}):
+                continue  # already learned in this exact context
 
             # Compute the EMA the same way write_learned_pref + recalculate
             # would, so accepting yields the value the user just saw.
@@ -441,6 +457,7 @@ class LightingPreferenceLearner(HealthTrackable):
                 "mode": mode,
                 "period": period,
                 "weather_class": weather,
+                "zone_at_time": zone,
                 "suggested_bri": suggested_bri,
                 "sample_count": len(bris),
             }
@@ -483,11 +500,13 @@ class LightingPreferenceLearner(HealthTrackable):
         # drag emits L3@t, L4@t+50ms, L3@t+250ms, L4@t+300ms, ...) don't
         # break consecutive-row detection inside a linear walk.
         per_bucket: dict[
-            tuple[Optional[str], Optional[str], Optional[str]],
+            tuple[Optional[str], Optional[str], Optional[str], Optional[str]],
             list[LightAdjustment],
         ] = defaultdict(list)
         for r in rows:
-            per_bucket[(r.light_id, r.mode_at_time, r.weather_class)].append(r)
+            per_bucket[
+                (r.light_id, r.mode_at_time, r.weather_class, r.zone_at_time)
+            ].append(r)
 
         out: list[LightAdjustment] = []
         for bucket_rows in per_bucket.values():

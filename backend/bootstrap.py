@@ -291,6 +291,7 @@ async def lifespan(app: FastAPI):
     from backend.services.presence_fusion import PresenceFusion
     presence = PresenceFusion()
     app.state.presence = presence
+    event_logger.set_presence_fusion(presence)
     app_logger.info("Presence fusion initialized")
 
     # Bedroom lux channel (D4) — per-room ambient lux for the bedroom, fed by
