@@ -168,10 +168,13 @@ async def lifespan(app: FastAPI):
     app.state.tts = tts
 
     # Screen sync service — receiver for RGB colors posted by the desktop
-    # pc_agent (or laptop loopback). Holds per-light smoothing state and
-    # applies colors to the two bedroom lamps. L2 ← left half, L5 ← right
-    # half (dual-region sync). The capture loop lives elsewhere.
-    screen_sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    # pc_agent (or laptop loopback). Holds per-light smoothing state for all
+    # sync-capable lamps; the route scopes desktop/Rust to L2+L5 and Latitude
+    # laptop watching to L1+L3+L4. The capture loop lives elsewhere.
+    screen_sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+    )
     app.state.screen_sync = screen_sync
 
     # Laptop loopback — opt-in screen capture that runs in-process on the

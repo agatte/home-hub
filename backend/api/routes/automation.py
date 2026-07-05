@@ -6,6 +6,7 @@ monitor (Blue Yeti mic). Provides the frontend with current automation state
 and manual override controls.
 """
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -40,6 +41,7 @@ from backend.services.automation_constants import (
     ScheduleConfig,
 )
 from backend.services.light_state_calculator import lux_to_multiplier
+from backend.services.presence_fusion import PresenceReading
 
 SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
@@ -61,6 +63,71 @@ WATCHING_POSTURE_DEFAULTS = {
 logger = logging.getLogger("home_hub.automation")
 
 router = APIRouter(prefix="/api/automation", tags=["automation"])
+
+BEDROOM_SCREEN_SYNC_TARGETS = ("2", "5")
+LIVING_ROOM_SCREEN_SYNC_TARGETS = ("1", "3", "4")
+
+
+def _factor_value(factors: list[dict] | None, key: str):
+    for factor in factors or []:
+        if isinstance(factor, dict) and factor.get("key") == key:
+            return factor.get("value")
+    return None
+
+
+def _is_latitude_streaming_report(report: ActivityReport) -> bool:
+    return (
+        report.source == "process"
+        and _factor_value(report.factors, "device") == "latitude"
+        and _factor_value(report.factors, "playback_active") is not None
+    )
+
+
+async def _handle_latitude_streaming_side_effects(
+    report: ActivityReport, request: Request,
+) -> None:
+    if not _is_latitude_streaming_report(report):
+        return
+
+    playback_active = bool(_factor_value(report.factors, "playback_active"))
+    streaming_present = playback_active and report.mode == "watching"
+
+    presence = getattr(request.app.state, "presence", None)
+    if presence is not None:
+        presence.on_observation(PresenceReading(
+            source="latitude_streaming",
+            captured_at=datetime.now(timezone.utc),
+            face_present=streaming_present,
+            face_confidence=1.0 if streaming_present else 0.0,
+            zone="couch" if streaming_present else None,
+        ))
+
+    loopback = getattr(request.app.state, "laptop_loopback", None)
+    if loopback is None:
+        return
+
+    auto_started = bool(getattr(
+        request.app.state, "latitude_streaming_loopback_started", False,
+    ))
+    if streaming_present:
+        if not loopback.running:
+            await loopback.start()
+            request.app.state.latitude_streaming_loopback_started = True
+        return
+
+    if auto_started and loopback.running:
+        await loopback.stop()
+    request.app.state.latitude_streaming_loopback_started = False
+
+
+def _screen_sync_target_lights(report: ScreenColorReport, sync) -> list[str]:
+    available = set(sync.target_lights)
+    if report.source == "laptop":
+        targets = [lid for lid in LIVING_ROOM_SCREEN_SYNC_TARGETS if lid in available]
+        if targets:
+            return targets
+    targets = [lid for lid in BEDROOM_SCREEN_SYNC_TARGETS if lid in available]
+    return targets or sync.target_lights
 
 
 def _agent_health_origin(body: dict) -> str:
@@ -107,6 +174,7 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Automation engine not initialized")
 
     await engine.report_activity(report.mode, report.source, factors=report.factors)
+    await _handle_latitude_streaming_side_effects(report, request)
 
     # Fan the report to the LoL champion service so a champion factor (set
     # only when League's Live Client Data API returned 200) can drive the
@@ -283,15 +351,16 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     """
     Receive a screen color sample from the desktop pc_agent or laptop loopback.
 
-    The current automation mode gates application: colors only reach the
-    bedroom lamps if the mode is in SCREEN_SYNC_MODES (gaming, watching).
-    Off-mode colors are accepted (so the agent doesn't error) but dropped
-    silently — the response distinguishes via the ``applied`` field.
+    The current automation mode gates application: colors only reach lights
+    if the mode is in SCREEN_SYNC_MODES (gaming, watching). Off-mode colors
+    are accepted (so the agent doesn't error) but dropped silently — the
+    response distinguishes via the ``applied`` field.
 
-    Mirror dispatch: the single ``{r, g, b}`` is fan-out to every lamp the
-    ScreenSyncService manages (currently L2 + L5). Per-light EMA, brightness
-    caps, and luma compensation still differentiate the lamps' output —
-    the input color is shared, the on-bridge state isn't.
+    Mirror dispatch: the single ``{r, g, b}`` is fan-out to the route-selected
+    lamp set. Desktop/Rust stays on bedroom L2+L5; Latitude laptop watching
+    uses L1+L3+L4 so the room around the TV responds. Per-light EMA,
+    brightness caps, and luma compensation still differentiate output — the
+    input color is shared, the on-bridge state isn't.
     """
     engine = getattr(request.app.state, "automation", None)
     sync = getattr(request.app.state, "screen_sync", None)
@@ -303,7 +372,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
 
     # Away/external-off: a game/video left running keeps streaming colors
     # after a departure — while the apartment is suppressed, accept the
-    # report but never re-light the bedroom lamps with it.
+    # report but never re-light the sync target lamps with it.
     if getattr(engine, "_external_off_detected", False):
         return {"status": "ok", "applied": False}
 
@@ -357,7 +426,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
 
         applied_rust: list[str] = []
         skipped_rust: dict[str, str] = {}
-        for target in ("2", "5"):
+        for target in BEDROOM_SCREEN_SYNC_TARGETS:
             if target not in sync.target_lights:
                 skipped_rust[target] = "no_target"
                 continue
@@ -406,7 +475,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     applied: list[str] = []
     skipped: list[str] = []
     skip_reasons: dict[str, str] = {}
-    for light_id in sync.target_lights:
+    for light_id in _screen_sync_target_lights(report, sync):
         if light_id in engine.manual_light_overrides:
             skipped.append(light_id)
             skip_reasons[light_id] = "manual_override"

@@ -64,7 +64,7 @@ LATITUDE_STRONG_FACE_THRESHOLD = 0.70
 # Canonical source names. New sources don't need to be enumerated here
 # (the merge is dict-keyed by string), but the route layer validates
 # inbound payloads against this set.
-KNOWN_SOURCES = frozenset({"latitude", "desktop"})
+KNOWN_SOURCES = frozenset({"latitude", "desktop", "latitude_streaming"})
 
 # Forward skew beyond which a STORED reading is considered invalid by
 # construction (no honest capture happens in the future). Mirrors the
@@ -318,6 +318,13 @@ class PresenceFusion:
         lat = self._readings.get("latitude")
         if lat is not None and lat.zone is not None and self._fresh(lat, max_age_s):
             return lat.zone
+        streaming = self._readings.get("latitude_streaming")
+        if (
+            streaming is not None
+            and streaming.zone is not None
+            and self._fresh(streaming, max_age_s)
+        ):
+            return streaming.zone
         if self._desktop_at_desk_fresh(max_age_s):
             return "desk"
         return None

@@ -44,12 +44,12 @@ class PresenceObservation(BaseModel):
     from this body and hands it to ``app.state.presence``.
     """
 
-    source: Literal["desktop"] = "desktop"
+    source: Literal["desktop", "latitude_streaming"] = "desktop"
     captured_at: Optional[datetime] = None
     face_present: Optional[bool] = None
     face_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     detection_source: Optional[Literal["face", "pose"]] = None
-    zone: Optional[Literal["desk", "bed"]] = None
+    zone: Optional[Literal["desk", "bed", "couch"]] = None
     posture: Optional[Literal["upright", "reclined", "slouched"]] = None
     posture_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     pose_visible_landmarks: Optional[int] = Field(default=None, ge=0)

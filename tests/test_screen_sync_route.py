@@ -9,9 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.api.routes.automation import receive_screen_color
-from backend.api.schemas.automation import ScreenColorReport
+from backend.api.routes.automation import receive_screen_color, report_activity
+from backend.api.schemas.automation import ActivityReport, ScreenColorReport
 from backend.services.screen_sync import ScreenSyncService
+from backend.services.presence_fusion import PresenceFusion
 
 
 class _FakeHue:
@@ -218,3 +219,103 @@ async def test_watching_desk_cap_fires_off_fused_zone():
     )
     assert couch <= 80, f"no desk zone → L2 holds the dim watching cap (got {couch})"
     assert desk > couch
+
+
+class _FakeActivityEngine:
+    def __init__(self) -> None:
+        self.reports: list[tuple[str, str, list[dict] | None]] = []
+
+    async def report_activity(self, mode: str, source: str, factors=None) -> None:
+        self.reports.append((mode, source, factors))
+
+
+class _FakeLoopback:
+    def __init__(self, running: bool = False) -> None:
+        self.running = running
+        self.starts = 0
+        self.stops = 0
+
+    async def start(self) -> None:
+        self.running = True
+        self.starts += 1
+
+    async def stop(self) -> None:
+        self.running = False
+        self.stops += 1
+
+
+@pytest.mark.asyncio
+async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopback():
+    engine = _FakeActivityEngine()
+    presence = PresenceFusion()
+    loopback = _FakeLoopback()
+    req = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                automation=engine,
+                presence=presence,
+                laptop_loopback=loopback,
+            )
+        )
+    )
+
+    active = ActivityReport(
+        mode="watching",
+        source="process",
+        factors=[
+            {"key": "device", "value": "latitude"},
+            {"key": "playback_active", "value": True},
+        ],
+    )
+    await report_activity(active, req)  # type: ignore[arg-type]
+
+    assert presence.latest_zone() == "couch"
+    assert presence.is_strongly_present_any() is True
+    assert loopback.running is True
+    assert loopback.starts == 1
+
+    idle = ActivityReport(
+        mode="idle",
+        source="process",
+        factors=[
+            {"key": "device", "value": "latitude"},
+            {"key": "playback_active", "value": False},
+        ],
+    )
+    await report_activity(idle, req)  # type: ignore[arg-type]
+
+    assert presence.latest_zone() is None
+    assert loopback.running is False
+    assert loopback.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_desktop_screen_color_stays_bedroom_when_service_can_write_all_lamps():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5", "1", "3", "4"])
+    engine = _fake_engine("watching")
+    req = _make_request(engine, sync)
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="desktop"), req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is True
+    assert set(result["lights"]) == {"2", "5"}
+    assert set(hue.lights_touched()) == {"2", "5"}
+
+
+@pytest.mark.asyncio
+async def test_laptop_watching_screen_color_targets_living_room_and_kitchen():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5", "1", "3", "4"])
+    engine = _fake_engine("watching")
+    req = _make_request(engine, sync)
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="laptop"), req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is True
+    assert set(result["lights"]) == {"1", "3", "4"}
+    assert set(hue.lights_touched()) == {"1", "3", "4"}
