@@ -289,6 +289,58 @@ async def test_l2_no_luma_comp():
     )
 
 
+@pytest.mark.asyncio
+async def test_watching_night_uses_slow_transition_and_deadband():
+    """Night watching should glide and skip sub-perceptual repeat frames."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+
+    for _ in range(30):
+        await sync.apply_color("2", 0, 0, 0, mode="watching", period="night")
+    first = hue.last_for("2")
+    assert first["transitiontime"] == 40
+
+    call_count = len(hue.calls)
+    await sync.apply_color("2", 0, 0, 0, mode="watching", period="night")
+    assert len(hue.calls) == call_count
+    assert sync.last_color_at is not None
+
+
+@pytest.mark.asyncio
+async def test_watching_night_prime_limits_first_bright_frame():
+    """A mode-primed sync frame should not jump straight to the cap."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    sync.prime_from_mode_state(
+        "watching",
+        "night",
+        {"2": {"on": True, "bri": 30, "ct": 454}},
+    )
+
+    await sync.apply_color("2", 255, 255, 255, mode="watching", period="night")
+    state = hue.last_for("2")
+
+    assert 30 <= state["bri"] <= 34
+    assert state["transitiontime"] == 40
+    assert sync._last_bri["2"] == pytest.approx(state["bri"], abs=1.0)
+
+
+def test_prime_from_mode_state_seeds_hsb_when_available():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    sync.prime_from_mode_state(
+        "gaming",
+        "late_night",
+        {"2": {"on": True, "bri": 110, "hue": 46920, "sat": 170}},
+    )
+
+    assert sync._last_bri["2"] == 110
+    assert sync._last_hue["2"] == 46920
+    assert sync._last_sat["2"] == 170
+    assert sync._last_bri["5"] == 0
+
+
 # -----------------------------------------------------------------------------
 # Gaming-day ambient lift — lux × weather scaling on cap + floor
 # -----------------------------------------------------------------------------

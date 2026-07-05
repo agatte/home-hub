@@ -1592,6 +1592,33 @@ class TestApplyModeDedup:
             "to the bridge"
         )
 
+    async def test_apply_mode_primes_screen_sync_with_final_state(
+        self, engine,
+    ):
+        """Screen sync should start from the computed night baseline."""
+
+        class _FakeScreenSync:
+            def __init__(self) -> None:
+                self.calls = []
+                self.last_color_at = None
+                self.target_lights = ["2", "5"]
+
+            def prime_from_mode_state(self, mode, period, states) -> None:
+                self.calls.append((mode, period, states))
+
+        sync = _FakeScreenSync()
+        engine._screen_sync = sync
+        engine._get_time_period = lambda: "night"
+
+        await engine._apply_mode("watching", force_resend=True)
+
+        assert sync.calls
+        mode, period, states = sync.calls[-1]
+        assert mode == "watching"
+        assert period == "night"
+        assert states["2"]["bri"] == 30
+        assert states["5"]["bri"] == 15
+
 
 # ---------------------------------------------------------------------------
 # notify_camera_commit — re-apply lights when zone/posture transitions

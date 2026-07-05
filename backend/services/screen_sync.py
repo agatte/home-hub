@@ -246,6 +246,7 @@ class ScreenSyncService:
         self._last_hue: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_sat: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_bri: dict[str, float] = {lid: 0.0 for lid in self._targets}
+        self._last_sent_state: dict[str, dict[str, int]] = {}
 
         # Status tracking — global "most recent write" across all lamps.
         self._last_color_at: Optional[datetime] = None
@@ -471,6 +472,82 @@ class ScreenSyncService:
         """All Hue light ids this service can write to."""
         return list(self._targets)
 
+    def prime_from_mode_state(
+        self,
+        mode: str,
+        period: Optional[str],
+        states: dict[str, dict[str, Any]],
+    ) -> None:
+        """Seed EMA state from the mode target before screen frames resume.
+
+        Mode changes already put the intended night/evening baseline on the
+        bridge. Seeding the sync EMA from that baseline prevents the next
+        screen frame from easing out of stale prior-mode values, which reads as
+        a random brightness jump before settling back.
+        """
+        if mode not in {"gaming", "watching"}:
+            return
+        if period not in {"evening", "night", "late_night"}:
+            return
+        for light_id in self._targets:
+            target = states.get(light_id)
+            if not isinstance(target, dict):
+                continue
+            if target.get("on") is False:
+                self._last_bri[light_id] = 0.0
+                continue
+            if "bri" in target:
+                self._last_bri[light_id] = float(target["bri"])
+            if "hue" in target:
+                self._last_hue[light_id] = float(target["hue"])
+            if "sat" in target:
+                self._last_sat[light_id] = float(target["sat"])
+
+    @staticmethod
+    def _smoothing_alpha_for(mode: str, period: Optional[str]) -> float:
+        if mode == "watching" and period in {"night", "late_night"}:
+            return 0.18
+        if mode == "gaming" and period == "late_night":
+            return 0.25
+        return 0.4
+
+    @staticmethod
+    def _transitiontime_for(mode: str, period: Optional[str]) -> int:
+        if mode == "watching" and period in {"night", "late_night"}:
+            return 40
+        if mode == "gaming" and period == "late_night":
+            return 30
+        return 20
+
+    @staticmethod
+    def _max_brightness_step(mode: str, period: Optional[str]) -> Optional[int]:
+        if mode == "watching" and period in {"night", "late_night"}:
+            return 14
+        if mode == "gaming" and period == "late_night":
+            return 22
+        return None
+
+    @staticmethod
+    def _within_deadband(
+        previous: Optional[dict[str, int]],
+        hue: int,
+        sat: int,
+        bri: int,
+        mode: str,
+        period: Optional[str],
+    ) -> bool:
+        if previous is None:
+            return False
+        if mode != "watching" or period not in {"night", "late_night"}:
+            return False
+        hue_delta = abs(hue - previous.get("hue", hue))
+        hue_delta = min(hue_delta, 65535 - hue_delta)
+        return (
+            hue_delta < 700
+            and abs(sat - previous.get("sat", sat)) < 4
+            and abs(bri - previous.get("bri", bri)) < 2
+        )
+
     async def apply_color(
         self,
         light_id: str,
@@ -525,23 +602,43 @@ class ScreenSyncService:
         h, s, br = rgb_to_hue_hsb(
             (r, g, b), max_bri, min_bri, sat_boost, luma_comp
         )
-        sh, ss, sb = self._smooth(light_id, h, s, br)
+        max_step = self._max_brightness_step(mode, period)
+        last_bri = self._last_bri.get(light_id, 0.0)
+        if max_step is not None and last_bri > 0.0:
+            br = max(last_bri - max_step, min(last_bri + max_step, br))
+        sh, ss, sb = self._smooth(
+            light_id, h, s, br, alpha=self._smoothing_alpha_for(mode, period),
+        )
+        ih, isat, ibri = int(sh), int(ss), int(sb)
+        last_sent = self._last_sent_state.get(light_id)
+        if (
+            abs(ibri - int(br)) < 2
+            and last_sent is not None
+            and abs(last_sent.get("bri", ibri) - int(br)) < 2
+            and self._within_deadband(last_sent, ih, isat, ibri, mode, period)
+        ):
+            self._last_color_at = datetime.now(timezone.utc)
+            self._last_source = source
+            return
         await self._hue.set_light(light_id, {
             "on": True,
-            "hue": int(sh),
-            "sat": int(ss),
-            "bri": int(sb),
-            "transitiontime": 20,  # 2s transition for smoothness
+            "hue": ih,
+            "sat": isat,
+            "bri": ibri,
+            "transitiontime": self._transitiontime_for(mode, period),
         })
+        self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
         self._last_color_at = datetime.now(timezone.utc)
         self._last_source = source
-        await self._maybe_log_adjustment(light_id, int(sh), int(ss), int(sb), mode)
+        await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
 
     def _smooth(
         self, light_id: str, h: float, s: float, b: float,
+        alpha: Optional[float] = None,
     ) -> tuple[float, float, float]:
         """Apply EMA smoothing with hue-wrap handling for the given light."""
-        alpha = self._smoothing_alpha
+        if alpha is None:
+            alpha = self._smoothing_alpha
         last_h = self._last_hue.get(light_id, 0.0)
         last_s = self._last_sat.get(light_id, 0.0)
         last_b = self._last_bri.get(light_id, 0.0)

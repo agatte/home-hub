@@ -2173,6 +2173,10 @@ class AutomationEngine:
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
+            if self._screen_sync is not None:
+                prime = getattr(self._screen_sync, "prime_from_mode_state", None)
+                if prime is not None:
+                    prime(mode, period, state)
             tt = MODE_TRANSITION_TIME.get(mode)
             await self._apply_state(state, transitiontime=tt)
 
