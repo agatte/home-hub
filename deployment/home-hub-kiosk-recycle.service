@@ -1,0 +1,27 @@
+# Home Hub Firefox kiosk recycle - systemd user unit for the Latitude
+#
+# The paired timer runs this after the nightly ML/relaunch window. It restarts
+# only Firefox instances launched with the Home Hub kiosk URL; it does not touch
+# home-hub.service or media apps such as Stremio.
+#
+# Install:
+#   cp deployment/home-hub-kiosk-recycle.* ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now home-hub-kiosk-recycle.timer
+#
+# Logs:
+#   journalctl --user -u home-hub-kiosk-recycle.service
+
+[Unit]
+Description=Recycle Home Hub Firefox kiosk
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/home-hub
+ExecStart=%h/home-hub/scripts/recycle-kiosk.sh
+Environment="PATH=%h/home-hub/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISPLAY=:0"
+Environment="WAYLAND_DISPLAY=wayland-0"
+Environment="XDG_RUNTIME_DIR=%t"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"

@@ -1,0 +1,16 @@
+# Weekly Home Hub Firefox kiosk recycle timer.
+#
+# Sunday 05:00 local time is intentionally after the 03:30 fusion retune,
+# 04:00 ML nightly, and 04:00 loop relaunch window.
+
+[Unit]
+Description=Weekly Home Hub Firefox kiosk recycle
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00
+AccuracySec=15m
+Persistent=true
+Unit=home-hub-kiosk-recycle.service
+
+[Install]
+WantedBy=timers.target
