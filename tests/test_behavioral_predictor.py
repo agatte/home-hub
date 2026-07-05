@@ -6,9 +6,11 @@ so the suite runs cleanly in environments without it. The production
 deployment has lightgbm.
 """
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from backend.config import settings
 from backend.models import ActivityEvent
 from backend.services.ml.behavioral_predictor import (
     AUTO_APPLY_THRESHOLD,
@@ -391,24 +393,36 @@ class TestClassImbalance:
     minority class should at least surface in the distribution.
     """
 
-    async def test_minority_class_survives_imbalance(self, predictor, ml_db):
-        now = datetime.now(timezone.utc)
+    async def test_minority_class_survives_imbalance(
+        self, predictor, ml_db, monkeypatch,
+    ):
+        local_tz = ZoneInfo(settings.TIMEZONE)
+        base_local = datetime.now(local_tz).replace(
+            hour=12, minute=0, second=0, microsecond=0,
+        )
         async with ml_db() as session:
-            # 80/20 working/gaming, gaming concentrated at late-night
-            # hours so the temporal features can discriminate. 1000 rows
-            # for enough val-split material.
+            # 80/20 working/gaming, held inside the 60d training window.
+            # Gaming is explicitly concentrated at local 22:00-23:00 so
+            # the temporal features can discriminate after lux was removed.
             for i in range(1000):
+                day_offset = i // 25
                 if i % 5 == 0:
                     mode = "gaming"
-                    # Gaming at hour 22-23 only.
-                    ts = now - timedelta(days=i // 24, hours=22 + (i % 2))
+                    ts_local = (
+                        base_local - timedelta(days=day_offset)
+                    ).replace(hour=22 + (i % 2))
+                    audio_class = "game_audio"
                 else:
                     mode = "working"
-                    # Working during the work day.
-                    ts = now - timedelta(days=i // 8, hours=9 + (i % 8))
+                    ts_local = (
+                        base_local - timedelta(days=day_offset)
+                    ).replace(hour=9 + (i % 8))
+                    audio_class = "speech_single"
+                ts = ts_local.astimezone(timezone.utc)
                 session.add(ActivityEvent(
                     timestamp=ts, mode=mode, previous_mode="idle",
                     source="manual", duration_seconds=600,
+                    zone="desk", posture="upright", audio_class=audio_class,
                 ))
             await session.commit()
 
@@ -421,10 +435,26 @@ class TestClassImbalance:
             f"Expected gaming in label encoder, got {modes_seen}"
         )
 
-        # Per-class predicted count is the relevant log field; we re-read
-        # it from the model by spot-checking the distribution from the
-        # promoted predict() path. With softened weights gaming should
-        # carry non-trivial mass in at least one prediction.
+        # Per-class predicted count is the relevant log field; spot-check
+        # the distribution from a known gaming-shaped feature vector. The
+        # old fixture called predict() with the live wall clock, so a
+        # full-suite run could ask the model about a working-shaped "now"
+        # even though the test intended to inspect late-night gaming.
+        from backend.services.ml.feature_builder import build_training_data
+        import backend.services.ml.behavioral_predictor as predictor_module
+
+        rows = await build_training_data(days=60)
+        gaming_features = next(r for r in rows if r["target"] == "gaming")
+        gaming_features = {
+            k: v for k, v in gaming_features.items() if k != "target"
+        }
+
+        async def _gaming_runtime_features(*args, **kwargs):
+            return gaming_features
+
+        monkeypatch.setattr(
+            predictor_module, "build_runtime_features", _gaming_runtime_features,
+        )
         predictor._status = "active"
         result = await predictor.predict(current_mode="working")
         if result is not None:
