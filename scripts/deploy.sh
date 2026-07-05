@@ -64,6 +64,7 @@ RESTART_BACKEND=0
 RESTART_AMBIENT=0
 RESTART_LATITUDE_STREAMING=0
 RESTART_TUNNEL=0
+INSTALL_KIOSK_RECYCLE=0
 REBUILD_FRONTEND=0
 
 if [[ -z "$LAST_DEPLOYED" ]]; then
@@ -80,6 +81,7 @@ if [[ -z "$LAST_DEPLOYED" ]]; then
     RESTART_AMBIENT=1
     RESTART_LATITUDE_STREAMING=1
     RESTART_TUNNEL=1
+    INSTALL_KIOSK_RECYCLE=1
 else
     echo "Deploying ${LAST_DEPLOYED:0:7} → ${NEW_HEAD:0:7}"
     echo
@@ -103,6 +105,10 @@ else
 
     if echo "$CHANGED" | grep -qE "^frontend-svelte/(src|static)/"; then
         REBUILD_FRONTEND=1
+    fi
+
+    if echo "$CHANGED" | grep -qE "^(scripts/recycle-kiosk\.sh|deployment/home-hub-kiosk-recycle\.(service|timer))$"; then
+        INSTALL_KIOSK_RECYCLE=1
     fi
 
     if echo "$CHANGED" | grep -qE "^(backend/|run\.py$)"; then
@@ -231,6 +237,25 @@ restart_latitude_streaming() {
         echo "  (home-hub-latitude-streaming.service not installed — see deployment/home-hub-latitude-streaming.service)"
     fi
 }
+
+install_kiosk_recycle_timer() {
+    if [[ ! -f deployment/home-hub-kiosk-recycle.service || ! -f deployment/home-hub-kiosk-recycle.timer ]]; then
+        echo "  (kiosk recycle units not present in this checkout; skipping)"
+        return 0
+    fi
+
+    echo "→ Installing home-hub-kiosk-recycle.timer..."
+    mkdir -p "$HOME/.config/systemd/user"
+    cp deployment/home-hub-kiosk-recycle.service "$HOME/.config/systemd/user/"
+    cp deployment/home-hub-kiosk-recycle.timer "$HOME/.config/systemd/user/"
+    chmod +x scripts/recycle-kiosk.sh
+    systemctl --user daemon-reload
+    systemctl --user enable --now home-hub-kiosk-recycle.timer
+}
+
+if [[ "$INSTALL_KIOSK_RECYCLE" == "1" ]]; then
+    install_kiosk_recycle_timer
+fi
 if [[ "$RESTART_BACKEND" == "1" ]]; then
     echo "→ Restarting home-hub.service..."
     systemctl --user restart home-hub.service
