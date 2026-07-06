@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
 from backend.api._guards import clamp_client_timestamp
-from backend.api.auth import require_api_key
+from backend.api.auth import require_api_key, source_from_request
 from backend.api.routes.routines import load_setting, save_setting
 from backend.database import async_session
 from backend.models import MoodCalibration, MoodSample
@@ -298,6 +298,38 @@ async def post_blendshape(payload: BlendshapeSubmit, request: Request) -> dict:
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
+
+class VibeCommand(BaseModel):
+    """Free-form natural-language lighting command from Shortcut/Alexa."""
+
+    transcript: str = Field(min_length=1, max_length=500)
+    timing: Literal["arrival_if_away", "now"] = "arrival_if_away"
+
+
+@router.post("/vibe", dependencies=[Depends(require_api_key)])
+async def post_vibe_command(payload: VibeCommand, request: Request) -> dict:
+    """Parse a free-form vibe command and stage/apply lighting.
+
+    iOS Shortcuts post here over the Cloudflare tunnel with strict two-token
+    auth. If the apartment is away and timing is the default, the parsed vibe
+    is stored for the next geofence/camera arrival; otherwise it applies now.
+    """
+    router_svc = getattr(request.app.state, "vibe_router", None)
+    if router_svc is None:
+        raise HTTPException(status_code=503, detail="vibe_router unavailable")
+    source = source_from_request(request, fallback="ios_shortcut:vibe")
+    try:
+        return await router_svc.handle_request(
+            transcript=payload.transcript,
+            timing=payload.timing,
+            source=source,
+        )
+    except Exception as exc:
+        from backend.services.personality.vibe_router import VibeRouterError
+        if isinstance(exc, VibeRouterError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.exception("Vibe command failed")
+        raise HTTPException(status_code=500, detail="Vibe command failed") from exc
 
 class PersonalitySettings(BaseModel):
     personality_enabled: Optional[bool] = None

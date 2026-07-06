@@ -953,10 +953,23 @@ async def lifespan(app: FastAPI):
         notifier_getter=lambda: app.state.notifier,
         save_setting=_away_save_setting,
         load_setting=_away_load_setting,
+        vibe_router_getter=lambda: getattr(app.state, "vibe_router", None),
     )
     await away_manager.load_state()
     app.state.away_manager = away_manager
 
+    # VibeRouter — GH#107 NL layer. iOS Shortcut/Alexa text commands are
+    # parsed into a validated lighting plan, staged while away, and consumed
+    # by AwayManager on arrival. Deterministic rules run before Anthropic.
+    from backend.services.personality.vibe_router import VibeRouter
+    vibe_router = VibeRouter(
+        app_state=app.state,
+        save_setting=_away_save_setting,
+        load_setting=_away_load_setting,
+        anthropic_api_key=settings.ANTHROPIC_API_KEY,
+        anthropic_model=settings.ANTHROPIC_MODEL,
+    )
+    app.state.vibe_router = vibe_router
     # Bounded auto-remediation — the only backend path that turns a
     # source-trust diagnosis into a state change. Constructed after notifier
     # (it notifies on every decision) and after automation/source_trust exist.

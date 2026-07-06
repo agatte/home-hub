@@ -66,6 +66,7 @@ class AwayManager:
         notifier_getter: Callable[[], Any],
         save_setting: Callable[..., Any],
         load_setting: Callable[..., Any],
+        vibe_router_getter: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._engine = engine
         self._hue_getter = hue_getter
@@ -74,6 +75,7 @@ class AwayManager:
         self._notifier_getter = notifier_getter
         self._save_setting = save_setting
         self._load_setting = load_setting
+        self._vibe_router_getter = vibe_router_getter or (lambda: None)
 
         self._away: bool = False
         self._since: Optional[datetime] = None
@@ -258,6 +260,17 @@ class AwayManager:
         except Exception as e:
             logger.error("ARRIVE — light reapply failed: %s", e, exc_info=True)
 
+        pending_vibe_applied = False
+        try:
+            vibe_router = self._vibe_router_getter()
+            if vibe_router is not None:
+                result = await vibe_router.apply_pending_arrival(
+                    source=f"arrival:{source}",
+                )
+                pending_vibe_applied = bool(result)
+        except Exception as e:
+            logger.error("ARRIVE — pending vibe apply failed: %s", e, exc_info=True)
+
         cfg = await self._config()
         if cfg.get("welcome_tts", True) and self._welcome_tts_allowed():
             try:
@@ -270,8 +283,12 @@ class AwayManager:
                 logger.warning("ARRIVE — welcome TTS failed: %s", e)
 
         body = "Geofence arrive: lighting restored."
+        if pending_vibe_applied:
+            body = "Geofence arrive: staged vibe applied."
         if away_minutes is not None:
             body = f"Geofence arrive after {away_minutes} min away: lighting restored."
+            if pending_vibe_applied:
+                body = f"Geofence arrive after {away_minutes} min away: staged vibe applied."
         await self._notify(
             title="Welcome home", body=body, kind="welcome_home",
         )

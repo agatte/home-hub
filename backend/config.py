@@ -148,6 +148,11 @@ class Settings(BaseSettings):
 
     # Phase 2 — Game Day
     OPENAI_API_KEY: Optional[str] = None
+    # AI Personality Layer Phase C - backend-side free-form vibe parser.
+    # Deterministic phrase rules run first; Anthropic is only used for
+    # ambiguous requests such as "set something low-key but social".
+    ANTHROPIC_API_KEY: Optional[str] = None
+    ANTHROPIC_MODEL: str = "claude-3-haiku-20240307"
     ESPN_POLL_INTERVAL: int = 5
     BIG_PLAY_YARD_THRESHOLD: int = 20
     FIELD_GOAL_YARD_THRESHOLD: int = 40

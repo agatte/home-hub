@@ -216,6 +216,7 @@ ALLOWED_PATHS_FROM_LAMBDA = [
     # iOS Shortcut geofence webhook (D2, GH#107) — not a Lambda caller,
     # but rides the same tunnel with the same strict auth pair.
     ("POST", "/api/presence/geofence"),
+    ("POST", "/api/personality/vibe"),
 ]
 
 
@@ -256,6 +257,7 @@ DISALLOWED_PATHS = [
     ("POST", "/api/automation/clear"),     # not the dnd endpoint
     ("GET", "/api/debug/query"),           # SELECT-only but still gated
     ("GET", "/api/presence/status"),       # away-state read stays LAN-only
+    ("GET", "/api/personality/settings"),  # personality reads stay LAN-only
 ]
 
 

@@ -15,5 +15,6 @@ independently of camera_enabled.
 """
 from backend.services.personality.emotion_service import EmotionService
 from backend.services.personality.mood_palette import mood_to_hsv
+from backend.services.personality.vibe_router import VibeRouter
 
-__all__ = ["EmotionService", "mood_to_hsv"]
+__all__ = ["EmotionService", "VibeRouter", "mood_to_hsv"]

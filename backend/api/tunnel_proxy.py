@@ -96,6 +96,8 @@ _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/scenes/effects/stop$")),
     # presence — iOS Shortcut geofence webhook (D2, GH#107)
     ("POST", re.compile(r"^/api/presence/geofence$")),
+    # personality/vibe — iOS Shortcut staged-arrival NL lighting command
+    ("POST", re.compile(r"^/api/personality/vibe$")),
     # sonos
     ("POST", re.compile(r"^/api/sonos/smart-play$")),
     ("POST", re.compile(r"^/api/sonos/pause$")),

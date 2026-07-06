@@ -72,6 +72,7 @@ def _make_manager(
     sonos_state="STOPPED",
     sonos_connected=True,
     hue_connected=True,
+    vibe_router=None,
 ):
     engine = engine or FakeEngine()
     settings = settings or FakeSettings()
@@ -99,6 +100,7 @@ def _make_manager(
         notifier_getter=lambda: notifier,
         save_setting=settings.save,
         load_setting=settings.load,
+        vibe_router_getter=lambda: vibe_router,
     )
     return mgr, engine, settings, hue, sonos, tts, notifier
 
@@ -201,6 +203,24 @@ class TestArrive:
         await mgr.handle_event("arrive", "ios_shortcut")
         tts.speak.assert_not_awaited()
 
+    async def test_arrive_applies_pending_vibe_once(self):
+        vibe_router = MagicMock()
+        vibe_router.apply_pending_arrival = AsyncMock(
+            return_value={"status": "ok", "plan": {"mode": "social"}}
+        )
+        mgr, _engine, _settings, _hue, _sonos, _tts, notifier = _make_manager(
+            vibe_router=vibe_router,
+        )
+        await mgr.handle_event("leave", "ios_shortcut")
+        notifier.emit_alert.reset_mock()
+
+        await mgr.handle_event("arrive", "ios_shortcut")
+
+        vibe_router.apply_pending_arrival.assert_awaited_once_with(
+            source="arrival:ios_shortcut",
+        )
+        body = notifier.emit_alert.await_args.kwargs["body"]
+        assert "staged vibe applied" in body
     async def test_arrive_while_home_still_clears_suppression(self):
         """A lost-state arrive must never leave the apartment suppressed."""
         mgr, engine, *_ = _make_manager()
