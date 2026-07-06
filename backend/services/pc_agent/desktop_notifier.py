@@ -512,6 +512,12 @@ class ToastWidget(QWidget):
     def show_with_payload(self, payload: dict[str, Any]) -> None:
         """Entry point from the bus signal. Populate, animate, arm dismiss."""
         try:
+            logger.info(
+                "toast show requested: title=%r kind=%r actions=%d",
+                payload.get("title"),
+                payload.get("kind"),
+                len(payload.get("actions") or []),
+            )
             self._expanded = False
             self._populate(payload)
             self._position_and_slide_in()
@@ -529,6 +535,15 @@ class ToastWidget(QWidget):
         target_y = geo.bottom() - self.height() - TOAST_MARGIN
         start_x = geo.right()
 
+        logger.info(
+            "toast positioning: screen=%sx%s target=(%s,%s) size=%sx%s",
+            geo.width(),
+            geo.height(),
+            target_x,
+            target_y,
+            self.width(),
+            self.height(),
+        )
         self.move(start_x, target_y)
         self.show()
         self.raise_()
@@ -619,11 +634,22 @@ class WsWorker(threading.Thread):
                 continue
             if msg.get("type") != "notification":
                 continue
+            payload = msg.get("data") or {}
             if is_silenced():
-                logger.debug("notification suppressed (silenced)")
+                logger.info(
+                    "notification suppressed (silenced): title=%r kind=%r",
+                    payload.get("title"),
+                    payload.get("kind"),
+                )
                 continue
             try:
-                self._bus.notification.emit(msg.get("data") or {})
+                logger.info(
+                    "notification received: title=%r kind=%r actions=%d",
+                    payload.get("title"),
+                    payload.get("kind"),
+                    len(payload.get("actions") or []),
+                )
+                self._bus.notification.emit(payload)
             except Exception:
                 logger.exception("bus emit failed")
 

@@ -594,8 +594,8 @@ class NotifierService:
         """
         if kind == "suggestion":
             # No-op URL — buttons just need to render for the toast verify;
-            # click-through is best-effort (handler ignores bad URLs).
-            stub_url = f"{self._ntfy_server.replace('https://ntfy.sh', 'http://localhost:8000')}/api/notification/test"
+            # route it to the deployed backend because the desktop is remote.
+            stub_url = "http://192.168.86.210:8000/api/notification/test"
             payload: dict[str, Any] = {
                 "title": title,
                 "subtitle": body,
