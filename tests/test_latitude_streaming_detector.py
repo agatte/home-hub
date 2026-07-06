@@ -1,4 +1,5 @@
 """Tests for the Latitude streaming detector."""
+
 from __future__ import annotations
 
 import subprocess
@@ -32,13 +33,21 @@ class FakeDetector(LatitudeStreamingDetector):
 
 
 def test_open_stremio_without_playback_does_not_report_watching():
-    detector = FakeDetector(outputs={
-        (
-            "gdbus", "call", "--session", "--dest", "org.freedesktop.DBus",
-            "--object-path", "/org/freedesktop/DBus", "--method",
-            "org.freedesktop.DBus.ListNames",
-        ): "([],)"
-    })
+    detector = FakeDetector(
+        outputs={
+            (
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.DBus",
+                "--object-path",
+                "/org/freedesktop/DBus",
+                "--method",
+                "org.freedesktop.DBus.ListNames",
+            ): "([],)"
+        }
+    )
     detector.processes = ["stremio"]
 
     snapshot = detector.snapshot()
@@ -49,20 +58,35 @@ def test_open_stremio_without_playback_does_not_report_watching():
 
 def test_mpris_playing_reports_watching():
     list_cmd = (
-        "gdbus", "call", "--session", "--dest", "org.freedesktop.DBus",
-        "--object-path", "/org/freedesktop/DBus", "--method",
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.DBus",
+        "--object-path",
+        "/org/freedesktop/DBus",
+        "--method",
         "org.freedesktop.DBus.ListNames",
     )
     status_cmd = (
-        "gdbus", "call", "--session", "--dest", "org.mpris.MediaPlayer2.stremio",
-        "--object-path", "/org/mpris/MediaPlayer2", "--method",
-        "org.freedesktop.DBus.Properties.Get", "org.mpris.MediaPlayer2.Player",
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.mpris.MediaPlayer2.stremio",
+        "--object-path",
+        "/org/mpris/MediaPlayer2",
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        "org.mpris.MediaPlayer2.Player",
         "PlaybackStatus",
     )
-    detector = FakeDetector(outputs={
-        list_cmd: "(['org.mpris.MediaPlayer2.stremio'],)",
-        status_cmd: "(<('Playing',)>,)",
-    })
+    detector = FakeDetector(
+        outputs={
+            list_cmd: "(['org.mpris.MediaPlayer2.stremio'],)",
+            status_cmd: "(<('Playing',)>,)",
+        }
+    )
 
     snapshot = detector.snapshot()
 
@@ -72,20 +96,28 @@ def test_mpris_playing_reports_watching():
 
 
 def test_pipewire_media_stream_reports_watching():
-    detector = FakeDetector(outputs={
-        (
-            "gdbus", "call", "--session", "--dest", "org.freedesktop.DBus",
-            "--object-path", "/org/freedesktop/DBus", "--method",
-            "org.freedesktop.DBus.ListNames",
-        ): "([],)",
-        ("wpctl", "status"): """
+    detector = FakeDetector(
+        outputs={
+            (
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.DBus",
+                "--object-path",
+                "/org/freedesktop/DBus",
+                "--method",
+                "org.freedesktop.DBus.ListNames",
+            ): "([],)",
+            ("wpctl", "status"): """
 Audio
  └─ Streams:
         99. Stremio
              100. output_FL > Built-in Audio
 Video
 """,
-    })
+        }
+    )
 
     snapshot = detector.snapshot()
 
@@ -117,3 +149,169 @@ def test_build_factors_include_latitude_device_and_playback_state():
     assert factors[0]["key"] == "device"
     assert factors[0]["value"] == "latitude"
     assert {f["key"] for f in factors} >= {"playback_active", "detection_method"}
+
+
+def test_mpris_browser_streaming_page_reports_watching():
+    list_cmd = (
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.DBus",
+        "--object-path",
+        "/org/freedesktop/DBus",
+        "--method",
+        "org.freedesktop.DBus.ListNames",
+    )
+    status_cmd = (
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.mpris.MediaPlayer2.firefox.instance42",
+        "--object-path",
+        "/org/mpris/MediaPlayer2",
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        "org.mpris.MediaPlayer2.Player",
+        "PlaybackStatus",
+    )
+    metadata_cmd = (
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.mpris.MediaPlayer2.firefox.instance42",
+        "--object-path",
+        "/org/mpris/MediaPlayer2",
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        "org.mpris.MediaPlayer2.Player",
+        "Metadata",
+    )
+    detector = FakeDetector(
+        outputs={
+            list_cmd: "(['org.mpris.MediaPlayer2.firefox.instance42'],)",
+            status_cmd: "(<('Playing',)>,)",
+            metadata_cmd: "{'xesam:url': <'https://www.hulu.com/watch/abc'>, 'xesam:title': <'Hulu'>}",
+        }
+    )
+
+    snapshot = detector.snapshot()
+
+    assert snapshot.active is True
+    assert snapshot.method == "mpris"
+    assert snapshot.player == "firefox"
+
+
+def test_mpris_browser_non_streaming_page_does_not_report_watching():
+    list_cmd = (
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.DBus",
+        "--object-path",
+        "/org/freedesktop/DBus",
+        "--method",
+        "org.freedesktop.DBus.ListNames",
+    )
+    status_cmd = (
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.mpris.MediaPlayer2.firefox.instance42",
+        "--object-path",
+        "/org/mpris/MediaPlayer2",
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        "org.mpris.MediaPlayer2.Player",
+        "PlaybackStatus",
+    )
+    metadata_cmd = (
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.mpris.MediaPlayer2.firefox.instance42",
+        "--object-path",
+        "/org/mpris/MediaPlayer2",
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        "org.mpris.MediaPlayer2.Player",
+        "Metadata",
+    )
+    detector = FakeDetector(
+        outputs={
+            list_cmd: "(['org.mpris.MediaPlayer2.firefox.instance42'],)",
+            status_cmd: "(<('Playing',)>,)",
+            metadata_cmd: "{'xesam:url': <'https://example.com'>, 'xesam:title': <'Example'>}",
+        }
+    )
+
+    snapshot = detector.snapshot()
+
+    assert snapshot.active is False
+
+
+def test_pipewire_browser_streaming_title_reports_watching():
+    detector = FakeDetector(
+        outputs={
+            (
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.DBus",
+                "--object-path",
+                "/org/freedesktop/DBus",
+                "--method",
+                "org.freedesktop.DBus.ListNames",
+            ): "([],)",
+            ("wpctl", "status"): """
+Audio
+ └─ Streams:
+        99. Firefox
+             100. output_FL > Built-in Audio
+Video
+""",
+            ("xdotool", "getactivewindow", "getwindowname"): "YouTube - Firefox",
+        }
+    )
+
+    snapshot = detector.snapshot()
+
+    assert snapshot.active is True
+    assert snapshot.method == "pipewire"
+    assert snapshot.player == "firefox"
+
+
+def test_pipewire_browser_audio_without_streaming_title_does_not_report_watching():
+    detector = FakeDetector(
+        outputs={
+            (
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.DBus",
+                "--object-path",
+                "/org/freedesktop/DBus",
+                "--method",
+                "org.freedesktop.DBus.ListNames",
+            ): "([],)",
+            ("wpctl", "status"): """
+Audio
+ └─ Streams:
+        99. Firefox
+             100. output_FL > Built-in Audio
+Video
+""",
+            ("xdotool", "getactivewindow", "getwindowname"): "Docs - Firefox",
+        }
+    )
+
+    snapshot = detector.snapshot()
+
+    assert snapshot.active is False

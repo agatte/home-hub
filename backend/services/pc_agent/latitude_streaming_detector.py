@@ -5,6 +5,7 @@ Runs on the production Latitude and reports active living-room media playback as
 requires playback evidence (MPRIS Playing or a PipeWire media stream); a merely
 open Stremio window is not enough.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,6 +24,8 @@ from typing import Callable, Optional
 import httpx
 import psutil
 
+from backend.services.pc_agent.game_list import WATCHING_TITLE_KEYWORDS
+
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "latitude_streaming_detector.log"
 LOG_DIR.mkdir(exist_ok=True)
@@ -35,7 +38,10 @@ _console = logging.StreamHandler()
 _console.setFormatter(_fmt)
 logger.addHandler(_console)
 _file_handler = RotatingFileHandler(
-    LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8",
+    LOG_FILE,
+    maxBytes=2 * 1024 * 1024,
+    backupCount=2,
+    encoding="utf-8",
 )
 _file_handler.setFormatter(_fmt)
 logger.addHandler(_file_handler)
@@ -62,6 +68,7 @@ PIPEWIRE_STREAM_HINTS = (
     "chromium",
     "qtwebengine",
 )
+BROWSER_PROCESS_HINTS = frozenset({"firefox", "chrome", "chromium"})
 
 
 @dataclass
@@ -178,47 +185,55 @@ class LatitudeStreamingDetector:
         names = self._mpris_names()
         for name in names:
             status = self._mpris_playback_status(name)
-            if status == "Playing":
-                player = name.rsplit(".", 1)[-1].lower()
-                return PlaybackSnapshot(
-                    active=True,
-                    method="mpris",
-                    player=player,
-                    processes=processes,
-                    detail=name,
-                )
+            if status != "Playing":
+                continue
+            player = self._mpris_player_name(name)
+            metadata = self._mpris_metadata(name)
+            if self._browser_hint(name) and not self._looks_like_streaming_page(metadata):
+                continue
+            return PlaybackSnapshot(
+                active=True,
+                method="mpris",
+                player=player,
+                processes=processes,
+                detail=metadata or name,
+            )
         return PlaybackSnapshot(active=False, method="mpris", processes=processes)
 
     def _mpris_names(self) -> list[str]:
-        result = self._run([
-            "gdbus",
-            "call",
-            "--session",
-            "--dest",
-            "org.freedesktop.DBus",
-            "--object-path",
-            "/org/freedesktop/DBus",
-            "--method",
-            "org.freedesktop.DBus.ListNames",
-        ])
+        result = self._run(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.DBus",
+                "--object-path",
+                "/org/freedesktop/DBus",
+                "--method",
+                "org.freedesktop.DBus.ListNames",
+            ]
+        )
         if result.returncode != 0:
             return []
         return sorted(set(re.findall(r"org\.mpris\.MediaPlayer2[\w.:-]*", result.stdout)))
 
     def _mpris_playback_status(self, bus_name: str) -> Optional[str]:
-        result = self._run([
-            "gdbus",
-            "call",
-            "--session",
-            "--dest",
-            bus_name,
-            "--object-path",
-            "/org/mpris/MediaPlayer2",
-            "--method",
-            "org.freedesktop.DBus.Properties.Get",
-            "org.mpris.MediaPlayer2.Player",
-            "PlaybackStatus",
-        ])
+        result = self._run(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                bus_name,
+                "--object-path",
+                "/org/mpris/MediaPlayer2",
+                "--method",
+                "org.freedesktop.DBus.Properties.Get",
+                "org.mpris.MediaPlayer2.Player",
+                "PlaybackStatus",
+            ]
+        )
         if result.returncode != 0:
             return None
         for status in ("Playing", "Paused", "Stopped"):
@@ -226,21 +241,69 @@ class LatitudeStreamingDetector:
                 return status
         return None
 
+    def _mpris_metadata(self, bus_name: str) -> str:
+        result = self._run(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                bus_name,
+                "--object-path",
+                "/org/mpris/MediaPlayer2",
+                "--method",
+                "org.freedesktop.DBus.Properties.Get",
+                "org.mpris.MediaPlayer2.Player",
+                "Metadata",
+            ]
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout
+
     def _pipewire_snapshot(self, processes: list[str]) -> PlaybackSnapshot:
         result = self._run(["wpctl", "status"])
         if result.returncode != 0:
             return PlaybackSnapshot(active=False, method="pipewire", processes=processes)
         section = self._audio_streams_section(result.stdout).lower()
+        active_title = self._active_window_title()
         for hint in PIPEWIRE_STREAM_HINTS:
-            if hint in section:
-                return PlaybackSnapshot(
-                    active=True,
-                    method="pipewire",
-                    player=hint,
-                    processes=processes,
-                    detail=hint,
-                )
+            if hint not in section:
+                continue
+            if self._browser_hint(hint) and not self._looks_like_streaming_page(active_title):
+                continue
+            return PlaybackSnapshot(
+                active=True,
+                method="pipewire",
+                player=hint,
+                processes=processes,
+                detail=active_title or hint,
+            )
         return PlaybackSnapshot(active=False, method="pipewire", processes=processes)
+
+    def _active_window_title(self) -> str:
+        result = self._run(["xdotool", "getactivewindow", "getwindowname"])
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
+    @staticmethod
+    def _mpris_player_name(bus_name: str) -> str:
+        lowered = bus_name.lower()
+        for hint in BROWSER_PROCESS_HINTS:
+            if hint in lowered:
+                return hint
+        return bus_name.rsplit(".", 1)[-1].lower()
+
+    @staticmethod
+    def _browser_hint(value: str) -> bool:
+        lowered = value.lower()
+        return any(hint in lowered for hint in BROWSER_PROCESS_HINTS)
+
+    @staticmethod
+    def _looks_like_streaming_page(value: str) -> bool:
+        lowered = value.lower()
+        return any(keyword in lowered for keyword in WATCHING_TITLE_KEYWORDS)
 
     @staticmethod
     def _audio_streams_section(output: str) -> str:
@@ -288,19 +351,22 @@ def _post_health(
 ) -> None:
     now = time.time()
     try:
-        client.post(endpoint, json={
-            "origin": "latitude",
-            "agents": {
-                "latitude_streaming_detector": {
-                    "status": "running",
-                    "uptime": int(now - started_at),
-                    "restarts": 0,
-                    "last_error": last_error,
-                    "heartbeat_age": 0,
+        client.post(
+            endpoint,
+            json={
+                "origin": "latitude",
+                "agents": {
+                    "latitude_streaming_detector": {
+                        "status": "running",
+                        "uptime": int(now - started_at),
+                        "restarts": 0,
+                        "last_error": last_error,
+                        "heartbeat_age": 0,
+                    },
                 },
+                "service_uptime": int(now - started_at),
             },
-            "service_uptime": int(now - started_at),
-        })
+        )
     except Exception:
         logger.debug("latitude streaming health POST failed", exc_info=True)
 
