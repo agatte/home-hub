@@ -28,6 +28,7 @@ from backend.services.automation_constants import (
     AUTONOMOUS_PUSH_SOURCES as AUTONOMOUS_PUSH_SOURCES,
     DND_STATE_KEY as DND_STATE_KEY,
     IDLE_AMBIENT_RELAX_DWELL_SECONDS as IDLE_AMBIENT_RELAX_DWELL_SECONDS,
+    RECENT_DESK_ATTENDANCE_SECONDS as RECENT_DESK_ATTENDANCE_SECONDS,
     MODE_PRIORITY as MODE_PRIORITY,
     PRESERVE_PER_LIGHT_OVERRIDE_SOURCES as PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
     RECENT_PROCESS_WORKING_SECONDS as RECENT_PROCESS_WORKING_SECONDS,
@@ -778,6 +779,37 @@ class AutomationEngine:
         return zone == "desk"
 
 
+    def is_recently_at_desk(
+        self, window_seconds: int = RECENT_DESK_ATTENDANCE_SECONDS,
+    ) -> bool:
+        """True iff the desk was confirmed recently enough to veto automation.
+
+        PresenceFusion keeps a high-water mark that survives a non-confirming
+        desktop frame, which is the important distinction from
+        ``is_at_desk_fresh``. Use this for autonomous idle/relax pushes that
+        should not fire while Anthony is still plausibly at the desk.
+        """
+        presence = self._presence_fusion
+        if presence is not None:
+            try:
+                seconds_since = presence.seconds_since_at_desk()
+                if seconds_since is not None:
+                    return seconds_since <= window_seconds
+                return presence.is_at_desk_fresh(window_seconds)
+            except Exception:
+                logger.debug(
+                    "PresenceFusion recent-desk check failed", exc_info=True,
+                )
+        return self.is_at_desk_fresh()
+
+    def _attendance_veto_reason(self) -> Optional[str]:
+        """Reason an autonomous mode push should defer to active attendance."""
+        if self.is_recently_at_desk():
+            return "recent_desk_attendance"
+        if self.is_recent_process_working():
+            return "process_working_recent"
+        return None
+
     def is_present_in_room(self) -> bool:
         """True iff a presence source shows the user is visibly here right now.
 
@@ -962,7 +994,7 @@ class AutomationEngine:
             return False
         # Any attendance signal releases the gate. Both helpers already
         # used as autonomous-push vetoes — same semantics here.
-        if self.is_at_desk_fresh():
+        if self.is_recently_at_desk():
             return False
         if self.is_recent_process_working():
             return False
@@ -1221,7 +1253,7 @@ class AutomationEngine:
         if (
             mode == "idle"
             and self._current_mode in {"working", "watching"}
-            and self.is_at_desk_fresh()
+            and self.is_recently_at_desk()
         ):
             logger.info(
                 "Desk-presence veto: ignored %s idle while %s is at desk",
@@ -2612,11 +2644,7 @@ class AutomationEngine:
                     and self._current_mode in ("working", "idle")
                     and not await self._sonos_is_playing()
                 ):
-                    _rescue_veto: str | None = None
-                    if self.is_at_desk_fresh():
-                        _rescue_veto = "camera_at_desk"
-                    elif self.is_recent_process_working():
-                        _rescue_veto = "process_working_recent"
+                    _rescue_veto = self._attendance_veto_reason()
 
                     if _rescue_veto is None:
                         logger.info(
@@ -2659,11 +2687,7 @@ class AutomationEngine:
                         >= IDLE_AMBIENT_RELAX_DWELL_SECONDS
                     and not await self._sonos_is_playing()
                 ):
-                    _relax_veto: str | None = None
-                    if self.is_at_desk_fresh():
-                        _relax_veto = "camera_at_desk"
-                    elif self.is_recent_process_working():
-                        _relax_veto = "process_working_recent"
+                    _relax_veto = self._attendance_veto_reason()
 
                     if _relax_veto is None:
                         logger.info(
@@ -2764,11 +2788,7 @@ class AutomationEngine:
                             # in which case defer to active presence and log
                             # the veto for audit. Parallel-veto pattern mirrors
                             # late_night_rescue (commit 0dcb245).
-                            veto_reason: str | None = None
-                            if self.is_at_desk_fresh():
-                                veto_reason = "camera_at_desk"
-                            elif self.is_recent_process_working():
-                                veto_reason = "process_working_recent"
+                            veto_reason = self._attendance_veto_reason()
 
                             if veto_reason is not None:
                                 logger.debug(
@@ -2857,11 +2877,11 @@ class AutomationEngine:
                             and self._current_mode not in ("idle",)
                             and fm != self._current_mode
                         ):
-                            if self.is_at_desk_fresh():
+                            veto_reason = self._attendance_veto_reason()
+                            if veto_reason is not None:
                                 logger.debug(
-                                    "Fusion override suppressed (camera at "
-                                    "desk): %s -> %s @ %.2f",
-                                    self._current_mode, fm, fc,
+                                    "Fusion override suppressed (%s): %s -> %s @ %.2f",
+                                    veto_reason, self._current_mode, fm, fc,
                                 )
                                 if ml_logger:
                                     await ml_logger.log_decision(
@@ -2872,7 +2892,7 @@ class AutomationEngine:
                                             "agreement": fusion_result["agreement"],
                                             "signal_details": fusion_result["signals"],
                                             "action": "override",
-                                            "vetoed_by": "camera_at_desk",
+                                            "vetoed_by": veto_reason,
                                         },
                                         applied=False,
                                     )
@@ -2908,7 +2928,7 @@ class AutomationEngine:
                             and not self._manual_override
                             and self._current_mode in ("idle",)
                             and fm != self._current_mode
-                            and not self.is_at_desk_fresh()
+                            and not self.is_recently_at_desk()
                             and not self.is_recent_process_working()
                         ):
                             logger.info(
@@ -3108,7 +3128,7 @@ class AutomationEngine:
         if elapsed < dwell_required:
             return
 
-        # Gate 6: attendance vetoes — even with dwell met, fresh camera-at-desk
+        # Gate 6: attendance vetoes — even with dwell met, recent desk attendance
         # OR a recent process=working report means the user isn't actually
         # settling in (they're lying back on the bed momentarily while still
         # on the PC). Reset the dwell so a fresh 120s of bed+reclined-with-no-
@@ -3118,11 +3138,11 @@ class AutomationEngine:
         # per feedback_rule_refractory_burn_pattern.md, silent-rejection
         # conditions must run before the stamp or the rule locks itself out
         # for 4h on a no-op.
-        at_desk = self.is_at_desk_fresh()
+        at_desk = self.is_recently_at_desk()
         process_working = self.is_recent_process_working()
         if at_desk or process_working:
             logger.debug(
-                "Zone+posture rule vetoed at fire-time: at_desk_fresh=%s "
+                "Zone+posture rule vetoed at fire-time: recently_at_desk=%s "
                 "recent_process_working=%s — dwell reset",
                 at_desk, process_working,
             )

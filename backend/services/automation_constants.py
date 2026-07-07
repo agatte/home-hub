@@ -98,13 +98,18 @@ USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
 # zone went stale; PC agent had reported working 1.4s before the fire.)
 RECENT_PROCESS_WORKING_SECONDS = 10 * 60  # 10 minutes
 
+# Desk-attendance veto window for autonomous idle/relax pushes. Unlike
+# is_at_desk_fresh(), this can use PresenceFusion's high-water mark so a
+# single no-face/head-down desktop frame does not make the system treat an
+# active desk session as empty.
+RECENT_DESK_ATTENDANCE_SECONDS = 10 * 60  # 10 minutes
+
 # Ambient-relax dwell — how long the apartment must sit in `idle` (no manual
 # override, no Sonos, both attendance vetoes negative, not away) before the
-# soft-default kicks in and pushes to `relax`. Shorter than late_night_rescue
-# because it's day-agnostic — the trigger is "nothing's happening for a few
-# minutes," not "it's past 23:00." 180s is short enough to feel responsive
-# when the user actually steps away, long enough to ignore brief micro-gaps.
-IDLE_AMBIENT_RELAX_DWELL_SECONDS = 180
+# soft-default kicks in and pushes to `relax`. Slower than the original 180s
+# so brief thinking gaps or camera flicker do not make the apartment feel
+# eager to drift away from functional modes.
+IDLE_AMBIENT_RELAX_DWELL_SECONDS = 10 * 60  # 10 minutes
 
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user

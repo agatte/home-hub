@@ -113,7 +113,7 @@ The unit that's missing today is **`afk`** — "the game is running but no face 
 |---|---|---|---|
 | `TransitLightingService` | sustained 10s camera desk-loss | L1 (+kitchen) path light, 10min fade | live; just patched (cooldown) |
 | `DeskExitKitchenService` | sustained 10s desk-loss, evening/night | warm kitchen, hold-until-return; late_night corridor | live; just patched (sustain+cooldown) |
-| `ambient_relax` | `idle` ≥180s + `not is_present_in_room()` + no Sonos | push `relax` | live |
+| `ambient_relax` | `idle` ≥600s + `not is_present_in_room()` + no Sonos + no recent desk/process attendance | push `relax` | live |
 | `late_night_rescue` | 23:00+ `idle/working` + no override/Sonos + `not is_at_desk_fresh()` + `not is_recent_process_working()` | push `relax` | live |
 | `watching_sleep_guard` | late_night watching + `zone=bed+reclined` 90min | push `sleeping` | **DORMANT** (no bed source) |
 | `_evaluate_zone_posture_rule` | `zone=bed+reclined` | mode/overlay | **DORMANT** (env-gated off) |

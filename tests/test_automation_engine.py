@@ -2291,6 +2291,38 @@ class TestLateNightRescueProcessVeto:
 # fusion_auto_apply no-op guard (regression for 2026-05-12 idle-lock)
 # ---------------------------------------------------------------------------
 
+class _StickyDeskPresence:
+    """Presence fake with a recent desk high-water mark but optional fresh miss."""
+
+    def __init__(
+        self,
+        seconds_since_at_desk: float | None,
+        *,
+        at_desk_fresh: bool = False,
+        zone: str | None = None,
+    ) -> None:
+        self._seconds_since_at_desk = seconds_since_at_desk
+        self._at_desk_fresh = at_desk_fresh
+        self._zone = zone
+
+    def seconds_since_at_desk(self):
+        return self._seconds_since_at_desk
+
+    def is_at_desk_fresh(self, _max_age_s=300):
+        return self._at_desk_fresh
+
+    def is_strongly_present_any(self):
+        return False
+
+    def latest_zone(self):
+        return self._zone
+
+    def latest_posture(self):
+        return None
+
+    def get_sources(self):
+        return {}
+
 class _StubFusion:
     """Minimal fusion stub: returns a fixed compute_fusion() result.
 
@@ -2299,9 +2331,12 @@ class _StubFusion:
     that's the only method we need.
     """
 
-    def __init__(self, fused_mode: str, fused_confidence: float):
+    def __init__(
+        self, fused_mode: str, fused_confidence: float, *, can_override=False,
+    ):
         self._fm = fused_mode
         self._fc = fused_confidence
+        self._can_override = can_override
 
     def compute_fusion(self):
         return {
@@ -2309,7 +2344,7 @@ class _StubFusion:
             "fused_confidence": self._fc,
             "agreement": 0.9,
             "signals": {},
-            "can_override": False,
+            "can_override": self._can_override,
         }
 
     def report_signal(self, *args, **kwargs):
@@ -2335,6 +2370,136 @@ async def _drive_one_tick(engine: AutomationEngine) -> None:
     ):
         await engine.run_loop()
 
+
+class TestRecentDeskAttendanceVeto:
+    """Recent at-desk high-water marks suppress eager idle/relax automation."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        eng = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+        eng._ml_logger = _FakeMLLogger()
+        return eng
+
+    def test_recent_high_water_mark_counts_when_latest_frame_misses(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+
+        assert engine.is_at_desk_fresh() is False
+        assert engine.is_recently_at_desk() is True
+        assert engine._attendance_veto_reason() == "recent_desk_attendance"
+
+    def test_stale_high_water_mark_does_not_count(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            601, at_desk_fresh=False,
+        )
+
+        assert engine.is_recently_at_desk() is False
+        assert engine._attendance_veto_reason() is None
+
+    async def test_idle_report_is_vetoed_by_recent_desk_attendance(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+
+        await engine.report_activity(mode="idle", source="process")
+
+        assert engine.current_mode == "working"
+        assert engine._last_mode_source_report_at["process"] is not None
+        assert engine._idle_entered_at is None
+
+    async def test_stale_recent_desk_allows_idle_report(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            601, at_desk_fresh=False,
+        )
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+
+        await engine.report_activity(mode="idle", source="process")
+
+        assert engine.current_mode == "idle"
+        assert engine._idle_entered_at is not None
+
+    async def test_late_night_rescue_vetoes_recent_desk_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "late_night",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "working"
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "late_night_rescue"
+        assert call["applied"] is False
+        assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
+
+    async def test_ambient_relax_vetoes_recent_desk_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        engine._idle_entered_at = datetime.now(tz=TZ) - timedelta(seconds=601)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "ambient_relax"
+        assert call["applied"] is False
+        assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
+
+    async def test_fusion_auto_apply_vetoes_recent_desk_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        engine._confidence_fusion = _StubFusion("working", 0.96)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+
+    async def test_fusion_override_vetoes_recent_desk_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "working"
+        engine._confidence_fusion = _StubFusion(
+            "idle", 0.96, can_override=True,
+        )
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "fusion"
+        assert call["applied"] is False
+        assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
 
 class TestFusionAutoApplyNoOp:
     """Regression coverage for the 2026-05-12 idle-lock incident.
