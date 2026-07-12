@@ -36,7 +36,7 @@ Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastM
 - External changes (Hue app, Alexa) detected within 1 second via polling and broadcast to all WebSocket clients
 
 ### 🎵 Music
-- Sonos control via SoCo (UPnP, zero authentication)
+- Sonos control via SoCo (UPnP, zero authentication), including the global now-playing chip that opens an in-page player overlay
 - Mode-aware playlist mapping — persisted to SQLite, manageable from the dashboard via `ModePlaylistMapper`
 - On mode change: auto-plays mapped favorite if Sonos is idle, or broadcasts a `music_suggestion` WebSocket event if busy
 - Apple Music / iTunes library XML import — parses play counts, genre distribution, and playlist signals to build a personal taste profile
@@ -58,8 +58,8 @@ Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastM
 ### 📱 Real-time Dashboard
 - SvelteKit + Threlte (Three.js) frontend served directly by FastAPI as a static build
 - WebSocket for bidirectional communication — server pushes `light_update`, `sonos_update`, `mode_update`, `music_suggestion`, `music_auto_played` events
-- Five Svelte writable stores (Lights, Sonos, Automation, Music, Connection) for granular reactivity
-- Mode-gated Threlte canvas for animated backgrounds (sleeping-mode moon scene shipped)
+- Svelte writable stores for granular reactivity: lights, Sonos, automation, music suggestions, connection, and local music-player overlay state
+- Mode-gated Threlte canvas for animated backgrounds (sleeping-mode moon scene shipped) plus global layout chrome for navigation, vitals, now-playing, and the in-page music player overlay
 - Progressive Web App with service worker — installable on Android tablet as a kiosk display, works offline
 
 ---

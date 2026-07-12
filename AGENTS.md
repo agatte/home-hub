@@ -187,6 +187,10 @@ completion workflow without waiting for extra prompts.
   journal, personality, and guest pages.
 - Use existing visual language: dense smart-home dashboard, live cards, mode
   backgrounds, Lucide icons, and established store/API helpers.
+- Root layout owns kiosk chrome (`FloatingNav`, `VitalStrip`, `ModeOverlay`,
+  `NowPlayingChip`, `MusicPlayerOverlay`); guest routes intentionally strip it.
+  The now-playing chip opens the overlay, while `/music` remains the deeper
+  discovery/settings page.
 - For Three.js/Threlte work, verify the scene renders in browser-sized desktop
   and mobile viewports.
 

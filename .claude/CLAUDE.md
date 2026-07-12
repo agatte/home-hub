@@ -131,7 +131,7 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 
 ## Frontend
 
-Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Backgrounds". Key layout: `src/lib/stores/` (WS → stores), `src/lib/ws.js` (reconnect), `src/lib/backgrounds/` (mode scenes), `src/routes/` (4 pages + hidden `/journal` + `/guest/*`). Typography: Bebas Neue (display) + Source Sans 3 (body). Lucide SVG icons.
+Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Backgrounds". Key layout: `src/lib/stores/` (WS → stores), `src/lib/ws.js` (reconnect), `src/lib/backgrounds/` (mode scenes), `src/routes/` (home/music/analytics/gameday/settings/journal/personality + `/guest/*`). Global kiosk chrome lives in root `+layout.svelte`: `FloatingNav`, `VitalStrip`, `ModeOverlay`, `NowPlayingChip`, and `MusicPlayerOverlay`; guest routes suppress that chrome. Typography: Bebas Neue (display) + Source Sans 3 (body). Lucide SVG icons.
 
 **Gotcha — Game Day 3D field:** `<Canvas autoRender={false} toneMapping={NoToneMapping}>` is required; see `docs/GAMEDAY_SPEC.md` §11 + memory `project_gameday_3d_field_gotchas.md`. `postprocessing@6.35.4` peer dep must stay pinned.
 
@@ -182,7 +182,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Events | `/api/events` | `events.py` — activity/playback/light/scene aggregation, mode timeline (backs journal + analytics) |
 | Plants | `/api/plants` | `plants.py` — external plant app summary (10-min TTL); 503 when unset |
 | Bar | `/api/bar` | `bar.py` — Home Bar app summary; 503 when `BAR_APP_URL` unset |
-| Ambient | `/api/ambient` | `ambient.py` — browser ambient audio state/volume/map/weather config |
+| Ambient | `/api/ambient` | `ambient.py` — Sonos-only ambient sound state/volume/map/weather config |
 | Notification | `/api/notification` | `notification.py` — `POST /test` synthetic notification; bypasses DND/coalesce/boot gating |
 | Personality | `/api/personality` | `personality.py` — mood current/history, calibration, settings, `/vibe`; backs `/personality` + Siri/iOS Shortcut vibe flow; spec PERSONALITY_LAYER |
 | Presence | `/api/presence` | `presence.py` — `POST /geofence` (iOS Shortcut leave/arrive via tunnel, strict auth) + `GET /status`; backs AwayManager (D2/D6) |
@@ -348,4 +348,3 @@ Keys you **hand-edit** (no UI; edit the row directly):
 - **Android tablet blank page** — deferred.
 
 Non-goals + scope discussion: `docs/PROJECT_SPEC.md`.
-
