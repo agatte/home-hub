@@ -11,6 +11,7 @@
   import NowPlayingIdle from '$lib/components/NowPlayingIdle.svelte'
   import FloatingNav from '$lib/components/FloatingNav.svelte'
   import NowPlayingChip from '$lib/components/NowPlayingChip.svelte'
+  import MusicPlayerOverlay from '$lib/components/MusicPlayerOverlay.svelte'
   import ErrorToast from '$lib/components/ErrorToast.svelte'
   import VitalStrip from '$lib/components/VitalStrip.svelte'
   import ModeSuggestionToast from '$lib/components/ModeSuggestionToast.svelte'
@@ -67,6 +68,7 @@
 {#if !isGuestRoute}
   <FloatingNav />
   <NowPlayingChip />
+  <MusicPlayerOverlay />
   <VitalStrip />
   <!-- Rule-engine mode suggestion toast: cross-route coverage. Self-suppresses
        on / where ModeSuggestionCard owns the banner spot. -->

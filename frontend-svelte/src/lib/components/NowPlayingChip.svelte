@@ -1,5 +1,6 @@
 <script>
   import { sonos } from '$lib/stores/sonos.js'
+  import { openMusicPlayer } from '$lib/stores/musicPlayer.js'
 
   $: playing = $sonos.state === 'PLAYING'
   $: track = $sonos.track || ''
@@ -9,11 +10,12 @@
 </script>
 
 {#if hasTrack}
-  <a
-    href="/music"
+  <button
+    type="button"
     class="now-playing-chip"
     class:is-playing={playing}
-    aria-label={artist ? `Now playing: ${track} by ${artist}` : `Now playing: ${track}`}
+    aria-label={artist ? `Open music player: ${track} by ${artist}` : `Open music player: ${track}`}
+    on:click={openMusicPlayer}
   >
     {#if artUrl}
       <img class="chip-art" src={artUrl} alt="" width="32" height="32" />
@@ -28,7 +30,7 @@
         <div class="chip-artist">{artist}</div>
       {/if}
     </div>
-  </a>
+  </button>
 {/if}
 
 <style>
@@ -45,9 +47,10 @@
     -webkit-backdrop-filter: blur(16px) saturate(1.2);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 999px;
-    z-index: 45;
+    z-index: 85;
     text-decoration: none;
     color: inherit;
+    font: inherit;
     max-width: 280px;
     transition: border-color 0.2s, opacity 0.3s;
     cursor: pointer;
@@ -89,6 +92,7 @@
   .chip-text {
     min-width: 0;
     overflow: hidden;
+    text-align: left;
   }
 
   .chip-track {
