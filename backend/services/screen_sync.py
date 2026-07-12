@@ -83,9 +83,9 @@ MODE_MAX_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
     # L2 (fabric shade) — curator-proposed ratios ~1.2× the per-period static
     # baseline (150/140/110) give the sync headroom to pop on bright content
     # without becoming the room's dominant visual element.
-    ("gaming", "evening",    "2"): 185,
-    ("gaming", "night",      "2"): 170,
-    ("gaming", "late_night", "2"): 130,
+    ("gaming", "evening",    "2"): 170,
+    ("gaming", "night",      "2"): 125,
+    ("gaming", "late_night", "2"):  95,
     # L5 (clear seeded glass) — Stage-2 2026-05-31 (curator agent a976374):
     # caps RAISED above the lowered static resting floor (90/75/65/50) so
     # screen-sync can LIFT L5 on vivid frames instead of dragging it below its
@@ -94,9 +94,9 @@ MODE_MAX_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
     # scales warm/green frames down, so the lift mainly benefits low-luma blue
     # gaming content. Evening cap (95) intentionally exceeds day (flat 60): an
     # accent should read MORE present in a dark room than in daylight.
-    ("gaming", "evening",    "5"):  95,
-    ("gaming", "night",      "5"):  80,
-    ("gaming", "late_night", "5"):  50,
+    ("gaming", "evening",    "5"):  80,
+    ("gaming", "night",      "5"):  55,
+    ("gaming", "late_night", "5"):  35,
 }
 
 # Per-(mode, light_id) minimum brightness. Gaming stays visible even on
@@ -124,14 +124,19 @@ MODE_MIN_BRIGHTNESS: dict[tuple[str, str], int] = {
 # Desk-watching needs a small dark-frame floor so videos remain comfortable
 # at the monitor without turning projector/bed watching into working mode.
 MODE_ZONE_MIN_BRIGHTNESS: dict[tuple[str, str, str, str], int] = {
-    ("watching", "desk", "night",      "2"): 45,
-    ("watching", "desk", "late_night", "2"): 35,
-    ("watching", "desk", "night",      "5"): 24,
-    ("watching", "desk", "late_night", "5"): 20,
+    ("watching", "desk", "night",      "2"): 30,
+    ("watching", "desk", "late_night", "2"): 25,
+    ("watching", "desk", "night",      "5"): 18,
+    ("watching", "desk", "late_night", "5"): 14,
 }
 
 MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
-    ("gaming", "late_night", "2"): 110,
+    ("gaming", "evening", "2"): 125,
+    ("gaming", "night", "2"): 85,
+    ("gaming", "late_night", "2"): 65,
+    ("gaming", "evening", "5"): 35,
+    ("gaming", "night", "5"): 28,
+    ("gaming", "late_night", "5"): 20,
     # Day-specific floors 2026-06-02 (curator): blinds-closed "day" is the dim
     # complaint case the day-only caps wrongly assume is bright. L2 carries the
     # room light; L5 gets a slightly-more-present accent than a bright-sun day.
@@ -155,7 +160,11 @@ MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
 # zone="desk" emission (Phase 1). The bed entries are kept (not deleted) for
 # revival if bed-zone detection is later added via the desktop's wide FoV.
 MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
-    ("watching", "desk",            "2"): 180,
+    ("watching", "desk", "day",        "2"): 180,
+    ("watching", "desk", "evening",    "2"): 140,
+    ("watching", "desk", "night",      "2"): 110,
+    ("watching", "desk", "late_night", "2"):  80,
+    ("watching", "desk",            "2"): 120,
     ("watching", "bed", "reclined", "2"):  25,
     ("watching", "bed", "upright",  "2"):  60,
     ("watching", "bed", "reclined", "5"):  20,
@@ -305,6 +314,7 @@ class ScreenSyncService:
 
         Lookup order: runtime override 4-tuple → MODE_ZONE_MAX_BRIGHTNESS
         4-tuple (mode, zone, posture, light_id) → MODE_ZONE_MAX_BRIGHTNESS
+        4-tuple (mode, zone, period, light_id) → MODE_ZONE_MAX_BRIGHTNESS
         3-tuple (mode, zone, light_id) → MODE_MAX_BRIGHTNESS_PERIOD
         (mode, period, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)]
         → default.
@@ -314,7 +324,7 @@ class ScreenSyncService:
         should hard-cap regardless of time of day.
 
         Ambient envelope lift: for ``mode`` in ``_AMBIENT_LIFT_MODES``
-        (gaming + watching) across ALL periods, the resolved cap is scaled by
+        (gaming + watching) during day/evening, the resolved cap is scaled by
         ``lux_multiplier * get_functional_weather_multiplier(mode, period,
         weather_condition)`` (cloudy 1.10×, rain 1.15×, etc.) — see
         ``_scale_for_ambient``. L5 is excluded from the lift (glare-prone clear
@@ -328,6 +338,12 @@ class ScreenSyncService:
                     override, mode, period, lux_multiplier, weather_condition, light_id,
                 )
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture, light_id))
+            if cap is not None:
+                return self._scale_for_ambient(
+                    cap, mode, period, lux_multiplier, weather_condition, light_id,
+                )
+        if zone is not None and period is not None:
+            cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, period, light_id))
             if cap is not None:
                 return self._scale_for_ambient(
                     cap, mode, period, lux_multiplier, weather_condition, light_id,
@@ -365,7 +381,7 @@ class ScreenSyncService:
         MODE_MIN_BRIGHTNESS (mode, light_id) → MIN_BRIGHTNESS default.
 
         Subject to the same ambient lift as ``get_cap`` (gaming + watching,
-        all periods, L2 only) — the floor lifting is the main eye-comfort
+        day/evening, L2 only) — the floor lifting is the main eye-comfort
         payoff: dark content no longer drags L2 down to fabric-shade dimness
         when the bedroom itself is dark.
         """
@@ -390,11 +406,9 @@ class ScreenSyncService:
 
     # Modes whose screen-sync envelope tracks ambient lux + weather. Both
     # gaming and watching run in the dim bedroom and the user's stated intent
-    # is "brighter when the room is dark" for BOTH (2026-06-02). Widened from
-    # gaming-day-only on 2026-06-02 (D4 task #7) — the night-time risk is
-    # contained by the lift being self-limiting (lifting the lamps brightens
-    # the room the webcam measures, so the lux mult settles ~1.02) and by the
-    # weather grid tapering to 1.0 at night/late_night.
+    # is "brighter when the room is dark" during day/evening gloom. Night and
+    # late_night deliberately stay on their darker envelopes even when the
+    # bedroom lux sensor reports a dark room.
     _AMBIENT_LIFT_MODES: frozenset[str] = frozenset({"gaming", "watching"})
 
     # Lights EXCLUDED from the ambient lift. L5 (clear seeded-glass pendant) is
@@ -406,6 +420,7 @@ class ScreenSyncService:
     # (build 4adce9f). See [[feedback_clear_housing_perceptual_luma]] + this
     # session's "L2 carries the room light" curator reframe.
     _AMBIENT_LIFT_EXCLUDE_LIGHTS: frozenset[str] = frozenset({"5"})
+    _AMBIENT_LIFT_PERIODS: frozenset[str] = frozenset({"day", "evening"})
 
     # Worst-case stacked multiplier ceiling: LUX_CURVE peaks at 1.30 (20 lux
     # baseline-shifted) and FUNCTIONAL_WEATHER_BRIGHTNESS peaks at 1.20
@@ -429,16 +444,17 @@ class ScreenSyncService:
 
         Gated to ``_AMBIENT_LIFT_MODES`` (gaming + watching) and to lamps NOT
         in ``_AMBIENT_LIFT_EXCLUDE_LIGHTS`` (L5 rides its static per-period
-        caps to avoid point-source glare). All time periods are eligible: the
-        weather grid already tapers to 1.0 at night/late_night and the lux
-        multiplier is self-limiting, so the night-time lift is a gentle top-up
-        on L2's floor — the eye-comfort payoff for a dark room. The combined
-        multiplier is capped at ``_AMBIENT_LIFT_CEILING``; final value clamped
+        caps to avoid point-source glare). Only day/evening are eligible: at night
+        the mode-specific darker envelope wins even when the bedroom sensor
+        reads dark. The combined multiplier is capped at
+        ``_AMBIENT_LIFT_CEILING``; final value clamped
         to [1, 254].
         """
         if mode not in ScreenSyncService._AMBIENT_LIFT_MODES:
             return value
         if light_id in ScreenSyncService._AMBIENT_LIFT_EXCLUDE_LIGHTS:
+            return value
+        if period not in ScreenSyncService._AMBIENT_LIFT_PERIODS:
             return value
         weather_mult = get_functional_weather_multiplier(
             mode, period, weather_condition,
@@ -580,7 +596,7 @@ class ScreenSyncService:
                 the room's ambient.
             lux_multiplier: Camera-derived brightness multiplier (from
                 ``lux_to_multiplier``). Consumed for gaming + watching across
-                all periods (L2 only — L5 is excluded); lifts the cap+floor
+                day/evening (L2 only — L5 is excluded); lifts the cap+floor
                 envelope on dim ambient. Defaults to 1.0 (no lift).
             weather_condition: Classified weather string ("clouds" / "rain"
                 / "thunderstorm" / "snow" / None). Same gate as

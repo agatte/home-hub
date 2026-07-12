@@ -343,22 +343,22 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "5": {"on": True, "bri": 75,  "hue": 48000, "sat": 170},
         },
         "night": {
-            "1": {"on": True, "bri": 70,  "hue": 47000, "sat": 200},
-            "2": {"on": True, "bri": 140, "hue": 46920, "sat": 200},
-            "3": {"on": True, "bri": 40,  "hue": 39500, "sat": 200},
-            "4": {"on": True, "bri": 40,  "hue": 39500, "sat": 200},
-            "5": {"on": True, "bri": 65,  "hue": 48000, "sat": 175},
+            "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 190},
+            "2": {"on": True, "bri": 105, "hue": 46920, "sat": 190},
+            "3": {"on": True, "bri": 25,  "hue": 39500, "sat": 190},
+            "4": {"on": True, "bri": 25,  "hue": 39500, "sat": 190},
+            "5": {"on": True, "bri": 45,  "hue": 48000, "sat": 165},
         },
         # Late-night gaming — warmer accent, less saturation, dimmed overall.
         # L1 shifts toward muted teal, L2 (desk dominant) keeps the blue but
         # at lower bri to ease eye strain. Kitchen stays a dim accent but is
         # now visible (was bri18 = invisible) so the surround isn't pitch black.
         "late_night": {
-            "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 160},
-            "2": {"on": True, "bri": 110, "hue": 46920, "sat": 170},
-            "3": {"on": True, "bri": 28,  "hue": 39500, "sat": 180},
-            "4": {"on": True, "bri": 28,  "hue": 39500, "sat": 180},
-            "5": {"on": True, "bri": 50,  "hue": 47500, "sat": 150},
+            "1": {"on": True, "bri": 45,  "hue": 47000, "sat": 150},
+            "2": {"on": True, "bri": 80,  "hue": 46920, "sat": 155},
+            "3": {"on": True, "bri": 18,  "hue": 39500, "sat": 160},
+            "4": {"on": True, "bri": 18,  "hue": 39500, "sat": 160},
+            "5": {"on": True, "bri": 35,  "hue": 47500, "sat": 140},
         },
     },
     # ── Working ───────────────────────────────────────────────────────
@@ -392,30 +392,25 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "5": {"on": True, "bri": 140, "ct": 370},
         },
         "night": {
-            "1": {"on": True, "bri": 60,  "ct": 440},
-            "2": {"on": True, "bri": 130, "ct": 370},
+            "1": {"on": True, "bri": 45,  "ct": 440},
+            "2": {"on": True, "bri": 105, "ct": 370},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
             # L5 night: depth gradient — L2 stays dominant desk read,
             # L5 sits in ambient layer alongside L1.
-            "5": {"on": True, "bri": 100, "ct": 400},
+            "5": {"on": True, "bri": 60,  "ct": 420},
         },
         # Distinct from night: warmer and slightly brighter so 1am+ desk
         # work stays readable without falling back to relax-dim. Kitchen
         # stays off; this is desk-only late-night functional lighting.
         "late_night": {
-            "1": {"on": True, "bri": 90,  "ct": 454},
-            "2": {"on": True, "bri": 160, "ct": 400},
+            "1": {"on": True, "bri": 45,  "ct": 454},
+            "2": {"on": True, "bri": 95,  "ct": 400},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            # L5 late_night: iterative tune-by-feel after Phase C pass-3.
-            # 120/440 → 100/454 (first tune, still bright) → 70/470 (this).
-            # Clear housing's visible filament reads as ambient warmth even
-            # at very low bri, so we can drop further than fabric-shade L2
-            # without losing presence. Lands clearly below L1's 90-anchor
-            # so L5 reads as "on but soft" rather than "second functional
-            # source." L2 at bri=160 carries the actual desk-task read.
-            "5": {"on": True, "bri": 70, "ct": 470},
+            # L5 late_night: clear housing reads bright from the desk, so keep
+            # it as a warm low accent while L2 carries the task read.
+            "5": {"on": True, "bri": 40, "ct": 470},
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
@@ -436,18 +431,18 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         # glare. Pulled bri below the projector-safe floor, ct pushed warmer to
         # blend into ambient darkness without competing with the screen.
         "evening": {
-            "1": {"on": True, "bri": 65,  "ct": 400},
-            "2": {"on": True, "bri": 40,  "ct": 400},
+            "1": {"on": True, "bri": 55,  "ct": 400},
+            "2": {"on": True, "bri": 30,  "ct": 400},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            "5": {"on": True, "bri": 20,  "ct": 454},
+            "5": {"on": True, "bri": 15,  "ct": 454},
         },
         "night": {
-            "1": {"on": True, "bri": 60,  "ct": 454},
-            "2": {"on": True, "bri": 30,  "ct": 454},
+            "1": {"on": True, "bri": 45,  "ct": 454},
+            "2": {"on": True, "bri": 20,  "ct": 454},
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
-            "5": {"on": True, "bri": 15,  "ct": 500},
+            "5": {"on": True, "bri": 12,  "ct": 500},
         },
     },
     # ── Social ────────────────────────────────────────────────────────
@@ -625,11 +620,11 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "5": {"on": True, "bri": 50,  "ct": 400},
         },
         "night": {
-            "1": {"on": True, "bri": 60,  "ct": 420},
-            "2": {"on": True, "bri": 25,  "ct": 454},
-            "3": {"on": True, "bri": 180, "ct": 370},
-            "4": {"on": True, "bri": 180, "ct": 370},
-            "5": {"on": True, "bri": 25,  "ct": 454},
+            "1": {"on": True, "bri": 45,  "ct": 420},
+            "2": {"on": True, "bri": 20,  "ct": 454},
+            "3": {"on": True, "bri": 130, "ct": 370},
+            "4": {"on": True, "bri": 130, "ct": 370},
+            "5": {"on": True, "bri": 18,  "ct": 454},
         },
     },
 }

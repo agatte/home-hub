@@ -244,13 +244,12 @@ async def test_watching_desk_night_dark_frame_gets_small_floor_lift():
     desk = hue2.last_for("2")["bri"]
 
     assert 14 <= non_desk <= 16
-    assert 43 <= desk <= 47
+    assert 28 <= desk <= 31
     assert desk > non_desk
 
 @pytest.mark.asyncio
 async def test_late_night_floor_drop_for_l2():
-    """L2's late_night floor drops to 110 so dark scenes can dim past the
-    default 130 floor (which equals the late_night cap, collapsing range)."""
+    """L2's late_night floor stays well below the night cap for dark scenes."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
@@ -259,9 +258,9 @@ async def test_late_night_floor_drop_for_l2():
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="late_night")
     bri = hue.last_for("2")["bri"]
 
-    # Floor at late_night should be 110, not 130. Allow 1 unit slack for EMA
-    # asymptotic convergence + int-cast.
-    assert 108 <= bri <= 112, f"expected floor near 110, got {bri}"
+    # Floor at late_night should be near 65, well below the cap. Allow 1 unit
+    # slack for EMA asymptotic convergence + int-cast.
+    assert 63 <= bri <= 66, f"expected floor near 65, got {bri}"
 
 
 @pytest.mark.asyncio
@@ -381,6 +380,15 @@ def test_scale_for_ambient_evening_now_lifts():
     # gaming-evening rain = 1.07; 150 × min(1.40, 1.20 × 1.07 = 1.284) =
     # 150 × 1.284 = 192.6 → 192
     assert out == 192
+
+def test_scale_for_ambient_night_does_not_lift_l2():
+    """Night keeps the darker mode envelope even when the bedroom reads dark."""
+    out = ss.ScreenSyncService._scale_for_ambient(
+        85, mode="gaming", period="night",
+        lux_multiplier=1.30, weather_condition="thunderstorm",
+        light_id="2",
+    )
+    assert out == 85
 
 
 def test_scale_for_ambient_l5_excluded_from_lift():

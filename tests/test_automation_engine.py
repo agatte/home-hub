@@ -176,6 +176,14 @@ class TestActivityStateResolution:
         if day and night:
             assert day != night
 
+    def test_working_late_night_is_dimmer_than_night(self):
+        night = _resolve_activity_state("working", time_period="night")
+        late = _resolve_activity_state("working", time_period="late_night")
+        assert late["2"]["bri"] < night["2"]["bri"]
+        assert late["5"]["bri"] < night["5"]["bri"]
+        ratio = late["2"]["bri"] / late["1"]["bri"]
+        assert 1.0 <= ratio <= 3.0
+
 
 # ---------------------------------------------------------------------------
 # AutomationEngine — core behavior
@@ -1291,7 +1299,9 @@ class TestScreenSyncPostureCap:
 
     def test_desk_entry_preserved(self):
         from backend.services.screen_sync import MODE_ZONE_MAX_BRIGHTNESS
-        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk", "2")] == 180
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk", "day", "2")] == 180
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk", "night", "2")] == 110
+        assert MODE_ZONE_MAX_BRIGHTNESS[("watching", "desk", "2")] == 120
 
 
 # ---------------------------------------------------------------------------
@@ -1317,13 +1327,16 @@ class TestWatchingPostureRuntimeTuning:
         assert sync.get_cap("watching", "5", "bed", "reclined") == 20
         # Sibling entries untouched.
         assert sync.get_cap("watching", "2", "bed", "upright") == 60
-        assert sync.get_cap("watching", "2", "desk", "upright") == 180
+        assert sync.get_cap("watching", "2", "desk", "upright") == 120
+        assert sync.get_cap("watching", "2", "desk", "upright", period="night") == 110
 
     def test_screen_sync_cap_fallback_order(self, mock_hue):
         from backend.services.screen_sync import ScreenSyncService
         sync = ScreenSyncService(mock_hue, target_light_ids=["2", "5"])
-        # Posture missing — falls back to (mode, zone, light_id).
-        assert sync.get_cap("watching", "2", "desk", None) == 180
+        # Posture missing — falls back through period-specific, then generic zone cap.
+        assert sync.get_cap("watching", "2", "desk", None, period="day") == 180
+        assert sync.get_cap("watching", "2", "desk", None, period="night") == 110
+        assert sync.get_cap("watching", "2", "desk", None) == 120
         # Mode-only fallback (L2 working has no entry → default).
         assert sync.get_cap("working", "2", None, None) > 0
 
@@ -1616,8 +1629,8 @@ class TestApplyModeDedup:
         mode, period, states = sync.calls[-1]
         assert mode == "watching"
         assert period == "night"
-        assert states["2"]["bri"] == 30
-        assert states["5"]["bri"] == 15
+        assert states["2"]["bri"] == 20
+        assert states["5"]["bri"] == 12
 
 
 # ---------------------------------------------------------------------------
