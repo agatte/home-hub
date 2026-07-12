@@ -5,17 +5,50 @@
 
 $ProjectRoot = "C:\Users\antho\Desktop\home-hub"
 $LogFile = Join-Path $ProjectRoot "logs\supervisor.log"
+$TaskName = "Home Hub Agent Supervisor"
+
+function Stop-AgentProcess {
+    param(
+        [Parameter(Mandatory=$true)] $Process,
+        [Parameter(Mandatory=$true)] [string] $Module
+    )
+
+    Write-Host "  Killing PID $($Process.ProcessId) ($Module)"
+    try {
+        Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
+    } catch {
+        # Some wedged pythonw.exe instances can remain visible to WMI while
+        # Stop-Process/taskkill cannot resolve them. WMI termination has cleaned
+        # up that limbo state in practice.
+        try {
+            $result = $Process | Invoke-CimMethod -MethodName Terminate -ErrorAction Stop
+            if ($null -ne $result -and $result.ReturnValue -ne 0) {
+                Write-Host "    WMI terminate returned $($result.ReturnValue)"
+            }
+        } catch {
+            Write-Host "    Could not terminate PID $($Process.ProcessId): $($_.Exception.Message)"
+        }
+    }
+}
 
 Write-Host "Stopping existing agent processes..."
 
-# Kill any pythonw processes running our agents or supervisor
-$AgentModules = @("activity_detector", "ambient_monitor", "screen_sync_agent", "supervisor")
+# Kill any pythonw processes running our agents or supervisor.
+$AgentModules = @(
+    "activity_detector",
+    "ambient_monitor",
+    "screen_sync_agent",
+    "sleep_watcher",
+    "emotion_capture",
+    "monitor_brightness",
+    "peripheral_rgb",
+    "supervisor"
+)
 $killed = 0
 Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | ForEach-Object {
     foreach ($mod in $AgentModules) {
         if ($_.CommandLine -match $mod) {
-            Write-Host "  Killing PID $($_.ProcessId) ($mod)"
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            Stop-AgentProcess -Process $_ -Module $mod
             $killed++
             break
         }
@@ -26,8 +59,7 @@ if ($killed -eq 0) {
     Write-Host "  No agent processes found"
 }
 
-# Also try stopping the scheduled task cleanly
-$TaskName = "Home Hub Agent Supervisor"
+# Also try stopping the scheduled task cleanly.
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task -and $task.State -eq "Running") {
     Write-Host "  Stopping scheduled task..."
@@ -35,6 +67,21 @@ if ($task -and $task.State -eq "Running") {
 }
 
 Start-Sleep -Seconds 2
+
+# Supervisor-managed agents share the supervisor process PID. If a supervisor
+# dies hard, per-agent PID locks can outlive the actual owner and block the next
+# clean supervisor from starting that agent. These locks are safe to clear here
+# because this script has just stopped every known Home Hub pythonw agent.
+$StalePidLocks = @(
+    "logs\peripheral_rgb.pid"
+)
+foreach ($relative in $StalePidLocks) {
+    $pidFile = Join-Path $ProjectRoot $relative
+    if (Test-Path -LiteralPath $pidFile) {
+        Write-Host "  Removing stale PID lock $relative"
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host "Starting agent supervisor..."
 # Route through the same VBS -> start-supervisor.ps1 chain that the
@@ -54,13 +101,19 @@ Start-Process "wscript.exe" `
 
 Start-Sleep -Seconds 4
 
-# Verify - check for any pythonw process running the supervisor
-$running = Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object {
-    $_.CommandLine -match "supervisor"
+# Verify through Get-Process instead of WMI so stale WMI rows do not look like
+# duplicate live supervisors.
+$running = Get-Process -Name pythonw -ErrorAction SilentlyContinue | Where-Object {
+    try {
+        (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine -match "supervisor"
+    } catch {
+        $false
+    }
 }
 
 if ($running) {
-    Write-Host "OK: supervisor running (PID $($running.ProcessId))" -ForegroundColor Green
+    $ids = ($running | Select-Object -ExpandProperty Id) -join ", "
+    Write-Host "OK: supervisor running (PID $ids)" -ForegroundColor Green
     Write-Host "Logs: $LogFile" -ForegroundColor Cyan
 } else {
     Write-Host "ERROR: supervisor not found - check $LogFile" -ForegroundColor Red

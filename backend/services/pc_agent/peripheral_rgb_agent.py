@@ -176,12 +176,43 @@ def _configure_standalone_logging() -> None:
 # inside run_agent is the supervisor's PID, and a restart of just our
 # thread must NOT read the file we ourselves wrote as a foreign conflict.
 
+def _pid_is_live_owner(pid: int) -> bool:
+    """Return true only for a live process that could own this agent lock."""
+    try:
+        proc = psutil.Process(pid)
+        if not proc.is_running():
+            return False
+        try:
+            if proc.status() == psutil.STATUS_ZOMBIE:
+                return False
+        except psutil.Error:
+            pass
+        try:
+            cmdline = " ".join(proc.cmdline()).lower()
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.Error:
+            # If the OS refuses details for a still-running process, be
+            # conservative and keep the lock rather than risk two SDK writers.
+            return True
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.Error:
+        return True
+
+    return (
+        "backend.services.pc_agent.peripheral_rgb_agent" in cmdline
+        or "backend.services.pc_agent.supervisor" in cmdline
+    )
+
+
 def _acquire_singleton() -> bool:
-    """Claim the agent PID lock. Return False if another LIVE process owns it.
+    """Claim the agent PID lock. Return False if another LIVE owner holds it.
 
     A PID file owned by our *own* PID is a thread restart within the same
     (supervisor) process, not a conflict — we take it over. A file owned by
-    a dead PID is stale and reclaimed. FS errors never block the feature.
+    a dead or unrelated PID is stale and reclaimed. FS errors never block the
+    feature.
     """
     try:
         if PID_FILE.exists():
@@ -189,7 +220,7 @@ def _acquire_singleton() -> bool:
                 owner = int(PID_FILE.read_text().strip())
             except (ValueError, OSError):
                 owner = -1
-            if owner > 0 and owner != os.getpid() and psutil.pid_exists(owner):
+            if owner > 0 and owner != os.getpid() and _pid_is_live_owner(owner):
                 logger.warning(
                     "Another peripheral_rgb agent owns PID %d — refusing to "
                     "start a duplicate (would fight over the OpenRGB SDK)",
@@ -197,7 +228,7 @@ def _acquire_singleton() -> bool:
                 )
                 return False
             if owner > 0 and owner != os.getpid():
-                logger.info("Stale PID file (PID %d not alive) — taking over", owner)
+                logger.info("Stale PID file (PID %d not live owner) — taking over", owner)
         PID_FILE.write_text(str(os.getpid()))
         return True
     except OSError:
