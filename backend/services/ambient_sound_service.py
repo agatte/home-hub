@@ -1,18 +1,17 @@
 """
-Ambient Sound Service — browser-based ambient audio orchestration.
+Ambient Sound Service - Sonos-only ambient audio orchestration.
 
 Manages which ambient sound should be playing (rain, fireplace, etc.) and
-broadcasts state to the frontend via WebSocket. Actual audio playback happens
-in the browser using HTML5 Audio API — this service is the state authority.
+broadcasts state to the frontend via WebSocket. Playback is intentionally
+restricted to Sonos; browser clients render state and controls only.
 
 Reacts to mode changes (registered as mode-change callback) and weather
 conditions (uses cached WeatherService data). Config is persisted to the
 app_settings table.
 
-Optionally mirrors active ambient sounds to the Sonos speaker at low volume
-when mode is not gaming/working/watching/sleeping/gameday. A follow-me volume
-loop ramps Sonos volume up when the camera detects absence (user in
-kitchen/bathroom) and back down on return.
+Ambient sounds play to the Sonos speaker at low volume when the mode is
+eligible. A follow-me volume loop ramps Sonos volume up when the camera detects
+absence (user in kitchen/bathroom) and back down on return.
 """
 import asyncio
 import logging
@@ -146,9 +145,8 @@ class AmbientSoundService:
         self._sonos_ambient_active: bool = False
         # Optimistic gate set the instant we decide Sonos will be attempted,
         # cleared once _start_sonos_ambient confirms success or fails out.
-        # Browsers silence local <audio> on active OR pending so the first
-        # broadcast after a mode flip doesn't race past the Sonos start and
-        # let the device the user just touched win on autoplay permission.
+        # Browsers never play ambient audio; pending is still broadcast so the
+        # UI can show that Sonos is being attempted.
         self._sonos_ambient_pending: bool = False
         self._sonos_ambient_uri: Optional[str] = None
         # Whether the active Sonos ambient URI is a continuous radio stream
@@ -177,6 +175,7 @@ class AmbientSoundService:
         # silence-by-default is worse than too-loud-by-default for a
         # weather-reactive ambient layer.
         self._sonos_enabled: bool = True
+        self._sonos_only_migrated: bool = False
         self._sonos_present_volume: int = 25  # Sonos level when user is nearby
         self._sonos_away_volume: int = 35     # Sonos level when user is away
         # Per-mode Sonos volume overrides. Missing modes fall back to
@@ -219,6 +218,7 @@ class AmbientSoundService:
         from backend.api.routes.routines import load_setting
 
         config = await load_setting(AMBIENT_CONFIG_KEY) or {}
+        seeded = False
 
         self._volume = config.get("volume", 0.3)
         self._mode_sounds = dict(config.get("mode_sounds", {}))
@@ -229,6 +229,15 @@ class AmbientSoundService:
         if self._playing and self._current_sound:
             self._source = config.get("last_source", "manual")
         self._sonos_enabled = config.get("sonos_enabled", True)
+        self._sonos_only_migrated = config.get("sonos_only_migrated", False)
+        if self._sonos_enabled is False and not self._sonos_only_migrated:
+            # Before browser playback was removed, false meant "browser only".
+            # In the Sonos-only world that legacy value would make ambient
+            # permanently silent, so migrate it once. Future explicit disables
+            # set sonos_only_migrated=True and remain respected.
+            self._sonos_enabled = True
+            self._sonos_only_migrated = True
+            seeded = True
         self._sonos_present_volume = config.get("sonos_present_volume", 25)
         self._sonos_away_volume = config.get("sonos_away_volume", 35)
         self._sonos_mode_volume_overrides = dict(
@@ -240,7 +249,6 @@ class AmbientSoundService:
         # one mode default we ship; weather-reactive ambient covers
         # working/gaming/cooking organically without forcing a sound when
         # weather is clear.
-        seeded = False
         if not self._mode_sounds:
             self._mode_sounds = {"relax": "fireplace.mp3"}
             seeded = True
@@ -452,24 +460,31 @@ class AmbientSoundService:
     # ------------------------------------------------------------------
 
     async def play(self, filename: str, source: str = "manual") -> dict[str, Any]:
-        """Set the active sound and broadcast."""
+        """Set the active sound and start Sonos playback."""
         if not self._file_exists(filename):
             return {"status": "error", "detail": f"File not found: {filename}"}
+        if not self._sonos_can_attempt():
+            logger.info(
+                "Ambient play skipped: Sonos unavailable/ineligible "
+                "(sound=%s, source=%s, mode=%s)",
+                filename, source, self._current_mode(),
+            )
+            self._current_sound = filename
+            self._playing = False
+            self._source = source
+            self._weather_override_active = False
+            self._sonos_ambient_pending = False
+            await self._broadcast_state()
+            await self._save_config()
+            return {"status": "error", "detail": "Ambient sound requires Sonos"}
 
         self._current_sound = filename
         self._playing = True
         self._source = source
         self._weather_override_active = source == "weather"
-        # Set pending BEFORE the first broadcast so connected browsers see
-        # "Sonos is coming" on the very first ambient_update and don't race
-        # past on autoplay permission. _start_sonos_ambient clears it on
-        # success (concurrent with active=True) or failure (fall through).
-        if (
-            self._sonos
-            and self._sonos_enabled
-            and not self._sonos_ambient_active
-            and self._sonos_eligible()
-        ):
+        # Set pending BEFORE the first broadcast so the UI shows that Sonos is
+        # being attempted. Browser clients stay silent regardless.
+        if not self._sonos_ambient_active:
             self._sonos_ambient_pending = True
         await self._broadcast_state()
         await self._save_config()
@@ -492,8 +507,10 @@ class AmbientSoundService:
         self._pending_sonos_tasks.add(task)
         task.add_done_callback(self._pending_sonos_tasks.discard)
 
-    async def pause(self) -> dict[str, Any]:
+    async def pause(self, *, learn: bool = False) -> dict[str, Any]:
         """Pause playback."""
+        if learn:
+            await self._learn_manual_suppression("pause")
         self._playing = False
         self._sonos_ambient_pending = False
         await self._broadcast_state()
@@ -503,28 +520,29 @@ class AmbientSoundService:
         return {"status": "ok"}
 
     async def resume(self) -> dict[str, Any]:
-        """Resume playback."""
+        """Resume playback on Sonos."""
         if not self._current_sound:
             return {"status": "error", "detail": "No sound to resume"}
+        if not self._sonos_can_attempt():
+            self._playing = False
+            self._sonos_ambient_pending = False
+            await self._broadcast_state()
+            await self._save_config()
+            return {"status": "error", "detail": "Ambient sound requires Sonos"}
         self._playing = True
-        if (
-            self._sonos
-            and self._sonos_enabled
-            and not self._sonos_ambient_active
-            and self._sonos_eligible()
-        ):
+        if not self._sonos_ambient_active:
             self._sonos_ambient_pending = True
         await self._broadcast_state()
         await self._save_config()
-        # pause() stops the Sonos mirror; resume should bring it back so
-        # the "Sonos primary" model stays consistent across the pause/play cycle.
-        if self._sonos and not self._sonos_ambient_active:
+        if not self._sonos_ambient_active:
             self._spawn_sonos_task(self._start_sonos_ambient())
         logger.info("Ambient resumed: %s", self._current_sound)
         return {"status": "ok"}
 
-    async def stop(self) -> dict[str, Any]:
+    async def stop(self, *, learn: bool = False) -> dict[str, Any]:
         """Stop and clear current sound."""
+        if learn:
+            await self._learn_manual_suppression("stop")
         self._current_sound = None
         self._playing = False
         self._source = "manual"
@@ -534,6 +552,32 @@ class AmbientSoundService:
         self._stop_sonos_ambient()
         logger.info("Ambient stopped")
         return {"status": "ok"}
+
+    async def _learn_manual_suppression(self, action: str) -> None:
+        """Persist a user's manual rejection of an auto ambient decision."""
+        changed = False
+        mode = self._current_mode()
+
+        if self._source == "mode" and mode and self._mode_auto_play.get(mode):
+            self._mode_auto_play[mode] = False
+            changed = True
+            logger.info(
+                "Ambient learned suppression: mode auto-play disabled "
+                "(mode=%s, action=%s, sound=%s)",
+                mode, action, self._current_sound,
+            )
+        elif self._source == "weather" and self._weather_reactive:
+            self._weather_reactive = False
+            self._weather_override_active = False
+            changed = True
+            logger.info(
+                "Ambient learned suppression: weather reactive disabled "
+                "(action=%s, sound=%s)",
+                action, self._current_sound,
+            )
+
+        if changed:
+            await self._save_config()
 
     async def set_volume(self, volume: float) -> dict[str, Any]:
         """Set volume (0.0-1.0), persist, broadcast."""
@@ -573,6 +617,7 @@ class AmbientSoundService:
         if sonos_enabled is not None:
             was_enabled = self._sonos_enabled
             self._sonos_enabled = bool(sonos_enabled)
+            self._sonos_only_migrated = True
             sonos_changed = True
             sonos_enabled_turned_on = self._sonos_enabled and not was_enabled
         if sonos_present_volume is not None:
@@ -590,9 +635,10 @@ class AmbientSoundService:
             sonos_changed = True
 
         # If the toggle just flipped off and Sonos was mirroring (or about
-        # to), stop it. Re-evaluate so the browser surface picks up where
-        # Sonos left off.
+        # to), stop it. Browser fallback is disabled, so this becomes silent.
         if sonos_changed and not self._sonos_enabled:
+            self._playing = False
+            self._weather_override_active = False
             if self._sonos_ambient_active:
                 self._stop_sonos_ambient()
             elif self._sonos_ambient_pending:
@@ -645,9 +691,8 @@ class AmbientSoundService:
         """Central priority chain — weather > mode mapping > existing state.
 
         Single entry point so the mode-change callback and the weather-watch
-        loop produce identical behavior. Both surfaces (Sonos + browser)
-        consume the broadcast `playing` / `sound` fields so the choice of
-        what's playing is made in exactly one place.
+        loop produce identical behavior. Sonos is the only playback surface;
+        broadcasts exist for UI state and controls.
         """
         if mode is None and self._automation is not None:
             mode = getattr(self._automation, "current_mode", None)
@@ -659,7 +704,7 @@ class AmbientSoundService:
         # when the mode opens back up.
         if mode in SUPPRESSED_MODES:
             if self._playing or self._sonos_ambient_active:
-                await self.pause()
+                await self.pause(learn=False)
             return
 
         weather_sound = self._check_weather() if self._weather_reactive else None
@@ -699,7 +744,7 @@ class AmbientSoundService:
         # No active driver. Stop weather/mode-driven playback so the rain
         # sound doesn't outlive the storm; manual selections persist.
         if self._playing and self._source in ("weather", "mode"):
-            await self.pause()
+            await self.pause(learn=False)
             if self._weather_override_active:
                 self._weather_override_active = False
                 await self._broadcast_state()
@@ -917,6 +962,15 @@ class AmbientSoundService:
         mode = getattr(self._automation, "current_mode", None)
         return mode not in SONOS_BLOCKED_MODES if mode else True
 
+    def _sonos_can_attempt(self) -> bool:
+        """True when ambient playback has a viable Sonos target right now."""
+        return bool(
+            self._sonos
+            and self._sonos_enabled
+            and self._sonos_eligible()
+            and getattr(self._sonos, "connected", False)
+        )
+
     def _current_mode(self) -> Optional[str]:
         """Read the engine's current mode for per-mode volume / eligibility."""
         if self._automation is None:
@@ -970,11 +1024,11 @@ class AmbientSoundService:
           1. Not already active + mode is eligible.
           2. Sonos connected.
           3. Sonos currently idle (STOPPED or PAUSED_PLAYBACK).
-          4. Browser ambient is actively playing.
+          4. Ambient state says playback is desired.
 
-        On any failure path we clear `_sonos_ambient_pending` and rebroadcast
-        so connected browsers know Sonos isn't coming and can fall through to
-        local playback (the documented fallback when Sonos is unreachable).
+        On any failure path we clear `_sonos_ambient_pending`, mark playback
+        paused, and rebroadcast. Browser fallback is intentionally disabled:
+        ambient audio should only ever come from Sonos.
         """
         try:
             if self._sonos_ambient_active:
@@ -1027,18 +1081,17 @@ class AmbientSoundService:
                 "Sonos ambient started: %s at volume %d (mode=%s)",
                 self._current_sound, start_volume, mode,
             )
-            # Re-broadcast so frontends see sonos_ambient_active=true and
-            # silence their per-tab audio. Without this the gate in
-            # ambientAudio.js wouldn't fire until the next play()/pause()
-            # cycle.
+            # Re-broadcast so frontends show that Sonos is active.
             await self._broadcast_state()
         finally:
             # Any non-success exit (early return, exception) must clear
-            # pending so browsers stop holding their breath and fall through
-            # to local playback. Success already cleared pending above.
+            # pending and pause state. Success already cleared pending above.
             if not self._sonos_ambient_active and self._sonos_ambient_pending:
                 self._sonos_ambient_pending = False
                 try:
+                    self._playing = False
+                    self._weather_override_active = False
+                    await self._save_config()
                     await self._broadcast_state()
                 except Exception:
                     logger.exception(
@@ -1217,6 +1270,7 @@ class AmbientSoundService:
             "last_playing": self._playing,
             "last_source": self._source,
             "sonos_enabled": self._sonos_enabled,
+            "sonos_only_migrated": self._sonos_only_migrated,
             "sonos_present_volume": self._sonos_present_volume,
             "sonos_away_volume": self._sonos_away_volume,
             "sonos_mode_volume_overrides": self._sonos_mode_volume_overrides,

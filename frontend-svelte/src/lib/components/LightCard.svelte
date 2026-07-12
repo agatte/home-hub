@@ -110,7 +110,7 @@
   // they never seed a drag. While dragging, `displayBri` overrides
   // `light.bri` so the fill follows the finger before the WS echo lands.
 
-  /** @type {HTMLDivElement | undefined} */
+  /** @type {HTMLButtonElement | undefined} */
   let cardEl
   let dragging = false
   /** @type {number | null} */
@@ -240,22 +240,11 @@
 </script>
 
 <!--
-  The card is a composite widget: a drag-to-dim surface PLUS two embedded
-  buttons (color-swatch, power). ARIA forbids interactive descendants
-  inside a `role="slider"` element, so the OUTER container is `role="group"`
-  and the drag surface keeps its slider semantics via aria-* attributes
-  alone — Pointer/keyboard handlers stay on the outer for full-card hit
-  area, but axe sees `role="group"` and accepts the nested buttons.
-
-  Keyboard model: the group itself takes focus (Tab); Arrow / Home / End
-  on the focused group adjust brightness; Space / Enter toggle power.
-  A second Tab moves focus into the group, landing on the swatch button,
-  then a third Tab lands on the power button — both have their own
-  aria-label and run independent of the group's keydown handler.
-
-  The brightness percentage announced to screen readers comes from the
-  visible `.chip-pct` text and the composite aria-label below, not from
-  a slider valuetext.
+  The card is a composite widget: one full-card native button handles
+  drag/keyboard brightness control, while the color-swatch and power buttons
+  sit above it as sibling controls. Keeping the controls as siblings avoids
+  nested interactive elements and keeps Svelte's a11y checks aligned with the
+  actual keyboard model.
 -->
 <div
   class="light-chip"
@@ -264,18 +253,21 @@
   class:light-unreachable={!light.reachable}
   class:dragging
   style="--fill-pct: {fillPct}%; --fill-color: {fillColor};"
-  bind:this={cardEl}
-  on:pointerdown={onPointerDown}
-  on:pointermove={onPointerMove}
-  on:pointerup={onPointerEnd}
-  on:pointercancel={onPointerEnd}
-  on:keydown={onKeydown}
-  role="group"
-  aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
-  aria-disabled={!light.reachable}
-  tabindex={light.reachable ? 0 : -1}
 >
-  <div class="chip-fill" aria-hidden="true"></div>
+  <button
+    type="button"
+    class="chip-drag-surface"
+    bind:this={cardEl}
+    on:pointerdown={onPointerDown}
+    on:pointermove={onPointerMove}
+    on:pointerup={onPointerEnd}
+    on:pointercancel={onPointerEnd}
+    on:keydown={onKeydown}
+    aria-label="{nameOverride ?? light.name} ({light.on ? `${pctLabel} brightness` : 'off'})"
+    disabled={!light.reachable}
+  >
+    <span class="chip-fill" aria-hidden="true"></span>
+  </button>
 
   <div class="chip-content">
     <button
@@ -379,10 +371,27 @@
     opacity: 0.55;
     filter: saturate(0.5);
   }
+  .chip-drag-surface {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    cursor: inherit;
+    text-align: inherit;
+  }
 
-  .light-chip:focus-visible {
+  .chip-drag-surface:disabled {
+    cursor: not-allowed;
+  }
+
+  .chip-drag-surface:focus-visible {
     outline: 2px solid rgba(255, 255, 255, 0.4);
-    outline-offset: 2px;
+    outline-offset: -2px;
   }
 
   /* Fill is the slider — width = brightness %, gradient fades from the
@@ -409,6 +418,7 @@
   .chip-content {
     position: relative;
     z-index: 1;
+    pointer-events: none;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -416,6 +426,7 @@
   }
 
   .chip-swatch {
+    pointer-events: auto;
     width: 14px;
     height: 14px;
     border-radius: 50%;
@@ -462,6 +473,7 @@
   .light-off .chip-pct { color: var(--text-muted); }
 
   .chip-power {
+    pointer-events: auto;
     width: 32px;
     height: 32px;
     border-radius: 50%;
@@ -490,6 +502,7 @@
   }
 
   .chip-presets {
+    pointer-events: auto;
     position: absolute;
     left: 12px;
     top: 100%;

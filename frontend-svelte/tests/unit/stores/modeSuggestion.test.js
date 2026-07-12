@@ -8,7 +8,7 @@ import {
 } from '$lib/stores/modeSuggestion.js'
 
 const sample = {
-  rule_id: 1, predicted_mode: 'relax', confidence: 0.8,
+  suggestion_id: 7, rule_id: 1, predicted_mode: 'relax', confidence: 0.8,
   sample_count: 12, message: 'Try relax?',
 }
 

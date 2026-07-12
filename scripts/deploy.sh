@@ -257,7 +257,7 @@ if [[ "$INSTALL_KIOSK_RECYCLE" == "1" ]]; then
     install_kiosk_recycle_timer
 fi
 if [[ "$RESTART_BACKEND" == "1" ]]; then
-    echo "→ Restarting home-hub.service..."
+    echo "→ Restarting home-hub.service (systemd --user)..."
     systemctl --user restart home-hub.service
     # FastAPI typically binds in 2-5s but can take longer on first-deploy
     # (cold import tree). Retry for up to 20s.

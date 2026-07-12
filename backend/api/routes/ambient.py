@@ -1,9 +1,9 @@
 """
-Ambient sound endpoints — browser-based ambient audio control.
+Ambient sound endpoints - Sonos-only ambient audio control.
 
-Manages playback state, volume, mode→sound mappings, and weather-reactive config.
-Actual audio plays in the browser; these endpoints control what the backend
-tells the frontend to play.
+Manages playback state, volume, mode-to-sound mappings, and weather-reactive
+config. Audio playback is restricted to Sonos; frontend clients render state
+only.
 """
 import logging
 from typing import Optional
@@ -75,7 +75,7 @@ async def play_sound(body: AmbientPlayRequest, request: Request) -> dict:
 async def pause_sound(request: Request) -> dict:
     """Pause current ambient sound."""
     service = request.app.state.ambient_sound
-    return await service.pause()
+    return await service.pause(learn=True)
 
 
 @router.post("/resume", dependencies=[Depends(require_api_key)])
@@ -89,7 +89,7 @@ async def resume_sound(request: Request) -> dict:
 async def stop_sound(request: Request) -> dict:
     """Stop and clear ambient sound."""
     service = request.app.state.ambient_sound
-    return await service.stop()
+    return await service.stop(learn=True)
 
 
 @router.post("/volume", dependencies=[Depends(require_api_key)])

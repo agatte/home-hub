@@ -191,3 +191,131 @@ def test_state_payload_sound_url_none_when_no_sound(monkeypatch, tmp_path):
 
     assert state["sound"] is None
     assert state["sound_url"] is None
+
+
+async def test_play_requires_connected_sonos(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    service.scan_sounds()
+    service._save_config = AsyncMock()
+
+    result = await service.play("rain.mp3", source="manual")
+
+    assert result["status"] == "error"
+    assert result["detail"] == "Ambient sound requires Sonos"
+    assert service._current_sound == "rain.mp3"
+    assert service._playing is False
+    assert service._weather_override_active is False
+    assert service._sonos_ambient_pending is False
+    service._ws_manager.broadcast.assert_awaited()
+
+
+async def test_busy_sonos_start_pauses_state_instead_of_falling_back(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    service.scan_sounds()
+    service._save_config = AsyncMock()
+    service._sonos.connected = True
+    service._sonos.get_status = AsyncMock(return_value={"state": "PLAYING"})
+    service._current_sound = "rain.mp3"
+    service._playing = True
+    service._sonos_ambient_pending = True
+
+    await service._start_sonos_ambient()
+
+    assert service._playing is False
+    assert service._sonos_ambient_active is False
+    assert service._weather_override_active is False
+    assert service._sonos_ambient_pending is False
+    service._sonos.play_uri.assert_not_called()
+    service._ws_manager.broadcast.assert_awaited()
+
+
+async def test_manual_pause_learns_mode_auto_play_suppression(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    service._save_config = AsyncMock()
+    service._automation = MagicMock(current_mode="relax")
+    service._mode_auto_play = {"relax": True}
+    service._source = "mode"
+    service._current_sound = "fireplace.mp3"
+    service._playing = True
+
+    await service.pause(learn=True)
+
+    assert service._mode_auto_play["relax"] is False
+    assert service._playing is False
+    service._save_config.assert_awaited()
+
+
+async def test_manual_stop_learns_weather_suppression(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    service._save_config = AsyncMock()
+    service._source = "weather"
+    service._weather_reactive = True
+    service._weather_override_active = True
+    service._current_sound = "rain.mp3"
+    service._playing = True
+
+    await service.stop(learn=True)
+
+    assert service._weather_reactive is False
+    assert service._weather_override_active is False
+    assert service._current_sound is None
+    service._save_config.assert_awaited()
+
+
+async def test_load_from_db_migrates_legacy_browser_only_sonos_disabled(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    saved = []
+
+    async def fake_load_setting(key):
+        if key == svc.AMBIENT_CONFIG_KEY:
+            return {
+                "sonos_enabled": False,
+                "mode_sounds": {"relax": "fireplace.mp3"},
+                "mode_auto_play": {"relax": True},
+            }
+        return {}
+
+    async def fake_save_setting(key, value):
+        saved.append((key, value))
+
+    monkeypatch.setattr("backend.api.routes.routines.load_setting", fake_load_setting)
+    monkeypatch.setattr("backend.api.routes.routines.save_setting", fake_save_setting)
+    service._load_stream_library = AsyncMock()
+
+    await service.load_from_db()
+
+    assert service._sonos_enabled is True
+    assert service._sonos_only_migrated is True
+    assert saved[-1][0] == svc.AMBIENT_CONFIG_KEY
+    assert saved[-1][1]["sonos_enabled"] is True
+    assert saved[-1][1]["sonos_only_migrated"] is True
+
+
+async def test_load_from_db_respects_post_migration_sonos_disabled(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    saved = []
+
+    async def fake_load_setting(key):
+        if key == svc.AMBIENT_CONFIG_KEY:
+            return {
+                "sonos_enabled": False,
+                "sonos_only_migrated": True,
+                "mode_sounds": {"relax": "fireplace.mp3"},
+                "mode_auto_play": {"relax": True},
+            }
+        return {}
+
+    async def fake_save_setting(key, value):
+        saved.append((key, value))
+
+    monkeypatch.setattr("backend.api.routes.routines.load_setting", fake_load_setting)
+    monkeypatch.setattr("backend.api.routes.routines.save_setting", fake_save_setting)
+    service._load_stream_library = AsyncMock()
+
+    await service.load_from_db()
+
+    assert service._sonos_enabled is False
+    assert service._sonos_only_migrated is True
+    assert saved == []

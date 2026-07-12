@@ -109,7 +109,7 @@
 
   // Hue API → CSS color for the preview swatch. Approximate; the real
   // lamp does CIE-space gamut clipping the bridge handles for us.
-  /** @param {{hue: number, sat: number, bri: number}} hsv */
+  /** @param {{hue: number, sat: number, bri: number} | null | undefined} hsv */
   function hsvToCss(hsv) {
     if (!hsv) return 'rgba(180,180,180,0.5)'
     const h = (hsv.hue / 65535) * 360

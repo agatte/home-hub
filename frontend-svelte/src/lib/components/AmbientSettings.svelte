@@ -104,7 +104,7 @@
   $: suppressed = $ambient.suppressed_modes || ['watching', 'gameday', 'sleeping']
   $: hasSounds = $ambient.available_sounds && $ambient.available_sounds.length > 0
   $: sonosStatusLabel = (() => {
-    if (!$ambient.sonos_enabled) return 'Browser only'
+    if (!$ambient.sonos_enabled) return 'Sonos disabled'
     if ($ambient.sonos_ambient_active) return 'Now playing on Sonos'
     if ($ambient.playing) return 'Sonos eligible, idle'
     return 'Ready'
@@ -114,10 +114,10 @@
 <section class="widget">
   <h2 class="widget-title">Ambient Sound</h2>
   <p class="widget-hint">
-    Weather-reactive background audio. Sonos is the primary surface when enabled and the mode
-    isn't a suppressed one ({suppressed.join(', ')}); per-tab browser audio is silenced while
-    Sonos is playing. Weather classes (rain, thunderstorm, snow, wind) take priority over
-    mode mappings.
+    Weather-reactive background audio. Playback is Sonos-only when enabled and the mode
+    isn't a suppressed one ({suppressed.join(', ')}). Weather classes (rain, thunderstorm,
+    snow, wind) take priority over mode mappings. Manual pause/stop teaches the matching
+    auto rule to stay quiet.
   </p>
 
   {#if !hasSounds}
