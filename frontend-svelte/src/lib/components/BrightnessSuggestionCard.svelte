@@ -38,6 +38,18 @@
       clear: 'clear',
     })[cls] || cls
   }
+
+  function roomLabel(room) {
+    return ({
+      bedroom: 'Bedroom',
+      kitchen: 'Kitchen',
+      living_room: 'Living room',
+    })[room] || room
+  }
+
+  function pctFromBri(bri) {
+    return Math.round((Number(bri || 0) / 254) * 100)
+  }
 </script>
 
 {#if $brightnessSuggestion}
@@ -54,15 +66,21 @@
       </span>
       <div class="suggestion-text">
         <div class="suggestion-headline">
-          During <strong>{weatherLabel(payload.weather_class)}</strong> {lbl} you've set
-          <strong>L{payload.light_id}</strong> to
-          <strong>~{Math.round((payload.suggested_bri / 254) * 100)}%</strong>
-          {#if payload.base_bri}
-            (default is {Math.round((payload.base_bri / 254) * 100)}%)
+          {#if payload.scope === 'room'}
+            During <strong>{weatherLabel(payload.weather_class)}</strong> {lbl},
+            <strong>{roomLabel(payload.room)}</strong> has been landing around
+            <strong>~{payload.target_pct ?? pctFromBri(payload.suggested_bri)}%</strong>
+          {:else}
+            During <strong>{weatherLabel(payload.weather_class)}</strong> {lbl} you've set
+            <strong>L{payload.light_id}</strong> to
+            <strong>~{pctFromBri(payload.suggested_bri)}%</strong>
+            {#if payload.base_bri}
+              (default is {pctFromBri(payload.base_bri)}%)
+            {/if}
           {/if}
         </div>
         <div class="suggestion-meta">
-          {payload.sample_count} observation{payload.sample_count === 1 ? '' : 's'} · apply automatically next time?
+          {payload.sample_count} observation{payload.sample_count === 1 ? '' : 's'} · apply now and automatically next time?
         </div>
       </div>
     </div>

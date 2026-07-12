@@ -2,12 +2,14 @@
 Rule engine endpoints — view, manage, and interact with learned rules.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.api.auth import require_api_key
+from backend.services.ml.feature_builder import get_time_period
 
 logger = logging.getLogger("home_hub.rules")
 
@@ -27,6 +29,63 @@ def _get_service(request: Request):
 
 class RuleUpdate(BaseModel):
     enabled: bool
+
+
+def _brightness_targets(payload: dict) -> dict[str, int]:
+    """Normalize old per-light and new room-level payloads to light targets."""
+    raw_targets = payload.get("light_targets")
+    if isinstance(raw_targets, dict) and raw_targets:
+        return {str(light_id): int(bri) for light_id, bri in raw_targets.items()}
+    if "light_id" in payload and "suggested_bri" in payload:
+        return {str(payload["light_id"]): int(payload["suggested_bri"])}
+    return {}
+
+
+def _brightness_context_matches(payload: dict, request: Request) -> bool:
+    automation = getattr(request.app.state, "automation", None)
+    if automation is None:
+        return False
+    if payload.get("mode") and automation.current_mode != payload.get("mode"):
+        return False
+    if payload.get("period") != get_time_period(datetime.now(timezone.utc)):
+        return False
+    expected_weather = payload.get("weather_class")
+    current_weather = getattr(automation, "last_weather_class", None)
+    if expected_weather and current_weather and expected_weather != current_weather:
+        return False
+    return True
+
+
+async def _apply_brightness_targets_now(
+    request: Request,
+    targets: dict[str, int],
+) -> list[dict]:
+    hue = getattr(request.app.state, "hue", None)
+    if hue is None or not targets:
+        return []
+    automation = getattr(request.app.state, "automation", None)
+    event_logger = getattr(request.app.state, "event_logger", None)
+    before_lights = {l["light_id"]: l for l in await hue.get_all_lights()}
+    applied: list[dict] = []
+    for light_id, bri in targets.items():
+        state = {"bri": max(1, min(254, int(bri)))}
+        ok = await hue.set_light(light_id, state)
+        if not ok:
+            continue
+        if automation:
+            automation.mark_light_manual(str(light_id))
+        applied.append({"light_id": light_id, "bri": state["bri"]})
+        if event_logger:
+            before = before_lights.get(light_id) or {}
+            await event_logger.log_light_adjustment(
+                light_id=str(light_id),
+                light_name=before.get("name"),
+                bri_before=before.get("bri"),
+                bri_after=state["bri"],
+                mode_at_time=automation.current_mode if automation else None,
+                trigger="brightness_suggestion_accept",
+            )
+    return applied
 
 
 @router.get("/")
@@ -191,16 +250,18 @@ async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
 
     learner = getattr(request.app.state, "lighting_learner", None)
     payload = resolved.get("payload", {})
-    if learner and payload:
+    targets = _brightness_targets(payload)
+    if learner and payload and targets:
         try:
-            await learner.write_learned_pref(
-                light_id=str(payload["light_id"]),
-                mode=payload["mode"],
-                time_period=payload["period"],
-                weather_class=payload["weather_class"],
-                bri=int(payload["suggested_bri"]),
-                zone_at_time=payload.get("zone_at_time"),
-            )
+            for light_id, bri in targets.items():
+                await learner.write_learned_pref(
+                    light_id=str(light_id),
+                    mode=payload["mode"],
+                    time_period=payload["period"],
+                    weather_class=payload["weather_class"],
+                    bri=int(bri),
+                    zone_at_time=payload.get("zone_at_time"),
+                )
         except Exception as exc:
             # Resolution row is already accepted; surface a 500 so the
             # caller can retry but log enough context to diagnose.
@@ -208,7 +269,18 @@ async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
                 status_code=500,
                 detail=f"learner write failed: {exc}",
             )
-    return {"status": "ok", "applied": payload}
+
+    applied_now = []
+    if targets and _brightness_context_matches(payload, request):
+        try:
+            applied_now = await _apply_brightness_targets_now(request, targets)
+        except Exception as exc:
+            logger.exception("brightness suggestion immediate apply failed")
+            raise HTTPException(
+                status_code=500,
+                detail=f"immediate apply failed: {exc}",
+            )
+    return {"status": "ok", "applied": payload, "applied_now": applied_now}
 
 
 @router.post(

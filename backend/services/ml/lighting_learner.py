@@ -12,6 +12,7 @@ No external ML libraries required — pure math.
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -69,6 +70,25 @@ PAIR_ENFORCED_MODES = frozenset({
 })
 KITCHEN_PAIR_IDS = ("3", "4")
 
+LIGHT_ID_TO_ROOM: dict[str, str] = {
+    "1": "living_room",
+    "2": "bedroom",
+    "3": "kitchen",
+    "4": "kitchen",
+    "5": "bedroom",
+}
+
+ROOM_LIGHT_IDS: dict[str, tuple[str, ...]] = {
+    "living_room": ("1",),
+    "bedroom": ("2", "5"),
+    "kitchen": ("3", "4"),
+}
+
+LARGE_CORRECTION_BRI = 45
+REPEATED_CORRECTION_MIN_SAMPLES = 2
+MIN_DIRECTIONAL_RATIO = 0.70
+ROOM_VARIANCE_RATIO = 0.75
+
 
 class LightingPreferenceLearner(HealthTrackable):
     """EMA-based per-light preference learning from manual adjustments.
@@ -81,6 +101,11 @@ class LightingPreferenceLearner(HealthTrackable):
     def __init__(self, model_manager: ModelManager) -> None:
         self._model_manager = model_manager
         self._preferences: dict[str, dict[str, dict[str, Any]]] = {}
+        self._last_suggestion_scan: dict[str, Any] = {
+            "candidate_count": 0,
+            "rejection_counts": {},
+            "scanned_at": None,
+        }
         self._init_health_tracking()
         self._load_existing()
 
@@ -219,6 +244,10 @@ class LightingPreferenceLearner(HealthTrackable):
             "min_adjustments": MIN_ADJUSTMENTS,
             "ema_alpha": EMA_ALPHA,
         }
+
+    def get_last_suggestion_scan_status(self) -> dict[str, Any]:
+        """Return metadata from the last brightness-suggestion scan."""
+        return dict(self._last_suggestion_scan)
 
     def health(self) -> dict:
         """Health entry for the /health ml block."""
@@ -376,19 +405,12 @@ class LightingPreferenceLearner(HealthTrackable):
         window_days: int = 14,
         ema_alpha: float = EMA_ALPHA,
     ) -> list[dict[str, Any]]:
-        """Find (light, mode, period, weather) buckets ready to be suggested.
+        """Find brightness-preference buckets ready to be suggested.
 
-        Criteria for a candidate:
-          * ``MIN_ADJUSTMENTS_WEATHER`` (=3) or more user-triggered rows in
-            the last ``window_days`` matching the bucket.
-          * Variance is consistent: (max - min) / mean <= 0.20.
-          * No existing WEATHER-SPECIFIC learned pref for that bucket
-            (deduplicates against already-accepted suggestions).
-
-        Returns the list of candidate dicts. The caller is responsible for
-        deduplicating against existing pending/accepted rule_suggestions
-        rows before inserting (RuleEngineService.emit_brightness_suggestion
-        handles that step so the scanner stays read-only on the DB).
+        Room-level suggestions are emitted first. They look for one strong
+        manual correction or repeated directional evidence in a
+        (room, mode, period, weather) bucket, then carry per-light targets in
+        ``light_targets``. The legacy per-light scanner remains as fallback.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
         async with async_session() as session:
@@ -402,49 +424,78 @@ class LightingPreferenceLearner(HealthTrackable):
             )
             rows = list(result.scalars().all())
 
-        # Collapse slider-drag micro-steps — see recalculate() for rationale.
-        # A drag emits ~5-10 rows in 1.5s; without dedup the suggestion
-        # scanner emits candidates from a single user action.
         rows = self._collapse_drag_clusters(rows)
+        rejection_counts: dict[str, int] = defaultdict(int)
 
-        # Group by (light_id, mode, period, weather_class). Bri values per
-        # group are kept ordered so the EMA can be computed for the
-        # suggested_bri exactly the way the learner would on accept.
+        room_groups: dict[
+            tuple[str, str, str, str, Optional[str]], list[LightAdjustment]
+        ] = defaultdict(list)
+        for row in rows:
+            room = LIGHT_ID_TO_ROOM.get(str(row.light_id))
+            if not room:
+                rejection_counts["unknown_room"] += 1
+                continue
+            period = get_time_period(row.timestamp)
+            room_groups[
+                (room, row.mode_at_time, period, row.weather_class, row.zone_at_time)
+            ].append(row)
+
+        suggestions: list[dict[str, Any]] = []
+        room_covered: set[tuple[str, str, str, str, Optional[str]]] = set()
+        for (room, mode, period, weather, zone), adjs in room_groups.items():
+            candidate = self._build_room_brightness_candidate(
+                room=room,
+                mode=mode,
+                period=period,
+                weather=weather,
+                zone=zone,
+                adjustments=adjs,
+                ema_alpha=ema_alpha,
+                rejection_counts=rejection_counts,
+            )
+            if candidate:
+                suggestions.append(candidate)
+                for light_id in candidate.get("light_targets", {}):
+                    room_covered.add((str(light_id), mode, period, weather, zone))
+
         groups: dict[
             tuple[str, str, str, str, Optional[str]], list[int]
         ] = defaultdict(list)
-        for r in rows:
-            period = get_time_period(r.timestamp)
+        for row in rows:
+            period = get_time_period(row.timestamp)
             groups[
-                (r.light_id, r.mode_at_time, period, r.weather_class, r.zone_at_time)
-            ].append(int(r.bri_after))
+                (row.light_id, row.mode_at_time, period, row.weather_class, row.zone_at_time)
+            ].append(int(row.bri_after))
 
-        # Avoid importing ACTIVITY_LIGHT_STATES at module-load (would create
-        # a light_state_calculator → lighting_learner cycle). Late import.
         from backend.services.light_state_calculator import ACTIVITY_LIGHT_STATES
 
-        suggestions: list[dict[str, Any]] = []
         for (light_id, mode, period, weather, zone), bris in groups.items():
+            if (str(light_id), mode, period, weather, zone) in room_covered:
+                rejection_counts["per_light_covered_by_room"] += 1
+                continue
             if len(bris) < MIN_ADJUSTMENTS_WEATHER:
+                rejection_counts["per_light_insufficient_evidence"] += 1
                 continue
             mean = sum(bris) / len(bris)
             if mean <= 0:
+                rejection_counts["per_light_zero_mean"] += 1
                 continue
             if (max(bris) - min(bris)) / mean > 0.20:
-                continue  # too inconsistent to suggest as a stable pref
+                rejection_counts["per_light_too_noisy"] += 1
+                continue
             slot_key = self._slot_key(mode, period, weather, zone)
             if zone is None and light_id in self.has_weather_pref(
                 mode, period, weather,
             ):
-                continue  # already learned in the generic bucket
+                rejection_counts["per_light_already_learned"] += 1
+                continue
             if light_id in (self._preferences.get(slot_key) or {}):
-                continue  # already learned in this exact context
+                rejection_counts["per_light_already_learned"] += 1
+                continue
 
-            # Compute the EMA the same way write_learned_pref + recalculate
-            # would, so accepting yields the value the user just saw.
             ema = float(bris[0])
-            for v in bris[1:]:
-                ema = ema * (1 - ema_alpha) + v * ema_alpha
+            for value in bris[1:]:
+                ema = ema * (1 - ema_alpha) + value * ema_alpha
             suggested_bri = round(ema)
 
             try:
@@ -453,6 +504,7 @@ class LightingPreferenceLearner(HealthTrackable):
                 base = None
 
             suggestion = {
+                "scope": "light",
                 "light_id": light_id,
                 "mode": mode,
                 "period": period,
@@ -466,7 +518,122 @@ class LightingPreferenceLearner(HealthTrackable):
                 suggestion["suggested_multiplier"] = round(suggested_bri / base, 2)
             suggestions.append(suggestion)
 
+        self._last_suggestion_scan = {
+            "candidate_count": len(suggestions),
+            "rejection_counts": dict(rejection_counts),
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+        }
         return suggestions
+
+    def _build_room_brightness_candidate(
+        self,
+        *,
+        room: str,
+        mode: str,
+        period: str,
+        weather: str,
+        zone: Optional[str],
+        adjustments: list[LightAdjustment],
+        ema_alpha: float,
+        rejection_counts: dict[str, int],
+    ) -> Optional[dict[str, Any]]:
+        values_by_light: dict[str, list[int]] = defaultdict(list)
+        deltas: list[int] = []
+        for adj in adjustments:
+            if adj.bri_after is None:
+                continue
+            light_id = str(adj.light_id)
+            values_by_light[light_id].append(int(adj.bri_after))
+            if adj.bri_before is not None:
+                deltas.append(int(adj.bri_after) - int(adj.bri_before))
+
+        sample_count = sum(len(values) for values in values_by_light.values())
+        has_large_correction = any(abs(delta) >= LARGE_CORRECTION_BRI for delta in deltas)
+        if sample_count < REPEATED_CORRECTION_MIN_SAMPLES and not has_large_correction:
+            rejection_counts["room_insufficient_evidence"] += 1
+            return None
+
+        nonzero = [delta for delta in deltas if delta]
+        if nonzero:
+            positives = sum(1 for delta in nonzero if delta > 0)
+            negatives = len(nonzero) - positives
+            directional_ratio = max(positives, negatives) / len(nonzero)
+            if directional_ratio < MIN_DIRECTIONAL_RATIO:
+                rejection_counts["room_mixed_direction"] += 1
+                return None
+
+        all_values = [value for values in values_by_light.values() for value in values]
+        med = float(median(all_values)) if all_values else 0.0
+        if med <= 0:
+            rejection_counts["room_zero_median"] += 1
+            return None
+        if len(all_values) >= 3 and (max(all_values) - min(all_values)) / med > ROOM_VARIANCE_RATIO:
+            rejection_counts["room_too_noisy"] += 1
+            return None
+
+        slot_key = self._slot_key(mode, period, weather, zone)
+        learned = self._preferences.get(slot_key) or {}
+        learned_weather = self.has_weather_pref(mode, period, weather) if zone is None else set()
+
+        target_lights: dict[str, int] = {}
+        for light_id, values in values_by_light.items():
+            if light_id in learned or light_id in learned_weather:
+                continue
+            ema = float(values[0])
+            for value in values[1:]:
+                ema = ema * (1 - ema_alpha) + value * ema_alpha
+            target_lights[light_id] = round(ema)
+
+        if not target_lights:
+            rejection_counts["room_already_learned"] += 1
+            return None
+
+        if room == "kitchen" and mode in PAIR_ENFORCED_MODES:
+            paired_values = [
+                bri for lid, bri in target_lights.items() if lid in KITCHEN_PAIR_IDS
+            ]
+            if paired_values:
+                paired = round(sum(paired_values) / len(paired_values))
+                for lid in KITCHEN_PAIR_IDS:
+                    if lid in values_by_light and lid not in learned:
+                        target_lights[lid] = paired
+
+        primary_light = sorted(target_lights)[0]
+        base_targets: dict[str, int] = {}
+        try:
+            from backend.services.light_state_calculator import ACTIVITY_LIGHT_STATES
+            defaults = ACTIVITY_LIGHT_STATES[mode][period]
+            base_targets = {
+                lid: int(defaults[lid]["bri"])
+                for lid in target_lights
+                if lid in defaults and defaults[lid].get("bri") is not None
+            }
+        except (KeyError, AttributeError, TypeError):
+            base_targets = {}
+
+        target_pct = round(sum(target_lights.values()) / len(target_lights) / 254 * 100)
+        suggestion: dict[str, Any] = {
+            "scope": "room",
+            "room": room,
+            "mode": mode,
+            "period": period,
+            "weather_class": weather,
+            "zone_at_time": zone,
+            "target_pct": target_pct,
+            "sample_count": sample_count,
+            "light_targets": target_lights,
+            "base_targets": base_targets,
+            "reason": "large_adjustment" if has_large_correction else "repeated_preference",
+            "light_id": primary_light,
+            "suggested_bri": target_lights[primary_light],
+        }
+        if primary_light in base_targets:
+            base = base_targets[primary_light]
+            suggestion["base_bri"] = base
+            suggestion["suggested_multiplier"] = round(
+                target_lights[primary_light] / base, 2,
+            ) if base else None
+        return suggestion
 
     @staticmethod
     def _collapse_drag_clusters(

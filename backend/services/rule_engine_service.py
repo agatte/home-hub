@@ -165,6 +165,13 @@ class RuleEngineService:
             (public_base_url or "").rstrip("/")
             or "http://192.168.86.210:8000"  # LAN bypass for require_api_key
         )
+        self._last_brightness_scan: dict[str, Any] = {
+            "scanned_at": None,
+            "candidate_count": 0,
+            "emitted_count": 0,
+            "duplicate_count": 0,
+            "rejection_counts": {},
+        }
         self._heartbeat = None  # HeartbeatRegistry, injected by main.py
 
     def set_heartbeat_registry(self, registry) -> None:
@@ -648,7 +655,9 @@ class RuleEngineService:
         """
         import json as _json
 
+        scope = candidate.get("scope") or "light"
         light_id = str(candidate["light_id"])
+        room = candidate.get("room")
         mode = candidate["mode"]
         period = candidate["period"]
         weather = candidate["weather_class"]
@@ -669,13 +678,25 @@ class RuleEngineService:
                     parsed = _json.loads(row.payload)
                 except Exception:
                     continue
-                if (
-                    str(parsed.get("light_id")) == light_id
-                    and parsed.get("mode") == mode
+                same_context = (
+                    parsed.get("mode") == mode
                     and parsed.get("period") == period
                     and parsed.get("weather_class") == weather
                     and parsed.get("zone_at_time") == zone
-                ):
+                )
+                if scope == "room":
+                    duplicate = (
+                        same_context
+                        and parsed.get("scope") == "room"
+                        and parsed.get("room") == room
+                    )
+                else:
+                    duplicate = (
+                        same_context
+                        and str(parsed.get("light_id")) == light_id
+                        and (parsed.get("scope") in (None, "light"))
+                    )
+                if duplicate:
                     return None  # already pending — don't double-emit
 
             sample_count = int(candidate.get("sample_count", 0))
@@ -789,9 +810,25 @@ class RuleEngineService:
             candidates = await self._lighting_learner.scan_for_suggestions()
         except Exception:
             logger.exception("LightingLearner scan_for_suggestions failed")
+            self._last_brightness_scan = {
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
+                "candidate_count": 0,
+                "emitted_count": 0,
+                "duplicate_count": 0,
+                "rejection_counts": {},
+                "last_error": "scan_for_suggestions failed",
+            }
             return 0
 
+        learner_scan = {}
+        if hasattr(self._lighting_learner, "get_last_suggestion_scan_status"):
+            try:
+                learner_scan = self._lighting_learner.get_last_suggestion_scan_status()
+            except Exception:
+                learner_scan = {}
+
         emitted = 0
+        duplicate_count = 0
         for candidate in candidates:
             try:
                 row = await self.emit_brightness_suggestion(candidate)
@@ -802,6 +839,7 @@ class RuleEngineService:
                 )
                 continue
             if not row:
+                duplicate_count += 1
                 continue  # duplicate of an already-pending bucket
             emitted += 1
 
@@ -841,6 +879,13 @@ class RuleEngineService:
                         row["id"],
                     )
 
+        self._last_brightness_scan = {
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+            "candidate_count": len(candidates),
+            "emitted_count": emitted,
+            "duplicate_count": duplicate_count,
+            "rejection_counts": learner_scan.get("rejection_counts", {}),
+        }
         if emitted:
             logger.info(
                 "Emitted %d brightness suggestion(s) from %d candidate(s)",
@@ -853,7 +898,7 @@ class RuleEngineService:
         """Render a human-readable suggestion body for the notification.
 
         bri values are stored in Hue 0-254 scale; we present them as 0-100%
-        for the user. Dropping the "× base" multiplier here — when the
+        for the user. Dropping the "Ã— base" multiplier here — when the
         engine default is small (kitchen pair=22, relax late_night=10) the
         ratio reads as alarmingly large for what's actually a sensible
         change. Absolute target + default conveys the same info without
@@ -863,6 +908,7 @@ class RuleEngineService:
         period = candidate.get("period", "?")
         weather = candidate.get("weather_class", "?")
         light_id = candidate.get("light_id", "?")
+        room = candidate.get("room")
         bri = candidate.get("suggested_bri")
         base = candidate.get("base_bri")
         n = candidate.get("sample_count", 0)
@@ -872,6 +918,16 @@ class RuleEngineService:
                 return f"{round(int(v) / 254 * 100)}%"
             except (TypeError, ValueError):
                 return "?"
+
+        if candidate.get("scope") == "room" and room:
+            target = candidate.get("target_pct")
+            target_str = f"{target}%" if target is not None else _pct(bri)
+            label = str(room).replace("_", " ")
+            return (
+                f"{label.title()} {mode}/{period} has been landing around "
+                f"~{target_str} during {weather} ({n} observations). "
+                f"Apply automatically next time?"
+            )
 
         bri_str = _pct(bri)
         base_str = f" (default {_pct(base)})" if base else ""
@@ -1179,7 +1235,7 @@ class RuleEngineService:
 
         The rule engine is intrinsically data-gated — it only exists
         when enough activity history has accumulated to clear
-        ``min_confidence`` × ``min_samples`` thresholds. So we report
+        ``min_confidence`` Ã— ``min_samples`` thresholds. So we report
         ``status="shadow"`` until rules exist; absence of rules is not
         a failure. Generation-loop wedges are caught separately by the
         heartbeat surface (``tasks.rule_engine``).
@@ -1192,6 +1248,7 @@ class RuleEngineService:
             "last_failure": None,
             "active_cooldowns": len(self._cooldowns),
             "has_pending_suggestion": self._last_suggestion is not None,
+            "brightness_scan": dict(self._last_brightness_scan),
         }
 
     async def run_generation_loop(self) -> None:

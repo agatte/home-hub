@@ -923,3 +923,48 @@ class TestBrightnessSuggestion:
         assert first is not None
         second = await service.emit_brightness_suggestion(candidate)
         assert second is None  # pending row exists → no re-emit
+
+    @pytest.mark.asyncio
+    async def test_emit_room_payload_dedupes_by_room_context(self, db_and_service):
+        """Room suggestions dedupe by room/mode/period/weather, not one light."""
+        _, service, _, _ = db_and_service
+        candidate = {
+            "scope": "room",
+            "room": "bedroom",
+            "mode": "watching",
+            "period": "night",
+            "weather_class": "rain",
+            "target_pct": 28,
+            "light_id": "2",
+            "suggested_bri": 70,
+            "light_targets": {"2": 70, "5": 72},
+            "sample_count": 2,
+        }
+        first = await service.emit_brightness_suggestion(candidate)
+        assert first is not None
+        assert first["payload"]["scope"] == "room"
+        assert first["payload"]["room"] == "bedroom"
+        assert first["payload"]["light_targets"] == {"2": 70, "5": 72}
+
+        second = await service.emit_brightness_suggestion({
+            **candidate,
+            "light_id": "5",
+            "suggested_bri": 72,
+        })
+        assert second is None
+
+    @pytest.mark.asyncio
+    async def test_health_includes_brightness_scan_metadata(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service._last_brightness_scan = {
+            "scanned_at": "2026-07-12T12:00:00+00:00",
+            "candidate_count": 2,
+            "emitted_count": 1,
+            "duplicate_count": 1,
+            "rejection_counts": {"room_too_noisy": 3},
+        }
+
+        health = service.health()
+
+        assert health["brightness_scan"]["candidate_count"] == 2
+        assert health["brightness_scan"]["rejection_counts"] == {"room_too_noisy": 3}

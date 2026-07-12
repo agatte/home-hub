@@ -398,6 +398,67 @@ class TestScanForSuggestions:
         assert 208 <= s["suggested_bri"] <= 215
         assert s["sample_count"] == 3
 
+    async def test_large_bedroom_correction_produces_room_candidate(
+        self, learner, ml_db,
+    ):
+        async with ml_db() as session:
+            for light_id in ("2", "5"):
+                session.add(self._recent_adjustment(
+                    light_id=light_id, mode_at_time="watching",
+                    bri_before=180, bri_after=70, weather_class="rain",
+                ))
+            await session.commit()
+
+        suggestions = await learner.scan_for_suggestions()
+
+        assert len(suggestions) == 1
+        s = suggestions[0]
+        assert s["scope"] == "room"
+        assert s["room"] == "bedroom"
+        assert s["mode"] == "watching"
+        assert s["weather_class"] == "rain"
+        assert s["light_targets"] == {"2": 70, "5": 70}
+        assert s["target_pct"] == 28
+        assert s["reason"] == "large_adjustment"
+
+    async def test_repeated_room_corrections_produce_room_candidate(
+        self, learner, ml_db,
+    ):
+        async with ml_db() as session:
+            for bri in (96, 98):
+                session.add(self._recent_adjustment(
+                    light_id="2", mode_at_time="watching",
+                    bri_before=130, bri_after=bri, weather_class="clouds",
+                ))
+            await session.commit()
+
+        suggestions = await learner.scan_for_suggestions()
+
+        assert len(suggestions) == 1
+        assert suggestions[0]["scope"] == "room"
+        assert suggestions[0]["room"] == "bedroom"
+        assert suggestions[0]["reason"] == "repeated_preference"
+
+    async def test_kitchen_room_candidate_keeps_pair_matched(
+        self, learner, ml_db,
+    ):
+        async with ml_db() as session:
+            session.add(self._recent_adjustment(
+                light_id="3", mode_at_time="working",
+                bri_before=160, bri_after=80, weather_class="clear",
+            ))
+            session.add(self._recent_adjustment(
+                light_id="4", mode_at_time="working",
+                bri_before=160, bri_after=100, weather_class="clear",
+            ))
+            await session.commit()
+
+        suggestions = await learner.scan_for_suggestions()
+
+        assert len(suggestions) == 1
+        assert suggestions[0]["room"] == "kitchen"
+        assert suggestions[0]["light_targets"] == {"3": 90, "4": 90}
+
     async def test_zone_context_included_in_candidate(self, learner, ml_db):
         async with ml_db() as session:
             for v in (70, 72, 74):

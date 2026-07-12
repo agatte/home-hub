@@ -7,11 +7,17 @@ import { writable } from 'svelte/store'
  * /api/rules/brightness-suggestion/{accept|dismiss}/{id} endpoints.
  *
  * @typedef {Object} BrightnessSuggestionPayload
- * @property {string} light_id
+ * @property {string} [scope]
+ * @property {string} [room]
+ * @property {string} [light_id]
  * @property {string} mode
  * @property {string} period
  * @property {string} weather_class
- * @property {number} suggested_bri
+ * @property {number} [suggested_bri]
+ * @property {number} [target_pct]
+ * @property {Object.<string, number>} [light_targets]
+ * @property {Object.<string, number>} [base_targets]
+ * @property {number} [base_bri]
  * @property {number} [suggested_multiplier]
  * @property {number} sample_count
  *
