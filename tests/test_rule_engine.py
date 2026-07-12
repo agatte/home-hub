@@ -968,3 +968,28 @@ class TestBrightnessSuggestion:
 
         assert health["brightness_scan"]["candidate_count"] == 2
         assert health["brightness_scan"]["rejection_counts"] == {"room_too_noisy": 3}
+
+    @pytest.mark.asyncio
+    async def test_suggestion_history_includes_brightness_payload(self, db_and_service):
+        _, service, _, _ = db_and_service
+        candidate = {
+            "scope": "room",
+            "room": "bedroom",
+            "mode": "watching",
+            "period": "night",
+            "weather_class": "rain",
+            "target_pct": 28,
+            "light_id": "2",
+            "suggested_bri": 70,
+            "light_targets": {"2": 70, "5": 72},
+            "sample_count": 2,
+        }
+        emitted = await service.emit_brightness_suggestion(candidate)
+        assert emitted is not None
+
+        history = await service.get_suggestion_history(status="pending", limit=10)
+
+        row = next(r for r in history if r["id"] == emitted["id"])
+        assert row["kind"] == "brightness"
+        assert row["payload"]["scope"] == "room"
+        assert row["payload"]["light_targets"] == {"2": 70, "5": 72}

@@ -1,5 +1,7 @@
 <script>
-  import { brightnessSuggestion, dismissBrightnessSuggestion } from '$lib/stores/brightnessSuggestion.js'
+  import { onMount } from 'svelte'
+  import { apiGet } from '$lib/api.js'
+  import { brightnessSuggestion, showBrightnessSuggestion, dismissBrightnessSuggestion } from '$lib/stores/brightnessSuggestion.js'
   import { modeColor, modeLabel } from '$lib/theme.js'
   import { addError } from '$lib/stores/errors.js'
 
@@ -27,6 +29,18 @@
     dismissBrightnessSuggestion()
     await postSilently(`/api/rules/brightness-suggestion/dismiss/${id}`)
   }
+
+
+  onMount(async () => {
+    if ($brightnessSuggestion) return
+    try {
+      const res = await apiGet('/api/rules/suggestions?status=pending&limit=20')
+      const pending = (res?.suggestions || []).find((row) => row.kind === 'brightness' && row.payload)
+      if (pending) showBrightnessSuggestion(pending)
+    } catch {
+      // apiGet already reports the error; leave the card hidden.
+    }
+  })
 
   function weatherLabel(cls) {
     return ({

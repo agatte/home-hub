@@ -8,6 +8,7 @@ suggestion via WebSocket. The user can accept or dismiss — rules never
 auto-apply in v1.
 """
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -81,9 +82,16 @@ def _suggestion_to_dict(
     resolved_at = override.get("resolved_at", row.resolved_at)
     if resolved_at is not None:
         resolved_at = _as_utc(resolved_at).isoformat()
-    return {
+    payload = override.get("payload")
+    if payload is None and row.payload:
+        try:
+            payload = json.loads(row.payload)
+        except Exception:
+            payload = {}
+    data = {
         "id": row.id,
         "rule_id": row.rule_id,
+        "kind": override.get("kind", row.kind),
         "fired_at": fired_at.isoformat(),
         "predicted_mode": override.get("predicted_mode", row.predicted_mode),
         "confidence": int(round(float(confidence_raw) * 100)),
@@ -93,6 +101,9 @@ def _suggestion_to_dict(
         "resolved_at": resolved_at,
         "resolved_source": override.get("resolved_source", row.resolved_source),
     }
+    if payload is not None:
+        data["payload"] = payload
+    return data
 
 
 def _build_rule_factors(rule: "LearnedRule") -> list[dict]:
