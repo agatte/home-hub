@@ -126,6 +126,7 @@ MIN_PERIPHERAL_VALUE = 0.40
 # The WRITE_EPSILON dedup otherwise skips the corrective write because the
 # agent's own cache still matches the target it's trying to set.
 REFRESH_EVERY_POLLS = 6  # × POLL_INTERVAL_S (5s) ≈ 30s
+SINGLETON_RETRY_S = 300.0  # Standby retry when another live process owns the PID lock.
 
 # Per-device color mode, in preference order. We need a mode that honors
 # per-LED writes (``set_color`` writes the per-LED array): the Keychron's
@@ -619,9 +620,9 @@ def run_agent(
     _configure_standalone_logging()
     _stop = stop_event or threading.Event()
 
-    if not _acquire_singleton():
-        return
-
+    while not _acquire_singleton():
+        if _stop.wait(SINGLETON_RETRY_S):
+            return
     http_base = server_url.rstrip("/")
     ws_url = http_base.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
 

@@ -5,6 +5,7 @@ Mirror semantics: a single ``{r, g, b}`` payload writes to every lamp in
 ``sync.target_lights``. Per-light EMA + caps still differentiate output;
 this test file covers the dispatch surface only.
 """
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -123,11 +124,12 @@ async def test_all_lights_overridden_returns_skip_list():
     assert hue.calls == []
 
 
-def _calibrated_bedroom_lux(ema, baseline=127.0):
-    """A calibrated, fresh bedroom LuxChannel for the route to read (D4 Part E)."""
+def _calibrated_bedroom_lux(ema, baseline=127.0, *, age_s=0.0):
+    """A calibrated bedroom LuxChannel for the route to read (D4 Part E)."""
     from backend.services.lux_channel import LuxChannel
     ch = LuxChannel("bedroom", baseline_lux=baseline)
-    ch.update(ema)  # stamps last_update=now → is_fresh(60) True
+    captured_at = datetime.now(timezone.utc) - timedelta(seconds=age_s)
+    ch.update(ema, captured_at=captured_at)
     return ch
 
 
@@ -174,6 +176,42 @@ async def test_uncalibrated_bedroom_lux_is_neutral():
     req.app.state.bedroom_lux = LuxChannel("bedroom")  # uncalibrated
     result = await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
     assert result["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_watching_lux_lift_holds_through_short_desktop_gap():
+    """A late desktop lux sample should not make L2 pulse back to neutral."""
+    async def run(age_s):
+        hue = _FakeHue()
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        engine = _fake_engine("watching", period="day")
+        req = _make_request(engine, sync)
+        req.app.state.bedroom_lux = _calibrated_bedroom_lux(40.0, age_s=age_s)
+        for _ in range(30):
+            await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+        return next(s["bri"] for lid, s in reversed(hue.calls) if lid == "2")
+
+    fresh = await run(5.0)
+    held = await run(120.0)
+    assert held == fresh
+
+
+@pytest.mark.asyncio
+async def test_watching_lux_lift_falls_back_after_stale_reset_window():
+    """Past the LuxChannel reset horizon, screen sync uses neutral lux."""
+    async def run(age_s):
+        hue = _FakeHue()
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        engine = _fake_engine("watching", period="day")
+        req = _make_request(engine, sync)
+        req.app.state.bedroom_lux = _calibrated_bedroom_lux(40.0, age_s=age_s)
+        for _ in range(30):
+            await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
+        return next(s["bri"] for lid, s in reversed(hue.calls) if lid == "2")
+
+    held = await run(120.0)
+    stale = await run(360.0)
+    assert held > stale
 
 
 class _FakePresence:

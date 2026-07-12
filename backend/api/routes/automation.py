@@ -41,6 +41,7 @@ from backend.services.automation_constants import (
     ScheduleConfig,
 )
 from backend.services.light_state_calculator import lux_to_multiplier
+from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
 from backend.services.presence_fusion import PresenceReading
 
 SCHEDULE_CONFIG_KEY = "time_schedule_config"
@@ -66,6 +67,7 @@ router = APIRouter(prefix="/api/automation", tags=["automation"])
 
 BEDROOM_SCREEN_SYNC_TARGETS = ("2", "5")
 LIVING_ROOM_SCREEN_SYNC_TARGETS = ("1", "3", "4")
+BEDROOM_LUX_HOLD_SECONDS = float(LUX_EMA_STALE_RESET_SECONDS)
 
 
 def _factor_value(factors: list[dict] | None, key: str):
@@ -128,6 +130,23 @@ def _screen_sync_target_lights(report: ScreenColorReport, sync) -> list[str]:
             return targets
     targets = [lid for lid in BEDROOM_SCREEN_SYNC_TARGETS if lid in available]
     return targets or sync.target_lights
+
+
+def _bedroom_lux_multiplier(channel) -> float:
+    """Return the bedroom lux multiplier, holding through short agent gaps."""
+    if channel is None:
+        return 1.0
+    ema_lux = channel.ema_lux
+    baseline_lux = channel.baseline_lux
+    last_update = getattr(channel, "last_lux_update", None)
+    if ema_lux is None or baseline_lux is None or last_update is None:
+        return 1.0
+    if last_update.tzinfo is None:
+        last_update = last_update.replace(tzinfo=timezone.utc)
+    age_s = (datetime.now(timezone.utc) - last_update).total_seconds()
+    if age_s > BEDROOM_LUX_HOLD_SECONDS:
+        return 1.0
+    return lux_to_multiplier(ema_lux, baseline_lux)
 
 
 def _agent_health_origin(body: dict) -> str:
@@ -456,16 +475,11 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # living room must not dim them (the cross-room contamination that got
     # gaming dropped from LUX_MODES; bit us live 2026-06-02, living-room
     # mult 0.897 was throttling the bedroom gaming floors). Falls back to
-    # neutral 1.0 when the channel is uncalibrated or stale (>60s ≈ 2.4×
-    # the ~25s sample cadence, so a single missed sample can't flicker the
-    # floor).
-    lux_mult = 1.0
+    # neutral 1.0 only when the channel is uncalibrated, never updated,
+    # or stale past the LuxChannel stale-reset window. Short desktop-agent gaps
+    # keep the last EMA value so L2 does not pulse between lifted and neutral.
     bedroom_lux = getattr(request.app.state, "bedroom_lux", None)
-    if bedroom_lux is not None and bedroom_lux.is_fresh(60.0):
-        ema_lux = bedroom_lux.ema_lux
-        baseline_lux = bedroom_lux.baseline_lux
-        if ema_lux is not None and baseline_lux is not None:
-            lux_mult = lux_to_multiplier(ema_lux, baseline_lux)
+    lux_mult = _bedroom_lux_multiplier(bedroom_lux)
     weather_condition = engine._get_current_weather_condition()
 
     # Per-light skip gate. A lamp may sit out a frame because the user
