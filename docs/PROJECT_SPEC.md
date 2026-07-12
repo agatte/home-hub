@@ -17,7 +17,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Invisible automation** — The system detects activity, adjusts lights and music, and manages routines without manual input. Gradual transitions, activity-aware timing
 - **Full autopilot learning** — Observes all interactions and behavior patterns, starts with simple rules ("Friday 8pm = gaming"), evolves toward autonomous decision-making with subtle nudge notifications
 - **Bold, living UI** — Animated backgrounds that change with mode and time of day. Not a generic dashboard — a visual experience that reflects what's happening in the apartment
-- **Voice control** — Alexa integration (Fauxmo locally first, custom skill later) for hands-free mode switching, music control, and routine triggers
+- **Voice control** — Fauxmo, custom Alexa Skill, and iOS Shortcuts for hands-free mode switching, music control, arrival geofences, and natural-language vibe requests
 - **Game day magic** — Colts games become a synchronized experience: lights, sound, TTS celebrations, live scoreboard, pixel art field
 - **Hub for everything** — Widget cards for plant app, future bar app, and other projects. The dashboard is the home screen for your digital life
 - **Personal, not generic** — Every rule, mode, animation, and routine is tuned for one person's actual apartment and habits
@@ -64,7 +64,7 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 - PC activity detection (psutil process monitoring for games/media; gaming uses static known binaries plus cached Steam library manifest executable discovery)
 - Ambient noise monitoring (Blue Yeti mic RMS for party detection)
-- Camera-based presence (MediaPipe face + pose) is the primary "is the user here" signal in-app, fused with the desktop pc_agent's presence observations via `PresenceFusion` (shipped 2026-05-18). The Latitude camera sees the couch zone (since the 2026-05-27 living-room relocation); the desktop pc_agent owns the desk zone. Home/away as a concept was retired 2026-04-28; arrivals/departures are now handled by Hue's native geofencing outside Home Hub.
+- Camera-based presence (MediaPipe face + pose) is the primary "is the user here" signal in-app, fused with the desktop pc_agent's presence observations via `PresenceFusion` (shipped 2026-05-18). The Latitude camera sees the couch zone (since the 2026-05-27 living-room relocation); the desktop pc_agent owns the desk zone. Apartment-empty state is owned by `AwayManager`, fed by iOS Shortcut geofence webhooks through the Cloudflare tunnel; LEAVE suppresses autonomous actuation and ARRIVE force-reapplies lights, optional welcome behavior, and any `pending_arrival_vibe` staged through Siri.
 - Mode priority system: pregameday (6) = gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
@@ -172,7 +172,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 **Structural / tech debt:**
 - `automation_engine.py` is a 1,944-LOC single-file monolith. Mode rules, effect reconciliation, fusion wiring, learner overlay application, and the 60s loop all live in one module. Refactor candidate — split into `mode_resolver`, `light_applicator`, `effect_reconciler`, `engine_loop`
 - Apple Music XML upload (`POST /api/music/import`) has no enforced size limit. A multi-GB library file could OOM the backend before the parser rejects it
-- ~~Zero authentication middleware anywhere~~ — fixed: `require_api_key` is a global write-endpoint gate (see "No authentication on API endpoints" above). The LAN auto-bypass keeps friction at zero for the kiosk and Anthony's devices; a future Cloudflare Tunnel for Phase 5 Alexa would route through a non-private IP and naturally hit the header check
+- ~~Zero authentication middleware anywhere~~ — fixed: `require_api_key` is a global write-endpoint gate (see "No authentication on API endpoints" above). The LAN auto-bypass keeps friction at zero for the kiosk and Anthony's devices; Cloudflare Tunnel callers route through a non-private IP and hit the strict header check
 - ~~`EventLogger` swallows exceptions silently~~ — fixed: `_drop_count` dict tracks per-family (mode/light/scene/sonos) drop counts, surfaced in `/health` JSON under `event_logger_drops` so Uptime Kuma can alert on growth
 - ~~Automation-triggered light changes aren't logged to `light_adjustments`~~ — fixed: `_apply_uniform` and `_apply_per_light` in `automation_engine.py` now call `log_light_adjustment(trigger="automation")` with before/after values when state actually changes (dedup check prevents hot-path spam)
 - ~~Celebration light steps bypass EventLogger~~ — fixed: `CelebrationOrchestrator._run_light_steps` now mirrors successful `set_light` to `log_light_adjustment(trigger=f"celebration:{sequence_key}")` (commit `34fc550`). DB primary, journalctl corroboration. Closed memory: `project_celebration_no_event_log.md`
@@ -362,7 +362,7 @@ External APIs (cloud):
 - **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) if event volume ever forces it. **Deprioritized 2026-06-09:** the nightly per-table retention sweep (90-day rolling; `ml_decisions` capped at 21 days, ~1.1–1.2 GB plateau) removed the forcing function — no migration is planned absent a new driver. SQLAlchemy abstraction keeps the switch straightforward if revisited; `models.py` ↔ raw-migration schema drift (GH#29) is the prerequisite either way.
 - **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
 - **PC Agent over network:** Gaming PC (WiFi via TP-Link USB adapter since the 2026-06 Google Wifi migration — formerly wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery. NB: the desktop's MAC (and thus its `192.168.86.30` DHCP reservation) travels with the USB adapter, not the motherboard.
-- **Alexa two-phase:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel for full flexibility later.
+- **Voice/tunnel control:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel are live for structured voice control; the iOS Shortcut `home hub vibe` also uses the tunnel for natural-language vibe requests and staged arrival moods.
 
 ### Tech Stack
 
@@ -388,8 +388,8 @@ External APIs (cloud):
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Database | PostgreSQL (Supabase) | Deprioritized 2026-06-09 — retention sweep removed the volume driver; see "Database migration path" above |
-| Voice Control | Fauxmo (phase 1), Custom Alexa Skill + Lambda (phase 2) | Local UPnP → cloud skill |
-| Tunnel | Cloudflare Tunnel (free) | For Alexa Skill → local API |
+| Voice Control | Fauxmo, Custom Alexa Skill + Lambda, iOS Shortcuts | Local UPnP plus tunneled structured commands and Siri text capture |
+| Tunnel | Cloudflare Tunnel (free) | For Alexa Skill and authenticated iOS Shortcut webhooks → local API |
 | Learning | Separate Python process, scikit-learn or rule-based | Reads events, writes predictions |
 | External Widgets | HTTP polling or WebSocket to plant app / bar app | Status data for dashboard cards |
 
@@ -416,7 +416,7 @@ Additional keys:
 - `camera_wedge_last_restart` — `{at, detail}`; last camera-watchdog process-restart escalation, rate-limited to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart`.
 - `desktop_lux_calibration_config` — `{exposure, baseline_lux, target_lux, calibrated_at}`; bedroom webcam calibration result from the desktop Brio (D4). Written by `POST /api/camera/desktop/lux/calibration`; read at boot by `bootstrap.py` to seed `app.state.bedroom_lux` (`LuxChannel`). The `exposure` value is pinned by `emotion_capture.py` for every subsequent flip-sample-flip lux read. Empty dict until the bedroom webcam is calibrated.
 - `desktop_lux_calibrate_requested` — `{requested: bool}`; flag set by `POST /api/camera/desktop/lux/calibrate/request` and cleared when the agent POSTs its calibration result. Polled every 30s by `emotion_capture.py` so calibration can be triggered server-side without a separate UI flow.
-- Personality bundle (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`) — master kill switch + sub-toggles for the AI Personality Layer (spec: `docs/PERSONALITY_LAYER.md`).
+- Personality bundle (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`, `vibe_daily_cost_cap_usd`, `pending_arrival_vibe`) — master kill switch + sub-toggles for the AI Personality Layer, plus VibeRouter daily cost cap and one-shot staged arrival command (spec: `docs/PERSONALITY_LAYER.md`).
 - `mood_calibration_nudge_state` — `{last_nudge_at_utc, last_nudge_bucket}`; `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges), survives restart so a deploy mid-day doesn't reset the gate.
 - `gameday_playoff_state` — cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot (spec: `docs/GAMEDAY_SPEC.md`).
 - `gameday_team_form` — recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection (spec: `docs/GAMEDAY_SPEC.md`).
@@ -641,22 +641,20 @@ Persistent (no retention sweep). Per-axis bias auto-refits on POST `/api/persona
 once ≥10 rows with `detected_valence IS NOT NULL` exist; result written to
 `app_settings["mood_calibration_bias"]`.
 
-**vibe_requests** — Phase C `/api/personality/vibe` Claude-routed request log
+**vibe_requests** — Phase C `/api/personality/vibe` VibeRouter request log
 | Column | Type | Notes |
 |--------|------|-------|
 | id | Integer | PK, auto-increment |
 | timestamp | DateTime | UTC, indexed |
-| transcript | String(500) | Free-form Alexa slot text |
-| response | JSON | Nullable; Claude's structured `{mode, light_overrides, playlist_hint, tts_response}` |
+| transcript | String(500) | Free-form request text from Siri/iOS Shortcut, future Alexa, or API callers |
+| response | JSON | Nullable; VibeRouter structured response such as `{mode, scene_id, acknowledgement, confidence, parser, staged}` |
 | applied | Boolean | Whether the response was actuated |
-| cache_hit | Boolean | 24h SHA256 transcript cache |
-| cost_usd | Float | Anthropic billing for this request (Haiku ~$0.001) |
+| cache_hit | Boolean | Reserved for 24h SHA256 transcript cache; deterministic rule hits may be uncached |
+| cost_usd | Float | Anthropic billing for this request; deterministic rule hits cost 0 |
 | latency_ms | Float | Nullable |
-| source | String(50) | Caller attribution (`api`, `alexa:vibe`) |
+| source | String(50) | Caller attribution (`ios_shortcut:vibe`, `alexa:vibe`, `api`) |
 
-Phase A creates this table forward-compatibly so Phase C ships without
-another migration. No rows are written until VibeRouter lands (GH#59).
-Persistent (no retention sweep) for cost auditing.
+Phase A created this table forward-compatibly; Phase C v1 now writes rows from `VibeRouter` for both immediate and staged-arrival requests. Current response payloads are constrained to validated modes/scenes (`{mode, scene_id, acknowledgement, confidence, parser, staged}`), not arbitrary generated light payloads. Persistent (no retention sweep) for cost auditing and request traceability.
 
 ### Future Database Tables
 
@@ -948,8 +946,9 @@ WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `
 | GET | `/api/personality/settings` | All five sub-toggles + current `calibration_bias` (read-only snapshot) |
 | POST | `/api/personality/settings` | Partial-update any of `personality_enabled`, `emotion_enabled`, `mood_ring_enabled`, `mood_ring_light_id`. Flipping `emotion_enabled` calls `EmotionService.set_enabled(...)` which lazy-loads FaceLandmarker on first true-flip |
 | POST | `/api/personality/blendshape` | Ingest a desktop-captured FaceLandmarker reading (`{blendshapes: dict[str,float], face_confidence, source, timestamp?}`) → `EmotionService.on_blendshape` (GH#64, shipped 2026-05-18). Validates per-value [0,1] bounds; client `timestamp` clamped to server now when >2s in the future (`clamp_client_timestamp` — see `/api/camera/observation`) |
+| POST | `/api/personality/vibe` | Natural-language vibe request `{transcript, timing}`. `timing="arrival_if_away"` applies immediately when home or stages to `app_settings.pending_arrival_vibe` while away; geofence/camera ARRIVE consumes and clears it. Deterministic rules map common phrases to existing modes/curated scenes first; optional Anthropic fallback is validated against known modes/scenes. Tunnel callers require both `X-API-Key` and `X-Skill-Token`; iOS Shortcut source is `X-Source: ios_shortcut:vibe` |
 
-Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`). Full spec: `docs/PERSONALITY_LAYER.md`. Phase C's `/vibe` POST (Claude routing, GH#59) ships in its phase.
+Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`) and the Siri/iOS Shortcut `home hub vibe` text workflow. Full spec: `docs/PERSONALITY_LAYER.md`.
 
 #### Widgets — `/api/widgets/` **(future)**
 
@@ -1110,7 +1109,7 @@ Subscribes to MediaPipe FaceLandmarker blendshape callbacks from `camera_service
 | `poll_loop` | `() → None` | Every 10s persist a `mood_samples` row when the last vector is fresh |
 | `health_status` | `() → dict` | HealthTrackable surface; always `is_shadow=True` in Phase A |
 
-Phase A is **shadow-log only** — no actuation. Phase B (MoodRingLight, GH#58) gates on Spearman ρ > 0.4 across 30+ paired calibration samples per axis (the `homehub-checkbacks.md` entry #31 evaluator). Phase C (VibeRouter + Alexa VibeIntent, GH#59) layers Claude (Haiku) on top, backend-side. Phase D (cost dashboard + dismiss kill switch, GH#60) hardens before mainstream use. Full design: `docs/PERSONALITY_LAYER.md`.
+Phase A emotion sensing is **shadow-log only** — no actuation. Phase B (MoodRingLight, GH#58) gates on Spearman ρ > 0.4 across 30+ paired calibration samples per axis (the `homehub-checkbacks.md` entry #31 evaluator). Phase C v1 shipped `VibeRouter` + `/api/personality/vibe` for Siri/text commands, with deterministic routing first and optional backend-side Anthropic fallback; Alexa `VibeIntent` and passive suggestions remain future. Phase D (cost dashboard + dismiss kill switch, GH#60) hardens before mainstream use. Full design: `docs/PERSONALITY_LAYER.md`.
 
 #### GameDayService + CelebrationOrchestrator (shipped 2026-05-07)
 ESPN polling, play detection, and celebration orchestration. See `docs/GAMEDAY_SPEC.md` for the full interface contracts (`GameDayService`, `CelebrationOrchestrator`, `PlayEvent`, `GameDayState`) and the "Game Day Engine — shipped 2026-05-07" section below for the architecture summary.
@@ -1580,8 +1579,9 @@ The system observes everything and evolves from rules to autopilot:
 **Phase 2 — Custom Alexa Skill + Cloudflare Tunnel (✓ shipped):**
 - Invocation: `home hub` (since 2026-05-16). Originally `command center` from 2026-05-05 launch because `home hub` appeared to collide with Alexa's smart-home category — confirmed 2026-05-16 that this was an Alexa+ side-effect, not the literal phrase. Fallback if voice routing ever regresses: `the home hub` → `home hub apartment` → `command home` → revert to `command center`. See `alexa_skill/README.md` §"Invocation name history"
 - AWS Lambda (`home-hub-skill` in `us-east-1`) → Cloudflare Tunnel (`home-hub.gatte-home.com`) → tunnel proxy (`backend/api/tunnel_proxy.py` on `127.0.0.1:8002`) → main backend on `127.0.0.1:8000`
-- Tunnel-origin auth: `X-Tunnel-Origin: cloudflare` header injected by tunnel proxy forces require_api_key to demand BOTH `X-API-Key` AND `X-Skill-Token` (skips loopback/RFC1918 bypass)
-- Source attribution: lambda sets `X-Source: alexa:<intent>` on every API call (set by a `ContextVar` in the dispatcher, read by `_call_homehub`). Backend write routes call `source_from_request(request, fallback=...)` from `backend.api.auth` and tag the resulting `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` row accordingly. Without this, tunneled Alexa traffic was indistinguishable from any other LAN write — every row landed as `api:127.0.0.1`. **Latent gap closed 2026-05-07 (commit `31a1edf`):** `set_manual_override` accepted a `source` kwarg for journalctl + cooldown logic but its `log_mode_change` call hardcoded `source="manual"`, flattening every override write in `activity_events` to `"manual"` regardless of caller. Pre-fix `activity_events` rows where `source="manual"` are unreliable — they could be Alexa, guest, dashboard, or autonomous (winddown / late_night_rescue / fusion). See memory `project_override_caller_telemetry.md`
+- Tunnel-origin auth: `X-Tunnel-Origin: cloudflare` header injected by tunnel proxy forces require_api_key to demand BOTH `X-API-Key` AND `X-Skill-Token` (skips loopback/RFC1918 bypass). This applies to Alexa and iOS Shortcut tunnel calls.
+- Source attribution: lambda sets `X-Source: alexa:<intent>` on every API call (set by a `ContextVar` in the dispatcher, read by `_call_homehub`); the vibe Shortcut sets `X-Source: ios_shortcut:vibe` directly. Backend write routes call `source_from_request(request, fallback=...)` from `backend.api.auth` and tag the resulting `activity_events` / `light_adjustments` / `sonos_playback_events` / `scene_activations` row accordingly. Without this, tunneled Alexa traffic was indistinguishable from any other LAN write — every row landed as `api:127.0.0.1`. **Latent gap closed 2026-05-07 (commit `31a1edf`):** `set_manual_override` accepted a `source` kwarg for journalctl + cooldown logic but its `log_mode_change` call hardcoded `source="manual"`, flattening every override write in `activity_events` to `"manual"` regardless of caller. Pre-fix `activity_events` rows where `source="manual"` are unreliable — they could be Alexa, guest, dashboard, or autonomous (winddown / late_night_rescue / fusion). See memory `project_override_caller_telemetry.md`
+- iOS Shortcut shipped: `home hub vibe` prompts for text, then POSTs `https://home-hub.gatte-home.com/api/personality/vibe` with headers `Content-Type: application/json`, `X-API-Key`, `X-Skill-Token`, `X-Source: ios_shortcut:vibe` and JSON body `{ "transcript": <Ask for Input>, "timing": "arrival_if_away" }`. End with `Show Result` so Siri reports success instead of a generic Shortcuts error.
 - Intents shipped: `SetModeIntent`, `PlayMusicIntent`, `PauseMusicIntent`, `ReleaseOverrideIntent` (auto override clear — carved out because single-token slot values misroute reliably), `AdjustBrightnessIntent` (±10% relative bump via new `/api/lights/brightness/{up\|down}`), `SetEffectIntent` + `StopEffectIntent` (candle/fire/sparkle/prism/glisten/opal), `ActivateSceneIntent` (6-scene safelist mirroring `/guest`: party/neon/miami/arcade/aurora/sunset), `EnableDNDIntent` + `DisableDNDIntent` (default 2h window), `AdjustVolumeIntent` (±5 Sonos volume via new `/api/sonos/volume/{up\|down}`), `NextTrackIntent` + `PreviousTrackIntent`, `WhatModeIntent` + `WhatsPlayingIntent` (read-only status queries), plus built-ins (`AMAZON.HelpIntent`, `AMAZON.CancelIntent`, `AMAZON.StopIntent`). See `alexa_skill/` for code + manifest + setup README
 - **Critical: requires Alexa+ (Amazon's generative-AI tier) to be DISABLED.** Alexa+'s LLM routing intercepts custom skills and falls back to smart-home. See `alexa_skill/README.md` "Critical prerequisite" section
 - Routing gotchas (sample collisions): when two custom intents could plausibly share a verb pattern (e.g. "turn on {X}"), the same shape must exist on every colliding intent so NLU disambiguates by slot-type validity — otherwise the lone owner raw-fills the slot and the handler hits a dead-end clarify prompt. SetModeIntent therefore mirrors SetEffectIntent's "turn on {Mode}" pattern
@@ -1867,7 +1867,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 ### Phase 5: Polish & Expand (September 2026+)
 
 - Remaining mode backgrounds (social/club, watching/drive-in) + improved art assets (transparent layers, wider tiles)
-- Custom Alexa Skill (full voice control)
+- Alexa VibeIntent/free-form voice polish (structured Alexa control already shipped)
 - Apple Music API integration ($99/year) — catalog browsing (search by genre/mood, dynamic playlists). Phase A (DIDL-Lite Now Playing metadata for HTTP streams), Phase A.5 (always-shuffle + random queue start via `play_favorite`), and Phase B (weather-aware bandit arm key `(mode, period, weather_class, title)` with legacy 3-tuple migration + warm-start) all shipped 2026-05-12
 - Bar app widget integration
 - Seasonal lighting adjustments

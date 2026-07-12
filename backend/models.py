@@ -502,7 +502,7 @@ class MoodCalibration(Base):
 
 
 class VibeRequest(Base):
-    """One /api/personality/vibe Claude-routed request."""
+    """One /api/personality/vibe VibeRouter request."""
 
     __tablename__ = "vibe_requests"
 

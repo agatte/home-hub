@@ -1,6 +1,6 @@
 # AI Personality Layer
 
-> **Status:** Phase A shipped 2026-05-18 (commits e57fdad → a2d0e2a → 9d6e534). Phase B gated on validation — **gate checked 2026-06-09: WAIT, insufficient data** (6/30 paired samples; see "Validation gate" below). Phases C–D queued.
+> **Status:** Phase A shipped 2026-05-18 (commits e57fdad → a2d0e2a → 9d6e534). Phase B gated on validation — **gate checked 2026-06-09: WAIT, insufficient data** (6/30 paired samples; see "Validation gate" below). Phase C v1 shipped 2026-07-06/07: `/api/personality/vibe` + iOS Shortcut natural-language vibe routing, including staged arrival vibes.
 > **Plan origin:** 2026-05-17 brainstorm — user picked "AI Personality" as one cohesive big build over a menu of smaller ideas. Twitch/streaming explicitly dropped from scope.
 
 ---
@@ -15,7 +15,7 @@ Home Hub today reacts to *what* you're doing (process detection, camera zone, au
 
 ## Architecture overview
 
-Three new services in `backend/services/personality/`, one parallel detector added to `camera_service.py`, one new Alexa intent, three new DB tables. One-directional pipeline:
+Three services in `backend/services/personality/`, one parallel detector added to `camera_service.py`, a shipped iOS Shortcut vibe entrypoint, a future Alexa intent, and three DB tables. One-directional pipeline:
 
 ```
 camera_service ──face_blendshapes_cb──┐
@@ -26,11 +26,11 @@ audio_classifier (prosody features)───┘                                 
                                                                           ├─> MoodSuggestionService ──> NotifierService (toast + push)
                                                                           │       (divergence >5min from active mode target)
                                                                           │
-                                                                          └─> ml_decisions logger
+                                                                          └─> vibe_requests log (ml_decisions mirror still future)
 
-Alexa "set my vibe to X" ──Lambda──tunnel──> VibeRouter ──> Claude API (Haiku) ──> {mode, light_overrides, playlist_hint, tts}
-                                                              ↓
-                                                       automation_engine.set_mode() + hue_service.set_light() + Sonos
+iOS Shortcut "Home Hub Vibe" ──tunnel──> VibeRouter ──rules first / Claude API fallback──> {mode, scene_id, acknowledgement}
+                                                             ↓
+                                            automation_engine.set_mode() + curated scene apply, or staged until arrival
 ```
 
 The `mood_vector` is `{valence ∈ [-1,1], arousal ∈ [-1,1], focus ∈ [0,1], confidence, ts}`. Subscribers read from an in-memory last-value cache + asyncio.Event — same shape as `automation_engine._last_fusion_result` consumed by `NotifierService` today.
@@ -56,10 +56,10 @@ Why FaceLandmarker wins:
 
 **Audio prosody** (energy + spectral centroid from the existing 0.975s YAMNet frames) was scoped to contribute additively to `arousal` weighted 0.3 vs face 0.7. Deferred from Phase A — `audio_classifier` doesn't yet expose raw RMS / spectral features; tracked as a separate follow-up. Every `mood_samples` row already includes `factors.audio_arousal=null` as the forward-compat marker.
 
-**Claude API stays in the backend, not the Lambda.** `alexa_skill/lambda_function.py` is stdlib-only (`json`, `os`, `urllib.error`, `urllib.request`). Adding the `anthropic` SDK + deps breaks the paste-into-console deploy workflow. Lambda forwards the `{vibe}` slot to `/api/personality/vibe` via the existing tunnel; backend calls Claude; backend returns the TTS string; Lambda speaks it.
+**Claude API stays in the backend, not edge clients.** The shipped iOS Shortcut only captures text and POSTs it to `/api/personality/vibe`; deterministic rules handle common requests before any model call. Future Alexa `VibeIntent` should keep the same boundary: `alexa_skill/lambda_function.py` stays stdlib-only and forwards `{vibe}` through the tunnel, with the backend owning Anthropic calls and validation.
 
 **Cost bounding:**
-- Model: `claude-haiku-4-5-20251001` — structured-output task, not reasoning. ~$0.001/request.
+- Model: configured by `ANTHROPIC_MODEL` (default `claude-3-haiku-20240307`) — structured-output task, not reasoning. Deterministic rule hits cost $0; model fallback is expected to be around $0.001/request.
 - Daily cap via `vibe_daily_cost_cap_usd` setting (default $0.50, ~500 requests/day — generously above ceiling).
 - 24h SHA256 cache on normalized transcripts ("set my vibe to focus mode" hits cache on repeat).
 - Anthropic prompt caching on the system prompt (mode list + light IDs + scene rules + current state, ~800 tokens cached).
@@ -77,7 +77,7 @@ What landed (commits `a2d0e2a` + `9d6e534`):
 
 - `EmotionService` consumes blendshapes via a new camera callback; projects 52 blendshapes → (V, A, F) via hand-tuned coefficients; EMA-smooths at α=0.3; persists every 10s to `mood_samples` (rolling 7-day).
 - `FaceLandmarker` added in parallel to `camera_service.py`, lazy-loaded on first `emotion_enabled=true` flip.
-- 3 new tables: `mood_samples`, `mood_calibration`, `vibe_requests` (Phase C placeholder).
+- 3 new tables: `mood_samples`, `mood_calibration`, `vibe_requests` (created forward-compatibly in Phase A, now used by Phase C v1).
 - `/api/personality/*` routes: `mood/current`, `mood/history`, `calibration` POST + history, `settings` GET + POST.
 - `/personality` SvelteKit page: live V/A/F gauges + HSV color swatch preview, slider self-report form, sub-toggles + master kill switch, 24h history strip. Hidden from FloatingNav (same pattern as `/journal`).
 - Three new app_settings: `personality_enabled` (master), `emotion_enabled` (sub-toggle), `mood_ring_enabled` (Phase B preview), plus `mood_ring_light_id` + `mood_calibration_bias`.
@@ -95,11 +95,34 @@ Also requires:
 - Add `"personality"` trigger to the non-`USER_TRIGGERS` exclusion at `backend/services/ml/lighting_learner.py:37` so mood-ring writes don't poison the EMA learner.
 - Promote `/personality` mood updates from 5s polling to a new `personality_update` WS message type so the lamp doesn't poll.
 
-### Phase C — Vibe Intent + Passive Suggestions (after Phase B)
+### Phase C — Vibe Routing v1 · SHIPPED 2026-07-06/07
 
-`MoodSuggestionService` poll loop fires through `notifier.publish_suggestion(...)` when mood diverges from active mode for >5 min (max 1/hr, 3/day, suppressed during sleeping/cooking/DND).
+`VibeRouter` service + `POST /api/personality/vibe` landed as a text/Siri control path. The first production client is the iOS Shortcut named `home hub vibe`; Alexa `VibeIntent` and passive mood suggestions remain future work.
 
-`VibeRouter` service + `/api/personality/vibe` POST endpoint. New Alexa `VibeIntent` (free-form `AMAZON.SearchQuery` slot) → Lambda → tunnel → backend → Claude (Haiku) → apply mode/lights → TTS back. v1 scope: mode + light_overrides only (no music auto-queue — Sonos adds failure modes).
+Request shape:
+
+```json
+{
+  "transcript": "coming home with friends, set a party mood",
+  "timing": "arrival_if_away"
+}
+```
+
+Auth over the Cloudflare tunnel requires `X-API-Key` + `X-Skill-Token`; the Shortcut also sends `X-Source: ios_shortcut:vibe` for attribution. `timing="arrival_if_away"` applies immediately when home and writes `app_settings.pending_arrival_vibe` when away. `AwayManager` consumes that setting on the next geofence/camera arrive, reapplies the current mode with force, applies the vibe, logs the request, and clears the pending setting.
+
+Routing is intentionally constrained. Deterministic phrase rules handle the common paths first:
+- party/friends/guests/pregame → `social` + `house_party`
+- neon/tokyo/cyberpunk → `relax` + `neon_tokyo`
+- miami/vice → `relax` + `miami_vice`
+- arcade/retro/game night → `social` + `arcade`
+- aurora/northern lights → `relax` + `northern_lights`
+- sunset/golden hour → `relax` + `sunset_strip`
+- chill/cozy/calm/relax → `relax`
+- cook/dinner/kitchen → `cooking`
+
+Ambiguous requests can call Anthropic if `ANTHROPIC_API_KEY` is configured; responses are validated against known modes/scenes and never generate arbitrary light payloads. v1 remains lights/mode only, but applying `social` can still trigger existing mode-change callbacks such as MusicMapper's Party-Jazz autoplay.
+
+`MoodSuggestionService` poll loop still belongs to the remaining Phase C work: fire through `notifier.publish_suggestion(...)` when mood diverges from active mode for >5 min (max 1/hr, 3/day, suppressed during sleeping/cooking/DND).
 
 ### Phase D — Hardening + Cost Dashboard (after Phase C)
 
@@ -122,11 +145,13 @@ Also requires:
 **To create Phase B+:**
 - `backend/services/personality/mood_ring_light.py` — passive light output, EMA + dead-zone, override-aware.
 - `backend/services/personality/mood_suggestion_service.py` — divergence detector → `NotifierService`.
-- `backend/services/personality/vibe_router.py` — Claude client, prompt template, response validator (rejects out-of-set modes/light IDs), cache, cost ledger.
 - `alexa_skill/lambda_function.py` patch — add `VibeIntent` handler (paste-in, same shape as existing `HOMEHUB_MODE` handler).
 - `alexa_skill/interaction_model.json` — `VibeIntent` with `{vibe}` slot of type `AMAZON.SearchQuery`.
 
-**Modified Phase A (✓ shipped):**
+**Created Phase C v1 (✓ shipped):**
+- `backend/services/personality/vibe_router.py` — deterministic rule router, optional Anthropic fallback, response validator, staged-arrival persistence, `vibe_requests` logging.
+
+**Modified Phase A / Phase C v1 (✓ shipped):**
 - `backend/services/camera_service.py` — added `FaceLandmarker` as parallel conditional detector + `register_blendshape_callback()` + `set_emotion_enabled()` hooks.
 - `backend/models.py` — added `MoodSample`, `MoodCalibration`, `VibeRequest` tables.
 - `backend/database.py` — 7-day prune of `mood_samples` at boot.
@@ -147,7 +172,7 @@ Also requires:
 - **Privacy contract** from `camera_service.py:1653` ("Pausing turns off the camera (LED goes dark) for sleep privacy") — re-state in personality module docstring; face crops obey the same in-memory-only rule pose landmarks already do.
 - **Health mixin** (`backend/services/ml/health_mixin.py`) — `HealthTrackable` on EmotionService so `/health` surfaces its state for free.
 - **Notifier gating** — call `notifier.publish_suggestion(...)`, don't duplicate the BOOT/COALESCE/DND checks.
-- **MLDecisionLogger** — every Claude vibe response logged as `decision_source="vibe"`, `factors={transcript, mode, cost_usd, latency_ms}`. Same explainability surface the analytics SectorBoard already renders.
+- **Remaining analytics mirror** — VibeRouter currently logs to `vibe_requests`; a future hardening pass should also mirror model-backed parses into `ml_decisions` with `decision_source="vibe"`, `factors={transcript, mode, cost_usd, latency_ms}` if we want the analytics SectorBoard to show them.
 - **Service shape** (`_connected` + `async connect()` / `poll_state_loop(ws_manager)` / `close()`) — copy `notifier_service.py`.
 - **Alexa intent pattern** — paste-in addition next to `HOMEHUB_MODE` handler, same `_call_homehub` helper, `X-Source: alexa:vibe` header so backend attributes correctly.
 
@@ -157,7 +182,7 @@ Also requires:
 
 - **Phase A (in progress):** 2-week shadow log + once-daily calibration prompts. Phase B ships only if Spearman ρ > 0.4 on all three axes over 30+ samples.
 - **Phase B:** Playwright UI audit at the four V/A corners (happy-energized, happy-calm, sad-energized, sad-calm) — confirm L1 hue matches palette. Manual L1 override → confirm mood ring stops touching it. Sleeping mode → confirm mood ring disabled.
-- **Phase C:** 10 canned vibe phrases → confirm Claude returns valid JSON every time, validator rejects out-of-set modes/light IDs, cost ledger increments, TTS round-trip works via Echo. CI test with mocked Claude client.
+- **Phase C v1:** `tests/test_vibe_router.py`, `tests/test_away_manager.py`, and `tests/test_tunnel_proxy.py` cover deterministic phrase mapping, staged-arrival apply/clear, invalid outputs, tunnel allowlisting, and auth shape. Production smoke: iOS Shortcut `home hub vibe` POSTs through `https://home-hub.gatte-home.com/api/personality/vibe`; Siri result is made clean by ending the Shortcut with `Show Result`.
 - **After each phase:** `/api-audit` skill to confirm no existing endpoint regressed. `/deploy-home` to ship.
 
 ---

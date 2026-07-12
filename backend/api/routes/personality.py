@@ -1,9 +1,9 @@
-"""AI Personality Layer routes — mood readings + calibration + settings.
+"""AI Personality Layer routes — mood readings, calibration, settings, vibe.
 
-Phase A (shadow-log only): read the live mood vector, store self-report
-calibration rows against detector readings, expose 7-day history. No
-actuation surfaces here yet — the mood-ring light (Phase B) and vibe
-intent (Phase C) will add their own endpoints when they ship.
+Phase A emotion sensing is shadow-log only: read the live mood vector, store
+self-report calibration rows against detector readings, and expose 7-day
+history. Phase C v1 adds `/vibe` as a constrained text/Siri lighting command
+surface; mood-ring actuation remains gated behind Phase B.
 """
 from __future__ import annotations
 

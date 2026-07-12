@@ -184,7 +184,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Bar | `/api/bar` | `bar.py` — Home Bar app summary; 503 when `BAR_APP_URL` unset |
 | Ambient | `/api/ambient` | `ambient.py` — browser ambient audio state/volume/map/weather config |
 | Notification | `/api/notification` | `notification.py` — `POST /test` synthetic notification; bypasses DND/coalesce/boot gating |
-| Personality | `/api/personality` | `personality.py` — mood current/history, calibration, settings; backs `/personality`; spec PERSONALITY_LAYER |
+| Personality | `/api/personality` | `personality.py` — mood current/history, calibration, settings, `/vibe`; backs `/personality` + Siri/iOS Shortcut vibe flow; spec PERSONALITY_LAYER |
 | Presence | `/api/presence` | `presence.py` — `POST /geofence` (iOS Shortcut leave/arrive via tunnel, strict auth) + `GET /status`; backs AwayManager (D2/D6) |
 | Analytics | `/api/analytics` | `analytics.py` — digest entries/daily/highlights/{date} for `/analytics` |
 | Debug | `/api/debug` | `debug.py` — ad-hoc read-only SQL + event-summary (LAN/localhost gated) |
@@ -215,7 +215,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **New automation mode.** Add per-light states in `automation_engine.py` → `ACTIVITY_LIGHT_STATES` under `day`/`evening`/`night` (+ `late_night` if needed). Each light should differ (spatial depth) — avoid `_uniform()`. Engine checks `mode_scene_overrides` DB table first. Mode brightness multipliers apply on top.
 
-**App settings (SQLite).** `await save_setting(key, value_dict)` / `await load_setting(key)` (each opens its own session — no `db` arg). Sample keys (non-exhaustive — full list in `docs/PROJECT_SPEC.md` § "Database Schema → app_settings"): `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`.
+**App settings (SQLite).** `await save_setting(key, value_dict)` / `await load_setting(key)` (each opens its own session — no `db` arg). Sample keys (non-exhaustive — full list in `docs/PROJECT_SPEC.md` § "Database Schema → app_settings"): `morning_routine_config`, `time_schedule_config`, `mode_brightness_config`, `mode_volume_curves`, `watching_posture_config`, `camera_enabled`, `lux_calibration_config`, `away_state`, `pending_arrival_vibe`, `vibe_daily_cost_cap_usd`.
 
 **Source attribution on write endpoints.** Routes logging to `activity_events`/`light_adjustments`/`sonos_playback_events`/`scene_activations` pull caller identity via `source_from_request(request, fallback="...")` (`backend.api.auth`). Alexa lambda sets `X-Source: alexa:<intent>`; absent → route default (`api:<ip>`, `rest`, `manual`, etc.).
 
@@ -260,7 +260,7 @@ Conventions for this codebase — only what's non-obvious. Standard Python/FastA
 
 **Ambient-relax soft default:** When `_current_mode == "idle"` continuously ≥600s (`IDLE_AMBIENT_RELAX_DWELL_SECONDS`) with no Sonos and both attendance vetoes negative, `run_loop` pushes `set_manual_override("relax", source="ambient_relax")`. Day-agnostic; catches the "stepped away after dinner" gap.
 
-**Apartment-empty handling (away state, not a mode):** `AwayManager` (`away_manager.py`, D2/D6) owns an explicit away/home state fed by iOS Shortcut geofence webhooks (`POST /api/presence/geofence`, tunnel + strict auth). LEAVE: arms `engine.arm_away_suppression()` — a **HARD hold** on the `_external_off_detected` flag: residual PC process reports (foreground lingers ~10 min post-departure) can't clear it, and while ANY suppression is set `report_activity` tracks mode but does NOT actuate lights or fire callbacks. Also pauses Sonos, all-lights-off, ONE notification, invalidates dedup (so a camera-walk-in release re-lights); state persists (`away_state`) and re-arms on restart. Release = `signal_presence` ONLY (geofence ARRIVE → also force-reapply + optional welcome TTS via `away_config`; or **CameraService** absent→present). The Hue app's "Leaving home" soft path (`_check_external_off`, no hold) keeps its original any-non-idle-activity-resumes semantics. Pre-D2 dead-ends: `project_away_mode_shelved.md`.
+**Apartment-empty handling (away state, not a mode):** `AwayManager` (`away_manager.py`, D2/D6) owns an explicit away/home state fed by iOS Shortcut geofence webhooks (`POST /api/presence/geofence`, tunnel + strict auth). LEAVE: arms `engine.arm_away_suppression()` — a **HARD hold** on the `_external_off_detected` flag: residual PC process reports (foreground lingers ~10 min post-departure) can't clear it, and while ANY suppression is set `report_activity` tracks mode but does NOT actuate lights or fire callbacks. Also pauses Sonos, all-lights-off, ONE notification, invalidates dedup (so a camera-walk-in release re-lights); state persists (`away_state`) and re-arms on restart. Release = `signal_presence` ONLY (geofence ARRIVE → also force-reapply + optional welcome TTS via `away_config`; or **CameraService** absent→present). ARRIVE also consumes `pending_arrival_vibe` through `VibeRouter` if Siri staged a mood while away, then clears the setting. The Hue app's "Leaving home" soft path (`_check_external_off`, no hold) keeps its original any-non-idle-activity-resumes semantics. Pre-D2 dead-ends: `project_away_mode_shelved.md`.
 
 ---
 
@@ -280,7 +280,7 @@ Effects: `candle`, `fire`, `sparkle`, `prism`, `glisten`, `opal`. Activate via `
 
 ## Database Schema
 
-Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (Phase C placeholder). Data retention: per-table via nightly `retention_sweep` — 90-day rolling, with `mood_samples` 7-day and `ml_decisions` 21-day exceptions (ml_decisions logs ~75k rows/day; 21d plateau ≈ 1.1–1.2 GB).
+Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (live VibeRouter request log). Data retention: per-table via nightly `retention_sweep` — 90-day rolling, with `mood_samples` 7-day and `ml_decisions` 21-day exceptions (ml_decisions logs ~75k rows/day; 21d plateau ≈ 1.1–1.2 GB).
 
 ---
 
@@ -291,7 +291,7 @@ Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live
 **Full list + inline docs:** `.env.example` (repo root). **Source of truth:** `backend/config.py` (pydantic `BaseSettings`). Keep those two in sync — don't re-enumerate the vars here (this block kept drifting).
 
 Non-obvious runtime behavior worth knowing without opening the files:
-- `HOME_HUB_API_KEY` — gates every write endpoint; **unset → writes 503**. Localhost (kiosk) + RFC1918 LAN auto-bypass; `TRUSTED_LAN_IPS` pins extra public IPs. `HOME_HUB_SKILL_TOKEN` is the tunnel-origin pair for the Alexa Skill (requires BOTH).
+- `HOME_HUB_API_KEY` — gates every write endpoint; **unset → writes 503**. Localhost (kiosk) + RFC1918 LAN auto-bypass; `TRUSTED_LAN_IPS` pins extra public IPs. `HOME_HUB_SKILL_TOKEN` is the tunnel-origin pair for Alexa Skill and iOS Shortcut calls (requires BOTH). `ANTHROPIC_API_KEY` is optional; if set, VibeRouter can use it for ambiguous `/api/personality/vibe` text after deterministic rules fail.
 - `NTFY_TOPIC` — the topic name **IS** the auth on hosted ntfy.sh; treat as a secret. Unset → desktop toast still fires via WS, phone push skipped.
 - `ZONE_POSTURE_RULE_APPLY` — DORMANT since 2026-05-27 (no `zone=bed` source post Latitude→living-room move); kept for a future bed-zone source.
 - `PLANT_APP_ALLOW_INSECURE` — default false **rejects `http://` at boot**; only flip if upstream lacks TLS.
