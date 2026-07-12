@@ -19,6 +19,7 @@
   $: if (!dragging) displayValue = value
 
   let dragging = false
+  let suppressNextChange = false
 
   /** @param {Event} e */
   function handleInput(e) {
@@ -30,12 +31,18 @@
 
   /** @param {Event} e */
   function handleCommit(e) {
+    if (e.type === 'change' && suppressNextChange) {
+      suppressNextChange = false
+      return
+    }
+
     const target = /** @type {HTMLInputElement} */ (e.target)
     const val = Number(target.value)
     displayValue = val
     if (!liveUpdate) onChange(val)
     onCommit(val)
     dragging = false
+    suppressNextChange = e.type === 'pointerup' || e.type === 'pointercancel'
   }
 </script>
 

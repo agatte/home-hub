@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import time
+from urllib.parse import urljoin
 from typing import TYPE_CHECKING, Any, Optional
 
 from backend.config import settings
@@ -46,6 +47,17 @@ _ALLOWED_PLAY_URI_PATTERNS: tuple[re.Pattern, ...] = (
 # of stream URLs from its (admin-edited) library via register_allowed_stream_uris;
 # only those precise URLs are playable. Membership is exact-match, not prefix.
 _ALLOWED_STREAM_URIS: set[str] = set()
+
+
+def _absolute_album_art_url(album_art: str, device_ip: Optional[str]) -> str:
+    """Turn Sonos relative album-art paths into browser-loadable URLs."""
+    if not album_art:
+        return ""
+    if album_art.startswith(("http://", "https://")):
+        return album_art
+    if not device_ip:
+        return album_art
+    return urljoin(f"http://{device_ip}:1400", album_art)
 
 
 def register_allowed_stream_uris(uris: set[str]) -> None:
@@ -235,7 +247,10 @@ class SonosService:
                 "track": track.get("title", ""),
                 "artist": track.get("artist", ""),
                 "album": track.get("album", ""),
-                "art_url": track.get("album_art", ""),
+                "art_url": _absolute_album_art_url(
+                    track.get("album_art", ""),
+                    getattr(self._device, "ip_address", None),
+                ),
                 "duration": track.get("duration", "0:00:00"),
                 "position": track.get("position", "0:00:00"),
                 "volume": volume,

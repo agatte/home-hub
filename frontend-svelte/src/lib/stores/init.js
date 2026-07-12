@@ -179,6 +179,11 @@ export function setLight(lightId, state) {
  * @param {Record<string, unknown>} [params]
  */
 export function sonosCommand(action, params = {}) {
+  if (action === 'volume' && typeof params.volume === 'number') {
+    const volume = Math.max(0, Math.min(100, Math.round(params.volume)))
+    sonos.update((prev) => ({ ...prev, volume }))
+    params = { ...params, volume }
+  }
   socket?.send('sonos_command', { action, ...params })
 }
 
