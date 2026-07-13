@@ -475,6 +475,7 @@ def run_monitor(
 
     # Shadow logging throttle state
     last_logged_class: Optional[str] = None
+    last_logged_mode_signal: Optional[str] = None
     last_log_time: float = 0.0
 
     try:
@@ -547,15 +548,20 @@ def run_monitor(
                     now_log = time.time()
                     class_changed = ml_result["top_class"] != last_logged_class
                     interval_elapsed = (now_log - last_log_time) >= SHADOW_LOG_INTERVAL
+                    mode_signal_changed = (
+                        mode_signal is not None
+                        and mode_signal != last_logged_mode_signal
+                    )
                     should_log = (
                         not shadow_mode
                         or class_changed
-                        or mode_signal is not None
+                        or mode_signal_changed
                         or interval_elapsed
                     )
 
                     if should_log:
                         last_logged_class = ml_result["top_class"]
+                        last_logged_mode_signal = mode_signal
                         last_log_time = now_log
                         try:
                             resp = client.post(

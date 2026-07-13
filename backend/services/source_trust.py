@@ -79,6 +79,8 @@ LUX_IMPLAUSIBLE_HIGH_FACTOR = 5.0
 # --- generic variance-collapse tunables (audio classifier, etc.) --------------
 AUDIO_MIN_SAMPLES = 20
 AUDIO_SCORE_VARIANCE_EPSILON = 1e-3
+AUDIO_COLLAPSE_MIN_SPAN_SECONDS = 300.0
+AUDIO_COLLAPSE_MAX_MEAN = 0.2
 # The audio_ml lane is fed by ambient_monitor POSTs at its SHADOW_LOG_INTERVAL
 # (30s) steady-state cadence. The 300s registry default holds only ~10 samples —
 # below AUDIO_MIN_SAMPLES — so the predicate could never reach quorum and would
@@ -375,6 +377,8 @@ def variance_collapse_predicate(
     *,
     min_samples: int,
     epsilon: float,
+    min_span_seconds: float = 0.0,
+    max_mean: Optional[float] = None,
 ) -> Predicate:
     """Factory: a predicate that trips when a scalar series goes flat.
 
@@ -392,8 +396,23 @@ def variance_collapse_predicate(
         ]
         if len(values) < min_samples:
             return True, "insufficient_samples", {"samples": len(values), "need": min_samples}
+        span = (observations[-1].at - observations[0].at).total_seconds()
         stdev = statistics.pstdev(values)
-        metrics = {"stdev": round(stdev, 6), "samples": len(values), "key": value_key}
+        mean = statistics.fmean(values)
+        metrics = {
+            "stdev": round(stdev, 6),
+            "samples": len(values),
+            "key": value_key,
+            "mean": round(mean, 6),
+            "span_seconds": round(span, 1),
+        }
+        if span < min_span_seconds:
+            return True, "insufficient_span", {
+                **metrics,
+                "need_span_seconds": min_span_seconds,
+            }
+        if max_mean is not None and mean > max_mean:
+            return True, "ok", {**metrics, "max_collapse_mean": max_mean}
         if stdev < epsilon:
             return False, "variance_collapse", metrics
         return True, "ok", metrics
@@ -419,6 +438,8 @@ def register_audio_ml(source_trust: SourceTrust) -> None:
             "top_score",
             min_samples=AUDIO_MIN_SAMPLES,
             epsilon=AUDIO_SCORE_VARIANCE_EPSILON,
+            min_span_seconds=AUDIO_COLLAPSE_MIN_SPAN_SECONDS,
+            max_mean=AUDIO_COLLAPSE_MAX_MEAN,
         ),
         window_seconds=AUDIO_WINDOW_SECONDS,
         max_samples=AUDIO_MAX_SAMPLES,

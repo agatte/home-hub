@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.services.source_trust import (
+    AUDIO_COLLAPSE_MIN_SPAN_SECONDS,
     AUDIO_MIN_SAMPLES,
     AUDIO_WINDOW_SECONDS,
     CAMERA_MAX_SAMPLES,
@@ -295,6 +296,31 @@ class TestAudioLaneWiring:
         v = st.verdict("audio_ml", now=self._now(n))
         assert v["trusted"] is True
         assert v["reason"] == "insufficient_samples"
+
+    def test_flat_high_confidence_silence_stays_trusted(self, st):
+        # A quiet room can legitimately produce sustained near-1.0 idle/silence
+        # scores; that is not the low-confidence stuck-classifier signature.
+        register_audio_ml(st)
+        n = 25
+        _feed(st, "audio_ml", [{"top_score": 0.999999, "top_class": "idle"}
+                               for _ in range(n)],
+              step_seconds=AMBIENT_SHADOW_LOG_INTERVAL)
+        v = st.verdict("audio_ml", now=self._now(n))
+        assert v["trusted"] is True
+        assert v["reason"] == "ok"
+
+    def test_short_flat_burst_fails_open(self, st):
+        # The monitor can produce bursts faster than the steady-state cadence;
+        # do not quarantine from seconds of flat output alone.
+        register_audio_ml(st)
+        n = 25
+        _feed(st, "audio_ml", [{"top_score": 0.088, "top_class": "speech"}
+                               for _ in range(n)],
+              step_seconds=1)
+        v = st.verdict("audio_ml", now=self._now(n, step=1))
+        assert v["trusted"] is True
+        assert v["reason"] == "insufficient_span"
+        assert v["metrics"]["need_span_seconds"] == AUDIO_COLLAPSE_MIN_SPAN_SECONDS
 
     def test_window_holds_quorum_at_shadow_cadence(self):
         # Regression guard: the window MUST be wide enough to accumulate
