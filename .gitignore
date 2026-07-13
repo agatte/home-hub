@@ -1,5 +1,6 @@
 # Secrets
 .env
+.env.bak*
 *.pem
 *.key
 *.p12
@@ -23,6 +24,8 @@ venv/
 node_modules/
 
 # Generated
+=1.0.0
+docker/pihole/etc-pihole/
 backend/static/tts/
 data/
 logs/
