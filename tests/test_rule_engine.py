@@ -879,6 +879,25 @@ class TestMLLoggerIntegration:
 # ---------------------------------------------------------------------------
 
 
+
+
+class FakeAutomation:
+    def __init__(self, mode="working", period="day", weather="rain"):
+        self.current_mode = mode
+        self.last_weather_class = weather
+        self._period = period
+
+    def get_time_period(self):
+        return self._period
+
+
+class FakePresence:
+    def __init__(self, zone=None):
+        self.zone = zone
+
+    def latest_zone(self):
+        return self.zone
+
 class TestBrightnessSuggestion:
     """The WS payload + accept/dismiss serialization for kind="brightness"."""
 
@@ -888,13 +907,17 @@ class TestBrightnessSuggestion:
         fanned out via WS to the dashboard — kind + payload must be
         present so BrightnessSuggestionCard.svelte can render."""
         _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="working", period="day", weather="thunderstorm"),
+        )
         candidate = {
             "light_id": "1",
             "mode": "working",
             "period": "day",
             "weather_class": "thunderstorm",
             "suggested_bri": 211,
-            "sample_count": 3,
+            "sample_count": 5,
+            "distinct_days": 3,
             "suggested_multiplier": 1.18,
         }
         result = await service.emit_brightness_suggestion(candidate)
@@ -908,16 +931,21 @@ class TestBrightnessSuggestion:
         # Standard suggestion fields still present (frontend store uses .id
         # for the accept/dismiss URL).
         assert "id" in result
-        assert result["sample_count"] == 3
+        assert result["sample_count"] == 5
+        assert result["payload"]["distinct_days"] == 3
 
     @pytest.mark.asyncio
     async def test_emit_dedupes_pending_same_bucket(self, db_and_service):
         """A second emit for the same (light, mode, period, weather)
         returns None so the bucket isn't double-surfaced."""
         _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="working", period="day", weather="rain"),
+        )
         candidate = {
             "light_id": "1", "mode": "working", "period": "day",
-            "weather_class": "rain", "suggested_bri": 180, "sample_count": 3,
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
         }
         first = await service.emit_brightness_suggestion(candidate)
         assert first is not None
@@ -928,6 +956,9 @@ class TestBrightnessSuggestion:
     async def test_emit_room_payload_dedupes_by_room_context(self, db_and_service):
         """Room suggestions dedupe by room/mode/period/weather, not one light."""
         _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="watching", period="night", weather="rain"),
+        )
         candidate = {
             "scope": "room",
             "room": "bedroom",
@@ -938,7 +969,8 @@ class TestBrightnessSuggestion:
             "light_id": "2",
             "suggested_bri": 70,
             "light_targets": {"2": 70, "5": 72},
-            "sample_count": 2,
+            "sample_count": 5,
+            "distinct_days": 3,
         }
         first = await service.emit_brightness_suggestion(candidate)
         assert first is not None
@@ -972,6 +1004,9 @@ class TestBrightnessSuggestion:
     @pytest.mark.asyncio
     async def test_suggestion_history_includes_brightness_payload(self, db_and_service):
         _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="watching", period="night", weather="rain"),
+        )
         candidate = {
             "scope": "room",
             "room": "bedroom",
@@ -982,7 +1017,8 @@ class TestBrightnessSuggestion:
             "light_id": "2",
             "suggested_bri": 70,
             "light_targets": {"2": 70, "5": 72},
-            "sample_count": 2,
+            "sample_count": 5,
+            "distinct_days": 3,
         }
         emitted = await service.emit_brightness_suggestion(candidate)
         assert emitted is not None
@@ -993,3 +1029,83 @@ class TestBrightnessSuggestion:
         assert row["kind"] == "brightness"
         assert row["payload"]["scope"] == "room"
         assert row["payload"]["light_targets"] == {"2": 70, "5": 72}
+
+    @pytest.mark.asyncio
+    async def test_emit_skips_when_live_context_differs(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="relax", period="day", weather="rain"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
+
+        assert await service.emit_brightness_suggestion(candidate) is None
+
+    @pytest.mark.asyncio
+    async def test_zone_candidate_requires_matching_current_zone(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="watching", period="night", weather="clear"),
+            presence=FakePresence(zone="couch"),
+        )
+        candidate = {
+            "light_id": "2", "mode": "watching", "period": "night",
+            "weather_class": "clear", "zone_at_time": "desk",
+            "suggested_bri": 90, "sample_count": 5, "distinct_days": 3,
+        }
+
+        assert await service.emit_brightness_suggestion(candidate) is None
+
+        service.set_brightness_suggestion_deps(presence=FakePresence(zone="desk"))
+        assert await service.emit_brightness_suggestion(candidate) is not None
+
+    @pytest.mark.asyncio
+    async def test_accept_expires_when_context_no_longer_matches(self, db_and_service):
+        _, service, ws, session_factory = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="working", period="day", weather="rain"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
+        emitted = await service.emit_brightness_suggestion(candidate)
+        assert emitted is not None
+
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="working", period="day", weather="clear"),
+        )
+        resolved = await service.accept_brightness_suggestion(emitted["id"], remote="test")
+
+        assert resolved is not None
+        assert resolved["status"] == "expired"
+        history = await service.get_suggestion_history(status="expired", limit=10)
+        row = next(r for r in history if r["id"] == emitted["id"])
+        assert row["resolved_source"] == "context_mismatch:test"
+        dismissed = [b for b in ws.broadcasts if b[0] == "brightness_suggestion_dismissed"]
+        assert dismissed[-1][1] == {"id": emitted["id"]}
+
+    @pytest.mark.asyncio
+    async def test_accept_succeeds_when_context_still_matches(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(mode="working", period="day", weather="rain"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
+        emitted = await service.emit_brightness_suggestion(candidate)
+        assert emitted is not None
+
+        resolved = await service.accept_brightness_suggestion(emitted["id"], remote="test")
+
+        assert resolved is not None
+        assert resolved["status"] == "accepted"
+        assert resolved["payload"]["suggested_bri"] == 180
+

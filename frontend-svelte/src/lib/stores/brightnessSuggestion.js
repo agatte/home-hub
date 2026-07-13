@@ -20,12 +20,14 @@ import { writable } from 'svelte/store'
  * @property {number} [base_bri]
  * @property {number} [suggested_multiplier]
  * @property {number} sample_count
+ * @property {number} [distinct_days]
  *
  * @typedef {Object} BrightnessSuggestion
  * @property {number} id           - rule_suggestions.id, used for race-safe accept
  * @property {string} kind         - always "brightness"
  * @property {number} confidence   - integer percent (0-100)
  * @property {number} sample_count
+ * @property {number} [distinct_days]
  * @property {BrightnessSuggestionPayload} payload
  */
 

@@ -158,6 +158,8 @@ class RuleEngineService:
         notifier_service=None,
         api_key: Optional[str] = None,
         public_base_url: Optional[str] = None,
+        automation=None,
+        presence=None,
     ) -> None:
         self._ws_manager = ws_manager
         self._min_confidence = min_confidence
@@ -171,6 +173,8 @@ class RuleEngineService:
         # base url are baked into the action URLs ntfy.sh callbacks hit.
         self._lighting_learner = lighting_learner
         self._notifier = notifier_service
+        self._automation = automation
+        self._presence = presence
         self._api_key = api_key
         self._public_base_url = (
             (public_base_url or "").rstrip("/")
@@ -196,6 +200,8 @@ class RuleEngineService:
         notifier_service=None,
         api_key: Optional[str] = None,
         public_base_url: Optional[str] = None,
+        automation=None,
+        presence=None,
     ) -> None:
         """Late-bind the brightness-suggestion collaborators.
 
@@ -211,6 +217,10 @@ class RuleEngineService:
             self._api_key = api_key
         if public_base_url is not None:
             self._public_base_url = public_base_url.rstrip("/")
+        if automation is not None:
+            self._automation = automation
+        if presence is not None:
+            self._presence = presence
 
     # ------------------------------------------------------------------
     # Rule generation
@@ -716,6 +726,9 @@ class RuleEngineService:
             # introducing a separate dimension.
             confidence = min(1.0, sample_count / 10.0)
 
+            if not self._brightness_context_matches(candidate):
+                return None
+
             row = RuleSuggestion(
                 rule_id=None,
                 predicted_mode=mode,
@@ -766,6 +779,38 @@ class RuleEngineService:
             )).scalar_one_or_none()
             if row is None:
                 return None
+            payload = {}
+            if row.payload:
+                try:
+                    payload = _json.loads(row.payload)
+                except Exception:
+                    payload = {}
+
+            if not self._brightness_context_matches(payload):
+                result = await session.execute(
+                    update(RuleSuggestion)
+                    .where(
+                        RuleSuggestion.id == suggestion_id,
+                        RuleSuggestion.status == "pending",
+                    )
+                    .values(
+                        status="expired",
+                        resolved_at=now_utc,
+                        resolved_source=f"context_mismatch:{remote}",
+                    )
+                )
+                await session.commit()
+                if result.rowcount == 0:
+                    return None
+                await self._broadcast_brightness_dismissed(suggestion_id)
+                return {
+                    "id": suggestion_id,
+                    "kind": "brightness",
+                    "status": "expired",
+                    "payload": payload,
+                    "resolved_at": now_utc.isoformat(),
+                }
+
             result = await session.execute(
                 update(RuleSuggestion)
                 .where(
@@ -781,23 +826,9 @@ class RuleEngineService:
             await session.commit()
             if result.rowcount == 0:
                 return None
-            payload = {}
-            if row.payload:
-                try:
-                    payload = _json.loads(row.payload)
-                except Exception:
-                    payload = {}
 
         # Drop the dashboard card (other WS clients also clear).
-        try:
-            await self._ws_manager.broadcast(
-                "brightness_suggestion_dismissed", {"id": row.id},
-            )
-        except Exception:
-            logger.exception(
-                "brightness_suggestion_dismissed broadcast failed on accept sid=%d",
-                row.id,
-            )
+        await self._broadcast_brightness_dismissed(row.id)
 
         return {
             "id": row.id,
@@ -850,8 +881,9 @@ class RuleEngineService:
                 )
                 continue
             if not row:
-                duplicate_count += 1
-                continue  # duplicate of an already-pending bucket
+                if self._brightness_context_matches(candidate):
+                    duplicate_count += 1
+                continue  # duplicate of an already-pending bucket or inactive context
             emitted += 1
 
             # Broadcast a WS event so the dashboard's BrightnessSuggestionCard
@@ -923,6 +955,11 @@ class RuleEngineService:
         bri = candidate.get("suggested_bri")
         base = candidate.get("base_bri")
         n = candidate.get("sample_count", 0)
+        days = candidate.get("distinct_days")
+        evidence = (
+            f"{n} observations across {days} days"
+            if days else f"{n} observations"
+        )
 
         def _pct(v: Any) -> str:
             try:
@@ -936,17 +973,54 @@ class RuleEngineService:
             label = str(room).replace("_", " ")
             return (
                 f"{label.title()} {mode}/{period} has been landing around "
-                f"~{target_str} during {weather} ({n} observations). "
-                f"Apply automatically next time?"
+                f"~{target_str} during {weather} ({evidence}). "
+                f"Apply this now and remember it for similar moments?"
             )
 
         bri_str = _pct(bri)
         base_str = f" (default {_pct(base)})" if base else ""
         return (
             f"You've been setting L{light_id} to ~{bri_str}{base_str} "
-            f"during {weather} {mode}/{period} ({n} times). "
-            f"Apply automatically next time?"
+            f"during {weather} {mode}/{period} ({evidence}). "
+            f"Apply this now and remember it for similar moments?"
         )
+
+
+
+    async def _broadcast_brightness_dismissed(self, suggestion_id: int) -> None:
+        try:
+            await self._ws_manager.broadcast(
+                "brightness_suggestion_dismissed", {"id": suggestion_id},
+            )
+        except Exception:
+            logger.exception(
+                "brightness_suggestion_dismissed broadcast failed sid=%d",
+                suggestion_id,
+            )
+
+    def _brightness_context_matches(self, payload: dict[str, Any]) -> bool:
+        """True only while a brightness suggestion's context is active."""
+        automation = self._automation
+        if automation is None:
+            return False
+        expected_mode = payload.get("mode")
+        if expected_mode and getattr(automation, "current_mode", None) != expected_mode:
+            return False
+        get_period = getattr(automation, "get_time_period", None)
+        current_period = get_period() if callable(get_period) else None
+        if payload.get("period") != current_period:
+            return False
+        expected_weather = payload.get("weather_class")
+        current_weather = getattr(automation, "last_weather_class", None)
+        if expected_weather and expected_weather != current_weather:
+            return False
+        expected_zone = payload.get("zone_at_time")
+        if expected_zone:
+            latest_zone = getattr(self._presence, "latest_zone", None)
+            current_zone = latest_zone() if callable(latest_zone) else None
+            if current_zone != expected_zone:
+                return False
+        return True
 
     async def brightness_scan_loop(self, interval_seconds: int = 3600) -> None:
         """Periodically scan for new brightness suggestions and emit them.

@@ -1003,6 +1003,8 @@ async def lifespan(app: FastAPI):
             if getattr(settings, "LOCAL_IP", None)
             else "http://192.168.86.210:8000"
         ),
+        automation=automation,
+        presence=presence,
     )
 
     # CalibrationNudgeService — accumulates paired mood_calibration rows

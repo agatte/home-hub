@@ -579,7 +579,7 @@ UniqueConstraint on (day_of_week, hour). Rules regenerated every 6 hours from 30
 | resolved_at | DateTime | Nullable, UTC; set on status transition out of `pending` |
 | resolved_source | String(100) | `user_accept:<remote-ip>`, `user_dismiss:<remote-ip>`, `auto_expire`, `superseded_by:<new_id>` |
 | kind | String(20) | `mode` (default, legacy rule-engine nudge) or `brightness` (LightingLearner scanner candidate). Added 2026-05-18. |
-| payload | Text | Nullable. For `kind='brightness'`: `{light_id, mode, period, weather_class, suggested_bri, suggested_multiplier, sample_count}`. NULL on `kind='mode'` rows. |
+| payload | Text | Nullable. For `kind='brightness'`: `{light_id, mode, period, weather_class, suggested_bri, suggested_multiplier, sample_count, distinct_days}` plus optional room/zone target fields. NULL on `kind='mode'` rows. |
 
 Composite index on (status, fired_at) for "latest pending" lookup + history queries. Pending rows older than 60min are auto-expired on the 60s automation tick. Boot-time `restore_pending_on_boot()` re-broadcasts an unresolved pending suggestion so a deploy mid-banner doesn't drop the kiosk's Home card.
 
@@ -700,7 +700,7 @@ All messages are JSON with `type` + `data` fields.
 | `music_suggestion` | Sonos busy, playlist available | `{mode, title, message}` |
 | `mode_suggestion` | Rule engine nudge (idle + rule matches) | `{rule_id, predicted_mode, confidence, sample_count, message}` |
 | `mode_suggestion_dismissed` | User dismissed nudge | `{}` |
-| `brightness_suggestion` | LightingLearner scanner emits a weather-aware brightness candidate (hourly `brightness_scan_loop`) | `{id, kind, payload: {light_id, mode, period, weather_class, suggested_bri, suggested_multiplier, sample_count}, status, fired_at, confidence, sample_count}` |
+| `brightness_suggestion` | LightingLearner scanner emits a weather-aware brightness candidate only while the matching mode/period/weather/zone context is active; scanner requires at least 5 collapsed manual adjustment moments across at least 3 local days | `{id, kind, payload: {light_id, mode, period, weather_class, suggested_bri, suggested_multiplier, sample_count, distinct_days}, status, fired_at, confidence, sample_count}` |
 | `brightness_suggestion_dismissed` | Brightness suggestion resolved (accepted or dismissed) — optimistic dismiss so all open dashboards drop the card together | `{id}` |
 | `notification` | NotifierService threshold-cross — mode flip OR average per-light brightness Δ ≥ 15%. Suppressed during DND, within 10s coalesce window, and on user-initiated mode flips (`api:*` / `manual` / `alexa:*` / `guest:*`). Consumed by `desktop_notifier.py` on the Windows desktop and by `httpx` POST to `https://ntfy.sh/{NTFY_TOPIC}` for iOS push. Optional `actions[]` carries Accept / Dismiss button metadata (label, url, method, headers) for suggestion-bearing notifications — desktop toast renders a button row, ntfy.sh emits an `Actions` header with `http` action buttons. | `{title, subtitle, factors[{lane, label, value, impact}], output_delta, mode_changed, brightness_shifted, old_mode, new_mode, timestamp, correlation_id, actions?[{label, url, method, headers}], suggestion_id?, kind?}` |
 
@@ -891,7 +891,7 @@ Bounded auto-remediation for the source-trust watchdog (camera lux decoupling et
 | DELETE | `/api/rules/{id}` | Delete a learned rule |
 | POST | `/api/rules/suggestion/accept` | Accept latest pending suggestion → set_manual_override. Returns 410 Gone when the row was auto-expired/superseded between WS broadcast and click (UI dismisses silently) |
 | POST | `/api/rules/suggestion/dismiss` | Dismiss latest pending suggestion (idempotent; 200 on no-op) |
-| POST | `/api/rules/brightness-suggestion/accept/{id}` | Accept a brightness suggestion by id → calls `LightingPreferenceLearner.write_learned_pref` for the bucket in `payload`. Broadcasts `brightness_suggestion_dismissed` so dashboards drop the card. Returns 410 Gone when the row was auto-expired/superseded between push and click. |
+| POST | `/api/rules/brightness-suggestion/accept/{id}` | Accept a brightness suggestion by id only if the live context still matches → immediately applies target brightness, calls `LightingPreferenceLearner.write_learned_pref` for the bucket in `payload`, and broadcasts `brightness_suggestion_dismissed`. Returns 410 Gone when the row was auto-expired/superseded or the context no longer matches. |
 | POST | `/api/rules/brightness-suggestion/dismiss/{id}` | Dismiss a brightness suggestion by id (idempotent; 200 on no-op). Broadcasts `brightness_suggestion_dismissed`. |
 
 #### Camera — `/api/camera/`

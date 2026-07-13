@@ -12,6 +12,7 @@ No external ML libraries required — pure math.
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from statistics import median
 from typing import Any, Optional
 
@@ -84,10 +85,11 @@ ROOM_LIGHT_IDS: dict[str, tuple[str, ...]] = {
     "kitchen": ("3", "4"),
 }
 
-LARGE_CORRECTION_BRI = 45
-REPEATED_CORRECTION_MIN_SAMPLES = 2
+SUGGESTION_MIN_SAMPLES = 5
+SUGGESTION_MIN_DISTINCT_DAYS = 3
 MIN_DIRECTIONAL_RATIO = 0.70
 ROOM_VARIANCE_RATIO = 0.75
+TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 
 class LightingPreferenceLearner(HealthTrackable):
@@ -407,8 +409,8 @@ class LightingPreferenceLearner(HealthTrackable):
     ) -> list[dict[str, Any]]:
         """Find brightness-preference buckets ready to be suggested.
 
-        Room-level suggestions are emitted first. They look for one strong
-        manual correction or repeated directional evidence in a
+        Room-level suggestions are emitted first. They require multiple
+        separate adjustment moments across multiple local dates in a
         (room, mode, period, weather) bucket, then carry per-light targets in
         ``light_targets``. The legacy per-light scanner remains as fallback.
         """
@@ -459,23 +461,29 @@ class LightingPreferenceLearner(HealthTrackable):
                     room_covered.add((str(light_id), mode, period, weather, zone))
 
         groups: dict[
-            tuple[str, str, str, str, Optional[str]], list[int]
+            tuple[str, str, str, str, Optional[str]], list[LightAdjustment]
         ] = defaultdict(list)
         for row in rows:
             period = get_time_period(row.timestamp)
             groups[
                 (row.light_id, row.mode_at_time, period, row.weather_class, row.zone_at_time)
-            ].append(int(row.bri_after))
+            ].append(row)
 
         from backend.services.light_state_calculator import ACTIVITY_LIGHT_STATES
 
-        for (light_id, mode, period, weather, zone), bris in groups.items():
+        for (light_id, mode, period, weather, zone), adjs in groups.items():
             if (str(light_id), mode, period, weather, zone) in room_covered:
                 rejection_counts["per_light_covered_by_room"] += 1
                 continue
-            if len(bris) < MIN_ADJUSTMENTS_WEATHER:
+            sample_count = len(adjs)
+            distinct_days = self._distinct_local_days(adjs)
+            if sample_count < SUGGESTION_MIN_SAMPLES:
                 rejection_counts["per_light_insufficient_evidence"] += 1
                 continue
+            if distinct_days < SUGGESTION_MIN_DISTINCT_DAYS:
+                rejection_counts["per_light_insufficient_days"] += 1
+                continue
+            bris = [int(row.bri_after) for row in adjs if row.bri_after is not None]
             mean = sum(bris) / len(bris)
             if mean <= 0:
                 rejection_counts["per_light_zero_mean"] += 1
@@ -511,7 +519,8 @@ class LightingPreferenceLearner(HealthTrackable):
                 "weather_class": weather,
                 "zone_at_time": zone,
                 "suggested_bri": suggested_bri,
-                "sample_count": len(bris),
+                "sample_count": sample_count,
+                "distinct_days": distinct_days,
             }
             if base:
                 suggestion["base_bri"] = int(base)
@@ -548,9 +557,12 @@ class LightingPreferenceLearner(HealthTrackable):
                 deltas.append(int(adj.bri_after) - int(adj.bri_before))
 
         sample_count = sum(len(values) for values in values_by_light.values())
-        has_large_correction = any(abs(delta) >= LARGE_CORRECTION_BRI for delta in deltas)
-        if sample_count < REPEATED_CORRECTION_MIN_SAMPLES and not has_large_correction:
+        distinct_days = self._distinct_local_days(adjustments)
+        if sample_count < SUGGESTION_MIN_SAMPLES:
             rejection_counts["room_insufficient_evidence"] += 1
+            return None
+        if distinct_days < SUGGESTION_MIN_DISTINCT_DAYS:
+            rejection_counts["room_insufficient_days"] += 1
             return None
 
         nonzero = [delta for delta in deltas if delta]
@@ -621,9 +633,10 @@ class LightingPreferenceLearner(HealthTrackable):
             "zone_at_time": zone,
             "target_pct": target_pct,
             "sample_count": sample_count,
+            "distinct_days": distinct_days,
             "light_targets": target_lights,
             "base_targets": base_targets,
-            "reason": "large_adjustment" if has_large_correction else "repeated_preference",
+            "reason": "repeated_preference",
             "light_id": primary_light,
             "suggested_bri": target_lights[primary_light],
         }
@@ -634,6 +647,19 @@ class LightingPreferenceLearner(HealthTrackable):
                 target_lights[primary_light] / base, 2,
             ) if base else None
         return suggestion
+
+    @staticmethod
+    def _distinct_local_days(adjustments: list[LightAdjustment]) -> int:
+        """Count distinct local calendar dates represented by adjustments."""
+        days = set()
+        for adj in adjustments:
+            ts = adj.timestamp
+            if ts is None:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            days.add(ts.astimezone(TZ).date())
+        return len(days)
 
     @staticmethod
     def _collapse_drag_clusters(

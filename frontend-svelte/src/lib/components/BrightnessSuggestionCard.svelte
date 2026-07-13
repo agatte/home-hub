@@ -64,6 +64,13 @@
   function pctFromBri(bri) {
     return Math.round((Number(bri || 0) / 254) * 100)
   }
+
+  function evidenceText(payload) {
+    const n = Number(payload.sample_count || 0)
+    const days = Number(payload.distinct_days || 0)
+    if (days > 0) return `${n} observation${n === 1 ? '' : 's'} across ${days} day${days === 1 ? '' : 's'}`
+    return `${n} observation${n === 1 ? '' : 's'}`
+  }
 </script>
 
 {#if $brightnessSuggestion}

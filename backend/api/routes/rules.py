@@ -247,6 +247,10 @@ async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
         raise HTTPException(
             status_code=410, detail="suggestion no longer pending",
         )
+    if resolved.get("status") == "expired":
+        raise HTTPException(
+            status_code=410, detail="suggestion context no longer active",
+        )
 
     learner = getattr(request.app.state, "lighting_learner", None)
     payload = resolved.get("payload", {})
@@ -271,7 +275,7 @@ async def accept_brightness_suggestion(sid: int, request: Request) -> dict:
             )
 
     applied_now = []
-    if targets and _brightness_context_matches(payload, request):
+    if targets:
         try:
             applied_now = await _apply_brightness_targets_now(request, targets)
         except Exception as exc:

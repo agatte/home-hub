@@ -134,8 +134,9 @@ class TestRequest:
 
         with patch("backend.services.pihole_service.httpx.AsyncClient", side_effect=client_factory):
             result = await svc._request("GET", "/api/stats/summary")
-        # Should have re-authenticated
+        # Should have re-authenticated and returned the retried response.
         assert svc._sid == "test-sid-123"
+        assert result["queries"]["total"] == 100
 
 
 # ---------------------------------------------------------------------------

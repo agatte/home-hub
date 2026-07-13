@@ -367,7 +367,8 @@ class TestScanForSuggestions:
         same-timestamp rows into a single observation.
         """
         _ADJ_TS_COUNTER[0] += 1
-        now = datetime.now(timezone.utc) - timedelta(days=1)
+        days_ago = kwargs.pop("days_ago", 1)
+        now = datetime.now(timezone.utc) - timedelta(days=days_ago)
         ts = now.replace(hour=18, minute=0, second=0, microsecond=0)
         ts += timedelta(minutes=_ADJ_TS_COUNTER[0])
         kwargs.setdefault("light_id", "1")
@@ -379,13 +380,24 @@ class TestScanForSuggestions:
     async def test_returns_empty_with_no_rows(self, learner, ml_db):
         assert await learner.scan_for_suggestions() == []
 
-    async def test_three_consistent_rows_produce_a_candidate(
+    async def test_three_consistent_rows_are_not_enough_for_a_candidate(
         self, learner, ml_db,
     ):
         async with ml_db() as session:
-            for v in (210, 215, 208):
+            for v, days_ago in zip((210, 215, 208), (3, 2, 1)):
                 session.add(self._recent_adjustment(
-                    bri_after=v, weather_class="thunderstorm",
+                    bri_after=v, weather_class="thunderstorm", days_ago=days_ago,
+                ))
+            await session.commit()
+        assert await learner.scan_for_suggestions() == []
+
+    async def test_five_consistent_rows_across_three_days_produce_candidate(
+        self, learner, ml_db,
+    ):
+        async with ml_db() as session:
+            for v, days_ago in zip((210, 215, 208, 212, 211), (5, 4, 3, 2, 1)):
+                session.add(self._recent_adjustment(
+                    bri_after=v, weather_class="thunderstorm", days_ago=days_ago,
                 ))
             await session.commit()
         suggestions = await learner.scan_for_suggestions()
@@ -396,9 +408,10 @@ class TestScanForSuggestions:
         assert s["weather_class"] == "thunderstorm"
         assert s["zone_at_time"] is None
         assert 208 <= s["suggested_bri"] <= 215
-        assert s["sample_count"] == 3
+        assert s["sample_count"] == 5
+        assert s["distinct_days"] >= 3
 
-    async def test_large_bedroom_correction_produces_room_candidate(
+    async def test_large_bedroom_correction_alone_does_not_produce_candidate(
         self, learner, ml_db,
     ):
         async with ml_db() as session:
@@ -409,19 +422,9 @@ class TestScanForSuggestions:
                 ))
             await session.commit()
 
-        suggestions = await learner.scan_for_suggestions()
+        assert await learner.scan_for_suggestions() == []
 
-        assert len(suggestions) == 1
-        s = suggestions[0]
-        assert s["scope"] == "room"
-        assert s["room"] == "bedroom"
-        assert s["mode"] == "watching"
-        assert s["weather_class"] == "rain"
-        assert s["light_targets"] == {"2": 70, "5": 70}
-        assert s["target_pct"] == 28
-        assert s["reason"] == "large_adjustment"
-
-    async def test_repeated_room_corrections_produce_room_candidate(
+    async def test_repeated_room_corrections_need_conservative_evidence(
         self, learner, ml_db,
     ):
         async with ml_db() as session:
@@ -432,42 +435,42 @@ class TestScanForSuggestions:
                 ))
             await session.commit()
 
-        suggestions = await learner.scan_for_suggestions()
-
-        assert len(suggestions) == 1
-        assert suggestions[0]["scope"] == "room"
-        assert suggestions[0]["room"] == "bedroom"
-        assert suggestions[0]["reason"] == "repeated_preference"
+        assert await learner.scan_for_suggestions() == []
 
     async def test_kitchen_room_candidate_keeps_pair_matched(
         self, learner, ml_db,
     ):
         async with ml_db() as session:
-            session.add(self._recent_adjustment(
-                light_id="3", mode_at_time="working",
-                bri_before=160, bri_after=80, weather_class="clear",
-            ))
-            session.add(self._recent_adjustment(
-                light_id="4", mode_at_time="working",
-                bri_before=160, bri_after=100, weather_class="clear",
-            ))
+            rows = [
+                ("3", 80, 5), ("4", 100, 4), ("3", 86, 3),
+                ("4", 94, 2), ("3", 90, 1),
+            ]
+            for light_id, bri, days_ago in rows:
+                session.add(self._recent_adjustment(
+                    light_id=light_id, mode_at_time="working",
+                    bri_before=160, bri_after=bri, weather_class="clear",
+                    days_ago=days_ago,
+                ))
             await session.commit()
 
         suggestions = await learner.scan_for_suggestions()
 
         assert len(suggestions) == 1
         assert suggestions[0]["room"] == "kitchen"
-        assert suggestions[0]["light_targets"] == {"3": 90, "4": 90}
+        assert suggestions[0]["light_targets"]["3"] == suggestions[0]["light_targets"]["4"]
+        assert suggestions[0]["sample_count"] == 5
+        assert suggestions[0]["distinct_days"] >= 3
 
     async def test_zone_context_included_in_candidate(self, learner, ml_db):
         async with ml_db() as session:
-            for v in (70, 72, 74):
+            for v, days_ago in zip((70, 72, 74, 76, 78), (5, 4, 3, 2, 1)):
                 session.add(self._recent_adjustment(
                     mode_at_time="watching",
                     bri_after=v,
                     weather_class="clear",
                     zone_at_time="desk",
                     posture_at_time="upright",
+                    days_ago=days_ago,
                 ))
             await session.commit()
         suggestions = await learner.scan_for_suggestions()
@@ -481,13 +484,14 @@ class TestScanForSuggestions:
             "watching:day:clear": {"1": {"bri": 110}},
         }
         async with ml_db() as session:
-            for v in (70, 72, 74):
+            for v, days_ago in zip((70, 72, 74, 76, 78), (5, 4, 3, 2, 1)):
                 session.add(self._recent_adjustment(
                     mode_at_time="watching",
                     bri_after=v,
                     weather_class="clear",
                     zone_at_time="desk",
                     posture_at_time="upright",
+                    days_ago=days_ago,
                 ))
             await session.commit()
 
