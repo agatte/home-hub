@@ -93,7 +93,9 @@ IDLE_THRESHOLD = 600  # 10 minutes
 # Late-night threshold for "working" detection (hour, 24h format)
 LATE_NIGHT_START = 21  # 9 PM
 
-# Sleep detection: no input for 15 min after 10:30 PM while media/browser is running
+# Sleep detection: no input for 15 min after 10:30 PM while explicit foreground
+# media is selected. A merely open browser is not intent; Firefox can route the
+# global media key to a background YouTube tab.
 SLEEP_DETECT_HOUR = 22    # 10 PM
 SLEEP_DETECT_MINUTE = 30  # :30
 SLEEP_IDLE_THRESHOLD = 900  # 15 minutes
@@ -440,11 +442,14 @@ class ActivityDetector:
         idle_seconds = self._get_idle_seconds()
         processes = self._get_running_process_names()
 
-        # Sleep detection: no input for 15 min after 10:30 PM with media/browser running
+        # Sleep detection: no input for 15 min after 10:30 PM with explicit
+        # foreground media. Do not treat "browser is open" as media intent:
+        # Firefox may route the global media key to a background YouTube tab
+        # even while the selected tab is Reddit/GitHub/etc.
         if (
             idle_seconds > SLEEP_IDLE_THRESHOLD
             and self._is_sleep_window()
-            and (processes & MEDIA_PROCESSES or processes & BROWSER_PROCESSES)
+            and self._foreground_is_media()
         ):
             self._pause_media()
             return "sleeping"

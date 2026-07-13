@@ -51,6 +51,76 @@ def _make_detector(
     return d
 
 
+
+# ---------------------------------------------------------------------------
+# Sleep auto-pause — only foreground media counts as intent
+# ---------------------------------------------------------------------------
+
+
+class TestSleepAutoPauseGate:
+    """Background browser/media must not receive the global media key."""
+
+    def _sleep_window_detector(
+        self,
+        *,
+        processes: set[str],
+        fg_proc: str | None,
+        fg_title: str = "",
+    ) -> tuple[ActivityDetector, dict[str, int]]:
+        d = _make_detector(
+            processes=processes,
+            fg_proc=fg_proc,
+            fg_title=fg_title,
+            idle_seconds=901,
+        )
+        d._is_sleep_window = lambda: True  # type: ignore[method-assign]
+        calls = {"pause": 0}
+
+        def fake_pause() -> None:
+            calls["pause"] += 1
+
+        d._pause_media = fake_pause  # type: ignore[method-assign]
+        return d, calls
+
+    def test_firefox_non_media_selected_tab_does_not_pause(self):
+        d, calls = self._sleep_window_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="GitHub - Mozilla Firefox",
+        )
+
+        assert d._classify() == "idle"
+        assert calls["pause"] == 0
+
+    def test_firefox_youtube_selected_tab_pauses(self):
+        d, calls = self._sleep_window_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Lo-fi video - YouTube - Mozilla Firefox",
+        )
+
+        assert d._classify() == "sleeping"
+        assert calls["pause"] == 1
+
+    def test_background_media_player_does_not_pause(self):
+        d, calls = self._sleep_window_detector(
+            processes={"stremio.exe", "code.exe"},
+            fg_proc="code.exe",
+            fg_title="activity_detector.py - home-hub",
+        )
+
+        assert d._classify() == "idle"
+        assert calls["pause"] == 0
+
+    def test_foreground_media_player_pauses(self):
+        d, calls = self._sleep_window_detector(
+            processes={"stremio.exe"},
+            fg_proc="stremio.exe",
+        )
+
+        assert d._classify() == "sleeping"
+        assert calls["pause"] == 1
+
 # ---------------------------------------------------------------------------
 # Gaming gate — leagueclient.exe-style launcher persistence
 # ---------------------------------------------------------------------------
