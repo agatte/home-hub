@@ -13,7 +13,9 @@ jobs:
           python-version: "3.13"
 
       - name: Lint Python
-        run: pip install ruff && ruff check backend/
+        # Keep CI aligned with the validated repository toolchain. Unpinned
+        # Ruff 0.16.1 enabled new rules across untouched legacy files.
+        run: pip install ruff==0.15.10 && ruff check backend/
 
   test:
     runs-on: ubuntu-latest
