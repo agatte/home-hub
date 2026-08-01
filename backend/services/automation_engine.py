@@ -211,6 +211,7 @@ class AutomationEngine:
         self._override_mode: Optional[str] = None
         self._override_source: Optional[str] = None
         self._override_time: Optional[datetime] = None
+        self._override_expiry_deferred: bool = False
         self._last_activity: Optional[str] = None
         self._last_activity_change: Optional[datetime] = None
         # Per-source liveness for the priority guard (source → last report time).
@@ -630,12 +631,12 @@ class AutomationEngine:
             ("morning_ramp", schedule.ramp_start_hour, schedule.ramp_duration_minutes),
         ))
 
-        # Daytime bright neutral
+        # Daytime neutral white — functional idle uses CT, never tinted HSB.
         if ramp_end < schedule.evening_start_hour:
             rules.append((
                 ramp_end,
                 schedule.evening_start_hour,
-                {"on": True, "bri": 220, "hue": 20000, "sat": 80},
+                {"on": True, "bri": 220, "ct": 250},
             ))
 
         # Evening warm
@@ -809,6 +810,26 @@ class AutomationEngine:
         if self.is_recent_process_working():
             return "process_working_recent"
         return None
+
+    def _has_fresh_mode_replacement(self, now: datetime) -> bool:
+        """Whether a fresh semantic source can safely replace user intent."""
+        if self._current_mode == "idle":
+            return False
+        last_report = self._last_mode_source_report_at.get(
+            self._mode_source_key,
+            self._last_mode_source_report_at.get(self._mode_source),
+        )
+        return bool(
+            last_report
+            and (now - last_report).total_seconds() < SOURCE_STALE_SECONDS
+        )
+
+    def _override_is_user_owned(self) -> bool:
+        """Return whether the active override represents explicit user intent."""
+        return bool(
+            self._manual_override
+            and self._override_source not in AUTONOMOUS_PUSH_SOURCES
+        )
 
     def is_present_in_room(self) -> bool:
         """True iff a presence source shows the user is visibly here right now.
@@ -1488,6 +1509,7 @@ class AutomationEngine:
         self._override_mode = mode
         self._override_source = source
         self._override_time = datetime.now(tz=TZ)
+        self._override_expiry_deferred = False
         self._last_activity_change = self._override_time
 
         # Only wipe per-light manual brightness/color when the user picked
@@ -1553,6 +1575,9 @@ class AutomationEngine:
         self._override_mode = None
         self._override_source = None
         self._override_time = None
+        self._override_expiry_deferred = False
+        if self._current_mode == "idle":
+            self._idle_entered_at = datetime.now(tz=TZ)
 
         # Same gate as set_manual_override — autonomous clears (4h timeout,
         # etc.) preserve per-light overrides; user-initiated "auto" presses
@@ -1671,10 +1696,11 @@ class AutomationEngine:
     async def load_override_state(self) -> None:
         """Restore manual-override state from app_settings on startup.
 
-        Drops the override if it would have already timed out (older than
-        `_override_timeout_hours`); `sleeping` is exempt because it has no
-        timeout by design. Always restores the zone+posture rule stamp so
-        gate 2's post-expiry refractory survives a restart.
+        Expired autonomous overrides are dropped. Expired user-owned
+        overrides are restored until a fresh semantic mode can safely replace
+        them; `sleeping` remains exempt because it has no timeout by design.
+        Always restores the zone+posture rule stamp so gate 2's post-expiry
+        refractory survives a restart.
         """
         from backend.api.routes.automation import OVERRIDE_STATE_KEY
         from backend.api.routes.routines import load_setting
@@ -1755,23 +1781,35 @@ class AutomationEngine:
             logger.warning("Invalid override_time on load: %r", time_str)
             return
 
+        source = saved.get("override_source")
+
         # Sleeping has no timeout by design (CLAUDE.md: "Persistent override").
-        # Every other mode: drop if it would have already expired.
+        # An expired autonomous push is safe to drop at startup. An explicit
+        # user choice is not: sources are not yet reporting, so restoring it
+        # prevents booting into a stale idle/color state. The run loop releases
+        # it once a fresh non-idle semantic replacement arrives.
         if mode != "sleeping":
             elapsed = datetime.now(tz=TZ) - override_time
             if elapsed > timedelta(hours=self._override_timeout_hours):
+                if source in AUTONOMOUS_PUSH_SOURCES:
+                    logger.info(
+                        "Autonomous override (%s, source=%s) age %.0fmin "
+                        "exceeds %dh timeout — treating as expired",
+                        mode, source, elapsed.total_seconds() / 60,
+                        self._override_timeout_hours,
+                    )
+                    await self._persist_override_state()
+                    return
+                self._override_expiry_deferred = True
                 logger.info(
-                    "Override (%s) age %.0fmin exceeds %dh timeout — "
-                    "treating as expired",
-                    mode, elapsed.total_seconds() / 60,
+                    "User override (%s, source=%s) age %.0fmin exceeds %dh "
+                    "timeout — restoring until a fresh mode replaces it",
+                    mode, source, elapsed.total_seconds() / 60,
                     self._override_timeout_hours,
                 )
-                # Re-persist the cleared state so the dashboard sees no override.
-                await self._persist_override_state()
-                return
 
         self._manual_override = True
-        self._override_source = saved.get("override_source")
+        self._override_source = source
         self._override_mode = mode
         self._override_time = override_time
         self._last_activity_change = override_time
@@ -2609,13 +2647,38 @@ class AutomationEngine:
                     and self._override_time
                     and self._override_mode != "sleeping"
                 ):
+                    # A user override suspends idle dwell. Otherwise days of
+                    # stale idle can trigger ambient_relax immediately after
+                    # the override eventually clears.
+                    self._idle_entered_at = None
                     elapsed = now - self._override_time
                     if elapsed > timedelta(hours=self._override_timeout_hours):
-                        logger.info(
-                            f"Manual override timed out after "
-                            f"{self._override_timeout_hours}h"
-                        )
-                        await self.clear_override(source="timeout_4h")
+                        if not self._override_is_user_owned():
+                            logger.info(
+                                "Autonomous override timed out after %dh "
+                                "(mode=%s source=%s)",
+                                self._override_timeout_hours,
+                                self._override_mode,
+                                self._override_source,
+                            )
+                            await self.clear_override(source="timeout_4h")
+                        elif self._has_fresh_mode_replacement(now):
+                            logger.info(
+                                "Manual override timed out after %dh; fresh "
+                                "replacement mode=%s source=%s",
+                                self._override_timeout_hours,
+                                self._current_mode,
+                                self._mode_source_key,
+                            )
+                            await self.clear_override(source="timeout_4h")
+                        elif not self._override_expiry_deferred:
+                            logger.info(
+                                "Manual override expiry deferred: no fresh "
+                                "semantic replacement (underlying=%s source=%s)",
+                                self._current_mode,
+                                self._mode_source_key,
+                            )
+                            self._override_expiry_deferred = True
 
                 # Expire stale per-light overrides (same 4h window as the
                 # mode-level override, tracked per-entry via the datetime

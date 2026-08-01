@@ -47,7 +47,15 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - Social mode — "Velvet Speakeasy" single static palette (dusty rose statement on L1 + cognac amber L2 + matched burnt-orange kitchen pendants). Sub-styles removed in favor of a grown-up cocktail-lounge aesthetic tuned for small hangouts.
 - Relax mode — "Moss & Candlelight" biophilic palette: warm ember on living-room lamps (L1/L2) with muted moss/sage kitchen pendants (L3/L4) that echo the plants and olive/sage/teal accents in the room. Candle/fire effects are scoped to L1/L2 so the moss pendants stay static. Late-night variant ("Moss & Ember") kicks in after 23:00 — deeper ember + hunter-green shadow for the cave/den feel.
 - Screen sync for gaming and watching. Desktop/projector capture routes to the bedroom pair L2/L5 (the projector runs off HDMI from the dev PC, so mss captures the same frames that are being projected). Latitude laptop watching routes laptop loopback colors to living-room/kitchen lights L1/L3/L4 and treats active Latitude playback as synthetic `latitude_streaming` couch presence, so a tilted laptop screen does not make the room look absent. Gaming-night minimum brightness floor of `bri=85` so L2 never drops to cave-dark against a bright monitor. Watching cap at `bri=80` keeps L2 subtle so mirrored colors don't wash the projected image — but zone-aware: when `zone=desk` is committed (sourced from the desktop pc_agent since the 2026-05-27 Latitude→living-room relocation — YouTube-on-monitor, projector not running), watching's L2 base lifts to `bri=160` day / 110 eve / 70 night and the screen-sync cap rises to 180 so a bright monitor can push L2 well above the projector-safe default. **Ambient lux lift (D4):** for gaming and watching across all time periods, L2's screen-sync cap + floor are scaled by `bedroom_lux × weather_multiplier` so a dim room lifts brightness without the user touching anything — `ScreenSyncService._scale_for_ambient`. The bedroom lux comes from `app.state.bedroom_lux` (the desktop Brio webcam's `LuxChannel`, NOT the living-room Latitude camera — cross-room contamination would dim the bedroom lamps when the living room is bright). L5 is excluded from the lift (clear seeded-glass housing is glare-prone and keeps its static per-period caps). Zone/posture sourcing for the watching-desk cap uses `app.state.presence` (PresenceFusion) rather than the raw Latitude camera, so the `zone=desk` detection the desktop pc_agent owns flows through correctly.
-- Manual override with 4-hour auto-timeout
+- Manual override with a 4-hour auto-timeout. Autonomous overrides expire on
+  schedule. Explicit user choices expire only when a fresh non-idle semantic
+  mode is available to replace them; stale/absent desktop evidence must not
+  expose old idle state. Sleeping remains persistent until manually cleared.
+- Functional daytime idle uses CT-only neutral white (`ct=250`), not an HSB
+  tint.
+- Transit lighting is presence-edge-triggered: one activation per confirmed
+  presence session, latched after activation/timeout until fresh strong
+  presence re-arms it.
 - Configurable per-mode brightness multipliers
 
 ### Audio & Music
@@ -1726,8 +1734,9 @@ gitignored).
 
 ### Deployment workflow
 
-**Code changes** flow from dev → production via the `/deploy-home`
-Claude Code skill, which handles the full lifecycle end-to-end:
+**Code changes** flow from dev → production via the Codex `$deploy-home`
+skill (`C:\Users\antho\.codex\skills\deploy-home`), which handles the full
+lifecycle end-to-end:
 
 1. Edit code on the Windows dev machine
 2. `git commit` + `git push` happen inside the skill
@@ -1735,11 +1744,10 @@ Claude Code skill, which handles the full lifecycle end-to-end:
    `id_ed25519_homehub` keypair and `~/.ssh/config` Host alias
    `homehub` (set up 2026-05-06). Direct CLI shorthand:
    `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"`
-4. The `deploy-verifier` subagent auto-spawns post-deploy: confirms
-   `build_id` rolled forward (the SHA is now exposed on `/health`),
-   runs an API smoke across every major endpoint group, and scans
-   the post-restart event window for regressions before reporting
-   STATUS
+4. Post-deploy verification confirms `/health`, `build_id` rollover when a
+   restart is expected, live state shape, touched API/UI surfaces, and the
+   post-restart event window. The historical Claude `deploy-verifier` subagent
+   is now a checklist reference, not an automatically running component.
 
 `scripts/deploy.sh` handles the remote side: `git pull --ff-only`,
 diffs `HEAD` to detect what changed, reinstalls Python deps if

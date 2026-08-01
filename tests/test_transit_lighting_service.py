@@ -8,7 +8,7 @@ the effective (override-aware) mode and only blocks when that mode falls
 outside TRIGGER_MODES.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -133,7 +133,8 @@ def _make_service(mode="working", override=False, override_mode=None,
 
 async def _drive_absent_window(svc):
     """Drive the service through the ABSENT_TRIGGER_SECONDS window so the
-    state machine reaches its activate decision."""
+    state machine reaches its activate decision after a real presence edge."""
+    await _arm_presence(svc)
     # First tick seeds the absent timer.
     await svc._check()
     # Backdate the timer past the trigger window so the next tick fires.
@@ -143,8 +144,35 @@ async def _drive_absent_window(svc):
     await svc._check()
 
 
+async def _arm_presence(svc):
+    """Establish the fresh-presence side of a later exit transition."""
+    cam = svc._camera
+    original = (
+        cam.last_detection, cam.detection_source, cam.confidence,
+    )
+    cam.last_detection = "present"
+    cam.detection_source = "pose"
+    cam.confidence = 0.95
+    await svc._check()
+    cam.last_detection, cam.detection_source, cam.confidence = original
+
+
 class TestActivateGuards:
     """The activate path: when (and only when) should transit fire?"""
+
+    async def test_initial_continuous_absence_never_activates(self):
+        svc, auto, _ = _make_service(mode="working")
+
+        await svc._check()
+        svc._camera_absent_since = (
+            datetime.now(tz=TZ)
+            - timedelta(seconds=ABSENT_TRIGGER_SECONDS + 60)
+        )
+        await svc._check()
+
+        assert auto.transit_calls == []
+        assert svc._active is False
+        assert svc._presence_armed is False
 
     async def test_activates_when_camera_absent_and_eligible_mode(
         self, monkeypatch,
@@ -252,6 +280,7 @@ class TestStationaryZoneGate:
             cam_detection="absent", cam_detection_source=None,
             cam_confidence=0.0,
         )
+        await _arm_presence(svc)
         # Build the absent streak — gate still blocks during this window.
         for _ in range(BED_EXIT_ABSENT_FRAMES):
             await svc._check()
@@ -310,6 +339,7 @@ class TestStationaryZoneGate:
         # commits to "bed" — block should clear the pending timer so it
         # doesn't fire the moment zone moves back to desk.
         svc, _, cam = _make_service(mode="working", cam_zone=None)
+        await _arm_presence(svc)
         await svc._check()
         assert svc._camera_absent_since is not None
 
@@ -342,6 +372,7 @@ class TestStationaryZoneGate:
             cam_detection="present", cam_detection_source="face",
             cam_confidence=0.49,  # below TRANSIT_FACE_TRUST_THRESHOLD = 0.70
         )
+        await _arm_presence(svc)
         # Drive BED_EXIT_ABSENT_FRAMES polls of weak-face → still gated, but
         # the streak builds.
         for _ in range(BED_EXIT_ABSENT_FRAMES):
@@ -569,6 +600,7 @@ class TestFlapSuppression:
         svc, auto, cam = _make_service(
             mode="working", cam_detection="absent",
         )
+        await _arm_presence(svc)
         # Tick 1: absent → timer starts.
         await svc._check()
         assert svc._camera_absent_since is not None
@@ -597,6 +629,7 @@ class TestFlapSuppression:
         svc, auto, cam = _make_service(
             mode="working", cam_detection="absent",
         )
+        await _arm_presence(svc)
         # Tick 1: absent → timer starts.
         await svc._check()
         assert svc._camera_absent_since is not None
@@ -616,6 +649,7 @@ class TestFlapSuppression:
 
     async def test_presence_tracker_clears_on_each_absent_frame(self):
         svc, _, cam = _make_service(mode="working", cam_detection="absent")
+        await _arm_presence(svc)
         await svc._check()  # timer starts
 
         # Flap to present, then back. The tracker should reset cleanly.
@@ -678,6 +712,7 @@ class TestBlockReasonLogging:
     async def test_mode_block_clears_absent_timer(self):
         # Build up the absent timer in working mode...
         svc, auto, cam = _make_service(mode="working")
+        await _arm_presence(svc)
         await svc._check()
         assert svc._camera_absent_since is not None
 
@@ -796,16 +831,29 @@ class TestRefireCooldown:
         assert svc._camera_absent_since is None  # cooldown cleared the dwell
         assert len(auto.transit_calls) == 1  # no second fire
 
-    async def test_refire_allowed_after_cooldown_lapses(self):
+    async def test_continuous_absence_stays_latched_after_cooldown(self):
         from datetime import timedelta
         svc, auto, cam = _make_service(mode="working")
         await _drive_absent_window(svc)
         await svc._deactivate("test")
 
-        # Lapse the cooldown, then a real sustained absence should fire again.
+        # Cooldown expiry alone is insufficient: the same continuous absence
+        # must not manufacture another walk.
         svc._last_deactivated_at -= timedelta(seconds=REFIRE_COOLDOWN_SECONDS + 1)
         cam.last_detection = "absent"
+        await svc._check()
+        assert svc.active is False
+        assert len(auto.transit_calls) == 1
+
+    async def test_fresh_presence_rearms_after_cooldown(self):
+        from datetime import timedelta
+        svc, auto, cam = _make_service(mode="working")
         await _drive_absent_window(svc)
+        await svc._deactivate("test")
+        svc._last_deactivated_at -= timedelta(seconds=REFIRE_COOLDOWN_SECONDS + 1)
+
+        await _drive_absent_window(svc)
+
         assert svc.active is True
         assert len(auto.transit_calls) == 2
 

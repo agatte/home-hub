@@ -2384,6 +2384,154 @@ async def _drive_one_tick(engine: AutomationEngine) -> None:
         await engine.run_loop()
 
 
+class TestDesktopUnavailableLightingPolicy:
+    """P0 regressions for stale desktop/camera semantic evidence."""
+
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    def test_daytime_idle_rule_is_ct_only(self, engine):
+        rules = engine._build_time_rules(engine.schedule_config.weekday)
+        daytime = next(
+            state for _start, _end, state in rules
+            if isinstance(state, dict) and state.get("bri") == 220
+        )
+
+        assert daytime == {"on": True, "bri": 220, "ct": 250}
+        assert "hue" not in daytime
+        assert "sat" not in daytime
+
+    def test_stale_idle_is_not_a_safe_override_replacement(self, engine):
+        now = datetime.now(tz=TZ)
+        engine._current_mode = "idle"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process"
+        engine._last_mode_source_report_at["process"] = now
+
+        assert engine._has_fresh_mode_replacement(now) is False
+
+    async def test_expired_user_override_waits_for_fresh_replacement(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "day",
+        )
+        await engine.set_manual_override("working", source="api:test")
+        engine._override_time = (
+            datetime.now(tz=TZ)
+            - timedelta(hours=engine.override_timeout_hours + 1)
+        )
+        engine._current_mode = "idle"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process"
+        engine._last_mode_source_report_at["process"] = (
+            datetime.now(tz=TZ) - timedelta(seconds=SOURCE_STALE_SECONDS + 1)
+        )
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is True
+        assert engine.current_mode == "working"
+        assert engine._override_expiry_deferred is True
+        assert engine._idle_entered_at is None
+
+    async def test_expired_user_override_releases_to_fresh_mode(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "day",
+        )
+        await engine.set_manual_override("relax", source="api:test")
+        engine._override_time = (
+            datetime.now(tz=TZ)
+            - timedelta(hours=engine.override_timeout_hours + 1)
+        )
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process"
+        engine._last_mode_source_report_at["process"] = datetime.now(tz=TZ)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "working"
+
+    async def test_autonomous_override_keeps_normal_timeout(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self: "day",
+        )
+        await engine.set_manual_override("relax", source="ambient_relax")
+        engine._override_time = (
+            datetime.now(tz=TZ)
+            - timedelta(hours=engine.override_timeout_hours + 1)
+        )
+        engine._current_mode = "idle"
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+
+    async def test_startup_restores_expired_user_override(
+        self, monkeypatch, engine,
+    ):
+        saved = {
+            "manual_override": True,
+            "override_mode": "working",
+            "override_source": "api:test",
+            "override_time_utc": (
+                datetime.now(timezone.utc)
+                - timedelta(hours=engine.override_timeout_hours + 1)
+            ).isoformat(),
+        }
+
+        async def fake_load_setting(_key):
+            return saved
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", fake_load_setting,
+        )
+
+        await engine.load_override_state()
+
+        assert engine.manual_override is True
+        assert engine.current_mode == "working"
+        assert engine._override_expiry_deferred is True
+
+    async def test_startup_drops_expired_autonomous_override(
+        self, monkeypatch, engine,
+    ):
+        saved = {
+            "manual_override": True,
+            "override_mode": "relax",
+            "override_source": "ambient_relax",
+            "override_time_utc": (
+                datetime.now(timezone.utc)
+                - timedelta(hours=engine.override_timeout_hours + 1)
+            ).isoformat(),
+        }
+
+        async def fake_load_setting(_key):
+            return saved
+
+        async def fake_persist():
+            return None
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", fake_load_setting,
+        )
+        monkeypatch.setattr(engine, "_persist_override_state", fake_persist)
+
+        await engine.load_override_state()
+
+        assert engine.manual_override is False
+        assert engine._override_expiry_deferred is False
+
+
 class TestRecentDeskAttendanceVeto:
     """Recent at-desk high-water marks suppress eager idle/relax automation."""
 

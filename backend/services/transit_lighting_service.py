@@ -185,6 +185,10 @@ class TransitLightingService:
         # the STATIONARY_ZONES gate when sustained — see BED_EXIT_ABSENT_FRAMES.
         # Resets to 0 on any strongly-present frame.
         self._strong_absent_streak: int = 0
+        # Transit is edge-triggered: one activation is allowed only after a
+        # fresh strong-presence observation. Continuous absence cannot create
+        # repeated synthetic walks after a timeout/deactivation.
+        self._presence_armed: bool = False
         # When transit last deactivated — gates the re-fire cooldown so a
         # presence flicker can't immediately re-grab the lights (see
         # REFIRE_COOLDOWN_SECONDS).
@@ -244,6 +248,7 @@ class TransitLightingService:
             self._camera_absent_since = None
             self._presence_during_absent_since = None
             self._strong_absent_streak = 0
+            self._presence_armed = False
             if self._active:
                 await self._deactivate("camera disabled")
             self._record_block("camera disabled")
@@ -304,6 +309,8 @@ class TransitLightingService:
             # linger after he's clearly settled.
             if desk_sticky or zone in STATIONARY_ZONES:
                 where = "desk" if desk_sticky else zone
+                if strongly_present:
+                    self._presence_armed = True
                 await self._deactivate(f"zone={where} (user stationary)")
                 return
 
@@ -318,6 +325,7 @@ class TransitLightingService:
                 if self._camera_present_since is None:
                     self._camera_present_since = now
                 elif (now - self._camera_present_since).total_seconds() >= PRESENT_CLEAR_SECONDS:
+                    self._presence_armed = True
                     await self._deactivate("camera returned")
                     return
             else:
@@ -325,6 +333,15 @@ class TransitLightingService:
             return
 
         # ── Not active: look for conditions to activate ──
+        # A strong observation establishes the presence session even when the
+        # user is stationary at the desk/couch. It must happen before the
+        # stationary-zone gates below; those gates prevent activation, but
+        # should not prevent the later present→absent edge from being known.
+        if strongly_present and not self._presence_armed:
+            self._presence_armed = True
+            self._camera_absent_since = None
+            self._presence_during_absent_since = None
+
         if mode not in TRIGGER_MODES:
             self._record_block(f"mode={mode} (not in trigger set)")
             return
@@ -382,6 +399,10 @@ class TransitLightingService:
         # service became eligible again.
         self._record_unblock()
 
+        if not self._presence_armed:
+            self._record_block("awaiting fresh presence before exit")
+            return
+
         if strongly_present:
             if self._camera_absent_since is None:
                 # Not currently waiting on the absent dwell — nothing to debounce.
@@ -413,6 +434,7 @@ class TransitLightingService:
             return
 
         if (now - self._camera_absent_since).total_seconds() >= ABSENT_TRIGGER_SECONDS:
+            self._presence_armed = False
             await self._activate(mode)
 
     def _record_block(self, reason: str) -> None:
