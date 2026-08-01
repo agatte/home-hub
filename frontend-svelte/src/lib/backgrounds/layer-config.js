@@ -24,29 +24,6 @@ export const LAYER_CONFIGS = {
   ],
 }
 
-// Tile width matches the source asset size (1024px).
-// The scroll animation translates by exactly this amount for seamless looping.
-export const TILE_WIDTH = 1024
-
-/**
- * Get sky variant based on time of day and weather.
- * @param {string} mode
- * @param {string} weather
- * @returns {string} sky image path
- */
-export function getSkyVariant(mode, weather = 'clear') {
-  if (mode !== 'working') return LAYER_CONFIGS[mode]?.[0]?.src || ''
-  const base = '/backgrounds/working'
-
-  if (weather.includes('overcast') || weather.includes('cloud')) {
-    return `${base}/sky-overcast.png`
-  }
-  const hour = new Date().getHours()
-  if (hour >= 17 && hour < 20) return `${base}/sky-sunset.png`
-  if (hour >= 20 || hour < 6) return `${base}/sky-night.png`
-  return `${base}/sky.png`
-}
-
 /** Music speed multiplier per mode (applied to durations — lower = faster) */
 export const MUSIC_SPEED_BOOST = {
   working: 0.7,

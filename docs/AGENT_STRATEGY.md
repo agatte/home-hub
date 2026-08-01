@@ -1,17 +1,19 @@
 # Claude Code Tooling Layer — Strategy, Fleet, and Reference
 
-**Captured 2026-05-06. Last full tooling review 2026-05-11.** This document is the canonical reference for everything in the Claude Code tooling layer for this project — agent fleet, hooks, skills, MCP servers, LSP plugins, data files, and runbook integration. It also contains research findings on multi-agent coding workflows and a concrete playbook for using a parallel agent fleet to ship a large feature like Game Day.
+**Captured 2026-05-06. Last full tooling review 2026-05-11. Codex transition note added 2026-07-13.** This document is the historical canonical reference for the Claude Code tooling layer for this project — agent fleet, hooks, skills, MCP servers, LSP plugins, data files, and runbook integration. It also contains research findings on multi-agent coding workflows and a concrete playbook for using a parallel agent fleet to ship a large feature like Game Day.
 
 This is a durable strategy document, not a plan-of-record. Shipping any individual agent or tool is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
+
+**Current status (2026-07-13):** Claude's always-on `/checkback-loop` and `/watcher-loop` are disabled. The Scheduled Tasks were still launching hidden `claude.exe` processes, but useful digest/subagent output stopped on 2026-06-13. Backups and restore instructions are in `C:\Users\antho\.codex\backups\homehub-claude-loop-tasks\README.md`. Active Codex workflows live under `C:\Users\antho\.codex\skills\`; use `$homehub-monitoring` for read-only checks of the retired loop state.
 
 ## Current fleet at a glance (31 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
-| `homehub-verifier` | core | shipped | auto (checkback-loop) + manual recipe |
-| `homehub-investigator` | core | shipped | auto (watcher-loop) |
-| `homehub-remediator` | core | shipped | auto (watcher-loop, post-diagnosis, policy-matched + `REMEDIATION_ENABLED`) — the one fix-mode agent: bounded `remediate` MCP tool, propose-only until `REMEDIATION_AUTONOMOUS` |
-| `deploy-verifier` | core | shipped | auto (`/deploy-home` step 7) |
+| `homehub-verifier` | core | shipped, auto disabled 2026-07-13 | historical auto via checkback-loop + manual checklist |
+| `homehub-investigator` | core | shipped, auto disabled 2026-07-13 | historical auto via watcher-loop; checklist only |
+| `homehub-remediator` | core | shipped, auto disabled 2026-07-13 | historical watcher-loop handoff; no active Codex remediation path |
+| `deploy-verifier` | core | shipped, auto disabled 2026-07-13 | checklist reference for Codex `$deploy-home` verification |
 | `lighting-curator` | 1 | shipped | hook-gated (pre-commit) + manual |
 | `lighting-shopper` | 1 | shipped | manual |
 | `doc-drift-checker` | 1 | shipped | manual + monthly runbook entry 14 |
@@ -74,7 +76,7 @@ Net effect is roughly cost-neutral-or-cheaper while quality rises on the decisio
 
 ## Verification note
 
-Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Project-specific skills (all under `~/.claude/skills/`): `/api-audit`, `/deploy-home`, `/home-hub-dev`, `/ui-audit`, `/project-spec`, `/checkback-loop`, `/watcher-loop` (original seven); `/ml-status`, `/promotion-decision`, `/override-rate-check` (Round 1 — ML autonomy); `/health-snapshot`, `/why-this-mode`, `/last-fail`, `/grep-journal`, `/digest-today` (Round 2 — dev velocity); `/flag`, `/flag-sync`, `/flag-list` (Round 3 — flag-capture workflow); `/lsp-verify` (LSP marketplace patch drift check + auto-reapply); `/ci-health`, `/fleet-usage`, `/implement-issue` (Round 4, 2026-05-31 — GitHub surface: on-demand CI status, weekly fleet token-spend report, single-issue plan-gated PR pipeline). User-global skills available in all projects: `/loop`, `/schedule`, `/simplify`, `/init`, `/review`, `/security-review`, `/update-config`, `/keybindings-help`, `/fewer-permission-prompts`, `/claude-api`, `/frontend-design`, `/ui-ux-pro-max`.
+Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Historical project-specific Claude skills live under `~/.claude/skills/`; active Codex equivalents live under `C:\Users\antho\.codex\skills\`: `$api-audit`, `$deploy-home`, `$health-snapshot`, `$why-this-mode`, `$journal-triage`, `$ui-audit`, `$ci-health`, `$ml-status`, `$override-rate-check`, `$flag-queue`, `$implement-issue`, and `$homehub-monitoring`. The Claude `/checkback-loop`, `/watcher-loop`, `/fleet-usage`, `/digest-today`, `/promotion-decision`, and `/lsp-verify` flows are historical unless explicitly re-enabled or ported.
 
 Canonical multi-agent path on this machine: **git worktrees + manual coordination**, OR the **experimental Agent Teams** behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (enabled in `~/.claude/settings.json`). Treat any reference elsewhere to a `/batch` skill as aspirational, not actionable.
 
@@ -187,11 +189,11 @@ After Phase A, the four slices are mostly file-disjoint:
 | **C** | `feature/gameday-frontend` | SvelteKit page + stores + WS subscription | `frontend-svelte/src/routes/gameday/+page.svelte`, `frontend-svelte/src/lib/stores/gameday.js` |
 | **D** | `feature/threlte-football-field` | Threlte 3D field component | `frontend-svelte/src/lib/components/FootballField.svelte` and supporting helpers |
 
-Stagger by 24-48h: spawn A first, then B once A's `register_on_play_event` interface is concrete, then C and D in parallel against the SvelteKit/Threlte boundary defined in Phase A. Each agent opens a PR; main session reviews and cherry-picks into main as they land. Run `/api-audit` after the merges, `/deploy-home` when frontend + backend are both in.
+Stagger by 24-48h: spawn A first, then B once A's `register_on_play_event` interface is concrete, then C and D in parallel against the SvelteKit/Threlte boundary defined in Phase A. Each agent opens a PR; main session reviews and cherry-picks into main as they land. Run Codex `$api-audit` after the merges, then `$deploy-home` when frontend + backend are both in.
 
 ### Phase C — Integration + smoke (main session)
 
-Main session is the integrator. Run the full system end-to-end. The deploy-verifier subagent catches structural regressions; the watcher loop catches anomalies in the post-deploy event window.
+Main session is the integrator. Run the full system end-to-end. Codex `$deploy-home` performs deploy-verifier-style structural checks. The old watcher loop is retired; use `$homehub-monitoring` or targeted `$journal-triage` for post-deploy anomalies.
 
 ### Token cost reality check
 
@@ -216,7 +218,7 @@ The fleet ran end-to-end. Game Day Phase B Slices B + C + D were spawned in 3 pa
 - **File-disjoint plan held perfectly.** Zero merge conflicts across 4 branches (B/C/D + integration). The interface-pinning that Phase A spec §4 enforced was the load-bearing piece — none of the agents had to invent contracts.
 - **Curator caught a real anti-pattern.** Slice B agent set `_COLTS_BLUE_SAT = 254` for the celebration pulse helper. Lighting-curator subagent flagged this as the same room-overload pattern the gaming retune (sat 240→180) addressed; we dropped it to 215 before merge. A static linter wouldn't have caught this — the curator reasoned about the apartment's textile palette and the time-window of all-lights-saturated-blue.
 - **Agent continuity via SendMessage paid off** for the follow-up dynamic-volume work. The Slice B agent was resumed (not re-spawned) — retained context on the orchestrator's design (kitchen-pair invariant test, `_SafeFormatDict` template substitution, cooldown stamping, SEQUENCES dict structure), synced its worktree to current master, and shipped 199 tests + ruff-clean code in a single session.
-- **Live verification end-to-end worked first try.** Synthetic touchdown fired through GameDayService → CelebrationOrchestrator → HueService + TTSService + WebSocketManager, all observed in journalctl with correct ordering. The deploy-verifier subagent (already auto-fires after `/deploy-home`) caught no regressions.
+- **Live verification end-to-end worked first try.** Synthetic touchdown fired through GameDayService → CelebrationOrchestrator → HueService + TTSService + WebSocketManager, all observed in journalctl with correct ordering. The historical deploy-verifier subagent caught no regressions after `/deploy-home`. Current Codex `$deploy-home` performs equivalent checklist verification inline.
 
 ### Token cost reality check (actual vs. predicted)
 
@@ -251,17 +253,17 @@ The fleet is 30 agents. Most fire automatically — the manual spawns left are d
 
 | Agent | Trigger | Cadence | Output sink |
 |---|---|---|---|
-| `homehub-verifier` | `/checkback-loop` dispatches | hourly anomaly sweep + dated entries | digest block in `~/.claude/runbooks/digests/YYYY-MM-DD.md` |
-| `homehub-investigator` | `/watcher-loop` polls digests | always-on, ~30s polling for un-diagnosed warns | inline `**Diagnosis (HH:MM):**` subsection appended to the warn block |
-| `homehub-remediator` | `/watcher-loop`, post-diagnosis, ONLY when the diagnosis matches a remediation policy (Check O source-trust, Check B→recover_camera) AND `REMEDIATION_ENABLED` | reactive (one action per spawn) | `## Remediation` block under the warn + `remediation_log` row + notification (all written by the backend `remediate` path). Propose-only until `REMEDIATION_AUTONOMOUS`. |
+| `homehub-verifier` | historical `/checkback-loop` dispatches | disabled 2026-07-13 | old digest blocks in `~/.claude/runbooks/digests/YYYY-MM-DD.md`; latest useful output stopped 2026-06-13 |
+| `homehub-investigator` | historical `/watcher-loop` polls digests | disabled 2026-07-13 | checklist only unless Claude tasks are re-enabled |
+| `homehub-remediator` | historical `/watcher-loop` post-diagnosis handoff | disabled 2026-07-13 | no active Codex remediation path; use read-only diagnosis and human-approved fixes |
 | `ml-model-evaluator` | runbook entry #1 | weekly Mon 10:00 ET | digest block (agent writes its own) |
 | `override-rate-tracker` | runbook entry #7 | weekly Sun 16:00 ET | digest block (agent writes its own) |
 | `fusion-lane-auditor` | runbook entry #23 | weekly Mon 11:00 ET | digest block (agent writes its own) |
 | `rule-engine-misfire-auditor` | runbook entry #24 | weekly Fri 08:00 ET | digest block (agent writes its own) |
 | `performance-regression-hunter` | runbook entry #25 | weekly Tue 09:00 ET | digest block; trends to `~/.claude/data/perf_trends.jsonl` |
 | `error-pattern-watcher` | runbook entry #26 | weekly Thu 09:00 ET | digest block (agent writes its own) |
-| `ci-health-watcher` | runbook entry #33 | daily 08:30 ET | digest block (self-diagnosed — watcher-loop skips investigator) |
-| `deploy-verifier` | `/deploy-home` skill step 7 | post-deploy, automatic | inline conversation report (no digest) |
+| `ci-health-watcher` | historical runbook entry #33 | disabled 2026-07-13 | use Codex `$ci-health` on demand |
+| `deploy-verifier` | historical `/deploy-home` step 7 | disabled 2026-07-13 | Codex `$deploy-home` performs equivalent checklist verification inline |
 | `lighting-curator` | PreToolUse hook on `git commit` | per-commit when staged diff matches lighting files + design identifiers | blocks commit unless `[curator-reviewed]` token in message |
 | `gameday-preflight` | runbook entry #12 (preseason T-7) + entry #13 (weekly Sun Aug-Jan) + manual T-90 game morning | once preseason + every Sunday in NFL season + ad-hoc | digest block (agent writes its own) |
 | `gameday-postmortem` | loop pre-fire detector on `gameday:auto` close (per `homehub-checkbacks.md` § Pre-fire detectors) + manual for test fires | within ~1h of every real game close (auto), ad-hoc otherwise | appends to today's digest |
@@ -305,7 +307,7 @@ next day Curator review on any subsequent SEQUENCES tweak (advisory section K) b
 | `pre_push_pr_review.py` | PreToolUse | Bash | Blocks `git push` of Python/SvelteKit diffs unless PASS markers exist. See Pre-push gate below. |
 | `post_edit_ruff.py` | PostToolUse | Edit\|Write | Runs `python -m ruff check --fix` on edited `backend/**/*.py`. No frontend lint hook. |
 | `post_edit_env_validate.py` | PostToolUse | Edit\|Write | Filters to `.env*` files. Validates required keys (APP_ENV, LOCAL_IP, HUE_BRIDGE_IP, HUE_USERNAME, TIMEZONE), empty values, FRONTEND_BUILD path existence, smart-quote substitution. Prints `[env]` inline. |
-| `post_git_push.py` | PostToolUse | Bash | After a real `git push`, nudges `/deploy-home`. |
+| `post_git_push.py` | PostToolUse | Bash | Historical Claude hook: after a real `git push`, nudged `/deploy-home`. Codex uses `$deploy-home` directly. |
 | `post_tool_failure.py` | PostToolUse | — (all tools) | Logs tool call failures to `~/.claude/data/tool_failures.jsonl`. 10s dedup window. Idempotent. |
 | `subagent_stop_audit.py` | SubagentStop | — | Logs every subagent completion to `~/.claude/data/subagent_audit.jsonl` (structured row: agent + token usage parsed from the subagent's own transcript). Read by `error-pattern-watcher` + `/fleet-usage`. (Rebuilt 2026-05-31 — the old `.log` logged `unknown/chars=0` on every row.) |
 
@@ -387,7 +389,7 @@ The flag workflow (Round 3, 2026-05-11) solves topic-drift loss: when Claude sur
 
 The `session_start_homehub.py` hook injects `flags_pending=<n>` (and `oldest=<n>d`) into `additionalContext` when the queue has ≥3 pending or something has been sitting >7 days, so the next session opens with a terse reminder.
 
-Drain reminders fire at four mid-session moments: after capturing another flag when total pending ≥ 3; when the user mentions a domain with pending flags in that label; at natural session-end signals ("done for today", "ship it") with pending count > 0; after `git push` / `/deploy-home` sequences with pending ≥ 5.
+Drain reminders fire at four mid-session moments: after capturing another flag when total pending ≥ 3; when the user mentions a domain with pending flags in that label; at natural session-end signals ("done for today", "ship it") with pending count > 0; after `git push` / `$deploy-home` sequences with pending ≥ 5.
 
 ### Runbook cadence map
 

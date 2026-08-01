@@ -89,6 +89,33 @@ branch/PR, then map the issue to targeted tests before editing. For backlog
 hygiene, mirror the rubric in
 `C:\Users\antho\.claude\agents\gh-backlog-triager.md`.
 
+## Codex Skills And Retired Claude Loops
+
+User-level Codex skills live in `C:\Users\antho\.codex\skills\`. Current
+Home Hub skills include:
+
+- `$deploy-home` - commit, push, deploy via `scripts/deploy.sh`, then verify.
+- `$api-audit`, `$health-snapshot`, `$why-this-mode`, `$journal-triage`,
+  `$ui-audit` - read-only verification and debugging workflows.
+- `$ci-health`, `$ml-status`, `$override-rate-check` - CI and autonomy checks.
+- `$flag-queue` - Codex follow-up capture/list/sync workflow.
+- `$implement-issue` - small GitHub issue implementation workflow.
+- `$homehub-monitoring` - read-only bridge for checking legacy Claude loop
+  status and digest freshness.
+
+The old Claude 24/7 monitoring loops are intentionally disabled as of
+2026-07-13. Windows Scheduled Tasks `Home Hub Checkback Loop`,
+`Home Hub Watcher Loop`, and `Home Hub Loops Daily Relaunch` were launching
+hidden `claude.exe` processes, but useful digest/subagent output stopped on
+2026-06-13 after Claude subscription/auth drift. Task XML backups and restore
+commands are in
+`C:\Users\antho\.codex\backups\homehub-claude-loop-tasks\README.md`.
+
+Do not assume `/checkback-loop`, `/watcher-loop`, `homehub-verifier`,
+`homehub-investigator`, or `homehub-remediator` are actively running. Treat the
+Claude agent specs as reusable checklists only unless the user explicitly
+re-enables the old scheduled tasks.
+
 ## Issue-To-Test Checklist
 
 Before editing for a GitHub issue:

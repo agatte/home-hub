@@ -48,13 +48,13 @@ Server runs at http://localhost:8000. Frontend dev server: `cd frontend-svelte &
 
 ### Production deploy (Latitude at 192.168.86.210)
 
-Use the `/deploy-home` skill — it commits/pushes/SSHes/spawns deploy-verifier end-to-end. Direct CLI shorthand: `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"` (passwordless via `id_ed25519_homehub` + `~/.ssh/config` Host alias).
+Current Codex workflow: use `$deploy-home` from `C:\Users\antho\.codex\skills\deploy-home` — it commits/pushes/SSHes/runs verification end-to-end. Historical Claude shorthand was `/deploy-home`. Direct CLI shorthand remains: `ssh homehub "cd ~/home-hub && ./scripts/deploy.sh"` (passwordless via `id_ed25519_homehub` + `~/.ssh/config` Host alias).
 
 `scripts/deploy.sh` does `git pull --ff-only`, conditionally reinstalls deps / rebuilds frontend / restarts `home-hub.service`, then health-checks `/health`. Backend restarts emit a new `build_id` on `connection_status`, the kiosk WebSocket reloads within ~1s.
 
 ---
 
-## Claude Code Tooling
+## Codex And Historical Claude Tooling
 
 ### MCP Server (`backend/mcp_server.py`)
 
@@ -83,23 +83,21 @@ python -m backend.mcp_server
 - **PostToolUse all-tools** (`post_tool_failure.py`) — logs failures to `~/.claude/data/tool_failures.jsonl`; consumed by `error-pattern-watcher`.
 - **SessionStart** (`session_start_homehub.py`) — injects mode/source/override + anomaly-only fields via `additionalContext`. Healthy systems stay terse.
 - **SubagentStop** (`subagent_stop_audit.py`) — logs every subagent completion to `~/.claude/data/subagent_audit.jsonl` (structured: agent + token usage parsed from the subagent's own transcript). Read by `error-pattern-watcher` + the `/fleet-usage` reporter.
-- **PostToolUse Bash** (`post_git_push.py`) — after a real `git push`, nudges `/deploy-home`.
+- **PostToolUse Bash** (`post_git_push.py`) — historical Claude hook: after a real `git push`, nudged `/deploy-home`. Codex uses `$deploy-home` directly.
 - **PreToolUse Bash** (`pre_commit_lighting_curator.py`) — blocks `git commit` touching `light_state_calculator.py` / `scenes.py` / `celebration_orchestrator.py` + a design identifier (`ACTIVITY_LIGHT_STATES`, `EFFECT_AUTO_MAP`, `SCENE_PRESETS`, `SEQUENCES`, …) unless the message contains `[curator-reviewed]`. Override: spawn `lighting-curator`, address, re-commit.
 - **PreToolUse Bash** (`pre_push_pr_review.py`) — blocks `git push` of Python/SvelteKit diffs unless PASS markers (`<git-dir>/.pr-review-{backend,frontend}-ok` = HEAD SHA) exist. Bypass: `SKIP_PR_REVIEW=1`. Docs/config-only pushes skip.
 
-### Slash commands + subagents
+### Codex skills and historical Claude commands
 
-Commands: `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`.
+Active Codex user skills live in `C:\Users\antho\.codex\skills\`: `$deploy-home`, `$api-audit`, `$health-snapshot`, `$why-this-mode`, `$journal-triage`, `$ui-audit`, `$ci-health`, `$ml-status`, `$override-rate-check`, `$flag-queue`, `$implement-issue`, and `$homehub-monitoring`. Historical Claude commands included `/home-hub-dev`, `/api-audit`, `/deploy-home`, `/ui-audit`, `/project-spec`, `/checkback-loop`, and `/watcher-loop`.
 
 Subagents (`~/.claude/agents/`, 31 total) — fleet table + trigger map in `docs/AGENT_STRATEGY.md` Parts 1 + 5. Single canonical source — don't re-enumerate here.
 
-### Ambient verification loop
+### Ambient verification loop (retired)
 
-`/checkback-loop` runs `~/.claude/runbooks/homehub-checkbacks.md` (hourly sweep + dated one-shots), writes blocks to `~/.claude/runbooks/digests/YYYY-MM-DD.md`. MCP-down → `[skipped]` + 600s back-off. Warn/error blocks fire a system-tray balloon via `~/.claude/scripts/notify.ps1`.
+The old Claude `/checkback-loop` + `/watcher-loop` 24/7 monitor is disabled as of 2026-07-13. The Windows Scheduled Tasks `Home Hub Checkback Loop`, `Home Hub Watcher Loop`, and `Home Hub Loops Daily Relaunch` were still launching hidden `claude.exe` processes, but useful digest/subagent output stopped on 2026-06-13 after Claude subscription/auth drift.
 
-Parallel `/watcher-loop` polls digests every 600s; warn/error blocks without `**Diagnosis (` get a `homehub-investigator` subagent spawned (playbook: `~/.claude/runbooks/homehub-watcher.md`). Investigation-only.
-
-**Autostart (both loops):** Windows Scheduled Tasks `Home Hub Checkback Loop` + `Home Hub Watcher Loop` (triggers: logon + unlock + resume; idempotent ensure-running), run hidden via `start-homehub-loop.ps1` through the `start-homehub-loop-hidden.vbs` shim. `Home Hub Loops Daily Relaunch` recycles both at 04:00 to shed `/loop` context before auto-compaction. Re-register: `register-homehub-loop-tasks.ps1`; status: `homehub-loops-status.ps1` (all in `~/.claude/scripts/`).
+Task XML backups and re-enable/restore commands are in `C:\Users\antho\.codex\backups\homehub-claude-loop-tasks\README.md`. Use `$homehub-monitoring` from Codex for read-only status checks. Do not assume `homehub-verifier`, `homehub-investigator`, or `homehub-remediator` are actively running unless those tasks have been explicitly re-enabled.
 
 ---
 

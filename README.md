@@ -2,13 +2,11 @@
 
 A personal smart home OS that learns your lifestyle and adapts your environment automatically. Controls Philips Hue lighting and Sonos audio from a unified real-time dashboard — with intelligent automation, behavioral event logging, and a full **MCP server** that lets AI agents interact with the live system directly.
 
-![Home Hub Dashboard](audit-home-full.png)
-
 ---
 
 ## Overview
 
-Home Hub goes well beyond basic smart home control. Instead of manually adjusting lights and music, it monitors context — what you're doing on your PC, ambient sound levels, the time of day, your listening history — and makes adjustments automatically. It runs as a single server on your local network, accessible from any browser or installable as a PWA on mobile.
+Home Hub goes well beyond basic smart home control. Instead of manually adjusting lights and music, it monitors context — what you're doing on your PC, ambient sound levels, the time of day, your listening history — and makes adjustments automatically. Its always-on server runs on a Latitude laptop, while optional desktop agents provide richer bedroom and PC context. It is accessible from any browser or installable as a PWA on mobile.
 
 The standout feature: a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes the entire Home Hub API as AI-callable tools. Claude Code (or any MCP-compatible agent) can query system state, control lights, switch modes, manage Sonos, and run read-only database queries — all against the live running system.
 
@@ -17,7 +15,7 @@ The standout feature: a [Model Context Protocol (MCP)](https://modelcontextproto
 ## Features
 
 ### 🤖 MCP Server — AI-Native Control
-Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastMCP. It exposes 20 tools across every subsystem, registered in `.mcp.json` for seamless Claude Code integration.
+Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastMCP. It exposes 31 tools across every subsystem, registered in `.mcp.json` for MCP-compatible clients.
 
 **Tool categories:**
 - **System** — health check, Hue bridge + Sonos connectivity, WebSocket client count
@@ -44,9 +42,9 @@ Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastM
 - Recommendations scored by similarity, genre overlap, and user feedback; cached in SQLite with 30-day TTL
 
 ### 🤖 Automation & Event Logging
-- PC activity detection via psutil — detects gaming, media playback, and idle states
-- Ambient sound monitoring via Blue Yeti mic (PyAudio RMS) for party/event detection
-- Both agents run as standalone processes, POSTing mode updates to `/api/automation/activity`
+- The Latitude owns always-on automation, Hue/Sonos connections, scheduling, living-room presence, and persistence
+- A supervised desktop agent bundle provides process activity, desk presence, bedroom lux, screen sync, audio classification, sleep watching, monitor brightness, and peripheral RGB
+- Desktop capabilities enrich automation but can be unavailable; their freshness is distinct from backend health
 - `AutomationEngine` supports `register_on_mode_change` callbacks — MusicMapper and other services subscribe to mode changes
 - `EventLogger` tracks every mode transition, light adjustment, and Sonos playback event to SQLite for behavioral analysis
 
@@ -76,7 +74,7 @@ Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastM
 | Music Discovery | Last.fm API, iTunes Search API |
 | TTS | edge-tts → MP3 → Sonos |
 | Scheduling | Custom async cron scheduler |
-| PC Agent | psutil, PyAudio |
+| Desktop agents | psutil, OpenCV/MediaPipe, PyAudio/YAMNet, screen capture, Win32 APIs, OpenRGB |
 
 ---
 
@@ -100,12 +98,17 @@ Browser / Android Tablet (kiosk) / Phone (PWA)
    ├── SQLite (aiosqlite + SQLAlchemy async)
    └── Serves SvelteKit static build from frontend-svelte/build/
 
-   Standalone processes (POST to /api/automation/activity):
-   ├── pc_agent/activity_detector.py  (psutil — game/media/idle detection)
-   └── pc_agent/ambient_monitor.py    (PyAudio — Blue Yeti RMS, party detection)
+   Desktop PC Agent Supervisor (reports to the Latitude):
+   ├── activity_detector      process/input mode detection
+   ├── emotion_capture        desk presence, bedroom zone/lux, optional emotion
+   ├── screen_sync_agent      screen colors and game events
+   ├── ambient_monitor        optional microphone/audio classification
+   ├── sleep_watcher          desktop sleep/wake coordination
+   ├── monitor_brightness     Windows display integration
+   └── peripheral_rgb_agent  OpenRGB integration
 
    AI Integration:
-   └── mcp_server.py  (FastMCP — 20 tools, registered in .mcp.json)
+   └── mcp_server.py  (FastMCP — 31 tools, registered in .mcp.json)
        ├── Lights, Scenes, Effects
        ├── Automation mode + schedule
        ├── Sonos playback + favorites
@@ -152,11 +155,8 @@ cp .env.example .env
 python run.py
 # → http://localhost:8000
 
-# Optional: PC activity detection (separate terminal)
-python -m backend.services.pc_agent.activity_detector
-
-# Optional: Ambient sound monitoring (requires Blue Yeti + PyAudio)
-python -m backend.services.pc_agent.ambient_monitor
+# Optional: supervised desktop context bundle
+python -m backend.services.pc_agent.supervisor
 
 # Optional: MCP server for Claude Code integration
 python -m backend.mcp_server
@@ -165,6 +165,15 @@ python -m backend.mcp_server
 cd frontend-svelte && npm run dev
 # → http://localhost:3001
 ```
+
+---
+
+## Documentation
+
+Start with [`docs/README.md`](docs/README.md). The authoritative product and
+architecture description is [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md).
+The July 2026 desktop-inactive lighting investigation is preserved in
+[`docs/INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md`](docs/INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md).
 
 ---
 
@@ -192,19 +201,10 @@ The `query_db` tool accepts any SELECT statement against the live SQLite databas
 
 ---
 
-## Screenshots
+## Future development
 
-| Dashboard | Music | Settings |
-|---|---|---|
-| ![Dashboard](audit-home-full.png) | ![Music](audit-music-full.png) | ![Settings](audit-settings-full.png) |
-
----
-
-## Roadmap
-
-- **Game Day Engine** — ESPN API polling for Colts games, play-type detection (touchdown, field goal, big play), celebration lighting sequences and TTS announcements
-- **Pixel Art Scoreboard** — PixiJS retro football field with animated play sprites
-- Expanded device support
+See [`docs/Future_Development.md`](docs/Future_Development.md) for longer-range
+ideas. Shipped product behavior belongs in the authoritative project spec.
 
 ---
 

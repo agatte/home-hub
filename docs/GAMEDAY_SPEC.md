@@ -291,7 +291,7 @@ Falls back to a `no-game` state when `GameDayState.status == "no-game"`: shows t
 **Static assets** (under `frontend-svelte/static/3d/`):
 - `stadium.glb` — Awbmegames Low Poly Football Stadium (CC-BY-4.0, Sketchfab, ~1.65 MB)
 - `env/stadium_01_2k.hdr` — Poly Haven Stadium 01 HDRI (CC0, ~6 MB)
-- `textures/grass-{color,normal,roughness}.jpg` — Poly Haven `leafy_grass` PBR set (CC0, ~13 MB total). Currently unused after phase 1.6 dropped the PBR grass plane in favor of the HDRI ground projection. Kept on disk as a fallback.
+- The former Poly Haven `leafy_grass` PBR texture set was removed in the July 2026 repository cleanup. Phase 1.6 replaced its grass plane with the HDRI ground projection; Git history remains the fallback if that design is revisited.
 
 **Props in (boundary contract):**
 ```typescript
@@ -346,7 +346,7 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 - **Pre-game / commercial behavior in v2** — still deferred. Pre-game ambient mode (continuous Colts-tinted lighting before kickoff) and commercial-break behavior (lights restore to mode default + Sonos resume on commercials) are out of scope for v1. Revisit post-preseason.
 - **Preseason 2026-08-13 first test** — pending. 2026 schedule typically publishes May–June; check ESPN once published. The synthetic `/api/gameday/test/{event}` endpoint exercises the full pipeline (play_event → orchestrator → lights + TTS + WS) so we have confidence in the wiring; the preseason game is for tuning palette/timings/TTS lines against reality.
 - **Celebration EventLogger gap** — ✓ closed 2026-05-07 (commit `34fc550`). `CelebrationOrchestrator._run_light_steps` now mirrors every successful `set_light` to `log_light_adjustment` with `trigger=f"celebration:{sequence_key}"`. Query celebrations via `WHERE trigger LIKE 'celebration:%'`; journalctl is now corroboration, not primary.
-- **Agent fleet wiring** — ✓ shipped 2026-05-07. `gameday-preflight` fires from runbook entry #12 (preseason T-7) and #13 (weekly Sunday Aug-Jan) with bye-week early-exit. `gameday-postmortem` auto-fires from the loop's pre-fire detector when a `gameday:auto` window closes (real games only; manual `set_mode` doesn't trip it). See `docs/AGENT_STRATEGY.md` Part 5 for the full T-7d → T+90 timeline.
+- **Agent fleet wiring** — ✓ shipped 2026-05-07. `gameday-preflight` fires from runbook entry #12 (preseason T-7) and #13 (weekly Sunday Aug-Jan) with bye-week early-exit. `gameday-postmortem` previously auto-fired from the retired Claude loop pre-fire detector when a `gameday:auto` window closed. As of 2026-07-13, use Codex `$homehub-monitoring` plus targeted `$journal-triage`/manual postmortem checks instead. See `docs/AGENT_STRATEGY.md` Part 5 for the historical T-7d → T+90 timeline.
 
 ---
 
@@ -365,7 +365,7 @@ Before spawning slice agents, main session refactors these to make seams clean. 
 4. ✓ Slice D: Threlte component builds clean; defensive null-prop handling.
 5. ✓ Integration: `POST /api/gameday/test/touchdown` fired live on the Latitude — lights pulsed, TTS played, WS broadcasts emitted, automation reconciled cleanly.
 6. ✓ Curator review on Slice B's SEQUENCES caught + fixed an over-saturation anti-pattern.
-7. ✓ Phase B integration build (commit `d9c1fcd`) shipped via `/deploy-home`; deploy-verifier returned STATUS=ok across 6/6 checks.
+7. ✓ Phase B integration build (commit `d9c1fcd`) shipped via historical `/deploy-home`; deploy-verifier returned STATUS=ok across 6/6 checks.
 
 **Dynamic volume policy** (§9, also 2026-05-07):
 1. ✓ 32 unit tests on `compute_celebration_volume` covering WPA bands, fallback formula, hard suppressions, apartment modifiers, clamping.

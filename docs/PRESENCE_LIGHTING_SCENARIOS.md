@@ -32,7 +32,7 @@
 - [ ] Sign off strawman → commit the doc
 
 **D. Implementation (after design sign-off)**
-- [x] **D1 — lux-adaptive desk-exit/transit/corridor path brightness** — SHIPPED + DEPLOYED 2026-06-01 (`9163c39`, curator + pr-review + deploy-verifier GO). `path_light_brightness()` helper + measure-then-hold; camera-down → pre-D1 fixed fallback. Live-verified: first post-deploy activation scaled to bri=55 (room at 125 lux vs 74 baseline → lands on `lo`). **Perceptual follow-up:** watch a genuinely dark evening desk-exit to confirm the dark-end (`hi`) caps feel right.
+- [x] **D1 — lux-adaptive desk-exit/transit/corridor path brightness** — SHIPPED + DEPLOYED 2026-06-01 (`9163c39`, curator + pr-review + deploy-verifier GO (historical Claude workflow)). `path_light_brightness()` helper + measure-then-hold; camera-down → pre-D1 fixed fallback. Live-verified: first post-deploy activation scaled to bri=55 (room at 125 lux vs 74 baseline → lands on `lo`). **Perceptual follow-up:** watch a genuinely dark evening desk-exit to confirm the dark-end (`hi`) caps feel right.
 - [x] **D4 — bedroom lux channel** (full plan in Part 7.5) — SHIPPED + DEPLOYED 2026-06-02. Parts C/B/A/E + gaming-floor bump + task #7 gate-widening + watching-desk fused-zone fix all live; Part D (engine `LUX_MODES` re-expansion) deprioritized (self-limiting feedback loop). See the **D4 — SHIPPED** block in Part 7.5.
 - [ ] `PresenceResolver` — shadow build (log-only), validate vs reality
 - [ ] Migrate transit + desk_exit onto resolver transitions (delete local dwell/sustain/cooldown)
@@ -253,7 +253,7 @@ Micro-decisions: (1) **shadow-log before flipping `LUX_MODES`** — yes (cross-r
 
 ### D4 — SHIPPED + DEPLOYED 2026-06-02
 
-All live on master, deployed, curator + pr-review + deploy-verifier GO at each step.
+All live on master, deployed, curator + pr-review + deploy-verifier GO (historical Claude workflow) at each step.
 
 - **C — store + endpoints** (`4574f60`): `LuxChannel` (`backend/services/lux_channel.py`), `app.state.bedroom_lux`, 5 `/api/camera/desktop/lux*` endpoints, `desktop_lux_calibration_config` + `desktop_lux_calibrate_requested` app_settings.
 - **B + A — calibration + sampler** (`2f361db`, `ab17d63`): flip-sample-flip every ~25s, restore auto on the same handle, presence POST suppressed on the sample tick; settings-flag self-calibration. **Calibrated 2026-06-02 at blinds-closed working light** (Anthony's normal): `exposure=-6.0, baseline_lux=127.3`.

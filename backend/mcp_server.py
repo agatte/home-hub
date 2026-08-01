@@ -8,7 +8,7 @@ server to be running at http://localhost:8000.
 Usage:
     python -m backend.mcp_server
 
-Registered in .claude/mcp.json as the "home-hub" MCP server.
+Registered in .mcp.json as the "home-hub" MCP server.
 """
 import logging
 import os

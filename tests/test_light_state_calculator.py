@@ -102,11 +102,11 @@ class TestResolveActivityState:
         state = resolve_activity_state("working", "late_night")
         night = resolve_activity_state("working", "night")
         assert state != night
-        # L1: brighter than night (90 vs 60), warmer (ct 454)
-        assert state["1"]["bri"] == 90
+        # L1 keeps the night fill level but warms further.
+        assert state["1"]["bri"] == 45
         assert state["1"]["ct"] == 454
-        # L2: brighter than night (160 vs 130)
-        assert state["2"]["bri"] == 160
+        # L2 stays the dominant task light, slightly below the night level.
+        assert state["2"]["bri"] == 95
         assert state["2"]["ct"] == 400
         # Kitchen stays off — desk-only late-night functional lighting.
         assert state["3"]["on"] is False

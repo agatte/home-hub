@@ -134,7 +134,7 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         name="Docs-only",
-        patterns=("*.md", "docs/**/*.md", "AGENTS.md", "CODEX_TODO.md"),
+        patterns=("*.md", "docs/**/*.md", "AGENTS.md"),
         checks=("No runtime tests required unless commands/config examples changed.",),
     ),
 )

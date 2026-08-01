@@ -194,7 +194,7 @@ Any of these additions would require backend changes in `backend/services/light_
 5. Fill in remaining mode×period combinations with intentional values (never `_uniform`).
 6. `mcp__home-hub__get_automation_status` after a mode change to confirm the new light shows in the applied state.
 7. For Wall Washer / Signe / OmniGlow / Festavia: test `activate_effect` per light ID (candle, fire, sparkle, opal) — they're Hue v2 native, so effects work out of the box.
-8. UI audit via `/ui-audit` if any presets or scene UI changed.
+8. UI audit via Codex `$ui-audit` if any presets or scene UI changed.
 
 ---
 
