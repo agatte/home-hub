@@ -1,16 +1,16 @@
 # CLAUDE.md
 
 > This file provides guidance to Claude Code when working in this repository.
-> **Source of truth:** `docs/PROJECT_SPEC.md` — read it for full architecture, schema, and feature details. This file is the working guide; the spec is authoritative.
+> **Source of truth:** `docs/PROJECT_SPEC.md` — read it for cross-system product and architecture policy. This file is the working guide; the spec is authoritative for that policy. `backend/models.py` and current migrations are authoritative for implementation schema mechanics.
 > **ML specification:** `docs/ML_SPEC.md` — audio classification, behavioral prediction, camera presence, adaptive lighting, and phased rollout plan.
 > **Lighting expansion wishlist:** `docs/LIGHTING_EXPANSION.md` — Hue/Zigbee hardware recommendations by category and price tier, with per-apartment placement and integration notes.
-> **AI Personality Layer:** `docs/PERSONALITY_LAYER.md` — mood-vector inference, future mood-ring lamp, Claude vibe intent. Phase A live (shadow-log), B/C/D in GH#58/#59/#60.
+> **Mood Context / historical AI Personality Layer:** `docs/PERSONALITY_LAYER.md` — detector and VibeRouter subsystem history. Cross-system Mood Context policy is canonical in `docs/PROJECT_SPEC.md`.
 
 ---
 
 ## Project Overview
 
-Home Hub is an always-on personal command center for one apartment. Philips Hue + Sonos Era 100, mode-aware animated dashboard (1080p dedicated Latitude), full-autopilot learning, Alexa voice control, Colts Game Day celebrations. **Core focus:** Lights and music seamlessly. Everything else builds on that.
+Home Hub is an always-on personal command center for one apartment. Philips Hue + Sonos Era 100, mode-aware animated dashboard (1080p dedicated Latitude), consequence-based earned autonomy, Alexa voice control, Colts Game Day celebrations. **Core focus:** Lights and music that make ordinary apartment life feel responsive. Everything else builds on that.
 
 Full vision and goals: `docs/PROJECT_SPEC.md` § "Vision" + "Goals".
 
@@ -103,11 +103,11 @@ Task XML backups and re-enable/restore commands are in `C:\Users\antho\.codex\ba
 
 ## Architecture
 
-Full current + target ASCII diagrams: `docs/PROJECT_SPEC.md` § "Current Architecture" / "Target Architecture". Tech stack: § "Tech Stack". Import quirks: see § "Technical Limitations" below. At-a-glance:
+Current and deferred architecture references: `docs/PROJECT_SPEC.md` § "Current Architecture" / "Deferred Architecture Reference". Tech stack: § "Tech Stack". Import quirks: see § "Technical Limitations" below. At-a-glance:
 
 **FastAPI backend** (port 8000, async) serves the SvelteKit static build (`frontend-svelte/build/`) + WS/REST. Devices: `HueService` (v1/phue2, 0.5s poll; 5s when v2 active) + `HueV2Service` (CLIP v2 scenes/effects/SSE) → Hue Bridge; `SonosService` (SoCo, 2s) → Era 100; `TTSService` (edge-tts) → MP3 → Sonos. `AutomationEngine` maps time+activity → light state and fires mode-change callbacks (MusicMapper, AmbientMonitor, MLLogger, ModeVolumeService, CameraService, BarApp). ML services (`docs/ML_SPEC.md`): AudioClassifier, BehavioralPredictor, LightingLearner, CameraService, EmotionService, MusicBandit. Plus MusicMapper, ScreenSyncService (mss), Scheduler, Library/RecommendationService, PiholeService, NotifierService (→ WS + ntfy.sh), WebSocketManager, SQLite (aiosqlite + SQLAlchemy async).
 
-**Pi-hole** — Docker (host networking), same machine; DNS :53 (LAN-wide), admin :8080 **(loopback-only since 2026-06-01 — reach via `ssh -L 8080:localhost:8080 homehub`)**; upstream is a local **Unbound** recursive + DNSSEC resolver (`127.0.0.1#5335`, separate `mvance/unbound` container, loopback-only) — no third-party DNS in path. **Footgun:** `docker/pihole/.env` (holds `PIHOLE_PASSWORD`) must exist before any `docker compose up` that recreates the pihole container, or the admin password blanks + Pi-hole admin auth breaks. **PC agents** (standalone, dev desktop): `activity_detector.py` + `ambient_monitor.py` → `POST /api/automation/activity`; `desktop_notifier.py` subscribes `/ws` for toast events. **Target:** SQLite → PostgreSQL (Supabase) as event volume grows.
+**Pi-hole** — Docker (host networking), same machine; DNS :53 (LAN-wide), admin :8080 **(loopback-only since 2026-06-01 — reach via `ssh -L 8080:localhost:8080 homehub`)**; upstream is a local **Unbound** recursive + DNSSEC resolver (`127.0.0.1#5335`, separate `mvance/unbound` container, loopback-only) — no third-party DNS in path. **Footgun:** `docker/pihole/.env` (holds `PIHOLE_PASSWORD`) must exist before any `docker compose up` that recreates the pihole container, or the admin password blanks + Pi-hole admin auth breaks. **PC agents** (standalone, dev desktop): `activity_detector.py` + `ambient_monitor.py` → `POST /api/automation/activity`; `desktop_notifier.py` subscribes `/ws` for toast events. PostgreSQL/Supabase migration is deferred unless measured event volume or operational needs justify it.
 
 ---
 
@@ -116,7 +116,7 @@ Full current + target ASCII diagrams: `docs/PROJECT_SPEC.md` § "Current Archite
 Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "Additional Services". Non-obvious footguns only:
 
 - **`sonos_service.py`** — Favorites always shuffled with random start via `_shuffle_and_play`.
-- **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (**dormant since 2026-05-27** — no camera produces `zone=bed` after the Latitude→living-room move; kept pending future bed-zone source). Late-night rescue + ambient_relax + zone+posture rule + both attendance vetoes live in `run_loop`. `is_present_in_room()` (added with the move) gates `ambient_relax` so a fresh committed couch zone vetoes the auto-flip. Mode priority: pregameday(6) = gameday(6) > gaming(5) > social(4) > watching(3) = cooking(3) > working(2) > idle(1) > sleeping(0). Away mode + dedicated detection service shelved 2026-05-21 after Hue/ARP/Pi-hole paths all hit dead ends — see `project_away_mode_shelved.md` before designing another presence layer. The Hue iOS app's native Home & Away automations integrate via the existing `_check_external_off` mechanism.
+- **`automation_engine.py`** — `_evaluate_zone_posture_rule` is env-gated by `ZONE_POSTURE_RULE_APPLY` (**dormant since 2026-05-27** — no camera produces `zone=bed` after the Latitude→living-room move; kept pending future bed-zone source). Late-night rescue + ambient_relax + zone+posture rule + both attendance vetoes live in `run_loop`. `is_present_in_room()` (added with the move) gates `ambient_relax` so a fresh committed couch zone vetoes the auto-flip. Mode priority: pregameday(6) = gameday(6) > gaming(5) > social(4) > watching(3) = cooking(3) > working(2) > idle(1) > sleeping(0). The older ARP/Pi-hole away detector was shelved 2026-05-21, but `AwayManager` now owns explicit away/home state from authenticated iOS geofence webhooks; `_check_external_off` remains the softer Hue-off path.
 - **`camera_service.py`** — **Latitude relocated to living room 2026-05-27** (sees couch only — emits a single `ZONE_COUCH`; the bedroom desk/bed left-right split is retired; baseline_lux recalibrated to ~74). Desktop pc_agent owns `zone=desk` via PresenceFusion. Off-host ingest (observation/lux/blendshape routes) clamps client `captured_at` to server now (+2s tolerance, `clamp_client_timestamp` in `api/_guards.py`) — journal warning `clamped future timestamp` = the posting agent's clock is skewed; stored future stamps self-heal on the next honest report. **Re-run lux calibration after any resolution change OR camera relocation.** All V4L2 open/release runs off-loop + time-bounded (`_open_capture_async`); poll_loop's 5s frame watchdog → `_recover_capture()`. An orphaned fd can wedge `/dev/video0` intra-process (respawn can't reclaim it) → watchdog escalates to a systemd restart after 3 failed respawns, rate-limited via `camera_wedge_last_restart`; see `project_camera_v4l2_fd_wedge_self_heal.md`. Pauses during sleeping; heartbeat ticks only after `_cap` is non-None. Weak-face low-lux floor: `ema_lux<300` + conf<0.25 → absent; strong-face ≥0.70 and pose fire regardless. Couch posture is suppressed (no consumer).
 - **`transit_lighting_service.py` + `desk_exit_kitchen_service.py`** — sibling camera-driven overrides sharing `_transit_light_overrides`. Transit = L1+kitchen, 10-min auto-fade. DeskExit = kitchen-only, hold-until-return, time-of-day brightness. Transit **cedes the kitchen pair** in productive evening/night (mode ∈ {working, gaming, watching, idle}, hour ≥ 18 or late_night). Both fire on sustained 10s desk-loss; DeskExit also needs `period ∈ TRIGGER_PERIODS` and uses `is_at_desk_fresh()` to return. Distinguish via `light_adjustments.trigger`. `desk_exit_kitchen` is in `PRESERVE_PER_LIGHT_OVERRIDE_SOURCES`. 4h hard timeout = wedged-camera failsafe. **D1 (lux-adaptive path brightness):** both set corridor/kitchen `bri` via `light_state_calculator.path_light_brightness(lux, baseline, period)` against the **Latitude** room lux + measure-then-hold (sample once at activation, hold — avoids the L1-brightens-room feedback loop); camera-down → pre-D1 fixed fallback.
 - **`screen_sync.py`** — L2+L5 bedroom lamps mirror screen color (gaming/watching). **Ambient lux lift** (`_scale_for_ambient`): scales cap+floor by `bedroom_lux × weather` for `{gaming, watching}` × ALL periods, ceiling 1.40×; **L5 excluded** (`_AMBIENT_LIFT_EXCLUDE_LIGHTS`) — clear-housing point source = glare, so L2 (fabric, diffuse) carries the room-light lift. Lux source is `app.state.bedroom_lux` (desktop Brio `LuxChannel` in `lux_channel.py`), NOT the living-room Latitude — cross-room contamination was dimming bedroom floors when the living room was bright. The screen-color route (`automation.py:receive_screen_color`) sources zone/posture from `app.state.presence` (PresenceFusion `latest_zone()`), NOT `camera_service` — else the watching-at-desk L2 cap (180) silently stops firing post Latitude→living-room move. `bedroom_lux` is fed by `emotion_capture.py`'s flip-sample-flip sampler (restore auto-exposure on the SAME handle; DSHOW). Calibrate: `POST /api/camera/desktop/lux/calibrate/request`. Plan/history: `docs/PRESENCE_LIGHTING_SCENARIOS.md` Part 7.5.
@@ -133,7 +133,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 
 **Gotcha — Game Day 3D field:** `<Canvas autoRender={false} toneMapping={NoToneMapping}>` is required; see `docs/GAMEDAY_SPEC.md` §11 + memory `project_gameday_3d_field_gotchas.md`. `postprocessing@6.35.4` peer dep must stay pinned.
 
-**Gotcha — catch-all order:** Built frontend is served via `/{path:path}`; this must be registered in `main.py` AFTER all `/api/` routes or the API is shadowed.
+**Gotcha — catch-all order:** `pihole_proxy.py` must register after the Home Hub API routers but before the `/{path:path}` frontend catch-all. The catch-all must remain last so it cannot shadow either the Pi-hole proxy or API routes.
 
 **Gotcha — scene RAF + debounced derived:** Background scenes pause on `document.visibilitychange`, resume on visible (`MoonScene` exempt; sleeping only). `stores/_debounce.js` exports a `debounced()` mirror of `derived` with trailing-debounce; used by `constellationWithContext` + `sectorBoard`. `GenerativeCanvas`'s lights subscription is 200ms-debounced + palette-capped at 8.
 
@@ -187,7 +187,7 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 | Analytics | `/api/analytics` | `analytics.py` — digest entries/daily/highlights/{date} for `/analytics` |
 | Debug | `/api/debug` | `debug.py` — ad-hoc read-only SQL + event-summary (LAN/localhost gated) |
 
-> `pihole_proxy.py` registers an unprefixed reverse proxy (`/admin/*`, `/api/*` → Pi-hole), mounted LAST in `main.py` after every API route + the frontend catch-all.
+> `pihole_proxy.py` registers an unprefixed reverse proxy (`/admin/*`, `/api/*` → Pi-hole) after every Home Hub API router and before the frontend catch-all. Preserve that order so the catch-all cannot shadow the proxy.
 
 ### Future Routes (do not implement until planned)
 - `/api/actions/` — Quick actions (movie_night, bedtime, leaving, game_day)
@@ -199,9 +199,9 @@ Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Bac
 
 Conventions for this codebase — only what's non-obvious. Standard Python/FastAPI/asyncio scaffolding is assumed.
 
-**Mode-change callback.** `automation.register_on_mode_change(async_fn)` in `main.py` lifespan. Runs async in registration order — keep callbacks fast; dispatch long work as background tasks.
+**Mode-change callback.** Register through the application's bootstrap/composition path (`backend/bootstrap.py`). Callbacks run async in registration order — keep them fast; dispatch long work as background tasks.
 
-**New backend service.** Shape: `_connected` + `connected` property, `async connect()` / `poll_state_loop(ws_manager)` / `close()`. Wire up in `main.py` lifespan: create → await connect → `app.state.x = service` → add poll loop to `tasks` → register mode-change callback if relevant.
+**New backend service.** Shape: `_connected` + `connected` property, `async connect()` / `poll_state_loop(ws_manager)` / `close()`. Wire normal service construction, lifecycle, app state, tasks, and relevant callbacks through `backend/bootstrap.py`'s composition/lifespan path; `backend/main.py` remains the application and route-registration entry point.
 
 **API route.** Prefix `/api/{domain}/`. Return `{"status": "ok"}` or `{"status": "error", "detail": "..."}`. Register in `main.py` **before** the `/{path:path}` frontend catch-all.
 
@@ -278,7 +278,7 @@ Effects: `candle`, `fire`, `sparkle`, `prism`, `glisten`, `opal`. Activate via `
 
 ## Database Schema
 
-Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live tables: `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`. Event tables (Phase 3): `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (live VibeRouter request log). Data retention: per-table via nightly `retention_sweep` — 90-day rolling, with `mood_samples` 7-day and `ml_decisions` 21-day exceptions (ml_decisions logs ~75k rows/day; 21d plateau ≈ 1.1–1.2 GB).
+Use `backend/models.py` and current migrations as the authoritative implementation schema. `docs/PROJECT_SPEC.md` § "Database Schema" documents architectural intent and selected table purposes. The representative table inventory here includes `app_settings`, `scenes`, `mode_playlists`, `music_artists`, `taste_profile`, `recommendations`, `recommendation_feedback`, `mode_scene_overrides`, `rule_suggestions`, and `remediation_log`. Event tables include `activity_events`, `light_adjustments`, `sonos_playback_events` (`weather_class` column added Phase B for bandit context), `scene_activations`, `learned_rules`, `ml_decisions`, and `ml_metrics`. Personality: `mood_samples` (7-day rolling, pruned at boot), `mood_calibration`, `vibe_requests` (live VibeRouter request log). Data retention: per-table via nightly `retention_sweep` — 90-day rolling, with `mood_samples` 7-day and `ml_decisions` 21-day exceptions (ml_decisions logs ~75k rows/day; 21d plateau ≈ 1.1–1.2 GB).
 
 ---
 
@@ -289,7 +289,7 @@ Full schema with column types: `docs/PROJECT_SPEC.md` § "Database Schema". Live
 **Full list + inline docs:** `.env.example` (repo root). **Source of truth:** `backend/config.py` (pydantic `BaseSettings`). Keep those two in sync — don't re-enumerate the vars here (this block kept drifting).
 
 Non-obvious runtime behavior worth knowing without opening the files:
-- `HOME_HUB_API_KEY` — gates every write endpoint; **unset → writes 503**. Localhost (kiosk) + RFC1918 LAN auto-bypass; `TRUSTED_LAN_IPS` pins extra public IPs. `HOME_HUB_SKILL_TOKEN` is the tunnel-origin pair for Alexa Skill and iOS Shortcut calls (requires BOTH). `ANTHROPIC_API_KEY` is optional; if set, VibeRouter can use it for ambiguous `/api/personality/vibe` text after deterministic rules fail.
+- `HOME_HUB_API_KEY` — normal protected writes first allow the localhost, configured `TRUSTED_LAN_IPS`, and private-LAN bypasses; non-bypassed callers then require the key. If it is unset, only callers that did not already qualify for a bypass receive 503. `X-Tunnel-Origin: cloudflare` disables those bypasses and requires both `HOME_HUB_API_KEY` and `HOME_HUB_SKILL_TOKEN` for Alexa Skill and iOS Shortcut calls. `ANTHROPIC_API_KEY` is optional; if set, VibeRouter can use it for ambiguous `/api/personality/vibe` text after deterministic rules fail.
 - `NTFY_TOPIC` — the topic name **IS** the auth on hosted ntfy.sh; treat as a secret. Unset → desktop toast still fires via WS, phone push skipped.
 - `ZONE_POSTURE_RULE_APPLY` — DORMANT since 2026-05-27 (no `zone=bed` source post Latitude→living-room move); kept for a future bed-zone source.
 - `PLANT_APP_ALLOW_INSECURE` — default false **rejects `http://` at boot**; only flip if upstream lacks TLS.
@@ -322,12 +322,10 @@ Keys you **hand-edit** (no UI; edit the row directly):
 
 ## Roadmap
 
-| Phase | Status | Focus |
-|-------|--------|-------|
-| 1–2 | ✓ | Core foundation + dashboard. See `docs/PROJECT_SPEC.md` |
-| 3: Intelligence & Voice | ✓ | Fauxmo + Custom Skill (Lambda→Tunnel→:8002→:8000). Rule engine + persistent suggestion UX shipped |
-| 4: Game Day | A+B+C ✓; preseason 2026-08-13, reg-season 2026-09-13 | See `docs/GAMEDAY_SPEC.md`. SEQUENCES iteration + preseason validation pending |
-| 5: Polish & Expand | Future | Apple Music API, full autopilot, bar app widget |
+See the canonical [Roadmap](../docs/PROJECT_SPEC.md#roadmap) in
+`docs/PROJECT_SPEC.md`; do not duplicate its dated sequence here. Game Day
+details remain in `docs/GAMEDAY_SPEC.md`; older phase tables are delivery
+history, not current priority policy.
 
 ---
 

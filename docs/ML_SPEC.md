@@ -7,7 +7,9 @@
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
 > **Status:** Phase 1 complete, Phase 2 complete, Phase 3 started (confidence fusion shipped)
-> **Last updated:** April 29, 2026
+> **Last updated:** August 1, 2026 (policy reconciliation; implementation history retained)
+>
+> **Canonical policy note:** This document owns ML subsystem design and implementation history. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-1-2026) owns cross-system product policy. Fixed 95% auto-apply, 70% suggestion, and related thresholds below describe the committed confidence-fusion mechanism; they are not a universal target autonomy policy and do not prove that production is healthy. The decided target graduates each action according to consequence, evidence quality, accepted/dismissed suggestions, reversals, overrides, and operational health. Product-facing “Personality” direction is now temporary **Mood Context**; the older subsystem/code names remain for traceability.
 
 ---
 
@@ -56,9 +58,9 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam, 15s absent detection), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15s absent detection (vs 10-min idle timer); engine reports `idle`, not `away` (`away` mode retired 2026-04-27). Post 2026-05-27 Latitude→living-room relocation: camera emits only `ZONE_COUCH`; original desk/bed zone split retired; `zone=desk` now sourced exclusively from the desktop pc_agent. Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
-| **Phase 3: Autonomous Operation** | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; auto-apply at 95%+, stale override at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: threshold tuning on live FP data | Fewer than 2 manual overrides per day |
-| **Phase 4 (sibling track): AI Personality Layer** | Phase A live 2026-05-18; B/C/D queued | Mood-vector inference (V/A/F) from face blendshapes (Phase A shadow log), passive mood-ring accent light (Phase B, gated on Spearman ρ > 0.4), Claude (Haiku) vibe-intent router (Phase C, backend-side), cost dashboard + hardening (Phase D) | Spearman ρ > 0.4 across V/A/F on 30+ paired calibration rows → Phase B promote. Full spec: `docs/PERSONALITY_LAYER.md`. Not a classifier lane — interpretable linear projection from 52 ARKit blendshapes; calibration loop fits per-axis bias from self-report. Sibling to but distinct from the Phase 1-3 ML lanes (no fusion-math contribution in v1 — cosmetic + suggestion-only). |
+| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle` (vs 10-min PC idle timer); it does not report `away`. Explicit away/home state belongs to `AwayManager`. Post 2026-05-27 Latitude→living-room relocation: camera emits only `ZONE_COUCH`; original desk/bed zone split retired; `zone=desk` now sourced exclusively from the desktop pc_agent. Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
+| **Phase 3: Confidence fusion** (historical name: Autonomous Operation) | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; current code can auto-apply at 95%+ and override stale context at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: production/autonomy evidence audit and action-specific graduation | Evidence quality and intervention outcomes by action; aggregate override rate remains supporting evidence |
+| **Phase 4 (sibling track): AI Personality Layer** | Phase A and VibeRouter C v1 committed; Phase B gated; passive suggestions/Alexa and D remain | Mood-vector inference (V/A/F) from face blendshapes (Phase A shadow log), proposed mood-ring accent light (Phase B, gated on Spearman ρ > 0.4), constrained VibeRouter (Phase C v1), and remaining suggestion/Alexa/cost hardening | The detector’s Spearman gate applies only to its proposed experiment. Full subsystem history: `docs/PERSONALITY_LAYER.md`; current product policy: temporary Mood Context in `docs/PROJECT_SPEC.md`. No fusion-math contribution in v1. |
 
 ### Design Principles
 
@@ -69,9 +71,11 @@ rare.
 2. **Local-only processing.** No cloud ML services, no telemetry, no external
    API calls for inference. All models run on the Latitude 7420's CPU.
 
-3. **Conservative autonomy.** ML auto-applies mode changes only at 95%+
-   confidence. At 70-95%, it suggests via toast. Below 70%, it stays silent.
-   The user always has final say.
+3. **Current confidence gate; target consequence-based autonomy.** Committed
+   confidence-fusion code can auto-apply mode changes at 95%+, suggest at
+   70–95%, and stay silent below 70%. Those thresholds are implementation
+   facts, not authorization for every action. Target promotion is action-specific
+   and considers reversibility, evidence quality, feedback, and operational health.
 
 4. **Shadow before promote.** Every ML feature runs in shadow mode for 1-2 weeks
    (predicting without acting, logging accuracy) before being promoted to active.
@@ -93,8 +97,9 @@ rare.
 ### Service Model: Embedded, Not Microservice
 
 ML services follow the same pattern as every other Home Hub service: Python
-classes initialized in `main.py` lifespan, attached to `app.state`, with async
-methods called from the automation loop or on schedule.
+classes constructed through `backend/bootstrap.py`'s composition/lifecycle path,
+attached to `app.state`, with async methods called from the automation loop or
+on schedule.
 
 **Why not a separate process?** The Latitude 7420 has 2-4 cores and 8-16GB RAM
 shared with Pi-hole (Docker), Firefox kiosk, and the ambient monitor. A separate
@@ -213,12 +218,19 @@ EventQueryService ──> FeatureBuilder ──> train models ──> data/model
 
 **Phase:** 1 (Priority 1 — highest ROI, lowest risk)
 
-**Problem:** The ambient monitor (`ambient_monitor.py`) uses binary RMS volume
+**Current canonical position:** Generic RMS and generic speech activity are not
+reliable Social detectors, and audio-only Social inference is insufficient.
+The decided target is hybrid multi-person evidence that distinguishes guests
+from phone calls, microphone use, and gaming chat; speaker diarization is not
+currently implemented. Social remains manual-override only unless and until
+that target earns promotion.
+
+**Historical problem (superseded by the 2026-05-09 abandonment):** The ambient monitor (`ambient_monitor.py`) used binary RMS volume
 thresholds to detect social mode. It cannot distinguish conversation from TV
 audio, music, or game sounds. The 2-minute sustained noise requirement causes
 delayed detection, and the 800 RMS threshold is environment-dependent.
 
-**Solution:** Replace RMS-only analysis with a pretrained audio scene classifier
+**Historical proposed solution (superseded):** Replace RMS-only analysis with a pretrained audio scene classifier
 that identifies what kind of sound is occurring.
 
 | Attribute | Value |
@@ -235,7 +247,7 @@ that identifies what kind of sound is occurring.
 | **RAM** | 50-200MB (model dependent) |
 | **Privacy** | Audio processed as mel-spectrograms in memory. Raw PCM overwritten each read cycle. Only classification labels and confidence scores persist in the database. No audio is ever recorded, stored, or transmitted. |
 
-**Mode mapping from audio classes:**
+**Historical proposed mode mapping from audio classes:**
 
 | Audio Class | Mode Signal | Confidence Required |
 |-------------|------------|---------------------|
@@ -404,10 +416,12 @@ for adjustment in sorted_by_timestamp:
 
 **Phase:** 2 (Priority 4)
 
-**Problem:** "Away" detection currently requires 10 minutes of keyboard/mouse
-inactivity (Win32 `GetLastInputInfo` in `activity_detector.py`). This is slow
-and only works on the Windows dev machine. The Latitude has a built-in camera
-that could detect room occupancy instantly.
+**Historical problem (retired):** An early proposal treated camera absence as a
+faster form of "Away" detection than the Windows input-idle path. Current
+camera behavior is room-presence sensing only: 15 consecutive absent frames at
+an approximately two-second cadence yield approximately 30 seconds of sustained
+absence before the camera reports `idle`. Explicit away/home state is owned by
+`AwayManager` and the current presence/away-management path, not camera absence.
 
 **Solution:** Use MediaPipe BlazePose for real-time presence and posture
 detection from the Latitude's 720p webcam.
@@ -418,9 +432,9 @@ detection from the Latitude's 720p webcam.
 | **Preprocessing** | Capture one frame every 2 seconds (not continuous video). `cv2.resize()` downsample is a safety no-op when the webcam honors the capture-resolution hint. No image enhancement. |
 | **Model** | MediaPipe BlazePose (lite variant, shipped 2026-04-19 as a fallback signal). Runs alongside full-range BlazeFace: face first (~15ms at 640×480), pose as fallback on face-miss (~60ms). Presence declared if either detector hits. |
 | **Output classes** | Presence: `present` / `absent`. Zone (shipped 2026-04-19): post 2026-05-27 Latitude→living-room relocation, Latitude camera emits only `couch` / `None` — the original `desk` / `bed` bedroom split is retired. `zone=desk` is now sourced exclusively from the desktop pc_agent via PresenceFusion. Posture (shipped 2026-04-19, expose-only): `upright` / `reclined` / `None`, computed from `mean(hip_y) - mean(shoulder_y)` vs `POSTURE_UPRIGHT_MIN_DELTA=0.12`, same 15s hysteresis; couch posture is currently suppressed (no consumer). `None` when hips aren't visible (face-path hits, pose misses) — hysteresis preserves the committed value through those blanks. |
-| **Inference frequency** | Every 2 seconds (one frame capture + inference). Triggers "absent" after 7 consecutive absent frames (~14 seconds). |
+| **Inference frequency** | Approximately every 2 seconds (one frame capture + inference). 15 consecutive absent frames yield approximately 30 seconds of sustained absence before reporting `idle`. |
 | **Integration point** | New `CameraService` reports to `AutomationEngine.report_activity(source="camera")`. |
-| **CPU cost** | 30-50ms per inference every 5 seconds = <2% CPU sustained |
+| **CPU cost** | Face detection is ~15ms and pose fallback ~60ms per inference at an approximately two-second cadence; actual runtime health requires live verification. |
 | **RAM** | 50-100MB (MediaPipe + OpenCV) |
 | **Cold start** | MediaPipe is pretrained. Works immediately. Posture thresholds may need one-time calibration (30-second "sit normally, then recline" flow in Settings). |
 
@@ -452,15 +466,17 @@ else:
 | watching (process) | reclined | watching (confirmed) |
 | idle (no process) | upright at desk *(desktop pc_agent)* | likely working (browser) |
 | idle (no process) | reclined at couch *(Latitude)* | likely watching/relaxing |
-| any | absent (≥30s) | idle (engine signals `signal_presence("camera")` on return; `away` mode retired 2026-04-27) |
+| any | 15 consecutive absent frames at an approximately two-second cadence | approximately 30 seconds of sustained absence before reporting `idle` (engine signals `signal_presence("camera")` on return; away/home remains `AwayManager`-owned) |
 
 *Note: post 2026-05-27 Latitude relocation, `zone=desk` is sourced from the desktop pc_agent (not the Latitude camera). The Latitude sees only the couch.*
 
 **Ambient light measurement — adaptive brightness (shipped April 18 2026):**
 
 The same webcam frame used for face detection produces a grayscale-mean
-reading that drives a brightness multiplier for `working`, `relax`,
-`gaming`, and `watching` modes. Implementation details:
+reading for the standard camera-lux brightness multiplier, which currently
+applies to `relax` only. Gaming and watching have a separate bedroom-lux,
+screen-sync envelope; working has no standard camera-lux multiplier.
+Implementation details:
 
 ```python
 # Per-frame in camera_service.py
@@ -488,9 +504,9 @@ burst-mode binary search inflated readings by ~5× because AGC wound up
 high during rapid frame reads but settled down between sparse live polls.
 
 **Guardrails:**
-- `working`, `relax`, `gaming`, and `watching` modulate (`LUX_MODES`).
-  `cooking` and `social` keep their explicit bright/medium palettes
-  regardless of ambient light.
+- `LUX_MODES = {relax}` for the standard camera-lux multiplier. `gaming` and
+  `watching` use the separate bedroom-lux screen-sync envelope where supported;
+  `working`, `cooking`, and `social` have no standard camera-lux multiplier.
 - Mode-scene overrides (`activate_scene` path) bypass the multiplier
   entirely — explicit intent wins over adaptation.
 - Manual light overrides (4h timeout) are filtered downstream of the
@@ -765,7 +781,7 @@ await automation.report_activity(mode="idle", source="camera")  # away mode reti
 ```
 
 The existing `MODE_PRIORITY` dict arbitrates between sources. Camera "absent"
-overrides idle (faster away detection). Activity reports also feed into
+produces a faster `idle` report; it does not report `away`. Activity reports also feed into
 `ConfidenceFusion` as signal inputs (Pattern 5).
 
 **Note (2026-05-16):** `audio_ml` was removed from this pattern in `cd8e078`.
@@ -809,7 +825,7 @@ for light_id, prefs in learned.items():
 ML services register for mode changes to capture training signals:
 
 ```python
-# In main.py lifespan:
+# In backend/bootstrap.py's composition/lifecycle path:
 automation.register_on_mode_change(ml_logger.on_mode_change)
 automation.register_on_mode_change(music_bandit.on_mode_change)
 ```
@@ -862,7 +878,11 @@ New event types for ML status and predictions:
 | `ml_decision` | On any mode switch | `{mode, decision_chain, factors}` (see Explainability) |
 | `pipeline_state` | On state change (throttled to 1s) | Now includes a `fusion` field with `{fused_mode, fused_confidence, agreement, auto_apply, can_override, signals: {process, camera, audio_ml, rule_engine}}` for each active signal |
 
-### Confidence-Gated Actions
+### Confidence-Gated Actions (Current Mechanism)
+
+This section documents committed confidence-fusion behavior. It is not the
+canonical target trust ladder for lighting, music, notifications, projector
+control, guest actions, or other consequences.
 
 Applies to both individual ML predictions and the fused ensemble score:
 
@@ -1008,7 +1028,7 @@ degrade gracefully without NWS API access).
 | Audio classifier | <30ms, ~5% sustained | 50-200MB (model) | Every 2-3s | Runs on Latitude (ambient monitor) |
 | Behavioral predictor | <5ms, negligible | <10MB | Every 60s | Piggybacks automation loop |
 | Lighting learner | <1ms | <1MB | On mode change | Simple dict lookup |
-| Camera service | <80ms, ~2% sustained | 50-100MB (MediaPipe) | Every 5s | Only when enabled |
+| Camera service | <80ms, ~2% sustained | 50-100MB (MediaPipe) | Approximately every 2 seconds | Only when enabled |
 | Screen sync (K-means) | <10ms | <1MB | Every 2.5s | Runs on Windows dev machine |
 | Music bandit | <1ms | <1KB | On mode change | Beta sampling |
 | ML logger | <5ms | <1MB | On every decision | Async DB write |
@@ -1032,8 +1052,8 @@ degrade gracefully without NWS API access).
 | Metric | Current | With ML | Improvement |
 |--------|---------|---------|-------------|
 | Mode change reaction | ~5s (process poll) | ~5s (no change) | — |
-| Absent detection | 10 minutes (idle timer) | 15 seconds (camera → idle) | **40x faster** |
-| Social detection | 2 minutes (sustained RMS) | Manual override only (2026-05-09: `speech_multiple` gate abandoned — structurally unreachable, see §3.1; replacement direction deferred to camera multi-face path) | — |
+| Absent detection | 10 minutes (PC idle timer) | 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before camera reports `idle` | **~20x faster** |
+| Social auto-detection latency | No current SLO | Social is manual-only; the audio-only `speech_multiple` gate was abandoned. Hybrid multi-person evidence is a future research target. | — |
 | Lighting preference application | 0 (no learning) | <1ms on mode change | New capability |
 | Music selection | Instant (heuristic) | Instant (bandit) | Better choices over time |
 
@@ -1228,11 +1248,13 @@ promotion. During shadow mode:
 3. Actual outcomes (what mode the user actually used) are captured
 4. Shadow accuracy is computed nightly and stored in `ml_metrics`
 
-### Primary Metric
+### Historical Primary Metric
 
 **Manual overrides per day** — tracked via `activity_events` where
-`source='manual'`. This is the North Star metric. If ML is working, users
-override less.
+`source='manual'` — is a useful legacy aggregate. It is not sufficient as a
+North Star by itself: actor attribution and event completeness must be audited,
+and the target evaluates outcomes by action using suggestions, accepts,
+dismissals, reversals, overrides, confidence calibration, and capability health.
 
 Establish baseline in Week 0 (before any ML features are active). Track
 weekly average. Target: 30% reduction by end of Phase 1.
@@ -1348,7 +1370,7 @@ ssh anthony@192.168.86.210 "cd ~/home-hub && python -m backend.services.ml.model
 ### Startup Sequence
 
 ```python
-# In main.py lifespan, after existing services:
+# In backend/bootstrap.py's composition/lifecycle path, after existing services:
 
 # ML services (Phase 1)
 from backend.services.ml.model_manager import ModelManager
@@ -1418,13 +1440,14 @@ except ImportError:
 - ✓ `ModelManager` — model persistence to `data/models/`, metadata versioning, nightly retraining at 4 AM via scheduler.
 - ✓ Full `/api/learning/` REST API — status, decisions, accuracy, lighting prefs, predictor promote/demote, retrain, reset.
 - ✓ `ml_decisions` + `ml_metrics` database tables with indexes.
-- ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle/away, ML logger registered as mode-change callback.
+- ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle, ML logger registered as mode-change callback. Explicit away/home state is managed separately by `AwayManager`.
 
 **Current state (as of 2026-05-04):**
 - **Behavioral predictor — shadow mode, stripped from fusion.** `lightgbm` installed on the Latitude, model trains nightly at 04:00. The April 27 audit removed the predictor lane from `ConfidenceFusion` after the first model collapsed to single-class output (898/898 → `away`); the predictor still writes shadow rows to `ml_decisions` so future retrains can be evaluated. Step 4 (May 4) extended `FEATURE_COLUMNS` from 10 → 14 columns to include `zone_enc` / `posture_enc` / `audio_class_enc` / `lux`. Step 5 (2026-05-26, commit `7bbd885`) added `previous_zone_enc` as the 15th feature. Promotion is gated by `compute_prediction_diversity`; auto-demote is the symmetric counterpart shipped May 4 — see Phase 3 changelog entry and `project_step5_predictor_validation.md` for current promotion gate status.
 - **Lighting learner**: active on production. Overlay applications are now logged to `ml_decisions` with `decision_source="lighting_learner"`.
 - **Audio classifier (YAMNet)**: shadow mode on Windows desktop (Blue Yeti mic). 17,922 predictions logged to date. Of the 81 rows with `actual_mode` backfilled, only **2 are correct (2.5%)** — the classifier is predicting "idle" for "silence" almost every cycle and missing mode transitions. The 521→9 → user-mode mapping needs rework before promotion is meaningful. Kept in shadow.
-- **Camera presence (MediaPipe)**: active on Latitude webcam with 15s away detection.
+- **Camera presence (MediaPipe)**: active on Latitude webcam with a 15-frame
+  ~30-second absence threshold that reports `idle`, not `away`.
 
 **Phase 1 exit criteria:** ~~Audio classifier active,~~ behavioral predictor
 outperforming rules (blocked on lightgbm install), lighting learner active for 2+ lights. Manual overrides
@@ -1436,8 +1459,8 @@ down 30% from baseline.
 - ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
 - ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, weather_class, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others; weather-specific arms warm-start from the matching `any` arm's priors. Rewards from play/skip behavior in `sonos_playback_events` (with `weather_class` column captured at log time). Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`, `GET /api/music/bandit-status` (Phase B, top arms grouped by mode × weather). Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate. Phase B (2026-05-12): weather_class added; legacy 3-tuple arms auto-migrate.
 - ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `silence` ≥70% for 60s → exit social/quiet, `game_audio` ≥75% → watching. The `speech_multiple` ≥80% for 30s → social gate was abandoned 2026-05-09 (structurally unreachable in production; the score is still emitted into `all_scores` for analytics — see §3.1). Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
-- ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. Captures one frame every 2s, downsampled to 320×240, runs face detection (~5ms CPU). 7 consecutive absent frames (~14s) triggers `away` mode — 40× faster than 10-minute idle timer. Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera source priority: `away` does not override process-detected gaming/working/watching; `idle` (present) does not downgrade higher-priority modes. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
-- ✓ **Adaptive Lux Brightness (shipped April 18, 2026)** — Same camera frames feed a per-poll grayscale mean (`ambient_lux`), EMA-smoothed (α=0.3, 2s poll → ~20s to 95% response), that drives a piecewise-linear brightness multiplier for `working` and `relax` modes only. `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records steady-state `baseline_lux` (typical value 80–150). The multiplier curve is anchored at the calibrated baseline: `(baseline−50 → 1.15×, baseline → 1.00×, baseline+90 → 0.85×)`, clamped outside. Integrated into `AutomationEngine._apply_lux_multiplier` between `_apply_brightness_multiplier` and `_weather_adjust`, skipping mode-scene-override paths and functional modes. Kitchen-pair and post-sunset CT rules preserved (multiplier is scalar, only affects `bri`). 39 unit tests under `tests/test_lux_multiplier.py`.
+- ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. It captures 640×480 frames approximately every 2 seconds. Fifteen consecutive absent frames yield approximately 30 seconds of sustained absence before reporting `idle`; the camera path does not report `away`. Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera `idle` reports do not downgrade higher-priority process-detected gaming/working/watching. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
+- ✓ **Adaptive Lux Brightness (shipped April 18, 2026)** — Same camera frames feed a per-poll grayscale mean (`ambient_lux`), EMA-smoothed (α=0.3, 2s poll → ~20s to 95% response), that drives a piecewise-linear standard camera-lux multiplier for `relax` only. `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records steady-state `baseline_lux` (typical value 80–150). The multiplier curve is anchored at the calibrated baseline: `(baseline−50 → 1.15×, baseline → 1.00×, baseline+90 → 0.85×)`, clamped outside. The separate bedroom-lux screen-sync envelope handles gaming/watching where supported; working has no standard camera-lux multiplier. Kitchen-pair and post-sunset CT rules remain distinct.
 
 **Remaining (Phase 2b, deferred):**
 ```
@@ -1472,14 +1495,14 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
     fires that came via the social path are visible in ml_decisions
 ```
 
-**Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ Away detection under 30 seconds (achieved 15s). ✓ Posture detection shipped and consumed by the zone+posture rule. Audio promotion + posture-as-fusion-lane deferred to Phase 2b.
+**Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle`. ✓ Posture detection shipped and consumed by the zone+posture rule. Audio promotion + posture-as-fusion-lane deferred to Phase 2b.
 
-### Phase 3: Autonomous Operation (In Progress — April 2026+)
+### Phase 3: Confidence Fusion (Historical Name: Autonomous Operation; In Progress — April 2026+)
 
 **Shipped (April 15, 2026):**
 - ✓ `ConfidenceFusion` service — weighted ensemble. Lane-count evolution: **v1** 5-signal (April 15). **v2** 6-signal after phone-WiFi presence joined as the 6th voter (April 21). **v3** 4-signal after presence + behavioral lanes were both removed (April 27) — current shape is process / camera / audio_ml / rule_engine.
 - ✓ Fusion integrated into automation loop — computes every 60s cycle
-- ✓ Auto-apply at 95%+ confidence when idle/away
+- ✓ Auto-apply at 95%+ confidence when idle; explicit away/home state is managed separately by `AwayManager`
 - ✓ Stale process override at 92%+ confidence with 80%+ signal agreement
 - ✓ Live pipeline dashboard — replaced with the force-directed signal constellation in v2
 - ✓ Decision logging with `decision_source="fusion"`
@@ -1487,10 +1510,10 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 **Shipped (April 21, 2026) — v2:**
 - ⊘ **Presence joined as 6th voter** (weight 0.18). Prior voter weights scaled by 0.82. Votes `away` at conf 0.95 when phone is off home WiFi; abstaining-ish `idle` at 0.30 when home. *Retired 2026-04-27 (v3)* — phone-WiFi was too noisy on its own; the camera tuning below is the part that stayed.
 - ✓ **Per-lane sub-factors** — every fusion signal now carries a `factors: [{key, label, value, display, impact, stale}, ...]` list so the analytics constellation can expose the concrete data each lane is considering (foreground app, YAMNet scores, zone/posture/lux, top behavioral features, matching rule slot, presence state/last-seen).
-- ✓ **Camera low-light tuning** — `MIN_FACE_CONFIDENCE` 0.2→0.15 and `ABSENT_THRESHOLD` 7→15 frames (~14s→~30s). Dampens the reading-in-bed scenario where detection flapped and fusion flipped to away.
+- ✓ **Camera low-light tuning (historical April 2026):** `MIN_FACE_CONFIDENCE` 0.2→0.15 and `ABSENT_THRESHOLD` 7→15 frames. Current behavior is 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle`; camera absence does not produce `away`.
 
 **Shipped (April 27, 2026) — v3:**
-- ✓ **`presence_service` retired (`b8fdbfe`)** — fusion drops the phone-WiFi lane; `/api/automation/presence/*` routes removed; weights renormalized so the four remaining lanes sum to 1.0 (process 0.438, camera 0.250, audio_ml 0.187, rule_engine 0.125). The home/away concept is now fully Hue-native; iOS Shortcut + ARP probing was too unreliable on its own.
+- ✓ **`presence_service` retired (`b8fdbfe`)** — fusion drops the phone-WiFi lane; `/api/automation/presence/*` routes removed; weights renormalized so the four remaining lanes sum to 1.0 (process 0.438, camera 0.250, audio_ml 0.187, rule_engine 0.125). At that April 27 snapshot, home/away was fully Hue-native because iOS Shortcut + ARP probing was too unreliable on its own. A later `AwayManager` restored explicit away/home state from authenticated iOS geofence webhooks outside the fusion voter set.
 - ✓ **Behavioral predictor lane stripped from fusion (`c0b50ad`)** — single-class collapse audit found 898/898 → one class at 0.64% real accuracy, so the LightGBM lane no longer feeds the ensemble. The predictor still trains nightly and is exposed standalone at `/api/learning/predictor`, gated behind a diversity check before promotion (`abe6343`).
 - ✓ **Train/serve feature parity (`82c72ed`)** — predictor inference now builds features through the same code path as training, closing a divergence that was masking real prediction quality and forcing the diversity gate to do extra work.
 
@@ -1523,8 +1546,9 @@ Current:    Shadow logging + backfill now live. By 2026-04-22 cron,
             expect hundreds of fusion rows with actual_mode filled.
             /override-rate and /compare answer immediately.
 
-Next:       Analytics card surfacing override rate + strategy A/B.
-            Lower auto-apply threshold if false positives < 1/day.
+Next:       Audit production evidence quality, actor attribution, and live lane
+            health before changing thresholds. Graduate actions individually;
+            do not lower a universal threshold from aggregate false positives.
 
 Target:     Fewer than 2 manual overrides per day, sustained
             over 30 days.
@@ -1544,20 +1568,22 @@ Camera Posture ────── depends on ──────── Camera Pre
 Smart Screen Sync ─────────────────────── ✓ SHIPPED (K-means, April 2026)
 Music Bandit ──────────────────────────── ✓ SHIPPED (Thompson sampling, April 2026)
 Decision Explainability ── depends on ─── Any ML prediction source
-Autonomous Operation ──── depends on ──── Fusion confidence + override-rate budget
+Action-specific autonomy ─ depends on ──── Evidence quality + consequence + feedback + health
 ```
 
 ---
 
 ## 16. Metrics & Monitoring
 
-### Primary Metric
+### Legacy Aggregate Metric
 
 **Manual overrides per day** — tracked via `activity_events` where
-`source='manual'`.
+`source='manual'`. Treat it as supporting evidence pending the production and
+attribution audit, not as the sole product metric or a universal promotion gate.
 
-Establish baseline in Week 0. Track as a 7-day rolling average. This is the
-single metric that determines whether ML is helping.
+The historical rollout called for a Week 0 baseline and a 7-day rolling
+average. Retain that series, but interpret it alongside action-specific and
+capability-health evidence.
 
 ### Secondary Metrics
 
@@ -1567,8 +1593,8 @@ single metric that determines whether ML is helping.
 | Time-to-correct-mode | `activity_events` timestamps | Reaction speed |
 | Manual light adjustments/day | `light_adjustments` where trigger='ws'/'rest' | Lighting learner effectiveness |
 | Music skip rate after auto-play | `sonos_playback_events` | Music bandit effectiveness |
-| Away detection latency | Camera → mode change timestamp delta | Camera value |
-| Social detection latency | Audio → mode change timestamp delta | Audio classifier value |
+| Away state-change latency | Geofence webhook → `AwayManager` state transition | Explicit away-management value; camera absence is not an away signal |
+| Social auto-detection latency | No current SLO | Social is manual-only; hybrid multi-person detection remains a target |
 
 ### New Database Tables
 
@@ -1627,7 +1653,7 @@ which ML feature addresses it.
 | Threshold | Current Value | Line | ML Feature |
 |-----------|--------------|------|------------|
 | Poll interval | 5 seconds | 67 | — (keep as-is, good balance) |
-| Idle → away | 600 seconds (10 min) | 70 | Camera presence (15s detection) |
+| PC input idle threshold | 600 seconds (10 min) | 70 | Camera: 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle`; away/home remains `AwayManager`-owned |
 | Late night working cutoff | 21:00 (9 PM) | 73 | Behavioral predictor (learns actual patterns) |
 | Sleep detection hour | 22:30 (10:30 PM) | 76-77 | Behavioral predictor + camera (posture=reclined + eyes closed) — posture=reclined path dormant since 2026-05-27 (no bed-zone source) |
 | Sleep idle threshold | 900 seconds (15 min) | 78 | Camera presence (asleep posture) |

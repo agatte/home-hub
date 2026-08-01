@@ -2,10 +2,12 @@
 
 > **Status:** Phase A shipped 2026-05-18 (commits e57fdad → a2d0e2a → 9d6e534). Phase B gated on validation — **gate checked 2026-06-09: WAIT, insufficient data** (6/30 paired samples; see "Validation gate" below). Phase C v1 shipped 2026-07-06/07: `/api/personality/vibe` + iOS Shortcut natural-language vibe routing, including staged arrival vibes.
 > **Plan origin:** 2026-05-17 brainstorm — user picked "AI Personality" as one cohesive big build over a menu of smaller ideas. Twitch/streaming explicitly dropped from scope.
+>
+> **Canonical policy note — August 1, 2026:** This document remains the subsystem design and historical record for the code named `personality`. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-1-2026) owns cross-system policy. In that contract, **Mood Context** is a temporary, user-confirmed context with six states; it is not a claim about enduring personality or a silently inferred emotional truth. The committed detector, calibration UI, and VibeRouter are `SHIPPED/CURRENT` capabilities whose production health still requires live verification. The current calibration form pairs a self-report with the detector reading available at submission time; the decided target instead freezes only the 20–30 minutes of evidence preceding the prompt. The Spearman gate below remains useful for evaluating this detector and the proposed mood-ring experiment, but it does not authorize other actions: autonomy graduates per action and consequence.
 
 ---
 
-## Goal
+## Historical Subsystem Goal
 
 > One accent light that quietly reflects the apartment's emotional state, plus a voice command that lets you describe how you want the room to feel and have Claude pick the mode + lights + music.
 
@@ -65,7 +67,7 @@ Why FaceLandmarker wins:
 - Anthropic prompt caching on the system prompt (mode list + light IDs + scene rules + current state, ~800 tokens cached).
 - Per-source-IP rate limit at the endpoint: 30/hour.
 
-**False-positive handling: calibration loop, not confidence-gating.** Phase A ships in shadow-log mode for 2 weeks. Once-daily calibration prompts ("rate your mood right now") accumulate self-report vs detector pairs. Phase B only ships if per-axis Spearman ρ > 0.4 over 30+ samples. Per-user bias vector (3 floats) is added at output time after calibration. The suggestion service has a 3-dismissals-in-24h kill switch as a runtime safety valve.
+**False-positive handling for this detector experiment:** Phase A uses a calibration loop rather than a generic confidence threshold. Once-daily calibration prompts ("rate your mood right now") accumulate self-report vs detector pairs. Phase B only ships if per-axis Spearman ρ > 0.4 over 30+ samples. Per-user bias vector (3 floats) is added at output time after calibration. The suggestion service has a 3-dismissals-in-24h kill switch as a runtime safety valve. This subsystem gate does not replace the canonical action-specific trust ladder.
 
 ---
 
@@ -108,7 +110,7 @@ Request shape:
 }
 ```
 
-Auth over the Cloudflare tunnel requires `X-API-Key` + `X-Skill-Token`; the Shortcut also sends `X-Source: ios_shortcut:vibe` for attribution. `timing="arrival_if_away"` applies immediately when home and writes `app_settings.pending_arrival_vibe` when away. `AwayManager` consumes that setting on the next geofence/camera arrive, reapplies the current mode with force, applies the vibe, logs the request, and clears the pending setting.
+Auth over the Cloudflare tunnel requires `X-API-Key` + `X-Skill-Token`; the Shortcut also sends `X-Source: ios_shortcut:vibe` for attribution. `timing="arrival_if_away"` applies immediately when home and writes `app_settings.pending_arrival_vibe` when away. After a geofence-arrive event, `AwayManager._on_arrive()` reapplies the current mode with force, applies the staged vibe, logs the request, and clears the pending setting. Camera presence only reports presence through `AutomationEngine.signal_presence("camera")`.
 
 Routing is intentionally constrained. Deterministic phrase rules handle the common paths first:
 - party/friends/guests/pregame → `social` + `house_party`
@@ -180,7 +182,7 @@ Ambiguous requests can call Anthropic if `ANTHROPIC_API_KEY` is configured; resp
 
 ## Verification
 
-- **Phase A (in progress):** 2-week shadow log + once-daily calibration prompts. Phase B ships only if Spearman ρ > 0.4 on all three axes over 30+ samples.
+- **Phase A validation (historical plan; last checked 2026-06-09):** 2-week shadow log + once-daily calibration prompts. Phase B ships only if Spearman ρ > 0.4 on all three axes over 30+ samples. Current production data and gate health require fresh verification.
 - **Phase B:** Playwright UI audit at the four V/A corners (happy-energized, happy-calm, sad-energized, sad-calm) — confirm L1 hue matches palette. Manual L1 override → confirm mood ring stops touching it. Sleeping mode → confirm mood ring disabled.
 - **Phase C v1:** `tests/test_vibe_router.py`, `tests/test_away_manager.py`, and `tests/test_tunnel_proxy.py` cover deterministic phrase mapping, staged-arrival apply/clear, invalid outputs, tunnel allowlisting, and auth shape. Production smoke: iOS Shortcut `home hub vibe` POSTs through `https://home-hub.gatte-home.com/api/personality/vibe`; Siri result is made clean by ending the Shortcut with `Show Result`.
 - **After each phase:** Codex `$api-audit` to confirm no existing endpoint regressed. `$deploy-home` to ship.
@@ -208,7 +210,7 @@ Ambiguous requests can call Anthropic if `ANTHROPIC_API_KEY` is configured; resp
 - **Annoyance / false positives:** the suggestion service is the highest-risk surface. Three layered defenses: calibration bias term, 1/hr cap, NotifierService DND-aware. The 2-week Phase A shadow-log gate (Spearman ρ > 0.4) is the load-bearing decision point — do not ship Phase B if it fails.
 - **FaceLandmarker performance:** 478 landmarks is heavier than the current FaceDetector. Measure against the existing `FRAME_READ_TIMEOUT_S=5.0` watchdog; if it exceeds budget, downgrade landmarker to every 4th frame (8s cadence) while keeping the lightweight detector at 2s for presence.
 - **Mood ring vs lighting learner conflict:** L1 is in the EMA learner's history. Personality writes must filter out of the learner's window — handled by adding `"personality"` to the non-`USER_TRIGGERS` exclusion at `lighting_learner.py:37`. One line, but easy to miss.
-- **Bootstrap ordering:** EmotionService depends on CameraService connected before its callback fires. Existing `main.py` lifespan pattern handles it; register personality services after camera.
+- **Bootstrap ordering:** EmotionService depends on CameraService connected before its callback fires. `backend/bootstrap.py` owns this composition/lifecycle order; register personality services after camera there.
 
 ---
 

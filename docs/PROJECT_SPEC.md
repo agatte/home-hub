@@ -2,20 +2,387 @@
 
 > A personal command center that runs your apartment — lights, music, routines — learns how you live, and comes alive for the moments that matter.
 
+## Product Experience Contract — August 1, 2026
+
+This section is the authoritative cross-system product contract. Subsystem
+specifications provide implementation detail, but they do not override these
+policies. Status labels mean:
+
+- **SHIPPED/CURRENT** — capability exists in committed code. This is not proof
+  that it is deployed, configured, healthy, or producing useful evidence in
+  production; those claims require live verification.
+- **DECIDED TARGET** — product behavior Anthony chose, whether or not an
+  implementation exists.
+- **RESEARCH NEEDED** — direction is agreed, but feasibility or a safe path is
+  unresolved.
+- **DEFERRED** — retained intentionally, but not in the near-term roadmap.
+
+### Product model
+
+**DECIDED TARGET.** Home Hub coordinates three layers:
+
+1. **Context** — home/away, authoritative room, activity/media, time, weather,
+   season, temporary Mood Context, guests, and scheduled events.
+2. **Intent** — arriving, cooking, watching, quiet relaxing, listening,
+   working, Winding Down, Sleeping, waking, socializing, or hosting an event.
+3. **Response** — lights/scenes, music/ambience, chime/TTS/Alexa,
+   notifications, and controlled devices.
+
+The apartment should feel alive because Home Hub notices, interprets,
+responds, and occasionally invites Anthony into a decision. “Alive” does not
+mean random output or constant light movement.
+
+### Autonomy, trust, and interaction
+
+**SHIPPED/CURRENT.** Committed code contains confidence fusion, fixed
+auto-apply thresholds, rule and brightness suggestions, acceptance/dismissal
+records, notifier surfaces, manual-override tracking, and several learned or
+adaptive lanes. Their current production health and whether feedback changes
+future behavior require the production/autonomy evidence audit. A committed
+confidence threshold is a mechanism, not proof that an action has earned
+autonomy.
+
+**DECIDED TARGET.** Autonomy is consequence-based, not governed by one
+universal confidence threshold:
+
+- Low-consequence, reversible lighting may auto-apply on strong direct
+  evidence.
+- Starting or changing music is more intrusive and needs stronger context or
+  a demonstrated learned preference.
+- Spoken Alexa interruptions are rate-limited and normally use the opt-in
+  suggestion interaction below.
+- Device shutdown, especially the projector, needs explicit intent, a visible
+  timer, or sustained multi-signal evidence.
+
+Each action in each context follows its own trust ladder: suggest a specific
+action; record acceptance, rejection, correction, and later manual behavior;
+graduate only after repeated success; measure quick reversals after automatic
+application; and demote to suggestion-only when errors rise. Feedback must
+alter future policy, not merely resolve a notification row.
+
+**DECIDED TARGET.** Use three recognizable sounds:
+
+1. **Arrival chime** — warm acknowledgment that arrival was noticed.
+2. **Suggestion chime** — subtle signal that an optional idea is available.
+3. **Warning chime** — rare, reserved for a real problem needing attention.
+
+For an uncertain but useful suggestion, play the suggestion chime without
+unexpected speech. Anthony may ask, “Alexa, ask Home Hub what is it?” Home Hub
+then gives one concise contextual suggestion and accepts an answer to accept,
+reject, modify, defer, or show it on the dashboard. No answer means no action;
+ntfy and the dashboard remain secondary records. Do not repeat the same
+unresolved suggestion in the same context. Working does not globally suppress
+relevant chimes; Sleeping suppresses normal prompts, and Winding Down permits
+only relevant ones. Low-consequence, high-confidence actions may remain
+silent.
+
+### Sensor and room authority
+
+**SHIPPED/CURRENT.** `PresenceFusion` combines Latitude, desktop, and Latitude
+streaming observations. The Latitude supplies living-room/couch evidence; the
+desktop supplies desk evidence; iOS geofences own explicit apartment
+home/away state. Some consumers and diagnostics still need audit for consistent
+use of the fused result. See [PRESENCE_LIGHTING_SCENARIOS.md](PRESENCE_LIGHTING_SCENARIOS.md).
+
+**DECIDED TARGET.** Physical room presence outranks software activity. A
+confident Latitude couch observation owns living-room context; a confident
+desktop-camera desk observation owns desk/bedroom context. Running processes
+are supporting evidence, never proof of physical presence. If neither room
+source sees Anthony, do not infer a room from a stale process. Record and
+surface conflicts, the chosen authority, and the reason. Future room sensors
+provide occupancy evidence; they must not be used to invent PC-specific
+activity.
+
+### Arrival
+
+**SHIPPED/CURRENT.** The committed arrival path releases away suppression,
+reapplies lighting, can speak a welcome line, applies a staged VibeRouter plan,
+and notifies. Issue [#107](https://github.com/agatte/home-hub/issues/107)
+contains the shipped and remaining history. Live geofence and device health
+still require verification.
+
+**DECIDED TARGET.** Evening arrival plays the subtle arrival chime, silently
+acknowledges detected presence, establishes an atmosphere influenced by time
+and weather, applies any explicitly staged Mood Context or vibe, and may offer
+music or ambience according to context and earned preference. Arrival is an
+experience, not only a static mode switch.
+
+### Mood Context
+
+**SHIPPED/CURRENT.** The opt-in “Personality” subsystem can shadow-log a
+face-derived valence/arousal/focus vector, collect self-reports, and route
+constrained text vibe requests. The current form pairs self-report with a live
+reading at submission time. It does not implement the target evidence window
+or an authorized passive emotional-response loop. See
+[PERSONALITY_LAYER.md](PERSONALITY_LAYER.md).
+
+**DECIDED TARGET.** Product terminology is **Mood Context**, a temporary,
+practical preference with six states:
+
+- Upbeat / energetic
+- Calm / cozy
+- Down / reflective
+- Stressed / overwhelmed
+- Focused
+- Neutral / no preference
+
+Anthony normally volunteers Mood Context through Alexa or the dashboard.
+Facial and behavioral evidence may support a gentle question—such as “Want
+something cozy tonight?”, “Feel like something more upbeat?”, or “Keep things
+quiet for now?”—but must not silently assert a strong emotional conclusion.
+Mood Context expires after a reasonable time or major context change; it is not
+a permanent automation mode.
+
+**DECIDED TARGET.** Calibration pairs an explicit self-report with a frozen
+20–30 minute evidence window ending before the prompt appears. The summary
+includes distribution/median, variability/trend, face-visibility coverage,
+source camera, authoritative room, activity, music, weather, and time, and it
+excludes behavior while Anthony reads or submits the form. Retained atmosphere,
+accepted scenes, stopped audio, and changed music are more important outcome
+signals than detector correlation alone.
+
+### Everyday living-room intelligence — first product vertical slice
+
+**DECIDED TARGET.** After the production/autonomy evidence audit, this is the
+first end-to-end product experience to implement. Blocker-level
+capability-health or degraded-context defects identified by that audit must be
+addressed before the affected living-room behavior; non-blocking P1 work may
+proceed alongside the slice.
+
+- **Quiet couch:** with couch presence and no music/video, choose a relaxed
+  living-room scene influenced by time, weather, season, and Mood Context.
+  Keep audio off unless Anthony accepts a suggestion or the specific policy
+  has earned autonomy.
+- **Listening couch:** with music but no video, lighting may become more
+  expressive and colorful while remaining intentionally composed. Use music
+  energy/genre/album palette plus Mood Context, time, weather, and season;
+  protect kitchen and path task lighting.
+- **Settled couch:** after 15–30 minutes on the couch without media, maintain a
+  chill atmosphere and optionally offer high-quality weather ambience when
+  compatible. Down/reflective plus rain or storms strongly favors rain/storm
+  ambience; upbeat favors music and a vivid but tasteful scene.
+
+### Scene Curator and evolving atmosphere
+
+**SHIPPED/CURRENT.** Committed code provides curated, custom, and Hue-native
+scenes, manual activation, mode/time scene overrides, relax-only scene drift,
+weather overlays, and brightness-learning suggestions. It does not contain the
+target Scene Curator, contextual scene-ranking contract, or scoped scene
+feedback model.
+
+**DECIDED TARGET.** The Scene Curator classifies scenes by room, intent,
+Mood Context compatibility, time, weather, season/holiday,
+energy/stimulation, and functional versus aesthetic role. Selection priority
+is: safety/task lighting; authoritative room/activity; Mood Context; weather,
+time, and season; then variation and recent-use avoidance.
+
+Long sessions keep one recognizable identity while evolving slowly: brighter
+and more neutral in late afternoon, warmer through golden hour, richer and
+somewhat dimmer in evening, softer and less stimulating late, and deliberate
+toward bedtime during Winding Down. Use slow crossfades, avoid abrupt
+clock-boundary swaps, and do not reset the entire atmosphere on every
+recalculation. Seasonal and Hue holiday scenes enter eligible pools during
+their seasons; functional minima still win, while a scheduled event overlay
+may make the matching holiday pool dominant.
+
+**DECIDED TARGET.** Scene feedback applies immediately to the session and
+teaches future selection with preserved scope:
+
+- “I don’t like this scene” is a strong broad down-rank; repeated explicit
+  dislike may exclude it from automatic selection.
+- “This isn’t right right now” is context-local.
+- “Too bright/colorful/warm/stimulating” corrects that attribute in context.
+- Manual replacement without explanation is weak implicit negative evidence.
+
+A brief follow-up may distinguish “never” from “not for relaxing.” One
+rejection never permanently blacklists a scene; repeated explicit feedback is
+stronger, and seasonal scenes can return in a later season unless globally
+disliked.
+
+### Weather ambience
+
+**SHIPPED/CURRENT.** Weather-reactive lighting and Sonos ambient playback exist
+in committed code, with streams and local-file fallbacks. Current policy is
+broader than the decided target, and production source quality/health is not
+established. Issue [#79](https://github.com/agatte/home-hub/issues/79) tracks
+Sonos-side stream-health observability.
+
+**DECIDED TARGET.** Automatic weather ambience is primarily a Relax/living-room
+behavior. Do not auto-play poor short loops during working, gaming, cooking, or
+unrelated contexts. Prefer curated long-form recordings or reliable streams;
+fall silent when no quality source is available. Stopping a source teaches a
+source/context preference rather than globally disabling weather awareness.
+
+**RESEARCH NEEDED.** Higher-quality weather-audio sources and any YouTube
+playback path; issue [#40](https://github.com/agatte/home-hub/issues/40) is the
+existing YouTube/Sonos research tracker.
+
+### Music Curator
+
+**SHIPPED/CURRENT.** Home Hub can import an Apple Music XML library, map and
+play supported Sonos favorites/playlists, generate Last.fm/iTunes-preview
+recommendations, and choose among playable mappings with a contextual bandit.
+It cannot arbitrarily browse Apple Music and reliably queue any catalog item.
+
+**DECIDED TARGET.** The Music Curator learns which playlists, stations,
+genres, artists, and ambience sources fit each context without requiring
+Anthony to pre-curate every candidate. Gentle discovery defaults to roughly
+one unfamiliar track per four or five familiar tracks, adjacent to established
+taste and current context. “Alexa, ask Home Hub to help me find new music”
+starts a more exploratory session. Feedback weight increases from quick skip,
+to repeated similar skips, to full listen, to save/replay/volume increase or
+“what is this?”; stopping Home Hub-started music soon after start is a
+contextual negative. A first slice may improve already-playable context-tagged
+pools.
+
+**RESEARCH NEEDED.** Arbitrary Apple Music catalog search and reliable Sonos
+queue playback.
+
+### Desk, kitchen, Winding Down, and mornings
+
+**DECIDED TARGET.** Late-night desk work remains a core success case; do not add
+break reminders. Calibrate the two desk fixtures perceptually, not by identical
+numeric output: the shaded left lamp is visually dimmer; the translucent right
+lamp is brighter and glare-prone. Balance perceived output earlier, shift the
+left lamp into the primary functional role through evening, and make the right
+lamp a dimmer, warmer accent with a glare ceiling late at night. Lux/weather
+boosts must not multiply the two fixtures identically. Calibration should
+measure low/medium/high response and apparent color rather than assume equal
+Hue brightness produces equal perceived output.
+
+**DECIDED TARGET.** Kitchen behavior is task-oriented. Trial bounded inference
+from living-room movement toward the kitchen, recent room/transit history,
+darkness, return evidence, and manual corrections. Brighten functional kitchen
+lights for a likely dark-room visit, preserve task minima regardless of the
+living-room scene, and fade gently on return. Measure missed visits, false
+activations, premature fades, and corrections; do not grow inference
+indefinitely.
+
+**RESEARCH NEEDED.** Kitchen inference reliability before purchasing hardware.
+If the bounded trial is inadequate, use a motion/occupancy sensor fallback.
+
+**DECIDED TARGET.** **Winding Down** and **Sleeping** are distinct. Winding Down
+is a manually initiated Alexa/dashboard evening-intent overlay that preserves
+the underlying activity while Anthony may still watch the projector, use the
+desktop, listen, or move around. It gradually warms/dims the bedroom, reduces
+stimulation, adjusts music, suppresses unrelated prompts, preserves warm path
+lighting, arms projector shutdown, and makes the later Sleeping transition
+smooth. Sleeping is the final shutdown state.
+
+The first projector behavior is a visible default timer (for example, 60
+minutes) when Winding Down starts, adjustable/cancelable through Alexa or the
+dashboard. Sleeping may shut down immediately only through the safest supported
+sequence. Later, sustained multi-signal sleep evidence may trigger a subtle
+warning and shutdown that cancels on movement, response, or activity.
+
+**RESEARCH NEEDED.** Projector safe shutdown and smart-outlet integration. Do
+not cut outlet power until the projector’s normal shutdown and cooling needs
+are known.
+
+**DECIDED TARGET.** Morning detection is staged: movement after a real Sleeping
+session brings only gentle path light; continued activity, phone/desktop use,
+or “Good morning” confirms waking; confirmed wake gradually brightens the
+apartment and enables kitchen task lighting; a brief overnight wake remains
+dim and returns to Sleeping. After confirmation, one suggestion chime may make
+a concise brief available with weather, schedule/calendar, current commute
+versus normal, and a useful leave-time adjustment—one useful sentence, not a
+long report.
+
+### Social, guests, and privacy
+
+**SHIPPED/CURRENT.** Social is manually startable; guest pages can select
+safelisted light scenes, choose mapped Sonos vibes, adjust brightness/effects,
+hand control back, and view Wi-Fi/Home Bar/plant information. Current guest
+lighting is direct last-write-wins and there is no generic event record, guest
+music request queue, lighting queue, Showcase Mode, or hybrid Social detector.
+
+**DECIDED TARGET.** Social stays manually startable and may auto-apply only on
+strong hybrid evidence: sustained two-or-more faces on the Latitude, or
+alternating multi-speaker conversation supported by presence/movement. One
+visible person plus continuous speech, phone calls, gaming voice chat, or
+Anthony’s speech alone is insufficient. Known desktop voice-chat/microphone
+contexts veto audio-only inference; ambiguous cases use the suggestion chime.
+
+During Social, disable personal Mood Context inference/calibration and private
+prompts; use welcoming expressive lights and familiar music; protect kitchen
+and path lighting; reduce individual-habit automation; avoid automatic
+projector/bedtime behavior; and transition back gradually after guests leave.
+Strong Social evidence may eventually auto-change both lights and music.
+
+**RESEARCH NEEDED.** Multi-speaker Social detection that distinguishes guests
+from calls and gaming chat. Existing issue
+[#35](https://github.com/agatte/home-hub/issues/35) covers multi-face detection
+and an audio fallback but needs reconciliation with the hybrid policy above.
+
+### Events, Tonight at Anthony’s, and Home Bar
+
+**DECIDED TARGET.** Special events are dominant overlays on Social, not a new
+fundamental mode per holiday. Templates for Christmas, Thanksgiving,
+birthdays, casual hangouts, game nights, and similar occasions generate a
+complete editable draft: title, time, guest count, lighting, music, guest-page
+content, food/drinks, and reminders. One shared event record coordinates Home
+Hub, Home Bar, Alexa reminders, guest pages, lighting, and music.
+
+Create events by dashboard or natural Alexa request; Alexa asks only essential
+follow-ups (normally guest count), while the dashboard is the full editor and
+Alexa can create, confirm, remind, and operate. Plan quietly when more than a
+week away; confirm the atmosphere/food/drink shortlist at 3–7 days; consolidate
+shopping and ingredient gaps at 1–2 days; compress the flow inside 24 hours;
+and issue concrete preparation reminders a few hours before. Prepare
+automatically before start, but require start confirmation unless multiple
+guests are confidently detected near the scheduled time. Pause, end, or revert
+must remain one action away.
+
+**DECIDED TARGET.** The per-event guest page becomes **Tonight at Anthony’s**:
+event identity and visual design, now-playing artwork, upcoming requests and
+song search, controlled lighting, food/drink/house notes, and Wi-Fi. Music
+requests normally auto-join with duplicate handling, requester attribution,
+unlimited guest adds, and host remove/reorder/lock; familiar/event music fills
+gaps.
+
+Lighting requests are queued instead of direct last-write-wins. Use visible
+short leases, coalesce duplicates, limit each guest’s immediate pending light
+choices, preserve task minima, and give the host skip/reorder/lock/baseline
+controls. **Showcase Mode** is an explicit “show me the lights” session with
+fair rapid rotation, 10–20 second holds, temporary dramatic effects, and
+automatic baseline restoration.
+
+Home Bar recommendations fit the event, use inventory when possible, share
+ingredients across drinks, expose missing supplies, include nonalcoholic
+options when appropriate, and feed the event shopping/reminder plan.
+
+**RESEARCH NEEDED.** Guest Wi-Fi isolation and guest-page reachability;
+arbitrary Apple Music-to-Sonos guest requests; and richer Home Bar APIs for
+event-aware drink planning.
+
+### Deferred directions
+
+**DEFERRED.** Broad device expansion, local-voice replacement of Alexa,
+generic multi-user behavior, and speculative wellness analytics remain outside
+the near-term vertical slices unless separately promoted through this spec.
+
 ## Vision
 
-Home Hub is an always-on personal command center built for one apartment and one person. It controls Philips Hue lights and a Sonos Era 100 speaker from a single, visually striking dashboard that's always running on a dedicated laptop display. The system is deeply integrated into daily life — it detects what you're doing, adjusts lighting and music to match, and learns your patterns over time until it can run on full autopilot.
+Home Hub is an always-on personal command center built for one apartment and
+one person. It coordinates the apartment around Context → Intent → Response so
+ordinary life feels attentive rather than static. It earns autonomy per action
+and context; it does not pursue undifferentiated “full autopilot.”
 
 The dashboard isn't a boring control panel. It's a living interface with bold, mode-aware themed backgrounds — a retro pixel art landscape during gaming, a scrolling pixel city during working, flowing aurora borealis for relax, a 3D moon scene over a city silhouette while sleeping. It shows everything at a glance: current mode, light colors, now playing, weather, upcoming routines. It's also a hub for other personal projects (plant tracking app, future bar app) with animated widget cards that link out to each one.
 
-The core focus is getting lights and music working seamlessly. Everything else builds on that foundation — voice control via Alexa, game day celebrations for the Colts, and an intelligence layer that observes everything (mode changes, manual overrides, music choices, light adjustments, routine interactions) and gradually takes over.
+Lights and music remain the sensory foundation. Presence, weather, Mood
+Context, Alexa, guests, events, and learning exist to make those responses more
+appropriate—not to maximize automation for its own sake.
 
 ## Goals
 
 - **Lights and music first** — These are the foundation. Everything else builds on getting light control and mode-aware music playback working flawlessly
 - **Always-on command center** — Runs 24/7 on a dedicated foldable laptop (1080p landscape), always displaying the dashboard. Also works cleanly on mobile
-- **Invisible automation** — The system detects activity, adjusts lights and music, and manages routines without manual input. Gradual transitions, activity-aware timing
-- **Full autopilot learning** — Observes all interactions and behavior patterns, starts with simple rules ("Friday 8pm = gaming"), evolves toward autonomous decision-making with subtle nudge notifications
+- **Earned automation** — Automate reversible actions when evidence and
+  outcomes justify it; suggest first for intrusive or uncertain actions and
+  demote policies that produce corrections
+- **Observable trust** — Record source freshness, room authority, reasons,
+  feedback, graduation state, and reversals so autonomy can be audited
 - **Bold, living UI** — Animated backgrounds that change with mode and time of day. Not a generic dashboard — a visual experience that reflects what's happening in the apartment
 - **Voice control** — Fauxmo, custom Alexa Skill, and iOS Shortcuts for hands-free mode switching, music control, arrival geofences, and natural-language vibe requests
 - **Game day magic** — Colts games become a synchronized experience: lights, sound, TTS celebrations, live scoreboard, pixel art field
@@ -23,6 +390,13 @@ The core focus is getting lights and music working seamlessly. Everything else b
 - **Personal, not generic** — Every rule, mode, animation, and routine is tuned for one person's actual apartment and habits
 
 ## Current State
+
+> **SHIPPED/CURRENT evidence boundary (reviewed August 1, 2026):** This section
+> inventories capabilities found in committed code and incorporates dated
+> deployment notes already present in repository documentation. It does not
+> assert that a capability is currently running, configured, healthy, or
+> effective in production. The next roadmap step is a read-only
+> production/autonomy evidence audit.
 
 ### Lighting
 
@@ -71,7 +445,9 @@ The core focus is getting lights and music working seamlessly. Everything else b
 ### Automation
 
 - PC activity detection (psutil process monitoring for games/media; gaming uses static known binaries plus cached Steam library manifest executable discovery)
-- Ambient noise monitoring (Blue Yeti mic RMS for party detection)
+- Ambient/audio monitoring from the Blue Yeti, including YAMNet shadow
+  classifications. The former audio-triggered Social gate was abandoned on
+  May 9, 2026; Social is manually startable in current code.
 - Camera-based presence (MediaPipe face + pose) is the primary "is the user here" signal in-app, fused with the desktop pc_agent's presence observations via `PresenceFusion` (shipped 2026-05-18). The Latitude camera sees the couch zone (since the 2026-05-27 living-room relocation); the desktop pc_agent owns the desk zone. Apartment-empty state is owned by `AwayManager`, fed by iOS Shortcut geofence webhooks through the Cloudflare tunnel; LEAVE suppresses autonomous actuation and ARRIVE force-reapplies lights, optional welcome behavior, and any `pending_arrival_vibe` staged through Siri.
 - Mode priority system: pregameday (6) = gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
@@ -84,16 +460,18 @@ The core focus is getting lights and music working seamlessly. Everything else b
 
 The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 services), but components sit in three distinct states. Spec entries elsewhere use these labels consistently.
 
-**Active** (running, affecting behavior today):
+**Active in the committed architecture** (designed to affect behavior when
+deployed and healthy; production status requires live verification):
 - `LightingPreferenceLearner` — EMA-based (α=0.3) per-light preference overlay on `ACTIVITY_LIGHT_STATES`. Overlay applications are logged as `ml_decisions` rows with `decision_source="lighting_learner"` so the Analytics dashboard can audit when the learner is actually changing a value
 - `MusicBandit` — Thompson sampling for mode → Sonos favorite selection
-- `CameraService` — MediaPipe FaceDetector on the Latitude webcam, 15-frame (~30s) idle detection vs the 10-min PC-idle timer. Also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) feeding an adaptive brightness multiplier in working/relax/gaming/watching modes (+30%/-15%, anchored at the calibrated baseline) so lights adapt to real room conditions (clouds, sunset, lamps)
+- `CameraService` — MediaPipe FaceDetector on the Latitude webcam: 15 consecutive absent frames at an approximately two-second cadence yield approximately 30 seconds of sustained absence before reporting `idle`, versus the 10-min PC-idle timer. It also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) for the standard adaptive brightness multiplier in `relax` only. Gaming and watching use a distinct bedroom-lux screen-sync envelope where supported; working has no standard camera-lux multiplier.
 - `ScreenSyncService` K-means — 5-cluster dominant color extraction (saturation-weighted 0.7 + luminance balance 0.3)
 - `MLDecisionLogger` — every mode decision logged to `ml_decisions` with source + factors. Live `decision_source` values: `fusion`, `ml`, `rule_engine`, `process`, `camera`, `audio_ml`, `lighting_learner`, `zone_posture_rule`, `manual`. Each fusion voter writes its own per-arrival shadow row (`applied=False, broadcast=False`); `compute_per_source_metrics` and the analytics constellation read from those rows directly. **Truth-tagging** (`on_mode_change` callback): two-pass backfill — non-predictor rows tagged with the *leaving* mode (the mode that was active during the just-ended window); `decision_source='ml'` predictor rows tagged with the *entering* mode on idle → predictable-mode transitions (since predictor logs only during idle and forecasts the next non-idle mode). Both backfills cap at 2h to avoid mislabeling overnight gaps
-- `ConfidenceFusion` — **4-signal** weighted ensemble (process / camera / audio_ml / rule_engine) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence, and can override an active detected mode at `OVERRIDE_THRESHOLD = 0.92` + 80% agreement. The behavioral lane was removed 2026-04-27 after the LightGBM predictor collapsed to a single output class (898/898 over 9 days, 0.64% real accuracy); the presence lane was removed 2026-04-28 alongside the home/away retirement. Default weights renormalized to preserve relative ratios: process 0.438, camera 0.250, audio_ml 0.187, rule_engine 0.125. During 22:00–06:00 local, the process-detection lane is decayed by `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` so stale dev tools left open don't dominate the ensemble. Rule-engine vote stays fresh during manual overrides (`b8c285a`, 2026-04-29) — the prior `not self._manual_override` call-site guard had silenced the lane through any override (sleeping, winddown's relax, late-night rescue), permanently parking it in fusion's `never_reported` list; `check_rules()` already gates the nudge path on `current_mode==idle` internally, so the outer guard was redundant for nudges and wrong for the fusion-voter contract
+- `ConfidenceFusion` — **4-signal** weighted ensemble (process / camera / audio_ml / rule_engine) computing every automation tick and broadcasting to the analytics dashboard; auto-applies mode at 95%+ confidence, and can override an active detected mode at `OVERRIDE_THRESHOLD = 0.92` + 80% agreement. The behavioral lane was removed 2026-04-27 after the LightGBM predictor collapsed to a single output class (898/898 over 9 days, 0.64% real accuracy); the old phone-presence lane was removed 2026-04-28 with the original home/away implementation. The later explicit `AwayManager` is separate from fusion. Default weights renormalized to preserve relative ratios: process 0.438, camera 0.250, audio_ml 0.187, rule_engine 0.125. During 22:00–06:00 local, the process-detection lane is decayed by `LATE_NIGHT_PROCESS_WEIGHT_FACTOR = 0.6` so stale dev tools left open don't dominate the ensemble. Rule-engine vote stays fresh during manual overrides (`b8c285a`, 2026-04-29) — the prior `not self._manual_override` call-site guard had silenced the lane through any override (sleeping, winddown's relax, late-night rescue), permanently parking it in fusion's `never_reported` list; `check_rules()` already gates the nudge path on `current_mode==idle` internally, so the outer guard was redundant for nudges and wrong for the fusion-voter contract
 - **Nightly fusion weight tuning** — `fusion_weight_tuning` ScheduledTask runs daily at 3:30 AM (30 min before `ml_nightly_training` at 4:00 AM). `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion decisions where `factors.signal_details` is present and computes per-source accuracy; `ConfidenceFusion.update_weights_from_accuracy()` normalizes those values into new weights. Sources without usable samples fall back to `DEFAULT_WEIGHTS`. Manual trigger via `POST /api/learning/retune-weights` returns before/after weights for validation
 
-**Shadow** (running, logging predictions, not yet authoritative):
+**Shadow in the committed architecture** (designed to log without authority;
+production freshness requires live verification):
 - `BehavioralPredictor` (LightGBM, 7-class: gaming / working / watching / relax / social / cooking / idle) — runs in shadow on the Latitude, writes to `ml_decisions` with `decision_source="ml"`. Idle-gated: predictor logs only when `automation_engine._current_mode == "idle"`; each row's `predicted_mode` is a forecast of the next non-idle mode out of idle. Promotion is gated on `compute_prediction_diversity()` — the saved model must produce diverse outputs (≥2 modes, top-mode share ≤95% over the last 7 days) before `POST /api/learning/predictor/promote` returns 200. Calibration shipped 2026-04-28 (commit `82c72ed`): closed a train/serve feature-parity bug, lowered `SUGGEST_THRESHOLD` 0.70→0.30 to surface diverse predictions, plumbed full per-class probability distribution into shadow-log `factors.distribution`, added a stale-label-encoder gate. Class-balanced training shipped 2026-05-06 (`d3e1c7f`): `_train_sync` now computes inverse-frequency sample weights via sklearn's "balanced" formula and passes them to `lgb.Dataset(weight=...)` so minority modes don't get starved by working-class dominance; also logs per-class val accuracy to journalctl. Predictor-specific truth-tagging shipped same day (`80e8db7`): `MLDecisionLogger.on_mode_change` now tags `decision_source='ml'` rows with the *entering* mode on idle → predictable-mode transitions (instead of the leaving mode = always `idle`), so the standard `predicted_mode == actual_mode` accuracy query produces correct numbers. Historical backlog re-tagged via `scripts/migrations/2026-05-06-backfill-ml-predictor-actual-mode.py`. Auto-demote logic for a promoted-then-degenerate predictor is live (4/27 audit follow-up). 2026-05-06 smoke test against the next-mode JOIN against `activity_events` showed 72% accuracy at conf≥0.8 across 129 samples — well above the 28.3% no-skill baseline; minority classes (watching/relax) still at 0% pre-tuning, watching the next nightly retrain to see if class weights move them.
 - `AudioClassifier` (YAMNet, 521 AudioSet classes → 9 Home Hub scenes) — **Social-gate abandoned 2026-05-09 (option C).** 14-day re-evaluation across 838,629 production rows confirmed the 5/03 36h finding: `speech_multiple` MAX observed 0.088 (never close to the 0.80 threshold), 0 firings including the 5/02 + 5/06 guest-visit ground-truth windows. Option A (retarget to `speech_single` + RMS floor) was rejected — `speech_single ≥ 0.80` fires ~7,000/day with 3.4% overlap into solo working windows, and RMS doesn't disambiguate 1-vs-2 speakers. Option B (retrain YAMNet) was rejected — wrong tool architecturally. The `speech_multiple` entry was removed from `MODE_THRESHOLDS` in `audio_classifier.py`; the score is still emitted into `all_scores` for analytics. Audio_ml lane stays in v3 fusion for `silence→quiet` and `game_audio→watching` gates. Replacement direction (deferred — separate plan): camera multi-face detection extending the existing MediaPipe pipeline; SpeechBrain embeddings + clustering as a fallback if camera coverage gaps surface.
 
@@ -139,7 +517,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - ~~Evening wind-down triggers at fixed time regardless of activity~~ — fixed: delays 30 min and retries up to 4x if gaming/watching/social. "working" was later removed from the skip set (April 19) — late-night dev sessions are exactly when winddown should fire, not when it should defer
 - ~~Clearing override at 12:45 AM left lights in gaming/night's deep-blue ambient glow because gaming has no `late_night` state — forced manual relax every night~~ — fixed: three-layer autopilot cascade. (1) `javaw.exe` removed from `GAME_PROCESSES` (it had been silently forcing "gaming" on any JVM process). (2) Winddown enabled at 22:00 weekdays so the transition is proactive. (3) Late-night rescue in `run_loop` auto-applies relax after 23:00 when no override is set, detected mode is working/idle, and Sonos isn't playing — covers the edge after winddown's 4h override expires. Plan at `.claude/plans/let-s-look-at-the-serene-leaf.md`
 - ~~Mode detection has noticeable lag between activity start and mode switch~~ — fixed: dropped PC agent POLL_INTERVAL from 15s to 5s (worst-case 5s, average ~2.5s). The backend processes activity reports synchronously on POST, so the polling interval was the entire lag budget.
-- ~~Welcome-home sequence reliability (multiple rounds: ICMP retired April 19; Shortcut webhooks + ARP debounce April 19; sleeping-mode veto April 27)~~ — **superseded by retirement**: the entire home/away concept was removed 2026-04-28 (commit `b8fdbfe`). Three rounds of mitigation against iOS Shortcut + ARP flap couldn't fully suppress overnight phantom `away` events; iOS power-save makes phone-presence fundamentally unreliable. `presence_service.py` deleted, `away` mode removed from priority/encoding/UI, presence lane removed from ConfidenceFusion. Hue's native geofencing now handles arrivals/departures outside Home Hub.
+- ~~Original welcome-home sequence reliability (ICMP, ARP, and phone-presence fusion)~~ — **historical path retired 2026-04-28** (`b8fdbfe`) after phantom-away failures. `presence_service.py`, the `away` mode, and the fusion presence lane were removed. A later design restored explicit apartment-empty state through `AwayManager` and authenticated iOS geofence webhooks; that committed path is described under Automation and Arrival, but its live reliability still requires verification.
 
 **Lighting mode-switch quality (April 2026):**
 - ~~"Greenish bedroom" in working mode~~ — fixed: Hue bridge stored residual HSB on CT-mode lights (either cached from a prior HSB mode or injected by the LightingPreferenceLearner overlay). `hue_service.set_light` now always emits `sat=0` before `ct` in the JSON body and drops any stray `hue`/`sat` when `ct` is present — the bridge is key-order-sensitive and rejects `sat=0` that follows `ct`.
@@ -175,12 +553,12 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 - ~~No structured logging~~ — fixed: python-json-logger (JSON to file for machine parsing, text to console for humans)
 - ~~No uptime monitoring~~ — fixed: Uptime Kuma on port 3002 monitoring Home Hub backend + Pi-hole health, with alerting
 - ~~No bundle analysis~~ — fixed: vite-plugin-visualizer (`npm run analyze` generates interactive treemap)
-- ~~No authentication on API endpoints~~ — fixed: `X-API-Key` required on every write endpoint via `require_api_key` FastAPI dep (`backend/api/auth.py`), with auto-bypass for localhost + any RFC1918/loopback/link-local/ULA caller (the apartment LAN). `HOME_HUB_API_KEY` env var holds the secret; unset = fail-closed 503
+- ~~No authentication on API endpoints~~ — fixed: `require_api_key` gates writes in `backend/api/auth.py`. Normal localhost, configured trusted-LAN, and private-LAN callers bypass before key validation; other callers require `X-API-Key` matching `HOME_HUB_API_KEY`, and only those non-bypassed callers receive 503 when it is unset. Tunnel-origin requests are handled separately with two-token checks.
 
 **Structural / tech debt:**
 - `automation_engine.py` is a 1,944-LOC single-file monolith. Mode rules, effect reconciliation, fusion wiring, learner overlay application, and the 60s loop all live in one module. Refactor candidate — split into `mode_resolver`, `light_applicator`, `effect_reconciler`, `engine_loop`
 - Apple Music XML upload (`POST /api/music/import`) has no enforced size limit. A multi-GB library file could OOM the backend before the parser rejects it
-- ~~Zero authentication middleware anywhere~~ — fixed: `require_api_key` is a global write-endpoint gate (see "No authentication on API endpoints" above). The LAN auto-bypass keeps friction at zero for the kiosk and Anthony's devices; Cloudflare Tunnel callers route through a non-private IP and hit the strict header check
+- ~~Zero authentication middleware anywhere~~ — fixed: `require_api_key` is a global write-endpoint gate (see "No authentication on API endpoints" above). The LAN bypass remains distinct from Cloudflare Tunnel traffic: cloudflared reaches the service through loopback, while the local tunnel proxy injects `X-Tunnel-Origin: cloudflare` so tunneled writes skip bypasses and undergo the applicable two-token checks.
 - ~~`EventLogger` swallows exceptions silently~~ — fixed: `_drop_count` dict tracks per-family (mode/light/scene/sonos) drop counts, surfaced in `/health` JSON under `event_logger_drops` so Uptime Kuma can alert on growth
 - ~~Automation-triggered light changes aren't logged to `light_adjustments`~~ — fixed: `_apply_uniform` and `_apply_per_light` in `automation_engine.py` now call `log_light_adjustment(trigger="automation")` with before/after values when state actually changes (dedup check prevents hot-path spam)
 - ~~Celebration light steps bypass EventLogger~~ — fixed: `CelebrationOrchestrator._run_light_steps` now mirrors successful `set_light` to `log_light_adjustment(trigger=f"celebration:{sequence_key}")` (commit `34fc550`). DB primary, journalctl corroboration. Closed memory: `project_celebration_no_event_log.md`
@@ -308,7 +686,14 @@ workstation for code editing + `git push`, and runs the PC activity
 detector pointed at the Latitude. See the Deployment section below
 and `CLAUDE.md` for operational details.
 
-### Target Architecture
+### Deferred Architecture Reference
+
+> **DEFERRED.** This two-process/cloud-database diagram is an early 2026
+> architecture north star, not the current target roadmap. The shipped design
+> keeps ML services embedded in the FastAPI process, and the retained SQLite
+> database no longer has a volume-driven migration plan. New implementation
+> architecture must follow the Product Experience Contract and be justified by
+> the relevant vertical slice.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -366,7 +751,9 @@ External APIs (cloud):
 
 ### Key Architecture Decisions
 
-- **Two-process model:** Main server handles real-time control. Learning engine runs separately, reads events from the shared DB, computes patterns, and exposes an internal API for predictions. Main server queries the learning engine before making automation decisions.
+- **Two-process learning engine — DEFERRED:** An early design proposed a
+  separate learner process. Current ML services are embedded in FastAPI; no
+  split is planned without a measured reliability or resource driver.
 - **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) if event volume ever forces it. **Deprioritized 2026-06-09:** the nightly per-table retention sweep (90-day rolling; `ml_decisions` capped at 21 days, ~1.1–1.2 GB plateau) removed the forcing function — no migration is planned absent a new driver. SQLAlchemy abstraction keeps the switch straightforward if revisited; `models.py` ↔ raw-migration schema drift (GH#29) is the prerequisite either way.
 - **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
 - **PC Agent over network:** Gaming PC (WiFi via TP-Link USB adapter since the 2026-06 Google Wifi migration — formerly wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery. NB: the desktop's MAC (and thus its `192.168.86.30` DHCP reservation) travels with the USB adapter, not the motherboard.
@@ -954,7 +1341,7 @@ WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `
 | GET | `/api/personality/settings` | All five sub-toggles + current `calibration_bias` (read-only snapshot) |
 | POST | `/api/personality/settings` | Partial-update any of `personality_enabled`, `emotion_enabled`, `mood_ring_enabled`, `mood_ring_light_id`. Flipping `emotion_enabled` calls `EmotionService.set_enabled(...)` which lazy-loads FaceLandmarker on first true-flip |
 | POST | `/api/personality/blendshape` | Ingest a desktop-captured FaceLandmarker reading (`{blendshapes: dict[str,float], face_confidence, source, timestamp?}`) → `EmotionService.on_blendshape` (GH#64, shipped 2026-05-18). Validates per-value [0,1] bounds; client `timestamp` clamped to server now when >2s in the future (`clamp_client_timestamp` — see `/api/camera/observation`) |
-| POST | `/api/personality/vibe` | Natural-language vibe request `{transcript, timing}`. `timing="arrival_if_away"` applies immediately when home or stages to `app_settings.pending_arrival_vibe` while away; geofence/camera ARRIVE consumes and clears it. Deterministic rules map common phrases to existing modes/curated scenes first; optional Anthropic fallback is validated against known modes/scenes. Tunnel callers require both `X-API-Key` and `X-Skill-Token`; iOS Shortcut source is `X-Source: ios_shortcut:vibe` |
+| POST | `/api/personality/vibe` | Natural-language vibe request `{transcript, timing}`. `timing="arrival_if_away"` applies immediately when home or stages to `app_settings.pending_arrival_vibe` while away; after a geofence-arrive event, `AwayManager._on_arrive()` applies and clears the staged vibe. Camera presence only reports presence through `AutomationEngine.signal_presence("camera")`. Deterministic rules map common phrases to existing modes/curated scenes first; optional Anthropic fallback is validated against known modes/scenes. Tunnel callers require both `X-API-Key` and `X-Skill-Token`; iOS Shortcut source is `X-Source: ios_shortcut:vibe` |
 
 Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`) and the Siri/iOS Shortcut `home hub vibe` text workflow. Full spec: `docs/PERSONALITY_LAYER.md`.
 
@@ -1170,7 +1557,8 @@ async def on_mode_change(mode: str) -> None:
     if mode == "gaming":
         await do_something()
 
-# 2. Register in main.py lifespan, AFTER automation engine is created
+# 2. Register through backend/bootstrap.py's composition/lifecycle path,
+#    AFTER automation engine is created
 automation.register_on_mode_change(my_service.on_mode_change)
 ```
 
@@ -1231,10 +1619,10 @@ class NewService:
         self._connected = False
 ```
 
-**Registration in `main.py` lifespan:**
+**Registration in `backend/bootstrap.py`'s composition/lifecycle path:**
 
 ```python
-# In the lifespan() async context manager:
+# In `backend/bootstrap.py`'s lifespan() async context manager:
 
 # 1. Create service
 new_service = NewService(ws_manager=ws_manager, hue_service=hue_service)
@@ -1374,7 +1762,7 @@ class NewRoutineService:
             logger.error("Routine failed: %s", e, exc_info=True)
             return False
 
-# 2. Register in main.py lifespan:
+# 2. Register through backend/bootstrap.py's composition/lifecycle path:
 from backend.services.scheduler import ScheduledTask
 
 routine = NewRoutineService(sonos_service, tts_service)  # inject deps
@@ -1540,40 +1928,30 @@ The dashboard has been redesigned as a living, data-reactive interface:
 - ✓ **Science-based night work** — desk lamp at 3200K + dim ambient fill (contrast-optimized)
 - **Remaining:** per-room mode overrides
 
-### Music Overhaul
+### Music Curator Direction
 
-- **Vibe-based mapping** — Replace single-favorite-per-mode with vibe tags per mode (e.g., gaming = "high energy, electronic, instrumental"). Multiple Sonos favorites tagged per vibe, system picks or rotates.
-- **Smarter auto-play** — Fix reliability issues. Clear rules: play on mode change if idle AND auto-play enabled, never interrupt active listening unless told to.
-- **Queue management** — View and reorder the Sonos play queue from the dashboard
-- **Apple Music API integration** (future, $99/year) — Search catalog by genre/mood, build dynamic playlists, play via SoCo Apple Music URI support. Replaces manual favorite curation.
-- **Better recommendations** — Improve relevance by weighting actual listening behavior over Last.fm similarity scores
+- **SHIPPED/CURRENT (committed code):** vibe-tagged mode mappings, guarded
+  auto-play, supported Sonos favorite/playlist queueing, a contextual music
+  bandit, Apple Music XML taste import, and Last.fm/iTunes-preview discovery.
+- **DECIDED TARGET:** the Music Curator and gentle-discovery policy are defined
+  in the Product Experience Contract. Work first with already-playable sources.
+- **RESEARCH NEEDED:** arbitrary Apple Music catalog search, reliable Sonos
+  queue playback for those results, and guest request queueing.
 
-### Intelligence & Learning System
+### Intelligence and earned autonomy
 
-The system observes everything and evolves from rules to autopilot:
-
-**Data collection (new event tables):**
-- `activity_events` — Mode transitions with timestamp, source, duration
-- `light_adjustments` — All manual light changes (who changed what, when, in what mode)
-- `sonos_playback_events` — What was played, how long, was it skipped
-- `routine_executions` — When routines ran, success/failure, user overrides
-- `user_interactions` — Dashboard actions, feature usage, page visits
-
-**Phase 1 — Simple rules (quick wins):**
-- Time + day patterns: "Friday 8pm usually means gaming mode"
-- Override analysis: "You always override to relax at 9:30pm on weeknights"
-- Auto-apply rules that have >90% historical accuracy
-
-**Phase 2 — Pattern detection:**
-- Correlate mode transitions with time, day-of-week, season
-- Track which vibe/playlist choices stick vs get skipped
-- Identify when automation gets it wrong (frequent manual overrides)
-
-**Phase 3 — Full autopilot:**
-- Proactive mode switching based on learned patterns
-- Subtle nudge notifications: "Switching to relax mode" (brief toast, not interruptive)
-- Self-adjusting schedules that evolve with behavior changes
-- Learns from Alexa voice commands as another input signal
+- **SHIPPED/CURRENT (committed code):** event tables, rule and brightness
+  suggestions, confidence fusion, override analysis endpoints, shadow
+  predictors, adaptive lighting, and a music bandit. Some originally projected
+  tables and interaction telemetry were not built.
+- **RESEARCH NEEDED:** the production/autonomy evidence audit must establish
+  real auto-apply volume, source health, confidence distributions, vetoes,
+  suggestion outcomes, correction rates, and whether accepted/rejected
+  feedback changes later behavior.
+- **DECIDED TARGET:** replace the old universal-threshold “autopilot” framing
+  with the action-specific trust ladder in the Product Experience Contract.
+  No action graduates merely because a model or fixed confidence threshold
+  exists.
 
 ### Voice Control (Alexa)
 
@@ -1784,6 +2162,64 @@ and Sonos speaker are LAN-only.
 
 ## Roadmap
 
+This is the sole cross-system priority order as of **August 1, 2026**:
+
+1. **Documentation reconciliation — completed August 1, 2026:** this contract
+   is canonical and the supporting documentation was aligned without runtime
+   changes.
+2. **Production/autonomy evidence audit — NEXT:** verify production capability
+   health; quantify auto-applies, confidence and agreement distributions,
+   vetoes, shadow/promotion state, suggestion outcomes, corrections/reversals,
+   and whether feedback changes future choices. Existing evidence includes
+   issues [#116](https://github.com/agatte/home-hub/issues/116),
+   [#117](https://github.com/agatte/home-hub/issues/117), and closed historical
+   audit issue [#93](https://github.com/agatte/home-hub/issues/93). Do not
+   create a new umbrella issue yet: first complete the audit, use its findings
+   to define non-duplicative scope, and reuse, supersede, or close out existing
+   issues before creating any umbrella.
+3. **Incident P1 capability health and degraded-context observability — supporting/parallel:** expose
+   desktop activity, desk presence, bedroom lux, audio, screen sync, and
+   living-room presence health; normalize user actor/intent attribution; and
+   show signal freshness plus actuator ownership in “why this mode.” This is
+   the P1 work from
+   [INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md](INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md),
+   with related existing gaps in [#74](https://github.com/agatte/home-hub/issues/74),
+   [#81](https://github.com/agatte/home-hub/issues/81),
+   [#109](https://github.com/agatte/home-hub/issues/109), and
+   [#110](https://github.com/agatte/home-hub/issues/110). The audit determines
+   which gaps are actual blockers; blocker-level observability or
+   degraded-context defects must be addressed before the affected living-room
+   behavior, while non-blocking P1 improvements may proceed in parallel or
+   alongside the slice. Do not create a P1 umbrella issue yet; apply the
+   audit-first reuse/supersede/close-out rule above.
+4. **First product vertical slice — everyday living-room intelligence:** room
+   authority, quiet/listening/settled couch contexts, the Scene Curator,
+   evolving scene pools, consequence-based trust, Mood Context prompts, and
+   Relax-only quality weather ambience. Reuse focused issues
+   [#36](https://github.com/agatte/home-hub/issues/36),
+   [#40](https://github.com/agatte/home-hub/issues/40),
+   [#79](https://github.com/agatte/home-hub/issues/79), and
+   [#107](https://github.com/agatte/home-hub/issues/107) where their scope
+   overlaps. Do not create a new umbrella issue until after the audit has
+   defined non-duplicative scope and existing issues have been reused,
+   superseded, or closed out.
+5. **Later product vertical slices:** Winding Down and staged mornings; Music
+   Curator; then Social/events, Tonight at Anthony’s, guest queues, Showcase
+   Mode, and event-aware Home Bar. Reuse [#16](https://github.com/agatte/home-hub/issues/16),
+   [#35](https://github.com/agatte/home-hub/issues/35),
+   [#51](https://github.com/agatte/home-hub/issues/51), and
+   [#80](https://github.com/agatte/home-hub/issues/80) only after reconciling
+   their older assumptions with this contract.
+
+Do not design all later implementation architectures prematurely. Each slice
+earns its architecture from measured evidence and the action-specific policy.
+
+## Delivery History (Historical)
+
+The phase headings below record earlier delivery and planning history. They do
+not set current priority and do not override the Roadmap or Product Experience
+Contract.
+
 ### Phase 1: Core Fix & Foundation (Now — April 2026)
 
 - ✓ Fix automation timing: gradual evening transitions (30-min lerp before winddown_start_hour)
@@ -1867,19 +2303,17 @@ ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
 - ✓ **ML Phase 1 (Code complete):** Behavioral mode prediction (LightGBM, **shadow mode — not yet promoted, pending ~500 activity events**), adaptive lighting preferences (EMA — **active**), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables. Original Phase 1 exit criteria ("audio classifier active, behavioral outperforming rules") are not yet met — both predictors sit in shadow mode
-- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**, 15-frame ~30s idle) with pose fallback, zone mapping (desk/bed, expose-only), and posture classification (upright/reclined, expose-only — shipped April 19) all on the same 2s poll cadence, adaptive lux brightness for working + relax modes (**active** — shipped April 18: calibrated fixed exposure, baseline-anchored piecewise-linear curve, EMA α=0.3 at 2s poll, ±15% bri swing, kitchen-pair-preserving)
+- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**: 15 consecutive absent frames at an approximately two-second cadence yield approximately 30 seconds of sustained absence before reporting `idle`) with pose fallback, zone mapping (desk/bed, expose-only), and posture classification (upright/reclined, expose-only — shipped April 19). The standard camera-lux multiplier is active for `relax` only; gaming/watching have a distinct bedroom-lux screen-sync envelope where supported, and working has no standard camera-lux multiplier.
 - ✓ **Zone+posture → relax actuation rule** (**live** — shipped April 19, promoted April 27, social-supersede added May 3): first sensor signal that drives a mode *transition*. Fires `set_manual_override("relax")` when the camera sustains `zone=bed + posture=reclined`. Eligible modes are `{idle, working, social}`; dwell is 120s for idle/working and 180s for social. Gated on (a) no active manual override **OR** an active social override that's ≥30min old (`ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS`), (b) `effective_mode ∈ ELIGIBLE_MODES` (override_mode if override else current_mode), (c) evening-hour or weekend-afternoon (≥13:00 Sat/Sun), (d) 4h refractory since last fire. `ZONE_POSTURE_RULE_APPLY=true` by default. The May 3 change closes the architectural gap surfaced by the 5/02 guest-visit pattern (social override outliving its context after guest left + Anthony went to bed). Projector-from-bed still carves itself out because the sit-up-against-headboard posture stays `upright`. Misfire surface narrow: requires social override ≥30min old + sustained reclined ≥180s + evening/weekend afternoon — worst case is one tap to correct during in-bedroom socializing.
-- **ML Phase 3 (In Progress):** ✓ Confidence fusion — **4-signal** weighted ensemble (`ConfidenceFusion`) combining process detection, camera, audio classifier, and rule engine. Behavioral predictor lane stripped 2026-04-27 after a single-class collapse audit; presence lane removed 2026-04-28 with the home/away retirement. Weights renormalized to `process 0.438 / camera 0.250 / audio_ml 0.187 / rule_engine 0.125`. Auto-apply at 95%+ when idle, stale process override at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`, and persists per-source rows to `ml_metrics` (`561d4f1`, 2026-04-28). Manual trigger at `POST /api/learning/retune-weights`. ✓ **Override rate + A/B comparison endpoints shipped** — `/api/learning/override-rate` (7d + 30d windows) is the primary autonomy gate metric; `/api/learning/compare` runs fusion vs rule-engine-only vs priority-only on the same backfilled rows. ✓ **Predictor calibration shipped 2026-04-28** (`82c72ed`) — train/serve feature parity (4 features no longer default to 0 at inference), `SUGGEST_THRESHOLD` 0.70→0.30, full-class softmax distribution logged into `MLDecision.factors.distribution`, stale-encoder gate refuses to load models whose `label_encoder` references retired modes. ✓ **Rule-engine fusion vote stays fresh during manual overrides** (`b8c285a`, 2026-04-29). ✓ **Rule-engine fusion lane verified end-to-end and bootstrap guardrail added** (`7282b11`, 2026-05-03) — after the 4/29 fix, prod still showed `never_reported=["rule_engine"]` on the old PID. A test rule inserted into the live slot fired correctly on the new PID (DIAG entry → MATCH → `report_signal ok` → `log_decision ok`), confirming the wiring is sound; the silence on the older process remains unexplained but is no longer reproducible. The DIAG logs were replaced with a single WARN at the MATCH point that fires only if `_fusion is None or _ml_logger is None`, so any future bootstrap wiring drift surfaces immediately in journalctl instead of silently parking the lane in `never_reported`. ✓ **Predictor class-balanced training shipped 2026-05-06** (`d3e1c7f`) — inverse-frequency sample weights in `_train_sync` so minority classes (watching/relax/gaming) aren't starved by working-class dominance; per-class val accuracy logged to journalctl per retrain. ✓ **Predictor truth-tagging architectural fix shipped 2026-05-06** (`80e8db7`) — predictor is idle-gated, so the prior "tag with leaving mode" semantic produced `actual_mode='idle'` for every predictor row, making the standard accuracy query report 0% on a 72%-accurate model. New predictor-specific path in `MLDecisionLogger.on_mode_change` tags ml-source rows with the entering mode on idle → predictable-mode transitions; historical backlog re-tagged via one-shot SQL migration. **Remaining:** analytics-page Svelte card surfacing override-rate + A/B comparison; threshold tuning once ≥30 days of shadow+backfill data accrues; predictor lane re-add to fusion gated on 5/11 weekly evaluator's per-class accuracy report (≥30% on watching/relax with sample size ≥10).
+- **ML Phase 3 (historical April–May snapshot):** ✓ Confidence fusion — **4-signal** weighted ensemble (`ConfidenceFusion`) combining process detection, camera, audio classifier, and rule engine. Behavioral predictor lane stripped 2026-04-27 after a single-class collapse audit; presence lane removed 2026-04-28 with the original home/away retirement. Weights renormalized to `process 0.438 / camera 0.250 / audio_ml 0.187 / rule_engine 0.125`. Auto-apply at 95%+ when idle, stale process override was then documented at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`, and persists per-source rows to `ml_metrics` (`561d4f1`, 2026-04-28). Manual trigger at `POST /api/learning/retune-weights`. ✓ **Override rate + A/B comparison endpoints shipped** — `/api/learning/override-rate` (7d + 30d windows) was treated as the primary autonomy gate metric; `/api/learning/compare` runs fusion vs rule-engine-only vs priority-only on the same backfilled rows. ✓ **Predictor calibration shipped 2026-04-28** (`82c72ed`) — train/serve feature parity (4 features no longer default to 0 at inference), `SUGGEST_THRESHOLD` 0.70→0.30, full-class softmax distribution logged into `MLDecision.factors.distribution`, stale-encoder gate refuses to load models whose `label_encoder` references retired modes. ✓ **Rule-engine fusion vote stays fresh during manual overrides** (`b8c285a`, 2026-04-29). ✓ **Rule-engine fusion lane verified end-to-end and bootstrap guardrail added** (`7282b11`, 2026-05-03) — after the 4/29 fix, prod still showed `never_reported=["rule_engine"]` on the old PID. A test rule inserted into the live slot fired correctly on the new PID (DIAG entry → MATCH → `report_signal ok` → `log_decision ok`), confirming the wiring is sound; the silence on the older process remains unexplained but is no longer reproducible. The DIAG logs were replaced with a single WARN at the MATCH point that fires only if `_fusion is None or _ml_logger is None`, so any future bootstrap wiring drift surfaces immediately in journalctl instead of silently parking the lane in `never_reported`. ✓ **Predictor class-balanced training shipped 2026-05-06** (`d3e1c7f`) — inverse-frequency sample weights in `_train_sync` so minority classes (watching/relax/gaming) aren't starved by working-class dominance; per-class val accuracy logged to journalctl per retrain. ✓ **Predictor truth-tagging architectural fix shipped 2026-05-06** (`80e8db7`) — predictor is idle-gated, so the prior "tag with leaving mode" semantic produced `actual_mode='idle'` for every predictor row, making the standard accuracy query report 0% on a 72%-accurate model. New predictor-specific path in `MLDecisionLogger.on_mode_change` tags ml-source rows with the entering mode on idle → predictable-mode transitions; historical backlog re-tagged via one-shot SQL migration. Its former remaining-work and threshold-lowering claims are superseded by the August 1 Roadmap and action-specific trust policy.
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
-### Phase 5: Polish & Expand (September 2026+)
+### Superseded Phase 5 planning band
 
-- Remaining mode backgrounds (social/club, watching/drive-in) + improved art assets (transparent layers, wider tiles)
-- Alexa VibeIntent/free-form voice polish (structured Alexa control already shipped)
-- Apple Music API integration ($99/year) — catalog browsing (search by genre/mood, dynamic playlists). Phase A (DIDL-Lite Now Playing metadata for HTTP streams), Phase A.5 (always-shuffle + random queue start via `play_favorite`), and Phase B (weather-aware bandit arm key `(mode, period, weather_class, title)` with legacy 3-tuple migration + warm-start) all shipped 2026-05-12
-- Bar app widget integration
-- Seasonal lighting adjustments
-- Guest mode polish (mini-app shipped 2026-05-02 — bottom nav + WiFi/Bar/Plants/Vibe pages, 6 party scenes with live color previews, 3 music vibe tiles via Sonos favorites; remaining: Pi-hole DNS for `guest.homehub.lan`, settings UI for `guest_vibe_playlists` mapping, optionally a free-text "tell the host" channel)
+The former “Polish & Expand” list mixed shipped work, research, and unranked
+ideas. It is superseded by the August 1, 2026 Roadmap. Retained ideas and issue
+links live in [Future_Development.md](Future_Development.md); cross-system
+policy remains in this document.
 
 ## Technical Limitations & Constraints
 
@@ -1897,7 +2331,7 @@ sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md
 
 ## Non-Goals
 
-- **Not a multi-user platform** — No auth, no user accounts, no multi-tenant support
+- **Not a multi-user platform** — No user accounts or multi-tenant identity model. Write endpoints still use API-key gating with trusted-LAN bypass.
 - **Not a generic smart home hub** — No support for arbitrary device types, protocols, or brands beyond Hue and Sonos
 - **Not a full smart home OS** — Not replacing Home Assistant, HomeKit, or SmartThings. This is a personal dashboard and automation layer.
 - **Not an Alexa replacement** — Alexa handles general voice commands. Home Hub extends it for custom automation via Fauxmo/custom skill.
