@@ -437,14 +437,26 @@ class AgentSupervisor:
             self._report_health()  # best-effort: let the backend see the hang
         except Exception:
             pass
-        _release_mutex()
         # Best-effort immediate respawn; the task's 5-min repetition is the
-        # backstop if this kick fails.
+        # backstop if this kick fails. Start it from a short-lived helper after
+        # this process exits so the Windows mutex is released by the OS first.
+        # Releasing the mutex before the hard exit races a fresh supervisor
+        # against the dying one and can leave overlapping agent owners.
         if sys.platform == "win32":
             try:
                 import subprocess
                 subprocess.Popen(
-                    ["schtasks", "/run", "/tn", RESPAWN_TASK_NAME],
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-Command",
+                        (
+                            "Start-Sleep -Seconds 3; "
+                            f"schtasks /run /tn '{RESPAWN_TASK_NAME}'"
+                        ),
+                    ],
                     creationflags=0x08000000,  # CREATE_NO_WINDOW
                     close_fds=True,
                 )
