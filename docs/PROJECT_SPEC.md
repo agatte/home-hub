@@ -2167,16 +2167,7 @@ This is the sole cross-system priority order as of **August 1, 2026**:
 1. **Documentation reconciliation — completed August 1, 2026:** this contract
    is canonical and the supporting documentation was aligned without runtime
    changes.
-2. **Production/autonomy evidence audit — NEXT:** verify production capability
-   health; quantify auto-applies, confidence and agreement distributions,
-   vetoes, shadow/promotion state, suggestion outcomes, corrections/reversals,
-   and whether feedback changes future choices. Existing evidence includes
-   issues [#116](https://github.com/agatte/home-hub/issues/116),
-   [#117](https://github.com/agatte/home-hub/issues/117), and closed historical
-   audit issue [#93](https://github.com/agatte/home-hub/issues/93). Do not
-   create a new umbrella issue yet: first complete the audit, use its findings
-   to define non-duplicative scope, and reuse, supersede, or close out existing
-   issues before creating any umbrella.
+2. **Production/autonomy evidence audit — completed August 1, 2026:** see the dated read-only snapshot [`audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md`](audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md). Incident P1 capability-health and degraded-context work remains audit-informed blocker or parallel work. The next bounded implementation gate is the shadow-only living-room `CapabilitySnapshot → DecisionContext` gate; it must not enable new actuation.
 3. **Incident P1 capability health and degraded-context observability — supporting/parallel:** expose
    desktop activity, desk presence, bedroom lux, audio, screen sync, and
    living-room presence health; normalize user actor/intent attribution; and

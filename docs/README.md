@@ -38,6 +38,7 @@ Use this page as the entry point for repository documentation.
 
 - [`INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md`](INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md) — lighting instability while Anthony was home but the desktop was inactive, plus its remediation plan
 - [`REPO_CLEANUP_2026_07_31.md`](REPO_CLEANUP_2026_07_31.md) — cleanup inventory, deletion reasoning, retained local state, and regeneration commands
+- [audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md](audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md) — dated, read-only production/autonomy evidence snapshot and implementation handoff
 - [`archive/AUDIT_2026_05_05.md`](archive/AUDIT_2026_05_05.md) — archived full-system audit and resolved or deferred findings
 - [`archive/Audit_Summary_2026-04-28.txt`](archive/Audit_Summary_2026-04-28.txt) — earlier archived audit summary
 
