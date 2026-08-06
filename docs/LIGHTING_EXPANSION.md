@@ -1,222 +1,1015 @@
 # Hue Expansion Plan — Apartment Lighting Buildout
 
-## Context
-
-Current setup is 5 lights (L1 living-room lamp, L2 bedroom desk lamp left, L3/L4 kitchen pendants, L5 bedroom desk lamp right — added 2026-05-11 as a Phase A mirror of L2). The plan names new lights L6, L7 … in the order you'd likely add them next. The apartment is a small open studio (bedroom → hallway → kitchen + living room), white walls, warm LVP floors, industrial ductwork in the kitchen, upper-floor city view from the living-room window, projector on the bedroom wall opposite the desk.
-
-The gaps (biggest opportunities to make the space feel special):
-- **Zero uplight or wall-wash anywhere** — every current emitter is either a diffused lamp (L1, L2) or a downpendant (L3, L4). Adding up/wall-washing light is the single biggest drama lever.
-- **Bedroom has two emitters (L2 + L5 installed 2026-05-11)** — both desk-side. Spatial depth is still limited (no wall-wash or uplighting); adding a wall-wash layer is the biggest remaining bedroom upgrade.
-- **Living room has one emitter (L1)** and a big window with a city view — the window is an untapped accent opportunity.
-- **Kitchen has no task light** under the cabinets and no accent wash against the exposed ductwork.
-- **Hallway is dark** — only L2 spill. Good welcome-home real estate.
-
-Everything below respects your lighting design principles (kitchen pair, post-sunset ct≥333, HSB/CT never mix, IES contrast). For each light, I've noted: what it is, where it'd go, what role it'd play in modes, and realistic cost.
+**Audited:** August 5, 2026  
+**Fit update:** August 5, 2026 — plant-zone space confirmed, Flux cable route measured at 60 in, bedroom cabinet measured at 39 × 16 × 29 in.  
+**Status:** Replacement master plan for the earlier `LIGHTING_EXPANSION.md`  
+**Price basis:** Regular US list prices observed on August 5, 2026. Temporary sales, coupon codes, tax, shipping, raceway, and small installation supplies are excluded unless noted.
 
 ---
 
-## Categories
+## 1. Executive decision
 
-### A. Bias & Sync (gaming, watching, working)
-Extends screen light into the room. Works with the existing screen-sync service.
+The apartment does not need a large number of exposed smart-light fixtures. It needs a small number of deliberately placed **light layers**:
 
-| Light | Role | Where | Cost |
-|---|---|---|---|
-| **Hue Play Light Bar pair** | Physical bias flanking the monitor; snappier than L2 alone for gaming | Behind primary monitor on desk | $130/pair |
-| **Hue Gradient Lightstrip for monitor 55"** | Horizontal gradient behind the monitor | Adhered to back of primary monitor | $170 |
-| **Hue Play HDMI Sync Box 8K** | Replaces mss screen-sync on the dev PC; low-latency projector sync | Between dev PC and projector HDMI | $290 |
-| **Hue Play Gradient Light Tube 75"** | Bigger bar/tube form factor; mountable behind the desk or above projector | Vertical behind desk *or* horizontal above projector if projector is wall-mounted later | $240 |
+1. **A concealed low wall/plant wash** at the right side of the living-room sofa.
+2. **A broad horizontal cabinet-top wash** across the kitchen.
+3. **Two separate high-CRI task lights** over the useful kitchen counters.
+4. **Physical scene control** that is faster than opening HomeHub or the Hue app.
+5. **Low-level path lighting** in the entry/bathroom/closet areas.
+6. A later **side-wall bedroom layer** that never spills onto the projector image.
 
-**Integration notes:** Play bars would register as L8/L9 (L5 = Bedroom Lamp Right installed 2026-05-11; L6 = Signe floor lamp; L7 = Play Wall Washer per "Recommended placement" below) — join the kitchen-style "pair" rule for gaming/working bias. Gradient strips appear as a single light to `hue_service` but as addressable segments to Hue entertainment areas — keep in `ACTIVITY_LIGHT_STATES` as one light, use entertainment group for screen-sync. Sync Box replaces `screen_sync.py` mss path entirely and fixes the "watching is dev-PC-HDMI only" limitation.
+The two primary visual scene families are:
 
-### B. Ambient & Mood (lamps, sculptural)
-Fills out rooms. Replaces or complements existing fabric lamps.
+- **`connor_color`** — coral/peach architectural wash, teal/blue-violet vertical accents, restrained magenta/cyan details, and one warm anchor.
+- **`listening_bar`** — dark amber, burgundy, bronze, muted olive, warm picture/console light, and intentional negative space.
 
-| Light | Role | Where | Cost |
-|---|---|---|---|
-| **Hue Signe Gradient Floor Lamp (tall)** | Vertical wall-washer column, up to ~6ft tall gradient | Bedroom corner diagonal from desk (pointed at wall) *or* living room corner by window | $363 (MSRP) |
-| **Hue Twilight Gradient Table Lamp** | Dual-emitter nightstand lamp with ColorCast gradient; sunrise simulation | Bedside nightstand | $308 |
-| **Hue Iris Gen 4 Table Lamp** | Compact colored accent lamp, single color wash; Gen 4 is 570 lm (up from Gen 3's 210 lm) | Coffee table, kitchen counter corner, or nightstand | $121 |
-| **Hue Go Portable (latest model)** | Battery accent lamp, 24h battery, moveable | Floats — bathroom shelf, hallway floor, bed, living room coffee table | $99 |
-| **IKEA Varmblixt Smart Donut** | Sculptural frosted-donut lamp. **2026 revision is Matter-over-Thread only — does NOT pair with the Hue Bridge.** Aesthetically perfect for this apartment but currently incompatible with Home Hub; defer pending Matter integration. The 2024 Zigbee variant is no longer sold. | Deferred (was: living room side table) | $99 |
-
-**Integration notes:** Varmblixt's 2026 revision is Matter-over-Thread; until Home Hub adds a Matter actuator path, it can't sit in `ACTIVITY_LIGHT_STATES` and is effectively unusable for our setup. Hue Go can be motion-triggered via the Hue Motion Sensor (see Category D) — the in-app arrival-wave choreography was retired with home/away on 2026-04-27, but bridge-side motion rules still work.
-
-### C. Architectural & Wall-Wash (transform surfaces)
-Turn white walls into scenes. Highest drama-per-dollar.
-
-| Light | Role | Where | Cost |
-|---|---|---|---|
-| **Hue Play Wall Washer** | Continuous multi-LED gradient bar that paints a wall | Behind the desk chair in the bedroom (faces the projection wall — bias for watching without hitting the image); or wall behind the couch | $220 |
-| **Hue Dymera Wall Sconce (indoor)** | Two independently-controlled beams (up + down); hard-wired | Hallway (if there's a bare sconce box) or replacing a building-provided bathroom sconce | $242 |
-| **Hue OmniGlow Lightstrip 3m/10ft** | Seamless CSP lightstrip, 2700 lm at 6500K — no visible LED dots. Cuttable, NOT extendable. (5m/16ft variant is EU-only as of May 2026.) | On top of upper kitchen cabinets, aimed at ceiling — uplight wash against the industrial ductwork (this is the single most transformative move for the kitchen); or cove behind the couch | $140 |
-| **Hue Flux Gradient Lightstrip 10ft / 16ft** | Newer (US-released March 2026) gradient strip, 2000 lm. Cuttable AND extendable up to 20m total. ~half the price of Play Gradient at the same length. | Same placements as OmniGlow; better choice if you want to extend later | $70 / $100 |
-| **Hue Festavia String Lights 26ft (100 LED)** | Addressable string, individual LED control in entertainment scenes; 2nd-gen indoor+outdoor | Draped behind the living-room vertical blinds (pairs with the city night view); or across the kitchen ductwork | $132 |
-| **Hue Festavia 65ft (250 LED)** | Bigger version, covers multiple surfaces; 2nd-gen indoor+outdoor | Over-spec for a small studio — only worth it if covering both kitchen ductwork AND living-room window | $242 |
-
-**Integration notes:** Wall Washer behind the desk is the sharpest bedroom upgrade — it'd light the back wall during watching with warm CT and provide HSB gradient during gaming, without competing with the projector. OmniGlow on top of kitchen cabinets turns the ductwork ceiling into a moody canvas — add a `cooking` uplight state in `ACTIVITY_LIGHT_STATES` and the kitchen ceiling lights up automatically the moment you tap the cooking tile, plus a dim-orange `relax` state for evenings. Festavia has two distinct use modes: (a) **static HSB preset** — running a fixed "city skyline" palette behind the blinds, safe and matches the relax/social color palettes; (b) **entertainment-area sync** — mirrors live screen content, which during gaming can pull greens/reds that fight the recently retuned teal-blue gaming palette and the room's olive/teal accents. Default to (a); only opt into (b) if Festavia is excluded from the gaming entertainment group.
-
-### D. Functional & Task
-Work and utility bulbs. Where task lighting matters more than mood.
-
-| Light | Role | Where | Cost |
-|---|---|---|---|
-| **IKEA Skydrag / Omlopp** (Zigbee) | Under-cabinet task light; IKEA's wired Zigbee LED; pairs with Hue Bridge | Under kitchen upper cabinets | $35–60 |
-| **Hue White Ambiance A19** | Tunable-white bulb (no color) — cheaper than color | Bathroom ceiling, hallway, any building fixture where color isn't needed | $22 |
-| **Hue White & Color A19** | Full color bulb | Any existing E26 fixture | $50 |
-| **Hue E12 Candelabra** | Candle-style bulb | If any fixture uses E12 sockets | $25 |
-| **Innr A19 Color Bulb** | Budget third-party Zigbee bulb, pairs with Hue Bridge | Fill-in for secondary fixtures; known to be less reliable | $18–25 |
-| **IKEA Tradfri E26 Color (latest firmware)** | Budget Zigbee bulb, pairs with Hue Bridge | Same as Innr | $10–15 |
-| **Hue Recessed Downlight 5"/6"** | Retrofit can light | Living room recessed cans (the "sensor/thermostat hardware" circles you noted) if any are actual bulb sockets | $60 each |
-| **Hue Motion Sensor (indoor)** | Battery-powered PIR sensor; bridge-native motion rules without backend changes. Pairs with Hue Go for hallway "welcome home" lighting. | Hallway shelf, entry, bathroom | $45 |
-| **Hue Tap Dial Switch** | Kinetic-energy (battery-free) physical scene/dimmer with rotary dimmer + 4 buttons. Magnetic mount. Bridges the gap when voice and dashboard aren't reachable (cooking, controller in hand, guests). | Kitchen backsplash, desk side, or living-room end table | $50 |
-
-### E. Decorative / Character
-Makes the apartment visibly non-generic.
-
-| Light | Role | Where | Cost |
-|---|---|---|---|
-| **Hue Festavia Globe (outdoor)** | NOT a pendant — outdoor-rated globe-bulb string lights (22ft / 45ft). Marketed for patios, balconies. | Defer pending balcony/patio (none in current apartment) | $176 / $220 |
-| **Hue Go Portable** (repeat) | The only battery-powered option on this list — no permanent install, no rewiring. Movable character light. | Any surface, battery, mobile | $99 |
+The first purchases should be the living-room plant wash and the kitchen cabinet cove. They correct the apartment's two largest nighttime imbalances: the dark right end of the sofa wall and the kitchen's two bright pendants floating in a dark volume.
 
 ---
 
-## Price tiers
+## 2. Verified apartment constraints
 
-### Tier 1 — Budget foothold (~$220)
-Fill the biggest functional gaps without rewiring anything.
-- **Hue OmniGlow 3m** — $140 — top of kitchen cabinets, uplight wash against the industrial ductwork — tracked in [#11](https://github.com/agatte/home-hub/issues/11)
-- **IKEA Skydrag under-cabinet Zigbee strip** — $35–60 — kitchen task light (paired with OmniGlow as the kitchen completion kit) — tracked in [#12](https://github.com/agatte/home-hub/issues/12)
-- **Hue Motion Sensor** — $45 — enables motion-triggered hallway lighting without code — tracked in [#13](https://github.com/agatte/home-hub/issues/13)
+These are the physical facts used by this audit.
 
-**Biggest bang:** OmniGlow + Skydrag together complete the kitchen — uplight ductwork above + task light below. The OmniGlow transforms the kitchen's visual identity at night; it's also the first wishlist item that integrates directly with an existing mode (add a `cooking` uplight state and the kitchen lights up automatically the moment you tap the cooking tile).
+### Existing Hue layout
 
-### Tier 2 — Meaningful upgrade ($200–500)
-Add character to the living room, a flexible mobile light, and physical control.
-- **Hue Iris Gen 4** — $121 — one colored accent on the coffee table or nightstand
-- **Hue Go Portable** — $99 — flexible nightstand/bathroom/hallway light (combines with Tier 1 motion sensor for welcome-home)
-- **Hue Tap Dial Switch** — $50 — physical scene/dimmer near the cooking station or desk
-- **Hue Flux Gradient Lightstrip 16ft** — $100 — alternative to OmniGlow if you want extendability later
-- **2× IKEA Tradfri E26 color** — $20–30 — any dumb fixture you want Hue to control
+- **L1** — living-room shaded lamp.
+- **L2** — bedroom desk lamp left.
+- **L3/L4** — kitchen pendants.
+- **L5** — bedroom desk lamp right.
 
-**Biggest bang:** Hue Go is the cheapest item on the list that visibly changes how the apartment feels — 24h battery, floats anywhere, and closes the dark hallway gap when paired with the Tier 1 motion sensor. Note: Varmblixt's 2026 revision dropped to Matter-only, so the original "living room sculptural accent" pick is unavailable for now.
+New lights should not receive permanent L6/L7/etc. labels until they are paired and their actual Hue IDs are known.
 
-### Tier 3 — Premium redesign ($500–1500)
-Real architectural changes. Room-level visual identity.
-- **Hue Play Wall Washer** — $220 — behind desk, wall-wash opposite projector. The foundational bedroom upgrade — closes the one-emitter gap directly.
-- **Hue Signe Gradient Floor Lamp** — $363 (MSRP) — bedroom corner column. Premium layer on top of the Wall Washer; gradient palette assignment needs design work against the recently retuned ember/moss relax palette (curator review pre-purchase recommended).
-- **Hue Twilight Gradient Table Lamp** — $308 — nightstand; integrates with morning_routine + winddown_routine schedulers.
-- **Hue Play HDMI Sync Box 8K** — $290 — replaces mss path, proper projector sync.
-- **Hue Play Light Bar pair** — $130 — monitor flank, snappier than L2 alone for gaming bias.
-- **Hue Bridge Pro** — $99 — infrastructure prerequisite for the full buildout (150 lights / 50 accessories vs original Bridge's 50/12; MotionAware turns existing lights into motion sensors; SpatialAware scenes 2026).
+### Kitchen
 
-**Biggest bang:** Wall Washer is the foundational bedroom upgrade — turns a blank back wall into the apartment's best surface during watching/gaming for $220. Signe is the premium layer on top. The Sync Box is a separate but real quality-of-life upgrade for watching mode.
+- Upper-cabinet top run: **exactly 12 ft / 144 in**, uninterrupted.
+- Cabinet top to ceiling: **9 in**.
+- No outlet above cabinets.
+- Useful backsplash outlets:
+  - left outlet behind the Keurig;
+  - right outlet behind the air fryer.
+- Under-cabinet spans, left to right:
+  - 22 in useful counter;
+  - 30 in microwave/range;
+  - 22 in useful counter;
+  - 35 in above refrigerator;
+  - stacked pantry cabinets.
+- Only the two **22 in counter spans** need dedicated task bars.
+- The microwave's built-in light should serve the range.
+- The refrigerator span is not a useful work surface.
 
-### Tier 4 — Flagship / full buildout (~$2000+)
-Everything the apartment can reasonably hold without over-lighting.
-- All of Tier 3 plus:
-- **Hue Festavia 26ft (100 LED)** — $132 — behind living-room vertical blinds, paired with city night view
-- **Hue Festavia 65ft (250 LED)** — $242 — only if covering kitchen ductwork run AND living-room window (over-spec for a single surface)
-- **Hue Dymera Wall Sconce** — $242 — hallway IF there's a sconce box (renter-friendliness caveat: hard-wired install)
-- **2× Hue Iris Gen 4** — $242 — kitchen counter + coffee table second emitters
-- **Hue Play Gradient Light Tube 75"** — $242 — secondary bias behind desk (sized for TV-back; check fit)
+### Living-room plant bay
 
----
+- Couch back sits firmly against the wall.
+- Couch arm to cabinet: **36 in**.
+- Bottom of couch arm: **20 in above floor**.
+- Front plant stand: **23.5 in high × 9 in wide**.
+- Rear stand: **27.5 in high × 10 in wide**.
+- Two free receptacles are available in the plant area.
+- A 4 × 4 in floor footprint exists inside a stand.
+- The stands use thin, open black legs. A tall solid lamp body remains visible through them.
 
-## Recommended placement (your apartment, L6 onward)
+### Bedroom
 
-**Bedroom** — fills out the two-emitter room (L2 + L5 installed; spatial depth still limited)
-- **L5 — Bedroom Lamp Right** (installed 2026-05-11): clear housing, desk-side. Differentiated from L2 in the Phase B/C curator-reviewed gameday SEQUENCES (shipped 2026-05-07); per-mode state differentiation for non-gameday modes is still ongoing as Tier 3 buildout proceeds.
-- **L6 — Signe floor lamp** in the corner diagonal from the desk, pointed at the wall behind the bed. During watching it backlights the viewer in warm CT; during gaming it becomes a gradient column; scene-drift loves it.
-- **L7 — Play Wall Washer** on the wall behind the desk chair, aimed at the projection wall's adjacent side wall (NOT the projection wall itself). In watching mode: warm CT at ~200 bri, extends the projected image's ambient spread. In gaming: HSB gradient that bounces off the side wall and reaches peripheral vision.
-- **L8 + L9 — Play Light Bar pair** flanking the primary monitor. Two Hue IDs, registered as a "pair" like L3/L4 (each bar is a distinct light_id at the bridge). They'd replace a lot of what L2/L5 are currently doing for bias and let you push them down to a softer fill role.
-- **L10 — Twilight Gradient Table Lamp** on the nightstand. Plug into morning routine (sunrise simulation) and wind-down (candle fade). Replaces any dumb bedside lamp.
+- Headboard sits against the wall.
+- Lifting/storage bed frame means cables must never cross the moving platform, hinge path, or lifting mechanism.
+- There is no practical floor-lamp space beside the bed.
+- Outlets exist on both sides.
+- The projector image occupies most of the projection wall.
+- Any new mood light must illuminate a side wall, headboard plane, furniture face, or rear/low plane — never the projection wall.
 
-**Living room** — second emitter + window character
-- **L11 — Hue Iris Gen 4** on the coffee table or the side table beside L1. Two emitters in a small room is enough. Single colored wash; choose hue/sat that complements L1's teal base (avoid a second teal — the room is already teal-anchored). The original pick was the IKEA Varmblixt Smart Donut, but its 2026 revision dropped Zigbee for Matter-over-Thread and is no longer Hue-Bridge-compatible. Pending Matter integration in Home Hub, the Iris Gen 4 takes its slot.
-- **L12 — Festavia 26ft** behind the vertical blinds, facing out toward the window. Pairs with the city night view — especially during `social` or `relax` evening/night states. Invisible when off, magic when on. Run as static HSB preset (not entertainment-sync) during gaming to avoid palette clash.
+### Bathroom and closet
 
-**Kitchen** — task + accent layering
-- **L13 — OmniGlow 3m** on top of the upper cabinets, aimed at the ceiling. Uplight wash against the exposed ductwork. Deep oranges in evening `cooking`, warm amber `relax`, and a pulsing accent in `social`. This is the move that makes the kitchen photograph well.
-- **L14 — Skydrag/Omlopp** under-cabinet task light. Strict `ct ≥ 333` in evening+. Auto-on during `cooking` at 4000K (food color accuracy within your post-sunset rule allows up to 333 mired = 3000K; 4000K only during daytime cooking). Complements L3/L4 which are island-focused.
+- Existing fixtures appear integrated rather than replaceable-bulb fixtures.
+- Both closet doors are hinged and can remain open.
+- The closet is commonly left open for extended periods, so a door contact sensor would not represent actual occupancy.
 
-**Hallway** — no fixture, easy wins
-- **L15 — Hue Go Portable** on a small shelf or the floor. Battery-powered warm light that doesn't require permanent install — works as a bathroom or hallway accent. Pair with the **Hue Motion Sensor** (Tier 1) — bridge-side motion rules trigger the Go on entry without any backend changes. The in-app arrival-wave choreography was retired with home/away on 2026-04-27, but hardware-driven welcome lighting works fine.
-- Or **L15 — Hue Dymera** if there's a bare sconce box you can wire. Up+down beams add vertical drama to the narrow hallway.
+### Corrected apartment description
 
----
+The prior plan contained outdated or inaccurate room assumptions:
 
-## Pairing third-party (IKEA Tradfri / Varmblixt / Innr) to the Hue Bridge
-
-Your memory of "12 times" is in the right ballpark — the Zigbee Touchlink spec resets on rapid power cycles, and the exact count depends on firmware version. Practical rules:
-
-- **IKEA Tradfri bulbs** — toggle power 6 times rapidly for a factory reset on modern firmware. Older firmware (pre-v1.2) may need more cycles or can't be paired at all without first updating via IKEA's hub. 12 rapid cycles is a "safety number" that works across most firmware revisions.
-- **IKEA Varmblixt Smart (2026 revision)** — **Matter-over-Thread only.** The 2024 Zigbee variant the doc was originally drafted against is no longer sold. The 2026 unit retains a Zigbee radio for IKEA's BILRESA accessory but is NOT advertised or supported as Hue-Bridge-pairable, and requires a Thread Border Router (DIRIGERA, Apple TV 4K, Echo 4th-gen) for control. Until Home Hub adds a Matter actuator path, treat as incompatible.
-- **Tradfri drivers (Skydrag/Omlopp)** — have a physical reset button; hold it while the bridge searches.
-- **Innr bulbs** — power-cycle 5–6 times, same Touchlink reset. Friends-of-Hue certified, so should pair cleanly.
-
-**Use "Add Hue-compatible light" (not "Add Hue light")** in the Hue app during pairing. The bridge will discover any Zigbee LightLink / Zigbee 3.0 device in reset mode within ~1m range.
-
-**Risks:**
-- Non-Hue lights don't always fire at the same speed, so strict scene choreography (the `register_on_mode_change` wave) may look staggered.
-- Innr has a reputation for dropping off the mesh after months of use (per r/hue). If a light is critical to a mode's state, pay for Hue.
-- IKEA Tradfri drivers have a similar (though less documented) mesh-drop risk and can't receive firmware updates over the Hue Bridge.
+- The kitchen has a clean white cabinet-top cove, **not exposed industrial ductwork** above the cabinets.
+- The living-room window has **horizontal blinds**, not vertical blinds.
+- The floor plan includes a balcony; it should not be described as an apartment with no outdoor zone.
+- The projector wall cannot accept a general wall wash during watching.
 
 ---
 
-## Home Hub integration implications
+## 3. Design direction
 
-Any of these additions would require backend changes in `backend/services/light_state_calculator.py` (where `ACTIVITY_LIGHT_STATES` and `EFFECT_AUTO_MAP` live — `automation_engine.py` re-exports both for back-compat but is no longer the edit target):
+The inspiration images favor **illuminated planes rather than visible gadgets**:
 
-- **New light IDs** added to `ACTIVITY_LIGHT_STATES` for every mode × time period (see "New automation mode" pattern in `.claude/CLAUDE.md`). Each new light needs a considered state — don't `_uniform()`.
-- **Kitchen-pair rule extension** — if L13 (OmniGlow cabinet uplight) and L14 (under-cabinet task) are added, they're a new functional pair for `cooking` + the 6 guest party scenes. In relax + custom non-party aesthetic scenes they're free to diverge.
-- **Bias-pair rule** — L8/L9 Play bars become a monitor-flanking pair (L5 is installed Bedroom Lamp Right); group with L2/L5 for screen sync entertainment area.
-- **`EFFECT_AUTO_MAP`** (also in `light_state_calculator.py`) — for effects scoped to specific lights (e.g. relax candle/fire is scoped to `["1", "2"]` so moss kitchen pendants stay static), new lights are **excluded by default**. You must explicitly add their IDs to the relevant scope list. Effects with `"lights": None` (e.g. watching glisten) will apply to all lights automatically. Wall Washer + Signe + Festavia + OmniGlow are all Hue v2 effect-capable, but which scope list they should join is a design decision, not an automatic one.
-- **Screen sync service** — Play Sync Box would replace `backend/services/pc_agent/screen_sync_agent.py` (the mss capture loop that runs on the dev PC); the backend `screen_sync.py` receiver service stays. Route sync through the box's Entertainment API instead of the `POST /api/automation/screen-color` path. Much lower latency, frees the dev PC from running mss.
-- **Frontend theme** — `src/lib/theme.js` `LIGHT_COLOR_PRESETS` would need new entries for Varmblixt's limited gamut (snap presets to its supported range to avoid "color requested but not matched" artifacts).
+- ceiling/cove wash;
+- vertical wall or column wash;
+- plants and artwork catching colored light;
+- small pools of warm light;
+- low visible “jewel” lights used sparingly;
+- dark areas between lit surfaces;
+- warm light retained even in colorful scenes.
 
-**Scope ordering if executing:**
-1. Add each new light's states to `ACTIVITY_LIGHT_STATES` for all 7 modes × up to 4 time periods (`day`/`evening`/`night`/`late_night` — social is flat; cooking has no `late_night`; modes without a `late_night` entry fall back to `night` automatically).
-2. Test via `mcp__home-hub__get_lights` → `set_light` per new ID.
-3. Validate kitchen-pair rule holds (L13/L14 paired in functional modes).
-4. Update `LIGHT_COLOR_PRESETS` if any light needs a special preset.
-5. Add to screen-sync entertainment group if bias/sync role.
-6. Update scenes in DB via `mode_scene_overrides` if a flagship preset should auto-apply.
+This should remain a warm modern listening-lounge apartment, not become a gaming-room installation. The safeguards are:
 
----
-
-## Verification (after any purchase)
-
-1. Pair the light via Hue app (or power-cycle reset for IKEA/Innr).
-2. `mcp__home-hub__get_lights` — confirm new light appears with reachable=True.
-3. `mcp__home-hub__set_light` — test CT and HSB (if capable); confirm the bridge accepts values.
-4. Add a draft `ACTIVITY_LIGHT_STATES` block for the new ID with one mode/time, `python run.py`, force the mode, verify the state applies.
-5. Fill in remaining mode×period combinations with intentional values (never `_uniform`).
-6. `mcp__home-hub__get_automation_status` after a mode change to confirm the new light shows in the applied state.
-7. For Wall Washer / Signe / OmniGlow / Festavia: test `activate_effect` per light ID (candle, fire, sparkle, opal) — they're Hue v2 native, so effects work out of the box.
-8. UI audit via Codex `$ui-audit` if any presets or scene UI changed.
+- keep one warm anchor in colorful scenes;
+- avoid making every light the same color;
+- keep saturation lower on large architectural surfaces;
+- reserve brighter saturation for smaller plant, pendant, or console accents;
+- preserve the center sofa wall for oversized art;
+- conceal wiring and light sources wherever possible;
+- use no more than one deliberate visible accent lamp in the living room.
 
 ---
 
-## Top picks if you only buy one thing
+# 4. Where to start
 
-- **Under $200**: **Hue OmniGlow 3m + Hue Motion Sensor + Skydrag** ($140 + $45 + $35 ≈ $220) — completes the kitchen above and below, plus enables hallway welcome-home lighting. Cheapest path to "the apartment feels deliberately lit."
-- **Under $300**: **Hue Play Wall Washer** behind the desk — turns a blank bedroom wall into the best-looking surface in the apartment during watching/gaming modes; adds the bedroom's second spatial layer for both modes.
-- **No budget limit**: **Signe Gradient Floor Lamp** for the bedroom corner — single most "this is a designed space" addition. Caveat: gradient palette assignment (ember-vs-moss for relax, teal-blue for gaming) is a design-time decision that needs `lighting-curator` review before commit. The recently retuned relax palette (ember L1/L2, whisper-dim moss L3/L4) means Signe can't just inherit L2's state — the gradient must be designed for the column.
+## Phase 1 — Correct the open-plan room
+
+### 1A. Living-room plant wash
+
+**Primary recommendation:** one **Hue Play Light Bar single pack**, placed horizontally and concealed low behind the rear plant stand or along the baseboard.
+
+- Regular price: **$109.99**
+- Output: **500 lm**
+- Size: approximately **10 in long × 1 7/16 in high**
+- Cable: approximately **2 m / 6.6 ft**
+- Can lie horizontally.
+- Base kit includes a power supply that can support up to three Play bars.
+
+Official product:  
+https://www.philips-hue.com/en-us/p/hue-play-light-bar/7820130U7
+
+**Why it wins here**
+
+- Its very low height is easier to hide than an 8 in uplight can, a 24 in Play Table lamp, or a 53 in Play Floor lamp.
+- It creates a broad wall wash and softer plant shadows.
+- The 10 in length fits easily within the 36 in bay.
+- The outlets are already within practical cable distance.
+- Its power supply leaves an upgrade path for another Play bar later.
+
+**Fit status: confirmed**
+
+The plant stands can be moved, so there is ample room to create the required clear strip behind the rear stand or along the baseboard. Reserve at least:
+
+- **10.5 in clear length**
+- about **4 in usable depth**, including the stand/mount and cable bend
+
+The final position should be chosen by sightline and beam quality rather than by a hard space constraint.
+
+**Starting placement**
+
+- Lay the bar horizontally.
+- Put it as close to the wall as the cable and stand allow.
+- Aim the broad face up the wall and slightly toward the corner.
+- Keep direct LEDs out of the couch, kitchen, and entry sightlines.
+- Begin at only 10–20% brightness.
+
+### 1B. Kitchen cabinet-top cove
+
+**Recommendation:** **Hue Flux strip light 16 ft**, cut only at the permitted cut mark nearest the 12 ft run.
+
+- Regular price: **$99.99**
+- Output: **2,000 lm**
+- Actual listed length: approximately **196 7/8 in**
+- Cuttable, reconnectable, reusable, and extendable.
+- Designed for concealed indirect wall washing.
+- Official Hue US store status during this audit: temporarily out of stock.
+
+Official product:  
+https://www.philips-hue.com/en-us/p/lightstrips-flux-strip-light-16ft/046677607814
+
+Recommended supporting parts:
+
+- **Flux 16 ft low-voltage extension cable** — $14.99  
+  https://www.philips-hue.com/en-us/p/lightstrips-hue-flux-strip-light-extension-cable-16ft/046677606305
+- **Flux bracket 10-pack** — $11.99  
+  https://www.philips-hue.com/en-us/products/smart-light-strips?page=2
+
+**List-price kitchen-cove package:** **$126.97**, before white raceway and tax.
+
+**Placement**
+
+- Start by dry-fitting the strip roughly **2–3 in behind the cabinet front edge**.
+- Test it flat, then test a slight backward/upward aim.
+- Do not permanently attach it until viewed from:
+  - the couch;
+  - the island;
+  - the entry;
+  - immediately in front of the kitchen.
+- The preferred result is a broad ceiling halo, not a bright narrow line at the rear wall.
+- Use brackets or a removable channel rather than trusting adhesive on the dusty cabinet top.
+
+**Power route**
+
+- Use the left outlet behind the Keurig.
+- Keep the power supply/controller low near that outlet where practical.
+- Run the official low-voltage extension cable vertically in a narrow white raceway at the far-left cabinet edge.
+- Enter the cabinet-top area at the upper-left corner.
+- Do not use a permanently routed thin household extension cord above the cabinets.
+
+**Route status: confirmed**
+
+The measured route from the Keurig outlet to the intended cabinet-top connection is **60 in / 5 ft**. The official 16 ft low-voltage extension cable is therefore comfortably long enough. Plan the raceway and controller location so the excess cable can be managed out of sight without tight coils, pinching, or heat buildup.
+
+### Phase 1 cost
+
+| Item | Regular price |
+|---|---:|
+| Hue Play Light Bar single | $109.99 |
+| Hue Flux 16 ft | $99.99 |
+| Flux low-voltage extension cable | $14.99 |
+| Flux bracket 10-pack | $11.99 |
+| Hue Tap Dial, added below | $54.99 |
+| **Phase 1 total** | **$291.95** |
+
+This total excludes tax, raceway, and any temporary Hue promotions.
 
 ---
 
-## Sources
+## Phase 2 — Physical control and kitchen task light
 
-- [Philips Hue new products 2025 overview — Hueblog](https://hueblog.com/2025/09/04/these-are-all-the-new-philips-hue-products-for-2025/)
-- [Philips Hue OmniGlow Review — TechRadar](https://www.techradar.com/home/smart-lights/philips-hue-omniglow-review)
-- [Philips Hue Play Wall Washer Review — Hueblog](https://hueblog.com/2025/06/17/review-of-the-new-philips-hue-play-wall-washer/)
-- [Philips Hue Dymera Wall Light Review — Hueblog](https://hueblog.com/2024/02/01/philips-hue-dymera-wall-light-review/)
-- [IKEA Varmblixt Smart Matter Compatibility — TechRadar](https://www.techradar.com/home/smart-lights/a-marriage-of-hue-and-form-ikeas-donut-shaped-varmblixt-smart-lamp-has-started-landing-in-stores-early-and-we-cant-wait-to-get-our-hands-on-it-again)
-- [IKEA Tradfri pairing with Hue Bridge — return2.net](https://return2.net/how-to-connect-ikea-tradfri-to-philips-hue-bridge/)
-- [Third-party bulbs compatible with Hue — The Smart Cave](https://thesmartcave.com/smart-bulbs-compatible-with-philips-hue/)
-- [Philips Hue Gradient Signe Floor Lamp Review — T3](https://www.t3.com/reviews/philips-hue-gradient-signe-floor-lamp-review)
-- [Philips Hue Go Gen 2 Review — TechRadar](https://www.techradar.com/reviews/philips-hue-go-2)
-- [Philips Hue Festavia Review — Trusted Reviews](https://www.trustedreviews.com/reviews/philips-hue-festavia-string-lights-2nd-gen-indoor-and-outdoor)
-- [Philips Hue Play HDMI Sync Box Review — TechHive](https://www.techhive.com/article/584116/philips-hue-play-hdmi-sync-box-review.html)
-- [Hue Zigbee 3.0 support — Philips Hue Developer Program](https://developers.meethue.com/zigbee-3-0-support-in-hue-ecosystem/)
+### 2A. Hue Tap Dial
+
+**Recommendation:** buy after the first two new light layers are installed.
+
+- Regular price: **$54.99**
+- Battery powered; uses a replaceable battery.
+- It is **not kinetic and not battery-free**.
+- Four buttons can control scenes/rooms/zones, and the dial adjusts brightness.
+
+Official product:  
+https://www.philips-hue.com/en-us/p/hue-tap-dial-switch/046677578800
+
+Recommended button layout:
+
+1. `cooking`
+2. `connor_color`
+3. `listening_bar`
+4. `projector_night` or `all_off`
+
+Recommended dial target:
+
+- an **open-plan ambient zone** containing L1, the plant wash, cabinet cove, and kitchen pendants;
+- task bars should remain separately controllable during cooking.
+
+### 2B. Two IKEA SKYDRAG 18 in task bars
+
+**Recommendation:** two 18 in bars, one centered under each 22 in useful cabinet.
+
+Each bar:
+
+- Regular price: **$32**
+- Size: **18 × 1 × 1 in**
+- Output: **260 lm**
+- Power: **4 W**
+- Cord: **11 ft 6 in**
+- CRI: **>90**
+
+Official product:  
+https://www.ikea.com/us/en/p/skydrag-led-cntp-wrd-lght-strp-w-sensor-dimmable-white-00439595/
+
+Supporting components:
+
+- **TRÅDFRI 10 W driver** — $35
+- **ANSLUTA 11 ft 6 in power cord** — $12
+
+Official driver:  
+https://www.ikea.com/us/en/p/tradfri-driver-for-wireless-control-smart-gray-10356189/
+
+**Two-bar package:** **$111** before tax.
+
+The two bars draw 8 W total, below the 10 W driver's limit. The driver supports up to three units provided total wattage remains at or under 10 W.
+
+**Physical fit**
+
+- Each 18 in bar leaves about **2 in of margin at each end** of a 22 in cabinet.
+- Install behind the cabinet's front lip so the hardware is hidden and the light reaches the counter.
+- Do not install a separate bar under the microwave.
+- Do not install one above the refrigerator.
+
+**Compatibility caution**
+
+IKEA says smart-lighting products with software 1.2.x or later can pair directly to a Hue Bridge after a factory reset, but firmware level and behavior must be verified on the actual driver. Pair and test the driver near the Bridge before permanently routing its long cables.
+
+IKEA Hue-Bridge guidance:  
+https://www.ikea.com/us/en/customer-service/product-support/smart-lighting/how-to-use-smart-lighting-pub53d86412/
+
+**Fallback if direct Hue pairing is unreliable**
+
+Use fixed high-CRI task bars through a **Hue Smart Plug**.
+
+- Hue Smart Plug regular price: **$37.99**
+- Smart Plug provides on/off control only; it does not add dimming to a non-dimmable fixture.
+
+Official product:  
+https://www.philips-hue.com/en-us/p/hue-smart-plug/046677552343
+
+### Phase 2 running total
+
+- Phase 1: $291.95
+- Two SKYDRAG bars + driver + ANSLUTA cord: $111
+- **Running total: $402.95**
+
+---
+
+## Phase 3 — Entry/path automation
+
+### Hue indoor motion sensor
+
+**Recommendation:** add after the plant wash and cabinet cove create suitable arrival/path endpoints.
+
+- Regular price: **$48.99**
+- Battery powered.
+- Can change behavior by time of day.
+- Includes daylight sensing.
+- Best initial location: entry/hall, aimed across the walking path rather than broadly into the living room.
+
+Official product:  
+https://www.philips-hue.com/en-us/products/all-products/product-page.hue_motion-sensor_indoor
+
+**Initial bridge-native behavior**
+
+- Daylight sufficient: no action.
+- Evening entry: warm cabinet cove + very low plant wash.
+- Overnight: only a low warm path layer.
+- Do not let the sensor activate all living-room lights or overwrite a deliberate listening/projector scene.
+
+**Running total with sensor:** **$451.94**
+
+### Bathroom and closet
+
+Do **not** buy a Hue motion sensor for these zones until there is a controllable light endpoint. Their integrated fixtures cannot be controlled merely by adding a sensor.
+
+Immediate renter-friendly option:
+
+- warm-white rechargeable motion bars;
+- place low under the vanity/toe-kick and inside the closet;
+- keep bathroom overnight output very low.
+
+Longer-term integrated option:
+
+- renter/landlord-approved smart switch or relay;
+- separate implementation and electrical-safety review.
+
+### Closet contact sensor
+
+**Rejected.** Since the doors often remain open, door state is not occupancy state.
+
+### Front-door contact sensor
+
+**Deferred.** It can become useful later for arrival/departure intent, but HomeHub should first gain accessory-event ingestion and a clear authority policy.
+
+Hue Secure contact sensor regular prices observed:
+
+- 2-pack: **$69.99**
+
+Official product:  
+https://www.philips-hue.com/en-us/p/hue-secure-contact-sensor/046677580872
+
+---
+
+## Phase 4 — Bedroom side-wall layer
+
+### Conditional recommendation: Hue Play Table lamp
+
+- Regular price: **$79.99**
+- Size: approximately **23 15/16 in tall × 3 9/16 in square**
+- Output: **400 lm**
+- Gradient RGBWWIC light.
+- Cable: approximately **1.5 m / 4.9 ft**
+
+Official product:  
+https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-hue-play-table-lamp/046677610791
+
+**Rejected for the living-room plant bay**
+
+Although its 3.56 in square base fits the measured 4 × 4 in footprint, its nearly 24 in solid black body would be obvious through the thin plant-stand legs.
+
+**Possible bedroom role**
+
+The top of the projector/cubby cabinet may support it, aimed toward:
+
+- the desk-side wall;
+- the headboard-side wall;
+- the corner between those surfaces.
+
+It must not face or spill onto the projection wall.
+
+**Cabinet fit status**
+
+The projector/cubby cabinet measures **39 in long × 16 in deep × 29 in high**. That overall top surface is physically large enough for the Play Table lamp's roughly 3.6 in square footprint.
+
+Before purchase, only the exact usable portion of the top still needs to be checked against the projector itself:
+
+- keep the lamp out of the projector's intake/exhaust path;
+- keep it clear of controls, lens, and cable bends;
+- aim it toward the side/headboard wall, never the projection wall;
+- confirm the available outlet route does not cross the lifting bed mechanism.
+
+The cabinet envelope is no longer a fit concern; projector clearance and aiming are the remaining placement checks.
+
+**Running total if approved later:** **$531.93**
+
+---
+
+# 5. Living-room plant-zone three-way audit
+
+## Option 1 — Hue Play Light Bar single
+
+**Decision: preferred**
+
+| Attribute | Assessment |
+|---|---|
+| Price | $109.99 |
+| Output | 500 lm |
+| Physical form | 10 in long; very low when laid horizontally |
+| Concealment | Best of the three |
+| Beam | Broad, soft wash |
+| Plant shadows | Softer, more diffuse |
+| Cable | About 6.6 ft; outlets nearby |
+| HomeHub/Hue support | Native Hue |
+| Main fit question | Need 10.5 in × ~4 in clear strip behind rear stand |
+| Best scene use | Teal/blue-violet; amber/burgundy/olive |
+
+This is only about $7 more than the verified two-can GU10 package plus one Hue GU10 bulb, while being lower, easier to hide, and fully integrated.
+
+## Option 2 — Compact black GU10 uplight + Hue GU10 bulb
+
+**Decision: conditional alternative**
+
+Hue GU10 bulb:
+
+- Regular price: **$59.99**
+- Output: **450 lm**
+- Size: approximately **2 in diameter × 2.25 in high**
+- 2000–6500 K, full color.
+
+Official bulb:  
+https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-gu10-smart-spotlight/046677584658
+
+Verified fixture example:
+
+- SUNVIE two-pack black indoor uplights at Walmart
+- Observed price: **$42.99**
+- Each can: about **8 in high × 3.5 in wide**
+- Includes GU10 bulbs, 5.9 ft cord, and foot switch.
+
+Retail listing:  
+https://www.walmart.com/ip/10565607413
+
+Package using one Hue GU10:
+
+- fixture two-pack: $42.99
+- one Hue color GU10: $59.99
+- **total: $102.98**
+
+| Attribute | Assessment |
+|---|---|
+| Concealment | Better than a tall column, worse than horizontal Play Bar |
+| Beam | Focused cone |
+| Plant shadows | Stronger and more dramatic |
+| Inspiration match | Excellent for a defined vertical column |
+| Visual risk | 8 in can may remain visible through open stand |
+| Value | Nearly same total as Play Bar; includes spare can/bulbs |
+| Best placement | Behind rear stand, close to wall |
+
+Choose this only when a flashlight/temporary spotlight test proves that the focused beam looks substantially better than the broad Play Bar wash.
+
+A cheaper GU10 can may exist, but exact dimensions and heat/clearance must be verified before treating it as a fit.
+
+## Option 3 — Hue Play Table lamp
+
+**Decision: reject for plant bay; conditional bedroom option**
+
+| Attribute | Assessment |
+|---|---|
+| Price | $79.99 |
+| Footprint | Fits 4 × 4 in space |
+| Height | Nearly 24 in |
+| Concealment | Poor through thin open stands |
+| Beam | Vertical gradient |
+| Plant-bay result | Visible technological column |
+| Better role | Bedroom furniture-top side-wall wash |
+
+## Previously considered Play Floor lamp large
+
+**Decision: reject for plant bay**
+
+- Regular price: **$149.99**
+- Height: approximately **53 in**
+- The footprint fits, but the long solid black body would be obvious from couch and kitchen viewpoints.
+
+Official product:  
+https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-hue-play-floor-lamp-large/046677610821
+
+---
+
+# 6. Kitchen strip decision
+
+## Hue Flux 16 ft — selected
+
+Why it matches the apartment:
+
+- The run is exactly 12 ft.
+- Flux is long enough to cut at a supported mark near 12 ft.
+- It is designed for concealed indirect light.
+- Its visible LED construction is irrelevant because the source will be hidden.
+- It can be cut, reused, and extended.
+- It costs less than OmniGlow.
+
+## Hue OmniGlow 10 ft — rejected for the cabinet run
+
+- Regular price: **$139.99**
+- Length: approximately **10 ft / 118 in**
+- Output: up to **2,700 lm**
+- Dot-free direct or indirect light.
+- Cuttable but non-extendable.
+
+Official product:  
+https://www.philips-hue.com/en-us/p/lightstrips-omniglow-strip-light-10ft/046677608170
+
+Why it loses here:
+
+- Centering it on a 12 ft run leaves about **12 in unlit at each end**.
+- The cove is only 9 in high, so end falloff is more likely to be apparent.
+- Its dot-free visible-light premium is wasted in a concealed installation.
+- It cannot be extended to solve the missing length.
+
+Official Hue comparison describes Flux as the concealed/indirect system and OmniGlow as suitable for visible direct light as well as concealed use:  
+https://www.philips-hue.com/en-us/explore-hue/propositions/smart-strip-lights
+
+## Do not reuse the leftover Flux under the cabinets
+
+The remaining cut strip should be stored, not routed under the two counters.
+
+Reasons:
+
+1. The top and bottom pieces would remain one controller and one logical Hue light.
+2. The cove and task layers could not independently use different colors/temperatures.
+3. The 30 in microwave gap exceeds the official Flux flex connector's approximately 19 11/16 in span.
+4. Flux has CRI 80, while SKYDRAG is rated above CRI 90.
+5. The air-fryer area adds heat/grease exposure.
+6. A visible LED strip reflected in glossy tile is less refined than a diffused linear task bar.
+
+Official flex connector:
+
+- $29.99
+- approximately 19 11/16 in long
+
+https://www.philips-hue.com/en-us/p/lightstrips-hue-flux-flex-connector-4-pack/046677606336
+
+---
+
+# 7. Room-by-room plan
+
+## Living room
+
+### Install now
+
+- Existing L1 remains the warm anchor.
+- Add one low concealed Play Bar in the right plant bay.
+- Keep the center sofa wall relatively quiet for oversized artwork.
+
+### Add after furniture/art decisions
+
+- A warm picture light after the artwork's exact width, frame, and hanging height are known.
+- One visible decorative “jewel” light on the future media console after the TV is wall-mounted and the current stand is removed.
+
+### Do not use here now
+
+- Iris on the coffee table: visible power cord and direct sightline.
+- Hue Go on the floor as permanent architecture.
+- Play Floor/Signe in the plant bay: visible tall column.
+- Festavia behind the blinds: the horizontal blinds and small room make it likely to read as exposed string light rather than integrated architecture.
+
+## Kitchen
+
+### Install now
+
+- 16 ft Flux cove, cut to supported mark near 12 ft.
+- Two 18 in SKYDRAG task bars.
+- Tap Dial accessible from cooking/open-plan area.
+
+### Keep separate
+
+- Cabinet cove = ambient/architectural layer.
+- Task bars = functional food-prep layer.
+- Pendants = island accents and functional fill.
+
+### Later
+
+- Reassess entry illumination after cove installation; reflected cove light may remove the need for a dedicated entry lamp.
+
+## Bedroom
+
+### Current priority
+
+Lower than living-room and kitchen because the room already has two emitters.
+
+### Conditional addition
+
+- Play Table lamp on projector/cubby furniture only after fit measurements.
+- Aim at side/headboard plane.
+- During projector viewing, use 1–5% warm amber, deep red, or subdued violet.
+- Never wash the projection wall.
+
+### Under-bed
+
+Only consider very low warm path light attached to the **stationary base**. Do not attach a strip or cable to the lifting platform.
+
+### Reject/defer
+
+- Signe floor lamp: no practical floor location.
+- Wall Washer toward projector wall: harms image contrast.
+- Twilight: too costly and requires a suitable bedside surface.
+- Sync Box: major expense and not necessary while HomeHub's PC/projector path remains functional.
+
+## Entry/hall
+
+### After first light layers
+
+- Add Hue motion sensor.
+- Use narrow arrival/path rules.
+- Use cabinet cove and plant wash as endpoints before buying another permanent hallway lamp.
+
+### Later
+
+- Front-door contact sensor only after accessory events and intent precedence are designed in HomeHub.
+
+## Bathroom
+
+- Existing integrated fixtures are not controllable with a Hue bulb.
+- Immediate solution: low warm rechargeable motion bar under vanity/toe-kick.
+- Do not activate full ceiling/vanity light overnight unless needed.
+- Smart-switch/relay integration requires authorization and a separate electrical-safety project.
+
+## Closet
+
+- Contact sensor rejected because doors remain open.
+- Use an internal rechargeable motion/occupancy bar.
+- A later smart-switch solution is possible if authorized.
+
+## Balcony
+
+The balcony is a legitimate future zone, but it should remain restrained:
+
+- one warm portable/outdoor-rated lamp;
+- or low plant/railing illumination;
+- no dense string-light installation until outlet, weather, lease, and sightline details are documented.
+
+---
+
+# 8. Scene design
+
+These are design targets, not final calibrated Hue values.
+
+## `connor_color`
+
+| Layer | Starting role |
+|---|---|
+| L1 living-room lamp | Warm 2200–2500 K, 20–35% |
+| Plant Play Bar | Teal/cyan/blue-violet, 10–25% |
+| Cabinet Flux | Muted coral/peach/red-orange, 20–35% |
+| Kitchen pendants | Magenta/violet/cyan, 5–15% |
+| Counter task bars | Off |
+| Center sofa wall | Mostly dark |
+
+Rule: retain the warm L1 anchor so the apartment does not become a gaming-room palette.
+
+## `listening_bar`
+
+| Layer | Starting role |
+|---|---|
+| L1 | Deep warm white/amber |
+| Plant Play Bar | Dark amber, burgundy, bronze, or muted olive at 8–18% |
+| Cabinet Flux | 2200 K amber or subdued burnt orange at 15–25% |
+| Pendants | Amber at 3–8%, or off |
+| Future picture light | Focused warm white |
+| Future console jewel | Very low amber |
+
+Rule: objects and vertical surfaces should emerge from darkness; do not turn every light the same orange.
+
+## `cooking`
+
+- SKYDRAG bars: bright neutral/warm-neutral white.
+- Flux: white or very low-saturation warm tone.
+- Pendants: functional warm/neutral fill.
+- L1/plant wash: low enough not to distort the work zone.
+- Task bars may be brighter than all decorative lights.
+
+## `relax`
+
+- Warm anchor plus one subdued complementary color.
+- Pendants should stop being the brightest objects in the kitchen after Flux is installed.
+- Avoid identical hue/brightness across all lights.
+
+## `projector_night`
+
+- Bedroom lights at 1–5%.
+- Warm amber, deep red, or subdued violet.
+- No output on projection wall.
+- New Play Table, if approved, should only illuminate a side/headboard plane.
+
+## `night_path`
+
+- Very low, very warm, low-plane light.
+- Avoid ceiling fixtures.
+- Motion timeout should be long enough to prevent darkness while stationary in the bathroom.
+
+---
+
+# 9. Updated product master list
+
+Prices are regular US prices observed August 5, 2026 and may change.
+
+## A. Buy / plan now
+
+| Product | Regular price | Intended location | Fit status | Decision |
+|---|---:|---|---|---|
+| Hue Play Light Bar single | $109.99 | Behind rear living-room plant stand/baseboard | **Fit confirmed; stands can be repositioned** | **First purchase** |
+| Hue Flux 16 ft | $99.99 | Top of 12 ft kitchen cabinets | Length/cove fit confirmed | **First purchase** |
+| Flux extension cable 16 ft | $14.99 | Keurig outlet to cabinet top | Verify route length | **Buy with Flux** |
+| Flux bracket 10-pack | $11.99 | Cabinet top | Fits | **Buy with Flux** |
+| Hue Tap Dial | $54.99 | Open-plan physical control | Fits; mount location flexible | **Buy after first layers** |
+| 2× SKYDRAG 18 in | $64 | Two 22 in counter bays | Fit confirmed | **Phase 2** |
+| TRÅDFRI 10 W driver | $35 | Hidden above/in cabinetry | Electrical capacity confirmed | **Phase 2 pilot** |
+| ANSLUTA cord | $12 | Driver power | Route to be planned | **Required** |
+| Hue indoor motion sensor | $48.99 | Entry/hall | Endpoint dependent | **Phase 3** |
+
+## B. Conditional alternatives
+
+| Product | Regular/observed price | Possible role | Condition |
+|---|---:|---|---|
+| Hue GU10 color bulb | $59.99 | Focused plant uplight | Use only in verified safe GU10 can |
+| SUNVIE GU10 uplight 2-pack | $42.99 observed | Focused plant uplight | Mock up 8 × 3.5 in can visibility |
+| Hue Play Table lamp | $79.99 | Bedroom furniture-top side wash | Cabinet envelope fits; verify projector airflow/throw clearance |
+| Hue Smart Plug | $37.99 | Fixed-white decorative/task fixture | On/off only |
+| Hue Dimmer Switch | $30.99 | Lower-cost physical control | Choose only if Tap Dial's four-button layout is unnecessary |
+| Hue Smart Button | $32.99 | One-scene/automation trigger | Less capable than Tap Dial |
+
+## C. Future after furniture/art decisions
+
+| Product | Regular price | Future role | Why deferred |
+|---|---:|---|---|
+| Hue Iris | $120.99 | Visible media-console jewel | Wait for wall-mounted TV and console |
+| Hue Go portable accent | $98.99 | Temporary/mobile accent | Not permanent hallway architecture |
+| Warm picture light + Hue-compatible control | TBD | Oversized sofa art | Artwork must be selected first |
+| Festavia 100 LED / 26 ft | $139.99 | Balcony or special display | Poor current fit behind horizontal blinds |
+| Festavia 250 LED / 65 ft | $259.99 | Large future installation | Over-scale for current indoor surfaces |
+
+## D. Defer or reject for this apartment
+
+| Product | Regular price | Decision |
+|---|---:|---|
+| Hue Play Floor lamp large | $149.99 | Reject plant bay; tall body remains visible |
+| Signe gradient floor lamp | $379.99 | Defer/reject; no appropriate floor location |
+| Hue Play Wall Washer single | $229.99 | Defer; too broad/bright/expensive for plant bay and unsafe for projection wall |
+| Twilight | $319.99 | Defer; no suitable bedside surface and low value versus current needs |
+| OmniGlow 10 ft | $139.99 | Reject for 12 ft cabinet run |
+| Dymera hardwired wall light | $249.99 | Reject absent approved junction-box project |
+| Play HDMI Sync Box 8K | $384.99 | Defer; expensive separate entertainment project |
+| TV Play gradient strips | size-dependent | Defer until final TV and source path are known |
+| PC Play gradient strip 24–27 in | $169.99 | Only after exact monitor size and desk bias goal are confirmed |
+| Play gradient tube large | $249.99 | Designed for 60 in+ TV use; no current placement |
+| Bridge Pro | $139.99 | Not needed at present scale |
+
+### Bridge Pro note
+
+Bridge Pro supports 150+ lights and 50+ accessories and enables MotionAware. MotionAware needs at least three compatible lights arranged through an area; a dedicated physical motion sensor remains more targeted for this small apartment.
+
+Official Bridge Pro:  
+https://www.philips-hue.com/en-us/p/hue-bridge-pro/046677582111
+
+MotionAware requirements:  
+https://www.philips-hue.com/en-ph/support/article/motionawaretm--transform-your-hue-lights-into-motion-sensors/000011
+
+---
+
+# 10. HomeHub integration implications
+
+This audit is based on the supplied repository snapshot.
+
+## Current source-of-truth locations
+
+- Mode and period states:  
+  `backend/services/light_state_calculator.py::ACTIVITY_LIGHT_STATES`
+- Automatic effect scope:  
+  `backend/services/light_state_calculator.py::EFFECT_AUTO_MAP`
+- Color preset buttons currently live in:  
+  `frontend-svelte/src/lib/components/LightCard.svelte`
+- `theme.js` currently supplies CT presets and broader UI design tokens; the old document's instruction to add limited-gamut color presets to `theme.js::LIGHT_COLOR_PRESETS` is stale.
+
+## Hue v2 event limitation
+
+`backend/services/hue_v2_service.py::_dispatch_stream_events()` currently ignores any v2 resource update whose type is not `"light"`.
+
+Consequences:
+
+- Hue light-state changes can update HomeHub.
+- Tap Dial button events, Hue motion events, and contact-sensor events are not yet ingested as HomeHub accessory intent.
+- Bridge-native rules can work immediately, but HomeHub cannot yet attribute or arbitrate those accessory events.
+
+## Safe rollout policy
+
+### Initial stage
+
+- Let Hue Bridge rules control a narrow, dedicated behavior.
+- Do not let a bridge-native sensor rewrite every light in the open-plan room.
+- Keep motion behavior limited to arrival/path endpoints.
+- Use the Tap Dial primarily through Hue scenes until HomeHub accessory ingestion exists.
+
+### Later HomeHub work
+
+Add:
+
+1. accessory event ingestion;
+2. source tagging for each light change;
+3. precedence among:
+   - physical manual control;
+   - active scene/mode;
+   - motion;
+   - presence;
+   - time/daylight;
+   - HomeHub automation;
+4. explicit manual-override duration;
+5. diagnostic logging showing why each light changed.
+
+## Adding each new light
+
+After pairing:
+
+1. Record its actual Hue/v1 ID and name.
+2. Test reachability and CT/HSB behavior.
+3. Add intentional state coverage to every relevant mode and period.
+4. Do not copy one uniform state across all new fixtures.
+5. Review `EFFECT_AUTO_MAP`; scoped effects exclude new lights until deliberately added.
+6. Keep cabinet cove and counter task lights as separate logical layers.
+7. Add the plant light to entertainment/sync only after deciding whether screen color should override the curated scene.
+8. Update UI grouping only after stable IDs are known.
+
+---
+
+# 11. Installation and validation
+
+## Plant wash
+
+1. Confirm clear baseboard strip.
+2. Mock up a 10 in × ~4 in object at the intended location.
+3. Test from couch, kitchen, and entry.
+4. Test teal, blue-violet, amber, and burgundy at low brightness.
+5. Confirm no direct LED glare.
+6. Conceal power adapter and excess cable without pinching or heat buildup.
+
+## Cabinet Flux
+
+1. Measure outlet-to-top raceway route.
+2. Dry-fit full strip before cutting.
+3. Identify the nearest legal cut mark to 144 in.
+4. Test front/back position and aim.
+5. Photograph from couch and entry at night.
+6. Cut only after the wash is accepted.
+7. Install with brackets/channel.
+8. Store the remaining reusable strip and connectors.
+
+## SKYDRAG
+
+1. Pair the TRÅDFRI driver near the Hue Bridge before installation.
+2. Verify both bars dim together reliably.
+3. Run a multi-day test for reconnect/restart behavior.
+4. Center bars in the 22 in bays.
+5. Hide driver and cord without blocking appliance ventilation.
+6. Keep the air-fryer exhaust path clear.
+7. Use the bars as neutral task light, not decorative color.
+
+## Motion sensor
+
+1. Add only after suitable path endpoints exist.
+2. Aim across the path.
+3. Set daylight threshold.
+4. Test day/evening/night behaviors.
+5. Confirm it does not overwrite `connor_color`, `listening_bar`, or projector modes unexpectedly.
+
+---
+
+# 12. Remaining information needed
+
+No more broad apartment photo survey is needed.
+
+## Plant Play Bar
+
+No additional space measurement is required. The stands can be repositioned to create the needed footprint. Final placement should be selected by a low-brightness nighttime mockup from the couch, kitchen, and entry sightlines.
+
+## Flux power route
+
+No additional route measurement is required. The confirmed route is **60 in / 5 ft**, comfortably within the official 16 ft extension cable.
+
+## Bedroom Play Table
+
+The cabinet envelope is confirmed at **39 × 16 × 29 in** and is large enough for the lamp. Before purchase, verify only:
+
+- the projector's actual occupied footprint on the cabinet;
+- intake/exhaust clearance;
+- lens, controls, and cable clearance;
+- the exact side-wall aiming angle;
+- a safe outlet route that does not cross the lifting bed mechanism.
+
+## Only if choosing the GU10 alternative
+
+- One mockup using an object about 8 in high × 3.5 in wide behind the rear plant stand.
+- A nighttime flashlight/spotlight test from couch and kitchen viewpoints.
+
+---
+
+# 13. Corrections from the previous master list
+
+The following recommendations or statements have been removed or corrected:
+
+- OmniGlow 10 ft is no longer the kitchen recommendation.
+- The kitchen cove does not contain exposed industrial ductwork.
+- The apartment does have a balcony.
+- The blinds are horizontal.
+- Tap Dial is battery powered, not kinetic/battery-free.
+- Wall Washer is not recommended toward the projection wall.
+- Signe is not assigned a bedroom corner that does not physically exist.
+- Play Floor lamp is rejected for the airy plant stands.
+- Iris is not assigned to the coffee table.
+- Hue Go is not treated as permanent hallway architecture.
+- Closet contact sensor is rejected because doors remain open.
+- Bathroom/closet sensors are not recommended without controllable light endpoints.
+- Bridge Pro is not an infrastructure prerequisite for this build.
+- The 55 in TV gradient strip is not described as a monitor strip.
+- New products do not receive speculative L6/L7 IDs before pairing.
+- HomeHub accessory events are not assumed to be ingested.
+- UI color-preset changes are not directed to a nonexistent `theme.js::LIGHT_COLOR_PRESETS`.
+
+---
+
+# 14. Current regular-price reference
+
+| Product | Regular price |
+|---|---:|
+| Hue Play Light Bar single | $109.99 |
+| Hue Play Table lamp | $79.99 |
+| Hue Play Floor lamp large | $149.99 |
+| Hue GU10 color | $59.99 |
+| Hue Flux 16 ft | $99.99 |
+| Flux extension cable 16 ft | $14.99 |
+| Flux bracket 10-pack | $11.99 |
+| Flux flex connector 4-pack | $29.99 |
+| OmniGlow 10 ft | $139.99 |
+| Tap Dial | $54.99 |
+| Dimmer Switch | $30.99 |
+| Smart Button | $32.99 |
+| Indoor motion sensor | $48.99 |
+| Smart Plug | $37.99 |
+| Bridge | $69.99 |
+| Bridge Pro | $139.99 |
+| Iris | $120.99 |
+| Go | $98.99 |
+| Signe floor | $379.99 |
+| Twilight | $319.99 |
+| Play Wall Washer single | $229.99 |
+| Play HDMI Sync Box 8K | $384.99 |
+| Play PC gradient strip 24–27 in | $169.99 |
+| Play gradient tube large | $249.99 |
+| Festavia 100 LED / 26 ft | $139.99 |
+| Festavia 250 LED / 65 ft | $259.99 |
+| SKYDRAG 18 in | $32 each |
+| TRÅDFRI 10 W driver | $35 |
+| ANSLUTA power cord | $12 |
+
+Prices should be rechecked immediately before purchase.
+
+---
+
+# 15. Primary sources
+
+## Philips Hue
+
+- Play Light Bar: https://www.philips-hue.com/en-us/p/hue-play-light-bar/7820130U7
+- Play Table lamp: https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-hue-play-table-lamp/046677610791
+- Play Floor lamp large: https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-hue-play-floor-lamp-large/046677610821
+- GU10 color bulb: https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-gu10-smart-spotlight/046677584658
+- Flux 16 ft: https://www.philips-hue.com/en-us/p/lightstrips-flux-strip-light-16ft/046677607814
+- Flux extension cable: https://www.philips-hue.com/en-us/p/lightstrips-hue-flux-strip-light-extension-cable-16ft/046677606305
+- Flux flex connector: https://www.philips-hue.com/en-us/p/lightstrips-hue-flux-flex-connector-4-pack/046677606336
+- Strip comparison: https://www.philips-hue.com/en-us/explore-hue/propositions/smart-strip-lights
+- OmniGlow: https://www.philips-hue.com/en-us/p/lightstrips-omniglow-strip-light-10ft/046677608170
+- Tap Dial: https://www.philips-hue.com/en-us/p/hue-tap-dial-switch/046677578800
+- Indoor motion sensor: https://www.philips-hue.com/en-us/products/all-products/product-page.hue_motion-sensor_indoor
+- Smart Plug: https://www.philips-hue.com/en-us/p/hue-smart-plug/046677552343
+- Bridge Pro: https://www.philips-hue.com/en-us/p/hue-bridge-pro/046677582111
+- MotionAware requirements: https://www.philips-hue.com/en-ph/support/article/motionawaretm--transform-your-hue-lights-into-motion-sensors/000011
+- Sync Box 8K: https://www.philips-hue.com/en-us/p/hue-philips-hue-play-hdmi-sync-box-8k/046677579753
+- Wall Washer: https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-hue-play-wall-washer/046677590161
+- Twilight: https://www.philips-hue.com/en-us/p/sleep-and-wake-up-light-twilight-sleep-and-wake-up-light-black/046677585631
+- Iris: https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-iris-table-lamp/046677561796
+- Go: https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-go-portable-accent-light/7602031U7
+
+## IKEA
+
+- SKYDRAG 18 in: https://www.ikea.com/us/en/p/skydrag-led-cntp-wrd-lght-strp-w-sensor-dimmable-white-00439595/
+- TRÅDFRI 10 W driver: https://www.ikea.com/us/en/p/tradfri-driver-for-wireless-control-smart-gray-10356189/
+- Hue Bridge compatibility guidance: https://www.ikea.com/us/en/customer-service/product-support/smart-lighting/how-to-use-smart-lighting-pub53d86412/
+
+## Retail fixture reference
+
+- SUNVIE GU10 uplight example: https://www.walmart.com/ip/10565607413
