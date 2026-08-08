@@ -38,12 +38,12 @@ async def test_per_light_ema_state_independent():
 
     # L2 sees a pure red sequence.
     for _ in range(5):
-        await sync.apply_color("2", 220, 40, 40, mode="gaming")
+        await sync.apply_color("2", 220, 40, 40, mode="watching")
     l2_state = hue.last_for("2")
 
     # L5 sees a pure blue sequence (first time L5 is touched — EMA starts
     # from 0 for L5, not from L2's red prior).
-    await sync.apply_color("5", 40, 40, 220, mode="gaming")
+    await sync.apply_color("5", 40, 40, 220, mode="watching")
     l5_state = hue.last_for("5")
 
     # Sanity: L2 settled around red-ish hue (≈ 65535 wrap or 0), L5 around blue
@@ -58,12 +58,12 @@ async def test_per_light_ema_state_independent():
 
 
 @pytest.mark.asyncio
-async def test_gaming_caps_differ_per_light():
-    """L2 gaming max is 240, L5 gaming max is 75 — bright white must clamp differently."""
+async def test_generic_gaming_uses_base_brightness_and_fixture_caps():
+    """Canonical L2 stays bright while L5 respects its clear-housing cap."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Pure white = max brightness signal. Run enough frames for EMA to settle.
+    # Sample color is irrelevant; repeated frames should keep the same output.
     for _ in range(20):
         await sync.apply_color("2", 255, 255, 255, mode="gaming")
         await sync.apply_color("5", 255, 255, 255, mode="gaming")
@@ -71,7 +71,7 @@ async def test_gaming_caps_differ_per_light():
     l2_bri = hue.last_for("2")["bri"]
     l5_bri = hue.last_for("5")["bri"]
 
-    assert l2_bri > l5_bri, f"L2 should outshine L5 on bright frames (L2={l2_bri}, L5={l5_bri})"
+    assert l2_bri > l5_bri, f"L2 should outshine capped L5 (L2={l2_bri}, L5={l5_bri})"
     # L2 clamps to 240, L5 clamps to 75 (per MODE_MAX_BRIGHTNESS; 60→75 curator 6/02).
     assert l2_bri <= 240
     assert l5_bri <= 75
@@ -155,15 +155,15 @@ async def test_per_source_write_timestamps_survive_newer_other_source():
 
 
 @pytest.mark.asyncio
-async def test_per_light_sat_boost():
+async def test_per_light_sat_boost_for_watching():
     """L2 gets +20% sat boost; L5 stays neutral. Same RGB → different sat output."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
     # Feed identical strongly-saturated red to both lights; both EMA states
     # start at 0 so the first frame is `alpha * target` for each axis.
-    await sync.apply_color("2", 220, 40, 40, mode="gaming")
-    await sync.apply_color("5", 220, 40, 40, mode="gaming")
+    await sync.apply_color("2", 220, 40, 40, mode="watching")
+    await sync.apply_color("5", 220, 40, 40, mode="watching")
 
     l2_state = hue.last_for("2")
     l5_state = hue.last_for("5")
@@ -179,65 +179,53 @@ async def test_per_light_sat_boost():
 
 
 @pytest.mark.asyncio
-async def test_l5_luma_comp_dampens_yellow_more_than_blue():
+async def test_watching_l5_luma_comp_dampens_yellow_more_than_blue():
     """L5's perceptual-luminance comp scales high-luma hues (yellow/green) down
     more than low-luma hues (blue/red). Tested at moderate-bright inputs
     where the comp visibly differentiates before the L5 cap clamps both."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Brighter yellow (160,160,0) so the comp-scaled target lands ABOVE the
-    # raised L5 floor (40) — otherwise the floor masks the damping. High
-    # chroma_luma → comp scales it down toward (but not to) the floor.
+    # High-luma yellow should be damped more than low-luma blue.
     for _ in range(20):
-        await sync.apply_color("5", 160, 160, 0, mode="gaming")
+        await sync.apply_color("5", 160, 160, 0, mode="watching")
     yellow_bri = hue.last_for("5")["bri"]
 
-    # Same channel intensity, pure blue (0,0,160) — chroma_luma low, scale
-    # clamped to 1.0 → target hits the cap.
+    # Same channel intensity, low-luma blue receives less compensation.
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
     for _ in range(20):
-        await sync2.apply_color("5", 0, 0, 160, mode="gaming")
+        await sync2.apply_color("5", 0, 0, 160, mode="watching")
     blue_bri = hue2.last_for("5")["bri"]
 
-    # Both land within the L5 [40, 75] gaming band (floor 25→40, cap 60→75,
-    # curator 6/02). Allow slack for EMA asymptotic convergence + int-cast.
+    # Both land within the watching L5 envelope; allow EMA convergence slack.
     assert 38 <= yellow_bri <= 76
     assert 38 <= blue_bri <= 76
-    # Yellow (high luma) is damped below blue (low luma, clamped to 1.0). The
-    # raised floor compresses the low end, so the gap is smaller than the old
-    # [25,60] band gave — but the damping direction must still hold clearly.
-    assert yellow_bri < blue_bri * 0.85, (
-        f"luma comp not damping yellow enough: yellow={yellow_bri} blue={blue_bri}"
-    )
+    # Preserve the existing compensation direction for watching.
+    assert yellow_bri < blue_bri
 
 
 @pytest.mark.asyncio
-async def test_period_keyed_caps_take_precedence():
-    """When a `period` is passed, MODE_MAX_BRIGHTNESS_PERIOD wins over the
-    time-agnostic table. Stage-2 (2026-05-31) inverted the L5 relationship:
-    gaming evening L5 cap = 95, ABOVE the day flat cap 60 — the accent should
-    read more present in a dark room than in daylight (the L5 inversion fix)."""
+async def test_generic_gaming_l5_base_stays_within_period_caps():
+    """L5 holds each canonical base at or below the existing period cap."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Saturate pure deep-blue (low-luma → no comp damping). Day uses flat cap=75.
+    # Different periods resolve different bases; the sample cannot add dynamics.
     for _ in range(20):
         await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
     day_bri = hue.last_for("5")["bri"]
 
-    # Evening uses the period-keyed cap=95.
+    # Evening base is also 75, below its period-specific cap.
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
     for _ in range(20):
         await sync2.apply_color("5", 0, 0, 255, mode="gaming", period="evening")
     evening_bri = hue2.last_for("5")["bri"]
 
-    # The period table takes precedence: evening's 95 cap lands above the day
-    # flat 75, proving the (mode, period, light) lookup wins.
-    assert evening_bri > day_bri, (
-        f"evening period cap (95) should exceed day flat cap (75) "
+    # Both periods hold the canonical base and remain within their caps.
+    assert evening_bri == day_bri, (
+        f"canonical L5 base should be stable across day/evening here "
         f"(day={day_bri} evening={evening_bri})"
     )
     assert day_bri <= 75
@@ -269,23 +257,22 @@ async def test_watching_desk_night_dark_frame_gets_small_floor_lift():
     assert desk > non_desk
 
 @pytest.mark.asyncio
-async def test_late_night_floor_drop_for_l2():
-    """L2's late_night floor stays well below the night cap for dark scenes."""
+async def test_late_night_gaming_holds_canonical_l2_base():
+    """A black frame cannot drag L2 from base brightness to the old floor."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
-    # Pure black input — bri target should hit the floor.
+    # Pure black input must not affect the canonical output.
     for _ in range(30):
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="late_night")
     bri = hue.last_for("2")["bri"]
 
-    # Floor at late_night should be near 65, well below the cap. Allow 1 unit
-    # slack for EMA asymptotic convergence + int-cast.
-    assert 63 <= bri <= 66, f"expected floor near 65, got {bri}"
+    # Canonical late-night L2 is 80; the old dynamic floor was 65.
+    assert bri == 80, f"expected canonical late-night base 80, got {bri}"
 
 
 @pytest.mark.asyncio
-async def test_l2_no_luma_comp():
+async def test_watching_l2_no_luma_comp():
     """L2 is NOT luma-compensated — yellow and blue settle at similar bri
     (modulo HSV value differences, which are the same for fully-saturated
     primaries at max channel = 255)."""
@@ -293,13 +280,13 @@ async def test_l2_no_luma_comp():
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
     for _ in range(20):
-        await sync.apply_color("2", 255, 255, 0, mode="gaming")
+        await sync.apply_color("2", 255, 255, 0, mode="watching")
     yellow_bri = hue.last_for("2")["bri"]
 
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
     for _ in range(20):
-        await sync2.apply_color("2", 0, 0, 255, mode="gaming")
+        await sync2.apply_color("2", 0, 0, 255, mode="watching")
     blue_bri = hue2.last_for("2")["bri"]
 
     # Without luma comp, both fully-saturated primaries hit the same HSV v=1.0
@@ -497,20 +484,20 @@ async def test_screen_sync_logs_throttled_adjustment():
     sync.set_event_logger(elog)
 
     # First synced write to L2 logs once, tagged screen_sync, with applied values.
-    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    await sync.apply_color("2", 0, 0, 255, mode="watching", period="evening")
     assert len(elog.calls) == 1
     row = elog.calls[0]
     assert row["light_id"] == "2"
     assert row["trigger"] == "screen_sync"
-    assert row["mode_at_time"] == "gaming"
+    assert row["mode_at_time"] == "watching"
     assert "bri_after" in row and "hue_after" in row and "sat_after" in row
 
     # A rapid second write (within the interval) is throttled — still 1 row.
-    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    await sync.apply_color("2", 0, 0, 255, mode="watching", period="evening")
     assert len(elog.calls) == 1
 
     # L5 throttles independently → its first write logs (now 2 total).
-    await sync.apply_color("5", 0, 0, 255, mode="gaming", period="evening")
+    await sync.apply_color("5", 0, 0, 255, mode="watching", period="evening")
     assert len(elog.calls) == 2
     assert elog.calls[1]["light_id"] == "5"
 
@@ -518,7 +505,7 @@ async def test_screen_sync_logs_throttled_adjustment():
     sync._last_log_at["2"] = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
         seconds=ss.SCREEN_SYNC_LOG_INTERVAL_S + 1
     )
-    await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
+    await sync.apply_color("2", 0, 0, 255, mode="watching", period="evening")
     assert len(elog.calls) == 3
 
 
@@ -623,3 +610,84 @@ async def test_rust_config_partial_merge_and_validation():
     for _ in range(40):
         await sync.apply_rust_brightness("2", luma=255, period="night")
     assert abs(hue.last_for("2")["bri"] - 170) <= 3
+
+
+@pytest.mark.asyncio
+async def test_generic_gaming_full_spectrum_samples_keep_canonical_hsb_and_bri():
+    """Dark/red/green/blue samples cannot sweep generic gaming output."""
+    expected = ss.resolve_activity_state("gaming", "day")
+    samples = ((0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255))
+
+    for sample in samples:
+        hue = _FakeHue()
+        sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        await sync.apply_color("2", *sample, mode="gaming", period="day")
+        await sync.apply_color("5", *sample, mode="gaming", period="day")
+
+        l2 = hue.last_for("2")
+        l5 = hue.last_for("5")
+        assert (l2["hue"], l2["sat"], l2["bri"]) == (
+            expected["2"]["hue"], expected["2"]["sat"], expected["2"]["bri"]
+        )
+        assert (l5["hue"], l5["sat"], l5["bri"]) == (
+            expected["5"]["hue"],
+            expected["5"]["sat"],
+            min(expected["5"]["bri"], ss.MODE_MAX_BRIGHTNESS[("gaming", "5")]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_generic_gaming_policy_resolves_canonical_state(monkeypatch):
+    """The policy consumes the canonical resolver instead of copied constants."""
+    calls = []
+
+    def fake_resolve(mode, period):
+        calls.append((mode, period))
+        return {"5": {"on": True, "bri": 200, "hue": 12345, "sat": 111}}
+
+    monkeypatch.setattr(ss, "resolve_activity_state", fake_resolve)
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["5"])
+    await sync.apply_color("5", 0, 255, 0, mode="gaming", period="day")
+
+    assert calls == [("gaming", "day")]
+    state = hue.last_for("5")
+    assert (state["hue"], state["sat"]) == (12345, 111)
+    assert state["bri"] == ss.MODE_MAX_BRIGHTNESS[("gaming", "5")] == 75
+
+
+@pytest.mark.asyncio
+async def test_generic_gaming_repeated_samples_dedupe_but_refresh_ownership():
+    """Different frames do not rewrite Hue, but each report keeps sync fresh."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+
+    await sync.apply_color("2", 255, 0, 0, mode="gaming", source="desktop", period="day")
+    first_stamp = sync.last_color_at
+    await sync.apply_color("2", 0, 255, 0, mode="gaming", source="desktop", period="day")
+    await sync.apply_color("2", 0, 0, 255, mode="gaming", source="desktop", period="day")
+
+    assert len(hue.calls) == 1
+    assert sync.last_source == "desktop"
+    assert sync.last_color_at is not None
+    assert first_stamp is not None and sync.last_color_at >= first_stamp
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("period", ("day", "evening", "night", "late_night"))
+async def test_generic_gaming_brightness_matches_base_bounded_by_cap(period):
+    """Every period holds canonical brightness unless the fixture cap is lower."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    base = ss.resolve_activity_state("gaming", period)
+
+    for light_id in ("2", "5"):
+        await sync.apply_color(
+            light_id, 0, 0, 0, mode="gaming", period=period
+        )
+        state = hue.last_for(light_id)
+        cap = sync.get_cap(
+            "gaming", light_id, None, None, period, 1.0, None
+        )
+        assert state["bri"] == min(base[light_id]["bri"], cap)
+        assert state["bri"] > 0

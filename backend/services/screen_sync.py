@@ -7,12 +7,13 @@ them with an exponential moving average, and applies them to one or more
 Hue lights. The mode gate (gaming / watching only) lives in the route
 handler — by the time `apply_color` is called, the gate has already passed.
 
-Multi-light support: the service manages N target lights with independent
-per-light EMA state and per-light brightness caps. Mirror dispatch (route
-handler) sends the same RGB to every target lamp (currently L2 + L5); per-
-light caps, sat boost, and luma compensation differentiate the on-bridge
-state so the clear-housing L5 doesn't blow out next to the diffused-shade
-L2 even with identical input. (Dual-region — L2 ← left half, L5 ← right —
+Multi-light support: generic gaming resolves each target from the canonical
+period-specific gaming state and bounds it with the existing fixture cap;
+screen samples only refresh ownership. Watching keeps independent per-light
+EMA state and mirror dispatch (currently L2 + L5); per-light caps, sat boost,
+and luma compensation differentiate its on-bridge state so the clear-housing
+L5 doesn't blow out next to the diffused-shade L2. (Dual-region — L2 ← left
+half, L5 ← right —
 was tried and abandoned 2026-05-12 night for eye strain at close viewing
 distance; see lighting-curator INDEX for the documented anti-pattern.)
 
@@ -39,6 +40,7 @@ from backend.services.color_utils import (
 from backend.services.light_state_calculator import (
     get_functional_weather_multiplier,
     lux_to_multiplier,
+    resolve_activity_state,
 )
 
 logger = logging.getLogger("home_hub.screen_sync")
@@ -51,8 +53,8 @@ SCREEN_SYNC_LOG_INTERVAL_S = 5.0
 
 
 # Per-(mode, light_id) max brightness clamps for the synced lamps.
-# Gaming gets a higher cap so the lamp can pop on bright moments; watching
-# stays subtle so the mirrored projected content doesn't wash the image.
+# Gaming caps bound the canonical base for fixture safety; watching stays
+# subtle so mirrored projected content doesn't wash the image.
 # L5's clear housing reads ~1.3× brighter than L2's fabric shade, so its
 # caps are stepped down to keep it in a peripheral role.
 MODE_MAX_BRIGHTNESS: dict[tuple[str, str], int] = {
@@ -592,12 +594,13 @@ class ScreenSyncService:
         weather_condition: Optional[str] = None,
     ) -> None:
         """
-        Apply an RGB color to one of the managed bedroom lamps.
+        Apply a screen sample to one of the managed bedroom lamps.
 
         Args:
             light_id: Target Hue light id (e.g. "2" or "5"). Must be in
                 ``target_lights`` or the call is a no-op.
-            r, g, b: 0-255 RGB values from a screen capture.
+            r, g, b: 0-255 RGB values from a screen capture. Generic gaming
+                ignores them; watching retains dynamic RGB translation.
             mode: Current automation mode — used to look up the brightness clamp.
             source: "desktop" or "laptop" — recorded for status reporting only.
             zone: Optional camera-detected zone ("desk" | "bed").
@@ -617,6 +620,15 @@ class ScreenSyncService:
                 the envelope on overcast conditions.
         """
         if light_id not in self._targets:
+            return
+        if mode == "gaming":
+            await self._apply_generic_gaming_state(
+                light_id,
+                source=source,
+                zone=zone,
+                posture=posture,
+                period=period,
+            )
             return
         max_bri = self.get_cap(
             mode, light_id, zone, posture, period,
@@ -658,6 +670,67 @@ class ScreenSyncService:
         self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
         self._record_source_write(source)
         await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
+
+    async def _apply_generic_gaming_state(
+        self,
+        light_id: str,
+        *,
+        source: str,
+        zone: Optional[str],
+        posture: Optional[str],
+        period: Optional[str],
+    ) -> None:
+        """Hold generic gaming on its canonical HSB state and safe cap."""
+        mode_state = resolve_activity_state("gaming", period)
+        base = mode_state.get(light_id)
+        if not isinstance(base, dict):
+            return
+
+        hue = base.get("hue")
+        sat = base.get("sat")
+        bri = base.get("bri")
+        if hue is None or sat is None or bri is None:
+            return
+
+        cap = self.get_cap(
+            "gaming",
+            light_id,
+            zone,
+            posture,
+            period,
+            1.0,
+            None,
+        )
+        stable = {
+            "hue": int(hue),
+            "sat": int(sat),
+            "bri": min(int(bri), cap),
+        }
+
+        self._last_hue[light_id] = float(stable["hue"])
+        self._last_sat[light_id] = float(stable["sat"])
+        self._last_bri[light_id] = float(stable["bri"])
+        if self._last_sent_state.get(light_id) == stable:
+            self._record_source_write(source)
+            return
+
+        await self._hue.set_light(
+            light_id,
+            {
+                "on": True,
+                **stable,
+                "transitiontime": self._transitiontime_for("gaming", period),
+            },
+        )
+        self._last_sent_state[light_id] = stable
+        self._record_source_write(source)
+        await self._maybe_log_adjustment(
+            light_id,
+            stable["hue"],
+            stable["sat"],
+            stable["bri"],
+            "gaming",
+        )
 
     def _smooth(
         self, light_id: str, h: float, s: float, b: float,

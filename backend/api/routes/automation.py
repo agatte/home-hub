@@ -470,7 +470,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # are luma-driven on per-light envelopes (L5 subordinate, ~50-55% of L2) so
     # the clear-housing accent dims WITH L2 instead of towering over it when L2
     # floors out (the glare-pop the curator flagged + live feedback confirmed
-    # 2026-06-08). Other games fall through to the per-frame color sync below.
+    # 2026-06-08). Other games use the stable canonical gaming state below.
     if getattr(engine, "current_game", None) == "rust":
         luma = report.luma
         if luma is None:
@@ -508,11 +508,10 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             resp["skipped"] = skipped_rust
         return resp
 
-    # Ambient envelope lift: lux + weather scale the cap+floor so dim content
-    # in a dim room doesn't drag L2 to eye-strain dimness. The screen-sync
-    # service gates this internally (``_scale_for_ambient``): gaming + watching,
-    # all periods, L2 only (L5's clear housing keeps its static caps to avoid
-    # glare). Widened from gaming-day-only on 2026-06-02 (D4 task #7).
+    # Watching ambient lift: lux + weather scale the cap+floor so dim content
+    # in a dim room doesn't drag L2 to eye-strain dimness. Generic gaming
+    # bypasses this dynamic envelope and holds its canonical base; watching
+    # retains the existing per-light cap/floor scaling below.
     #
     # D4 Part E: source the lux from the BEDROOM desktop-webcam channel, NOT
     # the living-room Latitude camera — L2/L5 are bedroom lamps, and a bright

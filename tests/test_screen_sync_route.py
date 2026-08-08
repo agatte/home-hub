@@ -12,6 +12,7 @@ import pytest
 
 from backend.api.routes.automation import receive_screen_color, report_activity
 from backend.api.schemas.automation import ActivityReport, ScreenColorReport
+from backend.services.light_state_calculator import resolve_activity_state
 from backend.services.screen_sync import ScreenSyncService
 from backend.services.presence_fusion import PresenceFusion
 
@@ -25,6 +26,12 @@ class _FakeHue:
 
     def lights_touched(self) -> list[str]:
         return [lid for lid, _ in self.calls]
+
+    def last_for(self, light_id: str) -> dict:
+        for lid, state in reversed(self.calls):
+            if lid == light_id:
+                return state
+        raise KeyError(f"no call for {light_id}")
 
 
 def _fake_engine(
@@ -54,8 +61,8 @@ def _make_request(engine, sync, camera=None):
 
 
 @pytest.mark.asyncio
-async def test_single_color_mirrors_to_all_target_lights():
-    """One {r, g, b} payload fans out to every lamp the service manages."""
+async def test_generic_gaming_report_applies_canonical_target_states():
+    """One report writes both targets without adopting sampled RGB."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
     engine = _fake_engine("gaming")
@@ -67,13 +74,9 @@ async def test_single_color_mirrors_to_all_target_lights():
     assert result["applied"] is True
     assert set(result["lights"]) == {"2", "5"}
     assert set(hue.lights_touched()) == {"2", "5"}
-    # Both writes carry the same hue (red) — different bri/sat is fine because
-    # of per-light caps + luma comp; here we just confirm the input mirrored.
-    l2_hue = next(state["hue"] for lid, state in hue.calls if lid == "2")
-    l5_hue = next(state["hue"] for lid, state in hue.calls if lid == "5")
-    assert abs(l2_hue - l5_hue) < 100, (
-        f"mirrored writes should carry the same hue (L2={l2_hue} L5={l5_hue})"
-    )
+    expected = resolve_activity_state("gaming", "day")
+    assert hue.last_for("2")["hue"] == expected["2"]["hue"]
+    assert hue.last_for("5")["hue"] == expected["5"]["hue"]
 
 
 @pytest.mark.asyncio
@@ -134,11 +137,8 @@ def _calibrated_bedroom_lux(ema, baseline=127.0, *, age_s=0.0):
 
 
 @pytest.mark.asyncio
-async def test_gaming_floor_scales_with_bedroom_lux_not_camera():
-    """D4 Part E: the gaming-day envelope is scaled by the BEDROOM lux channel,
-    not the living-room camera. Hold the camera BRIGHT in both runs (it must be
-    ignored for lux) and vary only the bedroom: a dark bedroom must lift the
-    floor above a bright one."""
+async def test_generic_gaming_brightness_ignores_screen_and_lux():
+    """Dark samples and bedroom lux cannot reduce canonical day brightness."""
     # Camera reads bright (mult < 1) in BOTH runs — proves it's not the source.
     bright_camera = SimpleNamespace(
         zone=None, posture=None, ema_lux=180.0, baseline_lux=127.0,
@@ -150,19 +150,17 @@ async def test_gaming_floor_scales_with_bedroom_lux_not_camera():
         sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
         req = _make_request(engine, sync, camera=bright_camera)
         req.app.state.bedroom_lux = _calibrated_bedroom_lux(bedroom_ema)
-        # Black frame → bri target sits at the (lux-scaled) floor.
+        # Black frame should still produce the canonical gaming base.
         for _ in range(30):
             await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
         return next(s["bri"] for lid, s in reversed(hue.calls) if lid == "2")
 
-    l2_dark = await run(80.0)    # bedroom darker than baseline 127 → lift
-    l2_bright = await run(180.0)  # bedroom brighter than baseline → dim
+    l2_dark = await run(80.0)
+    l2_bright = await run(180.0)
 
-    assert l2_dark > l2_bright, (
-        f"a dark bedroom must lift the gaming floor above a bright one "
-        f"(dark={l2_dark} bright={l2_bright}); if equal, the route is still "
-        f"reading the (constant) camera lux, not the bedroom channel"
-    )
+    expected = resolve_activity_state("gaming", "day")["2"]["bri"]
+    assert l2_dark == expected
+    assert l2_bright == expected
 
 
 @pytest.mark.asyncio
