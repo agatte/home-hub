@@ -16,6 +16,7 @@ from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
     BED_RECLINED_L1_NIGHT_DEFAULT,
     DEFAULT_MODE_BRIGHTNESS,
+    GAME_LIGHT_PROFILES,
     LUX_MULT_EPSILON,
     TZ,
     apply_brightness_multiplier,
@@ -85,6 +86,64 @@ class TestResolveActivityState:
     def test_known_mode_period(self):
         state = resolve_activity_state("working", "day")
         assert state == ACTIVITY_LIGHT_STATES["working"]["day"]
+
+    def test_generic_gaming_state_is_detached_from_canonical(self):
+        state = resolve_activity_state("gaming", "day")
+        assert state["2"]["bri"] == 240
+
+        state["2"]["bri"] = 189
+        state["extra"] = {"on": False}
+
+        fresh = resolve_activity_state("gaming", "day")
+        assert fresh["2"]["bri"] == 240
+        assert "extra" not in fresh
+        assert ACTIVITY_LIGHT_STATES["gaming"]["day"]["2"]["bri"] == 240
+
+    def test_learner_style_overlay_does_not_leak_to_later_resolution(self):
+        state = resolve_activity_state("gaming", "day")
+        pre = state["2"]
+        state["2"] = {**pre, **{"bri": 189}}
+
+        assert state["2"]["bri"] == 189
+        assert resolve_activity_state("gaming", "day")["2"]["bri"] == 240
+
+    def test_additional_period_aware_mode_is_detached(self):
+        state = resolve_activity_state("watching", "night")
+        canonical_bri = ACTIVITY_LIGHT_STATES["watching"]["night"]["2"]["bri"]
+        state["2"]["bri"] = canonical_bri + 100
+
+        fresh = resolve_activity_state("watching", "night")
+        assert fresh["2"]["bri"] == canonical_bri
+        assert (
+            ACTIVITY_LIGHT_STATES["watching"]["night"]["2"]["bri"]
+            == canonical_bri
+        )
+
+    def test_game_profile_state_is_detached(self):
+        state = resolve_activity_state("gaming", "day", game="rust")
+        canonical_bri = GAME_LIGHT_PROFILES["rust"]["day"]["2"]["bri"]
+        state["2"]["bri"] = canonical_bri + 50
+
+        fresh = resolve_activity_state("gaming", "day", game="rust")
+        assert fresh["2"]["bri"] == canonical_bri
+        assert GAME_LIGHT_PROFILES["rust"]["day"]["2"]["bri"] == canonical_bri
+
+    def test_flat_mode_state_is_detached(self):
+        state = resolve_activity_state("social", "day")
+        canonical_bri = ACTIVITY_LIGHT_STATES["social"]["2"]["bri"]
+        state["2"]["bri"] = canonical_bri + 50
+
+        assert resolve_activity_state("social", "night")["2"]["bri"] == canonical_bri
+        assert ACTIVITY_LIGHT_STATES["social"]["2"]["bri"] == canonical_bri
+
+    def test_repeated_resolutions_do_not_alias_each_other(self):
+        first = resolve_activity_state("gaming", "day")
+        second = resolve_activity_state("gaming", "day")
+
+        assert first is not second
+        assert first["2"] is not second["2"]
+        first["2"]["bri"] = 189
+        assert second["2"]["bri"] == 240
 
     def test_late_night_falls_back_to_night(self):
         # Cooking has no late_night entry; should return its night state.

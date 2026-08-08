@@ -19,8 +19,11 @@ from backend.services.automation_engine import (
     _resolve_activity_state,
 )
 from backend.services.light_state_calculator import (
+    ACTIVITY_LIGHT_STATES,
     get_time_period_static as _get_time_period_static,
+    resolve_activity_state,
 )
+from backend.services.screen_sync import ScreenSyncService
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -1631,6 +1634,57 @@ class TestApplyModeDedup:
         assert period == "night"
         assert states["2"]["bri"] == 20
         assert states["5"]["bri"] == 12
+
+    async def test_learner_overlay_does_not_change_generic_screen_sync_source(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        """Learner 189 -> clouds 207 stays local; sync still resolves 240."""
+
+        class _Learner:
+            def get_overlay(self, mode, period, weather, *, zone=None):
+                assert (mode, period, weather) == ("gaming", "day", "clouds")
+                return {"2": {"bri": 189}}
+
+            def has_weather_pref(self, mode, period, weather):
+                return set()
+
+        class _Weather:
+            def get_cached(self):
+                return {"description": "clouds"}
+
+        mock_hue._lights["5"] = {
+            "id": "5",
+            "name": "Bedroom Right",
+            "on": True,
+            "bri": 90,
+            "hue": 8000,
+            "sat": 140,
+            "reachable": True,
+        }
+        sync = ScreenSyncService(
+            hue_service=mock_hue, target_light_ids=["2", "5"],
+        )
+        engine = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+            weather_service=_Weather(),
+            lighting_learner=_Learner(),
+            screen_sync=sync,
+        )
+        engine._get_time_period = lambda: "day"
+
+        await engine._apply_mode("gaming", force_resend=True)
+
+        assert mock_hue._lights["2"]["bri"] == 207
+        assert ACTIVITY_LIGHT_STATES["gaming"]["day"]["2"]["bri"] == 240
+        assert resolve_activity_state("gaming", "day")["2"]["bri"] == 240
+
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+
+        assert mock_hue._lights["2"]["bri"] == 240
+        assert mock_hue._lights["5"]["bri"] == 75
 
 
 # ---------------------------------------------------------------------------

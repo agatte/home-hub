@@ -893,10 +893,12 @@ def resolve_activity_state(
     time_period: Optional[str] = None,
     game: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Look up the time-appropriate light state for an activity mode.
+    """Return a detached, time-appropriate light state for an activity mode.
 
     Time-aware entries have "day"/"evening"/"night" (and optionally
-    "late_night") keys. Flat entries (social) are returned as-is.
+    "late_night") keys. Flat entries (social) are resolved directly. The
+    returned outer mapping and each nested per-light mapping are working
+    copies, so downstream overlays cannot mutate the canonical state tables.
 
     Args:
         mode: Activity mode name.
@@ -914,8 +916,17 @@ def resolve_activity_state(
         # late_night falls back to night for modes that don't define it
         if period == "late_night" and "late_night" not in entry:
             period = "night"
-        return entry.get(period, entry.get("night", {}))
-    return entry
+        resolved = entry.get(period, entry.get("night", {}))
+    else:
+        resolved = entry
+
+    # Canonical states have one known mutable level: light ID -> properties.
+    # Copy both levels at the resolver boundary so every caller receives an
+    # independently transformable state without needing to remember to copy.
+    return {
+        key: value.copy() if isinstance(value, dict) else value
+        for key, value in resolved.items()
+    }
 
 
 # ---------------------------------------------------------------------------
