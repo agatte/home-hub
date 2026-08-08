@@ -15,6 +15,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -131,6 +132,10 @@ NIGHT_END_HOUR = 6
 # scrolling). Walking away from the PC = idle climbs past the threshold and
 # the gaming hold releases, allowing late-night rescue / fusion to take over.
 GAMING_IDLE_THRESHOLD = 180  # seconds
+
+RUNELITE_JAVA_WINDOW_TITLE_RE = re.compile(
+    r"^runelite(?:\s*[-–—]\s*.+)?$", re.IGNORECASE
+)
 
 
 
@@ -404,6 +409,52 @@ class ActivityDetector:
             or (now.hour < 6)  # Also covers past midnight
         )
 
+    def _get_foreground_process_identity(
+        self,
+    ) -> tuple[Optional[str], Optional[str], Optional[int]]:
+        """Get the name, title, and PID of the currently focused window."""
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
+                return None, None, None
+
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value or ""
+
+            pid = ctypes.wintypes.DWORD()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            try:
+                proc_name = psutil.Process(pid.value).name().lower()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                return None, title, None
+
+            return proc_name, title, pid.value
+        except Exception:
+            return None, None, None
+
+    def _is_foreground_runelite_java(
+        self,
+        process_name: Optional[str],
+        window_title: Optional[str],
+        pid: Optional[int],
+    ) -> bool:
+        """Return whether the focused Java client is conclusively RuneLite."""
+        if (
+            process_name not in {"java.exe", "javaw.exe"}
+            or not window_title
+            or pid is None
+            or not RUNELITE_JAVA_WINDOW_TITLE_RE.fullmatch(window_title)
+        ):
+            return False
+
+        try:
+            command_line = " ".join(psutil.Process(pid).cmdline()).lower()
+        except Exception:
+            return False
+        return "net.runelite\\client" in command_line.replace("/", "\\")
+
     def _get_foreground_window(self) -> tuple[Optional[str], Optional[str]]:
         """
         Get the (process_name, window_title) of the currently focused window.
@@ -473,9 +524,12 @@ class ActivityDetector:
         # Promote to gaming only when the game is foregrounded OR input has
         # been active recently with a game running. See GAMING_IDLE_THRESHOLD
         # docstring above.
+        fg_proc, fg_title, fg_pid = self._get_foreground_process_identity()
+        if self._is_foreground_runelite_java(fg_proc, fg_title, fg_pid):
+            return "gaming"
+
         game_processes = get_game_processes()
         if processes & game_processes:
-            fg_proc, _ = self._get_foreground_window()
             if fg_proc in game_processes:
                 return "gaming"
             if idle_seconds < GAMING_IDLE_THRESHOLD:

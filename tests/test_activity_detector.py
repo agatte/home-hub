@@ -15,6 +15,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pytest
+import psutil
 
 from backend.services.pc_agent.activity_detector import (
     ActivityDetector,
@@ -46,6 +47,11 @@ def _make_detector(
     d = ActivityDetector()
     d._get_running_process_names = lambda: processes  # type: ignore[method-assign]
     d._get_foreground_window = lambda: (fg_proc, fg_title)  # type: ignore[method-assign]
+    d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+        fg_proc,
+        fg_title,
+        None,
+    )
     d._get_idle_seconds = lambda: idle_seconds  # type: ignore[method-assign]
     d._is_sleep_window = lambda: False  # type: ignore[method-assign]
     return d
@@ -137,6 +143,14 @@ class TestGamingGate:
         )
         assert d._classify() == "gaming"
 
+    def test_runelite_executable_commits_gaming(self):
+        d = _make_detector(
+            processes={"runelite.exe"},
+            fg_proc="runelite.exe",
+            idle_seconds=0,
+        )
+        assert d._classify() == "gaming"
+
     def test_active_input_with_game_running_commits_gaming(self):
         # Alt-tab to wiki: foreground is the browser, but input is active
         # (scrolling). Stay in gaming.
@@ -193,6 +207,105 @@ class TestGamingGate:
             mock_dt.now.return_value = datetime(2026, 4, 26, 22, 0)
             assert d._classify() == "working"
 
+
+class TestForegroundRuneLiteJava:
+    """Only a foreground Java client with three RuneLite signals is gaming."""
+
+    def _detector(
+        self,
+        *,
+        process_name: str = "java.exe",
+        title: str = "RuneLite - Photochalupa",
+        processes: set[str] | None = None,
+    ) -> ActivityDetector:
+        detector = _make_detector(
+            processes=processes or {process_name},
+            fg_proc=process_name,
+            fg_title=title,
+        )
+        detector._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+            process_name,
+            title,
+            1376,
+        )
+        return detector
+
+    @pytest.mark.parametrize(
+        ("process_name", "title", "command_line"),
+        [
+            (
+                "java.exe",
+                "RuneLite - Photochalupa",
+                r"net.runelite\client-1.12.35.jar --developer-mode --debug",
+            ),
+            ("javaw.exe", "RuneLite", "net.runelite/client-1.12.35.jar"),
+            ("java.exe", "RuneLite – Photochalupa", "net.runelite/client.jar"),
+            ("java.exe", "rUnElItE — Photochalupa", "net.runelite/client.jar"),
+        ],
+    )
+    def test_foreground_runelite_java_commits_gaming(
+        self, process_name, title, command_line
+    ):
+        detector = self._detector(process_name=process_name, title=title)
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.Process"
+        ) as process:
+            process.return_value.cmdline.return_value = command_line.split()
+            assert detector._classify() == "gaming"
+
+    def test_runelite_looking_java_without_client_marker_falls_through(self):
+        detector = self._detector(processes={"java.exe", "code.exe"})
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.Process"
+        ) as process:
+            process.return_value.cmdline.return_value = ["java", "other-app.jar"]
+            assert detector._classify() == "working"
+
+    def test_runelite_client_marker_with_unrelated_title_is_not_gaming(self):
+        detector = self._detector(title="Photochalupa Companion")
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.Process"
+        ) as process:
+            process.return_value.cmdline.return_value = ["net.runelite/client.jar"]
+            assert detector._classify() == "idle"
+
+    @pytest.mark.parametrize(
+        "title, command_line",
+        [
+            ("Gradle Daemon", ["gradle", "daemon"]),
+            ("IntelliJ IDEA", ["idea", "jbr"]),
+            ("My Java Tool", ["java", "custom-gui.jar"]),
+        ],
+    )
+    def test_non_runelite_java_apps_are_not_gaming(self, title, command_line):
+        detector = self._detector(title=title)
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.Process"
+        ) as process:
+            process.return_value.cmdline.return_value = command_line
+            assert detector._classify() == "idle"
+
+    def test_command_line_access_denied_fails_closed(self):
+        detector = self._detector()
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.Process"
+        ) as process:
+            process.return_value.cmdline.side_effect = psutil.AccessDenied(pid=1376)
+            assert detector._classify() == "idle"
+
+    def test_background_runelite_java_does_not_promote_gaming(self):
+        detector = _make_detector(
+            processes={"java.exe"},
+            fg_proc="code.exe",
+            fg_title="activity_detector.py - home-hub",
+        )
+        detector._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+            "code.exe",
+            "activity_detector.py - home-hub",
+            42,
+        )
+
+        assert detector._classify() == "idle"
 
 # ---------------------------------------------------------------------------
 # Dwell — watching ↔ working symmetric stickiness at night
