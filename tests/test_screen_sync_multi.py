@@ -78,6 +78,40 @@ async def test_generic_gaming_uses_base_brightness_and_fixture_caps():
 
 
 @pytest.mark.asyncio
+async def test_generic_gaming_reconciles_invalidated_targets_once_per_light():
+    """A stale sent-state assumption is repaired once without losing freshness."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+    await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+    assert sync._last_sent_state["2"]["bri"] == 240
+    assert sync._last_sent_state["5"]["bri"] == 75
+
+    # Simulate a normal-automation bridge write invalidating only L2. L5's
+    # cached physical-state assumption remains independently valid.
+    sync.invalidate_sent_state(["2"])
+    assert "2" not in sync._last_sent_state
+    assert sync._last_sent_state["5"]["bri"] == 75
+
+    calls_before_reconcile = len(hue.calls)
+    await sync.apply_color("2", 255, 0, 0, mode="gaming", period="day")
+    reconciled_at = sync.last_color_at
+    assert len(hue.calls) == calls_before_reconcile + 1
+    assert hue.last_for("2")["bri"] == 240
+
+    # Both targets now match their canonical cache. Identical generic reports
+    # deduplicate, but every valid report still refreshes ownership time.
+    calls_after_reconcile = len(hue.calls)
+    await sync.apply_color("2", 0, 255, 0, mode="gaming", period="day")
+    await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
+    assert len(hue.calls) == calls_after_reconcile
+    assert sync.last_color_at is not None
+    assert reconciled_at is not None
+    assert sync.last_color_at >= reconciled_at
+
+
+@pytest.mark.asyncio
 async def test_unknown_light_id_is_noop():
     """Typo'd light ids must not silently apply to a real light."""
     hue = _FakeHue()

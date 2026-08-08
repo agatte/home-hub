@@ -1958,6 +1958,218 @@ class TestScreenSyncTargetProtection:
         # manual L1 + transit L3 + sync L2/L5
         assert engine._protected_light_ids() == {"1", "2", "3", "5"}
 
+    async def test_uniform_automation_write_invalidates_all_sync_targets(self, engine):
+        """Uniform normal-automation writes dirty both sync targets."""
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+        assert set(sync._last_sent_state) == {"2", "5"}
+
+        engine._screen_sync = sync
+        engine._current_mode = "working"
+        engine._hue.set_all_lights = AsyncMock(return_value=True)
+        engine._last_applied = {}
+
+        await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
+
+        engine._hue.set_all_lights.assert_awaited_once()
+        assert sync._last_sent_state == {}
+
+    async def test_failed_uniform_write_preserves_sync_cache_and_deduplicates(self, engine):
+        """A failed bulk write leaves valid sync assumptions untouched."""
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+        cached = {lid: state.copy() for lid, state in sync._last_sent_state.items()}
+
+        engine._screen_sync = sync
+        engine._current_mode = "working"
+        engine._hue.set_all_lights = AsyncMock(return_value=False)
+        engine._last_applied_per_light = {}
+
+        await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
+
+        engine._hue.set_all_lights.assert_awaited_once()
+        assert sync._last_sent_state == cached
+
+        # The unchanged cache prevents the next canonical gaming report from
+        # issuing a reconciliation write solely because the bulk write failed.
+        engine._hue.set_light = AsyncMock(return_value=True)
+        await sync.apply_color("2", 255, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
+        engine._hue.set_light.assert_not_awaited()
+
+    async def test_successful_per_light_l2_write_invalidates_only_l2(self, engine):
+        """A successful L2 automation write dirties only L2's sync cache."""
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+
+        engine._screen_sync = sync
+        engine._current_mode = "working"
+        engine._hue.set_light = AsyncMock(return_value=True)
+        engine._last_applied_per_light = {}
+
+        await engine._apply_per_light({
+            "1": {"on": True, "bri": 80, "ct": 350},
+            "2": {"on": True, "bri": 207, "hue": 46920, "sat": 180},
+        })
+
+        assert "2" not in sync._last_sent_state
+        assert sync._last_sent_state["5"]["bri"] == 75
+
+    async def test_failed_per_light_l2_write_preserves_l2_cache(self, engine):
+        """A failed L2 automation write does not dirty L2's sync cache."""
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+        cached_l2 = sync._last_sent_state["2"].copy()
+
+        engine._screen_sync = sync
+        engine._current_mode = "working"
+        engine._hue.set_light = AsyncMock(
+            side_effect=lambda light_id, _state: light_id != "2",
+        )
+        engine._last_applied_per_light = {}
+
+        await engine._apply_per_light({
+            "1": {"on": True, "bri": 80, "ct": 350},
+            "2": {"on": True, "bri": 207, "hue": 46920, "sat": 180},
+        })
+
+        assert sync._last_sent_state["2"] == cached_l2
+        assert sync._last_sent_state["5"]["bri"] == 75
+
+    async def test_mixed_per_light_results_invalidate_only_successful_target(self, engine):
+        """Failed L2 and successful L5 writes reconcile independently."""
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+        cached_l2 = sync._last_sent_state["2"].copy()
+
+        engine._screen_sync = sync
+        engine._current_mode = "working"
+        engine._hue.set_light = AsyncMock(
+            side_effect=lambda light_id, _state: light_id == "5",
+        )
+        engine._last_applied_per_light = {}
+
+        await engine._apply_per_light({
+            "2": {"on": True, "bri": 207, "hue": 46920, "sat": 180},
+            "5": {"on": True, "bri": 139, "hue": 48500, "sat": 160},
+        })
+
+        assert sync._last_sent_state["2"] == cached_l2
+        assert "5" not in sync._last_sent_state
+
+    async def test_automation_write_invalidates_only_changed_sync_targets(self, engine):
+        """Automation bridge writes dirty per-light sync assumptions."""
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+        assert sync._last_sent_state["2"]["bri"] == 240
+        assert sync._last_sent_state["5"]["bri"] == 75
+
+        engine._screen_sync = sync
+        engine._current_mode = "gaming"
+        sync._last_color_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        engine._hue.set_light = AsyncMock(return_value=True)
+        engine._last_applied_per_light = {}
+
+        # L2 is manually held and must not be touched or invalidated. Only the
+        # actual normal-automation L5 write makes L5's sync cache unknown.
+        engine._manual_light_overrides = {"2": datetime.now(timezone.utc)}
+        await engine._apply_per_light({
+            "2": {"on": True, "bri": 207, "hue": 46920, "sat": 180},
+            "5": {"on": True, "bri": 139, "hue": 48500, "sat": 160},
+        })
+
+        engine._hue.set_light.assert_awaited_once()
+        assert engine._hue.set_light.await_args.args[0] == "5"
+        assert sync._last_sent_state["2"]["bri"] == 240
+        assert "5" not in sync._last_sent_state
+
+    async def test_working_to_gaming_reconciles_l2_l5_then_deduplicates(self, engine):
+        """Mode transition writes are repaired once by the first fresh report."""
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import AsyncMock
+
+        from backend.services.screen_sync import ScreenSyncService
+
+        sync = ScreenSyncService(
+            hue_service=engine._hue, target_light_ids=["2", "5"],
+        )
+        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
+        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
+        sync._last_color_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+        engine._screen_sync = sync
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+        engine._hue.set_light = AsyncMock(return_value=True)
+
+        # The transition's normal automation render writes its resolved gaming
+        # state before fresh sync ownership exists, invalidating both targets.
+        await engine.report_activity("gaming", source="process")
+        assert "2" not in sync._last_sent_state
+        assert "5" not in sync._last_sent_state
+
+        engine._hue.set_light.reset_mock()
+        await sync.apply_color("2", 20, 40, 220, mode="gaming", period="day")
+        await sync.apply_color("5", 20, 40, 220, mode="gaming", period="day")
+        repair_calls = engine._hue.set_light.await_args_list
+        assert len(repair_calls) == 2
+        repaired = {call.args[0]: call.args[1] for call in repair_calls}
+        assert repaired["2"]["bri"] == 240
+        assert repaired["5"]["bri"] == 75
+        assert engine._protected_light_ids() == {"2", "5"}
+
+        repaired_at = sync.last_color_at
+        engine._hue.set_light.reset_mock()
+        await sync.apply_color("2", 255, 255, 255, mode="gaming", period="day")
+        await sync.apply_color("5", 255, 255, 255, mode="gaming", period="day")
+        engine._hue.set_light.assert_not_awaited()
+        assert sync.last_color_at is not None
+        assert repaired_at is not None
+        assert sync.last_color_at >= repaired_at
+
 
 # ---------------------------------------------------------------------------
 # Transit override + kitchen-pair atomicity. Regression guard for the

@@ -503,6 +503,21 @@ class ScreenSyncService:
         """All Hue light ids this service can write to."""
         return list(self._targets)
 
+    def invalidate_sent_state(self, light_ids: list[str]) -> None:
+        """Forget cached bridge state for the selected managed lights.
+
+        Normal automation and screen sync write the Hue bridge through
+        separate paths. When automation changes a sync-capable lamp, the
+        cached screen-sync target no longer proves what is physically on the
+        bridge. Dropping only those cache entries makes the next valid frame
+        reconcile each changed lamp once; later identical frames deduplicate
+        normally. EMA state and ownership timestamps are intentionally left
+        untouched.
+        """
+        for light_id in light_ids:
+            if light_id in self._targets:
+                self._last_sent_state.pop(light_id, None)
+
     def prime_from_mode_state(
         self,
         mode: str,

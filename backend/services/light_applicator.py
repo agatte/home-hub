@@ -105,6 +105,13 @@ class LightApplicator:
 
     # ── Apply entry point ───────────────────────────────────────────────
 
+    def _invalidate_screen_sync_cache(self, light_ids: list[str]) -> None:
+        """Mark normal-automation bridge writes unknown to screen sync."""
+        sync = self._screen_sync_getter()
+        invalidate = getattr(sync, "invalidate_sent_state", None)
+        if invalidate is not None:
+            invalidate(light_ids)
+
     async def apply_state(
         self, state: dict[str, Any], transitiontime: int | None = None,
     ) -> None:
@@ -172,7 +179,9 @@ class LightApplicator:
         cmd = {**state}
         if transitiontime is not None:
             cmd["transitiontime"] = transitiontime
-        await hue.set_all_lights(cmd)
+        write_succeeded = await hue.set_all_lights(cmd)
+        if write_succeeded is True:
+            self._invalidate_screen_sync_cache(list(ALL_LIGHT_IDS))
         logger.info(f"Applied uniform state: bri={state.get('bri')}, hue={state.get('hue')}")
         event_logger = self._event_logger_getter()
         if event_logger:
@@ -239,7 +248,14 @@ class LightApplicator:
                 changed_ids.append(light_id)
 
         if tasks:
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
+            successful_ids = [
+                light_id
+                for light_id, result in zip(changed_ids, results)
+                if result is True
+            ]
+            if successful_ids:
+                self._invalidate_screen_sync_cache(successful_ids)
             on_ids = [lid for lid in changed_ids if states[lid].get("on", True)]
             off_ids = [lid for lid in changed_ids if not states[lid].get("on", True)]
             logger.info(f"Applied per-light state: on={on_ids}, off={off_ids}")
