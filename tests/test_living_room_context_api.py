@@ -8,6 +8,7 @@ from backend.api.routes import automation, health
 
 
 ENVELOPE = {
+    "shadow_only": True,
     "snapshot": {
         "version": "living_room_capability_snapshot.v1",
         "evaluated_at": "2026-08-01T20:00:00+00:00",
@@ -18,6 +19,7 @@ ENVELOPE = {
         "reason_codes": ["authoritative_living_room_absent"],
         "scene_selected": False,
         "actuation_attempted": False,
+        "actuation_outcome": "not_attempted",
     },
 }
 
@@ -105,10 +107,18 @@ def test_current_and_pipeline_return_same_stored_envelope_without_recompute() ->
     pipeline = client.get("/api/automation/pipeline")
     assert current.status_code == 200
     assert pipeline.status_code == 200
-    assert {
+    current_envelope = {
+        "shadow_only": current.json()["shadow_only"],
         "snapshot": current.json()["snapshot"],
         "decision": current.json()["decision"],
-    } == pipeline.json()["living_room_context"]
+    }
+    pipeline_envelope = pipeline.json()["living_room_context"]
+    assert current_envelope == pipeline_envelope
+    assert current_envelope["shadow_only"] is True
+    assert pipeline_envelope["shadow_only"] is True
+    assert current_envelope["decision"]["scene_selected"] is False
+    assert current_envelope["decision"]["actuation_attempted"] is False
+    assert current_envelope["decision"]["actuation_outcome"] == "not_attempted"
     assert gate.evaluate_calls == 0
 
 
@@ -170,6 +180,7 @@ def test_recovered_current_pipeline_health_and_history_agree() -> None:
     ).json()["records"]
 
     current_envelope = {
+        "shadow_only": current["shadow_only"],
         "snapshot": current["snapshot"],
         "decision": current["decision"],
     }

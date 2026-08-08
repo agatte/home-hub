@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_VERSION = "living_room_capability_snapshot.v1"
 DECISION_VERSION = "living_room_decision_context.v1"
 BEHAVIOR = "living_room_scene_curator_shadow_eligibility"
+SHADOW_ONLY = True
 LIVING_ROOM_LIGHT_IDS = frozenset({"1", "3", "4"})
 LUX_FRESHNESS_SECONDS = 30.0
 WEATHER_FRESHNESS_SECONDS = 300.0
@@ -139,6 +140,7 @@ class DecisionContextV1:
     eligible_for_scene_curator: bool
     scene_selected: bool = False
     actuation_attempted: bool = False
+    actuation_outcome: str = "not_attempted"
     physical_authority: str = "latitude"
     behavior: str = BEHAVIOR
     version: str = DECISION_VERSION
@@ -286,6 +288,7 @@ def _jsonable(value: Any) -> Any:
 
 def envelope_to_dict(envelope: DecisionEnvelope) -> dict[str, Any]:
     return {
+        "shadow_only": SHADOW_ONLY,
         "snapshot": _jsonable(asdict(envelope.snapshot)),
         "decision": _jsonable(asdict(envelope.decision)),
     }
@@ -299,16 +302,27 @@ _FINGERPRINT_OMIT_KEYS = frozenset({
     "last_success_at",
 })
 
+# These are exact telemetry values whose already-derived categorical fields
+# carry every decision-relevant distinction. They remain in persisted
+# snapshots; only the semantic comparison projection omits them.
+_FINGERPRINT_OMIT_PATHS = frozenset({
+    ("snapshot", "living_room_lux", "value"),
+    ("snapshot", "living_room_presence", "confidence"),
+    ("snapshot", "couch_zone_evidence", "confidence"),
+    ("snapshot", "desktop_physical_presence", "confidence"),
+})
 
-def _semantic_value(value: Any) -> Any:
+
+def _semantic_value(value: Any, path: tuple[str, ...] = ()) -> Any:
     if isinstance(value, dict):
         return {
-            key: _semantic_value(item)
+            key: _semantic_value(item, (*path, key))
             for key, item in value.items()
             if key not in _FINGERPRINT_OMIT_KEYS
+            and (*path, key) not in _FINGERPRINT_OMIT_PATHS
         }
     if isinstance(value, list):
-        return [_semantic_value(item) for item in value]
+        return [_semantic_value(item, path) for item in value]
     return value
 
 
@@ -433,6 +447,7 @@ class LivingRoomDecisionRecorder:
             {
                 "id": row.id,
                 "evaluated_at": _as_utc(row.evaluated_at).isoformat(),
+                "shadow_only": SHADOW_ONLY,
                 "behavior": row.behavior,
                 "outcome": row.outcome,
                 "reason_codes": row.reason_codes,
@@ -1132,7 +1147,7 @@ class LivingRoomDecisionGate:
             )
         return {
             "status": "degraded" if malfunction else "healthy",
-            "shadow_only": True,
+            "shadow_only": SHADOW_ONLY,
             "outcome": decision.outcome.value if decision else None,
             "reason_codes": list(decision.reason_codes) if decision else [],
             "evaluator_age_seconds": round(age, 3) if age is not None else None,

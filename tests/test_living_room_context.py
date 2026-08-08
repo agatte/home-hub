@@ -23,6 +23,7 @@ from backend.services.living_room_context import (
     LivingRoomSnapshotBuilder,
     envelope_to_dict,
     evaluate_living_room_context,
+    semantic_fingerprint,
 )
 from backend.services.sonos_service import SonosService
 
@@ -90,7 +91,10 @@ def _snapshot(**changes) -> CapabilitySnapshotV1:
             freshness=FreshnessStatus.MISSING,
         ),
         process_activity=_evidence("process", state="idle"),
-        living_room_lux=_evidence("latitude_lux", state="120"),
+        living_room_lux=replace(
+            _evidence("latitude_lux"),
+            value=120.0,
+        ),
         hue_health=_health("hue"),
         weather=_evidence("weather_cache", state="Clear"),
         music_sonos_health=_health("sonos"),
@@ -140,6 +144,7 @@ def test_fresh_latitude_couch_and_healthy_hue_is_shadow_eligible() -> None:
     assert result.eligible_for_scene_curator is True
     assert result.scene_selected is False
     assert result.actuation_attempted is False
+    assert result.actuation_outcome == "not_attempted"
 
 
 def test_process_watching_cannot_replace_fresh_latitude_absence() -> None:
@@ -739,6 +744,102 @@ async def test_persistence_semantic_change_checkpoint_and_history_bound(
         await recorder.history(101)
 
 
+def test_semantic_fingerprint_ignores_only_raw_continuous_evidence() -> None:
+    snapshot = _snapshot()
+    envelope = DecisionEnvelope(snapshot, _decision(snapshot))
+    jittered = replace(
+        snapshot,
+        living_room_lux=replace(snapshot.living_room_lux, value=121.7),
+        living_room_presence=replace(
+            snapshot.living_room_presence,
+            confidence=0.91,
+        ),
+        couch_zone_evidence=replace(
+            snapshot.couch_zone_evidence,
+            confidence=0.91,
+        ),
+        desktop_physical_presence=replace(
+            snapshot.desktop_physical_presence,
+            confidence=0.22,
+        ),
+    )
+    jittered_envelope = DecisionEnvelope(jittered, _decision(jittered))
+
+    assert semantic_fingerprint(jittered_envelope) == semantic_fingerprint(
+        envelope
+    )
+
+    stale_lux = replace(
+        jittered,
+        living_room_lux=replace(
+            jittered.living_room_lux,
+            freshness=FreshnessStatus.STALE,
+        ),
+    )
+    stale_envelope = DecisionEnvelope(stale_lux, _decision(stale_lux))
+    assert semantic_fingerprint(stale_envelope) != semantic_fingerprint(
+        jittered_envelope
+    )
+
+
+async def test_lux_jitter_dedups_but_transition_and_checkpoint_persist_exact(
+    session_factory,
+) -> None:
+    recorder = LivingRoomDecisionRecorder(session_factory)
+    initial = _snapshot()
+
+    async def persist(snapshot, *, seconds: int) -> bool:
+        return await recorder.persist_if_needed(
+            DecisionEnvelope(snapshot, _decision(snapshot)),
+            now=NOW + timedelta(seconds=seconds),
+        )
+
+    assert await persist(initial, seconds=0) is True
+    for seconds, lux in ((15, 120.4), (30, 119.7), (45, 121.1)):
+        jittered = replace(
+            initial,
+            evaluated_at=(NOW + timedelta(seconds=seconds)).isoformat(),
+            living_room_lux=replace(initial.living_room_lux, value=lux),
+        )
+        assert await persist(jittered, seconds=seconds) is False
+
+    transition_time = 60
+    transitioned = replace(
+        initial,
+        evaluated_at=(NOW + timedelta(seconds=transition_time)).isoformat(),
+        living_room_lux=replace(
+            initial.living_room_lux,
+            value=118.2,
+            freshness=FreshnessStatus.STALE,
+        ),
+    )
+    assert await persist(transitioned, seconds=transition_time) is True
+
+    before_checkpoint = replace(
+        transitioned,
+        evaluated_at=(NOW + timedelta(minutes=15, seconds=59)).isoformat(),
+        living_room_lux=replace(transitioned.living_room_lux, value=117.6),
+    )
+    assert await persist(before_checkpoint, seconds=15 * 60 + 59) is False
+
+    checkpoint = replace(
+        before_checkpoint,
+        evaluated_at=(NOW + timedelta(minutes=16)).isoformat(),
+        living_room_lux=replace(before_checkpoint.living_room_lux, value=117.4),
+    )
+    assert await persist(checkpoint, seconds=16 * 60) is True
+
+    history = await recorder.history(100)
+    assert len(history) == 3
+    assert history[2]["snapshot"]["living_room_lux"]["value"] == 120.0
+    assert history[1]["snapshot"]["living_room_lux"]["value"] == 118.2
+    assert history[1]["decision"]["optional_context_reason_codes"] == [
+        "living_room_lux_stale",
+        "not_collected_in_v1",
+    ]
+    assert history[0]["snapshot"]["living_room_lux"]["value"] == 117.4
+
+
 async def test_ninety_day_pruning_is_deterministic(session_factory) -> None:
     recorder = LivingRoomDecisionRecorder(session_factory)
     old = NOW - timedelta(days=91)
@@ -861,12 +962,14 @@ async def test_recorder_recovery_reconciles_current_health_and_history_once(
     assert recovered.decision.outcome == DecisionOutcome.ELIGIBLE
     assert "decision_recording_unavailable" not in recovered.decision.reason_codes
     assert gate.current_envelope() == envelope_to_dict(recovered)
+    assert gate.current_envelope()["shadow_only"] is True
     assert gate.current_status()["persistence_health"]["status"] == "healthy"
     assert gate.health_summary()["status"] == "healthy"
     assert gate.health_summary()["outcome"] == "eligible"
 
     history = await gate.history(100)
     assert len(history) == 1
+    assert history[0]["shadow_only"] is True
     assert history[0]["snapshot"] == gate.current_envelope()["snapshot"]
     assert history[0]["decision"] == gate.current_envelope()["decision"]
     assert history[0]["outcome"] == "eligible"
