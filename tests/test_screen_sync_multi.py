@@ -134,6 +134,27 @@ async def test_target_lights_exposes_both():
 
 
 @pytest.mark.asyncio
+async def test_per_source_write_timestamps_survive_newer_other_source():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["1", "2", "3", "4", "5"],
+    )
+
+    await sync.apply_color(
+        "1", 220, 40, 40, mode="watching", source="laptop"
+    )
+    laptop_stamp = sync.last_color_at_by_source["laptop"]
+    await sync.apply_color(
+        "2", 40, 40, 220, mode="watching", source="desktop"
+    )
+
+    assert sync.last_source == "desktop"
+    assert sync.last_color_at_by_source["laptop"] == laptop_stamp
+    assert sync.last_color_at_by_source["desktop"] >= laptop_stamp
+
+
+@pytest.mark.asyncio
 async def test_per_light_sat_boost():
     """L2 gets +20% sat boost; L5 stays neutral. Same RGB → different sat output."""
     hue = _FakeHue()

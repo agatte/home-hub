@@ -233,6 +233,7 @@ async def toggle_camera(body: CameraToggle, request: Request) -> dict:
     from backend.api.routes.routines import save_setting
 
     await save_setting("camera_enabled", {"enabled": body.enabled})
+    request.app.state.latitude_camera_configured = body.enabled
 
     if body.enabled:
         try:

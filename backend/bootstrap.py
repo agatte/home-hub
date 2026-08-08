@@ -18,6 +18,7 @@ import logging
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
@@ -766,6 +767,7 @@ async def lifespan(app: FastAPI):
             ("sonos_playback_events", "timestamp", 90),
             ("scene_activations", "timestamp", 90),
             ("ml_decisions", "timestamp", 21),
+            ("living_room_decision_records", "evaluated_at", 90),
         )
         deleted_total = 0
         async with async_session() as session:
@@ -1097,7 +1099,6 @@ async def lifespan(app: FastAPI):
     if sonos.connected:
         tasks.append(asyncio.create_task(sonos.poll_state_loop(ws_manager)))
 
-    tasks.append(asyncio.create_task(automation.run_loop()))
     tasks.append(asyncio.create_task(scheduler.run_loop()))
     tasks.append(asyncio.create_task(rule_engine.run_generation_loop()))
     # Hourly scan for weather-aware brightness-suggestion candidates.
@@ -1115,6 +1116,9 @@ async def lifespan(app: FastAPI):
 
     # Camera presence detection (opt-in, runs on Latitude webcam)
     camera_enabled_setting = await load_setting("camera_enabled")
+    app.state.latitude_camera_configured = bool(
+        camera_enabled_setting and camera_enabled_setting.get("enabled", False)
+    )
     if camera_enabled_setting and camera_enabled_setting.get("enabled", False):
         try:
             from backend.services.camera_service import CameraService
@@ -1229,6 +1233,121 @@ async def lifespan(app: FastAPI):
         )
     except Exception:
         app_logger.exception("EmotionService failed to initialize — personality disabled")
+
+    # Shadow-only living-room CapabilitySnapshot -> DecisionContext gate.
+    # Constructed after every read-side dependency exists. The builder gets
+    # only narrow snapshot callables; the gate never receives a Hue, Sonos,
+    # TTS, notifier, scene, or automation writer interface.
+    from backend.database import async_session as living_room_session_factory
+    from backend.services.living_room_context import (
+        LivingRoomDecisionGate,
+        LivingRoomDecisionRecorder,
+        LivingRoomSnapshotBuilder,
+    )
+
+    def _heartbeat_row(name: str) -> dict:
+        return next(
+            (row for row in heartbeats.snapshot() if row["name"] == name),
+            {},
+        )
+
+    def _camera_status_snapshot() -> dict:
+        service = getattr(app.state, "camera_service", None)
+        status = service.get_status() if service is not None else {}
+        return {**status, "heartbeat": _heartbeat_row("camera")}
+
+    def _living_room_lux_snapshot() -> dict:
+        service = getattr(app.state, "camera_service", None)
+        if service is None:
+            return {}
+        observed_at = getattr(service, "_last_lux_update", None)
+        age_seconds = (
+            max(
+                0.0,
+                (datetime.now(timezone.utc) - observed_at).total_seconds(),
+            )
+            if observed_at is not None else None
+        )
+        return {
+            "value": getattr(service, "_ema_lux", None),
+            "observed_at": (
+                observed_at.isoformat() if observed_at is not None else None
+            ),
+            "age_seconds": age_seconds,
+        }
+
+    def _hue_status_snapshot() -> dict:
+        breaker = hue.breaker.snapshot()
+        return {
+            "configured": bool(settings.HUE_BRIDGE_IP and settings.HUE_USERNAME),
+            "connected": hue.connected,
+            "breaker_state": breaker["state"],
+            "consecutive_failures": breaker["consecutive_failures"],
+            "last_success_at": breaker["last_success_at"],
+            "heartbeat": _heartbeat_row("hue"),
+        }
+
+    def _policy_context() -> dict:
+        return {
+            "dnd_active": automation.is_dnd_active(),
+            "apartment_away": away_manager.away,
+            "sleeping_active": automation.current_mode == "sleeping",
+            "manual_mode_active": automation.manual_override,
+            "manual_mode": automation.override_mode,
+            "manual_mode_source": automation.override_source,
+        }
+
+    def _ownership_context() -> dict:
+        context = automation.get_light_ownership_context()
+        context["transit"] = {
+            "active": transit_lighting.active,
+            "light_ids": sorted(transit_lighting._owned_lights),
+        }
+        desk_ids: set[str] = set()
+        if desk_exit_kitchen.active:
+            desk_ids.update({"3", "4"})
+        if desk_exit_kitchen._corridor_active:
+            desk_ids.update(
+                set(automation._transit_light_overrides) & {"1", "3", "4"}
+            )
+        context["desk_exit"] = {
+            "active": desk_exit_kitchen.active
+            or desk_exit_kitchen._corridor_active,
+            "light_ids": sorted(desk_ids),
+        }
+        return context
+
+    def _mood_status() -> dict:
+        service = getattr(app.state, "emotion_service", None)
+        return service.health_status() if service is not None else {
+            "enabled": False,
+        }
+
+    snapshot_builder = LivingRoomSnapshotBuilder(
+        latitude_configured=lambda: bool(
+            getattr(app.state, "latitude_camera_configured", False)
+        ),
+        camera_status=_camera_status_snapshot,
+        presence_sources=presence.get_sources,
+        living_room_lux=_living_room_lux_snapshot,
+        hue_status=_hue_status_snapshot,
+        weather_status=weather_service.get_cache_snapshot,
+        sonos_status=sonos.get_cached_status_snapshot,
+        activity_context=automation.get_activity_context,
+        policy_context=_policy_context,
+        ownership_context=_ownership_context,
+        pipeline_status=automation.get_pipeline_status,
+        mood_status=_mood_status,
+    )
+    living_room_gate = LivingRoomDecisionGate(
+        snapshot_builder,
+        LivingRoomDecisionRecorder(living_room_session_factory),
+    )
+    automation.set_living_room_decision_gate(living_room_gate)
+    app.state.living_room_decision_gate = living_room_gate
+    await living_room_gate.start()
+    tasks.append(asyncio.create_task(automation.run_loop()))
+    app_logger.info("Living-room decision gate initialized (shadow-only)")
 
     app_logger.info("Home Hub is ready")
 

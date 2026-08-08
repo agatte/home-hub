@@ -145,6 +145,7 @@ class WeatherService:
     def __init__(self) -> None:
         self._cache: Optional[dict[str, Any]] = None
         self._cache_time: float = 0
+        self._cache_is_stale_fallback: bool = False
         self._alert_cache: Optional[list[dict[str, Any]]] = None
         self._alert_cache_time: float = 0
         # IDs of alerts active as of the last fetch — used to emit the
@@ -158,6 +159,27 @@ class WeatherService:
     def get_cached(self) -> Optional[dict[str, Any]]:
         """Return the most recent cached weather data (sync, no fetch)."""
         return self._cache
+
+    def get_cache_snapshot(self) -> dict[str, Any]:
+        """Return cache health without performing a network fetch."""
+        if self._cache is None or self._cache_time <= 0:
+            return {
+                "condition": None,
+                "observed_at": None,
+                "age_seconds": None,
+                "fresh": False,
+                "stale_fallback": False,
+            }
+        age_seconds = max(0.0, time.time() - self._cache_time)
+        return {
+            "condition": self._cache.get("description"),
+            "observed_at": datetime.fromtimestamp(
+                self._cache_time, tz=timezone.utc
+            ).isoformat(),
+            "age_seconds": round(age_seconds, 3),
+            "fresh": age_seconds <= CACHE_TTL,
+            "stale_fallback": self._cache_is_stale_fallback,
+        }
 
     def get_cached_alerts(self) -> list[dict[str, Any]]:
         """Return cached active weather alerts."""
@@ -180,6 +202,7 @@ class WeatherService:
             ) as client:
                 obs = await self._fetch_observations(client)
                 if not obs:
+                    self._cache_is_stale_fallback = self._cache is not None
                     return self._cache  # Return stale on failure
 
                 # Fetch forecast for high/low (less frequent, piggyback)
@@ -194,6 +217,7 @@ class WeatherService:
             weather = self._build_weather_dict(obs, day_high, day_low)
             self._cache = weather
             self._cache_time = now
+            self._cache_is_stale_fallback = False
             logger.info(
                 "Weather updated: %d°F, %s (H:%s° L:%s°)",
                 weather["temp"],
@@ -206,6 +230,7 @@ class WeatherService:
         except Exception as e:
             logger.error("Weather fetch failed: %s", e, exc_info=True)
             if self._cache:
+                self._cache_is_stale_fallback = True
                 return self._cache
             return None
 

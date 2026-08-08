@@ -400,6 +400,7 @@ class AutomationEngine:
             ws_manager_getter=lambda: self._ws_manager,
             state_builder=self._build_pipeline_state,
         )
+        self._living_room_decision_gate = None
 
         # Heartbeat registry — set via set_heartbeat_registry from lifespan
         # so /health can flag a stalled run_loop.
@@ -469,6 +470,107 @@ class AutomationEngine:
     def manual_light_overrides(self) -> dict[str, datetime]:
         """Light IDs with active per-light manual overrides."""
         return self._manual_light_overrides
+
+    def set_living_room_decision_gate(self, gate: Any) -> None:
+        """Attach the read-only shadow gate after bootstrap composition."""
+        self._living_room_decision_gate = gate
+
+    def get_activity_context(self) -> dict[str, Any]:
+        """Return held activity/effective-mode state without recomputation."""
+        report_at = self._last_mode_source_report_at.get(
+            self._mode_source_key,
+            self._last_mode_source_report_at.get(self._mode_source),
+        )
+        report_age = (
+            (datetime.now(tz=TZ) - report_at).total_seconds()
+            if report_at is not None else None
+        )
+        return {
+            "current_activity": self._current_mode,
+            "current_activity_source": self._mode_source,
+            "current_activity_source_key": self._mode_source_key,
+            "current_activity_reported_at": (
+                report_at.isoformat() if report_at is not None else None
+            ),
+            "current_activity_age_seconds": report_age,
+            "current_activity_fresh": (
+                report_age is not None and report_age <= SOURCE_STALE_SECONDS
+            ),
+            "effective_mode": self.current_mode,
+            "effective_source": self.mode_source,
+            "last_activity_change": (
+                self._last_activity_change.isoformat()
+                if self._last_activity_change is not None else None
+            ),
+        }
+
+    def get_light_ownership_context(self) -> dict[str, Any]:
+        """Return existing ownership state without changing protection."""
+        sync = self._screen_sync
+        now = datetime.now(timezone.utc)
+        sync_age = (
+            (now - sync.last_color_at).total_seconds()
+            if sync is not None and sync.last_color_at is not None
+            else None
+        )
+        source_stamps = (
+            getattr(sync, "last_color_at_by_source", {})
+            if sync is not None else {}
+        )
+        screen_sources = {
+            source: {
+                "last_color_at": stamp.isoformat(),
+                "age_seconds": (now - stamp).total_seconds(),
+            }
+            for source, stamp in source_stamps.items()
+        }
+        return {
+            "manual": {
+                "light_ids": sorted(self._manual_light_overrides),
+                "set_at_by_light": {
+                    light_id: stamp.isoformat()
+                    for light_id, stamp in self._manual_light_overrides.items()
+                },
+            },
+            "screen_sync": {
+                "source": sync.last_source if sync is not None else None,
+                "last_color_at": (
+                    sync.last_color_at.isoformat()
+                    if sync is not None and sync.last_color_at is not None
+                    else None
+                ),
+                "age_seconds": sync_age,
+                "available_light_ids": (
+                    sorted(sync.target_lights) if sync is not None else []
+                ),
+                "sources": screen_sources,
+            },
+            "protected_light_ids": sorted(self._protected_light_ids()),
+            "transit_light_ids": sorted(self._transit_light_overrides),
+        }
+
+    def get_pipeline_status(self) -> dict[str, Any]:
+        """Return held pipeline liveness for the shadow capability snapshot."""
+        return {
+            "enabled": self._enabled,
+            "history_size": len(self._pipeline.history),
+        }
+
+    async def evaluate_living_room_context(
+        self, *, trigger: str = "normal",
+    ) -> Optional[dict[str, Any]]:
+        """Run the attached shadow gate without affecting engine state."""
+        gate = self._living_room_decision_gate
+        if gate is None:
+            return None
+        try:
+            await gate.evaluate(trigger=trigger)
+        except Exception:
+            logger.error(
+                "Living-room shadow evaluation escaped gate boundary",
+                exc_info=True,
+            )
+        return gate.current_envelope()
 
     # ── EngineState facades (GH#87 step 4a) ────────────────────────────
     # The dicts live on self._state so the step-4/5 extractions can share
@@ -2687,6 +2789,15 @@ class AutomationEngine:
                     now, self._override_timeout_hours,
                 )
 
+                # Shadow-only living-room decision context. This runs after
+                # policy/ownership expiry cleanup but before early returns
+                # such as away/external-off suppression can hide current
+                # evidence. It owns no writer interface and never blocks the
+                # existing loop on failure.
+                await self.evaluate_living_room_context(
+                    trigger="automation_tick",
+                )
+
                 # Check for external off (Alexa geofence)
                 if await self._check_external_off():
                     await asyncio.sleep(60)
@@ -3651,6 +3762,7 @@ class AutomationEngine:
 
     async def _broadcast_pipeline(self) -> None:
         """Broadcast pipeline state to all WebSocket clients (throttled)."""
+        await self.evaluate_living_room_context(trigger="pipeline_publish")
         await self._pipeline.broadcast()
 
     async def _broadcast_mode(self) -> None:

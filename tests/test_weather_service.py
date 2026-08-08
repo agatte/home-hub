@@ -125,6 +125,25 @@ class TestCaching:
         svc._cache = {"temp": 72}
         assert svc.get_cached() == {"temp": 72}
 
+    def test_cache_snapshot_reports_age_and_freshness_without_fetch(self):
+        svc = _make_service()
+        svc._cache = {"description": "Clear"}
+        svc._cache_time = time.time() - 10
+        snapshot = svc.get_cache_snapshot()
+        assert snapshot["condition"] == "Clear"
+        assert snapshot["fresh"] is True
+        assert 9 <= snapshot["age_seconds"] <= 11
+        assert snapshot["stale_fallback"] is False
+
+    def test_cache_snapshot_marks_stale_fallback(self):
+        svc = _make_service()
+        svc._cache = {"description": "Rain"}
+        svc._cache_time = time.time() - CACHE_TTL - 1
+        svc._cache_is_stale_fallback = True
+        snapshot = svc.get_cache_snapshot()
+        assert snapshot["fresh"] is False
+        assert snapshot["stale_fallback"] is True
+
 
 # ---------------------------------------------------------------------------
 # Response parsing

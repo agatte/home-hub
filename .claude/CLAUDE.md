@@ -127,6 +127,34 @@ Full service interface docs: `docs/PROJECT_SPEC.md` § "Service Interfaces" + "A
 
 ---
 
+## Shadow Living-Room Decision Gate
+
+**CODED 2026-08-01; SHADOW-ONLY; DEPLOYMENT PENDING.**
+backend/services/living_room_context.py builds
+living_room_capability_snapshot.v1 and living_room_decision_context.v1 from
+already-held read-side state. Latitude is the sole couch/living-room physical
+authority and uses the existing eight-second strong-presence freshness window;
+desktop evidence owns desk context; process activity and latitude_streaming
+never establish living-room occupancy. Hue health requires configured and
+connected state, a closed breaker, no current failures, a fresh heartbeat, and
+a real post-start success. Weather, lux, music/Sonos, Mood Context, and
+season/event context are optional and cannot independently block eligibility.
+
+The gate owns no Hue, Sonos, TTS, notifier, scene, mode, screen-sync, transit,
+or desk-exit writer. Eligible means only that a future Scene Curator could
+evaluate. Read-only status is available at
+GET /api/automation/living-room-context and
+GET /api/automation/living-room-context/history?limit=50 (range 1–100), with
+the same current envelope included in GET /api/automation/pipeline and a
+non-sensitive summary in /health. Normal degraded/veto decisions do not make
+backend health unhealthy; evaluator or recorder malfunction does.
+
+The additive living_room_decision_records table stores exact snapshots and
+decisions on semantic changes plus one unchanged 15-minute checkpoint. The
+nightly retention_sweep prunes it at 90 days. Startup schema creation will add
+the table when this code is deployed; no deployment, migration execution, or
+production verification has happened yet.
+
 ## Frontend
 
 Full frontend component map: `docs/PROJECT_SPEC.md` § "Dashboard — Themed Backgrounds". Key layout: `src/lib/stores/` (WS → stores), `src/lib/ws.js` (reconnect), `src/lib/backgrounds/` (mode scenes), `src/routes/` (home/music/analytics/gameday/settings/journal/personality + `/guest/*`). Global kiosk chrome lives in root `+layout.svelte`: `FloatingNav`, `VitalStrip`, `ModeOverlay`, `NowPlayingChip`, and `MusicPlayerOverlay`; guest routes suppress that chrome. Typography: Bebas Neue (display) + Source Sans 3 (body). Lucide SVG icons.

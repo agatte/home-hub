@@ -257,9 +257,11 @@ class ScreenSyncService:
         self._last_bri: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_sent_state: dict[str, dict[str, int]] = {}
 
-        # Status tracking — global "most recent write" across all lamps.
+        # Status tracking — retain the legacy global most-recent write plus
+        # per-source timestamps for read-only ownership evaluation.
         self._last_color_at: Optional[datetime] = None
         self._last_source: Optional[str] = None
+        self._last_color_at_by_source: dict[str, datetime] = {}
 
         # Runtime overrides for specific (mode, zone, posture, light_id) caps —
         # settings page writes through this dict, persisted in app_settings.
@@ -475,6 +477,17 @@ class ScreenSyncService:
         return self._last_source
 
     @property
+    def last_color_at_by_source(self) -> dict[str, datetime]:
+        """Most recent successful screen-sync write for each reporting source."""
+        return dict(self._last_color_at_by_source)
+
+    def _record_source_write(self, source: str) -> None:
+        observed_at = datetime.now(timezone.utc)
+        self._last_color_at = observed_at
+        self._last_source = source
+        self._last_color_at_by_source[source] = observed_at
+
+    @property
     def target_light(self) -> str:
         """The primary (first) Hue light id this service writes to.
 
@@ -633,8 +646,7 @@ class ScreenSyncService:
             and abs(last_sent.get("bri", ibri) - int(br)) < 2
             and self._within_deadband(last_sent, ih, isat, ibri, mode, period)
         ):
-            self._last_color_at = datetime.now(timezone.utc)
-            self._last_source = source
+            self._record_source_write(source)
             return
         await self._hue.set_light(light_id, {
             "on": True,
@@ -644,8 +656,7 @@ class ScreenSyncService:
             "transitiontime": self._transitiontime_for(mode, period),
         })
         self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
-        self._last_color_at = datetime.now(timezone.utc)
-        self._last_source = source
+        self._record_source_write(source)
         await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
 
     def _smooth(
@@ -772,8 +783,7 @@ class ScreenSyncService:
             "bri": int(sb),
             "transitiontime": 20,  # 2s — smooth brightness glide, no flicker
         })
-        self._last_color_at = datetime.now(timezone.utc)
-        self._last_source = source
+        self._record_source_write(source)
         await self._maybe_log_adjustment(
             light_id, int(sh), int(ss), int(sb), "gaming",
             trigger="rust_brightness_sync",

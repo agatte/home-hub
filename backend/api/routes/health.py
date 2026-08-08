@@ -223,6 +223,22 @@ async def health_check(request: Request) -> dict:
             "last_lux_multiplier": round(_automation.last_lux_multiplier, 4),
         }
 
+    # Living-room gate summary. Normal shadow decisions (absence, stale
+    # evidence, away, DND, sleeping, or ownership vetoes) are operational
+    # outcomes and do not degrade backend health. Only evaluator/recorder
+    # malfunction contributes to the top-level status.
+    living_room_gate_summary: dict = {}
+    living_room_gate = getattr(
+        app.state, "living_room_decision_gate", None
+    )
+    if living_room_gate is not None:
+        living_room_gate_summary = living_room_gate.health_summary()
+        if living_room_gate_summary.get("status") == "degraded":
+            status = "degraded"
+            details["living_room_decision_gate"] = (
+                "shadow evaluator or recorder malfunction"
+            )
+
     return {
         "status": status,
         "service": "Home Hub",
@@ -248,6 +264,7 @@ async def health_check(request: Request) -> dict:
         "circuit_breakers": circuit_breakers,
         "ml": ml,
         "automation": automation_block,
+        "living_room_decision_gate": living_room_gate_summary,
         "sources": sources,
         "sources_untrusted": sources_untrusted,
         "details": details,

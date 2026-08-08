@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import time
+from datetime import datetime, timezone
 from urllib.parse import urljoin
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
     from backend.services.heartbeat import HeartbeatRegistry
 
 logger = logging.getLogger("home_hub.sonos")
+
+STATUS_FRESHNESS_SECONDS = 10.0
 
 
 # play_uri() makes the speaker fetch arbitrary URLs. Without an
@@ -102,6 +105,8 @@ class SonosService:
         self._device = None
         self._connected = False
         self._last_status: Optional[dict] = None
+        self._last_successful_status: Optional[dict[str, Any]] = None
+        self._last_successful_status_at: Optional[datetime] = None
         # Off-dashboard skip emitter — physical buttons, Alexa, Sonos app
         # don't route through main.py:_handle_sonos_command, so skips
         # initiated outside the dashboard were invisible to the bandit
@@ -181,6 +186,45 @@ class SonosService:
         """The underlying SoCo device object."""
         return self._device
 
+    def get_cached_status_snapshot(self) -> dict[str, Any]:
+        """Return held playback health without querying the player."""
+        breaker = self._breaker.snapshot()
+        observed_at = self._last_successful_status_at
+        age_seconds = (
+            max(
+                0.0,
+                (datetime.now(timezone.utc) - observed_at).total_seconds(),
+            )
+            if observed_at is not None
+            else None
+        )
+        state = (
+            self._last_successful_status.get("state")
+            if self._last_successful_status is not None
+            else None
+        )
+        if state == "PLAYING":
+            coarse_state = "playing"
+        elif state in {"STOPPED", "PAUSED_PLAYBACK"}:
+            coarse_state = "stopped"
+        else:
+            coarse_state = "unknown"
+        return {
+            "configured": bool(self._sonos_ip or self._device),
+            "connected": self._connected,
+            "breaker_state": breaker["state"],
+            "consecutive_failures": breaker["consecutive_failures"],
+            "last_successful_status_at": (
+                observed_at.isoformat() if observed_at is not None else None
+            ),
+            "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+            "fresh": (
+                age_seconds is not None
+                and age_seconds <= STATUS_FRESHNESS_SECONDS
+            ),
+            "state": coarse_state,
+        }
+
     async def discover(self) -> None:
         """
         Find a Sonos speaker on the local network.
@@ -242,7 +286,7 @@ class SonosService:
                 self._safe_call(lambda: self._device.mute),
             )
 
-            return {
+            status = {
                 "state": transport.get("current_transport_state", "STOPPED"),
                 "track": track.get("title", ""),
                 "artist": track.get("artist", ""),
@@ -256,6 +300,9 @@ class SonosService:
                 "volume": volume,
                 "mute": mute,
             }
+            self._last_successful_status = status
+            self._last_successful_status_at = datetime.now(timezone.utc)
+            return status
         except CircuitBreakerOpen:
             # Breaker self-narrates state transitions; the 2s poll loop
             # would otherwise log ERROR every cycle while the breaker is

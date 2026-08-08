@@ -93,6 +93,17 @@ surface conflicts, the chosen authority, and the reason. Future room sensors
 provide occupancy evidence; they must not be used to invent PC-specific
 activity.
 
+**CODED/SHADOW-ONLY — DEPLOYMENT PENDING (2026-08-01).** The living-room
+CapabilitySnapshot -> DecisionContext gate implements that authority before
+Scene Curator work begins. Latitude is the sole living-room/couch physical
+authority, and eligibility requires evidence within the existing eight-second
+strong-presence freshness window plus a committed couch zone. Desktop evidence
+owns desk context; process activity and latitude_streaming cannot establish
+occupancy. Conflicts, optional stale context, policy vetoes, and current light
+owners are exposed with stable reason codes. Eligible grants no write
+permission: the gate does not select a scene, change a mode, or call Hue,
+Sonos, TTS, notification, or other apartment writers.
+
 ### Arrival
 
 **SHIPPED/CURRENT.** The committed arrival path releases away suppression,
@@ -816,6 +827,24 @@ Additional keys:
 - `gameday_playoff_state` — cached playoff/standings context; refreshed by the `playoff_state_refresh` ScheduledTask (Tue 06:00 in-season), read at boot (spec: `docs/GAMEDAY_SPEC.md`).
 - `gameday_team_form` — recent Colts form/record context the `CelebrationOrchestrator` folds into TTS line selection (spec: `docs/GAMEDAY_SPEC.md`).
 
+**living_room_decision_records** — Shadow living-room explainability
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer | PK, auto-increment |
+| evaluated_at | DateTime | UTC evaluation/checkpoint time, indexed |
+| behavior | String(100) | Shadow behavior identifier |
+| outcome | String(30) | eligible, degraded_skip, or safe_fallback |
+| reason_codes | JSON | Stable blocking/veto reason-code list |
+| snapshot_version | String(80) | living_room_capability_snapshot.v1 |
+| snapshot | JSON | Exact typed capability snapshot |
+| decision | JSON | Exact living_room_decision_context.v1 result |
+| semantic_fingerprint | String(64) | Timestamp/age-insensitive SHA-256 dedup key |
+
+Rows are written on semantic change plus one unchanged checkpoint every 15
+minutes, bounded by the existing 90-day retention_sweep. No backfill is
+required; startup Base.metadata.create_all creates the additive table after
+deployment. This code has not yet been deployed.
+
 **scenes** — User-created light presets
 | Column | Type | Notes |
 |--------|------|-------|
@@ -1178,6 +1207,16 @@ All messages are JSON with `type` + `data` fields.
 | PUT | `/api/automation/mode-volume` | Update per-mode volume curves (`{mode: {day, evening, night, fade_duration_s}}`) |
 | POST | `/api/automation/activity` | Report activity (`{mode, source}`) |
 | POST | `/api/automation/override` | Manual mode override |
+
+The authenticated automation router also exposes read-only
+GET /api/automation/living-room-context and
+GET /api/automation/living-room-context/history?limit=50 (accepted range
+1–100). The current endpoint returns the exact already-evaluated snapshot and
+decision plus evaluator age and recorder health. GET /api/automation/pipeline
+includes the same current envelope. /health includes a non-sensitive gate
+summary; ordinary absence, stale evidence, away, DND, sleeping, and ownership
+vetoes do not degrade backend health. Only evaluator or recorder malfunction
+contributes degradation.
 
 #### Sonos — `/api/sonos/`
 

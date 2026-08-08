@@ -8,7 +8,7 @@ and manual override controls.
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.api.auth import require_api_key, source_from_request
 from backend.config import settings
@@ -330,10 +330,54 @@ async def get_pipeline(request: Request) -> dict:
     """Get the current decision pipeline state and recent history."""
     engine = getattr(request.app.state, "automation", None)
     if not engine:
-        return {"current": None, "history": []}
+        return {
+            "current": None,
+            "history": [],
+            "living_room_context": None,
+        }
+    gate = getattr(request.app.state, "living_room_decision_gate", None)
     return {
         "current": engine._build_pipeline_state(),
         "history": list(engine.pipeline_history),
+        "living_room_context": (
+            gate.current_envelope() if gate is not None else None
+        ),
+    }
+
+
+@router.get(
+    "/living-room-context",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_living_room_context(request: Request) -> dict:
+    """Return the exact already-evaluated shadow decision envelope."""
+    gate = getattr(request.app.state, "living_room_decision_gate", None)
+    if gate is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Living-room decision gate not initialized",
+        )
+    return gate.current_status()
+
+
+@router.get(
+    "/living-room-context/history",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_living_room_context_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    """Return bounded persisted decisions, newest first."""
+    gate = getattr(request.app.state, "living_room_decision_gate", None)
+    if gate is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Living-room decision gate not initialized",
+        )
+    return {
+        "limit": limit,
+        "records": await gate.history(limit),
     }
 
 

@@ -446,6 +446,28 @@ class RemediationLog(Base):
     reverted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
+class LivingRoomDecisionRecord(Base):
+    """Bounded explainability record for the shadow living-room gate."""
+
+    __tablename__ = "living_room_decision_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    behavior: Mapped[str] = mapped_column(String(100), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason_codes: Mapped[list] = mapped_column(JSON, nullable=False)
+    snapshot_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    decision: Mapped[dict] = mapped_column(JSON, nullable=False)
+    semantic_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
+
+
 # ---------------------------------------------------------------------------
 # AI Personality Layer (Phase A shadow-log).
 #
