@@ -21,8 +21,9 @@ class _FakeHue:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    async def set_light(self, light_id: str, state: dict) -> None:
+    async def set_light(self, light_id: str, state: dict) -> bool:
         self.calls.append((light_id, state))
+        return True
 
     def lights_touched(self) -> list[str]:
         return [lid for lid, _ in self.calls]
@@ -97,11 +98,12 @@ async def test_manual_override_on_one_light_skips_only_that_one():
 
 
 @pytest.mark.asyncio
-async def test_off_mode_drops_silently():
-    """Working mode is not in SCREEN_SYNC_MODES → applied=False, no hue writes."""
+@pytest.mark.parametrize("mode", ["working", "sleeping"])
+async def test_off_mode_drops_silently(mode):
+    """Off modes, including sleeping, drop samples without Hue writes."""
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    engine = _fake_engine("working")
+    engine = _fake_engine(mode)
     req = _make_request(engine, sync)
 
     report = ScreenColorReport(r=220, g=40, b=40)

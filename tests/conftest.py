@@ -49,6 +49,7 @@ class MockHueService:
             "2": {"id": "2", "name": "Bedroom", "on": True, "bri": 150, "hue": 8000, "sat": 140, "reachable": True},
             "3": {"id": "3", "name": "Kitchen Front", "on": True, "bri": 200, "hue": 8000, "sat": 140, "reachable": True},
             "4": {"id": "4", "name": "Kitchen Back", "on": False, "bri": 0, "hue": 0, "sat": 0, "reachable": True},
+            "5": {"id": "5", "name": "Bedroom Accent", "on": True, "bri": 75, "hue": 45000, "sat": 180, "reachable": True},
         }
 
     async def get_all_lights(self) -> list[dict]:
@@ -75,6 +76,7 @@ class MockHueV2Service:
 
     def __init__(self) -> None:
         self.connected = True
+        self.mapped_light_ids = ["1", "2", "3", "4", "5"]
 
     async def activate_scene(self, scene_id: str) -> bool:
         return True

@@ -16,6 +16,7 @@ from backend.services.effect_manager import (
     WEATHER_SKIP_MODES,
     EffectManager,
 )
+from backend.services.light_applicator import LightApplyResult
 
 
 def _make_hue_v2(connected: bool = True):
@@ -23,9 +24,18 @@ def _make_hue_v2(connected: bool = True):
     hue = MagicMock()
     hue.connected = connected
     hue.stop_effect_all = AsyncMock()
-    hue.set_effect_all = AsyncMock()
-    hue.set_effect = AsyncMock()
+    hue.stop_effect_all.return_value = True
+    hue.set_effect_all = AsyncMock(return_value=True)
+    hue.set_effect = AsyncMock(return_value=True)
+    hue.mapped_light_ids = ["1", "2"]
     return hue
+
+
+async def _reconcile(mgr: EffectManager, desired):
+    async def establish(required: set[str]) -> LightApplyResult:
+        return LightApplyResult(successful=set(required))
+
+    return await mgr.reconcile(desired, establish_safety=establish)
 
 
 def _make_weather(description: str | None):
@@ -47,7 +57,7 @@ class TestReconcile:
         hue = _make_hue_v2(connected=False)
         mgr = EffectManager(hue_v2=hue)
 
-        await mgr.reconcile("candle")
+        await _reconcile(mgr, "candle")
 
         hue.stop_effect_all.assert_not_called()
         hue.set_effect_all.assert_not_called()
@@ -58,11 +68,11 @@ class TestReconcile:
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
         # Prime the tracker
-        await mgr.reconcile("candle")
+        await _reconcile(mgr, "candle")
         hue.stop_effect_all.reset_mock()
         hue.set_effect_all.reset_mock()
 
-        await mgr.reconcile("candle")
+        await _reconcile(mgr, "candle")
 
         hue.stop_effect_all.assert_not_called()
         hue.set_effect_all.assert_not_called()
@@ -73,12 +83,12 @@ class TestReconcile:
     async def test_same_name_different_lights_full_cycle(self):
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
-        await mgr.reconcile("candle")  # candle on all
+        await _reconcile(mgr, "candle")  # candle on all
         hue.stop_effect_all.reset_mock()
         hue.set_effect_all.reset_mock()
         hue.set_effect.reset_mock()
 
-        await mgr.reconcile({"effect": "candle", "lights": ["1", "2"]})
+        await _reconcile(mgr, {"effect": "candle", "lights": ["1", "2"]})
 
         hue.stop_effect_all.assert_awaited_once()
         hue.set_effect.assert_any_await("1", "candle")
@@ -90,10 +100,10 @@ class TestReconcile:
     async def test_desired_none_always_stops_when_active(self):
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
-        await mgr.reconcile("candle")
+        await _reconcile(mgr, "candle")
         hue.stop_effect_all.reset_mock()
 
-        await mgr.reconcile(None)
+        await _reconcile(mgr, None)
 
         hue.stop_effect_all.assert_awaited_once()
         assert mgr.active_name is None
@@ -107,7 +117,7 @@ class TestReconcile:
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
 
-        await mgr.reconcile(None)
+        await _reconcile(mgr, None)
 
         hue.stop_effect_all.assert_awaited_once()
 
@@ -116,7 +126,7 @@ class TestReconcile:
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
         # Prime with a different effect so reconcile takes the stop+start path
-        await mgr.reconcile("opal")
+        await _reconcile(mgr, "opal")
         hue.stop_effect_all.reset_mock()
         hue.set_effect_all.reset_mock()
 
@@ -124,7 +134,7 @@ class TestReconcile:
             "backend.services.effect_manager.asyncio.sleep",
             new=AsyncMock(),
         ) as sleep_mock:
-            await mgr.reconcile("candle")
+            await _reconcile(mgr, "candle")
 
         sleep_mock.assert_awaited_once_with(EffectManager.STOP_START_GUARD_SECONDS)
         hue.stop_effect_all.assert_awaited_once()
@@ -135,7 +145,7 @@ class TestReconcile:
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
 
-        await mgr.reconcile({"effect": "fire", "lights": ["1", "2"]})
+        await _reconcile(mgr, {"effect": "fire", "lights": ["1", "2"]})
 
         hue.set_effect_all.assert_not_called()
         hue.set_effect.assert_any_await("1", "fire")
@@ -146,7 +156,7 @@ class TestReconcile:
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
 
-        await mgr.reconcile("glisten")
+        await _reconcile(mgr, "glisten")
 
         hue.set_effect_all.assert_awaited_once_with("glisten")
         hue.set_effect.assert_not_called()
@@ -161,7 +171,7 @@ class TestStopAll:
     async def test_stop_all_clears_tracker(self):
         hue = _make_hue_v2()
         mgr = EffectManager(hue_v2=hue)
-        await mgr.reconcile("candle")
+        await _reconcile(mgr, "candle")
         hue.stop_effect_all.reset_mock()
 
         await mgr.stop_all()

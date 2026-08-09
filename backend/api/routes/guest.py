@@ -14,8 +14,7 @@ from backend.api._guards import _check_hue_available
 from backend.api.auth import require_api_key
 from backend.api.routes.scenes import (
     SCENE_PRESETS,
-    _activate_effect_if_needed,
-    _activate_per_light,
+    _activate_scene_safely,
     _log_scene_activation,
 )
 from backend.config import settings
@@ -242,15 +241,24 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
     hue = request.app.state.hue
     _check_hue_available(hue)
 
-    hue_v2 = getattr(request.app.state, "hue_v2", None)
     ws_manager = request.app.state.ws_manager
     automation = getattr(request.app.state, "automation", None)
+    effect_manager = getattr(request.app.state, "effect_manager", None)
 
     # Apply lights, then any paired effect. Mirrors scenes.py:activate_scene
     # but without the require_api_key gate around scene_id (guests don't
     # get to pick arbitrary scene IDs — only the safelist).
-    await _activate_per_light(hue, preset["lights"])
-    await _activate_effect_if_needed(hue_v2, preset.get("effect"))
+    success = await _activate_scene_safely(
+        automation,
+        effect_manager,
+        preset["lights"],
+        preset.get("effect"),
+    )
+    if not success:
+        raise HTTPException(
+            status_code=409,
+            detail="Guest scene aborted: safe effect release not established",
+        )
 
     await asyncio.sleep(0.3)
     light_states = await hue.get_all_lights()
@@ -303,16 +311,24 @@ async def reset_guest_scene(name: str, request: Request) -> dict:
     hue = request.app.state.hue
     _check_hue_available(hue)
 
-    hue_v2 = getattr(request.app.state, "hue_v2", None)
     ws_manager = request.app.state.ws_manager
+    automation = getattr(request.app.state, "automation", None)
+    effect_manager = getattr(request.app.state, "effect_manager", None)
 
     # Stop overlay effect first — if the guest layered candle/sparkle on top
     # of the scene, reset means "back to baseline" which includes whatever
     # effect (if any) the preset itself specifies.
-    if hue_v2:
-        await hue_v2.stop_effect_all()
-    await _activate_per_light(hue, preset["lights"])
-    await _activate_effect_if_needed(hue_v2, preset.get("effect"))
+    success = await _activate_scene_safely(
+        automation,
+        effect_manager,
+        preset["lights"],
+        preset.get("effect"),
+    )
+    if not success:
+        raise HTTPException(
+            status_code=409,
+            detail="Guest scene reset aborted: safe effect release not established",
+        )
 
     await asyncio.sleep(0.3)
     light_states = await hue.get_all_lights()
@@ -457,6 +473,10 @@ async def activate_guest_effect(name: str, request: Request) -> dict:
                    f"{', '.join(sorted(GUEST_OVERLAY_EFFECTS))} or 'stop'",
         )
 
+    hue_v2 = getattr(request.app.state, "hue_v2", None)
+    effect_manager = getattr(request.app.state, "effect_manager", None)
+    automation = getattr(request.app.state, "automation", None)
+
     async with _guest_effect_lock:
         now = time.monotonic()
         elapsed = now - _last_guest_effect_at
@@ -469,14 +489,20 @@ async def activate_guest_effect(name: str, request: Request) -> dict:
             )
         _last_guest_effect_at = now
 
-    hue_v2 = getattr(request.app.state, "hue_v2", None)
-    if not hue_v2:
+    if not hue_v2 or effect_manager is None or automation is None:
         raise HTTPException(status_code=503, detail="Hue v2 service not available")
 
-    if name == "stop":
-        await hue_v2.stop_effect_all()
-    else:
-        await hue_v2.set_effect_all(name)
+    success = await effect_manager.reconcile(
+        None if name == "stop" else name,
+        establish_safety=lambda release_ids: automation.establish_effect_release(
+            None, 4, release_ids,
+        ),
+    )
+    if not success:
+        raise HTTPException(
+            status_code=409,
+            detail="Guest effect aborted: safe effect release not established",
+        )
 
     logger.info(
         "Guest set overlay effect '%s' from %s",
@@ -689,25 +715,38 @@ async def speak_guest_toast(body: ToastRequest, request: Request) -> dict:
     if not tts:
         raise HTTPException(status_code=503, detail="TTS service not initialized")
 
-    hue_v2 = getattr(request.app.state, "hue_v2", None)
+    effect_manager = getattr(request.app.state, "effect_manager", None)
+    automation = getattr(request.app.state, "automation", None)
 
-    # Sparkle flourish — set it for the toast, stop it after. Done directly
-    # against hue_v2 to mirror the existing /effect/{name} pattern (which
-    # also bypasses the EffectManager). Edge case: if a guest had +Sparkle
-    # as a scene overlay, this stop will end their overlay too. Acceptable
-    # v1 limitation; toasts are rare and re-tapping +Sparkle costs a second.
-    if hue_v2:
+    # Sparkle flourish uses the same safe transition boundary as every other
+    # effect lifecycle path. If safety cannot be established, the toast still
+    # speaks without lighting rather than risking a flash.
+    if effect_manager is not None and automation is not None:
         try:
-            await hue_v2.set_effect_all("sparkle")
+            await effect_manager.reconcile(
+                "sparkle",
+                establish_safety=lambda release_ids: (
+                    automation.establish_effect_release(
+                        None, 4, release_ids,
+                    )
+                ),
+            )
         except Exception:
             logger.warning("Couldn't start sparkle for toast", exc_info=True)
 
     try:
         spoken = await tts.speak(text, volume=GUEST_TOAST_VOLUME)
     finally:
-        if hue_v2:
+        if effect_manager is not None and automation is not None:
             try:
-                await hue_v2.stop_effect_all()
+                await effect_manager.reconcile(
+                    None,
+                    establish_safety=lambda release_ids: (
+                        automation.establish_effect_release(
+                            None, 4, release_ids,
+                        )
+                    ),
+                )
             except Exception:
                 logger.warning("Couldn't stop sparkle after toast", exc_info=True)
 

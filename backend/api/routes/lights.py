@@ -89,7 +89,7 @@ async def set_light(light_id: str, state: LightState, request: Request) -> dict:
     # Mark this light as manually overridden so automation skips it
     automation = getattr(request.app.state, "automation", None)
     if automation:
-        automation.mark_light_manual(str(light_id))
+        automation.mark_light_manual(str(light_id), state_dict)
 
     # No post-write broadcast — the bridge is mid-transition and a fresh
     # read returns an intermediate value. Polling broadcasts after the
@@ -138,9 +138,11 @@ async def adjust_brightness(direction: str, request: Request) -> dict:
         if new_bri == current:
             continue
         light_id = light["light_id"]
-        await hue.set_light(light_id, {"bri": new_bri})
+        success = await hue.set_light(light_id, {"bri": new_bri})
+        if success is not True:
+            continue
         if automation:
-            automation.mark_light_manual(str(light_id))
+            automation.mark_light_manual(str(light_id), {"bri": new_bri})
         updated.append({"id": light_id, "bri": new_bri})
         # Per-light row in light_adjustments so Alexa "brighter"/"dimmer"
         # is visible in the same place as dashboard slider drags.

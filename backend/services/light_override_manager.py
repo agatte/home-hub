@@ -47,6 +47,7 @@ class LightOverrideManager:
         current_mode_getter: Callable[[], str],
         reapply_mode: Callable[[str], Awaitable[None]],
         suppressed_getter: Optional[Callable[[], bool]] = None,
+        transition_boundary=None,
     ) -> None:
         self._st = state
         self._hue_getter = hue_getter
@@ -57,16 +58,26 @@ class LightOverrideManager:
         # absence-shaped (camera sees nobody), so while the apartment is
         # suppressed they would churn path-lighting for an empty room.
         self._suppressed_getter = suppressed_getter or (lambda: False)
+        self._transition_boundary = transition_boundary
 
     # ── Manual stamps ───────────────────────────────────────────────────
 
-    def mark_manual(self, light_id: str) -> None:
+    def mark_manual(self, light_id: str, target: Optional[dict] = None) -> None:
         """Mark a light as manually adjusted — protects it from automation.
 
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
         self._st.manual_light_overrides[light_id] = datetime.now(tz=TZ)
+        if target is not None:
+            normalized = {
+                key: value
+                for key, value in target.items()
+                if key in {"on", "bri", "hue", "sat", "ct"}
+                and value is not None
+            }
+            base = self._st.last_applied_per_light.get(light_id, {})
+            self._st.manual_light_targets[light_id] = {**base, **normalized}
         logger.info(f"Light {light_id} marked as manually overridden")
 
     def clear_manual_stamps(self) -> None:
@@ -76,6 +87,7 @@ class LightOverrideManager:
                 f"Clearing per-light overrides: {list(self._st.manual_light_overrides)}"
             )
             self._st.manual_light_overrides.clear()
+            self._st.manual_light_targets.clear()
 
     def expire_manual_stamps(self, now: datetime, timeout_hours: int) -> None:
         """Expire stale per-light overrides (same window as the mode-level
@@ -91,6 +103,7 @@ class LightOverrideManager:
         ]
         for lid in expired:
             del self._st.manual_light_overrides[lid]
+            self._st.manual_light_targets.pop(lid, None)
             logger.info(
                 f"Per-light override on light {lid} expired "
                 f"after {timeout_hours}h"
@@ -136,6 +149,7 @@ class LightOverrideManager:
         ]
         for lid in expired:
             del self._st.transit_light_overrides[lid]
+            self._st.transit_light_targets.pop(lid, None)
             # Mirrors clear_transit_override's pop. Without it, the dedup
             # cache retains transit values after deadline expiry and the
             # next reconcile dedup-skips on stale data (kitchen-pair drift
@@ -173,6 +187,19 @@ class LightOverrideManager:
                 ``"desk_exit_kitchen"`` so analytics can distinguish the two
                 paths.
         """
+        if (
+            self._transition_boundary is not None
+            and not self._transition_boundary.held_by_current_task
+        ):
+            async with self._transition_boundary.serialized():
+                await self.apply_transit_override(
+                    states,
+                    duration_seconds=duration_seconds,
+                    transition_time=transition_time,
+                    trigger=trigger,
+                )
+                return
+
         # Away/external-off: never path-light an empty apartment. The
         # absence-based triggers (desk-loss) fire constantly while away —
         # observed live 2026-06-10, transit cycling every ~70s post-LEAVE.
@@ -216,6 +243,7 @@ class LightOverrideManager:
 
         deadline = datetime.now(tz=TZ) + timedelta(seconds=duration_seconds)
         tasks = []
+        changed_ids: list[str] = []
         # Capture before-state for event logging — same pattern as
         # _apply_per_light. Without this, transit writes were invisible to
         # light_adjustments queries (2026-05-12 incident: 107 transit cycles
@@ -227,21 +255,41 @@ class LightOverrideManager:
             ).copy()
             cmd = {**state, "transitiontime": transition_time}
             tasks.append(hue.set_light(light_id, cmd))
-            self._st.transit_light_overrides[light_id] = deadline
-            # Seed dedup so a concurrent reconcile cycle doesn't re-send the
-            # previous mode state for these lights before the skip filter runs.
-            self._st.last_applied_per_light[light_id] = {k: v for k, v in state.items() if k != "transitiontime"}
+            changed_ids.append(light_id)
+        results = []
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        successful = [
+            light_id
+            for light_id, result in zip(changed_ids, results)
+            if result is True
+        ]
+        failed = [
+            light_id
+            for light_id, result in zip(changed_ids, results)
+            if result is not True
+        ]
+        for light_id in successful:
+            state = states[light_id]
+            self._st.transit_light_overrides[light_id] = deadline
+            self._st.transit_light_targets[light_id] = {
+                key: value for key, value in state.items()
+                if key != "transitiontime"
+            }
+            self._st.last_applied_per_light[light_id] = {
+                key: value for key, value in state.items()
+                if key != "transitiontime"
+            }
         logger.info(
-            "%s override applied to lights %s (expires %s)",
-            trigger, list(states.keys()),
+            "%s override writes: success=%s failed=%s (expires %s)",
+            trigger, successful, failed,
             deadline.strftime("%H:%M:%S"),
         )
         event_logger = self._event_logger_getter()
         if event_logger:
             current_mode = self._current_mode_getter()
-            for light_id, state in states.items():
+            for light_id in successful:
+                state = states[light_id]
                 prev = pre_values.get(light_id, {})
                 await event_logger.log_light_adjustment(
                     light_id=light_id,
@@ -273,6 +321,7 @@ class LightOverrideManager:
         for lid in light_ids:
             if lid in self._st.transit_light_overrides:
                 del self._st.transit_light_overrides[lid]
+                self._st.transit_light_targets.pop(lid, None)
                 cleared.append(lid)
         if not cleared:
             return

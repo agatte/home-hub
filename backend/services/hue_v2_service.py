@@ -278,7 +278,12 @@ class HueV2Service:
         results = await asyncio.gather(
             *(self.set_effect(v1_id, effect) for v1_id in self._v1_to_v2)
         )
-        return any(results)
+        return all(result is True for result in results)
+
+    @property
+    def mapped_light_ids(self) -> list[str]:
+        """v1 light IDs affected by bridge-wide effect operations."""
+        return list(self._v1_to_v2)
 
     async def stop_effect(self, v1_light_id: str) -> bool:
         """Stop any active effect on a light."""

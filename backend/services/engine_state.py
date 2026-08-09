@@ -40,3 +40,9 @@ class EngineState:
     # TransitLightingService + DeskExitKitchenService through the engine
     # verbs; reconcile skips these lights like manual overrides.
     transit_light_overrides: dict[str, datetime] = field(default_factory=dict)
+
+    # Authoritative held targets for protected lamps. These are separate from
+    # the acknowledgement-backed dedup cache: ownership can outlive a failed
+    # write, while a failed write must never be remembered as applied.
+    manual_light_targets: dict[str, dict] = field(default_factory=dict)
+    transit_light_targets: dict[str, dict] = field(default_factory=dict)

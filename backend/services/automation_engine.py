@@ -52,7 +52,8 @@ from backend.services.automation_constants import (
 )
 from backend.services.dnd_manager import DndManager
 from backend.services.engine_state import EngineState
-from backend.services.light_applicator import LightApplicator
+from backend.services.light_applicator import LightApplicator, LightApplyResult
+from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.light_override_manager import LightOverrideManager
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
 
@@ -191,9 +192,16 @@ class AutomationEngine:
         self._ml_logger = ml_logger
         self._behavioral_predictor = behavioral_predictor
         self._presence_fusion = presence_fusion
-        self._effect_manager = effect_manager or EffectManager(
-            hue_v2=hue_v2, weather_service=weather_service,
-        )
+        if effect_manager is None:
+            transition_boundary = LightingTransitionBoundary(hue)
+            self._effect_manager = EffectManager(
+                hue_v2=hue_v2,
+                weather_service=weather_service,
+                transition_boundary=transition_boundary,
+            )
+        else:
+            self._effect_manager = effect_manager
+        self._transition_boundary = self._effect_manager.transition_boundary
 
         # Weather condition tracking for music suggestions
         self._last_weather_condition: Optional[str] = None
@@ -260,6 +268,7 @@ class AutomationEngine:
             # a bound method captured here would go stale.
             reapply_mode=lambda mode: self._apply_mode(mode),
             suppressed_getter=lambda: self._external_off_detected,
+            transition_boundary=self._transition_boundary,
         )
 
         # Bridge-write layer (away-gate, dedup compare/record, protected-light
@@ -285,6 +294,7 @@ class AutomationEngine:
             # honored from inside the apply chain (step-4 reapply_mode pattern).
             dispatch_per_light=lambda s, t=None: self._apply_per_light(s, t),
             dispatch_uniform=lambda s, t=None: self._apply_uniform(s, t),
+            transition_boundary=self._transition_boundary,
         )
 
         # Track if lights were turned off externally (Alexa geofence)
@@ -1935,13 +1945,15 @@ class AutomationEngine:
     # These delegates keep the original method names for external callers
     # (TransitLightingService, DeskExitKitchenService, WS handler, tests).
 
-    def mark_light_manual(self, light_id: str) -> None:
+    def mark_light_manual(
+        self, light_id: str, target: Optional[dict] = None,
+    ) -> None:
         """Mark a light as manually adjusted — protects it from automation.
 
         Per-light overrides are cleared on the next explicit mode change
         (manual override set/cleared) so automation resumes naturally.
         """
-        self._overrides.mark_manual(light_id)
+        self._overrides.mark_manual(light_id, target)
 
     def _clear_per_light_overrides(self) -> None:
         """Clear all per-light manual overrides."""
@@ -2111,10 +2123,35 @@ class AutomationEngine:
     # ------------------------------------------------------------------
 
     async def _reconcile_effect(
-        self, desired: Optional[str | dict[str, Any]],
-    ) -> None:
-        """Transition active Hue v2 effect (shim → effect_manager)."""
-        await self._effect_manager.reconcile(desired)
+        self,
+        desired: Optional[str | dict[str, Any]],
+        intended_states: Optional[dict[str, dict]] = None,
+        transitiontime: int | None = None,
+    ) -> bool:
+        """Safely establish targets, settle, then reconcile Hue effects."""
+        return await self._effect_manager.reconcile(
+            desired,
+            establish_safety=lambda release_ids: (
+                self._applicator.establish_effect_release(
+                    intended_states,
+                    transitiontime,
+                    release_ids,
+                )
+            ),
+        )
+
+    async def establish_effect_release(
+        self,
+        intended_states: Optional[dict[str, dict]],
+        transitiontime: int | None,
+        release_light_ids: set[str],
+    ) -> LightApplyResult:
+        """Establish effect-release targets while the shared boundary is held."""
+        return await self._applicator.establish_effect_release(
+            intended_states,
+            transitiontime,
+            release_light_ids,
+        )
 
     async def _apply_mode(self, mode: str, *, force_resend: bool = False) -> None:
         """Apply light state for a given mode.
@@ -2159,6 +2196,10 @@ class AutomationEngine:
         # mode change. We reconcile effects at the END of this function, after
         # _apply_state (or scene activation) has established the new target.
         desired_effect = self._get_desired_effect(mode)
+        pre_transition_targets = {
+            light_id: target.copy()
+            for light_id, target in self._last_applied_per_light.items()
+        }
 
         # On a true mode transition, the previous mode may have used HSB
         # while this one uses CT, an effect may have been running and changed
@@ -2168,11 +2209,11 @@ class AutomationEngine:
         if force_resend:
             self._invalidate_dedup_cache()
 
-        # Sleep mode: dim the bridge FIRST, then stop the effect, then fade to off.
+        # Sleep mode: establish the dim target and release any active effect as
+        # one serialized transition, then continue the existing fade to off.
         # Stopping an active effect before setting a brightness target pops the
         # bridge to 100% (same root cause as the mode-change flash documented
-        # in _reconcile_effect). Apply a very low target first so the bridge
-        # holds it when the effect releases.
+        # in _reconcile_effect).
         if mode == "sleeping":
             if self._sleep_fade_task and not self._sleep_fade_task.done():
                 return  # Fade already in progress
@@ -2181,11 +2222,26 @@ class AutomationEngine:
             # first thing Anthony sees (already in bed) is sleep-friendly.
             initial_state = {"on": True, "bri": 20, "hue": 5000, "sat": 254}
             self._invalidate_dedup_cache()
-            await self._apply_state(initial_state, transitiontime=10)
-            await asyncio.sleep(1.2)  # Let the bridge settle the target
-
-            # Now stop the effect — bridge holds bri=20 instead of popping to 100%
-            await self._effect_manager.stop_all()
+            if self._effect_manager.needs_reconcile(desired_effect):
+                release_targets = {
+                    light_id: initial_state.copy()
+                    for light_id in self._effect_manager.release_light_ids()
+                }
+                released = await self._reconcile_effect(
+                    desired_effect,
+                    intended_states=release_targets,
+                    transitiontime=10,
+                )
+                if not released:
+                    logger.warning(
+                        "Sleep transition aborted: effect release safety failed",
+                    )
+                    return
+            else:
+                # No effect release is needed, but preserve the prior visible
+                # dim step using its acknowledged Hue transition deadline.
+                applied = await self._apply_state(initial_state, transitiontime=10)
+                await self._transition_boundary.wait_for_settle(applied.successful)
 
             self._sleep_fade_task = asyncio.create_task(self._sleep_fade())
             return
@@ -2223,19 +2279,49 @@ class AutomationEngine:
             failure_reason: str | None = None
             try:
                 if source == "bridge":
-                    await self._hue_v2.activate_scene(override_scene)
+                    async def activate_native_override() -> bool:
+                        return await self._hue_v2.activate_scene(override_scene)
+
+                    override_applied = await self._effect_manager.replace_with_action(
+                        activate_native_override,
+                        establish_safety=lambda release_ids: (
+                            self.establish_effect_release(
+                                pre_transition_targets or None,
+                                MODE_TRANSITION_TIME.get(mode),
+                                release_ids,
+                            )
+                        ),
+                        desired=desired_effect,
+                    )
                     logger.info(
                         "Applied scene override for %s/%s: %s",
                         mode, period, override_scene,
                     )
-                    override_applied = True
                 elif source == "preset":
-                    # Preset scenes are handled via the scenes route — activate by name
-                    from backend.api.routes.scenes import SCENE_PRESETS, _activate_per_light
+                    from backend.api.routes.scenes import SCENE_PRESETS
                     preset = SCENE_PRESETS.get(override_scene)
                     if preset:
-                        await _activate_per_light(preset["lights"], self._hue)
-                        override_applied = True
+                        normalized = {
+                            str(light_id): light_state.copy()
+                            for light_id, light_state in preset["lights"].items()
+                        }
+
+                        async def preset_ready() -> bool:
+                            return True
+
+                        override_applied = (
+                            await self._effect_manager.replace_with_action(
+                                preset_ready,
+                                establish_safety=lambda release_ids: (
+                                    self.establish_effect_release(
+                                        normalized,
+                                        MODE_TRANSITION_TIME.get(mode),
+                                        release_ids,
+                                    )
+                                ),
+                                desired=desired_effect,
+                            )
+                        )
                     else:
                         failure_reason = f"preset '{override_scene}' not in SCENE_PRESETS"
             except Exception as e:
@@ -2247,9 +2333,6 @@ class AutomationEngine:
                 )
 
             if override_applied:
-                # Reconcile effect AFTER scene activation so the bridge has a
-                # brightness target set before we stop any old effect.
-                await self._reconcile_effect(desired_effect)
                 return
 
             # Both paths failed — notify the frontend and fall through to the
@@ -2350,12 +2433,18 @@ class AutomationEngine:
                 if prime is not None:
                     prime(mode, period, state)
             tt = MODE_TRANSITION_TIME.get(mode)
-            await self._apply_state(state, transitiontime=tt)
-
-            # Reconcile effect AFTER the state is on the bridge — this
-            # avoids the brightness pop that happens when an effect is
-            # stopped before the target brightness is known to the bridge.
-            await self._reconcile_effect(desired_effect)
+            if self._effect_manager.needs_reconcile(desired_effect):
+                # One serialized sequence: force safe targets (including
+                # protected held targets), wait the commanded transition,
+                # then release/start the effect.
+                await self._reconcile_effect(
+                    desired_effect,
+                    intended_states=state,
+                    transitiontime=tt,
+                )
+            else:
+                # Steady-state reapply: normal dedup path, no settle barrier.
+                await self._apply_state(state, transitiontime=tt)
         else:
             # Unknown mode — fall back to time-based
             await self._apply_time_based()
@@ -2368,11 +2457,16 @@ class AutomationEngine:
         combination is intentionally static: warm deep saturation flatters
         skin and drinks without cycling that reads as "RGB gamer strip".
         """
-        await self._apply_state(
-            ACTIVITY_LIGHT_STATES["social"],
-            transitiontime=MODE_TRANSITION_TIME["social"],
-        )
-        await self._reconcile_effect(None)
+        state = ACTIVITY_LIGHT_STATES["social"]
+        transitiontime = MODE_TRANSITION_TIME["social"]
+        if self._effect_manager.needs_reconcile(None):
+            await self._reconcile_effect(
+                None,
+                intended_states=state,
+                transitiontime=transitiontime,
+            )
+        else:
+            await self._apply_state(state, transitiontime=transitiontime)
 
     async def _sleep_fade(self) -> None:
         """
@@ -2438,14 +2532,14 @@ class AutomationEngine:
 
     async def _apply_state(
         self, state: dict[str, Any], transitiontime: int | None = None,
-    ) -> None:
+    ) -> LightApplyResult:
         """Apply a light state (uniform or per-light) — GH#87 step-5 delegate
         to :class:`LightApplicator`. Kept as a method (not just an attribute)
         so callers (``_apply_mode``, ``_apply_time_based``, ``_sleep_fade``,
         ``_maybe_drift``) and test spies that patch ``engine._apply_state``
         are honored unchanged.
         """
-        await self._applicator.apply_state(state, transitiontime)
+        return await self._applicator.apply_state(state, transitiontime)
 
     def _protected_light_ids(self) -> set[str]:
         """Light ids the mode-apply pipeline must NOT write this tick — GH#87
@@ -2456,15 +2550,15 @@ class AutomationEngine:
 
     async def _apply_uniform(
         self, state: dict[str, Any], transitiontime: int | None = None,
-    ) -> None:
+    ) -> LightApplyResult:
         """Apply the same state to all lights — GH#87 step-5 delegate."""
-        await self._applicator.apply_uniform(state, transitiontime)
+        return await self._applicator.apply_uniform(state, transitiontime)
 
     async def _apply_per_light(
         self, states: dict[str, dict], transitiontime: int | None = None,
-    ) -> None:
+    ) -> LightApplyResult:
         """Apply individual states to each light — GH#87 step-5 delegate."""
-        await self._applicator.apply_per_light(states, transitiontime)
+        return await self._applicator.apply_per_light(states, transitiontime)
 
     async def _maybe_drift(self) -> None:
         """

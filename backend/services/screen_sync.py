@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 import httpx
 
+from backend.services.automation_constants import SCREEN_SYNC_FRESH_SECONDS
 from backend.services.color_utils import (
     DEFAULT_LUMA_COMP,
     DEFAULT_SAT_BOOST,
@@ -239,8 +240,10 @@ class ScreenSyncService:
         self,
         hue_service,
         target_light_ids: Optional[list[str]] = None,
+        transition_boundary=None,
     ) -> None:
         self._hue = hue_service
+        self._transition_boundary = transition_boundary
         targets = list(target_light_ids) if target_light_ids else ["2"]
         if not targets:
             targets = ["2"]
@@ -518,6 +521,36 @@ class ScreenSyncService:
             if light_id in self._targets:
                 self._last_sent_state.pop(light_id, None)
 
+    def authoritative_state(self, light_id: str) -> Optional[dict[str, Any]]:
+        """Return the last screen-sync target currently owning a lamp."""
+        state = self._last_sent_state.get(light_id)
+        return {"on": True, **state} if state is not None else None
+
+    def fresh_authoritative_state(self, light_id: str) -> Optional[dict[str, Any]]:
+        """Return a fresh acknowledged target without applying a mode gate.
+
+        This is for transition safety only: a mode change may close the route
+        gate before an old, still-fresh screen-sync target has been safely
+        re-established and its effect released.
+        """
+        last_color_at = self._last_color_at
+        if last_color_at is None:
+            return None
+        age = (datetime.now(timezone.utc) - last_color_at).total_seconds()
+        if age >= SCREEN_SYNC_FRESH_SECONDS:
+            return None
+        return self.authoritative_state(light_id)
+
+    async def _set_light_serialized(self, light_id: str, state: dict) -> bool:
+        """Serialize screen writes only while an effect transition is active."""
+        if (
+            self._transition_boundary is None
+            or self._transition_boundary.held_by_current_task
+        ):
+            return await self._hue.set_light(light_id, state)
+        async with self._transition_boundary.serialized():
+            return await self._hue.set_light(light_id, state)
+
     def prime_from_mode_state(
         self,
         mode: str,
@@ -675,13 +708,15 @@ class ScreenSyncService:
         ):
             self._record_source_write(source)
             return
-        await self._hue.set_light(light_id, {
+        success = await self._set_light_serialized(light_id, {
             "on": True,
             "hue": ih,
             "sat": isat,
             "bri": ibri,
             "transitiontime": self._transitiontime_for(mode, period),
         })
+        if success is not True:
+            return
         self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
         self._record_source_write(source)
         await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
@@ -729,7 +764,7 @@ class ScreenSyncService:
             self._record_source_write(source)
             return
 
-        await self._hue.set_light(
+        success = await self._set_light_serialized(
             light_id,
             {
                 "on": True,
@@ -737,6 +772,8 @@ class ScreenSyncService:
                 "transitiontime": self._transitiontime_for("gaming", period),
             },
         )
+        if success is not True:
+            return
         self._last_sent_state[light_id] = stable
         self._record_source_write(source)
         await self._maybe_log_adjustment(
@@ -864,13 +901,19 @@ class ScreenSyncService:
         else:
             hue, sat = self._rust_ember_hue, self._rust_ember_sat
         sh, ss, sb = self._smooth(light_id, float(hue), float(sat), target_bri)
-        await self._hue.set_light(light_id, {
+        sent = {
             "on": True,
             "hue": int(sh),
             "sat": int(ss),
             "bri": int(sb),
             "transitiontime": 20,  # 2s — smooth brightness glide, no flicker
-        })
+        }
+        success = await self._set_light_serialized(light_id, sent)
+        if success is not True:
+            return
+        self._last_sent_state[light_id] = {
+            "hue": int(sh), "sat": int(ss), "bri": int(sb),
+        }
         self._record_source_write(source)
         await self._maybe_log_adjustment(
             light_id, int(sh), int(ss), int(sb), "gaming",

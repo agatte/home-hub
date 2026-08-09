@@ -20,8 +20,9 @@ class _FakeHue:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    async def set_light(self, light_id: str, state: dict) -> None:
+    async def set_light(self, light_id: str, state: dict) -> bool:
         self.calls.append((light_id, state))
+        return True
 
     def last_for(self, light_id: str) -> dict:
         for lid, state in reversed(self.calls):

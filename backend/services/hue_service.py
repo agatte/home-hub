@@ -37,6 +37,11 @@ class HueService:
         # loop skips that light so mid-transition bridge reads don't bounce
         # the UI back to stale values.
         self._inflight_until: dict[str, float] = {}
+        # Successful-write physical completion deadlines, without the UI
+        # polling buffer. Effect release waits on these exact commanded
+        # transition durations; API acknowledgement alone is not completion.
+        self._transition_settle_until: dict[str, float] = {}
+        self._transition_boundary = None
         self._heartbeat = None  # HeartbeatRegistry, set via set_heartbeat_registry
         # When the v2 EventStream is delivering push updates, the polling
         # loop slows to 5s (still covers color/ct + bridge reachability).
@@ -54,6 +59,10 @@ class HueService:
     def set_heartbeat_registry(self, registry) -> None:
         """Inject the heartbeat registry (called from lifespan)."""
         self._heartbeat = registry
+
+    def set_transition_boundary(self, boundary) -> None:
+        """Attach the shared effect-transition serializer."""
+        self._transition_boundary = boundary
 
     def set_v2_stream_active(self, active: bool) -> None:
         """
@@ -181,6 +190,13 @@ class HueService:
         Returns:
             True if the command succeeded.
         """
+        if (
+            self._transition_boundary is not None
+            and not self._transition_boundary.held_by_current_task
+        ):
+            async with self._transition_boundary.serialized():
+                return await self.set_light(light_id, state)
+
         if not self._connected or not self._bridge:
             return False
 
@@ -235,6 +251,9 @@ class HueService:
             self._inflight_until[light_id] = (
                 time.monotonic() + transition_seconds + INFLIGHT_BUFFER_SECONDS
             )
+            self._transition_settle_until[light_id] = (
+                time.monotonic() + transition_seconds
+            )
             return True
         except CircuitBreakerOpen:
             return False
@@ -249,6 +268,27 @@ class HueService:
             *(self.set_light(light["light_id"], state) for light in lights)
         )
         return all(results)
+
+    async def wait_for_transition_settle(self, light_ids) -> None:
+        """Wait until acknowledged writes have physically finished fading.
+
+        Deadlines are recorded only after literal successful bridge writes.
+        Waiting once for the latest affected deadline provides a compact
+        barrier without per-light bridge polling or unrelated fixed sleeps.
+        """
+        ids = [str(light_id) for light_id in light_ids]
+        now = time.monotonic()
+        deadlines = [
+            self._transition_settle_until.get(light_id, now)
+            for light_id in ids
+        ]
+        remaining = max(deadlines, default=now) - now
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        settled_at = time.monotonic()
+        for light_id in ids:
+            if self._transition_settle_until.get(light_id, 0.0) <= settled_at:
+                self._transition_settle_until.pop(light_id, None)
 
     async def flash_lights(
         self,

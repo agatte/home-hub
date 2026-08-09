@@ -42,9 +42,9 @@ async def test_concurrent_scene_requests_serialize_via_lock() -> None:
     # to ensure both requests arrive at the lock concurrently.
     async def slow_activate(*args, **kwargs):
         await asyncio.sleep(0.05)
+        return True
 
-    with patch.object(guest, "_activate_per_light", slow_activate), \
-            patch.object(guest, "_activate_effect_if_needed", AsyncMock()), \
+    with patch.object(guest, "_activate_scene_safely", slow_activate), \
             patch.object(guest, "_log_scene_activation", AsyncMock()):
         # Run two requests truly concurrently.
         results = await asyncio.gather(

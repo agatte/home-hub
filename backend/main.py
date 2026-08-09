@@ -451,12 +451,14 @@ async def _handle_light_command(
         k in state for k in ("bri", "hue", "sat", "ct")
     ) else None
 
-    await hue.set_light(light_id, state)
+    success = await hue.set_light(light_id, state)
+    if success is not True:
+        return
 
     # Mark this light as manually overridden so automation skips it
     automation = getattr(app.state, "automation", None)
     if automation:
-        automation.mark_light_manual(str(light_id))
+        automation.mark_light_manual(str(light_id), state)
 
     # No post-write broadcast: the bridge is mid-transition right now and a
     # fresh get_light read returns an intermediate value that the slider

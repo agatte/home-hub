@@ -2027,16 +2027,16 @@ class TestScreenSyncTargetProtection:
 
         engine._screen_sync = sync
         engine._current_mode = "working"
-        engine._hue.set_all_lights = AsyncMock(return_value=True)
-        engine._last_applied = {}
+        engine._hue.set_light = AsyncMock(return_value=True)
+        engine._last_applied_per_light = {}
 
         await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
 
-        engine._hue.set_all_lights.assert_awaited_once()
+        assert engine._hue.set_light.await_count == 5
         assert sync._last_sent_state == {}
 
-    async def test_failed_uniform_write_preserves_sync_cache_and_deduplicates(self, engine):
-        """A failed bulk write leaves valid sync assumptions untouched."""
+    async def test_failed_uniform_write_preserves_sync_cache_and_retries(self, engine):
+        """Failed writes preserve sync assumptions and never poison dedup."""
         from unittest.mock import AsyncMock
 
         from backend.services.screen_sync import ScreenSyncService
@@ -2050,20 +2050,18 @@ class TestScreenSyncTargetProtection:
 
         engine._screen_sync = sync
         engine._current_mode = "working"
-        engine._hue.set_all_lights = AsyncMock(return_value=False)
+        engine._hue.set_light = AsyncMock(return_value=False)
         engine._last_applied_per_light = {}
 
         await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
 
-        engine._hue.set_all_lights.assert_awaited_once()
+        assert engine._hue.set_light.await_count == 5
         assert sync._last_sent_state == cached
+        assert engine._last_applied_per_light == {}
 
-        # The unchanged cache prevents the next canonical gaming report from
-        # issuing a reconciliation write solely because the bulk write failed.
-        engine._hue.set_light = AsyncMock(return_value=True)
-        await sync.apply_color("2", 255, 0, 0, mode="gaming", period="day")
-        await sync.apply_color("5", 0, 0, 255, mode="gaming", period="day")
-        engine._hue.set_light.assert_not_awaited()
+        engine._hue.set_light.reset_mock()
+        await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
+        assert engine._hue.set_light.await_count == 5
 
     async def test_successful_per_light_l2_write_invalidates_only_l2(self, engine):
         """A successful L2 automation write dirties only L2's sync cache."""

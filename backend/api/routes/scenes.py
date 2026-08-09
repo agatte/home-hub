@@ -388,15 +388,40 @@ async def _activate_per_light(hue, light_states: dict, transitiontime: int = 10)
     for lid, lstate in light_states.items():
         state_with_transition = {**lstate, "transitiontime": transitiontime}
         tasks.append(hue.set_light(lid, state_with_transition))
-    await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return all(result is True for result in results)
 
 
-async def _activate_effect_if_needed(hue_v2, effect: str | None):
-    """Activate a paired effect if specified. Does nothing if no effect."""
-    if not hue_v2 or not hue_v2.connected:
-        return
-    if effect:
-        await hue_v2.set_effect_all(effect)
+async def _activate_scene_safely(
+    automation,
+    effect_manager,
+    light_states: dict,
+    effect: str | None,
+    *,
+    transitiontime: int = 10,
+    action=None,
+) -> bool:
+    """Run a preset/native scene replacement through the effect boundary."""
+    if automation is None or effect_manager is None:
+        return False
+
+    normalized = {
+        str(light_id): state.copy()
+        for light_id, state in light_states.items()
+    }
+
+    async def no_op_action() -> bool:
+        return True
+
+    return await effect_manager.replace_with_action(
+        action or no_op_action,
+        establish_safety=lambda release_ids: automation.establish_effect_release(
+            normalized or None,
+            transitiontime,
+            release_ids,
+        ),
+        desired=effect,
+    )
 
 
 @router.get("")
@@ -481,6 +506,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
     """
     hue = request.app.state.hue
     hue_v2 = getattr(request.app.state, "hue_v2", None)
+    effect_manager = getattr(request.app.state, "effect_manager", None)
     ws_manager = request.app.state.ws_manager
 
     # Stamp every light a scene touches as manually-overridden so the next
@@ -501,14 +527,21 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
         # automatically cancels any running effect on that light, so we
         # don't need a separate stop_effect_all (which causes a visible
         # flash as the bridge snaps to a raw state before our transition).
-        await _activate_per_light(hue, preset["lights"])
-
-        # Then apply paired effect if the scene has one
-        await _activate_effect_if_needed(hue_v2, preset.get("effect"))
+        success = await _activate_scene_safely(
+            automation,
+            effect_manager,
+            preset["lights"],
+            preset.get("effect"),
+        )
+        if not success:
+            raise HTTPException(
+                status_code=409,
+                detail="Scene transition aborted: safe effect release not established",
+            )
 
         if automation:
             for lid in preset["lights"]:
-                automation.mark_light_manual(str(lid))
+                automation.mark_light_manual(str(lid), preset["lights"][lid])
 
         await asyncio.sleep(0.3)
         lights = await hue.get_all_lights()
@@ -540,12 +573,24 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                 light_states = json.loads(row[1]) if isinstance(row[1], str) else row[1]
                 effect = row[2] if len(row) > 2 else None
 
-                await _activate_per_light(hue, light_states)
-                await _activate_effect_if_needed(hue_v2, effect)
+                success = await _activate_scene_safely(
+                    automation,
+                    effect_manager,
+                    light_states,
+                    effect,
+                )
+                if not success:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Scene transition aborted: safe effect release "
+                            "not established"
+                        ),
+                    )
 
                 if automation:
                     for lid in light_states:
-                        automation.mark_light_manual(str(lid))
+                        automation.mark_light_manual(str(lid), light_states[lid])
 
                 await asyncio.sleep(0.3)
                 lights = await hue.get_all_lights()
@@ -570,7 +615,16 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
             detail="Hue v2 API not connected — cannot activate native scene",
         )
 
-    success = await hue_v2.activate_scene(scene_id)
+    async def activate_native() -> bool:
+        return await hue_v2.activate_scene(scene_id)
+
+    success = await _activate_scene_safely(
+        automation,
+        effect_manager,
+        {},
+        None,
+        action=activate_native,
+    )
     if not success:
         raise HTTPException(
             status_code=404,
@@ -588,7 +642,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
         for light in lights:
             lid = light.get("light_id") if isinstance(light, dict) else None
             if lid is not None:
-                automation.mark_light_manual(str(lid))
+                automation.mark_light_manual(str(lid), light)
     for light in lights:
         await ws_manager.broadcast("light_update", light)
 
@@ -720,14 +774,26 @@ async def activate_effect(effect_name: str, request: Request) -> dict:
     Use effect_name 'stop' to stop all effects.
     """
     hue_v2 = getattr(request.app.state, "hue_v2", None)
-    if not hue_v2 or not hue_v2.connected:
+    effect_manager = getattr(request.app.state, "effect_manager", None)
+    automation = getattr(request.app.state, "automation", None)
+    if (
+        not hue_v2
+        or not hue_v2.connected
+        or effect_manager is None
+        or automation is None
+    ):
         raise HTTPException(
             status_code=503,
             detail="Hue v2 API not connected — cannot control effects",
         )
 
     if effect_name == "stop":
-        success = await hue_v2.stop_effect_all()
+        success = await effect_manager.reconcile(
+            None,
+            establish_safety=lambda release_ids: automation.establish_effect_release(
+                None, 4, release_ids,
+            ),
+        )
         return {"status": "ok" if success else "partial_failure", "effect": "stopped"}
 
     valid_effects = {e["name"] for e in await hue_v2.get_effects()}
@@ -738,7 +804,12 @@ async def activate_effect(effect_name: str, request: Request) -> dict:
             f"Available: {', '.join(sorted(valid_effects))}",
         )
 
-    success = await hue_v2.set_effect_all(effect_name)
+    success = await effect_manager.reconcile(
+        effect_name,
+        establish_safety=lambda release_ids: automation.establish_effect_release(
+            None, 4, release_ids,
+        ),
+    )
     return {"status": "ok" if success else "partial_failure", "effect": effect_name}
 
 
@@ -748,16 +819,26 @@ async def activate_effect_on_light(
 ) -> dict:
     """Activate a dynamic effect on a specific light (by v1 ID)."""
     hue_v2 = getattr(request.app.state, "hue_v2", None)
-    if not hue_v2 or not hue_v2.connected:
+    effect_manager = getattr(request.app.state, "effect_manager", None)
+    automation = getattr(request.app.state, "automation", None)
+    if (
+        not hue_v2
+        or not hue_v2.connected
+        or effect_manager is None
+        or automation is None
+    ):
         raise HTTPException(
             status_code=503,
             detail="Hue v2 API not connected",
         )
 
-    if effect_name == "stop":
-        success = await hue_v2.stop_effect(light_id)
-    else:
-        success = await hue_v2.set_effect(light_id, effect_name)
+    success = await effect_manager.reconcile_light(
+        light_id,
+        None if effect_name == "stop" else effect_name,
+        establish_safety=lambda release_ids: automation.establish_effect_release(
+            None, 4, release_ids,
+        ),
+    )
 
     if not success:
         raise HTTPException(

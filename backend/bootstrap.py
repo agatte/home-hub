@@ -151,6 +151,13 @@ async def lifespan(app: FastAPI):
         f"Hue v2 API: {'connected' if hue_v2.connected else 'NOT connected'}"
     )
 
+    from backend.services.lighting_transition_boundary import (
+        LightingTransitionBoundary,
+    )
+    lighting_transition_boundary = LightingTransitionBoundary(hue)
+    hue.set_transition_boundary(lighting_transition_boundary)
+    app.state.lighting_transition_boundary = lighting_transition_boundary
+
     # Sonos speaker
     sonos = SonosService(sonos_ip=settings.SONOS_IP)
     await sonos.discover()
@@ -175,6 +182,7 @@ async def lifespan(app: FastAPI):
     screen_sync = ScreenSyncService(
         hue_service=hue,
         target_light_ids=["2", "5", "1", "3", "4"],
+        transition_boundary=lighting_transition_boundary,
     )
     app.state.screen_sync = screen_sync
 
@@ -367,6 +375,7 @@ async def lifespan(app: FastAPI):
     from backend.services.effect_manager import EffectManager
     effect_manager = EffectManager(
         hue_v2=hue_v2, weather_service=weather_service,
+        transition_boundary=lighting_transition_boundary,
     )
     app.state.effect_manager = effect_manager
 

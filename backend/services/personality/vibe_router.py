@@ -20,8 +20,7 @@ from sqlalchemy import func, select
 
 from backend.api.routes.scenes import (
     SCENE_PRESETS,
-    _activate_effect_if_needed,
-    _activate_per_light,
+    _activate_scene_safely,
 )
 from backend.config import settings
 from backend.database import async_session
@@ -214,14 +213,24 @@ class VibeRouter:
             raise VibeRouterError("Hue bridge not connected")
 
         preset = SCENE_PRESETS[plan.scene_id]
-        hue_v2 = getattr(self._app_state, "hue_v2", None)
+        effect_manager = getattr(self._app_state, "effect_manager", None)
         ws_manager = getattr(self._app_state, "ws_manager", None)
 
-        await _activate_per_light(hue, preset["lights"])
-        await _activate_effect_if_needed(hue_v2, preset.get("effect"))
+        success = await _activate_scene_safely(
+            automation,
+            effect_manager,
+            preset["lights"],
+            preset.get("effect"),
+        )
+        if not success:
+            raise VibeRouterError(
+                "Scene transition aborted: safe effect release not established"
+            )
 
         for light_id in preset["lights"]:
-            automation.mark_light_manual(str(light_id))
+            automation.mark_light_manual(
+                str(light_id), preset["lights"][light_id],
+            )
 
         if ws_manager is not None:
             lights = await hue.get_all_lights()
