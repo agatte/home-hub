@@ -62,6 +62,7 @@ DAMAGE_POST_FLOOR = 16            # agent-side cheap pre-filter (backend gates f
 DAMAGE_POST_MIN_INTERVAL = 0.25  # ≤4 damage posts/sec
 LOG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "home-hub" / "logs"
 PID_FILE = LOG_DIR / "screen_sync_agent.pid"
+_BACKOFF_HEARTBEAT_INTERVAL = 10.0
 
 # Sticky-cluster tuning. K-means reassigns cluster labels each fit, so two
 # near-tied clusters can trade the "best" slot frame-to-frame and produce
@@ -279,6 +280,33 @@ def capture_dominant_color() -> Optional[tuple[tuple[int, int, int], int]]:
         return None
 
 
+def _wait_for_backoff(
+    stop_event: threading.Event,
+    duration: float,
+    heartbeat: Optional[Callable[[], None]],
+) -> bool:
+    """Wait out network backoff while reporting only intentional progress.
+
+    Long retry sleeps are sliced when supervised so they cannot look like a
+    hung agent. Capture, color computation, and HTTP calls remain outside this
+    helper; if any of those block, no heartbeat is emitted and the supervisor
+    can still detect the hang. Standalone agents retain the original one-shot
+    interruptible wait.
+    """
+    if heartbeat is None:
+        return stop_event.wait(duration)
+
+    remaining = duration
+    while remaining > 0:
+        wait_slice = min(remaining, _BACKOFF_HEARTBEAT_INTERVAL)
+        if stop_event.wait(wait_slice):
+            return True
+        remaining -= wait_slice
+        if remaining > 0:
+            heartbeat()
+    return False
+
+
 def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
@@ -365,7 +393,7 @@ def run_agent(
                                 backoff = min(backoff * 2, 60)
 
                 if backoff != 1:
-                    _stop.wait(backoff)
+                    _wait_for_backoff(_stop, backoff, heartbeat)
                 else:
                     _stop.wait(DAMAGE_TICK if rust_active else CAPTURE_INTERVAL)
 
@@ -374,7 +402,7 @@ def run_agent(
                 break
             except Exception as e:
                 logger.error(f"Unexpected error: {e}", exc_info=True)
-                _stop.wait(backoff)
+                _wait_for_backoff(_stop, backoff, heartbeat)
                 backoff = min(backoff * 2, 60)
     finally:
         client.close()

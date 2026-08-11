@@ -34,6 +34,13 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, Optional
 
+from backend.services.pc_agent.supervisor_recovery import (
+    FileBreadcrumbs,
+    ProcessIdentity,
+    current_process_identity,
+    launch_detached_recovery,
+)
+
 # ---------------------------------------------------------------------------
 # Logging — file + console (file captures errors even under pythonw.exe)
 # ---------------------------------------------------------------------------
@@ -100,7 +107,58 @@ HEARTBEAT_TIMEOUTS = {
 # Scheduled Task that ensure-runs the supervisor every 5 min (the backstop that
 # respawns a fresh process after a hang-triggered exit releases the mutex).
 RESPAWN_TASK_NAME = "Home Hub Agent Supervisor"
+RESUME_DETECTION_GAP = 30.0
+RESUME_HEARTBEAT_GRACE = 15.0
+RECOVERY_BREADCRUMB_FILE = LOG_DIR / "supervisor-recovery.log"
 
+
+# ---------------------------------------------------------------------------
+# Active-runtime clock (S3 does not advance this clock)
+# ---------------------------------------------------------------------------
+
+def active_runtime_seconds() -> float:
+    """Seconds of active Windows runtime, explicitly excluding S3 sleep.
+
+    ``QueryUnbiasedInterruptTime`` is a Windows kernel clock defined to omit
+    time spent suspended. In particular, this deliberately does *not* use
+    ``time.monotonic()`` on Windows: its suspend semantics are not the contract
+    the supervisor needs. Non-Windows test hosts use monotonic time only
+    because they do not run the desktop supervisor in production.
+    """
+    if sys.platform != "win32":
+        return time.monotonic()
+    import ctypes
+
+    unbiased = ctypes.c_ulonglong()
+    ctypes.windll.kernel32.QueryUnbiasedInterruptTime(ctypes.byref(unbiased))
+    return unbiased.value / 10_000_000.0  # 100ns units
+
+
+class SuspendAwareRuntimeClock:
+    """Samples active runtime and identifies a wall-clock suspend/resume gap."""
+
+    def __init__(
+        self,
+        runtime_clock: Callable[[], float] = active_runtime_seconds,
+        wall_clock: Callable[[], float] = time.time,
+        resume_gap: float = RESUME_DETECTION_GAP,
+    ) -> None:
+        self._runtime_clock = runtime_clock
+        self._wall_clock = wall_clock
+        self._resume_gap = resume_gap
+        self._last_runtime: float | None = None
+        self._last_wall: float | None = None
+
+    def sample(self) -> tuple[float, bool]:
+        runtime_now = self._runtime_clock()
+        wall_now = self._wall_clock()
+        resumed = False
+        if self._last_runtime is not None and self._last_wall is not None:
+            suspended = (wall_now - self._last_wall) - (runtime_now - self._last_runtime)
+            resumed = suspended >= self._resume_gap
+        self._last_runtime = runtime_now
+        self._last_wall = wall_now
+        return runtime_now, resumed
 
 # ---------------------------------------------------------------------------
 # Singleton mutex (Windows kernel-level, survives PID reuse)
@@ -233,12 +291,21 @@ class AgentSupervisor:
         server_url: str,
         classifier: bool = False,
         shadow: bool = True,
+        runtime_clock: SuspendAwareRuntimeClock | None = None,
+        recovery_launcher: Callable[[ProcessIdentity, Path], None] = launch_detached_recovery,
+        exit_fn: Callable[[int], None] = os._exit,
     ) -> None:
         self._server_url = server_url
         self._stop = threading.Event()
         self._agents: dict[str, AgentState] = {}
-        self._start_time = time.time()
-
+        self._clock = runtime_clock or SuspendAwareRuntimeClock()
+        self._start_time, _ = self._clock.sample()
+        self._resume_grace_until = 0.0
+        self._resume_detection_armed = True
+        self._process_identity = current_process_identity()
+        self._recovery_launcher = recovery_launcher
+        self._exit_fn = exit_fn
+        self._recovery_started = False
         self._register_activity_detector()
         self._register_ambient_monitor(classifier, shadow)
         self._register_screen_sync()
@@ -375,7 +442,7 @@ class AgentSupervisor:
         # the signature so unwired agents are untouched (is_alive-only).
         if _accepts_kwarg(state.target, "heartbeat"):
             def _beat(_s: AgentState = state) -> None:
-                _s.last_progress_at = time.time()
+                _s.last_progress_at = self._active_now()
             call_kwargs["heartbeat"] = _beat
             state.heartbeat_wired = True
         else:
@@ -393,7 +460,7 @@ class AgentSupervisor:
         state.thread = threading.Thread(
             target=_wrapper, name=f"agent-{state.name}", daemon=True,
         )
-        state.last_start = time.time()
+        state.last_start = self._active_now()
         # Seed the heartbeat at start so a slow first-tick init (FaceLandmarker /
         # PoseLandmarker / webcam open) doesn't read as an immediate hang; the
         # agent's own beats take over from the first loop iteration.
@@ -419,53 +486,46 @@ class AgentSupervisor:
 
         self._start_agent(state)
 
+    def _active_now(self) -> float:
+        """Return active runtime and arm a short post-resume heartbeat grace."""
+        now, resumed = self._clock.sample()
+        if resumed and self._resume_detection_armed and now >= self._resume_grace_until:
+            self._resume_grace_until = now + RESUME_HEARTBEAT_GRACE
+            self._resume_detection_armed = False
+            logger.info(
+                "Resume detected; suppressing heartbeat hang decisions for %.0fs",
+                RESUME_HEARTBEAT_GRACE,
+            )
+        elif not resumed and now >= self._resume_grace_until:
+            # Require a normal post-grace sample before another divergence can
+            # arm grace. Repeated wall corrections therefore cannot extend it.
+            self._resume_detection_armed = True
+        return now
+
     def _handle_hung_agent(self, state: AgentState, stale: float) -> None:
-        """Recover from an agent whose thread is alive but wedged in a native
-        call. A Python thread blocked in C (a hung cv2 read) cannot be killed,
-        and the zombie keeps its device handle so a fresh thread couldn't
-        reclaim the camera. The only reliable reclaim is to recycle the whole
-        process: the OS frees every handle on exit, the mutex is released, and
-        the ensure-running Scheduled Task (plus an immediate kick) brings up a
-        clean supervisor. Does not return — exits the process."""
-        logger.critical(
-            "Agent %s HUNG — alive but no heartbeat for %.0fs (> %.0fs timeout). "
-            "Recycling the supervisor process to reclaim its handles.",
-            state.name, stale, state.heartbeat_timeout,
-        )
+        """Make identity-safe external recovery inevitable, then hard-exit.
+
+        Do not report over the network, close shared logging handlers, or join
+        threads here. Any of those can block behind the same poisoned native
+        state that made a whole-process recovery necessary.
+        """
+        if self._recovery_started:
+            return
+        self._recovery_started = True
         state.last_error = f"hung: no heartbeat for {stale:.0f}s"
-        try:
-            self._report_health()  # best-effort: let the backend see the hang
-        except Exception:
-            pass
-        # Best-effort immediate respawn; the task's 5-min repetition is the
-        # backstop if this kick fails. Start it from a short-lived helper after
-        # this process exits so the Windows mutex is released by the OS first.
-        # Releasing the mutex before the hard exit races a fresh supervisor
-        # against the dying one and can leave overlapping agent owners.
-        if sys.platform == "win32":
+        breadcrumbs = FileBreadcrumbs(RECOVERY_BREADCRUMB_FILE)
+        identity = self._process_identity
+        identity_text = identity.value if identity is not None else f"{os.getpid()}:unknown"
+        breadcrumbs.write("supervisor", "hang-detected", f"{state.name} {identity_text}")
+        if sys.platform == "win32" and identity is not None:
             try:
-                import subprocess
-                subprocess.Popen(
-                    [
-                        "powershell.exe",
-                        "-NoProfile",
-                        "-WindowStyle",
-                        "Hidden",
-                        "-Command",
-                        (
-                            "Start-Sleep -Seconds 3; "
-                            f"schtasks /run /tn '{RESPAWN_TASK_NAME}'"
-                        ),
-                    ],
-                    creationflags=0x08000000,  # CREATE_NO_WINDOW
-                    close_fds=True,
-                )
+                self._recovery_launcher(identity, RECOVERY_BREADCRUMB_FILE)
+                breadcrumbs.write("supervisor", "recovery-detached", identity.value)
             except Exception:
-                logger.exception(
-                    "Respawn kick failed; relying on scheduled repetition",
-                )
-        logging.shutdown()  # flush log handlers before the hard exit
-        os._exit(1)
+                breadcrumbs.write("supervisor", "recovery-launch-failed", identity.value)
+        # Do not release the mutex: only process death releases the unhealthy
+        # owner's handle. The detached worker verifies that before it launches.
+        self._exit_fn(1)
 
     # ── Health heartbeat ──────────────────────────────────────────────
 
@@ -474,7 +534,7 @@ class AgentSupervisor:
         import httpx
 
         endpoint = f"{self._server_url.rstrip('/')}/api/automation/agent-health"
-        now = time.time()
+        now = self._active_now()
 
         agents = {}
         for name, state in self._agents.items():
@@ -496,6 +556,10 @@ class AgentSupervisor:
                 client.post(endpoint, json={
                     "agents": agents,
                     "supervisor_uptime": int(now - self._start_time),
+                    "supervisor_pid": os.getpid(),
+                    "supervisor_instance": (
+                        self._process_identity.value if self._process_identity else None
+                    ),
                 })
         except Exception:
             pass  # Health reporting is best-effort
@@ -524,14 +588,14 @@ class AgentSupervisor:
 
         try:
             while not self._stop.is_set():
-                now = time.time()
+                now = self._active_now()
 
                 for state in self._agents.values():
                     if not state.enabled:
                         continue
 
                     if state.thread and state.thread.is_alive():
-                        if _agent_hung(state, now):
+                        if now >= self._resume_grace_until and _agent_hung(state, now):
                             # Alive but blocked in a native call — is_alive()
                             # can't see this. The thread can't be killed, so
                             # recover by recycling the whole process.
