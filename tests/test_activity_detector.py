@@ -127,6 +127,69 @@ class TestSleepAutoPauseGate:
         assert d._classify() == "sleeping"
         assert calls["pause"] == 1
 
+
+# ---------------------------------------------------------------------------
+# Working intent — foreground work only, except existing late-night browser
+# ---------------------------------------------------------------------------
+
+
+class TestForegroundWorkIntent:
+    """Background developer tools cannot assert active work intent."""
+
+    @staticmethod
+    def _at_hour(hour: int):
+        return patch("backend.services.pc_agent.activity_detector.datetime")
+
+    @pytest.mark.parametrize(
+        ("processes", "fg_proc"),
+        [
+            ({"firefox.exe", "windowsterminal.exe"}, "firefox.exe"),
+            ({"explorer.exe", "code.exe"}, "explorer.exe"),
+            ({"lockapp.exe", "powershell.exe"}, "lockapp.exe"),
+        ],
+    )
+    def test_background_work_processes_fall_back_to_idle(
+        self, processes, fg_proc,
+    ):
+        d = _make_detector(processes=processes, fg_proc=fg_proc)
+
+        with self._at_hour(15) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 8, 10, 15, 0)
+            assert d._classify() == "idle"
+
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "fallback_idle"
+
+    @pytest.mark.parametrize("fg_proc", ["windowsterminal.exe", "code.exe"])
+    def test_foreground_work_process_is_working(self, fg_proc):
+        d = _make_detector(processes={fg_proc}, fg_proc=fg_proc)
+
+        assert d._classify() == "working"
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "foreground_work"
+
+    def test_foreground_browser_media_beats_background_terminal(self):
+        d = _make_detector(
+            processes={"firefox.exe", "windowsterminal.exe"},
+            fg_proc="firefox.exe",
+            fg_title="A video - YouTube - Mozilla Firefox",
+        )
+
+        assert d._classify() == "watching"
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "foreground_browser_media"
+
+    def test_late_night_browser_remains_working(self):
+        d = _make_detector(processes={"firefox.exe"}, fg_proc="firefox.exe")
+
+        with self._at_hour(22) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 8, 10, 22, 0)
+            assert d._classify() == "working"
+
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "late_night_browser"
+
+
 # ---------------------------------------------------------------------------
 # Gaming gate — leagueclient.exe-style launcher persistence
 # ---------------------------------------------------------------------------
@@ -192,6 +255,8 @@ class TestGamingGate:
             idle_seconds=GAMING_IDLE_THRESHOLD + 60,
         )
         assert d._classify() != "gaming"
+        assert d._last_classification is not None
+        assert d._last_classification.gaming_qualification == "background_game_idle"
 
     def test_unfocused_idle_launcher_with_browser_falls_to_working_at_night(self):
         # 9pm+, browser running, launcher in tray, walked away → not gaming.
@@ -253,13 +318,13 @@ class TestForegroundRuneLiteJava:
             process.return_value.cmdline.return_value = command_line.split()
             assert detector._classify() == "gaming"
 
-    def test_runelite_looking_java_without_client_marker_falls_through(self):
+    def test_runelite_looking_java_without_client_marker_does_not_use_background_work(self):
         detector = self._detector(processes={"java.exe", "code.exe"})
         with patch(
             "backend.services.pc_agent.activity_detector.psutil.Process"
         ) as process:
             process.return_value.cmdline.return_value = ["java", "other-app.jar"]
-            assert detector._classify() == "working"
+            assert detector._classify() == "idle"
 
     def test_runelite_client_marker_with_unrelated_title_is_not_gaming(self):
         detector = self._detector(title="Photochalupa Companion")
@@ -465,6 +530,31 @@ class TestDetectHysteresis:
             f"got {committed}"
         )
 
+    def test_watching_sticky_hold_stays_intact_for_terminal_alt_tab(self):
+        """The existing night watching hold still absorbs a brief terminal peek."""
+        d = _make_detector(
+            processes={"stremio.exe", "windowsterminal.exe"},
+            fg_proc="stremio.exe",
+        )
+        with patch(
+            "backend.services.pc_agent.activity_detector.datetime"
+        ) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 8, 10, 22, 0)
+            with self._patch_time(0.0):
+                assert d.detect() == "watching"
+
+            d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+                "windowsterminal.exe", "",
+            )
+            d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+                "windowsterminal.exe", "", None,
+            )
+            with self._patch_time(30.0):
+                assert d.detect() == "watching"
+
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "watching_sticky_hold"
+
 
 # ---------------------------------------------------------------------------
 # Factor payload — source/device context for backend ownership policy
@@ -483,7 +573,84 @@ def test_build_factors_includes_configured_device_role(monkeypatch):
 
     assert factors[0]["key"] == "device"
     assert factors[0]["value"] == "latitude"
-    assert len(factors) <= 8
+    assert len(factors) <= 15
+    assert "foreground_title" not in {factor["key"] for factor in factors}
+
+
+def test_classifier_factors_capture_candidate_and_pending_dwell():
+    d = _make_detector(
+        processes={"code.exe"},
+        fg_proc="code.exe",
+        idle_seconds=12,
+    )
+    with patch("backend.services.pc_agent.activity_detector.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 8, 10, 15, 0)
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.time", return_value=0.0,
+        ):
+            assert d.detect() == "working"
+
+        d._get_running_process_names = lambda: {  # type: ignore[method-assign]
+            "firefox.exe", "windowsterminal.exe",
+        }
+        d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+            "firefox.exe", "Mozilla Firefox",
+        )
+        d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+            "firefox.exe", "Mozilla Firefox", None,
+        )
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.time", return_value=10.0,
+        ):
+            assert d.detect() == "working"
+
+    factors = {factor["key"]: factor["value"] for factor in d.build_factors()}
+    assert factors["candidate_mode"] == "idle"
+    assert factors["classified_mode"] == "working"
+    assert factors["candidate_reason"] == "fallback_idle"
+    assert factors["foreground"] == "firefox.exe"
+    assert factors["foreground_kind"] == "browser"
+    assert factors["matched_work_processes"] == ["windowsterminal.exe"]
+    assert factors["idle"] == 12
+    assert factors["pending_mode"] == "idle"
+    assert factors["pending_dwell_age"] == 0.0
+
+
+def test_classifier_factors_capture_foreground_game_qualification():
+    d = _make_detector(processes={"planetzoo.exe"}, fg_proc="planetzoo.exe")
+
+    assert d.detect() == "gaming"
+
+    factors = {factor["key"]: factor["value"] for factor in d.build_factors()}
+    assert factors["candidate_mode"] == "gaming"
+    assert factors["classified_mode"] == "gaming"
+    assert factors["candidate_reason"] == "foreground_game"
+    assert factors["matched_game_process"] == "planetzoo.exe"
+    assert factors["gaming_qualification"] == "foreground_game"
+
+
+def test_foreground_game_telemetry_uses_qualifying_snapshot():
+    d = _make_detector(processes={"planetzoo.exe", "code.exe"}, fg_proc=None)
+    d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+        "planetzoo.exe",
+        "Planet Zoo",
+        42,
+    )
+    # A rapid focus change would make a later independent lookup disagree.
+    # Classification must retain the snapshot that qualified foreground gaming.
+    d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+        "code.exe",
+        "Home Hub - Visual Studio Code",
+    )
+
+    assert d._classify() == "gaming"
+
+    factors = {factor["key"]: factor["value"] for factor in d.build_factors()}
+    assert factors["candidate_reason"] == "foreground_game"
+    assert factors["foreground"] == "planetzoo.exe"
+    assert factors["foreground_kind"] == "game"
+    assert factors["matched_game_process"] == "planetzoo.exe"
+    assert factors["gaming_qualification"] == "foreground_game"
 
 # ---------------------------------------------------------------------------
 # Steam discovery — installed Steam games auto-join generic gaming detection

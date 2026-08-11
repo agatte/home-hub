@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -121,6 +122,7 @@ DWELL_LEAVE_WORKING_NIGHT = 300.0   # Symmetric counterpart: once committed work
 WATCHING_STICKY_SECONDS = 90.0
 NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
+MAX_MATCHED_WORK_PROCESSES = 3
 
 # Gaming gate — a game process being merely *running* is not enough.
 # leagueclient.exe and similar launchers persist long after the actual game
@@ -253,20 +255,40 @@ def release_pid_lock() -> None:
         pass
 
 
+@dataclass
+class _Classification:
+    """Bounded diagnostic state for one classifier poll."""
+
+    candidate_mode: str
+    candidate_reason: str
+    foreground_process: Optional[str]
+    foreground_kind: str
+    matched_work_processes: tuple[str, ...]
+    matched_game_process: Optional[str]
+    gaming_qualification: Optional[str]
+    idle_seconds: int
+    browser_running: bool
+    active_game: Optional[str]
+    classified_mode: Optional[str] = None
+    pending_mode: Optional[str] = None
+    pending_dwell_age: Optional[float] = None
+
+
 class ActivityDetector:
     """
     Monitors running processes to determine user activity mode.
 
     Modes:
-        gaming  — A game process is running (no Discord dependency)
+        gaming  — A game is foregrounded or has recent user input
         watching — A media player is running
-        working — Browser running late at night, no game or media
+        working — Foreground developer tool, or browser running late at night
         idle    — PC in use but nothing notable running, or input idle >10 min
     """
 
     def __init__(self) -> None:
         self._last_mode: Optional[str] = None              # Committed mode after dwell
         self._last_reported_mode: Optional[str] = None      # Last mode the loop POSTed
+        self._last_classification: Optional[_Classification] = None
         self._media_paused: bool = False                    # Track if we already paused media this sleep cycle
         # When _pause_media() injects a media key, Windows records it as user
         # input — GetLastInputInfo can't distinguish our synthetic keystroke
@@ -492,6 +514,51 @@ class ActivityDetector:
         """
         idle_seconds = self._get_idle_seconds()
         processes = self._get_running_process_names()
+        fg_proc, fg_title, fg_pid = self._get_foreground_process_identity()
+        game_processes = get_game_processes()
+        matched_work_processes = tuple(
+            sorted(processes & WORK_PROCESSES)[:MAX_MATCHED_WORK_PROCESSES]
+        )
+        matched_game_process = (
+            fg_proc if fg_proc in game_processes
+            else next(iter(sorted(processes & game_processes)), None)
+        )
+        browser_running = bool(processes & BROWSER_PROCESSES)
+        gaming_qualification_reason: Optional[str] = None
+
+        if fg_proc and fg_proc in game_processes:
+            fg_kind = "game"
+        elif fg_proc and fg_proc in MEDIA_PROCESSES:
+            fg_kind = "media"
+        elif fg_proc and fg_proc in WORK_PROCESSES:
+            fg_kind = "dev"
+        elif fg_proc and fg_proc in BROWSER_PROCESSES:
+            fg_kind = "browser"
+        elif fg_proc:
+            fg_kind = "other"
+        else:
+            fg_kind = "none"
+
+        def classified(
+            mode: str,
+            reason: str,
+            gaming_qualification: Optional[str] = None,
+        ) -> str:
+            self._last_classification = _Classification(
+                candidate_mode=mode,
+                candidate_reason=reason,
+                foreground_process=fg_proc,
+                foreground_kind=fg_kind,
+                matched_work_processes=matched_work_processes,
+                matched_game_process=matched_game_process,
+                gaming_qualification=(
+                    gaming_qualification or gaming_qualification_reason
+                ),
+                idle_seconds=idle_seconds,
+                browser_running=browser_running,
+                active_game=self._resolve_active_game(fg_proc, processes),
+            )
+            return mode
 
         # Sleep detection: no input for 15 min after 10:30 PM with explicit
         # foreground media. Do not treat "browser is open" as media intent:
@@ -500,14 +567,14 @@ class ActivityDetector:
         if (
             idle_seconds > SLEEP_IDLE_THRESHOLD
             and self._is_sleep_window()
-            and self._foreground_is_media()
+            and self._foreground_snapshot_is_media(fg_proc, fg_title)
         ):
             self._pause_media()
-            return "sleeping"
+            return classified("sleeping", "sleep_foreground_media")
 
         # Standard idle detection (input idle >10 min, no special context)
         if idle_seconds > IDLE_THRESHOLD:
-            return "idle"
+            return classified("idle", "global_input_idle")
 
         # Reset media pause flag when user is active again. Real input has
         # arrived (idle dropped below the threshold), so clear the synthetic-
@@ -524,18 +591,19 @@ class ActivityDetector:
         # Promote to gaming only when the game is foregrounded OR input has
         # been active recently with a game running. See GAMING_IDLE_THRESHOLD
         # docstring above.
-        fg_proc, fg_title, fg_pid = self._get_foreground_process_identity()
         if self._is_foreground_runelite_java(fg_proc, fg_title, fg_pid):
-            return "gaming"
+            return classified("gaming", "foreground_game", "foreground_runelite_java")
 
-        game_processes = get_game_processes()
         if processes & game_processes:
             if fg_proc in game_processes:
-                return "gaming"
+                return classified("gaming", "foreground_game", "foreground_game")
             if idle_seconds < GAMING_IDLE_THRESHOLD:
-                return "gaming"
+                return classified(
+                    "gaming", "recent_input_game_hold", "recent_input_game_hold",
+                )
             # Game process exists but is unfocused AND user is idle —
             # likely an abandoned launcher. Fall through to normal detection.
+            gaming_qualification_reason = "background_game_idle"
 
         # Media / work / browser disambiguation via foreground window.
         # Media apps (especially Stremio) leave background services running
@@ -543,40 +611,38 @@ class ActivityDetector:
         # as "watching" when a dev tool is the actual foreground. Resolution:
         # check the foreground first, and only return "watching" when either
         # (a) a media app is the foreground window, (b) a browser tab title
-        # looks like media playback, or (c) media is running and no work
-        # tools are present (preserves passive media-watching behavior).
+        # looks like media playback, or (c) media is running without a
+        # foreground work window (preserves passive media-watching behavior).
         media_running = bool(processes & MEDIA_PROCESSES)
-        work_running = bool(processes & WORK_PROCESSES)
-        browser_running = bool(processes & BROWSER_PROCESSES)
+        work_running = bool(matched_work_processes)
 
         if media_running or work_running or browser_running:
-            fg_proc, fg_title = self._get_foreground_window()
-
             if fg_proc in MEDIA_PROCESSES:
-                return "watching"
+                return classified("watching", "foreground_media")
 
             if (
                 fg_proc in BROWSER_PROCESSES
                 and fg_title
                 and any(kw in fg_title.lower() for kw in WATCHING_TITLE_KEYWORDS)
             ):
-                return "watching"
+                return classified("watching", "foreground_browser_media")
 
-            if work_running:
-                return "working"
+            if fg_proc in WORK_PROCESSES:
+                return classified("working", "foreground_work")
 
             if media_running:
-                # Media running with no work tools and foreground isn't
-                # recognized — likely passive watching (e.g. tray media player).
-                return "watching"
+                # Media running with no foreground work window and foreground
+                # isn't otherwise recognized — likely passive watching (e.g.
+                # tray media player).
+                return classified("watching", "background_media")
 
         # Browser running late at night = working
         current_hour = datetime.now().hour
         if current_hour >= LATE_NIGHT_START or current_hour < 6:
             if browser_running:
-                return "working"
+                return classified("working", "late_night_browser")
 
-        return "idle"
+        return classified("idle", "fallback_idle")
 
     def _foreground_is_media(self) -> bool:
         """
@@ -589,6 +655,14 @@ class ActivityDetector:
         it front-and-center.
         """
         fg_proc, fg_title = self._get_foreground_window()
+        return self._foreground_snapshot_is_media(fg_proc, fg_title)
+
+    @staticmethod
+    def _foreground_snapshot_is_media(
+        fg_proc: Optional[str],
+        fg_title: Optional[str],
+    ) -> bool:
+        """Evaluate media intent from an already-captured foreground snapshot."""
         if fg_proc in MEDIA_PROCESSES:
             return True
         if fg_proc in BROWSER_PROCESSES and fg_title:
@@ -658,12 +732,16 @@ class ActivityDetector:
             and (now - self._last_watching_candidate_at) < WATCHING_STICKY_SECONDS
         ):
             candidate = "watching"
+            if self._last_classification is not None:
+                self._last_classification.candidate_mode = candidate
+                self._last_classification.candidate_reason = "watching_sticky_hold"
 
         # First poll — accept immediately, no dwell.
         if self._last_mode is None:
             self._last_mode = candidate
             self._pending_mode = None
             self._pending_since = None
+            self._update_classification_hysteresis(now)
             return candidate
 
         # Candidate matches the committed mode — clear any pending switch.
@@ -675,6 +753,7 @@ class ActivityDetector:
                 )
             self._pending_mode = None
             self._pending_since = None
+            self._update_classification_hysteresis(now)
             return self._last_mode
 
         # New candidate — start (or restart) the dwell timer.
@@ -686,6 +765,7 @@ class ActivityDetector:
                 self._last_mode, candidate,
                 self._dwell_threshold(self._last_mode, candidate),
             )
+            self._update_classification_hysteresis(now)
             return self._last_mode
 
         # Same candidate as last poll — has it persisted long enough to commit?
@@ -699,7 +779,20 @@ class ActivityDetector:
             self._pending_mode = None
             self._pending_since = None
 
+        self._update_classification_hysteresis(now)
         return self._last_mode
+
+    def _update_classification_hysteresis(self, now: float) -> None:
+        """Attach committed and pending state to the latest classifier poll."""
+        if self._last_classification is None:
+            return
+        self._last_classification.classified_mode = self._last_mode
+        self._last_classification.pending_mode = self._pending_mode
+        self._last_classification.pending_dwell_age = (
+            max(0.0, now - self._pending_since)
+            if self._pending_since is not None
+            else None
+        )
 
     def has_changed(self, mode: str) -> bool:
         """Check if the reported mode has changed since the last call."""
@@ -807,36 +900,24 @@ class ActivityDetector:
 
         Surfaced to the analytics constellation UI. Keeps shape consistent
         with the fusion ``factors`` contract — each entry is a dict with
-        ``key``/``label``/``value``/``display``/``impact`` keys.
+        ``key``/``label``/``value``/``display``/``impact`` keys. The
+        classifier fields are deliberately compact: they identify only the
+        decisive foreground process and bounded relevant matches, never a
+        full process inventory or foreground title.
         """
-        fg_proc, fg_title = self._get_foreground_window()
-        idle_seconds = self._get_idle_seconds()
-        processes = self._get_running_process_names()
+        if self._last_classification is None:
+            self._classify()
+        classification = self._last_classification
+        assert classification is not None
 
-        # Foreground bucket — what category is the current focus?
-        game_processes = get_game_processes()
-        if fg_proc and fg_proc in game_processes:
-            fg_kind = "game"
-        elif fg_proc and fg_proc in MEDIA_PROCESSES:
-            fg_kind = "media"
-        elif fg_proc and fg_proc in WORK_PROCESSES:
-            fg_kind = "dev"
-        elif fg_proc and fg_proc in BROWSER_PROCESSES:
-            fg_kind = "browser"
-        elif fg_proc:
-            fg_kind = "other"
-        else:
-            fg_kind = "none"
-
-        # Idle bucket with a readable display
-        if idle_seconds < 60:
+        if classification.idle_seconds < 60:
             idle_display = "active"
             idle_impact = 1.0
-        elif idle_seconds < IDLE_THRESHOLD:
-            idle_display = f"{idle_seconds // 60}m idle"
+        elif classification.idle_seconds < IDLE_THRESHOLD:
+            idle_display = f"{classification.idle_seconds // 60}m idle"
             idle_impact = 0.6
         else:
-            idle_display = f"{idle_seconds // 60}m idle"
+            idle_display = f"{classification.idle_seconds // 60}m idle"
             idle_impact = 0.3
 
         device = _device_role()
@@ -851,50 +932,105 @@ class ActivityDetector:
             {
                 "key": "foreground",
                 "label": "Foreground",
-                "value": fg_proc or "none",
-                "display": (fg_proc or "none"),
-                "impact": 1.0 if fg_kind in ("game", "media", "dev") else 0.5,
-            },
-            {
-                # Surfaced so the watching-title check can be debugged from
-                # ml_decisions.factors without restarting the agent — the
-                # 2026-05-18 "watching never fired tonight" investigation
-                # was blind to the actual title and had to be diagnosed via
-                # process-bouncing evidence alone.
-                "key": "foreground_title",
-                "label": "Title",
-                "value": fg_title or "",
-                "display": (fg_title or "")[:80],
-                "impact": 0.3,
+                "value": classification.foreground_process or "none",
+                "display": classification.foreground_process or "none",
+                "impact": (
+                    1.0
+                    if classification.foreground_kind in ("game", "media", "dev")
+                    else 0.5
+                ),
             },
             {
                 "key": "idle",
                 "label": "Input",
-                "value": idle_seconds,
+                "value": classification.idle_seconds,
                 "display": idle_display,
                 "impact": idle_impact,
             },
             {
                 "key": "foreground_kind",
                 "label": "Kind",
-                "value": fg_kind,
-                "display": fg_kind,
+                "value": classification.foreground_kind,
+                "display": classification.foreground_kind,
                 "impact": 0.7,
             },
+            {
+                "key": "candidate_mode",
+                "label": "Candidate",
+                "value": classification.candidate_mode,
+                "display": classification.candidate_mode,
+                "impact": 1.0,
+            },
+            {
+                "key": "classified_mode",
+                "label": "Classified",
+                "value": classification.classified_mode or classification.candidate_mode,
+                "display": classification.classified_mode or classification.candidate_mode,
+                "impact": 1.0,
+            },
+            {
+                "key": "candidate_reason",
+                "label": "Reason",
+                "value": classification.candidate_reason,
+                "display": classification.candidate_reason,
+                "impact": 0.9,
+            },
         ]
+
+        if classification.matched_work_processes:
+            matches = list(classification.matched_work_processes)
+            factors.append({
+                "key": "matched_work_processes",
+                "label": "Work matches",
+                "value": matches,
+                "display": ", ".join(matches),
+                "impact": 0.8,
+            })
+
+        if classification.matched_game_process:
+            factors.append({
+                "key": "matched_game_process",
+                "label": "Game match",
+                "value": classification.matched_game_process,
+                "display": classification.matched_game_process,
+                "impact": 0.9,
+            })
+
+        if classification.gaming_qualification:
+            factors.append({
+                "key": "gaming_qualification",
+                "label": "Gaming gate",
+                "value": classification.gaming_qualification,
+                "display": classification.gaming_qualification,
+                "impact": 0.9,
+            })
+
+        if classification.pending_mode:
+            factors.append({
+                "key": "pending_mode",
+                "label": "Pending",
+                "value": classification.pending_mode,
+                "display": classification.pending_mode,
+                "impact": 0.5,
+            })
+            factors.append({
+                "key": "pending_dwell_age",
+                "label": "Pending age",
+                "value": round(classification.pending_dwell_age or 0.0, 1),
+                "display": f"{classification.pending_dwell_age or 0.0:.0f}s",
+                "impact": 0.4,
+            })
 
         # Per-game lighting profile factor — present only when a game with a
         # dedicated backend profile (e.g. Rust → "Rusted Ember") is active.
         # Drives GAME_LIGHT_PROFILES on the engine + the Rust L2 luma
-        # brightness-sync. Placed before the optional browser/champion
-        # factors so the [:6] cap can't truncate it.
-        active_game = self._resolve_active_game(fg_proc, processes)
-        if active_game:
+        # brightness-sync.
+        if classification.active_game:
             factors.append({
                 "key": "game",
                 "label": "Game",
-                "value": active_game,
-                "display": active_game,
+                "value": classification.active_game,
+                "display": classification.active_game,
                 "impact": 1.0,
             })
 
@@ -902,19 +1038,18 @@ class ActivityDetector:
         current_hour = datetime.now().hour
         is_late = current_hour >= LATE_NIGHT_START or current_hour < 6
         if is_late:
-            browser_running = bool(processes & BROWSER_PROCESSES)
             factors.append({
                 "key": "browser",
                 "label": "Browser",
-                "value": browser_running,
-                "display": "on" if browser_running else "off",
-                "impact": 0.8 if browser_running else 0.2,
+                "value": classification.browser_running,
+                "display": "on" if classification.browser_running else "off",
+                "impact": 0.8 if classification.browser_running else 0.2,
             })
 
         # League champion factor — only present when a LoL match is in progress
         # (Live Client Data API returns 200 with a championName). Drives the
         # bedroom-lamp champion color override on the backend.
-        champion = self._poll_lol_champion(processes)
+        champion = self._poll_lol_champion(self._get_running_process_names())
         if champion:
             factors.append({
                 "key": "champion",
@@ -924,9 +1059,10 @@ class ActivityDetector:
                 "impact": 1.0,
             })
 
-        # Cap at 8 so the device role plus load-bearing `game` and late-night
-        # League `champion` factors survive alongside the base foreground rows.
-        return factors[:8]
+        # Cap reports at 15 factors. This preserves the existing game/champion
+        # controls while adding bounded classifier context without persisting
+        # arbitrary process inventories.
+        return factors[:15]
 
     def close(self) -> None:
         """Release resources held by the detector (LoL HTTPS client).
