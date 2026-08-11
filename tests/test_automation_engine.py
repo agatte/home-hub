@@ -6,7 +6,8 @@ hardware. Hue, Sonos, and WebSocket are all mocked.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -17,6 +18,11 @@ from backend.services.automation_engine import (
     AutomationEngine,
     DaySchedule,
     _resolve_activity_state,
+)
+from backend.services.presence_fusion import PresenceFusion, PresenceReading
+from backend.services.camera_service import CameraService, spawn_camera_service
+from backend.services.automation_constants import (
+    PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
 )
 from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
@@ -3607,3 +3613,738 @@ class TestSignalPresence:
         engine._external_off_detected = True
         await engine.signal_presence("audio")
         assert engine._external_off_detected is False
+
+
+class _PhysicalContextCamera:
+    def __init__(self) -> None:
+        self.enabled = True
+        self._paused = False
+        self.healthy = True
+        self.last_detection_at = datetime.now(timezone.utc)
+
+    async def on_mode_change(self, mode: str) -> None:
+        if mode != "sleeping" and self._paused:
+            self._paused = False
+            self.healthy = False
+            self.last_detection_at = None
+
+
+class TestPhysicalContextRelax:
+    @pytest.fixture
+    def context(self, mock_hue, mock_hue_v2, mock_ws):
+        presence = PresenceFusion()
+        engine = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+            presence_fusion=presence,
+        )
+        camera = _PhysicalContextCamera()
+        engine.set_camera_service(camera)
+        return engine, presence, camera
+
+    @staticmethod
+    def observe(
+        presence: PresenceFusion,
+        *,
+        source: str,
+        captured_at: datetime,
+        face_present: bool,
+        zone: str | None,
+    ) -> PresenceReading:
+        reading = PresenceReading(
+            source=source,
+            captured_at=captured_at,
+            face_present=face_present,
+            face_confidence=0.9 if face_present else 0.0,
+            detection_source="face",
+            zone=zone,
+        )
+        presence.on_observation(reading)
+        return reading
+
+    async def test_fresh_committed_latitude_couch_enters_relax(self, context):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        reading = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+
+        await engine.notify_presence_observation(reading)
+
+        assert engine._current_mode == "idle"
+        assert engine.current_mode == "relax"
+        assert engine.override_source == "physical_context_relax"
+
+    async def test_no_latitude_evidence_leaves_idle_unchanged(self, context):
+        engine, _, _ = context
+
+        await engine._evaluate_physical_context_relax(
+            now=datetime.now(tz=TZ),
+            trigger="test",
+        )
+
+        assert engine.current_mode == "idle"
+        assert engine.manual_override is False
+
+    @pytest.mark.parametrize(
+        ("enabled", "paused", "healthy", "age_seconds"),
+        [
+            (False, False, True, 0),
+            (True, True, True, 0),
+            (True, False, False, 0),
+            (True, False, True, 9),
+        ],
+    )
+    async def test_unavailable_or_stale_latitude_cannot_enter(
+        self,
+        context,
+        enabled,
+        paused,
+        healthy,
+        age_seconds,
+    ):
+        engine, presence, camera = context
+        now = datetime.now(timezone.utc)
+        camera.enabled = enabled
+        camera._paused = paused
+        camera.healthy = healthy
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now - timedelta(seconds=age_seconds),
+            face_present=True,
+            zone="couch",
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+
+    @pytest.mark.parametrize("mode", ["working", "watching", "gaming"])
+    async def test_fresh_semantic_process_blocks_entry(self, context, mode):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        engine._last_process_semantic_by_device["desktop"] = (mode, now)
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+
+    async def test_process_age_31_to_299_does_not_block_entry(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        engine._last_process_semantic_by_device["desktop"] = (
+            "working",
+            now - timedelta(seconds=31),
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.override_source == "physical_context_relax"
+        assert SOURCE_STALE_SECONDS == 300
+
+    async def test_fresh_process_immediately_preempts_active_fallback(self, context):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        reading = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(reading)
+
+        await engine.report_activity(
+            "gaming",
+            source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert engine.current_mode == "gaming"
+        assert engine.manual_override is False
+
+    async def test_unsupported_activity_suggestion_does_not_displace(self, context):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        reading = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(reading)
+
+        await engine.report_activity("working", source="audio_ml")
+
+        assert engine.current_mode == "relax"
+        assert engine.override_source == "physical_context_relax"
+
+    async def test_manual_dnd_and_away_each_block_entry(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+
+        await engine.set_manual_override("working", source="api:test")
+        await engine._evaluate_physical_context_relax(now=now, trigger="manual")
+        assert engine.override_source == "api:test"
+
+        await engine.clear_override(source="api:test")
+        engine._external_off_detected = True
+        await engine._evaluate_physical_context_relax(now=now, trigger="away")
+        assert engine.manual_override is False
+
+        engine._external_off_detected = False
+        engine._dnd._enabled = True
+        engine._dnd._expiry = now + timedelta(hours=1)
+        await engine._evaluate_physical_context_relax(now=now, trigger="dnd")
+        assert engine.manual_override is False
+
+    async def test_presence_loss_releases_at_30s_without_brief_churn(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine._evaluate_physical_context_relax(now=now, trigger="entry")
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now + timedelta(seconds=1),
+            face_present=False,
+            zone="couch",
+        )
+        await engine._evaluate_physical_context_relax(
+            now=now + timedelta(seconds=1),
+            trigger="loss_started",
+        )
+
+        await engine._evaluate_physical_context_relax(
+            now=now + timedelta(seconds=29),
+            trigger="brief_loss",
+        )
+        assert engine.override_source == "physical_context_relax"
+
+        await engine._evaluate_physical_context_relax(
+            now=now + timedelta(seconds=30),
+            trigger="loss",
+        )
+        assert engine.override_source == "physical_context_relax"
+
+        await engine._evaluate_physical_context_relax(
+            now=now + timedelta(seconds=31),
+            trigger="loss_threshold",
+        )
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
+
+    async def test_presence_loss_releases_at_exactly_30_continuous_seconds(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine._evaluate_physical_context_relax(now=now, trigger="entry")
+        loss_started_at = now + timedelta(seconds=2)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=loss_started_at,
+            face_present=False,
+            zone="couch",
+        )
+
+        await engine._evaluate_physical_context_relax(
+            now=loss_started_at,
+            trigger="loss_started",
+        )
+        await engine._evaluate_physical_context_relax(
+            now=loss_started_at + timedelta(seconds=29, milliseconds=999),
+            trigger="before_threshold",
+        )
+        assert engine.override_source == "physical_context_relax"
+
+        await engine._evaluate_physical_context_relax(
+            now=loss_started_at + timedelta(seconds=30),
+            trigger="at_threshold",
+        )
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
+
+    async def test_loss_timer_survives_new_absent_observations_and_resets_on_couch(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        couch = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+        loss_started_at = now + timedelta(seconds=1)
+        absent = self.observe(
+            presence,
+            source="latitude",
+            captured_at=loss_started_at,
+            face_present=False,
+            zone="couch",
+        )
+        await engine._evaluate_physical_context_relax(
+            now=loss_started_at,
+            trigger="first_loss",
+        )
+
+        later_absent = self.observe(
+            presence,
+            source="latitude",
+            captured_at=loss_started_at + timedelta(seconds=20),
+            face_present=False,
+            zone=None,
+        )
+        await engine._evaluate_physical_context_relax(
+            now=later_absent.captured_at,
+            trigger="continued_loss",
+        )
+        assert engine._physical_context_presence_lost_at == absent.captured_at
+
+        renewed = self.observe(
+            presence,
+            source="latitude",
+            captured_at=loss_started_at + timedelta(seconds=25),
+            face_present=True,
+            zone="couch",
+        )
+        await engine._evaluate_physical_context_relax(
+            now=renewed.captured_at,
+            trigger="renewed_couch",
+        )
+        assert engine.override_source == "physical_context_relax"
+        assert engine._physical_context_presence_lost_at is None
+
+        second_loss = self.observe(
+            presence,
+            source="latitude",
+            captured_at=loss_started_at + timedelta(seconds=26),
+            face_present=False,
+            zone="couch",
+        )
+        await engine._evaluate_physical_context_relax(
+            now=second_loss.captured_at,
+            trigger="second_loss",
+        )
+        assert engine._physical_context_presence_lost_at == second_loss.captured_at
+
+    async def test_desktop_conflict_vetoes_entry_and_logs(self, context, caplog):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=now,
+            face_present=True,
+            zone="desk",
+        )
+
+        with caplog.at_level("INFO"):
+            await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        assert "simultaneous fresh couch and desk" in caplog.text
+
+    @pytest.mark.parametrize("zone", [None, "couch"])
+    async def test_non_desk_desktop_face_does_not_veto_entry(self, context, zone):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=now,
+            face_present=True,
+            zone=zone,
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.override_source == "physical_context_relax"
+
+    async def test_newer_idle_clears_device_veto_without_second_dwell(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        engine._last_process_semantic_by_device["desktop"] = ("working", now)
+        await engine._evaluate_physical_context_relax(now=now, trigger="blocked")
+        assert engine.manual_override is False
+
+        await engine.report_activity(
+            "idle",
+            source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert engine.override_source == "physical_context_relax"
+
+    async def test_non_sleeping_clear_keeps_cooldown(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        await engine.set_manual_override("relax", source="api:test")
+        await engine.clear_override(source="api:test")
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        assert engine._user_clear_allows_physical_context_relax is False
+
+    async def test_respawn_sleeping_resume_requires_new_real_camera_commit(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        presence = PresenceFusion()
+        engine = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+            presence_fusion=presence,
+        )
+        stale_camera = CameraService(mock_ws, engine)
+        engine.register_on_mode_change(stale_camera.on_mode_change)
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                automation=engine,
+                ws_manager=mock_ws,
+                presence=presence,
+                camera_service=stale_camera,
+            )
+        )
+
+        async def start_camera(camera):
+            camera._enabled = True
+            camera._cap = MagicMock()
+
+        with (
+            patch.object(CameraService, "start", start_camera),
+            patch.object(CameraService, "poll_loop", new_callable=AsyncMock),
+        ):
+            result = await spawn_camera_service(app, reason="test_respawn")
+            await asyncio.sleep(0)
+
+        assert result["status"] == "ok"
+        camera = app.state.camera_service
+        assert camera is not stale_camera
+        assert presence.on_observation in camera._observation_callbacks
+        assert (
+            presence.invalidate_source
+            in camera._observation_invalidation_callbacks
+        )
+        assert engine._presence_fusion is presence
+
+        before_sleep = datetime.now(timezone.utc)
+        camera._last_detection = "present"
+        camera._last_detection_at = before_sleep
+        camera._last_confidence = 0.9
+        camera._last_detection_source = "face"
+        camera._last_zone = "couch"
+        camera._last_zone_at = before_sleep
+        camera._face_anchor_at["couch"] = before_sleep
+        desktop = self.observe(
+            presence,
+            source="desktop",
+            captured_at=before_sleep,
+            face_present=False,
+            zone="desk",
+        )
+        stale = PresenceReading(
+            source="latitude",
+            captured_at=before_sleep,
+            face_present=True,
+            face_confidence=0.9,
+            detection_source="face",
+            zone="couch",
+        )
+        for callback in camera._observation_callbacks:
+            callback(stale)
+        assert presence.get_source_reading("latitude") is stale
+        assert presence.get_source_reading("desktop") is desktop
+
+        await camera.on_mode_change("sleeping")
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        camera._open_capture_async = AsyncMock(return_value=AsyncMock())
+
+        await engine.clear_override(source="api:test")
+
+        assert camera.healthy is False
+        assert camera.zone is None
+        assert presence.get_source_reading("latitude") is None
+        assert presence.get_source_reading("desktop") is desktop
+        await engine._evaluate_physical_context_relax(
+            now=datetime.now(timezone.utc), trigger="immediate_resume",
+        )
+        assert engine._current_mode == "idle"
+        assert engine.current_mode == "idle"
+        assert engine.manual_override is False
+
+        first_at = datetime.now(timezone.utc)
+        camera._last_detection = "present"
+        camera._last_detection_at = first_at
+        camera._last_confidence = 0.9
+        camera._last_detection_source = "face"
+        camera._apply_zone_hysteresis("couch", present_observed=True)
+        first = PresenceReading(
+            source="latitude",
+            captured_at=first_at,
+            face_present=True,
+            face_confidence=0.9,
+            detection_source="face",
+            zone=camera.zone,
+        )
+        for callback in camera._observation_callbacks:
+            callback(first)
+        await engine.notify_presence_observation(first)
+
+        assert camera.healthy is True
+        assert camera.zone is None
+        assert engine.current_mode == "idle"
+        assert engine.manual_override is False
+
+        camera._candidate_zone_since = (
+            datetime.now(timezone.utc) - timedelta(seconds=15)
+        )
+        camera._apply_zone_hysteresis("couch", present_observed=True)
+        committed_at = datetime.now(timezone.utc)
+        camera._last_detection_at = committed_at
+        committed = PresenceReading(
+            source="latitude",
+            captured_at=committed_at,
+            face_present=True,
+            face_confidence=0.9,
+            detection_source="face",
+            zone=camera.zone,
+        )
+        for callback in camera._observation_callbacks:
+            callback(committed)
+        engine._apply_mode = AsyncMock()
+        await engine.notify_presence_observation(committed)
+        await camera._maybe_notify_camera_commit(
+            zone_before=None, posture_before=None,
+        )
+
+        assert camera.zone == "couch"
+        assert engine._current_mode == "idle"
+        assert engine.current_mode == "relax"
+        assert engine.override_source == "physical_context_relax"
+        engine._apply_mode.assert_awaited_once_with("relax", force_resend=True)
+
+    async def test_sleeping_clear_exempts_only_physical_context(self, context):
+        engine, presence, camera = context
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        camera._paused = True
+        engine.register_on_mode_change(camera.on_mode_change)
+
+        await engine.clear_override(source="api:test")
+
+        assert camera._paused is False
+        assert camera.healthy is False
+        await engine.set_manual_override("relax", source="ambient_relax")
+        assert engine.manual_override is False
+
+        camera.healthy = True
+        camera.last_detection_at = datetime.now(timezone.utc)
+        unknown = self.observe(
+            presence,
+            source="latitude",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            zone=None,
+        )
+        await engine.notify_presence_observation(unknown)
+        assert engine.manual_override is False
+
+        committed = self.observe(
+            presence,
+            source="latitude",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(committed)
+
+        assert engine.override_source == "physical_context_relax"
+        assert engine._user_clear_allows_physical_context_relax is True
+
+    def test_source_preserves_per_light_overrides(self):
+        assert "physical_context_relax" in PRESERVE_PER_LIGHT_OVERRIDE_SOURCES
+
+    async def test_fresh_desktop_conflict_releases_active_fallback(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        couch = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+        desk = self.observe(
+            presence,
+            source="desktop",
+            captured_at=now,
+            face_present=True,
+            zone="desk",
+        )
+
+        await engine.notify_presence_observation(desk)
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
+
+    @pytest.mark.parametrize("zone", [None, "couch"])
+    async def test_non_desk_desktop_face_does_not_release_active_fallback(
+        self, context, zone,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        couch = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+        desktop = self.observe(
+            presence,
+            source="desktop",
+            captured_at=now,
+            face_present=True,
+            zone=zone,
+        )
+
+        await engine.notify_presence_observation(desktop)
+
+        assert engine.override_source == "physical_context_relax"
+        assert engine.current_mode == "relax"
+
+    async def test_away_release_clears_without_relighting(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        couch = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+        engine._apply_mode = AsyncMock()
+        engine._apply_time_based = AsyncMock()
+        engine._external_off_detected = True
+
+        await engine._evaluate_physical_context_relax(
+            now=now, trigger="away",
+        )
+
+        assert engine.manual_override is False
+        engine._apply_mode.assert_not_awaited()
+        engine._apply_time_based.assert_not_awaited()
+
+    async def test_commit_after_entry_does_not_repaint_idle_or_relax(self, context):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        couch = self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+        engine._apply_mode = AsyncMock()
+
+        await engine.notify_camera_commit()
+
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_explicit_user_mode_preempts_active_fallback(self, context):
+        engine, presence, _ = context
+        couch = self.observe(
+            presence,
+            source="latitude",
+            captured_at=datetime.now(tz=TZ),
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+
+        await engine.set_manual_override("working", source="api:test")
+
+        assert engine.current_mode == "working"
+        assert engine.override_source == "api:test"

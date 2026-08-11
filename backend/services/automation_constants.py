@@ -111,6 +111,14 @@ RECENT_DESK_ATTENDANCE_SECONDS = 10 * 60  # 10 minutes
 # eager to drift away from functional modes.
 IDLE_AMBIENT_RELAX_DWELL_SECONDS = 10 * 60  # 10 minutes
 
+# Physical-context relax fallback. The existing couch commit supplies the
+# 15-second entry hysteresis; the engine accepts a fresh confirming face.
+# Process intent has a tighter freshness window than global source ownership,
+# and presence loss is debounced so brief camera gaps do not churn the mode.
+PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS = 8
+PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS = 30
+PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS = 30
+
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user
 # choice. User-API actions (api:*) and rule-suggestion accepts
@@ -119,6 +127,7 @@ IDLE_AMBIENT_RELAX_DWELL_SECONDS = 10 * 60  # 10 minutes
 AUTONOMOUS_PUSH_SOURCES = frozenset({
     "late_night_rescue",
     "ambient_relax",
+    "physical_context_relax",
     "zone_posture_rule",
     "watching_sleep_guard",
     "behavioral_predictor",
@@ -139,6 +148,7 @@ AUTONOMOUS_PUSH_SOURCES = frozenset({
 RESCUE_OVERRIDE_SOURCES = frozenset({
     "late_night_rescue",
     "ambient_relax",
+    "physical_context_relax",
     "zone_posture_rule",
     "watching_sleep_guard",
 })
@@ -157,6 +167,7 @@ RESCUE_OVERRIDE_SOURCES = frozenset({
 PRESERVE_PER_LIGHT_OVERRIDE_SOURCES = frozenset({
     "late_night_rescue",
     "ambient_relax",
+    "physical_context_relax",
     "behavioral_predictor",
     "fusion_can_override",
     "fusion_auto_apply",

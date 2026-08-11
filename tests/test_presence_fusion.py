@@ -642,3 +642,42 @@ def test_as_fusion_factor_lists_active_sources_sorted() -> None:
 def test_as_fusion_factor_returns_none_when_silent() -> None:
     fusion = PresenceFusion()
     assert fusion.as_fusion_factor() is None
+
+
+def test_get_source_reading_is_source_qualified() -> None:
+    fusion = PresenceFusion()
+    latitude = PresenceReading(
+        source="latitude",
+        captured_at=_now(),
+        face_present=True,
+        zone="couch",
+    )
+    desktop = PresenceReading(
+        source="desktop",
+        captured_at=_now(),
+        face_present=True,
+        zone="desk",
+    )
+    fusion.on_observation(latitude)
+    fusion.on_observation(desktop)
+
+    assert fusion.get_source_reading("latitude") is latitude
+    assert fusion.get_source_reading("desktop") is desktop
+    assert fusion.get_source_reading("missing") is None
+
+
+def test_invalidate_source_removes_only_named_live_reading() -> None:
+    fusion = PresenceFusion()
+    latitude = PresenceReading(
+        source="latitude", captured_at=_now(), face_present=True, zone="couch",
+    )
+    desktop = PresenceReading(
+        source="desktop", captured_at=_now(), face_present=True, zone="desk",
+    )
+    fusion.on_observation(latitude)
+    fusion.on_observation(desktop)
+
+    fusion.invalidate_source("latitude")
+
+    assert fusion.get_source_reading("latitude") is None
+    assert fusion.get_source_reading("desktop") is desktop

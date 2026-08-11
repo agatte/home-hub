@@ -158,6 +158,13 @@ class PresenceFusion:
             ).total_seconds() > FUTURE_SKEW_TOLERANCE_S:
                 self._last_at_desk_at = now
 
+    def invalidate_source(self, source: str) -> None:
+        """Discard one source's live reading without touching other sources."""
+        self._readings.pop(source, None)
+        if self._last_at_desk_source == source:
+            self._last_at_desk_source = None
+            self._last_at_desk_at = None
+
     # ------------------------------------------------------------------
     # Attendance queries
     # ------------------------------------------------------------------
@@ -374,6 +381,17 @@ class PresenceFusion:
             return None
         candidates.sort()  # smallest age first
         return candidates[0][1]
+
+    def get_source_reading(self, source: str) -> Optional[PresenceReading]:
+        """Return the latest immutable reading for one named source.
+
+        Source-qualified policy consumers use this instead of merged presence
+        when physical ownership matters (Latitude couch vs desktop desk).
+        Freshness remains the caller's responsibility because each policy has
+        its own window.
+        """
+        return self._readings.get(source)
+
 
     # ------------------------------------------------------------------
     # Diagnostics

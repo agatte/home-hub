@@ -30,6 +30,9 @@ from backend.services.automation_constants import (
     IDLE_AMBIENT_RELAX_DWELL_SECONDS as IDLE_AMBIENT_RELAX_DWELL_SECONDS,
     RECENT_DESK_ATTENDANCE_SECONDS as RECENT_DESK_ATTENDANCE_SECONDS,
     MODE_PRIORITY as MODE_PRIORITY,
+    PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS as PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
+    PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS as PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS,
+    PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS as PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS,
     PRESERVE_PER_LIGHT_OVERRIDE_SOURCES as PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
     RECENT_PROCESS_WORKING_SECONDS as RECENT_PROCESS_WORKING_SECONDS,
     RESCUE_OVERRIDE_SOURCES as RESCUE_OVERRIDE_SOURCES,
@@ -230,6 +233,20 @@ class AutomationEngine:
         # camera blip doesn't strand the user in relax while they're actively
         # at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
         self._last_process_working_at: Optional[datetime] = None
+        # Fallback-specific freshness. Each device owns its latest process
+        # report, so newer idle immediately clears only that device's veto.
+        self._last_process_semantic_by_device: dict[
+            str, tuple[str, datetime]
+        ] = {}
+
+        # Central physical-context relax release state.
+        self._physical_context_last_qualifying_at: Optional[datetime] = None
+        self._physical_context_presence_lost_at: Optional[datetime] = None
+        self._physical_context_last_decision: Optional[str] = None
+
+        # Sleeping clears retain the normal autonomous cooldown for every
+        # source except physical_context_relax after a new post-resume commit.
+        self._user_clear_allows_physical_context_relax: bool = False
 
         # Timestamp of the most recent transition INTO `idle`. Cleared on any
         # exit from idle. Used by the ambient_relax setter to require a
@@ -1061,6 +1078,232 @@ class AutomationEngine:
         ).total_seconds()
         return age < window_seconds
 
+    def _record_process_semantic(
+        self,
+        mode: str,
+        factors: Optional[list[dict]],
+        now: datetime,
+    ) -> None:
+        """Store the latest device-qualified process semantic for this fallback."""
+        device = _activity_device(factors)
+        if device is None:
+            return
+        self._last_process_semantic_by_device[device] = (mode, now)
+
+    def _fresh_physical_context_process(
+        self, now: datetime,
+    ) -> Optional[tuple[str, str, float]]:
+        """Return the freshest device-qualified meaningful process veto."""
+        candidates: list[tuple[float, str, str]] = []
+        for device, (mode, reported_at) in (
+            self._last_process_semantic_by_device.items()
+        ):
+            age = (now - reported_at).total_seconds()
+            if (
+                mode in {"gaming", "watching", "working"}
+                and 0 <= age <= PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS
+            ):
+                candidates.append((age, device, mode))
+        if not candidates:
+            return None
+        age, device, mode = min(candidates)
+        return device, mode, age
+
+    def _physical_context_source_reading(self, source: str) -> Any:
+        presence = self._presence_fusion
+        if presence is None:
+            return None
+        getter = getattr(presence, "get_source_reading", None)
+        if getter is None:
+            return None
+        return getter(source)
+
+    def _physical_context_camera_ready(self) -> tuple[bool, str]:
+        camera = self._camera_service
+        if camera is None or not getattr(camera, "enabled", False):
+            return False, "latitude_disabled"
+        if getattr(camera, "_paused", False):
+            return False, "latitude_paused"
+        if hasattr(camera, "healthy") and not camera.healthy:
+            return False, "latitude_unhealthy"
+        if (
+            not hasattr(camera, "healthy")
+            and hasattr(camera, "_cap")
+            and camera._cap is None
+        ):
+            return False, "latitude_unhealthy"
+        if getattr(camera, "last_detection_at", None) is None:
+            return False, "latitude_post_start_observation_missing"
+        return True, "ready"
+
+    @staticmethod
+    def _physical_context_reading_age(reading: Any, now: datetime) -> float:
+        if reading is None or getattr(reading, "captured_at", None) is None:
+            return float("inf")
+        return (now - reading.captured_at).total_seconds()
+
+    def _physical_context_couch_qualified(self, now: datetime) -> bool:
+        reading = self._physical_context_source_reading("latitude")
+        age = self._physical_context_reading_age(reading, now)
+        return bool(
+            reading is not None
+            and -2.0 <= age <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and reading.zone == "couch"
+            and reading.face_present is True
+        )
+
+    def _physical_context_desktop_conflict(self, now: datetime) -> bool:
+        reading = self._physical_context_source_reading("desktop")
+        age = self._physical_context_reading_age(reading, now)
+        return bool(
+            reading is not None
+            and -2.0 <= age <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and reading.face_present is True
+            and reading.zone == "desk"
+        )
+
+    def _physical_context_cooldown_blocked(self, now: datetime) -> bool:
+        if self._user_cleared_override_at is None:
+            return False
+        elapsed = (now - self._user_cleared_override_at).total_seconds()
+        return bool(
+            elapsed < USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS
+            and not self._user_clear_allows_physical_context_relax
+        )
+
+    def _log_physical_context_decision(
+        self, decision: str, detail: str, trigger: str,
+    ) -> None:
+        if decision == self._physical_context_last_decision:
+            return
+        self._physical_context_last_decision = decision
+        logger.info(
+            "Physical-context relax %s: %s (trigger=%s)",
+            decision,
+            detail,
+            trigger,
+        )
+
+    async def notify_presence_observation(self, reading: Any) -> None:
+        """Evaluate source-qualified physical context after an observation edge."""
+        source = getattr(reading, "source", "unknown")
+        await self._evaluate_physical_context_relax(
+            trigger=f"presence:{source}",
+        )
+
+    async def _evaluate_physical_context_relax(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        trigger: str,
+    ) -> None:
+        """Own entry, preemption, and loss debounce for couch-driven relax."""
+        now = now or datetime.now(tz=TZ)
+        active = bool(
+            self._manual_override
+            and self._override_source == "physical_context_relax"
+        )
+        camera_ready, camera_reason = self._physical_context_camera_ready()
+        couch_qualified = camera_ready and self._physical_context_couch_qualified(now)
+        desktop_conflict = self._physical_context_desktop_conflict(now)
+        semantic = self._fresh_physical_context_process(now)
+
+        if couch_qualified:
+            reading = self._physical_context_source_reading("latitude")
+            self._physical_context_last_qualifying_at = reading.captured_at
+            self._physical_context_presence_lost_at = None
+
+        if active:
+            if self.is_dnd_active():
+                self._log_physical_context_decision(
+                    "blocked_dnd", "active override held by existing DND semantics", trigger,
+                )
+                return
+            if self._external_off_detected or self._away_hold:
+                self._log_physical_context_decision(
+                    "released_away", "away/external-off became active", trigger,
+                )
+                await self.clear_override(source="physical_context_relax")
+                return
+            if semantic is not None:
+                device, mode, age = semantic
+                self._log_physical_context_decision(
+                    "preempted_process", f"{device} {mode} age={age:.1f}s", trigger,
+                )
+                await self.clear_override(source="physical_context_relax")
+                return
+            if desktop_conflict:
+                self._log_physical_context_decision(
+                    "released_desktop_conflict", "fresh desktop desk presence", trigger,
+                )
+                await self.clear_override(source="physical_context_relax")
+                return
+            if couch_qualified:
+                return
+            lost_at = self._physical_context_presence_lost_at
+            if lost_at is None:
+                reading = self._physical_context_source_reading("latitude")
+                reading_age = self._physical_context_reading_age(reading, now)
+                if (
+                    reading is not None
+                    and -2.0
+                    <= reading_age
+                    <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+                ):
+                    lost_at = reading.captured_at
+                else:
+                    lost_at = now
+                self._physical_context_presence_lost_at = lost_at
+            loss_age = (now - lost_at).total_seconds()
+            if loss_age >= PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS:
+                self._log_physical_context_decision(
+                    "released_presence_loss",
+                    f"{camera_reason}; loss={loss_age:.1f}s",
+                    trigger,
+                )
+                await self.clear_override(source="physical_context_relax")
+            return
+
+        if not self._enabled:
+            return
+        if self._manual_override:
+            self._log_physical_context_decision(
+                "blocked_manual", f"override={self._override_source}", trigger,
+            )
+            return
+        if self._external_off_detected or self._away_hold:
+            self._log_physical_context_decision(
+                "blocked_away", "away/external-off active", trigger,
+            )
+            return
+        if self.is_dnd_active():
+            self._log_physical_context_decision("blocked_dnd", "DND active", trigger)
+            return
+        if self._current_mode != "idle" or not camera_ready or not couch_qualified:
+            return
+        if desktop_conflict:
+            self._log_physical_context_decision(
+                "blocked_desktop_conflict", "simultaneous fresh couch and desk", trigger,
+            )
+            return
+        if semantic is not None:
+            device, mode, age = semantic
+            self._log_physical_context_decision(
+                "blocked_process", f"{device} {mode} age={age:.1f}s", trigger,
+            )
+            return
+        if self._physical_context_cooldown_blocked(now):
+            self._log_physical_context_decision(
+                "blocked_cooldown", "non-sleeping user clear cooldown", trigger,
+            )
+            return
+
+        await self.set_manual_override("relax", source="physical_context_relax")
+        if self._manual_override and self._override_source == "physical_context_relax":
+            self._log_physical_context_decision(
+                "entered", "fresh committed Latitude couch face", trigger,
+            )
+
     def _attach_presence_attribution(
         self,
         factors: dict,
@@ -1224,6 +1467,10 @@ class AutomationEngine:
         mode = self.current_mode
         if not mode:
             return
+        # The observation edge already applied the physical-context entry.
+        # Avoid a second force-resend of the same relax palette.
+        if self._override_source == "physical_context_relax":
+            return
         logger.debug(
             "Camera commit → re-apply mode=%s with overlay-aware overlay",
             mode,
@@ -1273,6 +1520,13 @@ class AutomationEngine:
             return
 
         source_key = _activity_source_key(source, factors)
+        report_now = datetime.now(tz=TZ)
+        if source == "process":
+            self._record_process_semantic(mode, factors, report_now)
+            if mode == "idle":
+                await self._evaluate_physical_context_relax(
+                    now=report_now, trigger="process_idle",
+                )
 
         # Report to confidence fusion BEFORE mode-change guards — fusion is a
         # voting system, every signal should be heard even when it loses the
@@ -1317,7 +1571,7 @@ class AutomationEngine:
         # (sources can always update themselves) or the owning source has gone
         # stale. Enforces MODE_PRIORITY universally so every signal is subject
         # to the same rule.
-        now = datetime.now(tz=TZ)
+        now = report_now
         current_priority = MODE_PRIORITY.get(self._current_mode, 0)
         new_priority = MODE_PRIORITY.get(mode, 0)
         if new_priority < current_priority and source_key != self._mode_source_key:
@@ -1453,7 +1707,21 @@ class AutomationEngine:
             self._manual_override
             and self._override_source in AUTONOMOUS_PUSH_SOURCES
             and new_priority > override_priority
+            and (
+                self._override_source != "physical_context_relax"
+                or (
+                    source == "process"
+                    and _activity_device(factors) is not None
+                    and mode in {"gaming", "watching", "working"}
+                )
+            )
         ):
+            if self._override_source == "physical_context_relax":
+                self._log_physical_context_decision(
+                    "preempted_process",
+                    f"{_activity_device(factors)} {mode} age=0.0s",
+                    "activity_report",
+                )
             logger.info(
                 "Autonomous override displaced by priority: %s (p=%d, "
                 "source=%s) → %s (p=%d, source=%s)",
@@ -1602,7 +1870,11 @@ class AutomationEngine:
             elapsed = (
                 datetime.now(tz=TZ) - self._user_cleared_override_at
             ).total_seconds()
-            if elapsed < USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS:
+            physical_context_exempt = bool(
+                source == "physical_context_relax"
+                and self._user_clear_allows_physical_context_relax
+            )
+            if elapsed < USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS and not physical_context_exempt:
                 logger.info(
                     "Autonomous override blocked by user-clear cooldown: "
                     "mode=%s source=%s elapsed=%.0fs / %ds",
@@ -1678,10 +1950,13 @@ class AutomationEngine:
         # dashboard "auto" button. Subsequent autonomous mode pushes get
         # suppressed for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS so the user's
         # explicit "auto" choice isn't immediately undone by a sensor lane.
+        old_effective = self._override_mode
         if source.startswith("api:"):
             self._user_cleared_override_at = datetime.now(tz=TZ)
+            self._user_clear_allows_physical_context_relax = (
+                old_effective == "sleeping"
+            )
 
-        old_effective = self._override_mode
         was_overridden = self._manual_override
         self._manual_override = False
         self._override_mode = None
@@ -1715,6 +1990,15 @@ class AutomationEngine:
             await self._broadcast_mode()
             if old_effective != self._current_mode:
                 await self._fire_mode_change_callbacks(self._current_mode)
+            return
+
+        # Clearing an autonomous override while away must expose raw state
+        # without re-lighting or firing downstream mode callbacks.
+        if self._external_off_detected or self._away_hold:
+            await self._broadcast_mode()
+            logger.info(
+                "Override clear tracked but not actuated while away/external-off"
+            )
             return
 
         # Re-apply current detected mode or time-based. force_resend=True
@@ -1794,6 +2078,9 @@ class AutomationEngine:
                 self._user_cleared_override_at.astimezone(timezone.utc).isoformat()
                 if self._user_cleared_override_at is not None else None
             ),
+            "user_clear_allows_physical_context_relax": (
+                self._user_clear_allows_physical_context_relax
+            ),
             "last_bed_reclined_during_watching_utc": (
                 self._last_bed_reclined_during_watching_at
                 .astimezone(timezone.utc).isoformat()
@@ -1865,6 +2152,10 @@ class AutomationEngine:
                     "Invalid user_cleared_override stamp on load: %r", clear_str,
                 )
 
+        self._user_clear_allows_physical_context_relax = bool(
+            saved.get("user_clear_allows_physical_context_relax", False)
+        )
+
         # Restore the asleep-stamp so a deploy mid-night doesn't drop
         # morning-ramp suppression. The 12h failsafe inside
         # `_is_likely_still_asleep` self-clears stale stamps regardless.
@@ -1894,6 +2185,14 @@ class AutomationEngine:
             return
 
         source = saved.get("override_source")
+
+        # Physical evidence is process-local and must be re-established after
+        # restart. Never restore this override from pre-start camera state;
+        # the next fresh 15-second couch commit will enter through the evaluator.
+        if source == "physical_context_relax":
+            logger.info("Physical-context override awaits post-start couch evidence")
+            await self._persist_override_state()
+            return
 
         # Sleeping has no timeout by design (CLAUDE.md: "Persistent override").
         # An expired autonomous push is safe to drop at startup. An explicit
@@ -2842,6 +3141,7 @@ class AutomationEngine:
                     self._manual_override
                     and self._override_time
                     and self._override_mode != "sleeping"
+                    and self._override_source != "physical_context_relax"
                 ):
                     # A user override suspends idle dwell. Otherwise days of
                     # stale idle can trigger ambient_relax immediately after
@@ -2893,7 +3193,11 @@ class AutomationEngine:
                 )
 
                 # Check for external off (Alexa geofence)
-                if await self._check_external_off():
+                external_off = await self._check_external_off()
+                await self._evaluate_physical_context_relax(
+                    now=now, trigger="automation_tick",
+                )
+                if external_off:
                     await asyncio.sleep(60)
                     continue
 

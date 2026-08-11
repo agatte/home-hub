@@ -338,6 +338,7 @@ class CameraService:
         # Fired after each poll-loop frame with a complete PresenceReading
         # so the fusion layer can merge Latitude + desktop observations.
         self._observation_callbacks: list = []
+        self._observation_invalidation_callbacks: list = []
 
         # Detection state
         self._consecutive_absent: int = 0
@@ -401,6 +402,17 @@ class CameraService:
         """Whether the camera service is active and polling."""
         return self._enabled
 
+    @property
+    def healthy(self) -> bool:
+        """Whether a live post-start observation backs the active capture."""
+        return bool(
+            self._enabled
+            and not self._paused
+            and self._cap is not None
+            and self._last_detection_at is not None
+        )
+
+
     # ------------------------------------------------------------------
     # Personality / emotion hooks (Phase A — face blendshapes)
     #
@@ -434,6 +446,25 @@ class CameraService:
         """
         if callback not in self._observation_callbacks:
             self._observation_callbacks.append(callback)
+
+    def register_observation_invalidation_callback(self, callback) -> None:
+        """Subscribe to lifecycle invalidation of Latitude live authority."""
+        if callback not in self._observation_invalidation_callbacks:
+            self._observation_invalidation_callbacks.append(callback)
+
+    def _invalidate_live_detection_state(self) -> None:
+        """Drop pre-pause evidence that could authorize live decisions."""
+        self._last_detection = "unknown"
+        self._last_detection_at = None
+        self._last_confidence = 0.0
+        self._last_detection_source = None
+        self._face_anchor_at.clear()
+        self._clear_committed_zone_posture("resume from sleeping")
+        for callback in list(self._observation_invalidation_callbacks):
+            try:
+                callback("latitude")
+            except Exception:
+                logger.exception("failed to invalidate Latitude observation")
 
     def set_emotion_enabled(self, enabled: bool) -> None:
         """Flip the per-frame FaceLandmarker pass on or off.
@@ -1382,10 +1413,6 @@ class CameraService:
                 self._apply_posture_hysteresis(
                     frame_posture, present_observed=present_observed,
                 )
-                await self._maybe_notify_camera_commit(
-                    zone_before=zone_before,
-                    posture_before=posture_before,
-                )
 
                 # Fan out the just-settled state to PresenceFusion (or any
                 # tagged-source consumer registered via
@@ -1416,10 +1443,23 @@ class CameraService:
                                 logger.exception(
                                     "observation callback raised — ignoring"
                                 )
+                        notify = getattr(
+                            self._automation, "notify_presence_observation", None,
+                        )
+                        if notify is not None:
+                            await notify(reading)
                     except Exception:
                         logger.exception(
                             "failed to dispatch presence observation"
                         )
+
+                # The engine's source-qualified state machine must see the
+                # committed observation before the generic overlay repaint;
+                # otherwise an idle couch commit can flash idle before relax.
+                await self._maybe_notify_camera_commit(
+                    zone_before=zone_before,
+                    posture_before=posture_before,
+                )
 
                 # Compute the lux multiplier once — used by fusion factors,
                 # the ML logger below, and the WebSocket broadcast at the end.
@@ -2281,10 +2321,9 @@ class CameraService:
                 if self._heartbeat is not None:
                     self._heartbeat.register("camera", float(POLL_INTERVAL))
                 self._register_camera_sanity()
-                # The pause spanned at least the sleep cycle — any committed
-                # zone/posture from before sleep is stale and would otherwise
-                # leak into the morning's first overlay decisions.
-                self._clear_committed_zone_posture("resume from sleeping")
+                # Pre-sleep detections are not live authority after capture
+                # resumes. Require a new frame and a new zone commit.
+                self._invalidate_live_detection_state()
                 # Reopen camera — release any stranded handle first, off-loop +
                 # bounded, matching the recovery path. A handle left over from
                 # a failed sleep-entry release is exactly what wedges
@@ -2481,6 +2520,9 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
     presence = getattr(app.state, "presence", None)
     if presence is not None:
         camera.register_observation_callback(presence.on_observation)
+        camera.register_observation_invalidation_callback(
+            presence.invalidate_source
+        )
     # Stamp the poll task on the service so close() / next respawn can
     # cancel + await it. Without this, a respawn races the old task.
     camera._poll_task = asyncio.create_task(camera.poll_loop())

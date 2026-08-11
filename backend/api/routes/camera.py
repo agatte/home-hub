@@ -173,6 +173,9 @@ async def post_observation(
         pose_visible_landmarks=payload.pose_visible_landmarks,
     )
     presence.on_observation(reading)
+    automation = getattr(request.app.state, "automation", None)
+    if automation is not None:
+        await automation.notify_presence_observation(reading)
     return {"status": "ok"}
 
 

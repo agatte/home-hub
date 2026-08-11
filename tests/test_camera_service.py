@@ -83,6 +83,20 @@ class TestInit:
         assert status["enabled"] is False
         assert status["last_detection"] == "unknown"
 
+    def test_healthy_requires_active_capture_and_post_start_observation(self):
+        from datetime import datetime, timezone
+
+        service = _make_service()
+        service._enabled = True
+        service._cap = MagicMock()
+        assert service.healthy is False
+
+        service._last_detection_at = datetime.now(timezone.utc)
+        assert service.healthy is True
+
+        service._paused = True
+        assert service.healthy is False
+
 
 # ---------------------------------------------------------------------------
 # Presence detection logic
@@ -829,6 +843,13 @@ class TestModeChangeCallback:
         service._last_zone_at = datetime.now(timezone.utc)
         service._last_posture = "reclined"
         service._last_posture_at = datetime.now(timezone.utc)
+        service._last_detection = "present"
+        service._last_detection_at = datetime.now(timezone.utc)
+        service._last_confidence = 0.9
+        service._last_detection_source = "face"
+        service._face_anchor_at["couch"] = datetime.now(timezone.utc)
+        invalidated = []
+        service.register_observation_invalidation_callback(invalidated.append)
 
         mock_cv2 = MagicMock()
         mock_cap = MagicMock()
@@ -842,6 +863,12 @@ class TestModeChangeCallback:
         assert service._last_zone_at is None
         assert service._last_posture is None
         assert service._last_posture_at is None
+        assert service._last_detection == "unknown"
+        assert service._last_detection_at is None
+        assert service._last_confidence == 0.0
+        assert service._last_detection_source is None
+        assert service._face_anchor_at == {}
+        assert invalidated == ["latitude"]
 
 
 # ---------------------------------------------------------------------------

@@ -1144,6 +1144,9 @@ async def lifespan(app: FastAPI):
                 # Feed PresenceFusion the Latitude lane. Desktop lane is
                 # POST-driven via /api/camera/observation.
                 camera_service.register_observation_callback(presence.on_observation)
+                camera_service.register_observation_invalidation_callback(
+                    presence.invalidate_source
+                )
                 # Store the poll task on the service so close()/respawn
                 # can cancel + await it cleanly. Also append to the
                 # lifespan tasks list so shutdown waits on it.
