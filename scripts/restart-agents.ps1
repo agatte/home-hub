@@ -21,8 +21,104 @@ $AgentModules = @(
 $StalePidLocks = @("logs\peripheral_rgb.pid")
 $RecoveryTimeoutSeconds = 10
 
+if (-not ("HomeHubProcessNativeMethods" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class HomeHubProcessNativeMethods
+{
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME
+    {
+        public uint LowDateTime;
+        public uint HighDateTime;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(
+        uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+        int processId
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(
+        IntPtr processHandle,
+        out FILETIME creationTime,
+        out FILETIME exitTime,
+        out FILETIME kernelTime,
+        out FILETIME userTime
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static bool TryGetCreationFileTime(int processId, out ulong creationFileTime)
+    {
+        creationFileTime = 0;
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        if (handle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            FILETIME creation;
+            FILETIME exit;
+            FILETIME kernel;
+            FILETIME user;
+            if (!GetProcessTimes(handle, out creation, out exit, out kernel, out user))
+            {
+                return false;
+            }
+
+            creationFileTime = ((ulong)creation.HighDateTime << 32) | creation.LowDateTime;
+            return true;
+        }
+        finally
+        {
+            CloseHandle(handle);
+        }
+    }
+}
+'@
+}
+
+function Get-NativeProcessCreationFileTime([int]$ProcessId) {
+    [UInt64]$creationFileTime = 0
+    if (-not [HomeHubProcessNativeMethods]::TryGetCreationFileTime(
+        $ProcessId, [ref]$creationFileTime
+    )) {
+        return $null
+    }
+    return $creationFileTime
+}
+
+function Get-NativeProcessIdentity([int]$ProcessId) {
+    $creationFileTime = Get-NativeProcessCreationFileTime $ProcessId
+    if ($null -eq $creationFileTime) { return $null }
+    return [pscustomobject]@{
+        ProcessId = $ProcessId
+        CreationFileTime = $creationFileTime
+        Identity = "${ProcessId}:$creationFileTime"
+    }
+}
+
 function Get-IdentityKey($Process) {
-    "$($Process.ProcessId):$($Process.CreationDate.ToUniversalTime().ToFileTimeUtc())"
+    $nativeIdentity = Get-NativeProcessIdentity ([int]$Process.ProcessId)
+    if ($null -eq $nativeIdentity) { return $null }
+    return $nativeIdentity.Identity
 }
 
 function Test-HomeHubCommandLine([string]$CommandLine) {
@@ -42,26 +138,48 @@ function Get-HomeHubProcesses {
     Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" | Where-Object {
         Test-HomeHubCommandLine $_.CommandLine
     } | ForEach-Object {
+        $nativeIdentity = Get-NativeProcessIdentity ([int]$_.ProcessId)
         [pscustomobject]@{
             ProcessId = $_.ProcessId
-            CreationDate = $_.CreationDate
             CommandLine = $_.CommandLine
-            Identity = Get-IdentityKey $_
+            CreationFileTime = if ($nativeIdentity) { $nativeIdentity.CreationFileTime } else { $null }
+            Identity = if ($nativeIdentity) { $nativeIdentity.Identity } else { $null }
         }
     }
 }
 
 function Get-IdentityInspection($Identity) {
+    if (-not $Identity -or -not $Identity.Identity) {
+        return [pscustomobject]@{ Status = 'Indeterminate'; Process = $null }
+    }
     try {
         $current = Get-CimInstance Win32_Process `
             -Filter "ProcessId = $($Identity.ProcessId)" -ErrorAction Stop
     } catch {
         return [pscustomobject]@{ Status = 'Indeterminate'; Process = $null }
     }
-    if (-not $current -or (Get-IdentityKey $current) -ne $Identity.Identity) {
+    if (-not $current) {
         return [pscustomobject]@{ Status = 'AbsentOrDifferent'; Process = $current }
     }
+    $currentIdentity = Get-IdentityKey $current
+    if ($null -eq $currentIdentity) {
+        return [pscustomobject]@{ Status = 'Indeterminate'; Process = $current }
+    }
+    if ($currentIdentity -ne $Identity.Identity) {
+        return [pscustomobject]@{ Status = 'AbsentOrDifferent'; Process = $current }
+    }
+    if (-not (Test-HomeHubCommandLine $current.CommandLine)) {
+        return [pscustomobject]@{ Status = 'Indeterminate'; Process = $current }
+    }
     return [pscustomobject]@{ Status = 'Exact'; Process = $current }
+}
+
+function Test-ReplacementHealthIdentity($Health, $Replacement) {
+    if (-not $Health -or -not $Replacement -or -not $Replacement.Identity) { return $false }
+    return (
+        $Health.supervisor_pid -eq $Replacement.ProcessId -and
+        $Health.supervisor_instance -eq $Replacement.Identity
+    )
 }
 
 function Wait-IdentityGone($Identity, [int]$TimeoutSeconds = $RecoveryTimeoutSeconds) {
@@ -105,7 +223,12 @@ try {
 
     Write-Host "Snapshotting Home Hub agent owners after task suppression..."
     $owners = @(Get-HomeHubProcesses)
-    $owners | ForEach-Object { Write-Host "  PID $($_.ProcessId) $($_.CreationDate) $($_.CommandLine)" }
+    $indeterminateOwners = @($owners | Where-Object { -not $_.Identity })
+    if ($indeterminateOwners) {
+        $indeterminatePids = ($indeterminateOwners.ProcessId -join ', ')
+        throw "Initial owner identity inspection was indeterminate for PID(s): $indeterminatePids"
+    }
+    $owners | ForEach-Object { Write-Host "  $($_.Identity) $($_.CommandLine)" }
     foreach ($owner in $owners) {
         if (-not (Stop-ExactIdentity $owner)) { throw "Old owner survived bounded recovery: $($owner.Identity)" }
     }
@@ -123,7 +246,8 @@ try {
         }
     }
 
-    $restartAttempt = Get-Date
+    # Lower-bound marker only; process identities never derive from DateTime.
+    $restartAttemptFileTime = [DateTime]::UtcNow.ToFileTimeUtc()
     $oldKeys = @($owners | ForEach-Object Identity)
     $launcher = Join-Path $ProjectRoot "scripts\start-supervisor-hidden.vbs"
     Write-Host "Launching canonical supervisor path..."
@@ -134,7 +258,8 @@ try {
     do {
         $replacement = Get-HomeHubProcesses | Where-Object {
             $_.CommandLine -match 'backend\.services\.pc_agent\.supervisor' -and
-            $_.CreationDate -gt $restartAttempt -and $_.Identity -notin $oldKeys
+            $_.Identity -and $_.CreationFileTime -gt $restartAttemptFileTime -and
+            $_.Identity -notin $oldKeys
         } | Select-Object -First 1
         if ($replacement) { break }
         Start-Sleep -Milliseconds 500
@@ -149,7 +274,7 @@ try {
     do {
         try {
             $health = Invoke-RestMethod -Uri "$server/api/automation/agent-health" -TimeoutSec 3
-            $healthOk = ($health.supervisor_pid -eq $replacement.ProcessId -and $health.supervisor_instance -eq $replacement.Identity)
+            $healthOk = Test-ReplacementHealthIdentity $health $replacement
         } catch { $healthOk = $false }
         if ($healthOk) { break }
         Start-Sleep -Milliseconds 500
