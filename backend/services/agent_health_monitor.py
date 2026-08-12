@@ -81,11 +81,16 @@ class AgentHealthMonitor:
     # Inbound — called by the agent-health route on each POST
     # ------------------------------------------------------------------
 
-    async def record_report(self, body: dict) -> None:
+    async def record_report(self, body: dict, *, received_at: Optional[float] = None) -> None:
         """Record an inbound supervisor heartbeat and reconcile per-agent
         bad-state timers. Fires a recovery notice if the supervisor was
-        previously flagged silent."""
-        now = self._clock()
+        previously flagged silent.
+
+        ``received_at`` is the route's server-side receipt timestamp when
+        available, so the watchdog and agent-health response use one exact
+        freshness boundary. Direct callers retain the monitor clock behavior.
+        """
+        now = self._clock() if received_at is None else received_at
         was_silent = self._supervisor_alerted
 
         self._last_report_at = now
@@ -180,8 +185,8 @@ class AgentHealthMonitor:
     # Observability snapshot (for GET /api/automation/agent-health + /health)
     # ------------------------------------------------------------------
 
-    def snapshot(self) -> dict[str, Any]:
-        now = self._clock()
+    def snapshot(self, *, now: Optional[float] = None) -> dict[str, Any]:
+        now = self._clock() if now is None else now
         silent_for = (
             round(now - self._last_report_at, 1)
             if self._last_report_at is not None

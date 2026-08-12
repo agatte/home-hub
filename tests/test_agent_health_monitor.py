@@ -260,3 +260,12 @@ class TestEmitAlert:
         assert ok is True
         assert len(ws.broadcasts) == 1
         assert ws.broadcasts[0][1]["title"] == "Desktop agents offline"
+
+
+async def test_explicit_receipt_time_is_the_watchdog_freshness_boundary():
+    mon, _, _, t = _make()
+    await mon.record_report({"agents": {}}, received_at=900.0)
+    t[0] = 1200.0
+    assert mon.snapshot()["online"] is True
+    t[0] = 1200.1
+    assert mon.snapshot()["online"] is False

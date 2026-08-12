@@ -6,6 +6,7 @@ monitor (Blue Yeti mic). Provides the frontend with current automation state
 and manual override controls.
 """
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -43,6 +44,7 @@ from backend.services.automation_constants import (
 from backend.services.light_state_calculator import lux_to_multiplier
 from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
 from backend.services.presence_fusion import PresenceReading
+from backend.services.agent_health_monitor import SUPERVISOR_SILENT_SECONDS
 
 SCHEDULE_CONFIG_KEY = "time_schedule_config"
 BRIGHTNESS_CONFIG_KEY = "mode_brightness_config"
@@ -156,24 +158,80 @@ def _agent_health_origin(body: dict) -> str:
     return "desktop"
 
 
-def _merge_agent_health_reports(reports: dict[str, dict]) -> dict:
-    """Merge per-origin agent health while preserving origin details."""
+def _agent_health_clock(request: Request) -> float:
+    """Use an app-injected clock in route tests; production uses wall time."""
+    clock = getattr(request.app.state, "agent_health_clock", time.time)
+    return clock()
+
+
+def _stored_agent_health_report(value: dict) -> tuple[dict, float | None]:
+    """Read a receipt envelope, accepting pre-freshness raw reports on boot."""
+    if "report" in value and "received_at" in value:
+        report = value.get("report")
+        return (report if isinstance(report, dict) else {}), value.get("received_at")
+    return value, None
+
+
+def _origin_is_fresh(received_at: float | None, now: float) -> tuple[float | None, bool]:
+    """All current reporters post about every 30s, so share watchdog's 5m bound."""
+    if received_at is None:
+        return None, False
+    age = max(0.0, now - received_at)
+    return age, age <= SUPERVISOR_SILENT_SECONDS
+
+
+def _agent_snapshot(info: dict, origin_age: float | None, *, current: bool) -> dict:
+    """Label reporter-calculated age and, for current agents, estimate it now."""
+    snapshot = dict(info or {})
+    at_report = snapshot.get("heartbeat_age")
+    snapshot["heartbeat_age_at_report"] = at_report
+    if current and at_report is not None and origin_age is not None:
+        snapshot["heartbeat_age"] = at_report + origin_age
+    return snapshot
+
+
+def _merge_agent_health_reports(reports: dict[str, dict], *, now: float | None = None) -> dict:
+    """Expose only fresh origins as current while retaining their last reports.
+
+    Receipt time is server-owned. Every current reporter has a ~30-second
+    cadence, so this shares the desktop watchdog's five-minute silence bound.
+    """
     if not reports:
         return {"status": "no_report", "agents": {}, "origins": {}}
 
-    origins = dict(reports)
-    desktop = origins.get("desktop") or {}
+    now = time.time() if now is None else now
+    origins: dict[str, dict] = {}
+    current_reports: dict[str, tuple[dict, float | None]] = {}
+    agents: dict[str, dict] = {}
+    for origin, stored in reports.items():
+        report, received_at = _stored_agent_health_report(stored)
+        origin_age, fresh = _origin_is_fresh(received_at, now)
+        historical = dict(report)
+        historical["agents"] = {
+            name: _agent_snapshot(info, origin_age, current=False)
+            for name, info in (report.get("agents") or {}).items()
+        }
+        historical.update({
+            "server_received_at": received_at,
+            "origin_age_seconds": origin_age,
+            "fresh": fresh,
+        })
+        origins[origin] = historical
+        if not fresh:
+            continue
+        current_reports[origin] = (report, origin_age)
+        for name, info in (report.get("agents") or {}).items():
+            current_info = _agent_snapshot(info, origin_age, current=True)
+            if name in agents:
+                agents[f"{origin}:{name}"] = current_info
+            else:
+                agents[name] = current_info
+
+    desktop, _ = current_reports.get("desktop", ({}, None))
     merged = {
         key: value for key, value in desktop.items()
         if key not in {"agents", "origin"}
     }
-    agents: dict[str, dict] = {}
-    for origin, report in origins.items():
-        for name, info in (report.get("agents") or {}).items():
-            if name in agents:
-                agents[f"{origin}:{name}"] = info
-            else:
-                agents[name] = info
     merged["agents"] = agents
     merged["origins"] = origins
     return merged
@@ -231,16 +289,17 @@ async def report_agent_health(request: Request) -> dict:
     reports = getattr(request.app.state, "agent_health_reports", None)
     if not isinstance(reports, dict):
         reports = {}
-    reports[origin] = body
+    received_at = _agent_health_clock(request)
+    reports[origin] = {"report": body, "received_at": received_at}
     request.app.state.agent_health_reports = reports
-    request.app.state.agent_health = _merge_agent_health_reports(reports)
+    request.app.state.agent_health = _merge_agent_health_reports(reports, now=received_at)
 
     # The watchdog is desktop-supervisor-specific. Latitude service health is
     # exposed in the merged payload but must not reset desktop silence timers.
     if origin == "desktop":
         monitor = getattr(request.app.state, "agent_health_monitor", None)
         if monitor is not None:
-            await monitor.record_report(body)
+            await monitor.record_report(body, received_at=received_at)
     return {"status": "ok", "origin": origin}
 
 
@@ -251,9 +310,10 @@ async def get_agent_health(request: Request) -> dict:
     if not isinstance(reports, dict):
         legacy = getattr(request.app.state, "agent_health", None)
         reports = {"desktop": legacy} if isinstance(legacy, dict) else {}
-    health = _merge_agent_health_reports(reports)
+    now = _agent_health_clock(request)
+    health = _merge_agent_health_reports(reports, now=now)
     monitor = getattr(request.app.state, "agent_health_monitor", None)
-    watchdog = monitor.snapshot() if monitor is not None else None
+    watchdog = monitor.snapshot(now=now) if monitor is not None else None
     return {**health, "watchdog": watchdog}
 
 @router.get("/status")
