@@ -2836,12 +2836,72 @@ class TestRecentDeskAttendanceVeto:
         )
         engine._current_mode = "working"
         engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
 
-        await engine.report_activity(mode="idle", source="process")
+        await engine.report_activity(
+            mode="idle",
+            source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
 
         assert engine.current_mode == "working"
-        assert engine._last_mode_source_report_at["process"] is not None
+        assert engine._last_mode_source_report_at["process:desktop"] is not None
         assert engine._idle_entered_at is None
+
+    async def test_same_desktop_process_idle_releases_watching_at_desk(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            0, at_desk_fresh=True,
+        )
+        engine._current_mode = "watching"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+
+        await engine.report_activity(
+            mode="idle",
+            source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert engine.current_mode == "idle"
+        assert engine._mode_source_key == "process:desktop"
+        assert engine._idle_entered_at is not None
+
+    async def test_same_desktop_process_idle_releases_watching_without_desk(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            None, at_desk_fresh=False,
+        )
+        engine._current_mode = "watching"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+
+        await engine.report_activity(
+            mode="idle",
+            source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert engine.current_mode == "idle"
+        assert engine._idle_entered_at is not None
+
+    async def test_manual_watching_authority_survives_process_release(self, engine):
+        engine._presence_fusion = _StickyDeskPresence(
+            0, at_desk_fresh=True,
+        )
+        engine._current_mode = "watching"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+        await engine.set_manual_override("watching", source="api:127.0.0.1")
+
+        await engine.report_activity(
+            mode="idle",
+            source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "watching"
+        assert engine.current_mode == "watching"
+        assert engine._current_mode == "idle"
 
     async def test_stale_recent_desk_allows_idle_report(self, engine):
         engine._presence_fusion = _StickyDeskPresence(

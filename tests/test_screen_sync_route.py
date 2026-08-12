@@ -12,9 +12,10 @@ import pytest
 
 from backend.api.routes.automation import receive_screen_color, report_activity
 from backend.api.schemas.automation import ActivityReport, ScreenColorReport
+from backend.services.automation_engine import AutomationEngine
 from backend.services.light_state_calculator import resolve_activity_state
+from backend.services.presence_fusion import PresenceFusion, PresenceReading
 from backend.services.screen_sync import ScreenSyncService
-from backend.services.presence_fusion import PresenceFusion
 
 
 class _FakeHue:
@@ -111,6 +112,57 @@ async def test_off_mode_drops_silently(mode):
 
     assert result["applied"] is False
     assert hue.calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_watching_release_closes_screen_color_gate(
+    mock_hue, mock_hue_v2, mock_ws,
+):
+    """A committed desktop idle release stops later screen-color writes."""
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=datetime.now(timezone.utc),
+        face_present=True,
+        face_confidence=0.95,
+        zone="desk",
+    ))
+    sync = ScreenSyncService(
+        hue_service=mock_hue, target_light_ids=["2", "5"],
+    )
+    engine = AutomationEngine(
+        hue=mock_hue,
+        hue_v2=mock_hue_v2,
+        ws_manager=mock_ws,
+        screen_sync=sync,
+        presence_fusion=presence,
+    )
+    req = _make_request(engine, sync)
+    req.app.state.presence = presence
+    desktop_factors = [{"key": "device", "value": "desktop"}]
+
+    await engine.report_activity(
+        mode="watching", source="process", factors=desktop_factors,
+    )
+    applied = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="desktop"), req,
+    )
+    assert applied["applied"] is True
+
+    await engine.report_activity(
+        mode="idle", source="process", factors=desktop_factors,
+    )
+    lights_after_release = [
+        light.copy() for light in await mock_hue.get_all_lights()
+    ]
+
+    dropped = await receive_screen_color(
+        ScreenColorReport(r=220, g=40, b=40, source="desktop"), req,
+    )
+
+    assert engine.current_mode == "idle"
+    assert dropped["applied"] is False
+    assert await mock_hue.get_all_lights() == lights_after_release
 
 
 @pytest.mark.asyncio

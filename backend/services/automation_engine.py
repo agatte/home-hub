@@ -1633,13 +1633,14 @@ class AutomationEngine:
         self._last_mode_source_report_at[source] = now
 
         # Fresh desk presence is stronger evidence than a passive idle detector
-        # for desk-bound modes. Windows input can sit idle while Anthony is
-        # visibly at the desk reading, thinking, or watching. Do not apply this
-        # to gaming: if a game closes while camera presence remains fresh, the
-        # process idle report must still clear the stale gaming profile.
+        # for active desk work. Windows input can sit idle while Anthony is
+        # visibly at the desk reading or thinking. Watching already has process-
+        # detector hysteresis, so a committed idle report must release it even
+        # while desk presence remains fresh. Physical location alone is not
+        # media intent. Gaming likewise releases when its process lane goes idle.
         if (
             mode == "idle"
-            and self._current_mode in {"working", "watching"}
+            and self._current_mode == "working"
             and self.is_recently_at_desk()
         ):
             logger.info(
