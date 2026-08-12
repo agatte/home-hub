@@ -396,12 +396,16 @@ async def get_pipeline(request: Request) -> dict:
             "living_room_context": None,
         }
     gate = getattr(request.app.state, "living_room_decision_gate", None)
+    living_room_context = gate.current_envelope() if gate is not None else None
+    if living_room_context is not None:
+        living_room_context = {
+            **living_room_context,
+            "atmosphere": engine.get_living_room_atmosphere_status(),
+        }
     return {
         "current": engine._build_pipeline_state(),
         "history": list(engine.pipeline_history),
-        "living_room_context": (
-            gate.current_envelope() if gate is not None else None
-        ),
+        "living_room_context": living_room_context,
     }
 
 
@@ -417,7 +421,14 @@ async def get_living_room_context(request: Request) -> dict:
             status_code=503,
             detail="Living-room decision gate not initialized",
         )
-    return gate.current_status()
+    engine = getattr(request.app.state, "automation", None)
+    return {
+        **gate.current_status(),
+        "atmosphere": (
+            engine.get_living_room_atmosphere_status()
+            if engine is not None else None
+        ),
+    }
 
 
 @router.get(
@@ -435,9 +446,14 @@ async def get_living_room_context_history(
             status_code=503,
             detail="Living-room decision gate not initialized",
         )
+    engine = getattr(request.app.state, "automation", None)
     return {
         "limit": limit,
         "records": await gate.history(limit),
+        "atmosphere_records": (
+            await engine.get_living_room_atmosphere_history(limit)
+            if engine is not None else []
+        ),
     }
 
 

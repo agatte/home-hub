@@ -759,6 +759,14 @@ class LivingRoomSnapshotBuilder:
         )
 
         policy = self._policy_context() or {}
+        manual_mode_source = policy.get("manual_mode_source") or "none"
+        # physical_context_relax is represented by the engine's override
+        # machinery for lifecycle/release semantics, but it is autonomous
+        # couch provenance rather than user-owned manual intent.
+        user_manual_mode_active = bool(
+            policy.get("manual_mode_active")
+            and manual_mode_source != "physical_context_relax"
+        )
         ownership = self._ownership_context() or {}
         manual = ownership.get("manual") or {}
         manual_ids = tuple(sorted(str(i) for i in manual.get("light_ids", [])))
@@ -893,10 +901,10 @@ class LivingRoomSnapshotBuilder:
             apartment_away=bool(policy.get("apartment_away")),
             sleeping_active=bool(policy.get("sleeping_active")),
             manual_mode_override=Evidence(
-                source=policy.get("manual_mode_source") or "none",
+                source=manual_mode_source,
                 status=CapabilityStatus.HEALTHY,
                 freshness=FreshnessStatus.NOT_APPLICABLE,
-                present=bool(policy.get("manual_mode_active")),
+                present=user_manual_mode_active,
                 state=policy.get("manual_mode"),
                 authoritative=True,
             ),

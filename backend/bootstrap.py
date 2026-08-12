@@ -1256,6 +1256,9 @@ async def lifespan(app: FastAPI):
         LivingRoomDecisionRecorder,
         LivingRoomSnapshotBuilder,
     )
+    from backend.services.living_room_atmosphere import (
+        LivingRoomAtmosphereCurator,
+    )
 
     def _heartbeat_row(name: str) -> dict:
         return next(
@@ -1355,11 +1358,22 @@ async def lifespan(app: FastAPI):
         snapshot_builder,
         LivingRoomDecisionRecorder(living_room_session_factory),
     )
+    living_room_atmosphere = LivingRoomAtmosphereCurator(
+        enabled=settings.LIVING_ROOM_ATMOSPHERE_ENABLED,
+        session_factory=living_room_session_factory,
+        log_activation=event_logger.log_scene_activation,
+    )
+    await living_room_atmosphere.load_recent_history()
     automation.set_living_room_decision_gate(living_room_gate)
+    automation.set_living_room_atmosphere_curator(living_room_atmosphere)
     app.state.living_room_decision_gate = living_room_gate
+    app.state.living_room_atmosphere_curator = living_room_atmosphere
     await living_room_gate.start()
     tasks.append(asyncio.create_task(automation.run_loop()))
-    app_logger.info("Living-room decision gate initialized (shadow-only)")
+    app_logger.info(
+        "Living-room decision gate initialized (shadow-only); atmosphere=%s",
+        "enabled" if settings.LIVING_ROOM_ATMOSPHERE_ENABLED else "observe-only",
+    )
 
     app_logger.info("Home Hub is ready")
 

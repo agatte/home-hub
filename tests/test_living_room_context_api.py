@@ -89,6 +89,20 @@ class FakeEngine:
     def _build_pipeline_state(self):
         return {"timestamp": "held-pipeline-state"}
 
+    def get_living_room_atmosphere_status(self):
+        return {
+            "enabled": False,
+            "selected_atmosphere": "moss_ember",
+            "reason_codes": ["feature_disabled"],
+            "application": {
+                "state": "fallback",
+                "reason": "feature_disabled",
+            },
+        }
+
+    async def get_living_room_atmosphere_history(self, limit: int):
+        return [{"atmosphere_id": "moss_ember", "limit_seen": limit}]
+
 
 def _client() -> tuple[TestClient, FakeGate]:
     app = FastAPI()
@@ -111,6 +125,7 @@ def test_current_and_pipeline_return_same_stored_envelope_without_recompute() ->
         "shadow_only": current.json()["shadow_only"],
         "snapshot": current.json()["snapshot"],
         "decision": current.json()["decision"],
+        "atmosphere": current.json()["atmosphere"],
     }
     pipeline_envelope = pipeline.json()["living_room_context"]
     assert current_envelope == pipeline_envelope
@@ -119,6 +134,7 @@ def test_current_and_pipeline_return_same_stored_envelope_without_recompute() ->
     assert current_envelope["decision"]["scene_selected"] is False
     assert current_envelope["decision"]["actuation_attempted"] is False
     assert current_envelope["decision"]["actuation_outcome"] == "not_attempted"
+    assert current_envelope["atmosphere"]["selected_atmosphere"] == "moss_ember"
     assert gate.evaluate_calls == 0
 
 
@@ -136,6 +152,9 @@ def test_history_defaults_to_50_and_is_bounded_to_100() -> None:
     assert gate.history_limits == [50]
     records = response.json()["records"]
     assert records[0]["id"] == 1
+    assert response.json()["atmosphere_records"] == [
+        {"atmosphere_id": "moss_ember", "limit_seen": 50}
+    ]
 
     accepted = client.get(
         "/api/automation/living-room-context/history?limit=100"
@@ -183,6 +202,7 @@ def test_recovered_current_pipeline_health_and_history_agree() -> None:
         "shadow_only": current["shadow_only"],
         "snapshot": current["snapshot"],
         "decision": current["decision"],
+        "atmosphere": current["atmosphere"],
     }
     assert current_envelope == pipeline["living_room_context"]
     assert history[0]["snapshot"] == current["snapshot"]

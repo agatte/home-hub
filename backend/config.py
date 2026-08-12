@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # transit-revert. Override lives 4h, refractory matches.
     ZONE_POSTURE_RULE_APPLY: bool = True
 
+    # First #129/#130 living-room atmosphere slice. Default false keeps the
+    # accepted implementation observable but does not change production Hue
+    # behavior until the palette has been reviewed and rollout is explicit.
+    LIVING_ROOM_ATMOSPHERE_ENABLED: bool = False
+
     # Sentry error reporting — DSN from sentry.io project. When unset,
     # sentry_sdk.init() is called with dsn=None which silently disables
     # ingestion (no events sent). Free tier = 10k events/month.

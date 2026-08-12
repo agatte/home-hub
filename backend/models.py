@@ -247,7 +247,7 @@ class SceneActivation(Base):
     )
     scene_id: Mapped[str] = mapped_column(String(100), nullable=False)
     scene_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    # source: "preset", "custom", "bridge"
+    # source: "preset", "custom", "bridge", "atmosphere"
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     mode_at_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 

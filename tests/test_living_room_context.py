@@ -378,6 +378,52 @@ def test_manual_mode_and_source_are_preserved() -> None:
     assert snapshot.manual_mode_override.state == "relax"
 
 
+def test_physical_context_relax_is_not_user_manual_intent() -> None:
+    snapshot = _builder(policy_context=lambda: {
+        "manual_mode_active": True,
+        "manual_mode": "relax",
+        "manual_mode_source": "physical_context_relax",
+    })()
+    result = _decision(snapshot)
+    assert snapshot.manual_mode_override.present is False
+    assert snapshot.manual_mode_override.source == "physical_context_relax"
+    assert result.eligible_for_scene_curator is True
+    assert "manual_mode_override_active" not in result.reason_codes
+
+
+def test_actual_user_selected_relax_remains_manual_veto() -> None:
+    snapshot = _builder(policy_context=lambda: {
+        "manual_mode_active": True,
+        "manual_mode": "relax",
+        "manual_mode_source": "api:dashboard",
+    })()
+    result = _decision(snapshot)
+    assert snapshot.manual_mode_override.present is True
+    assert result.outcome == DecisionOutcome.SAFE_FALLBACK
+    assert "manual_mode_override_active" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "camera_status",
+    [
+        {"enabled": False, "paused": False},
+        {"enabled": True, "paused": True},
+        {
+            "enabled": True,
+            "paused": False,
+            "heartbeat": {"age_seconds": 120, "stale": True},
+        },
+    ],
+)
+def test_privacy_or_camera_health_loss_blocks_curator(
+    camera_status: dict,
+) -> None:
+    snapshot = _builder(camera_status=lambda: camera_status)()
+    result = _decision(snapshot)
+    assert result.eligible_for_scene_curator is False
+    assert any(code.startswith("latitude_") for code in result.reason_codes)
+
+
 def test_manual_per_light_ids_are_exact_and_veto_v1() -> None:
     owner = LightOwnership(
         active=True,

@@ -58,6 +58,13 @@ from backend.services.engine_state import EngineState
 from backend.services.light_applicator import LightApplicator, LightApplyResult
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.light_override_manager import LightOverrideManager
+from backend.services.living_room_atmosphere import (
+    ATMOSPHERE_TRANSITION_TIME,
+    AtmospherePlan,
+    LivingRoomAtmosphereCurator,
+    merge_living_room_atmosphere,
+    preserve_atmosphere_effect_scope,
+)
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
 
 logger = logging.getLogger("home_hub.automation")
@@ -428,6 +435,9 @@ class AutomationEngine:
             state_builder=self._build_pipeline_state,
         )
         self._living_room_decision_gate = None
+        self._living_room_atmosphere_curator: Optional[
+            LivingRoomAtmosphereCurator
+        ] = None
 
         # Heartbeat registry — set via set_heartbeat_registry from lifespan
         # so /health can flag a stalled run_loop.
@@ -501,6 +511,22 @@ class AutomationEngine:
     def set_living_room_decision_gate(self, gate: Any) -> None:
         """Attach the read-only shadow gate after bootstrap composition."""
         self._living_room_decision_gate = gate
+
+    def set_living_room_atmosphere_curator(
+        self, curator: LivingRoomAtmosphereCurator,
+    ) -> None:
+        """Attach the downstream selector; the decision gate stays writer-free."""
+        self._living_room_atmosphere_curator = curator
+
+    def get_living_room_atmosphere_status(self) -> Optional[dict[str, Any]]:
+        curator = self._living_room_atmosphere_curator
+        return curator.current_status() if curator is not None else None
+
+    async def get_living_room_atmosphere_history(
+        self, limit: int,
+    ) -> list[dict[str, Any]]:
+        curator = self._living_room_atmosphere_curator
+        return await curator.history(limit) if curator is not None else []
 
     def get_activity_context(self) -> dict[str, Any]:
         """Return held activity/effective-mode state without recomputation."""
@@ -598,6 +624,43 @@ class AutomationEngine:
                 exc_info=True,
             )
         return gate.current_envelope()
+
+    async def _plan_living_room_atmosphere(
+        self,
+        *,
+        period: str,
+        scene_override_active: bool,
+    ) -> Optional[AtmospherePlan]:
+        curator = self._living_room_atmosphere_curator
+        if curator is None:
+            return None
+        try:
+            envelope = await self.evaluate_living_room_context(
+                trigger="atmosphere_plan",
+            )
+            provenance = (
+                self._override_source
+                if self._manual_override
+                else self._mode_source
+            )
+            return curator.decide(
+                envelope,
+                period=period,
+                provenance=provenance,
+                session_started_at=(
+                    self._override_time
+                    if provenance == "physical_context_relax"
+                    else None
+                ),
+                scene_override_active=scene_override_active,
+            )
+        except Exception:
+            curator.reset_session("selector_failure")
+            logger.error(
+                "Living-room atmosphere selector failed; using ordinary Relax",
+                exc_info=True,
+            )
+            return None
 
     # ── EngineState facades (GH#87 step 4a) ────────────────────────────
     # The dicts live on self._state so the step-4/5 extractions can share
@@ -1890,12 +1953,21 @@ class AutomationEngine:
         old_mode = self.current_mode
         was_overridden = self._manual_override
         prior_override = self._override_mode
+        prior_override_source = self._override_source
         self._manual_override = True
         self._override_mode = mode
         self._override_source = source
         self._override_time = datetime.now(tz=TZ)
         self._override_expiry_deferred = False
         self._last_activity_change = self._override_time
+        if (
+            prior_override_source == "physical_context_relax"
+            and source != "physical_context_relax"
+            and self._living_room_atmosphere_curator is not None
+        ):
+            self._living_room_atmosphere_curator.reset_session(
+                f"authority_replaced:{source}",
+            )
 
         # Only wipe per-light manual brightness/color when the user picked
         # this mode. Autonomous sources (late-night rescue, fusion,
@@ -1952,6 +2024,7 @@ class AutomationEngine:
         # suppressed for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS so the user's
         # explicit "auto" choice isn't immediately undone by a sensor lane.
         old_effective = self._override_mode
+        old_source = self._override_source
         if source.startswith("api:"):
             self._user_cleared_override_at = datetime.now(tz=TZ)
             self._user_clear_allows_physical_context_relax = (
@@ -1964,6 +2037,13 @@ class AutomationEngine:
         self._override_source = None
         self._override_time = None
         self._override_expiry_deferred = False
+        if (
+            old_source == "physical_context_relax"
+            and self._living_room_atmosphere_curator is not None
+        ):
+            self._living_room_atmosphere_curator.reset_session(
+                f"authority_released:{source}",
+            )
         if self._current_mode == "idle":
             self._idle_entered_at = datetime.now(tz=TZ)
 
@@ -2573,6 +2653,16 @@ class AutomationEngine:
             )
             period = "night"
         override_scene = self._scene_overrides.get(mode, {}).get(period)
+        atmosphere_plan = (
+            await self._plan_living_room_atmosphere(
+                period=period,
+                scene_override_active=override_scene is not None,
+            )
+            if mode == "relax"
+            else None
+        )
+        if atmosphere_plan is not None and atmosphere_plan.should_apply:
+            desired_effect = preserve_atmosphere_effect_scope(desired_effect)
         if override_scene and self._hue_v2 and self._hue_v2.connected:
             source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
             override_applied = False
@@ -2679,6 +2769,15 @@ class AutomationEngine:
             else:
                 state = _resolve_activity_state(mode, period, game)
 
+            # The curator owns only its bounded L1/L3/L4 overlay. Everything
+            # after this point remains the ordinary Relax learner,
+            # brightness, lux, weather, ownership, dedup, and Hue pipeline.
+            if atmosphere_plan is not None and atmosphere_plan.should_apply:
+                state = merge_living_room_atmosphere(
+                    state,
+                    atmosphere_plan.palette,
+                )
+
             # Apply learned lighting preferences as overlay (ML Phase 1).
             # Learned values replace hardcoded defaults per-light, per-property.
             # Weather class threaded in (Layer 4) so the overlay picks the
@@ -2732,19 +2831,29 @@ class AutomationEngine:
                 prime = getattr(self._screen_sync, "prime_from_mode_state", None)
                 if prime is not None:
                     prime(mode, period, state)
-            tt = MODE_TRANSITION_TIME.get(mode)
+            tt = (
+                ATMOSPHERE_TRANSITION_TIME
+                if atmosphere_plan is not None
+                and atmosphere_plan.should_apply
+                else MODE_TRANSITION_TIME.get(mode)
+            )
             if self._effect_manager.needs_reconcile(desired_effect):
                 # One serialized sequence: force safe targets (including
                 # protected held targets), wait the commanded transition,
                 # then release/start the effect.
-                await self._reconcile_effect(
+                applied = await self._reconcile_effect(
                     desired_effect,
                     intended_states=state,
                     transitiontime=tt,
                 )
             else:
                 # Steady-state reapply: normal dedup path, no settle barrier.
-                await self._apply_state(state, transitiontime=tt)
+                applied = await self._apply_state(state, transitiontime=tt)
+            if atmosphere_plan is not None and atmosphere_plan.should_apply:
+                await self._living_room_atmosphere_curator.observe_application(
+                    atmosphere_plan,
+                    applied,
+                )
         else:
             # Unknown mode — fall back to time-based
             await self._apply_time_based()
@@ -3192,6 +3301,15 @@ class AutomationEngine:
                 await self.evaluate_living_room_context(
                     trigger="automation_tick",
                 )
+                if (
+                    self._manual_override
+                    and self._override_source == "physical_context_relax"
+                    and self.is_dnd_active()
+                    and self._living_room_atmosphere_curator is not None
+                ):
+                    self._living_room_atmosphere_curator.reset_session(
+                        "dnd_active",
+                    )
 
                 # Check for external off (Alexa geofence)
                 external_off = await self._check_external_off()
@@ -3298,6 +3416,17 @@ class AutomationEngine:
                     # force_resend=False so dedup in _last_applied_per_light makes
                     # this a true no-op when nothing changed (the common case).
                     await self._apply_mode(self._current_mode)
+                elif (
+                    self._manual_override
+                    and self._override_source == "physical_context_relax"
+                    and not self.is_dnd_active()
+                ):
+                    # Couch Relax is lifecycle-backed by the override path,
+                    # which ordinary periodic mode reconciliation skips.
+                    # Re-enter the normal pipeline so period changes and the
+                    # single 30-minute evolution become eligible; per-light
+                    # dedup keeps unchanged ticks writer-free.
+                    await self._apply_mode("relax")
 
                 # Scene drift — subtle variety during long sessions
                 if not self._manual_override:
@@ -4127,6 +4256,9 @@ class AutomationEngine:
             "effect": self._active_effect_name,
             "brightness_multiplier": brightness_mult,
             "lights": dict(self._last_applied_per_light),
+            "living_room_atmosphere": (
+                self.get_living_room_atmosphere_status()
+            ),
         }
 
         # Add fusion state
