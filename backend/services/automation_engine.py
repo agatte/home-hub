@@ -13,6 +13,7 @@ others off; fire-and-ice party: warm/cool split across rooms).
 import asyncio
 import logging
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -30,8 +31,10 @@ from backend.services.automation_constants import (
     IDLE_AMBIENT_RELAX_DWELL_SECONDS as IDLE_AMBIENT_RELAX_DWELL_SECONDS,
     RECENT_DESK_ATTENDANCE_SECONDS as RECENT_DESK_ATTENDANCE_SECONDS,
     MODE_PRIORITY as MODE_PRIORITY,
+    PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS as PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS,
     PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS as PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
     PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS as PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS,
+    PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT as PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT,
     PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS as PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS,
     PRESERVE_PER_LIGHT_OVERRIDE_SOURCES as PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
     RECENT_PROCESS_WORKING_SECONDS as RECENT_PROCESS_WORKING_SECONDS,
@@ -140,6 +143,21 @@ def _factor_value(factors: Optional[list[dict]], key: str) -> object:
     return None
 
 
+def _string_factor(factors: Optional[list[dict]], key: str) -> Optional[str]:
+    value = _factor_value(factors, key)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _number_factor(factors: Optional[list[dict]], key: str) -> Optional[float]:
+    value = _factor_value(factors, key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def _activity_device(factors: Optional[list[dict]]) -> Optional[str]:
     """Best-effort device role for a process report, e.g. desktop/latitude."""
     value = _factor_value(factors, "device")
@@ -155,6 +173,55 @@ def _activity_source_key(source: str, factors: Optional[list[dict]]) -> str:
     if source == "process" and device:
         return f"{source}:{device}"
     return source
+
+
+@dataclass(frozen=True)
+class ProcessSemanticEvidence:
+    """Latest bounded process-classifier evidence for one device."""
+
+    committed_mode: str
+    candidate_mode: Optional[str]
+    candidate_reason: Optional[str]
+    idle_seconds: Optional[float]
+    pending_mode: Optional[str]
+    pending_dwell_age: Optional[float]
+    gaming_qualification: Optional[str]
+    source: str
+    device: str
+    received_at: datetime
+
+    def as_context(self, now: datetime) -> dict[str, Any]:
+        return {
+            "committed_mode": self.committed_mode,
+            "candidate_mode": self.candidate_mode,
+            "candidate_reason": self.candidate_reason,
+            "idle_seconds": self.idle_seconds,
+            "pending_mode": self.pending_mode,
+            "pending_dwell_age": self.pending_dwell_age,
+            "gaming_qualification": self.gaming_qualification,
+            "source": self.source,
+            "device": self.device,
+            "received_at": self.received_at.isoformat(),
+            "age_seconds": (now - self.received_at).total_seconds(),
+        }
+
+
+@dataclass(frozen=True)
+class PhysicalContextProcessArbitration:
+    """One source-qualified process vote for couch authority."""
+
+    state: str
+    reason: str
+    evidence: Optional[ProcessSemanticEvidence] = None
+
+    def as_context(self, now: datetime) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "state": self.state,
+            "reason": self.reason,
+        }
+        if self.evidence is not None:
+            result.update(self.evidence.as_context(now))
+        return result
 
 
 class AutomationEngine:
@@ -243,7 +310,7 @@ class AutomationEngine:
         # Fallback-specific freshness. Each device owns its latest process
         # report, so newer idle immediately clears only that device's veto.
         self._last_process_semantic_by_device: dict[
-            str, tuple[str, datetime]
+            str, ProcessSemanticEvidence
         ] = {}
 
         # Central physical-context relax release state.
@@ -530,14 +597,16 @@ class AutomationEngine:
 
     def get_activity_context(self) -> dict[str, Any]:
         """Return held activity/effective-mode state without recomputation."""
+        now = datetime.now(tz=TZ)
         report_at = self._last_mode_source_report_at.get(
             self._mode_source_key,
             self._last_mode_source_report_at.get(self._mode_source),
         )
         report_age = (
-            (datetime.now(tz=TZ) - report_at).total_seconds()
+            (now - report_at).total_seconds()
             if report_at is not None else None
         )
+        process_arbitration = self._physical_context_process_arbitration(now)
         return {
             "current_activity": self._current_mode,
             "current_activity_source": self._mode_source,
@@ -554,6 +623,15 @@ class AutomationEngine:
             "last_activity_change": (
                 self._last_activity_change.isoformat()
                 if self._last_activity_change is not None else None
+            ),
+            "process_evidence_by_device": {
+                device: evidence.as_context(now)
+                for device, evidence in sorted(
+                    self._last_process_semantic_by_device.items()
+                )
+            },
+            "physical_context_process_arbitration": (
+                process_arbitration.as_context(now)
             ),
         }
 
@@ -1147,30 +1225,138 @@ class AutomationEngine:
         factors: Optional[list[dict]],
         now: datetime,
     ) -> None:
-        """Store the latest device-qualified process semantic for this fallback."""
-        device = _activity_device(factors)
-        if device is None:
-            return
-        self._last_process_semantic_by_device[device] = (mode, now)
-
-    def _fresh_physical_context_process(
-        self, now: datetime,
-    ) -> Optional[tuple[str, str, float]]:
-        """Return the freshest device-qualified meaningful process veto."""
-        candidates: list[tuple[float, str, str]] = []
-        for device, (mode, reported_at) in (
-            self._last_process_semantic_by_device.items()
+        """Store only the latest process/classifier evidence for one device."""
+        device = _activity_device(factors) or "unknown"
+        self._last_process_semantic_by_device[device] = ProcessSemanticEvidence(
+            committed_mode=mode,
+            candidate_mode=_string_factor(factors, "candidate_mode"),
+            candidate_reason=_string_factor(factors, "candidate_reason"),
+            idle_seconds=_number_factor(factors, "idle"),
+            pending_mode=_string_factor(factors, "pending_mode"),
+            pending_dwell_age=_number_factor(factors, "pending_dwell_age"),
+            gaming_qualification=_string_factor(
+                factors, "gaming_qualification",
+            ),
+            source="process",
+            device=device,
+            received_at=now,
+        )
+        if (
+            len(self._last_process_semantic_by_device)
+            > PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT
         ):
-            age = (now - reported_at).total_seconds()
+            oldest_device = min(
+                self._last_process_semantic_by_device,
+                key=lambda key: (
+                    self._last_process_semantic_by_device[key].received_at
+                ),
+            )
+            self._last_process_semantic_by_device.pop(oldest_device, None)
+
+    def _physical_context_desk_absence_qualified(self, now: datetime) -> bool:
+        """Whether fresh explicit desktop absence has held for 30 seconds."""
+        reading = self._physical_context_source_reading("desktop")
+        age = self._physical_context_reading_age(reading, now)
+        if not (
+            reading is not None
+            and -2.0 <= age <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+            and reading.face_present is False
+        ):
+            return False
+        presence = self._presence_fusion
+        if presence is None:
+            return False
+        try:
+            seconds_since = presence.seconds_since_at_desk()
+        except Exception:
+            logger.debug(
+                "PresenceFusion desk-absence check failed", exc_info=True,
+            )
+            return False
+        return bool(
+            seconds_since is not None
+            and seconds_since >= PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS
+        )
+
+    def _physical_context_strong_contradiction(self, now: datetime) -> bool:
+        """Strong source-qualified proof that desktop intent was abandoned."""
+        camera_ready, _ = self._physical_context_camera_ready()
+        return bool(
+            camera_ready
+            and self._physical_context_couch_qualified(now)
+            and self._physical_context_desk_absence_qualified(now)
+        )
+
+    def _physical_context_process_discount_supported(self, now: datetime) -> bool:
+        """Current or lifecycle-debounced couch authority supports discounting."""
+        if self._physical_context_strong_contradiction(now):
+            return True
+        active = bool(
+            self._manual_override
+            and self._override_source == "physical_context_relax"
+        )
+        last_qualified = self._physical_context_last_qualifying_at
+        if not active or last_qualified is None:
+            return False
+        authority_age = (now - last_qualified).total_seconds()
+        return bool(
+            self._physical_context_desk_absence_qualified(now)
+            and 0 <= authority_age <= (
+                PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
+                + PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS
+            )
+        )
+
+    def _physical_context_process_arbitration(
+        self, now: datetime,
+    ) -> PhysicalContextProcessArbitration:
+        """Resolve fresh process intent against strong physical couch authority."""
+        meaningful: list[tuple[float, ProcessSemanticEvidence]] = []
+        for evidence in self._last_process_semantic_by_device.values():
+            age = (now - evidence.received_at).total_seconds()
             if (
-                mode in {"gaming", "watching", "working"}
+                evidence.committed_mode in {"gaming", "watching", "working"}
                 and 0 <= age <= PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS
             ):
-                candidates.append((age, device, mode))
-        if not candidates:
-            return None
-        age, device, mode = min(candidates)
-        return device, mode, age
+                meaningful.append((age, evidence))
+        if not meaningful:
+            return PhysicalContextProcessArbitration(
+                state="none",
+                reason="no_fresh_process_intent",
+            )
+
+        discount_supported = self._physical_context_process_discount_supported(now)
+        vetoes: list[tuple[float, ProcessSemanticEvidence]] = []
+        discounted: list[tuple[float, ProcessSemanticEvidence]] = []
+        for age, evidence in meaningful:
+            if (
+                evidence.device == "desktop"
+                and evidence.committed_mode in {"gaming", "working"}
+                and discount_supported
+            ):
+                discounted.append((age, evidence))
+            else:
+                vetoes.append((age, evidence))
+
+        if vetoes:
+            _, evidence = min(vetoes, key=lambda row: row[0])
+            reason = (
+                "desktop_process_intent_active"
+                if evidence.device == "desktop"
+                else "process_intent_active"
+            )
+            return PhysicalContextProcessArbitration(
+                state="veto",
+                reason=reason,
+                evidence=evidence,
+            )
+
+        _, evidence = min(discounted, key=lambda row: row[0])
+        return PhysicalContextProcessArbitration(
+            state="discounted",
+            reason="stale_desktop_process_discounted",
+            evidence=evidence,
+        )
 
     def _physical_context_source_reading(self, source: str) -> Any:
         presence = self._presence_fusion
@@ -1222,7 +1408,6 @@ class AutomationEngine:
             reading is not None
             and -2.0 <= age <= PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS
             and reading.face_present is True
-            and reading.zone == "desk"
         )
 
     def _physical_context_cooldown_blocked(self, now: datetime) -> bool:
@@ -1269,7 +1454,8 @@ class AutomationEngine:
         camera_ready, camera_reason = self._physical_context_camera_ready()
         couch_qualified = camera_ready and self._physical_context_couch_qualified(now)
         desktop_conflict = self._physical_context_desktop_conflict(now)
-        semantic = self._fresh_physical_context_process(now)
+        process_arbitration = self._physical_context_process_arbitration(now)
+        process_evidence = process_arbitration.evidence
 
         if couch_qualified:
             reading = self._physical_context_source_reading("latitude")
@@ -1288,16 +1474,21 @@ class AutomationEngine:
                 )
                 await self.clear_override(source="physical_context_relax")
                 return
-            if semantic is not None:
-                device, mode, age = semantic
+            if desktop_conflict:
                 self._log_physical_context_decision(
-                    "preempted_process", f"{device} {mode} age={age:.1f}s", trigger,
+                    "released_desktop_conflict",
+                    "fresh desktop face restored desk authority",
+                    trigger,
                 )
                 await self.clear_override(source="physical_context_relax")
                 return
-            if desktop_conflict:
+            if process_arbitration.state == "veto" and process_evidence is not None:
+                age = (now - process_evidence.received_at).total_seconds()
                 self._log_physical_context_decision(
-                    "released_desktop_conflict", "fresh desktop desk presence", trigger,
+                    "preempted_process",
+                    f"{process_evidence.device} "
+                    f"{process_evidence.committed_mode} age={age:.1f}s",
+                    trigger,
                 )
                 await self.clear_override(source="physical_context_relax")
                 return
@@ -1342,17 +1533,27 @@ class AutomationEngine:
         if self.is_dnd_active():
             self._log_physical_context_decision("blocked_dnd", "DND active", trigger)
             return
-        if self._current_mode != "idle" or not camera_ready or not couch_qualified:
+        entry_mode_eligible = bool(
+            self._current_mode == "idle"
+            or (
+                self._current_mode in {"gaming", "working"}
+                and process_arbitration.state == "discounted"
+            )
+        )
+        if not entry_mode_eligible or not camera_ready or not couch_qualified:
             return
         if desktop_conflict:
             self._log_physical_context_decision(
                 "blocked_desktop_conflict", "simultaneous fresh couch and desk", trigger,
             )
             return
-        if semantic is not None:
-            device, mode, age = semantic
+        if process_arbitration.state == "veto" and process_evidence is not None:
+            age = (now - process_evidence.received_at).total_seconds()
             self._log_physical_context_decision(
-                "blocked_process", f"{device} {mode} age={age:.1f}s", trigger,
+                "blocked_process",
+                f"{process_evidence.device} "
+                f"{process_evidence.committed_mode} age={age:.1f}s",
+                trigger,
             )
             return
         if self._physical_context_cooldown_blocked(now):
@@ -1586,10 +1787,9 @@ class AutomationEngine:
         report_now = datetime.now(tz=TZ)
         if source == "process":
             self._record_process_semantic(mode, factors, report_now)
-            if mode == "idle":
-                await self._evaluate_physical_context_relax(
-                    now=report_now, trigger="process_idle",
-                )
+            await self._evaluate_physical_context_relax(
+                now=report_now, trigger="process_report",
+            )
 
         # Report to confidence fusion BEFORE mode-change guards — fusion is a
         # voting system, every signal should be heard even when it loses the
@@ -1766,6 +1966,7 @@ class AutomationEngine:
         override_priority = MODE_PRIORITY.get(self._override_mode, 0)
         if self._override_source in RESCUE_OVERRIDE_SOURCES:
             override_priority = max(override_priority, MODE_PRIORITY["idle"])
+        process_arbitration = self._physical_context_process_arbitration(now)
 
         if (
             self._manual_override
@@ -1775,15 +1976,20 @@ class AutomationEngine:
                 self._override_source != "physical_context_relax"
                 or (
                     source == "process"
-                    and _activity_device(factors) is not None
-                    and mode in {"gaming", "watching", "working"}
+                    and process_arbitration.state == "veto"
                 )
             )
         ):
             if self._override_source == "physical_context_relax":
+                process_evidence = process_arbitration.evidence
                 self._log_physical_context_decision(
                     "preempted_process",
-                    f"{_activity_device(factors)} {mode} age=0.0s",
+                    (
+                        f"{process_evidence.device} "
+                        f"{process_evidence.committed_mode} age=0.0s"
+                        if process_evidence is not None
+                        else f"{source_key} {mode} age=0.0s"
+                    ),
                     "activity_report",
                 )
             logger.info(

@@ -3723,6 +3723,80 @@ class TestPhysicalContextRelax:
         presence.on_observation(reading)
         return reading
 
+    @staticmethod
+    def process_factors(
+        mode: str,
+        *,
+        device: str = "desktop",
+        candidate_mode: str | None = None,
+        idle_seconds: int = 0,
+    ) -> list[dict]:
+        candidate = candidate_mode or mode
+        factors = [
+            {"key": "device", "value": device},
+            {"key": "candidate_mode", "value": candidate},
+            {"key": "candidate_reason", "value": f"foreground_{mode}"},
+            {"key": "idle", "value": idle_seconds},
+        ]
+        if candidate != mode:
+            factors.extend([
+                {"key": "pending_mode", "value": candidate},
+                {"key": "pending_dwell_age", "value": 12.0},
+            ])
+        if mode == "gaming":
+            factors.append({
+                "key": "gaming_qualification",
+                "value": "foreground_game",
+            })
+        return factors
+
+    def establish_couch_contradiction(
+        self,
+        presence: PresenceFusion,
+        *,
+        now: datetime,
+        desk_age_seconds: float,
+        desktop_absence_age_seconds: float = 0,
+        couch_age_seconds: float = 0,
+        couch_zone: str | None = "couch",
+        couch_face_present: bool = True,
+    ) -> PresenceReading:
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=now - timedelta(seconds=desk_age_seconds),
+            face_present=True,
+            zone="desk",
+        )
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=now - timedelta(seconds=desktop_absence_age_seconds),
+            face_present=False,
+            zone=None,
+        )
+        return self.observe(
+            presence,
+            source="latitude",
+            captured_at=now - timedelta(seconds=couch_age_seconds),
+            face_present=couch_face_present,
+            zone=couch_zone,
+        )
+
+    @staticmethod
+    def hold_process_mode(
+        engine: AutomationEngine,
+        mode: str,
+        factors: list[dict],
+        now: datetime,
+    ) -> None:
+        engine._current_mode = mode
+        engine._mode_source = "process"
+        engine._mode_source_key = (
+            f"process:{next(f['value'] for f in factors if f['key'] == 'device')}"
+        )
+        engine._record_process_semantic(mode, factors, now)
+
     async def test_fresh_committed_latitude_couch_enters_relax(self, context):
         engine, presence, _ = context
         now = datetime.now(timezone.utc)
@@ -3796,7 +3870,11 @@ class TestPhysicalContextRelax:
             face_present=True,
             zone="couch",
         )
-        engine._last_process_semantic_by_device["desktop"] = (mode, now)
+        engine._record_process_semantic(
+            mode,
+            [{"key": "device", "value": "desktop"}],
+            now,
+        )
 
         await engine._evaluate_physical_context_relax(now=now, trigger="test")
 
@@ -3812,8 +3890,9 @@ class TestPhysicalContextRelax:
             face_present=True,
             zone="couch",
         )
-        engine._last_process_semantic_by_device["desktop"] = (
+        engine._record_process_semantic(
             "working",
+            [{"key": "device", "value": "desktop"}],
             now - timedelta(seconds=31),
         )
 
@@ -3842,6 +3921,346 @@ class TestPhysicalContextRelax:
 
         assert engine.current_mode == "gaming"
         assert engine.manual_override is False
+
+    async def test_working_couch_handoff_under_30_seconds_stays_blocked(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors(
+            "working", candidate_mode="idle", idle_seconds=15,
+        )
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=29,
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        arbitration = engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]
+        assert arbitration["state"] == "veto"
+        assert arbitration["reason"] == "desktop_process_intent_active"
+
+    @pytest.mark.parametrize("mode", ["working", "gaming"])
+    async def test_strong_couch_handoff_discounts_desktop_process_intent(
+        self, context, mode,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors(
+            mode,
+            candidate_mode="idle" if mode == "working" else mode,
+            idle_seconds=0,
+        )
+        self.hold_process_mode(engine, mode, factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.override_source == "physical_context_relax"
+        assert engine.current_mode == "relax"
+        context_row = engine.get_activity_context()
+        arbitration = context_row["physical_context_process_arbitration"]
+        assert arbitration["state"] == "discounted"
+        assert arbitration["reason"] == "stale_desktop_process_discounted"
+        assert arbitration["committed_mode"] == mode
+        assert arbitration["candidate_mode"] == factors[1]["value"]
+        assert arbitration["candidate_reason"] == f"foreground_{mode}"
+        assert arbitration["idle_seconds"] == 0.0
+        if mode == "gaming":
+            assert arbitration["gaming_qualification"] == "foreground_game"
+        assert set(context_row["process_evidence_by_device"]) == {"desktop"}
+
+    async def test_repeated_working_heartbeats_remain_discounted_and_non_preempting(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors(
+            "working", candidate_mode="idle", idle_seconds=15,
+        )
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+        await engine._evaluate_physical_context_relax(now=now, trigger="entry")
+
+        await engine.report_activity("working", "process", factors)
+        await engine.report_activity("working", "process", factors)
+
+        assert engine.override_source == "physical_context_relax"
+        assert engine.current_mode == "relax"
+        evidence = engine.get_activity_context()["process_evidence_by_device"]
+        assert len(evidence) == 1
+        assert evidence["desktop"]["committed_mode"] == "working"
+        assert engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]["state"] == "discounted"
+
+    async def test_discounted_heartbeat_respects_existing_couch_loss_debounce(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors("working")
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+        await engine._evaluate_physical_context_relax(now=now, trigger="entry")
+        loss_at = now + timedelta(seconds=2)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=loss_at,
+            face_present=False,
+            zone=None,
+        )
+        await engine._evaluate_physical_context_relax(
+            now=loss_at, trigger="loss_started",
+        )
+        engine._record_process_semantic("working", factors, loss_at)
+
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=loss_at + timedelta(seconds=29),
+            face_present=False,
+            zone=None,
+        )
+        await engine._evaluate_physical_context_relax(
+            now=loss_at + timedelta(seconds=29), trigger="heartbeat",
+        )
+        assert engine.override_source == "physical_context_relax"
+
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=loss_at + timedelta(seconds=30),
+            face_present=False,
+            zone=None,
+        )
+        await engine._evaluate_physical_context_relax(
+            now=loss_at + timedelta(seconds=30), trigger="loss_threshold",
+        )
+        assert engine.manual_override is False
+        assert engine.current_mode == "working"
+
+    def test_process_evidence_device_cardinality_is_bounded(self, context):
+        engine, _, _ = context
+        now = datetime.now(timezone.utc)
+
+        for index in range(10):
+            engine._record_process_semantic(
+                "working",
+                self.process_factors("working", device=f"device-{index}"),
+                now + timedelta(milliseconds=index),
+            )
+
+        evidence = engine.get_activity_context()["process_evidence_by_device"]
+        assert len(evidence) == 8
+        assert "device-0" not in evidence
+        assert "device-1" not in evidence
+
+    async def test_fresh_desktop_face_restores_underlying_working_immediately(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors("working")
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+        await engine._evaluate_physical_context_relax(now=now, trigger="entry")
+
+        desk = self.observe(
+            presence,
+            source="desktop",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            zone=None,
+        )
+        await engine.notify_presence_observation(desk)
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "working"
+        assert engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]["state"] == "veto"
+
+    @pytest.mark.parametrize(
+        ("couch_zone", "couch_face_present", "couch_age_seconds"),
+        [(None, True, 0), ("couch", False, 0), ("couch", True, 9)],
+    )
+    async def test_weak_uncommitted_or_stale_couch_cannot_discount(
+        self,
+        context,
+        couch_zone,
+        couch_face_present,
+        couch_age_seconds,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors("working")
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence,
+            now=now,
+            desk_age_seconds=31,
+            couch_zone=couch_zone,
+            couch_face_present=couch_face_present,
+            couch_age_seconds=couch_age_seconds,
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        assert engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]["state"] == "veto"
+
+    @pytest.mark.parametrize("absence", ["missing", "stale"])
+    async def test_missing_or_stale_desktop_absence_cannot_discount(
+        self, context, absence,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors("working")
+        self.hold_process_mode(engine, "working", factors, now)
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=now - timedelta(seconds=31),
+            face_present=True,
+            zone="desk",
+        )
+        if absence == "stale":
+            self.observe(
+                presence,
+                source="desktop",
+                captured_at=now - timedelta(seconds=9),
+                face_present=False,
+                zone=None,
+            )
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        assert engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]["state"] == "veto"
+
+    async def test_non_desktop_process_intent_is_never_discounted(self, context):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors("working", device="latitude")
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        arbitration = engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]
+        assert arbitration["state"] == "veto"
+        assert arbitration["device"] == "latitude"
+
+    @pytest.mark.parametrize("mode", ["working", "gaming"])
+    async def test_desk_present_process_intent_remains_authoritative(
+        self, context, mode,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors(mode)
+        self.hold_process_mode(engine, mode, factors, now)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        self.observe(
+            presence,
+            source="desktop",
+            captured_at=now,
+            face_present=True,
+            zone="desk",
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        assert engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]["state"] == "veto"
+
+    async def test_watching_stays_authoritative_despite_couch_contradiction(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors(
+            "watching", candidate_mode="idle", idle_seconds=900,
+        )
+        self.hold_process_mode(engine, "watching", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.manual_override is False
+        arbitration = engine.get_activity_context()[
+            "physical_context_process_arbitration"
+        ]
+        assert arbitration["state"] == "veto"
+        assert arbitration["committed_mode"] == "watching"
+        assert arbitration["idle_seconds"] == 900.0
+
+    @pytest.mark.parametrize("blocker", ["manual", "dnd", "away", "cooldown"])
+    async def test_existing_authority_still_blocks_discounted_working_handoff(
+        self, context, blocker,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(timezone.utc)
+        factors = self.process_factors("working")
+        self.hold_process_mode(engine, "working", factors, now)
+        self.establish_couch_contradiction(
+            presence, now=now, desk_age_seconds=31,
+        )
+        if blocker == "manual":
+            await engine.set_manual_override("working", source="api:test")
+        elif blocker == "dnd":
+            engine._dnd._enabled = True
+            engine._dnd._expiry = now + timedelta(hours=1)
+        elif blocker == "away":
+            engine._external_off_detected = True
+        else:
+            engine._user_cleared_override_at = now
+            engine._user_clear_allows_physical_context_relax = False
+
+        await engine._evaluate_physical_context_relax(now=now, trigger="test")
+
+        assert engine.override_source != "physical_context_relax"
+        if blocker == "manual":
+            assert engine.override_source == "api:test"
 
     async def test_unsupported_activity_suggestion_does_not_displace(self, context):
         engine, presence, _ = context
@@ -4058,7 +4477,9 @@ class TestPhysicalContextRelax:
         assert "simultaneous fresh couch and desk" in caplog.text
 
     @pytest.mark.parametrize("zone", [None, "couch"])
-    async def test_non_desk_desktop_face_does_not_veto_entry(self, context, zone):
+    async def test_fresh_desktop_face_vetoes_entry_regardless_of_zone(
+        self, context, zone,
+    ):
         engine, presence, _ = context
         now = datetime.now(tz=TZ)
         self.observe(
@@ -4078,7 +4499,7 @@ class TestPhysicalContextRelax:
 
         await engine._evaluate_physical_context_relax(now=now, trigger="test")
 
-        assert engine.override_source == "physical_context_relax"
+        assert engine.manual_override is False
 
     async def test_newer_idle_clears_device_veto_without_second_dwell(self, context):
         engine, presence, _ = context
@@ -4090,7 +4511,11 @@ class TestPhysicalContextRelax:
             face_present=True,
             zone="couch",
         )
-        engine._last_process_semantic_by_device["desktop"] = ("working", now)
+        engine._record_process_semantic(
+            "working",
+            [{"key": "device", "value": "desktop"}],
+            now,
+        )
         await engine._evaluate_physical_context_relax(now=now, trigger="blocked")
         assert engine.manual_override is False
 
@@ -4327,7 +4752,7 @@ class TestPhysicalContextRelax:
         assert engine.current_mode == "idle"
 
     @pytest.mark.parametrize("zone", [None, "couch"])
-    async def test_non_desk_desktop_face_does_not_release_active_fallback(
+    async def test_fresh_desktop_face_releases_active_fallback_regardless_of_zone(
         self, context, zone,
     ):
         engine, presence, _ = context
@@ -4350,8 +4775,8 @@ class TestPhysicalContextRelax:
 
         await engine.notify_presence_observation(desktop)
 
-        assert engine.override_source == "physical_context_relax"
-        assert engine.current_mode == "relax"
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
 
     async def test_away_release_clears_without_relighting(self, context):
         engine, presence, _ = context

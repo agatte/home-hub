@@ -89,6 +89,25 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class ProcessArbitration:
+    """Engine-owned process/physical authority result and selected evidence."""
+
+    state: str = "none"
+    reason: str = "no_fresh_process_intent"
+    source: Optional[str] = None
+    device: Optional[str] = None
+    committed_mode: Optional[str] = None
+    candidate_mode: Optional[str] = None
+    candidate_reason: Optional[str] = None
+    idle_seconds: Optional[float] = None
+    pending_mode: Optional[str] = None
+    pending_dwell_age: Optional[float] = None
+    gaming_qualification: Optional[str] = None
+    received_at: Optional[str] = None
+    age_seconds: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class LightOwnership:
     active: bool
     source: Optional[str] = None
@@ -128,6 +147,9 @@ class CapabilitySnapshotV1:
     effective_source: str
     decision_pipeline_health: CapabilityHealth
     season_event_context: Evidence
+    process_arbitration: ProcessArbitration = field(
+        default_factory=ProcessArbitration
+    )
     version: str = SNAPSHOT_VERSION
 
 
@@ -142,6 +164,8 @@ class DecisionContextV1:
     actuation_attempted: bool = False
     actuation_outcome: str = "not_attempted"
     physical_authority: str = "latitude"
+    process_arbitration_state: str = "none"
+    process_arbitration_reason: str = "no_fresh_process_intent"
     behavior: str = BEHAVIOR
     version: str = DECISION_VERSION
 
@@ -212,6 +236,18 @@ def evaluate_living_room_context(
     if snapshot.hue_health.status != CapabilityStatus.HEALTHY:
         _append_once(degraded, "hue_unavailable")
 
+    process_arbitration = snapshot.process_arbitration
+    if process_arbitration.state == "veto":
+        _append_once(
+            vetoes,
+            process_arbitration.reason or "process_intent_active",
+        )
+    elif process_arbitration.state == "discounted":
+        _append_once(
+            optional,
+            process_arbitration.reason or "stale_desktop_process_discounted",
+        )
+
     if snapshot.apartment_away:
         _append_once(vetoes, "apartment_away")
     if snapshot.dnd_active:
@@ -271,6 +307,8 @@ def evaluate_living_room_context(
         reason_codes=reasons,
         optional_context_reason_codes=tuple(optional),
         eligible_for_scene_curator=outcome == DecisionOutcome.ELIGIBLE,
+        process_arbitration_state=process_arbitration.state,
+        process_arbitration_reason=process_arbitration.reason,
     )
 
 
@@ -299,7 +337,10 @@ _FINGERPRINT_OMIT_KEYS = frozenset({
     "observed_at",
     "age_seconds",
     "heartbeat_age_seconds",
+    "idle_seconds",
     "last_success_at",
+    "pending_dwell_age",
+    "received_at",
 })
 
 # These are exact telemetry values whose already-derived categorical fields
@@ -629,6 +670,28 @@ class LivingRoomSnapshotBuilder:
             state=activity.get("current_activity"),
             authoritative=False,
         )
+        arbitration_row = (
+            activity.get("physical_context_process_arbitration") or {}
+        )
+        process_arbitration = ProcessArbitration(
+            state=arbitration_row.get("state", "none"),
+            reason=arbitration_row.get(
+                "reason", "no_fresh_process_intent",
+            ),
+            source=arbitration_row.get("source"),
+            device=arbitration_row.get("device"),
+            committed_mode=arbitration_row.get("committed_mode"),
+            candidate_mode=arbitration_row.get("candidate_mode"),
+            candidate_reason=arbitration_row.get("candidate_reason"),
+            idle_seconds=arbitration_row.get("idle_seconds"),
+            pending_mode=arbitration_row.get("pending_mode"),
+            pending_dwell_age=arbitration_row.get("pending_dwell_age"),
+            gaming_qualification=arbitration_row.get(
+                "gaming_qualification"
+            ),
+            received_at=arbitration_row.get("received_at"),
+            age_seconds=arbitration_row.get("age_seconds"),
+        )
 
         lux = self._optional(self._living_room_lux)
         lux_age = lux.get("age_seconds")
@@ -932,6 +995,7 @@ class LivingRoomSnapshotBuilder:
                 state="not_collected_in_v1",
                 authoritative=False,
             ),
+            process_arbitration=process_arbitration,
         )
 
 

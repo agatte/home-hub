@@ -117,7 +117,9 @@ IDLE_AMBIENT_RELAX_DWELL_SECONDS = 10 * 60  # 10 minutes
 # and presence loss is debounced so brief camera gaps do not churn the mode.
 PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS = 8
 PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS = 30
+PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS = 30
 PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS = 30
+PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT = 8
 
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user

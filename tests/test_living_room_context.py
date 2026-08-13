@@ -18,6 +18,7 @@ from backend.services.living_room_context import (
     Evidence,
     FreshnessStatus,
     LightOwnership,
+    ProcessArbitration,
     LivingRoomDecisionGate,
     LivingRoomDecisionRecorder,
     LivingRoomSnapshotBuilder,
@@ -145,6 +146,51 @@ def test_fresh_latitude_couch_and_healthy_hue_is_shadow_eligible() -> None:
     assert result.scene_selected is False
     assert result.actuation_attempted is False
     assert result.actuation_outcome == "not_attempted"
+
+
+def test_active_process_veto_makes_gate_ineligible() -> None:
+    arbitration = ProcessArbitration(
+        state="veto",
+        reason="desktop_process_intent_active",
+        source="process",
+        device="desktop",
+        committed_mode="working",
+        candidate_mode="working",
+        candidate_reason="foreground_working",
+        idle_seconds=0.0,
+    )
+
+    result = _decision(_snapshot(process_arbitration=arbitration))
+
+    assert result.outcome == DecisionOutcome.SAFE_FALLBACK
+    assert result.eligible_for_scene_curator is False
+    assert "desktop_process_intent_active" in result.reason_codes
+    assert result.process_arbitration_state == "veto"
+    assert result.process_arbitration_reason == "desktop_process_intent_active"
+
+
+def test_discounted_desktop_intent_is_observable_but_non_blocking() -> None:
+    arbitration = ProcessArbitration(
+        state="discounted",
+        reason="stale_desktop_process_discounted",
+        source="process",
+        device="desktop",
+        committed_mode="gaming",
+        candidate_mode="gaming",
+        candidate_reason="foreground_game",
+        idle_seconds=0.0,
+        gaming_qualification="foreground_game",
+    )
+
+    result = _decision(_snapshot(process_arbitration=arbitration))
+
+    assert result.outcome == DecisionOutcome.ELIGIBLE
+    assert result.eligible_for_scene_curator is True
+    assert result.reason_codes == ()
+    assert "stale_desktop_process_discounted" in (
+        result.optional_context_reason_codes
+    )
+    assert result.process_arbitration_state == "discounted"
 
 
 def test_process_watching_cannot_replace_fresh_latitude_absence() -> None:
@@ -729,6 +775,45 @@ def _builder(**overrides) -> LivingRoomSnapshotBuilder:
     return LivingRoomSnapshotBuilder(**defaults)
 
 
+def test_snapshot_projects_engine_arbitration_without_recreating_policy() -> None:
+    activity = {
+        "current_activity": "working",
+        "current_activity_source": "process",
+        "current_activity_source_key": "process:desktop",
+        "current_activity_reported_at": NOW.isoformat(),
+        "current_activity_age_seconds": 0.5,
+        "current_activity_fresh": True,
+        "effective_mode": "relax",
+        "effective_source": "physical_context_relax",
+        "physical_context_process_arbitration": {
+            "state": "discounted",
+            "reason": "stale_desktop_process_discounted",
+            "source": "process",
+            "device": "desktop",
+            "committed_mode": "working",
+            "candidate_mode": "idle",
+            "candidate_reason": "fallback_idle",
+            "idle_seconds": 45.0,
+            "pending_mode": "idle",
+            "pending_dwell_age": 12.0,
+            "gaming_qualification": None,
+            "received_at": NOW.isoformat(),
+            "age_seconds": 0.5,
+        },
+    }
+
+    snapshot = _builder(activity_context=lambda: activity)()
+    decision = _decision(snapshot)
+
+    assert snapshot.process_arbitration.state == "discounted"
+    assert snapshot.process_arbitration.candidate_mode == "idle"
+    assert snapshot.process_arbitration.candidate_reason == "fallback_idle"
+    assert snapshot.process_arbitration.idle_seconds == 45.0
+    assert snapshot.process_arbitration.pending_dwell_age == 12.0
+    assert decision.process_arbitration_state == "discounted"
+    assert decision.eligible_for_scene_curator is True
+
+
 @pytest.fixture
 def session_factory(db_engine):
     return async_sessionmaker(
@@ -813,6 +898,37 @@ def test_semantic_fingerprint_ignores_only_raw_continuous_evidence() -> None:
 
     assert semantic_fingerprint(jittered_envelope) == semantic_fingerprint(
         envelope
+    )
+
+    heartbeat = replace(
+        snapshot,
+        process_arbitration=ProcessArbitration(
+            state="discounted",
+            reason="stale_desktop_process_discounted",
+            source="process",
+            device="desktop",
+            committed_mode="working",
+            candidate_mode="idle",
+            candidate_reason="fallback_idle",
+            idle_seconds=45.0,
+            received_at=NOW.isoformat(),
+            age_seconds=0.0,
+        ),
+    )
+    repeated_heartbeat = replace(
+        heartbeat,
+        process_arbitration=replace(
+            heartbeat.process_arbitration,
+            received_at=(NOW + timedelta(seconds=15)).isoformat(),
+            age_seconds=0.2,
+            idle_seconds=60.0,
+            pending_dwell_age=15.0,
+        ),
+    )
+    assert semantic_fingerprint(
+        DecisionEnvelope(heartbeat, _decision(heartbeat))
+    ) == semantic_fingerprint(
+        DecisionEnvelope(repeated_heartbeat, _decision(repeated_heartbeat))
     )
 
     stale_lux = replace(
