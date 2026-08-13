@@ -1324,8 +1324,17 @@ class CameraService:
                 # 2026-05-17 after a sleeping→working resume with a still-
                 # locked V4L2 handle.
                 if self._cap is None:
-                    self._cap = await self._open_capture_async()
+                    try:
+                        self._cap = await self._open_capture_async()
+                    except Exception:
+                        self._clear_pending_zone_candidacy(
+                            "capture reopen failure",
+                        )
+                        raise
                     if self._cap is None:
+                        self._clear_pending_zone_candidacy(
+                            "capture unavailable",
+                        )
                         continue
                     logger.info("Camera capture reopened by poll loop")
 
@@ -1344,6 +1353,7 @@ class CameraService:
                         timeout=FRAME_READ_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
+                    self._clear_pending_zone_candidacy("frame read timeout")
                     logger.warning(
                         "Camera frame read exceeded %.1fs — releasing and "
                         "reopening capture",
@@ -1351,7 +1361,16 @@ class CameraService:
                     )
                     await self._recover_capture()
                     continue
+                except Exception:
+                    self._clear_pending_zone_candidacy("frame processing failure")
+                    raise
                 if result is None:
+                    self._clear_pending_zone_candidacy("no frame result")
+                    continue
+                if not isinstance(result, dict) or result.get("status") not in {
+                    "present", "absent",
+                }:
+                    self._clear_pending_zone_candidacy("invalid frame result")
                     continue
 
                 status = result["status"]
@@ -1650,6 +1669,17 @@ class CameraService:
         self._candidate_posture = None
         self._candidate_posture_since = None
 
+    def _clear_pending_zone_candidacy(self, reason: str) -> None:
+        """Break zone dwell continuity without changing committed state."""
+        if self._candidate_zone is None and self._candidate_zone_since is None:
+            return
+        logger.debug(
+            "Clearing pending zone candidacy (reason=%s, was zone=%s)",
+            reason, self._candidate_zone,
+        )
+        self._candidate_zone = None
+        self._candidate_zone_since = None
+
     def _apply_zone_hysteresis(
         self,
         candidate: Optional[str],
@@ -1658,9 +1688,13 @@ class CameraService:
     ) -> None:
         """Update ``self._last_zone`` via a sustained-candidate rule.
 
-        - ``candidate is None`` (no detection this frame): clear any pending
-          candidacy but keep the committed zone intact — a brief absence
-          must not lose the last known zone.
+        - ``candidate is None`` while a person is still observed: preserve an
+          existing pending candidacy, but never create one. This lets an
+          intermittent trustworthy zone signal accumulate its real elapsed
+          dwell without allowing a weak face to establish a zone.
+        - ``candidate is None`` while absent: clear any pending candidacy but
+          keep the committed zone intact — a brief absence must not lose the
+          last known zone.
         - ``candidate == self._last_zone``: steady state, clear candidacy.
         - Otherwise: start or continue a candidacy timer; only commit the new
           zone after ``ZONE_HYSTERESIS_SECONDS`` of sustained detection. This
@@ -1670,9 +1704,13 @@ class CameraService:
         now = datetime.now(timezone.utc)
 
         if candidate is None:
-            self._candidate_zone = None
-            self._candidate_zone_since = None
-            # Weak-face frames (and strong-face-without-pose) emit candidate=None
+            # An uncertain-but-positive frame says nothing new about zone. It
+            # may bridge an already trustworthy candidacy, but cannot start
+            # one. An actual absent frame breaks person continuity and still
+            # cancels the pending timer conservatively.
+            if not present_observed:
+                self._clear_pending_zone_candidacy("explicit absence")
+            # Weak-face frames emit candidate=None
             # to prevent chair-back false positives from flipping the zone. When
             # the camera still observes a person (status=present), the prior
             # commit is semantically current — refresh the freshness timestamp

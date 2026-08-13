@@ -220,6 +220,56 @@ class TestAbsentCountdown:
             mode="idle", source="camera"
         )
 
+    @pytest.mark.asyncio
+    async def test_poll_loop_sustained_absence_reaches_threshold(self, monkeypatch):
+        """Explicit absent frames alone drive the ABSENT_THRESHOLD teardown."""
+        from datetime import datetime, timezone
+
+        from backend.services import camera_service as cam_module
+        from backend.services.camera_service import ZONE_COUCH
+
+        monkeypatch.setattr(cam_module, "POLL_INTERVAL", 0.005)
+        automation = AsyncMock()
+        automation._confidence_fusion = None
+        automation._presence_fusion = None
+        service = _make_service(automation=automation)
+        service._enabled = True
+        service._cap = MagicMock()
+        service._last_zone = ZONE_COUCH
+        service._last_zone_at = datetime.now(timezone.utc)
+        service._last_posture = "reclined"
+        service._last_posture_at = datetime.now(timezone.utc)
+        absent_result = {
+            "status": "absent",
+            "confidence": 0.0,
+            "source": None,
+            "pose_landmark_count": 0,
+            "ambient_lux": 10.0,
+            "zone": None,
+            "posture": None,
+        }
+        monkeypatch.setattr(service, "_process_frame", lambda: absent_result)
+
+        task = asyncio.create_task(service.poll_loop())
+        try:
+            for _ in range(100):
+                if automation.report_activity.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail("explicit absence did not reach ABSENT_THRESHOLD")
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert service._consecutive_absent >= ABSENT_THRESHOLD
+        assert service._last_zone is None
+        assert service._last_posture is None
+        automation.report_activity.assert_awaited()
+
     def test_clear_committed_zone_posture(self):
         """Clearing helper drops both zone and posture commits (and candidates)."""
         from datetime import datetime, timezone
@@ -244,6 +294,296 @@ class TestAbsentCountdown:
         assert service._last_posture_at is None
         assert service._candidate_posture is None
         assert service._candidate_posture_since is None
+
+
+class TestZoneCandidateContinuity:
+    """Pending zones survive only uncertain observations of a present user."""
+
+    def test_strong_couch_candidate_starts_pending_candidacy(self):
+        from backend.services.camera_service import ZONE_COUCH
+
+        service = _make_service()
+
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+
+        assert service._last_zone is None
+        assert service._candidate_zone == ZONE_COUCH
+        assert service._candidate_zone_since is not None
+
+    @pytest.mark.asyncio
+    async def test_no_result_gap_breaks_couch_dwell_without_absence_side_effects(
+        self, monkeypatch,
+    ):
+        """No frame result resets only the pending zone dwell."""
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services import camera_service as cam_module
+        from backend.services.camera_service import (
+            ZONE_COUCH,
+            ZONE_DESK,
+            ZONE_HYSTERESIS_SECONDS,
+        )
+
+        monkeypatch.setattr(cam_module, "POLL_INTERVAL", 0.01)
+        service = _make_service()
+        service._enabled = True
+        service._cap = MagicMock()
+        committed_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        service._last_zone = ZONE_DESK
+        service._last_zone_at = committed_at
+        service._candidate_zone = ZONE_COUCH
+        service._candidate_zone_since = datetime.now(timezone.utc) - timedelta(
+            seconds=ZONE_HYSTERESIS_SECONDS + 1,
+        )
+        service._consecutive_absent = 4
+        monkeypatch.setattr(service, "_process_frame", lambda: None)
+
+        task = asyncio.create_task(service.poll_loop())
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+        assert service._last_zone == ZONE_DESK
+        assert service._last_zone_at == committed_at
+        assert service._consecutive_absent == 4
+
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+
+        assert service._last_zone == ZONE_DESK
+        assert service._candidate_zone == ZONE_COUCH
+        assert service._candidate_zone_since is not None
+
+    @pytest.mark.asyncio
+    async def test_frame_processing_failure_breaks_pending_zone_continuity(
+        self, monkeypatch,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services import camera_service as cam_module
+        from backend.services.camera_service import ZONE_COUCH, ZONE_HYSTERESIS_SECONDS
+
+        monkeypatch.setattr(cam_module, "POLL_INTERVAL", 0.01)
+        service = _make_service()
+        service._enabled = True
+        service._cap = MagicMock()
+        service._candidate_zone = ZONE_COUCH
+        service._candidate_zone_since = datetime.now(timezone.utc) - timedelta(
+            seconds=ZONE_HYSTERESIS_SECONDS + 1,
+        )
+        service._consecutive_absent = 3
+
+        def fail_processing():
+            raise RuntimeError("inference failed")
+
+        monkeypatch.setattr(service, "_process_frame", fail_processing)
+        task = asyncio.create_task(service.poll_loop())
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+        assert service._consecutive_absent == 3
+
+    @pytest.mark.asyncio
+    async def test_failed_capture_reopen_cannot_preserve_aged_candidate(
+        self, monkeypatch,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services import camera_service as cam_module
+        from backend.services.camera_service import ZONE_COUCH, ZONE_HYSTERESIS_SECONDS
+
+        monkeypatch.setattr(cam_module, "POLL_INTERVAL", 0.01)
+        service = _make_service()
+        service._enabled = True
+        service._candidate_zone = ZONE_COUCH
+        service._candidate_zone_since = datetime.now(timezone.utc) - timedelta(
+            seconds=ZONE_HYSTERESIS_SECONDS + 1,
+        )
+
+        async def unavailable_capture():
+            return None
+
+        monkeypatch.setattr(service, "_open_capture_async", unavailable_capture)
+        task = asyncio.create_task(service.poll_loop())
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+
+    def test_weak_present_preserves_existing_pending_couch(self):
+        from backend.services.camera_service import ZONE_COUCH
+
+        service = _make_service()
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+        started_at = service._candidate_zone_since
+
+        service._apply_zone_hysteresis(None, present_observed=True)
+        service._apply_zone_hysteresis(None, present_observed=True)
+
+        assert service._candidate_zone == ZONE_COUCH
+        assert service._candidate_zone_since == started_at
+        assert service._last_zone is None
+
+    def test_weak_present_without_prior_candidate_does_not_create_one(self):
+        service = _make_service()
+
+        service._apply_zone_hysteresis(None, present_observed=True)
+
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+        assert service._last_zone is None
+
+    def test_positive_continuity_allows_later_trustworthy_couch_commit(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services.camera_service import (
+            ZONE_COUCH,
+            ZONE_HYSTERESIS_SECONDS,
+        )
+
+        service = _make_service()
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+        service._candidate_zone_since = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=ZONE_HYSTERESIS_SECONDS + 1)
+        )
+
+        service._apply_zone_hysteresis(None, present_observed=True)
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+
+        assert service._last_zone == ZONE_COUCH
+        assert service._last_zone_at is not None
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+
+    def test_absent_observation_cancels_pending_couch(self):
+        from backend.services.camera_service import ZONE_COUCH
+
+        service = _make_service()
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+
+        service._apply_zone_hysteresis(None, present_observed=False)
+
+        assert service._last_zone is None
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+
+    def test_conflicting_non_none_candidate_restarts_hysteresis(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services.camera_service import (
+            ZONE_COUCH,
+            ZONE_DESK,
+            ZONE_HYSTERESIS_SECONDS,
+        )
+
+        service = _make_service()
+        service._apply_zone_hysteresis(ZONE_COUCH, present_observed=True)
+        service._candidate_zone_since = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=ZONE_HYSTERESIS_SECONDS + 1)
+        )
+
+        service._apply_zone_hysteresis(ZONE_DESK, present_observed=True)
+
+        assert service._candidate_zone == ZONE_DESK
+        assert service._candidate_zone_since is not None
+        assert service._last_zone is None
+
+        service._apply_zone_hysteresis(ZONE_DESK, present_observed=True)
+
+        assert service._last_zone is None
+        assert service._candidate_zone == ZONE_DESK
+
+    def test_weak_furniture_like_face_cannot_commit_couch(self):
+        import numpy as np
+
+        from backend.services.camera_service import (
+            FACE_ANCHOR_MIN_CONFIDENCE,
+            LOW_LUX_FACE_FLOOR_CONF,
+        )
+
+        service = _make_service()
+        service._enabled = True
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (
+            True,
+            np.zeros((240, 320, 3), dtype=np.uint8),
+        )
+        service._cap = mock_cap
+        weak_confidence = LOW_LUX_FACE_FLOOR_CONF + 0.05
+        assert weak_confidence < FACE_ANCHOR_MIN_CONFIDENCE
+        mock_face_detector = MagicMock()
+        mock_face_results = MagicMock()
+        mock_face_results.detections = [_mock_detection(weak_confidence)]
+        mock_face_detector.detect.return_value = mock_face_results
+        service._face_detector = mock_face_detector
+        service._pose_landmarker = None
+
+        result = service._process_frame()
+
+        assert result["status"] == "present"
+        assert result["zone"] is None
+        service._apply_zone_hysteresis(
+            result["zone"], present_observed=result["status"] == "present",
+        )
+        assert service._last_zone is None
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+
+    def test_committed_couch_stays_fresh_through_weak_present_frame(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services.camera_service import ZONE_COUCH
+
+        service = _make_service()
+        old = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service._last_zone = ZONE_COUCH
+        service._last_zone_at = old
+
+        service._apply_zone_hysteresis(None, present_observed=True)
+
+        assert service._last_zone == ZONE_COUCH
+        assert service._last_zone_at is not None
+        assert service._last_zone_at > old
+
+    def test_sustained_absence_clear_drops_committed_couch(self):
+        from datetime import datetime, timezone
+
+        from backend.services.camera_service import ZONE_COUCH
+
+        service = _make_service()
+        service._last_zone = ZONE_COUCH
+        service._last_zone_at = datetime.now(timezone.utc)
+
+        service._clear_committed_zone_posture("absent threshold")
+
+        assert service._last_zone is None
+        assert service._last_zone_at is None
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
 
 
 class TestFreshnessRefreshOnConfirm:
@@ -1021,9 +1361,18 @@ class TestCaptureWatchdog:
         monkeypatch.setattr(cam_module, "FRAME_READ_TIMEOUT_S", 0.05)
         monkeypatch.setattr(cam_module, "POLL_INTERVAL", 0)
 
+        from datetime import datetime, timedelta, timezone
+
+        from backend.services.camera_service import ZONE_COUCH, ZONE_HYSTERESIS_SECONDS
+
         service = _make_service()
         service._enabled = True
         service._cap = MagicMock()  # truthy; _process_frame won't actually run
+        service._candidate_zone = ZONE_COUCH
+        service._candidate_zone_since = datetime.now(timezone.utc) - timedelta(
+            seconds=ZONE_HYSTERESIS_SECONDS + 1,
+        )
+        service._consecutive_absent = 2
 
         # _process_frame blocks until cancelled. Run in the executor so it
         # exercises the same wait_for path the real code uses.
@@ -1054,6 +1403,9 @@ class TestCaptureWatchdog:
             pass
 
         assert recover_called, "Watchdog should have invoked _recover_capture"
+        assert service._candidate_zone is None
+        assert service._candidate_zone_since is None
+        assert service._consecutive_absent == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1171,7 +1523,10 @@ class TestFaceAnchorPoseGate:
         """Face detected with conf >= FACE_ANCHOR_MIN_CONFIDENCE → anchor
         timestamp updates for the face's zone.
         """
-        from backend.services.camera_service import FACE_ANCHOR_MIN_CONFIDENCE
+        from backend.services.camera_service import (
+            FACE_ANCHOR_MIN_CONFIDENCE,
+            FACE_TRUST_THRESHOLD,
+        )
 
         service = _make_service()
         service._enabled = True
@@ -1194,8 +1549,17 @@ class TestFaceAnchorPoseGate:
         service._pose_landmarker = None
 
         assert "couch" not in service._face_anchor_at
-        service._process_frame()
+        result = service._process_frame()
+        assert result["status"] == "present"
+        assert result["zone"] is None
+        assert FACE_ANCHOR_MIN_CONFIDENCE < result["confidence"] < FACE_TRUST_THRESHOLD
         assert "couch" in service._face_anchor_at
+
+        service._apply_zone_hysteresis(
+            result["zone"], present_observed=result["status"] == "present",
+        )
+        assert service._last_zone is None
+        assert service._candidate_zone is None
 
     def test_face_below_anchor_threshold_does_not_refresh(self):
         """Weak chair-back faces (conf < FACE_ANCHOR_MIN_CONFIDENCE) must
