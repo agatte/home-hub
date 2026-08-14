@@ -52,7 +52,6 @@ PREGAMEDAY_AUTO_SOURCE = "gameday:auto:pregame"
 MOMENTUM_WPA_THRESHOLD = settings.MOMENTUM_WPA_THRESHOLD
 
 HTTP_TIMEOUT = 10.0
-HTTP_HEADERS = {"User-Agent": "HomeHub/1.0 (anthonygatte@gmail.com)"}
 
 # ESPN's status names for `header.competitions[0].status.type.name`.
 STATUS_SCHEDULED = "STATUS_SCHEDULED"
@@ -429,7 +428,7 @@ class GameDayService:
                 logger.warning("schedule refresh failed: %s", exc)
 
     async def _refresh_schedule(self) -> None:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=HTTP_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.get(SCHEDULE_URL)
             resp.raise_for_status()
             data = resp.json()
@@ -521,7 +520,7 @@ class GameDayService:
 
     async def _fetch_summary(self, game_id: str) -> Optional[dict[str, Any]]:
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=HTTP_HEADERS) as client:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
                 resp = await client.get(SUMMARY_URL, params={"event": game_id})
                 resp.raise_for_status()
                 return resp.json()

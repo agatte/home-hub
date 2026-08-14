@@ -254,6 +254,26 @@ def _fumble_td_play(play_id: str = "ft1") -> dict:
 
 class TestSchedule:
 
+    async def test_espn_requests_use_httpx_default_user_agent(self):
+        svc = _make_service()
+        schedule_client = _mock_client([{"events": []}])
+        summary_client = _mock_client([_summary_payload()])
+
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            side_effect=[schedule_client, summary_client],
+        ) as client_factory:
+            await svc._refresh_schedule()
+            await svc._fetch_summary("401001")
+
+        assert client_factory.call_count == 2
+        assert all(
+            "headers" not in client_call.kwargs
+            for client_call in client_factory.call_args_list
+        )
+        assert "headers" not in schedule_client.get.await_args.kwargs
+        assert "headers" not in summary_client.get.await_args.kwargs
+
     async def test_no_game_returns_none(self):
         svc = _make_service()
         client = _mock_client([{"events": []}])
