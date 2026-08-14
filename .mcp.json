@@ -5,10 +5,12 @@
       "args": ["-m", "backend.mcp_server"]
     },
     "sqlite-home-hub": {
-      "command": "C:\\Users\\antho\\AppData\\Roaming\\Python\\Python313\\Scripts\\mcp-server-sqlite.exe",
+      "command": "python",
       "args": [
+        "-c",
+        "from mcp_server_sqlite import main; main()",
         "--db-path",
-        "C:\\Users\\antho\\Desktop\\home-hub\\data\\home_hub.db"
+        "data/home_hub.db"
       ]
     },
     "sentry": {
@@ -16,15 +18,19 @@
       "args": ["-y", "@sentry/mcp-server@latest"]
     },
     "git-home-hub": {
-      "command": "C:\\Users\\antho\\AppData\\Roaming\\Python\\Python313\\Scripts\\mcp-server-git.exe",
+      "command": "python",
       "args": [
+        "-m",
+        "mcp_server_git",
         "--repository",
-        "C:\\Users\\antho\\Desktop\\home-hub"
+        "."
       ]
     },
     "time": {
-      "command": "C:\\Users\\antho\\AppData\\Roaming\\Python\\Python313\\Scripts\\mcp-server-time.exe",
+      "command": "python",
       "args": [
+        "-m",
+        "mcp_server_time",
         "--local-timezone",
         "America/Indiana/Indianapolis"
       ]

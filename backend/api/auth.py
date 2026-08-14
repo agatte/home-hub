@@ -16,14 +16,13 @@ The dependency has four exits for normal callers:
    or being explicit about a single device.
 3. **Private-range bypass** — any RFC1918 / loopback / link-local /
    ULA caller (i.e. the apartment LAN) skips the header check.
-   This project is single-user / single-apartment; the auth gate
-   exists to keep the kiosk port from being reachable from the
-   public internet, not to gate Anthony's own devices.
+   The ordinary write gate protects against external access rather
+   than authenticating devices on the private apartment network.
 4. **Header check** — anything else must present a matching
    `X-API-Key` header, compared against `HOME_HUB_API_KEY` via
    `hmac.compare_digest`.
 
-**Tunnel-origin gate (Phase 5):** when an incoming request carries
+**Tunnel-origin gate:** when an incoming request carries
 `X-Tunnel-Origin: cloudflare`, ALL of the above bypasses are skipped
 and the caller MUST present BOTH `X-API-Key` (matching
 `HOME_HUB_API_KEY`) AND `X-Skill-Token` (matching
@@ -34,9 +33,8 @@ External callers cannot forge this header from outside cloudflared
 because the sidecar binds only to 127.0.0.1; the public internet
 can't reach the port that strips/replaces the header.
 
-Fail-closed: if `HOME_HUB_API_KEY` is unset, every protected write
-returns 503 — a deploy that forgot to provision the key shouldn't
-silently leave the LAN exposed.
+Fail-closed: if `HOME_HUB_API_KEY` is unset, every non-bypassed
+protected write returns 503.
 """
 from __future__ import annotations
 
@@ -134,7 +132,7 @@ async def require_api_key_strict(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_skill_token: Optional[str] = Header(default=None, alias="X-Skill-Token"),
 ) -> None:
-    """Like `require_api_key` but WITHOUT the RFC1918 / TRUSTED_LAN bypass.
+    """Like `require_api_key` but WITHOUT its ordinary LAN bypass.
 
     Localhost (the kiosk) still passes unconditionally; every other caller —
     including ordinary LAN devices — must present a valid `X-API-Key`. Used

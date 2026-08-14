@@ -1,16 +1,16 @@
-# Claude Code Tooling Layer — Strategy, Fleet, and Reference
+# Historical agent-strategy record
 
-**Captured 2026-05-06. Last full tooling review 2026-05-11. Codex transition note added 2026-07-13.** This document is the historical canonical reference for the Claude Code tooling layer for this project — agent fleet, hooks, skills, MCP servers, LSP plugins, data files, and runbook integration. It also contains research findings on multi-agent coding workflows and a concrete playbook for using a parallel agent fleet to ship a large feature like Game Day.
+> **Legacy / historical:** This document records a past tooling strategy. It is
+> not the active agent workflow or a required operating guide. Use
+> [`AGENTS.md`](../AGENTS.md) for current repository operation and
+> [`docs/PROJECT_SPEC.md`](PROJECT_SPEC.md) for product and architecture truth.
 
-This is a historical strategy record, not a plan-of-record or a required source
-of context. Its Claude memories, fleet tiers, and checkback/runbook references
-are retained as provenance only; current repository guidance and Codex skills
-are the operational source of truth. Shipping any individual agent or tool is
-a separate decision.
+**Captured 2026-05-06. Last full tooling review 2026-05-11.** The material
+below is retained as historical provenance for the former Claude Code tooling
+layer, including agent fleets, hooks, skills, MCP servers, LSP plugins, data
+files, and runbook integration.
 
-**Current status (2026-07-13):** Claude's always-on `/checkback-loop` and `/watcher-loop` are disabled. The Scheduled Tasks were still launching hidden `claude.exe` processes, but useful digest/subagent output stopped on 2026-06-13. Backups and restore instructions are in `C:\Users\antho\.codex\backups\homehub-claude-loop-tasks\README.md`. Active Codex workflows live under `C:\Users\antho\.codex\skills\`; use `$homehub-monitoring` for read-only checks of the retired loop state.
-
-## Current fleet at a glance (31 agents)
+## Fleet at the time of this strategy (31 agents)
 
 | Agent | Tier | Status | Spawn mode |
 |---|---|---|---|
@@ -80,9 +80,9 @@ Net effect is roughly cost-neutral-or-cheaper while quality rises on the decisio
 
 ## Verification note
 
-Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Historical project-specific Claude skills live under `~/.claude/skills/`; active Codex equivalents live under `C:\Users\antho\.codex\skills\`: `$api-audit`, `$deploy-home`, `$health-snapshot`, `$why-this-mode`, `$journal-triage`, `$ui-audit`, `$ci-health`, `$ml-status`, `$override-rate-check`, `$flag-queue`, `$implement-issue`, and `$homehub-monitoring`. The Claude `/checkback-loop`, `/watcher-loop`, `/fleet-usage`, `/digest-today`, `/promotion-decision`, and `/lsp-verify` flows are historical unless explicitly re-enabled or ported.
+Some Claude Code patterns referenced in research (notably a `/batch` skill that supposedly spawns 5–30 worktree agents) are NOT available in this project's skill set. Historical project-specific Claude skills lived under `~/.claude/skills/`; references to current tools should be resolved through `AGENTS.md`. The Claude `/checkback-loop`, `/watcher-loop`, `/fleet-usage`, `/digest-today`, `/promotion-decision`, and `/lsp-verify` flows are historical unless explicitly re-enabled or ported.
 
-Canonical multi-agent path on this machine: **git worktrees + manual coordination**, OR the **experimental Agent Teams** behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (enabled in `~/.claude/settings.json`). Treat any reference elsewhere to a `/batch` skill as aspirational, not actionable.
+Historical multi-agent path on this machine: **git worktrees + manual coordination**, OR the **experimental Agent Teams** behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (enabled in `~/.claude/settings.json`). Treat any reference elsewhere to a `/batch` skill as aspirational, not actionable.
 
 ---
 
@@ -349,10 +349,10 @@ Five MCP servers load when Claude Code opens this project. All five must be appr
 | Name | Command | Purpose |
 |---|---|---|
 | `home-hub` | `python -m backend.mcp_server` | Custom REST-API wrapper — the primary tool surface for live-system queries. Tools: `get_live_state`, `get_state_history`, `get_health`, `get_lights`, `set_light`, `get_weather`, `get_automation_status`, `set_mode`, `get_schedule`, `get_mode_brightness`, `get_scenes`, `activate_scene`, `get_effects`, `activate_effect`, `get_sonos_status`, `sonos_play`, `sonos_pause`, `sonos_volume`, `get_sonos_favorites`, `get_mode_playlists`, `get_routines`, `get_pihole_stats`, `query_db`. Requires backend running at `HOME_HUB_URL`. |
-| `sqlite-home-hub` | `mcp-server-sqlite.exe --db-path data\home_hub.db` | Direct SQLite access (PyPI `mcp-server-sqlite`, Anthropic-maintained). Fallback when backend is down. Full exe path: `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\mcp-server-sqlite.exe`. |
+| `sqlite-home-hub` | `python -c "from mcp_server_sqlite import main; main()" --db-path data/home_hub.db` | Direct SQLite access (PyPI `mcp-server-sqlite`, Anthropic-maintained). Fallback when backend is down. |
 | `sentry` | `npx -y @sentry/mcp-server@latest` | Sentry issue/event browser (home-hub.sentry.io org). Requires one-time `npx @sentry/mcp-server@latest auth login` in a terminal before first load; token caches at `~/.sentry/`. SDK already wired in `backend/main.py` (commit `8bd4b82`). Free tier: 10k events/month, traces off. |
-| `git-home-hub` | `mcp-server-git.exe --repository C:\Users\antho\Desktop\home-hub` | Read-only git ops on the home-hub repo (PyPI `mcp-server-git` v2026.1.14). Full exe path: `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\mcp-server-git.exe`. |
-| `time` | `mcp-server-time.exe --local-timezone America/Indiana/Indianapolis` | Current time + timezone conversions, timezone-aware (PyPI `mcp-server-time` v2026.1.26). Full exe path: `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\mcp-server-time.exe`. |
+| `git-home-hub` | `python -m mcp_server_git --repository .` | Read-only git ops on the repository (PyPI `mcp-server-git` v2026.1.14). |
+| `time` | `python -m mcp_server_time --local-timezone America/Indiana/Indianapolis` | Current time + timezone conversions, timezone-aware (PyPI `mcp-server-time` v2026.1.26). |
 
 User-global MCPs available in all projects (claude.ai integrations, not in `.mcp.json`): GitHub MCP, Playwright MCP, Notion MCP, Gmail/Calendar/Drive.
 
@@ -362,8 +362,8 @@ Two LSP plugins are enabled in the global settings. Both required a one-time `ma
 
 | Plugin | Binary | Notes |
 |---|---|---|
-| `pyright-lsp@claude-plugins-official` | `C:\Users\antho\AppData\Roaming\Python\Python313\Scripts\pyright-langserver.exe --stdio` | Python type-checking (v1.1.409). `pyrightconfig.json` at repo root: `typeCheckingMode: standard`, excludes `venv/` + `frontend-svelte/`. Prereq: `pip install pyright`. |
-| `typescript-lsp@claude-plugins-official` | `node C:\Users\antho\AppData\Roaming\npm\node_modules\typescript-language-server\lib\cli.mjs --stdio` | TS/JS type-checking. Invoked via `node` + `cli.mjs` directly to bypass `.cmd` shim restriction. Prereq: `npm install -g typescript-language-server typescript`. |
+| `pyright-lsp@claude-plugins-official` | `pyright-langserver --stdio` | Python type-checking (v1.1.409). `pyrightconfig.json` at repo root: `typeCheckingMode: standard`, excludes `venv/` + `frontend-svelte/`. Prereq: `pip install pyright`. |
+| `typescript-lsp@claude-plugins-official` | `typescript-language-server --stdio` | TS/JS type-checking. Prereq: `npm install -g typescript-language-server typescript`. |
 
 **Maintenance note:** Both patches live in `~/.claude/plugins/marketplaces/claude-plugins-official/.claude-plugin/marketplace.json`, which Anthropic auto-updates under `"autoUpdatesChannel": "latest"`. Drift is detected + auto-reapplied by an idempotent Python script at `~/.claude/scripts/reapply_lsp_patches.py`, invoked either on-demand via `/lsp-verify` or automatically by runbook entry 27 (monthly second-Mon 11:00 ET). Script exit codes: 0=patches in place, 1=reapplied successfully, 2=unrecoverable error.
 

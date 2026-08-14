@@ -5,7 +5,7 @@
         "en-US": {
           "name": "Home Hub",
           "summary": "Personal apartment automation control.",
-          "description": "Custom skill for the Home Hub apartment automation system. Sets activity modes (gaming, working, relax, etc.), controls Sonos playback, and runs scenes via voice. Single-user, unpublished — runs only on Anthony's developer-account Echo devices.",
+          "description": "Custom skill for the Home Hub apartment automation system. Sets activity modes (gaming, working, relax, etc.), controls Sonos playback, and runs scenes via voice. Single-user, unpublished — runs only on the owner's developer-account Echo devices.",
           "examplePhrases": [
             "Alexa, tell home hub to set relax mode",
             "Alexa, ask home hub to pause the music",
@@ -17,7 +17,7 @@
         }
       },
       "isAvailableWorldwide": false,
-      "testingInstructions": "Single-user developer skill. No certification needed — invoked on Anthony's developer-account-linked Echo only.",
+      "testingInstructions": "Single-user developer skill. No certification needed — invoked on the owner's developer-account-linked Echo only.",
       "category": "SMART_HOME",
       "distributionCountries": ["US"]
     },

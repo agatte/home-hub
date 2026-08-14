@@ -24,7 +24,6 @@ venv/
 node_modules/
 
 # Generated
-=1.0.0
 docker/pihole/etc-pihole/
 backend/static/tts/
 data/
@@ -69,7 +68,7 @@ start.txt
 # Local-only planning / brainstorm docs (not committed)
 docs/GUEST_APP_BRAINSTORM.md
 
-# Experiments (Phase 2 prototyping sandbox)
+# Experiments
 experiments/**/.svelte-kit/
 experiments/**/build/
 experiments/**/.vite/

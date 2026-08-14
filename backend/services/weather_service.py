@@ -30,7 +30,7 @@ NWS_FORECAST_URL = f"{NWS_BASE}/gridpoints/{NWS_OFFICE}/{NWS_GRID_X},{NWS_GRID_Y
 NWS_ALERTS_URL = f"{NWS_BASE}/alerts/active"
 SUNRISE_SUNSET_URL = "https://api.sunrise-sunset.org/json"
 NWS_HEADERS = {
-    "User-Agent": "HomeHub/1.0 (anthonygatte@gmail.com)",
+    "User-Agent": "HomeHub/1.0 (https://github.com/agatte/home-hub)",
     "Accept": "application/geo+json",
 }
 

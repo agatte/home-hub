@@ -89,29 +89,21 @@ class Settings(BaseSettings):
     # Fauxmo Alexa integration (Phase 3 voice control)
     FAUXMO_ENABLED: bool = False
 
-    # API-key auth on write endpoints. When set, every write
-    # (POST / PUT / DELETE) requires X-API-Key matching this value
-    # except from localhost (the kiosk) and any TRUSTED_LAN_IPS.
-    # When unset, all writes return 503 — deploys must explicitly
-    # provision a key. See backend/api/auth.py.
+    # API-key auth on write endpoints. External/non-bypassed callers need a
+    # matching X-API-Key; localhost, configured TRUSTED_LAN_IPS, and private
+    # addresses use require_api_key()'s ordinary bypass. See backend/api/auth.py.
     HOME_HUB_API_KEY: Optional[str] = None
-    # Comma-separated LAN IPs that bypass X-API-Key — e.g. the dev
-    # desktop. Leave empty for "kiosk only" (only localhost bypasses).
+    # Comma-separated additional IPs that bypass X-API-Key. Private/LAN
+    # addresses are already covered by require_api_key()'s ordinary bypass.
     TRUSTED_LAN_IPS: str = ""
 
-    # Custom Alexa Skill (Phase 5) — separate secret from HOME_HUB_API_KEY
+    # Custom Alexa Skill — separate secret from HOME_HUB_API_KEY
     # so the Skill can be rotated independently. Required on tunneled
     # callers (X-Tunnel-Origin: cloudflare); ignored everywhere else.
     HOME_HUB_SKILL_TOKEN: Optional[str] = None
 
-    # Zone+posture → relax rule — when enabled, the automation engine
-    # auto-applies the "relax" manual override after a sustained
-    # zone=bed + posture=reclined window (evening or weekend afternoons
-    # only, no active override, eligible current mode). Default flipped
-    # to True after the in-bed-watching-TV scenario surfaced: PC stays
-    # "working" while Anthony's actually reclined, so without the rule
-    # he was manually pressing relax 5+ times per night and fighting
-    # transit-revert. Override lives 4h, refractory matches.
+    # Legacy/dormant zone+posture → relax setting pending #80. Retained for
+    # compatibility; it does not indicate an active bed-zone capability.
     ZONE_POSTURE_RULE_APPLY: bool = True
 
     # First #129/#130 living-room atmosphere slice. Default false keeps the
@@ -151,7 +143,7 @@ class Settings(BaseSettings):
     REMEDIATION_MAX_AUTO_PER_DAY: int = 6
     REMEDIATION_ACTION_COOLDOWN_SECONDS: int = 1800
 
-    # Phase 2 — Game Day
+    # Game Day
     OPENAI_API_KEY: Optional[str] = None
     # AI Personality Layer Phase C - backend-side free-form vibe parser.
     # Deterministic phrase rules run first; Anthropic is only used for
