@@ -4,7 +4,7 @@
 >
 > **Why now:** the 2026-05-31 warm↔gaming strobe (transit + desk_exit fighting the gaming palette for 5.5h) was *exhibit A*. The fix shipped (`392d187`), but it was — by Anthony's own framing — the 7th local patch on a presence layer where ~6 services each independently interpret the same flickery raw signals, several of them dormant since the Latitude moved to the living room. This doc is the "design first" half of the agreed "ship fix now, then design."
 >
-> **Canonical policy note — August 1, 2026:** This is a historical subsystem design record, not the current cross-system roadmap. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-1-2026) is authoritative when later decisions conflict. Committed `PresenceFusion` code gives the Latitude living-room/couch authority and the desktop agent bedroom/desk authority; current production health still requires live verification. The target rule is physical room authority first, with disagreement recorded as a capability-health signal. **Winding Down** is a manually initiated overlay distinct from **Sleeping**. The older projector-on bed proxy and automatic sleep assumptions below are not approved current behavior: safe projector shutdown and smart-outlet integration remain `RESEARCH NEEDED`, with a timer-first control before inferred sleep. Canonical arrival, hybrid Social, and guest/privacy policy also live in `PROJECT_SPEC.md`; no universal confidence threshold overrides their consequence-specific trust rules.
+> **Canonical policy note — August 14, 2026:** This is a historical subsystem design record, not the current cross-system roadmap. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-14-2026) is authoritative when later decisions conflict. Committed `PresenceFusion` code gives the Latitude living-room/couch authority and the desktop agent bedroom/desk authority; current production health still requires live verification. The target rule is physical room authority first, with disagreement recorded as a capability-health signal. **Winding Down** is a manually initiated overlay distinct from **Sleeping**. The older projector-on bed proxy, `zone=bed` automation, and automatic sleep assumptions below are not approved current behavior; #80 owns removal of the dormant bed paths. Safe projector shutdown and smart-outlet integration remain `RESEARCH NEEDED`, with a timer-first control before inferred sleep. Watching requires credible current playback intent, not merely a media process. Canonical arrival, hybrid Social, and guest/privacy policy also live in `PROJECT_SPEC.md`; no universal confidence threshold overrides their consequence-specific trust rules.
 
 ---
 
@@ -26,7 +26,11 @@
 **C. Presence/Lighting design — decisions (this doc, Part 7)**
 - [x] **D1 — desk-exit lux-adaptive path lighting** — DECIDED: fire on real exit, scale kitchen+L1 brightness by Latitude (room-correct) lux, measure-then-hold, **baseline-relative per room** (each path measured against its own room's baseline — see D4). Sub-q closed 2026-06-01.
 - [~] **D2 — phone presence → away/home (WANTED, signal reframed)** — Anthony wants away + welcome-home (see D6). **Signal: NOT the Google Wifi API** (unofficial, largely removed on app-managed GWifi; LAN-polling an iPhone is what shelved the ARP attempt — sleep+MAC-randomization). Use the **iPhone geofence → iOS Shortcut webhook** to the hub (push, reliable). Phone-keyed (iPhone confirmed visible in Google Home, but app≠API). Reuse `signal_presence()` + `_check_external_off()` + Hue Home/Away. Build = formalize an explicit away/home STATE + behaviors.
-- [~] **D3 — bed signals.** Anthony's biggest miss = the **late-night bed-watching DIM** (old `_apply_zone_overlay` bed branch). Auto-sleep (`watching_sleep_guard`) = nice-to-have, not a priority. **Revive bed-dim with NO camera-zone / NO hardware:** trigger on **projector ON (bedroom watching) + not-at-desk + evening/night** as the "in bed watching" proxy (deeper dim at late_night). **Depends on the projector Kasa integration landing** (`worktree-projector-kasa`, deploy pending — it provides the watching-in-bedroom signal). True reclined-vs-upright posture stays unavailable but isn't needed for "watching in bed → dim."
+- **D3 — bed signals (historical/rejected):** This June proposal sought to
+  revive the late-night bed-watching DIM (old `_apply_zone_overlay` bed
+  branch) from projector and desk signals. It is retained only as provenance:
+  #80 now owns removal of the dormant `zone=bed` automation assumptions. Do
+  not treat it as a future bedroom-sensing or bed-dimming implementation path.
 - [x] **D4 — per-room lux / two baselines (audit H2) — DESIGN-LOCKED 2026-06-01** — Anthony's bedroom reads dim in *daytime* (his room is darker than the blinds-open living room). Root cause: only the Latitude/living-room camera has a baseline (~74); the desktop webcam reports presence but NO lux, and `LUX_MODES={relax}` means gaming/working/watching get zero lux lift. Fix = **two baselines, one per camera/room** (`living_room←latitude`, `bedroom←desktop`), mode tagged with its room, re-expand `LUX_MODES`. **Couples with D1** (each path uses its own room's baseline → "baseline-relative"). **Exposure spike PASSED 2026-06-01 (P1 viable, no buy):** webcam honors manual exposure via DSHOW (sweep -4→-10 gave mean 149→17). Path = pin exposure for lux sampling. Build plan in **Part 7.5**. Key finding: the synced-lamp half is already scaffolded — `screen_sync._scale_for_ambient()` already scales L2/L5 caps/floors by a `lux_multiplier`, today gated to gaming-*day* only and fed the (bedroom-blind) Latitude lux. D4 swaps in the bedroom lux source + extends the gate to the dark periods, so both lamp groups (L1+kitchen via the engine multiplier, L2/L5 via sync caps) ride ONE bedroom darkness factor. Lux sampling = periodic flip-sample-flip (auto-exposure for faces; brief pinned exposure for one lux sample, presence POST suppressed during the flip).
 - [x] **D5 — couch vs desk authority (decided)** — **single-occupant model** (Anthony lives alone; guests are almost always with him in the same room). Rare both-fresh conflict resolved **freshness-first, activity breaks the tie ONLY when both presence signals are genuinely fresh**: a *background* game must NOT pin "desk" after the desk face goes stale + couch commits → couch wins. Common real "conflict" = phantom desk face-FP while on couch → no foreground game → couch wins (feature). Guest-sleepover (guest on couch, him in bedroom) = out of scope for auto-tracking → manual scene / future guest mode.
 - [x] **D6 — away/home behaviors (decided via D2)** — LEAVE: lights off + suppress autonomous setters (already what `_check_external_off` does) → **no brightness-churn → no spam** (NOT a mute); emit ONE "away" notification; genuine events still notify. **Notifications stay fully ON when home — Anthony wants the visibility.** ARRIVE: welcome-home sequence (lights ± TTS/music). NL staged-arrival vibe now shipped via Siri/iOS Shortcut (`/api/personality/vibe`, `timing="arrival_if_away"`).
@@ -39,8 +43,9 @@
 - [ ] `PresenceResolver` — shadow build (log-only), validate vs reality
 - [ ] Migrate transit + desk_exit onto resolver transitions (delete local dwell/sustain/cooldown)
 - [ ] Migrate relax setters (`ambient_relax`, `late_night_rescue`) onto `on_afk`/`on_away`
-- [ ] Light up new states (Google Wifi → `away`; bed source → revive `watching_sleep_guard` + zone+posture + overlay bed branch)
-- [ ] Retire dead code once each dormant feature's fate is decided
+- [ ] Light up new states as supported by current evidence; do not revive
+  dormant bed consumers.
+- [ ] Retire dormant bed-zone code under #80.
 
 **E. Gaming-palette eval (open, low priority — needs live gaming)**
 - [ ] L5 brightness on blue/cool game frames — reads present now?
@@ -67,7 +72,7 @@ Today there is **no single answer to "where is Anthony and what is he doing."** 
    audio (YAMNet)   │   wins, no      ├─ late_night_rescue        (23:00 idle → relax)
    Sonos state      │   debounce)     ├─ watching_sleep_guard     (DORMANT)
    [Google Wifi?] ──┘                 ├─ zone+posture rule        (DORMANT)
-                                       ├─ _apply_zone_overlay      (watching desk-lift; bed branch dormant)
+                                       ├─ _apply_zone_overlay      (watching desk-lift; historical bed branch, retired by #80)
    engine helpers:                     ├─ ScreenSyncService        (owns L2/L5 in gaming/watching)
      is_at_desk_fresh() ───────────────┤  ← consumed raw by several of the above
      is_recent_process_working() ──────┤
@@ -77,7 +82,10 @@ Today there is **no single answer to "where is Anthony and what is he doing."** 
 
 **Consequences we've actually hit:**
 - **Fights:** transit/desk_exit vs the mode-apply loop → the warm-strobe (2026-05-31); the 2026-05-12 watching incident (107 transit fires/30min on face-flutter). Each was patched locally (zone gates, posture gates, dwell tuning, sustain, cooldown).
-- **Drift:** `watching_sleep_guard`, the `zone+posture` rule, and the `_apply_zone_overlay` bed branch all went **dormant** when the Latitude moved living-room (no `zone=bed` source) — but they still live in the engine.
+- **Drift:** `watching_sleep_guard`, the `zone+posture` rule, and the
+  `_apply_zone_overlay` bed branch all went **dormant** when the Latitude moved
+  living-room (no `zone=bed` source). #80 now retires those historical
+  bed-zone consumers.
 - **Mismatched debounce:** `is_at_desk_fresh()` is last-write-wins with **no** hysteresis; transit has a 10s dwell + 2s release sustain; desk_exit now has 3s sustain + 45s cooldown; the corridor has its own 1s streak. Same question ("is he at the desk?"), four different smoothing rules.
 - **Vetoes as spackle:** `is_recent_process_working()` exists *only* because the camera signal is brittle — and it's scoped to `mode=working` only, so it's useless during gaming (the strobe's root gap).
 
@@ -117,9 +125,9 @@ The unit that's missing today is **`afk`** — "the game is running but no face 
 | `DeskExitKitchenService` | sustained 10s desk-loss, evening/night | warm kitchen, hold-until-return; late_night corridor | live; just patched (sustain+cooldown) |
 | `ambient_relax` | `idle` ≥600s + `not is_present_in_room()` + no Sonos + no recent desk/process attendance | push `relax` | live |
 | `late_night_rescue` | 23:00+ `idle/working` + no override/Sonos + `not is_at_desk_fresh()` + `not is_recent_process_working()` | push `relax` | live |
-| `watching_sleep_guard` | late_night watching + `zone=bed+reclined` 90min | push `sleeping` | **DORMANT** (no bed source) |
-| `_evaluate_zone_posture_rule` | `zone=bed+reclined` | mode/overlay | **DORMANT** (env-gated off) |
-| `_apply_zone_overlay` | watching `zone=desk` (lift L2); `bed+reclined` (dim L1/L2) | per-light overlay | desk-lift live; bed branch dormant |
+| `watching_sleep_guard` | late_night watching + `zone=bed+reclined` 90min | push `sleeping` | **Historical; retire under #80** |
+| `_evaluate_zone_posture_rule` | `zone=bed+reclined` | mode/overlay | **Historical; retire under #80** |
+| `_apply_zone_overlay` | watching `zone=desk` (lift L2); historical `bed+reclined` branch | per-light overlay | desk-lift live; bed branch retires under #80 |
 | `ScreenSyncService` | mode ∈ {gaming, watching} | drives L2/L5 to screen color | live |
 | `ConfidenceFusion` | process/camera/audio_ml/rule_engine | resolves the active **mode** | live |
 | external-off / `signal_presence()` | Hue "leaving home" all-off; camera absent→present | suppress/resume autonomy | live |
@@ -167,12 +175,13 @@ This is the artifact the sit-down should fill in / correct. Time-of-day (day/eve
 | **couch · present** | n/a | n/a | watching (couch is the watching seat now) | relax |
 | **kitchen · present** | cooking palette (manual) | — | — | — |
 | **in_transit** (left desk, walking) | transit path-light L1+kitchen | transit | transit | transit |
-| **bed · present** | — | — | **reclined → dim (DORMANT — needs bed source)** | wind to sleeping? |
+| **bed · present** | — | — | **historical/rejected; retire under #80** | historical/rejected |
 | **away** (nobody home) | **off / minimal? ← shelved away-mode question** | off | off | off |
 
 **Decisions this table forces:**
 - **desk·afk:** the strobe's real question. Hold gaming warmth-free until a *sustained* away, then go warm? Dim after X min of afk? (Today: fires warm immediately on face-loss — now damped by sustain+cooldown, but the *policy* is still implicit.)
-- **bed row:** only lights up if we revive a bed-location source (Part 7).
+- **bed row:** retained only to show the rejected historical path; #80 retires
+  it rather than reviving a bed-location source.
 - **away row:** only meaningful if we adopt a reliable "nobody home" signal (Google Wifi).
 
 ---
@@ -186,7 +195,12 @@ This is the artifact the sit-down should fill in / correct. Time-of-day (day/eve
    - Note: this needs only the *living-room* lux we already have — distinct from H2 (#4), which is about *bedroom* lux for the gaming desk lamps.
 2. **Phone presence → away/home — ✅ BUILT 2026-06-10 (D2, GH#107).** `POST /api/presence/geofence {event: leave|arrive}` (new `backend/api/routes/presence.py`), fed by two iOS Shortcut geofence automations; rides the Cloudflare tunnel (phone is on cellular when geofences fire) → `tunnel_proxy` allowlist → strict X-API-Key + X-Skill-Token auth. `AwayManager` (`backend/services/away_manager.py`) owns the explicit away/home state, persisted to `app_settings.away_state` (restart while away re-arms suppression). Original design rationale below.
    **(original)** Goal: detect *Anthony* leaving/arriving (phone-keyed — kiosk/Sonos/bridge are always-on, so "any device" is useless). **Do NOT depend on the Google Wifi device API** — it's unofficial and largely removed on the app-managed version; and LAN-polling an iPhone is precisely what shelved the original away-mode (WiFi sleep + MAC randomization → false "away"). **Use an iOS Shortcut geofence automation** ("arrive/leave home → `POST` the hub") — push-based, instant, sidesteps the iOS-on-LAN problems. Google Home *showing* the iPhone confirms it's identifiable but is the app, not a query API. Reuse existing scaffolding: `signal_presence()`, `_check_external_off()`, and the Hue app's Home/Away geofence (already integrated). Net build = an explicit `away`/`home` state the hub owns, + the D6 behaviors.
-3. **Bed signals — REFRAMED 2026-06-01.** Anthony's biggest regression isn't auto-sleep (parked, low priority) — it's the **late-night bed-watching DIM** (`_apply_zone_overlay` bed branch). Key insight: we don't need to *see* him in bed; we need "watching in the bedroom, not at the desk, late." **Trigger on projector-ON + not-at-desk + evening/night** (projector = bedroom-watching signal) → dim L1/L2, deeper at late_night. No camera-zone, no hardware, no posture needed. **Dependency:** the projector Kasa integration (`worktree-projector-kasa`, deploy pending). `watching_sleep_guard` + the zone+posture rule stay dormant (need true posture / a sensor — revisit only if one lands). **Confirmed 2026-06-01: Anthony watches in bed ONLY via the projector, at night** → projector-on + not-at-desk + night is sufficient; scope bed-dim to evening/night/late_night.
+3. **Bed signals — historical proposal, rejected 2026-08-14.** This
+   2026-06-01 proposal would have used projector-on plus not-at-desk and
+   evening/night as a proxy to revive the late-night bed-watching DIM. It is
+   retained as evidence of the old regression only. #80 instead accepts
+   removal of the dormant `zone=bed` consumers; this document does not propose
+   a replacement bedroom-sensing or bed-dimming path.
 4. **Per-room lux / two baselines (audit H2) — ELEVATED.** Symptom: bedroom dim in daytime (his room darker than the blinds-open living room) because the only lux source is the living-room camera and `LUX_MODES={relax}` left bedroom modes with no adaptation. Fix: desktop `emotion_capture` adds a `gray.mean()` brightness sample to its observation POST → backend per-room lux map (`living_room←latitude`, `bedroom←desktop`) + two calibrated baselines + mode→room tagging → re-expand `LUX_MODES` to {relax(LR), gaming/working/watching(bedroom)}. Each consumer (incl. D1 path lighting) goes baseline-relative against *its own room*. **Spike result 2026-06-01 (code read):** `emotion_capture` opens `cv2.VideoCapture(0)` with NO exposure control → runs auto-exposure → naive `gray.mean()` lux would be auto-compensated and unreliable. Deeper conflict: FaceLandmarker wants auto-exposure (find the face); lux wants pinned exposure (honest darkness) — the one webcam can't do both well.
   **Two paths:**
   - **P1 webcam double-duty — ✅ VIABLE (spike passed 2026-06-01, no purchase).** `scripts/probe_webcam_exposure.py` via DSHOW: exposure sweep -4/-6/-8/-10 → frame mean 149.7/83.0/36.5/17.1 — brightness tracks the setting cleanly, so manual exposure IS honored (auto-exposure overridden). Quirk: `CAP_PROP_AUTO_EXPOSURE` readback is unreliable (-1.0) but setting `CAP_PROP_EXPOSURE` directly forces manual anyway. **Design caveat:** a pinned low exposure darkens the image → can hurt FaceLandmarker in a dark room. Likely mitigation: keep auto-exposure for face detection, and every N seconds flip to a fixed exposure for ONE lux sample then flip back. **(Chosen path — Anthony prefers no buy.)**
@@ -281,8 +295,10 @@ All live on master, deployed, curator + pr-review + deploy-verifier GO (historic
 1. **Shadow the resolver.** Build `PresenceResolver` read-only; log what location/occupancy/activity it *would* commit, alongside what the live consumers actually did. Validate against a few days of real behavior (esp. the desk-flicker windows). No behavior change.
 2. **Migrate the worst offenders first.** Point `transit` + `desk_exit` at resolver transitions; delete their local dwell/sustain/cooldown bookkeeping. Verify the strobe stays dead with *less* code.
 3. **Migrate the relax setters** (`ambient_relax`, `late_night_rescue`) to `on_afk`/`on_away`/idle-dwell transitions; retire the `is_recent_process_working()` veto if the resolver's `afk` state subsumes it.
-4. **Light up new states as sources arrive** — Google Wifi lane → `away`; bed source → revive the three dormant consumers.
-5. **Retire dead code** once its source is decided (delete or formally revive the bed-zone features).
+4. **Light up new states as supported by current evidence.** Do not revive the
+   dormant bed consumers.
+5. **Retire dead code:** #80 accepts deletion of the dormant bed-zone features;
+   they are not candidates for revival under this historical strawman.
 
 ---
 

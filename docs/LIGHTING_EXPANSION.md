@@ -123,6 +123,14 @@ This should remain a warm modern listening-lounge apartment, not become a gaming
 
 ## Phase 1 — Correct the open-plan room
 
+**Current issue sequence:** [#147](https://github.com/agatte/home-hub/issues/147)
+owns the Play Light Bar plant/wall wash, followed by
+[#148](https://github.com/agatte/home-hub/issues/148) for the Flux cabinet
+cove. A motion sensor is not a Phase-1 purchase: revisit
+[#13](https://github.com/agatte/home-hub/issues/13) only if the bounded
+[#137](https://github.com/agatte/home-hub/issues/137) kitchen/path inference
+trial demonstrates that dedicated occupancy evidence is needed.
+
 ### 1A. Living-room plant wash
 
 **Primary recommendation:** one **Hue Play Light Bar single pack**, placed horizontally and concealed low behind the rear plant stand or along the baseboard.
@@ -624,11 +632,13 @@ Only consider very low warm path light attached to the **stationary base**. Do n
 
 ## Entry/hall
 
-### After first light layers
+### Evidence-gated follow-up
 
-- Add Hue motion sensor.
-- Use narrow arrival/path rules.
-- Use cabinet cove and plant wash as endpoints before buying another permanent hallway lamp.
+- Revisit a Hue motion sensor only after #137 records missed visits or false
+  activations that justify dedicated occupancy evidence.
+- If warranted, use narrow, conservative arrival/path behavior with the
+  cabinet cove and plant wash as endpoints; do not overwrite an established
+  watching, listening, projector, or task-light atmosphere.
 
 ### Later
 

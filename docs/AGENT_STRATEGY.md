@@ -2,7 +2,11 @@
 
 **Captured 2026-05-06. Last full tooling review 2026-05-11. Codex transition note added 2026-07-13.** This document is the historical canonical reference for the Claude Code tooling layer for this project — agent fleet, hooks, skills, MCP servers, LSP plugins, data files, and runbook integration. It also contains research findings on multi-agent coding workflows and a concrete playbook for using a parallel agent fleet to ship a large feature like Game Day.
 
-This is a durable strategy document, not a plan-of-record. Shipping any individual agent or tool is a separate decision; shipping multi-agent Game Day is a separate decision. Read this first when proposing either.
+This is a historical strategy record, not a plan-of-record or a required source
+of context. Its Claude memories, fleet tiers, and checkback/runbook references
+are retained as provenance only; current repository guidance and Codex skills
+are the operational source of truth. Shipping any individual agent or tool is
+a separate decision.
 
 **Current status (2026-07-13):** Claude's always-on `/checkback-loop` and `/watcher-loop` are disabled. The Scheduled Tasks were still launching hidden `claude.exe` processes, but useful digest/subagent output stopped on 2026-06-13. Backups and restore instructions are in `C:\Users\antho\.codex\backups\homehub-claude-loop-tasks\README.md`. Active Codex workflows live under `C:\Users\antho\.codex\skills\`; use `$homehub-monitoring` for read-only checks of the retired loop state.
 

@@ -6,7 +6,7 @@ Use this page as the entry point for repository documentation.
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md) is the single authoritative source for
   cross-system product direction, experience policy, architecture, and
-  roadmap. Its August 1, 2026 Product Experience Contract distinguishes
+  roadmap. Its August 14, 2026 Product Experience Contract distinguishes
   `SHIPPED/CURRENT`, `DECIDED TARGET`, `RESEARCH NEEDED`, and `DEFERRED`.
 - `SHIPPED/CURRENT` requires current committed-code evidence; where deployment
   matters it also requires reliable deployment/current-state evidence, and a
@@ -30,6 +30,8 @@ Use this page as the entry point for repository documentation.
 - [`PRESENCE_LIGHTING_SCENARIOS.md`](PRESENCE_LIGHTING_SCENARIOS.md) —
   historical presence/lighting decisions and subsystem implementation detail
 - [`LIGHTING_EXPANSION.md`](LIGHTING_EXPANSION.md) — future lighting hardware and room coverage
+- [`HomeHub_Travel_Mode_Design.docx`](HomeHub_Travel_Mode_Design.docx) — accepted
+  HOME/TRAVEL host-lifecycle design for the portable Latitude, tracked by #149
 - [`AGENT_STRATEGY.md`](AGENT_STRATEGY.md) — operational-agent strategy and retired monitoring loops
 - [`Future_Development.md`](Future_Development.md) — non-authoritative issue
   and idea index

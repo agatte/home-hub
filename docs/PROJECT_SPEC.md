@@ -2,7 +2,7 @@
 
 > A personal command center that runs your apartment — lights, music, routines — learns how you live, and comes alive for the moments that matter.
 
-## Product Experience Contract — August 1, 2026
+## Product Experience Contract — August 14, 2026
 
 This section is the authoritative cross-system product contract. Subsystem
 specifications provide implementation detail, but they do not override these
@@ -402,7 +402,7 @@ appropriate—not to maximize automation for its own sake.
 
 ## Current State
 
-> **SHIPPED/CURRENT evidence boundary (reviewed August 1, 2026):** This section
+> **SHIPPED/CURRENT evidence boundary (reviewed August 14, 2026):** This section
 > inventories capabilities found in committed code and incorporates dated
 > deployment notes already present in repository documentation. It does not
 > assert that a capability is currently running, configured, healthy, or
@@ -1543,7 +1543,15 @@ Subscribes to MediaPipe FaceLandmarker blendshape callbacks from `camera_service
 | `poll_loop` | `() → None` | Every 10s persist a `mood_samples` row when the last vector is fresh |
 | `health_status` | `() → dict` | HealthTrackable surface; always `is_shadow=True` in Phase A |
 
-Phase A emotion sensing is **shadow-log only** — no actuation. Phase B (MoodRingLight, GH#58) gates on Spearman ρ > 0.4 across 30+ paired calibration samples per axis (the `homehub-checkbacks.md` entry #31 evaluator). Phase C v1 shipped `VibeRouter` + `/api/personality/vibe` for Siri/text commands, with deterministic routing first and optional backend-side Anthropic fallback; Alexa `VibeIntent` and passive suggestions remain future. Phase D (cost dashboard + dismiss kill switch, GH#60) hardens before mainstream use. Full design: `docs/PERSONALITY_LAYER.md`.
+Phase A emotion sensing is **shadow-log only** — no actuation. Phase B
+(MoodRingLight, GH#58) gates on Spearman ρ > 0.4 across 30+ paired calibration
+samples per axis; the retired external checkback evaluator is historical
+provenance, not a required workflow. Phase C v1 shipped `VibeRouter` +
+`/api/personality/vibe` for Siri/text commands, with deterministic routing
+first and optional backend-side Anthropic fallback; Alexa `VibeIntent` and
+passive suggestions remain future. Phase D (cost dashboard + dismiss kill
+switch, GH#60) hardens before mainstream use. Full design:
+`docs/PERSONALITY_LAYER.md`.
 
 #### GameDayService + CelebrationOrchestrator (shipped 2026-05-07)
 ESPN polling, play detection, and celebration orchestration. See `docs/GAMEDAY_SPEC.md` for the full interface contracts (`GameDayService`, `CelebrationOrchestrator`, `PlayEvent`, `GameDayState`) and the "Game Day Engine — shipped 2026-05-07" section below for the architecture summary.
@@ -2201,11 +2209,11 @@ and Sonos speaker are LAN-only.
 
 ## Roadmap
 
-This is the sole cross-system priority order as of **August 1, 2026**:
+This is the sole cross-system priority order as of **August 14, 2026**:
 
-1. **Documentation reconciliation — completed August 1, 2026:** this contract
-   is canonical and the supporting documentation was aligned without runtime
-   changes.
+1. **Documentation reconciliation — prior pass completed August 1, 2026;
+   refreshed August 14, 2026:** this contract is canonical and the supporting
+   documentation was aligned without runtime changes.
 2. **Production/autonomy evidence audit — completed August 1, 2026:** see the dated read-only snapshot [`audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md`](audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md). Incident P1 capability-health and degraded-context work remains audit-informed blocker or parallel work. The next bounded implementation gate is the shadow-only living-room `CapabilitySnapshot → DecisionContext` gate; it must not enable new actuation.
 3. **Incident P1 capability health and degraded-context observability — supporting/parallel:** expose
    desktop activity, desk presence, bedroom lux, audio, screen sync, and
@@ -2220,26 +2228,20 @@ This is the sole cross-system priority order as of **August 1, 2026**:
    which gaps are actual blockers; blocker-level observability or
    degraded-context defects must be addressed before the affected living-room
    behavior, while non-blocking P1 improvements may proceed in parallel or
-   alongside the slice. Do not create a P1 umbrella issue yet; apply the
-   audit-first reuse/supersede/close-out rule above.
+   alongside the slice. #131 owns the action-specific autonomy/feedback
+   contract; #116/#117 remain focused evidence work.
 4. **First product vertical slice — everyday living-room intelligence:** room
    authority, quiet/listening/settled couch contexts, the Scene Curator,
    evolving scene pools, consequence-based trust, Mood Context prompts, and
-   Relax-only quality weather ambience. Reuse focused issues
-   [#36](https://github.com/agatte/home-hub/issues/36),
-   [#40](https://github.com/agatte/home-hub/issues/40),
-   [#79](https://github.com/agatte/home-hub/issues/79), and
-   [#107](https://github.com/agatte/home-hub/issues/107) where their scope
-   overlaps. Do not create a new umbrella issue until after the audit has
-   defined non-duplicative scope and existing issues have been reused,
-   superseded, or closed out.
+   Relax-only quality weather ambience. #129 owns this vertical slice, with
+   #130 Scene Curator and #131 feedback; #134/#135 provide weather/music
+   support.
 5. **Later product vertical slices:** Winding Down and staged mornings; Music
-   Curator; then Social/events, Tonight at Anthony’s, guest queues, Showcase
-   Mode, and event-aware Home Bar. Reuse [#16](https://github.com/agatte/home-hub/issues/16),
-   [#35](https://github.com/agatte/home-hub/issues/35),
-   [#51](https://github.com/agatte/home-hub/issues/51), and
-   [#80](https://github.com/agatte/home-hub/issues/80) only after reconciling
-   their older assumptions with this contract.
+   Curator; then Social/events and guest experience. #138/#139 own Winding
+   Down/Morning, #135 Music Curator, #35/#107/#140/#141 Social/events, and #80
+   removes dormant bed-path assumptions. Reliability/lifecycle work is indexed
+   by #142: #143 playback truth, #144 reacquisition, #145 portable-host/DNS,
+   #146 FaceLandmarker recovery, and #149 HOME/TRAVEL host lifecycle.
 
 Do not design all later implementation architectures prematurely. Each slice
 earns its architecture from measured evidence and the action-specific policy.
@@ -2333,17 +2335,23 @@ ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
 - ✓ **ML Phase 1 (Code complete):** Behavioral mode prediction (LightGBM, **shadow mode — not yet promoted, pending ~500 activity events**), adaptive lighting preferences (EMA — **active**), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables. Original Phase 1 exit criteria ("audio classifier active, behavioral outperforming rules") are not yet met — both predictors sit in shadow mode
-- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**: 15 consecutive absent frames at an approximately two-second cadence yield approximately 30 seconds of sustained absence before reporting `idle`) with pose fallback, zone mapping (desk/bed, expose-only), and posture classification (upright/reclined, expose-only — shipped April 19). The standard camera-lux multiplier is active for `relax` only; gaming/watching have a distinct bedroom-lux screen-sync envelope where supported, and working has no standard camera-lux multiplier.
-- ✓ **Zone+posture → relax actuation rule** (**live** — shipped April 19, promoted April 27, social-supersede added May 3): first sensor signal that drives a mode *transition*. Fires `set_manual_override("relax")` when the camera sustains `zone=bed + posture=reclined`. Eligible modes are `{idle, working, social}`; dwell is 120s for idle/working and 180s for social. Gated on (a) no active manual override **OR** an active social override that's ≥30min old (`ZONE_POSTURE_RULE_SOCIAL_MIN_AGE_SECONDS`), (b) `effective_mode ∈ ELIGIBLE_MODES` (override_mode if override else current_mode), (c) evening-hour or weekend-afternoon (≥13:00 Sat/Sun), (d) 4h refractory since last fire. `ZONE_POSTURE_RULE_APPLY=true` by default. The May 3 change closes the architectural gap surfaced by the 5/02 guest-visit pattern (social override outliving its context after guest left + Anthony went to bed). Projector-from-bed still carves itself out because the sit-up-against-headboard posture stays `upright`. Misfire surface narrow: requires social override ≥30min old + sustained reclined ≥180s + evening/weekend afternoon — worst case is one tap to correct during in-bedroom socializing.
-- **ML Phase 3 (historical April–May snapshot):** ✓ Confidence fusion — **4-signal** weighted ensemble (`ConfidenceFusion`) combining process detection, camera, audio classifier, and rule engine. Behavioral predictor lane stripped 2026-04-27 after a single-class collapse audit; presence lane removed 2026-04-28 with the original home/away retirement. Weights renormalized to `process 0.438 / camera 0.250 / audio_ml 0.187 / rule_engine 0.125`. Auto-apply at 95%+ when idle, stale process override was then documented at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`, and persists per-source rows to `ml_metrics` (`561d4f1`, 2026-04-28). Manual trigger at `POST /api/learning/retune-weights`. ✓ **Override rate + A/B comparison endpoints shipped** — `/api/learning/override-rate` (7d + 30d windows) was treated as the primary autonomy gate metric; `/api/learning/compare` runs fusion vs rule-engine-only vs priority-only on the same backfilled rows. ✓ **Predictor calibration shipped 2026-04-28** (`82c72ed`) — train/serve feature parity (4 features no longer default to 0 at inference), `SUGGEST_THRESHOLD` 0.70→0.30, full-class softmax distribution logged into `MLDecision.factors.distribution`, stale-encoder gate refuses to load models whose `label_encoder` references retired modes. ✓ **Rule-engine fusion vote stays fresh during manual overrides** (`b8c285a`, 2026-04-29). ✓ **Rule-engine fusion lane verified end-to-end and bootstrap guardrail added** (`7282b11`, 2026-05-03) — after the 4/29 fix, prod still showed `never_reported=["rule_engine"]` on the old PID. A test rule inserted into the live slot fired correctly on the new PID (DIAG entry → MATCH → `report_signal ok` → `log_decision ok`), confirming the wiring is sound; the silence on the older process remains unexplained but is no longer reproducible. The DIAG logs were replaced with a single WARN at the MATCH point that fires only if `_fusion is None or _ml_logger is None`, so any future bootstrap wiring drift surfaces immediately in journalctl instead of silently parking the lane in `never_reported`. ✓ **Predictor class-balanced training shipped 2026-05-06** (`d3e1c7f`) — inverse-frequency sample weights in `_train_sync` so minority classes (watching/relax/gaming) aren't starved by working-class dominance; per-class val accuracy logged to journalctl per retrain. ✓ **Predictor truth-tagging architectural fix shipped 2026-05-06** (`80e8db7`) — predictor is idle-gated, so the prior "tag with leaving mode" semantic produced `actual_mode='idle'` for every predictor row, making the standard accuracy query report 0% on a 72%-accurate model. New predictor-specific path in `MLDecisionLogger.on_mode_change` tags ml-source rows with the entering mode on idle → predictable-mode transitions; historical backlog re-tagged via one-shot SQL migration. Its former remaining-work and threshold-lowering claims are superseded by the August 1 Roadmap and action-specific trust policy.
+- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**: 15 consecutive absent frames at an approximately two-second cadence yield approximately 30 seconds of sustained absence before reporting `idle`) with pose fallback, desk-zone mapping (expose-only), and posture classification (upright/reclined, expose-only — shipped April 19). The former bed mapping is historical/dormant, not current authoritative sensing; #80 owns removal of its automation consumers. The standard camera-lux multiplier is active for `relax` only; gaming/watching have a distinct bedroom-lux screen-sync envelope where supported, and working has no standard camera-lux multiplier.
+- **Zone+posture → relax actuation rule (historical):** this April–May
+  `zone=bed + posture=reclined` path was tied to the former bedroom-camera
+  placement. It is no longer current product behavior: the Latitude is the
+  living-room/couch physical sensor, and #80 owns deletion of dormant bed-zone
+  automation assumptions. Do not treat this record as a live rule or a sleep
+  inference design.
+- **ML Phase 3 (historical April–May snapshot):** ✓ Confidence fusion — **4-signal** weighted ensemble (`ConfidenceFusion`) combining process detection, camera, audio classifier, and rule engine. Behavioral predictor lane stripped 2026-04-27 after a single-class collapse audit; presence lane removed 2026-04-28 with the original home/away retirement. Weights renormalized to `process 0.438 / camera 0.250 / audio_ml 0.187 / rule_engine 0.125`. Auto-apply at 95%+ when idle, stale process override was then documented at 98%+ with 80%+ agreement. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`, and persists per-source rows to `ml_metrics` (`561d4f1`, 2026-04-28). Manual trigger at `POST /api/learning/retune-weights`. ✓ **Override rate + A/B comparison endpoints shipped** — `/api/learning/override-rate` (7d + 30d windows) was treated as the primary autonomy gate metric; `/api/learning/compare` runs fusion vs rule-engine-only vs priority-only on the same backfilled rows. ✓ **Predictor calibration shipped 2026-04-28** (`82c72ed`) — train/serve feature parity (4 features no longer default to 0 at inference), `SUGGEST_THRESHOLD` 0.70→0.30, full-class softmax distribution logged into `MLDecision.factors.distribution`, stale-encoder gate refuses to load models whose `label_encoder` references retired modes. ✓ **Rule-engine fusion vote stays fresh during manual overrides** (`b8c285a`, 2026-04-29). ✓ **Rule-engine fusion lane verified end-to-end and bootstrap guardrail added** (`7282b11`, 2026-05-03) — after the 4/29 fix, prod still showed `never_reported=["rule_engine"]` on the old PID. A test rule inserted into the live slot fired correctly on the new PID (DIAG entry → MATCH → `report_signal ok` → `log_decision ok`), confirming the wiring is sound; the silence on the older process remains unexplained but is no longer reproducible. The DIAG logs were replaced with a single WARN at the MATCH point that fires only if `_fusion is None or _ml_logger is None`, so any future bootstrap wiring drift surfaces immediately in journalctl instead of silently parking the lane in `never_reported`. ✓ **Predictor class-balanced training shipped 2026-05-06** (`d3e1c7f`) — inverse-frequency sample weights in `_train_sync` so minority classes (watching/relax/gaming) aren't starved by working-class dominance; per-class val accuracy logged to journalctl per retrain. ✓ **Predictor truth-tagging architectural fix shipped 2026-05-06** (`80e8db7`) — predictor is idle-gated, so the prior "tag with leaving mode" semantic produced `actual_mode='idle'` for every predictor row, making the standard accuracy query report 0% on a 72%-accurate model. New predictor-specific path in `MLDecisionLogger.on_mode_change` tags ml-source rows with the entering mode on idle → predictable-mode transitions; historical backlog re-tagged via one-shot SQL migration. Its former remaining-work and threshold-lowering claims are superseded by the August 1 roadmap snapshot; the August 14, 2026 Product Experience Contract and Roadmap are current.
 - All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
 
 ### Superseded Phase 5 planning band
 
 The former “Polish & Expand” list mixed shipped work, research, and unranked
-ideas. It is superseded by the August 1, 2026 Roadmap. Retained ideas and issue
-links live in [Future_Development.md](Future_Development.md); cross-system
-policy remains in this document.
+ideas. It is superseded by the August 1, 2026 roadmap snapshot and the current
+August 14, 2026 Roadmap. Retained ideas and issue links live in
+[Future_Development.md](Future_Development.md); cross-system policy remains in
+this document.
 
 ## Technical Limitations & Constraints
 

@@ -2,7 +2,11 @@
 
 > **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). **Phase C shipped 2026-05-07** — `gameday` exposed in FloatingNav, MODE_CONFIG theme entry, Alexa `HOMEHUB_MODE` slot + lambda `VALID_MODES`. Voice-end-to-end verified.
 >
-> Live preseason validation: 2026-08-13. Remaining work: SEQUENCES palette/TTS iteration with lighting-curator review.
+> Live preseason validation: 2026-08-13. Remaining current work is tracked by
+> #5/#6 where unmet, #7 for first-real-room preseason volume calibration, and
+> #10 for post-preseason observation-driven 3D-field tuning. The ESPN
+> schedule-refresh 403 was addressed on `master` by `c2e60a4`; do not treat it
+> as unresolved without fresh evidence.
 
 Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; a 3D Threlte football field on the SvelteKit page mirrors live game state. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 
@@ -612,9 +616,11 @@ Rotation aligns long axes. Scale 0.81 makes the model's painted field span match
 
 **onLoad event signature:** `<GLTF on:load={...}>` uses Threlte's `createRawEventDispatcher`, which passes the gltf object directly to the handler — NOT wrapped in `CustomEvent.detail`. Use `function onLoad(gltf) { gltf.scene.traverse(...) }`, not `event.detail.scene`.
 
-### 11.5 Roadmap (deferred)
+### 11.5 Historical ideas; current tuning is evidence-led
 
-Aesthetic tuning and rendering enhancements tracked in [#10](https://github.com/agatte/home-hub/issues/10).
+Aesthetic tuning is tracked in [#10](https://github.com/agatte/home-hub/issues/10)
+only after post-preseason kiosk observations. The following were historical
+ideas, not a prescribed effects backlog:
 
 - **Phase 2.5:** GodRaysEffect from one anchor light tower; weather-reactive HDRI swap (clear / overcast / rain / snow); procedural drifting clouds (`@takram/three-clouds` or sprite-based); sun-arc time-of-day shadow direction; conditional `kickoff_utc` gating so light towers only fire on evening/night games.
 - **Phase 3:** `yomotsu/camera-controls` for cinematic dynamics — slow orbit during pregame and between plays, snap-to-broadcast on `gameday_play` arrival, dolly-in to scoring endzone on `gameday_celebration` (sequence_key keyed on `play.scoring_team`). Reduced-motion fallback skips dynamics.

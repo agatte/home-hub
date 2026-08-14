@@ -7,9 +7,9 @@
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
 > **Status:** Phase 1 complete, Phase 2 complete, Phase 3 started (confidence fusion shipped)
-> **Last updated:** August 1, 2026 (policy reconciliation; implementation history retained)
+> **Last updated:** August 14, 2026 (policy reconciliation; implementation history retained)
 >
-> **Canonical policy note:** This document owns ML subsystem design and implementation history. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-1-2026) owns cross-system product policy. Fixed 95% auto-apply, 70% suggestion, and related thresholds below describe the committed confidence-fusion mechanism; they are not a universal target autonomy policy and do not prove that production is healthy. The decided target graduates each action according to consequence, evidence quality, accepted/dismissed suggestions, reversals, overrides, and operational health. Product-facing “Personality” direction is now temporary **Mood Context**; the older subsystem/code names remain for traceability.
+> **Canonical policy note:** This document owns ML subsystem design and implementation history. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-14-2026) owns cross-system product policy. Fixed 95% auto-apply, 70% suggestion, and related thresholds below describe the committed confidence-fusion mechanism; they are not a universal target autonomy policy and do not prove that production is healthy. The decided target graduates each action according to consequence, evidence quality, accepted/dismissed suggestions, reversals, overrides, and operational health. Product-facing “Personality” direction is now temporary **Mood Context**; the older subsystem/code names remain for traceability.
 
 ---
 
@@ -1477,9 +1477,9 @@ Posture as a separate fusion lane
     DORMANT since 2026-05-27 — no camera produces zone=bed after the
     Latitude→living-room move; couch posture is suppressed upstream)
     and by ScreenSyncService MODE_ZONE_MAX_BRIGHTNESS keying
-  - Promoting posture into ConfidenceFusion as its own voter is now
-    blocked on bed-zone reactivation (e.g. light-touch desktop bed
-    detection from the desktop's wide FoV — see project_camera_position)
+  - This historical bed-zone lane is not a promotion path: #80 owns removal
+    of dormant `zone=bed` automation assumptions. Predictor work remains
+    evidence-gated/shadow-oriented under #116/#117.
 
 Zone+posture rule — social-supersede extension (shipped 2026-05-03)
   - Original rule (2026-04-27) ELIGIBLE_MODES = {idle, working};
@@ -1655,8 +1655,8 @@ which ML feature addresses it.
 | Poll interval | 5 seconds | 67 | — (keep as-is, good balance) |
 | PC input idle threshold | 600 seconds (10 min) | 70 | Camera: 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle`; away/home remains `AwayManager`-owned |
 | Late night working cutoff | 21:00 (9 PM) | 73 | Behavioral predictor (learns actual patterns) |
-| Sleep detection hour | 22:30 (10:30 PM) | 76-77 | Behavioral predictor + camera (posture=reclined + eyes closed) — posture=reclined path dormant since 2026-05-27 (no bed-zone source) |
-| Sleep idle threshold | 900 seconds (15 min) | 78 | Camera presence (asleep posture) |
+| Sleep detection hour | 22:30 (10:30 PM) | 76-77 | Historical mechanism; it does not establish sleep quality or authorize bed-zone inference. #25 owns session observability and #80 removes dormant bed paths. |
+| Sleep idle threshold | 900 seconds (15 min) | 78 | Historical mechanism; Sleeping remains a separate later state, not an automatic bed-posture conclusion. |
 
 ### Ambient Monitor (`backend/services/pc_agent/ambient_monitor.py`)
 

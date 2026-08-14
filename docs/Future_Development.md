@@ -1,134 +1,108 @@
 # Home Hub Future Development Index
 
 > **Status:** Non-authoritative idea and GitHub-issue index.
-> **Last reviewed:** August 1, 2026.
+> **Last reviewed:** August 14, 2026.
 
-Cross-system product policy and priority live only in the
-[Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-1-2026)
-and [Roadmap](PROJECT_SPEC.md#roadmap). This file helps find existing issues and
-preserves ideas that have not been committed to the product contract. Issue
-bodies are planning evidence, not proof of shipped behavior; code and live
-verification take precedence for current-state claims.
+Cross-system product policy and product direction live in the
+[Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-14-2026).
+This file is an index, not a second specification or a priority mechanism.
+Current GitHub issue contracts describe the bounded work; committed code and
+live verification are required for claims that something is shipped or healthy.
+Historical issue bodies, external memories, and retired watcher runbooks are
+not authoritative inputs.
 
-## Canonical roadmap issue map
+Open issues use `priority:p0` through `priority:p3`, `horizon:now`, `next`,
+`later`, or `parked`, and `effort:small`, `medium`, or `large`. Legacy Tier
+priority semantics are historical only.
 
-| Canonical workstream | Existing issue coverage | Coverage note |
+## Canonical issue map
+
+| Workstream | Current issue coverage | Current boundary |
 |---|---|---|
-| Production/autonomy evidence audit | [#93](https://github.com/agatte/home-hub/issues/93) (closed historical override-rate snapshot), [#116](https://github.com/agatte/home-hub/issues/116) (camera-lane metric), [#117](https://github.com/agatte/home-hub/issues/117) (predictor collapse) | **Missing umbrella issue.** Existing issues cover individual failures, not the complete action/feedback audit. |
-| Incident P1 capability health and degraded context | [#74](https://github.com/agatte/home-hub/issues/74) (healed outages), [#81](https://github.com/agatte/home-hub/issues/81) (desktop logs), [#109](https://github.com/agatte/home-hub/issues/109) (room-source consumer), [#110](https://github.com/agatte/home-hub/issues/110) (veto observability), [#120](https://github.com/agatte/home-hub/issues/120) (Sonos false-positive health) | **Missing umbrella issue.** Reuse these for their narrow fixes; the full capability matrix/ownership surface is untracked. |
-| Everyday living-room intelligence | [#36](https://github.com/agatte/home-hub/issues/36) (scene visibility), [#40](https://github.com/agatte/home-hub/issues/40) (quality ambient research), [#79](https://github.com/agatte/home-hub/issues/79) (stream health), [#107](https://github.com/agatte/home-hub/issues/107) (arrival foundation) | **Missing umbrella issue.** None owns quiet/listening/settled couch, Scene Curator feedback, or the action-specific trust ladder end to end. |
-| Winding Down and mornings | [#16](https://github.com/agatte/home-hub/issues/16) (macro executor), [#25](https://github.com/agatte/home-hub/issues/25) (sleep analytics), [#51](https://github.com/agatte/home-hub/issues/51) (additional prompt surfaces), [#80](https://github.com/agatte/home-hub/issues/80) (dormant bed paths) | **Missing product-slice issue.** Older “Bedtime macro” and inferred-sleep assumptions are superseded where they conflict with the Winding Down contract. |
-| Music Curator | [#39](https://github.com/agatte/home-hub/issues/39) (bandit visibility), [#40](https://github.com/agatte/home-hub/issues/40) (ambient YouTube path) | **Missing umbrella/research issue** for gentle discovery plus arbitrary Apple Music catalog-to-Sonos playback. |
-| Social and events | [#3](https://github.com/agatte/home-hub/issues/3) (Social palette defect), [#35](https://github.com/agatte/home-hub/issues/35) (multi-face/audio research), [#51](https://github.com/agatte/home-hub/issues/51) (audible prompts), [#107](https://github.com/agatte/home-hub/issues/107) (arrival with friends) | **Missing umbrella issue** for hybrid Social policy, event records, Tonight at Anthony’s, guest music/lighting queues, Showcase Mode, and Home Bar event planning. |
+| Production and autonomy | [#131](https://github.com/agatte/home-hub/issues/131), [#116](https://github.com/agatte/home-hub/issues/116), [#117](https://github.com/agatte/home-hub/issues/117) | #131 owns action-specific autonomy and feedback; #116/#117 are focused camera-metric and predictor evidence work. |
+| Everyday living room | [#129](https://github.com/agatte/home-hub/issues/129), [#130](https://github.com/agatte/home-hub/issues/130), [#131](https://github.com/agatte/home-hub/issues/131), [#134](https://github.com/agatte/home-hub/issues/134), [#135](https://github.com/agatte/home-hub/issues/135) | #129 is the vertical slice; Scene Curator and feedback are #130/#131, with weather and music support under #134/#135. |
+| Winding Down and Morning | [#138](https://github.com/agatte/home-hub/issues/138), [#139](https://github.com/agatte/home-hub/issues/139), [#25](https://github.com/agatte/home-hub/issues/25), [#80](https://github.com/agatte/home-hub/issues/80) | #138 is deliberate Winding Down, #139 is conservative wake confirmation, #25 is automation/session observability, and #80 removes dormant bed paths. |
+| Music and ambience | [#135](https://github.com/agatte/home-hub/issues/135), [#39](https://github.com/agatte/home-hub/issues/39), [#40](https://github.com/agatte/home-hub/issues/40), [#79](https://github.com/agatte/home-hub/issues/79) | Music Curator is #135; #39 diagnoses the current contextual bandit, #40 researches dependable long-form ambience delivery without preselecting a YouTube/proxy architecture, and #79 owns stream-health recovery. |
+| Social and events | [#35](https://github.com/agatte/home-hub/issues/35), [#107](https://github.com/agatte/home-hub/issues/107), [#140](https://github.com/agatte/home-hub/issues/140), [#141](https://github.com/agatte/home-hub/issues/141) | Social/privacy, arrival, event orchestration, and per-event guest experience have distinct owners. |
+| Reliability and lifecycle | [#142](https://github.com/agatte/home-hub/issues/142), [#143](https://github.com/agatte/home-hub/issues/143), [#144](https://github.com/agatte/home-hub/issues/144), [#145](https://github.com/agatte/home-hub/issues/145), [#146](https://github.com/agatte/home-hub/issues/146), [#149](https://github.com/agatte/home-hub/issues/149) | #142 is the portfolio index. #143 requires credible current playback intent for Watching; #145 owns portable-host/DNS architecture; #149 owns persistent HOME/TRAVEL lifecycle; #146 is FaceLandmarker suspend/resume recovery. RustDesk is completed administration convenience, not availability architecture. |
+| Physical lighting | [#147](https://github.com/agatte/home-hub/issues/147), [#148](https://github.com/agatte/home-hub/issues/148), [#137](https://github.com/agatte/home-hub/issues/137), [#13](https://github.com/agatte/home-hub/issues/13) | First add the Play Light Bar plant/wall wash (#147), then the Flux cabinet cove (#148). #13 is a motion-sensor fallback only if #137's bounded inference evidence warrants it; high-CRI under-cabinet task lighting is later and separate. |
 
-## Reusable focused work
+## Reframed open work
 
-These issues remain useful, but their old priority labels do not set the
-current roadmap.
+- [#3](https://github.com/agatte/home-hub/issues/3) verifies the historical
+  Social L1 violet-wall-flood concern in the current room before any retune.
+- [#10](https://github.com/agatte/home-hub/issues/10) is a post-preseason,
+  observation-driven Game Day 3D-field pass; it is not an effects backlog.
+- [#16](https://github.com/agatte/home-hub/issues/16) may provide a small
+  shared sequence executor only after accepted experiences demonstrate real
+  duplicated sequencing logic.
+- [#19](https://github.com/agatte/home-hub/issues/19) is safe context
+  reacquisition after outage, never blind replay of stale modes, lights, or
+  music. [#20](https://github.com/agatte/home-hub/issues/20) is an
+  evidence-gated audio-anomaly context/suppression experiment.
+- [#23](https://github.com/agatte/home-hub/issues/23) is optional transition
+  choreography based on current fixtures and experiences; [#24](https://github.com/agatte/home-hub/issues/24)
+  is a bounded preference experiment under #131.
+- [#30](https://github.com/agatte/home-hub/issues/30), [#31](https://github.com/agatte/home-hub/issues/31),
+  [#32](https://github.com/agatte/home-hub/issues/32), [#36](https://github.com/agatte/home-hub/issues/36),
+  [#41](https://github.com/agatte/home-hub/issues/41), [#53](https://github.com/agatte/home-hub/issues/53),
+  and [#55](https://github.com/agatte/home-hub/issues/55) require current
+  implementation inventories or measurements before prescribing a change.
+- [#45](https://github.com/agatte/home-hub/issues/45) is optional Game Day
+  stakes enrichment only if reliable current upstream data exists. The ESPN
+  schedule-refresh 403 was fixed on `master` by `c2e60a4`; it is not a current
+  known defect without fresh evidence.
+- [#51](https://github.com/agatte/home-hub/issues/51) owns operational
+  notification delivery, separate from #132's contextual suggestions.
+- [#56](https://github.com/agatte/home-hub/issues/56) is desktop-only desk
+  posture calibration. [#68](https://github.com/agatte/home-hub/issues/68) is
+  a microphone fallback experiment only if physical-context gaps justify it.
+- [#74](https://github.com/agatte/home-hub/issues/74) is durable recovered-
+  outage observability, not an external hourly watcher. [#105](https://github.com/agatte/home-hub/issues/105)
+  is the current Gaming color/screen-tracking design pass, separate from the
+  solved brightness floors.
 
-### Atmosphere and lighting
+## Current product boundaries
 
-- [#18 Seasonal lighting profile modifiers](https://github.com/agatte/home-hub/issues/18)
-  — useful input to Scene Curator ranking; the fixed sine-wave implementation
-  is not yet a product decision.
-- [#23 Adaptive transition choreography](https://github.com/agatte/home-hub/issues/23)
-  — compatible with evolving atmosphere when slow crossfades and task-light
-  protection are preserved.
-- [#24 Transition-curve preference learning](https://github.com/agatte/home-hub/issues/24)
-  — deferred until feedback scope and action-specific graduation exist.
-- [#36 Hue scene discovery and mode-mapping visibility](https://github.com/agatte/home-hub/issues/36)
-  — a useful library/diagnostic surface, not the Scene Curator itself.
-- [#77 Stronger night warming](https://github.com/agatte/home-hub/issues/77)
-  and [#105 gaming bedroom lighting](https://github.com/agatte/home-hub/issues/105)
-  — fixture-specific tuning, subordinate to the perceptual desk-lamp policy.
+- Physical room evidence outranks software activity guesses. The Latitude is
+  a living-room/couch sensor, not an authoritative bed sensor; #80 removes
+  dormant `zone=bed` assumptions. Watching requires credible current media
+  playback/viewing intent, not an open browser, streaming site, or media
+  process alone.
+- Travel Mode (#149) is a persistent HOME/TRAVEL **host state** above ordinary
+  activity modes. It survives reboot/login, requires fresh post-return physical
+  evidence, and coordinates planned backend absence with the Windows desktop-
+  agent lifecycle. It does not replace #145's always-home-host/DNS work.
+- Winding Down (#138) is not proof of sleep; Sleeping remains separate. Mood
+  Context (#133) is temporary and explicit-first, superseding broad automatic
+  multi-day personality/mood drift.
 
-### Intelligence, feedback, and observability
+## Historical or superseded items
 
-- [#14 Dashboard replay/time-machine](https://github.com/agatte/home-hub/issues/14)
-  — useful forensic visualization; not a near-term product vertical slice.
-- [#20 Anomaly-triggered automation pause](https://github.com/agatte/home-hub/issues/20)
-  — potentially valuable safety behavior, subject to consequence-based trust.
-- [#21 Override-reason classifier](https://github.com/agatte/home-hub/issues/21)
-  — keep suggestion-only unless a later action policy earns graduation.
-- [#33 Zone-change predictor feature](https://github.com/agatte/home-hub/issues/33)
-  and [#34 speculative predictor context](https://github.com/agatte/home-hub/issues/34)
-  — model research, not proof that the predictor should be promoted.
-- [#69 face-anchor TTL](https://github.com/agatte/home-hub/issues/69),
-  [#72 kitchen-audio measurement](https://github.com/agatte/home-hub/issues/72),
-  and [#83 controller-aware activity](https://github.com/agatte/home-hub/issues/83)
-  — narrow evidence-quality work.
+- [#18](https://github.com/agatte/home-hub/issues/18), the global seasonal
+  sine modifier, is closed/not planned; seasonal context belongs with Scene
+  Curator.
+- [#21](https://github.com/agatte/home-hub/issues/21), the generic override
+  classifier, is closed/not planned and superseded by #131/#132.
+- [#22](https://github.com/agatte/home-hub/issues/22), multi-day mood drift,
+  is closed/not planned and superseded by temporary Mood Context.
+- [#63](https://github.com/agatte/home-hub/issues/63) is a closed historical
+  brainstorm/source-of-truth artifact. [#72](https://github.com/agatte/home-hub/issues/72)
+  is closed/not planned, superseded by #137 and the #13 sensor fallback.
+- [#77](https://github.com/agatte/home-hub/issues/77) is closed/not planned:
+  its Nixeus-specific prescription is obsolete for the Samsung Odyssey G50F.
+- [#94](https://github.com/agatte/home-hub/issues/94) and [#95](https://github.com/agatte/home-hub/issues/95)
+  are closed/not planned Claude-centric workflow migrations. [#120](https://github.com/agatte/home-hub/issues/120)
+  is closed historical watcher false-positive evidence.
 
-### Interface and orchestration
+## Retained uncommitted ideas
 
-- [#15 Screensaver mode](https://github.com/agatte/home-hub/issues/15) — kiosk
-  polish; no longer a priority claim.
-- [#16 Contextual quick-actions/macros](https://github.com/agatte/home-hub/issues/16)
-  — a possible executor for Winding Down or event operations, but those
-  experiences must remain overlays with the confirmation rules in the
-  canonical contract.
-- [#39 Music bandit matrix UI](https://github.com/agatte/home-hub/issues/39)
-  — useful Music Curator observability.
-- [#51 System-wide nudge surfaces](https://github.com/agatte/home-hub/issues/51)
-  — reuse for the three-chime vocabulary and opt-in Alexa flow; its original
-  urgency mapping is not canonical.
+These are not commitments and must be promoted through `PROJECT_SPEC.md` before
+they become product direction:
 
-### Hardware and resilience
-
-- [#13 Hue motion sensor](https://github.com/agatte/home-hub/issues/13) — a
-  possible hardware fallback after the bounded kitchen-inference trial; its
-  current hallway-only scope would need revision.
-- [#19 Power-outage recovery](https://github.com/agatte/home-hub/issues/19) —
-  retained resilience idea.
-- [#65 desktop camera as a second lux source](https://github.com/agatte/home-hub/issues/65)
-  and [#106 engine per-room lux wiring](https://github.com/agatte/home-hub/issues/106)
-  — partially or intentionally not completed; inspect current code and issue
-  comments before treating either title as current truth.
-- [#80 Dormant bed automation paths](https://github.com/agatte/home-hub/issues/80)
-  — keep as historical implementation cleanup/research. The canonical target
-  now starts with manual Winding Down and a safe visible projector timer, not a
-  silent bed-zone shortcut.
-
-## Superseded or reframed ideas
-
-- **“Full autopilot” and one confidence threshold:** superseded by the
-  consequence-based, action-specific trust ladder.
-- **Permanent AI “Personality” or silent emotional claims:** reframed as
-  temporary, usually explicit **Mood Context**. Issues
-  [#58](https://github.com/agatte/home-hub/issues/58),
-  [#59](https://github.com/agatte/home-hub/issues/59), and
-  [#60](https://github.com/agatte/home-hub/issues/60) retain useful subsystem
-  work, but their original phase sequence is not the current product roadmap.
-  `VibeRouter` portions of #59 are already present in committed code; passive
-  suggestions and Alexa interaction must follow the Product Experience
-  Contract.
-- **Multi-day “mood drift” automation:** [#22](https://github.com/agatte/home-hub/issues/22)
-  is superseded as written. A temporary Mood Context may observe recent
-  outcomes, but it must expire and must not infer a durable emotional identity.
-- **Audio-only Social:** superseded. [#35](https://github.com/agatte/home-hub/issues/35)
-  must require hybrid guest evidence and distinguish calls/gaming chat.
-- **Direct guest last-write-wins lighting:** superseded by leases, queues,
-  task-light protection, host controls, and explicit Showcase Mode.
-- **One-step morning or silent inferred sleep:** superseded by staged waking
-  and manual Winding Down first; inferred sleep is a later, multi-signal phase.
-- **Old priority bands and dated phase calendars:** historical only. The sole
-  current ordering is the canonical Roadmap.
-
-## Uncommitted ideas worth retaining
-
-These have no current umbrella issue and are not commitments:
-
-- Calendar-aware focus context that protects a confirmed work session without
-  adding break reminders.
-- Album-art or media-poster palette extraction as an input to the Scene
-  Curator, with kitchen/path protection.
-- A compact presence-conflict diagnostic showing each room source, freshness,
-  chosen authority, and actuator owner.
-- A lightweight scene rehearsal tool for reviewing candidate Scene Curator
-  pools before allowing automatic selection.
+- Calendar-aware focus protection without break reminders.
+- Album-art/media-poster palette extraction as a Scene Curator input, while
+  preserving kitchen/path protection.
+- A compact presence-conflict diagnostic and a scene-rehearsal surface.
 - Local voice, additional device categories, multi-room audio, and generic
-  composable automation remain **DEFERRED** unless promoted through
-  `PROJECT_SPEC.md`.
-
-Issue [#63](https://github.com/agatte/home-hub/issues/63) is the broader May
-2026 brainstorm archive. Re-evaluate its ideas against the canonical contract
-instead of treating that issue’s ranking as current priority.
+  composable automation.
