@@ -11,6 +11,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from math import ceil, floor
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -27,6 +28,12 @@ SETTLED_SECONDS = 15 * 60
 EVOLUTION_SECONDS = 30 * 60
 RECENT_HISTORY_LIMIT = 8
 ATMOSPHERE_TRANSITION_TIME = 100  # Hue deciseconds = 10 seconds.
+ATMOSPHERE_BRIGHTNESS_BOUNDS: dict[str, tuple[float, float]] = {
+    "day": (1.00, 1.15),
+    "evening": (1.00, 1.15),
+    "night": (0.90, 1.10),
+    "late_night": (0.90, 1.00),
+}
 
 
 @dataclass(frozen=True)
@@ -98,12 +105,12 @@ ATMOSPHERES: dict[str, AtmosphereDefinition] = {
         priority=30,
         palettes=_period_palettes(
             day=(
-                {"on": True, "bri": 95, "hue": 7500, "sat": 200},
-                {"on": True, "bri": 30, "hue": 20000, "sat": 100},
+                {"on": True, "bri": 110, "hue": 7500, "sat": 200},
+                {"on": True, "bri": 40, "hue": 20000, "sat": 100},
             ),
             evening=(
-                {"on": True, "bri": 70, "hue": 6000, "sat": 230},
-                {"on": True, "bri": 15, "hue": 20000, "sat": 100},
+                {"on": True, "bri": 90, "hue": 6000, "sat": 230},
+                {"on": True, "bri": 30, "hue": 20000, "sat": 100},
             ),
             night=(
                 {"on": True, "bri": 38, "hue": 5000, "sat": 254},
@@ -178,6 +185,45 @@ def merge_living_room_atmosphere(
             merged[light_id] = overlay[light_id].copy()
     return merged
 
+
+def bound_living_room_atmosphere_brightness(
+    state: dict[str, dict[str, Any]],
+    basis: dict[str, dict[str, Any]],
+    period: str,
+) -> dict[str, dict[str, Any]]:
+    """Clamp atmosphere-owned brightness after environmental processing.
+
+    ``basis`` is the curated atmosphere state after the user's global Relax
+    brightness multiplier, but before lux, weather, and zone processing. The
+    helper changes only ``bri`` on L1/L3/L4 and never mutates either input.
+    """
+    bounds = ATMOSPHERE_BRIGHTNESS_BOUNDS.get(period)
+    if bounds is None:
+        return state
+
+    lower_ratio, upper_ratio = bounds
+    bounded = {
+        light_id: light_state.copy()
+        for light_id, light_state in state.items()
+    }
+    changed = False
+    for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS:
+        current = bounded.get(light_id)
+        basis_state = basis.get(light_id)
+        if current is None or basis_state is None:
+            continue
+        if "bri" not in current or "bri" not in basis_state:
+            continue
+
+        basis_bri = int(basis_state["bri"])
+        lower = max(1, min(254, ceil(basis_bri * lower_ratio)))
+        upper = max(lower, min(254, floor(basis_bri * upper_ratio)))
+        brightness = max(lower, min(upper, int(current["bri"])))
+        if brightness != current["bri"]:
+            current["bri"] = brightness
+            changed = True
+
+    return bounded if changed else state
 
 def preserve_atmosphere_effect_scope(
     desired_effect: Optional[str | dict[str, Any]],

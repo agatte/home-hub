@@ -14,6 +14,7 @@ from backend.services.living_room_atmosphere import (
     ATMOSPHERES,
     LIVING_ROOM_ATMOSPHERE_LIGHT_IDS,
     LivingRoomAtmosphereCurator,
+    bound_living_room_atmosphere_brightness,
     merge_living_room_atmosphere,
     preserve_atmosphere_effect_scope,
 )
@@ -72,6 +73,11 @@ def _envelope(
         },
     }
 
+
+def _pin_evening_outside_winddown_ramp(engine: AutomationEngine) -> None:
+    """Keep evening-state tests independent of the wall-clock ramp window."""
+    engine._schedule_config.weekday.winddown_start_hour = 0
+    engine._schedule_config.weekend.winddown_start_hour = 0
 
 def _decide(
     curator: LivingRoomAtmosphereCurator,
@@ -154,6 +160,150 @@ def test_merge_is_l1_l3_l4_only_with_matched_kitchen_and_one_colorspace() -> Non
         for state in merged.values():
             assert not ("ct" in state and ({"hue", "sat"} & state.keys()))
 
+
+def test_moss_raw_calibration_changes_only_day_evening_brightness() -> None:
+    moss = ATMOSPHERES["moss_ember"].palettes
+    assert moss["day"] == {
+        "1": {"on": True, "bri": 110, "hue": 7500, "sat": 200},
+        "3": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
+        "4": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
+    }
+    assert moss["evening"] == {
+        "1": {"on": True, "bri": 90, "hue": 6000, "sat": 230},
+        "3": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
+        "4": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
+    }
+    assert moss["night"] == {
+        "1": {"on": True, "bri": 38, "hue": 5000, "sat": 254},
+        "3": {"on": True, "bri": 8, "hue": 20000, "sat": 100},
+        "4": {"on": True, "bri": 8, "hue": 20000, "sat": 100},
+    }
+    assert moss["late_night"] == {
+        "1": {"on": True, "bri": 34, "hue": 3000, "sat": 240},
+        "3": {"on": True, "bri": 5, "hue": 20000, "sat": 100},
+        "4": {"on": True, "bri": 5, "hue": 20000, "sat": 100},
+    }
+
+
+def test_rainy_forest_and_listening_glow_raw_palettes_are_unchanged() -> None:
+    expected = {
+        "rainy_forest": {
+            "day": ((90, 7000, 180), (35, 39500, 120)),
+            "evening": ((65, 5500, 210), (20, 39500, 130)),
+            "night": ((42, 5000, 220), (12, 39500, 130)),
+            "late_night": ((36, 4000, 220), (8, 39500, 120)),
+        },
+        "listening_glow": {
+            "day": ((115, 48000, 140), (40, 6500, 170)),
+            "evening": ((85, 48000, 150), (28, 6000, 185)),
+            "night": ((55, 47000, 150), (18, 5500, 190)),
+            "late_night": ((45, 46000, 130), (12, 5000, 175)),
+        },
+    }
+    for atmosphere_id, periods in expected.items():
+        for period, (living, kitchen) in periods.items():
+            palette = ATMOSPHERES[atmosphere_id].palettes[period]
+            assert palette["1"] == {
+                "on": True,
+                "bri": living[0],
+                "hue": living[1],
+                "sat": living[2],
+            }
+            assert palette["3"] == palette["4"] == {
+                "on": True,
+                "bri": kitchen[0],
+                "hue": kitchen[1],
+                "sat": kitchen[2],
+            }
+
+
+@pytest.mark.parametrize(
+    ("period", "processed_bri", "expected_bri"),
+    [
+        ("day", 40, 100),
+        ("evening", 89, 100),
+        ("night", 200, 110),
+        ("late_night", 200, 100),
+    ],
+)
+def test_bounded_brightness_enforces_period_limits_without_touching_color(
+    period: str,
+    processed_bri: int,
+    expected_bri: int,
+) -> None:
+    basis = {
+        light_id: {"on": True, "bri": 100, "hue": 7000, "sat": 180}
+        for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+    }
+    state = {
+        **{
+            light_id: {
+                "on": True,
+                "bri": processed_bri,
+                "hue": 7000,
+                "sat": 180,
+            }
+            for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+        },
+        "2": {"on": True, "bri": 37, "hue": 6500, "sat": 220},
+        "5": {"on": True, "bri": 41, "hue": 6000, "sat": 210},
+    }
+    original = {light_id: light_state.copy() for light_id, light_state in state.items()}
+
+    bounded = bound_living_room_atmosphere_brightness(state, basis, period)
+
+    assert state == original
+    assert bounded["1"]["bri"] == expected_bri
+    assert bounded["3"]["bri"] == bounded["4"]["bri"] == expected_bri
+    assert {
+        light_id: (bounded[light_id]["hue"], bounded[light_id]["sat"])
+        for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+    } == {
+        light_id: (7000, 180)
+        for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+    }
+    assert bounded["2"] == state["2"]
+    assert bounded["5"] == state["5"]
+
+
+@pytest.mark.parametrize("atmosphere_id", ["rainy_forest", "listening_glow"])
+@pytest.mark.parametrize(
+    ("period", "environment_ratio", "bound_ratio"),
+    [
+        ("day", 0.90, 1.00),
+        ("evening", 0.90, 1.00),
+        ("night", 1.30, 1.10),
+        ("late_night", 1.30, 1.00),
+    ],
+)
+def test_other_atmospheres_get_bounds_without_palette_retuning(
+    atmosphere_id: str,
+    period: str,
+    environment_ratio: float,
+    bound_ratio: float,
+) -> None:
+    basis = ATMOSPHERES[atmosphere_id].palettes[period]
+    processed = {
+        light_id: {
+            **light_state,
+            "bri": int(light_state["bri"] * environment_ratio),
+        }
+        for light_id, light_state in basis.items()
+    }
+
+    bounded = bound_living_room_atmosphere_brightness(
+        processed,
+        basis,
+        period,
+    )
+
+    for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS:
+        assert bounded[light_id]["bri"] == int(
+            basis[light_id]["bri"] * bound_ratio
+        )
+        assert bounded[light_id]["hue"] == basis[light_id]["hue"]
+        assert bounded[light_id]["sat"] == basis[light_id]["sat"]
+    assert bounded["3"] == bounded["4"]
 
 def test_relax_effects_stay_on_ordinary_l2_l5_not_atmosphere_lights() -> None:
     assert preserve_atmosphere_effect_scope("sparkle") == {
@@ -419,6 +569,7 @@ async def test_engine_uses_existing_dedup_and_preserves_l2_l5(
     engine._override_mode = "relax"
     engine._override_source = "physical_context_relax"
     engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
     engine._get_time_period = lambda: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
     calls: list[str] = []
@@ -441,6 +592,97 @@ async def test_engine_uses_existing_dedup_and_preserves_l2_l5(
 
 
 @pytest.mark.asyncio
+async def test_engine_live_evening_lux_case_floors_only_atmosphere_lights(
+    mock_hue, mock_hue_v2, mock_ws,
+) -> None:
+    class FreshLuxCamera:
+        enabled = True
+        _paused = False
+        ema_lux = 150.0
+        baseline_lux = 90.0
+        last_lux_update = datetime.now(timezone.utc)
+
+    curator = LivingRoomAtmosphereCurator(enabled=True, now_provider=Clock())
+    engine = AutomationEngine(
+        hue=mock_hue,
+        hue_v2=mock_hue_v2,
+        ws_manager=mock_ws,
+    )
+    engine.set_camera_service(FreshLuxCamera())
+    engine.set_living_room_decision_gate(FakeGate(_envelope()))
+    engine.set_living_room_atmosphere_curator(curator)
+    engine._manual_override = True
+    engine._override_mode = "relax"
+    engine._override_source = "physical_context_relax"
+    engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
+    engine._get_time_period = lambda: "evening"
+    engine._effect_manager.needs_reconcile = lambda _desired: False
+
+    await engine._apply_mode("relax", force_resend=True)
+
+    assert engine.last_lux_multiplier == pytest.approx(0.90)
+    assert mock_hue._lights["1"]["bri"] == 90
+    assert mock_hue._lights["3"]["bri"] == 30
+    assert mock_hue._lights["4"]["bri"] == 30
+    assert mock_hue._lights["2"]["bri"] == int(
+        ACTIVITY_LIGHT_STATES["relax"]["evening"]["2"]["bri"] * 0.90
+    )
+    assert mock_hue._lights["5"]["bri"] == int(
+        ACTIVITY_LIGHT_STATES["relax"]["evening"]["5"]["bri"] * 0.90
+    )
+    for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS:
+        expected = ATMOSPHERES["moss_ember"].palettes["evening"][light_id]
+        assert mock_hue._lights[light_id]["hue"] == expected["hue"]
+        assert mock_hue._lights[light_id]["sat"] == expected["sat"]
+
+
+@pytest.mark.asyncio
+async def test_learner_cannot_replace_atmosphere_owned_lights(
+    mock_hue, mock_hue_v2, mock_ws,
+) -> None:
+    ordinary = ACTIVITY_LIGHT_STATES["relax"]["evening"]
+
+    class OrdinaryRelaxLearner:
+        def get_overlay(self, *_args, **_kwargs):
+            return {
+                "1": ordinary["1"],
+                "2": {"bri": 100},
+                "3": ordinary["3"],
+                "4": ordinary["4"],
+            }
+
+    curator = LivingRoomAtmosphereCurator(enabled=True, now_provider=Clock())
+    engine = AutomationEngine(
+        hue=mock_hue,
+        hue_v2=mock_hue_v2,
+        ws_manager=mock_ws,
+        lighting_learner=OrdinaryRelaxLearner(),
+    )
+    engine.set_living_room_decision_gate(FakeGate(_envelope()))
+    engine.set_living_room_atmosphere_curator(curator)
+    engine._manual_override = True
+    engine._override_mode = "relax"
+    engine._override_source = "physical_context_relax"
+    engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
+    engine._get_time_period = lambda: "evening"
+    engine._mode_brightness["relax"] = 0.80
+    engine._effect_manager.needs_reconcile = lambda _desired: False
+
+    await engine._apply_mode("relax", force_resend=True)
+
+    assert mock_hue._lights["1"]["bri"] == 72
+    assert mock_hue._lights["3"]["bri"] == 24
+    assert mock_hue._lights["4"]["bri"] == 24
+    assert mock_hue._lights["2"]["bri"] == 80
+    assert mock_hue._lights["5"]["bri"] == 60
+    for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS:
+        expected = ATMOSPHERES["moss_ember"].palettes["evening"][light_id]
+        assert mock_hue._lights[light_id]["hue"] == expected["hue"]
+        assert mock_hue._lights[light_id]["sat"] == expected["sat"]
+
+@pytest.mark.asyncio
 async def test_configured_scene_override_wins_before_curator_palette(
     mock_hue, mock_hue_v2, mock_ws,
 ) -> None:
@@ -456,6 +698,7 @@ async def test_configured_scene_override_wins_before_curator_palette(
     engine._override_mode = "relax"
     engine._override_source = "physical_context_relax"
     engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
     engine._get_time_period = lambda: "evening"
     engine._scene_overrides = {"relax": {"evening": "bridge-scene"}}
     engine._effect_manager.replace_with_action = AsyncMock(return_value=True)
@@ -486,6 +729,7 @@ async def test_selector_failure_falls_back_to_ordinary_relax(
     engine._override_mode = "relax"
     engine._override_source = "physical_context_relax"
     engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
     engine._get_time_period = lambda: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
 
@@ -512,6 +756,7 @@ async def test_disabled_switch_applies_ordinary_relax_in_engine(
     engine._override_mode = "relax"
     engine._override_source = "physical_context_relax"
     engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
     engine._get_time_period = lambda: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
 

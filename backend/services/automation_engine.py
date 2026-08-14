@@ -63,8 +63,10 @@ from backend.services.lighting_transition_boundary import LightingTransitionBoun
 from backend.services.light_override_manager import LightOverrideManager
 from backend.services.living_room_atmosphere import (
     ATMOSPHERE_TRANSITION_TIME,
+    LIVING_ROOM_ATMOSPHERE_LIGHT_IDS,
     AtmospherePlan,
     LivingRoomAtmosphereCurator,
+    bound_living_room_atmosphere_brightness,
     merge_living_room_atmosphere,
     preserve_atmosphere_effect_scope,
 )
@@ -2975,10 +2977,13 @@ class AutomationEngine:
             else:
                 state = _resolve_activity_state(mode, period, game)
 
-            # The curator owns only its bounded L1/L3/L4 overlay. Everything
-            # after this point remains the ordinary Relax learner,
-            # brightness, lux, weather, ownership, dedup, and Hue pipeline.
-            if atmosphere_plan is not None and atmosphere_plan.should_apply:
+            atmosphere_active = bool(
+                atmosphere_plan is not None and atmosphere_plan.should_apply
+            )
+            # The curator owns only its bounded L1/L3/L4 overlay. The ordinary
+            # pipeline still owns global brightness, environmental processing,
+            # protected-light gates, dedup, and Hue application.
+            if atmosphere_active:
                 state = merge_living_room_atmosphere(
                     state,
                     atmosphere_plan.palette,
@@ -3002,6 +3007,14 @@ class AutomationEngine:
                     deltas: dict[str, dict] = {}
                     for light_id, prefs in overlay.items():
                         if light_id in state:
+                            # Per-light Relax learning describes the ordinary
+                            # palette. Do not let it replace curator-owned
+                            # atmosphere identity; L2/L5 remain learner-owned.
+                            if (
+                                atmosphere_active
+                                and light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+                            ):
+                                continue
                             pre = state[light_id]
                             # Only fields the overlay actually changed (pre
                             # value differs from the overlay value) count —
@@ -3028,11 +3041,26 @@ class AutomationEngine:
                         )
 
             state = self._apply_brightness_multiplier(state, mode)
+            atmosphere_brightness_basis = (
+                {
+                    light_id: state[light_id].copy()
+                    for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+                    if light_id in state
+                }
+                if atmosphere_active
+                else None
+            )
             state = self._apply_lux_multiplier(state, mode)
             state = self._functional_weather_brightness(state, mode, period)
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
+            if atmosphere_brightness_basis is not None:
+                state = bound_living_room_atmosphere_brightness(
+                    state,
+                    atmosphere_brightness_basis,
+                    period,
+                )
             if self._screen_sync is not None:
                 prime = getattr(self._screen_sync, "prime_from_mode_state", None)
                 if prime is not None:
