@@ -346,10 +346,14 @@ class TestEngineHooks:
         engine.arm_away_suppression("geofence:test")
         await engine._apply_mode("working", force_resend=True)
         engine._apply_state.assert_not_awaited()
+        engine._effect_manager.reconcile.assert_not_awaited()
 
         await engine.signal_presence("camera")
         await engine._apply_mode("working", force_resend=True)
-        engine._apply_state.assert_awaited()
+        # An unknown EffectManager tracker takes the serialized release path;
+        # it need not pass through the steady-state _apply_state helper.
+        engine._effect_manager.reconcile.assert_awaited_once()
+        engine._apply_state.assert_not_awaited()
 
     async def test_transit_apply_gated_while_suppressed(self, engine):
         """Transit/desk-exit triggers are absence-shaped and churn while
