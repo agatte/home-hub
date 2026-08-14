@@ -1,221 +1,156 @@
-# 🏠 Home Hub
+# HomeHub
 
-A personal smart home OS that learns your lifestyle and adapts your environment automatically. Controls Philips Hue lighting and Sonos audio from a unified real-time dashboard — with intelligent automation, behavioral event logging, and a full **MCP server** that lets AI agents interact with the live system directly.
+HomeHub is a personal apartment automation system. It coordinates Philips Hue
+lighting, Sonos audio, presence and activity context, routines, and a custom
+dashboard for one home.
 
----
+The project is intentionally specific to my apartment and habits. It is not a
+general-purpose smart-home platform, but the repository may still be useful as
+an example of a small, local-first automation system.
 
-## Overview
+## How it is arranged
 
-Home Hub goes well beyond basic smart home control. Instead of manually adjusting lights and music, it monitors context — what you're doing on your PC, ambient sound levels, the time of day, your listening history — and makes adjustments automatically. Its always-on server runs on a Latitude laptop, while optional desktop agents provide richer bedroom and PC context. It is accessible from any browser or installable as a PWA on mobile.
+The current always-on host/server is a Dell Latitude running Ubuntu. It runs the
+FastAPI backend, scheduling and automation services, Hue and Sonos connections,
+and the SvelteKit dashboard in a Firefox kiosk. Its camera can contribute
+living-room/couch presence context; it is not a bedroom or bed-zone sensor.
 
-The standout feature: a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes the entire Home Hub API as AI-callable tools. Claude Code (or any MCP-compatible agent) can query system state, control lights, switch modes, manage Sonos, and run read-only database queries — all against the live running system.
+A Windows desktop can run optional companion agents for desk presence, process
+activity, screen colour, ambient audio, and monitor or peripheral integration.
+Those signals enrich the system but are not required for the server, dashboard,
+or core Hue and Sonos controls to run. When a source is absent or stale, its
+authority should degrade explicitly rather than being treated as current truth.
+They report observations to the HomeHub backend over HTTP; they are not imported
+into or run inside the server process.
 
----
+HomeHub has ordinary activity modes such as Working, Gaming, Watching, Relax,
+Cooking, Social, Sleeping, and Game Day. Travel is different: it is a
+persistent HOME/TRAVEL host-lifecycle state above activity modes, not another
+activity classification. That lifecycle design is tracked separately from the
+open work to remove the portable Latitude and apartment DNS as single points of
+failure.
 
-## Features
+At a high level:
 
-### 🤖 MCP Server — AI-Native Control
-Home Hub ships with a full MCP server (`backend/mcp_server.py`) built with FastMCP. It exposes 31 tools across every subsystem, registered in `.mcp.json` for MCP-compatible clients.
+```text
+optional desktop context ----\
+Latitude context -------------+--> FastAPI automation/services --> Hue + Sonos
+time, weather, history -------/               |
+                                                +--> WebSocket/API --> dashboard
+```
 
-**Tool categories:**
-- **System** — health check, Hue bridge + Sonos connectivity, WebSocket client count
-- **Lights** — get all light states, set brightness/color/hue/saturation per light
-- **Automation** — get current mode and source, override mode, get schedule, get per-mode brightness multipliers
-- **Scenes & Effects** — list and activate presets, native Hue scenes (by UUID), and dynamic effects (candle, fire, sparkle, prism, glisten, opal)
-- **Sonos** — playback state, play/pause, volume, list favorites
-- **Music** — get mode-to-playlist mappings
-- **Event Summary** — query behavioral data: mode transition counts, most-adjusted lights, most-played favorites over N days
-- **Database** — read-only SELECT queries against the live SQLite database (non-SELECT statements raise a ValueError)
+## What it does
 
-### 💡 Lighting
-- Full Philips Hue control via dual API architecture — v1 (phue2) for polling and basic control, v2 (CLIP API) for native scenes and dynamic effects
-- Time-based automation with 4-hour manual override timeout
-- Optimistic UI updates for instant feel
-- External changes (Hue app, Alexa) detected within 1 second via polling and broadcast to all WebSocket clients
-
-### 🎵 Music
-- Sonos control via SoCo (UPnP, zero authentication), including the global now-playing chip that opens an in-page player overlay
-- Mode-aware playlist mapping — persisted to SQLite, manageable from the dashboard via `ModePlaylistMapper`
-- On mode change: auto-plays mapped favorite if Sonos is idle, or broadcasts a `music_suggestion` WebSocket event if busy
-- Apple Music / iTunes library XML import — parses play counts, genre distribution, and playlist signals to build a personal taste profile
-- Music discovery via Last.fm `artist.getSimilar` + iTunes Search API for 30-second previews and artwork
-- Recommendations scored by similarity, genre overlap, and user feedback; cached in SQLite with 30-day TTL
-
-### 🤖 Automation & Event Logging
-- The Latitude owns always-on automation, Hue/Sonos connections, scheduling, living-room presence, and persistence
-- A supervised desktop agent bundle provides process activity, desk presence, bedroom lux, screen sync, audio classification, sleep watching, monitor brightness, and peripheral RGB
-- Desktop capabilities enrich automation but can be unavailable; their freshness is distinct from backend health
-- `AutomationEngine` supports `register_on_mode_change` callbacks — MusicMapper and other services subscribe to mode changes
-- `EventLogger` tracks every mode transition, light adjustment, and Sonos playback event to SQLite for behavioral analysis
-
-### ⏰ Routines
-- Morning routine fires at 6:40 AM weekdays — fetches weather (OpenWeatherMap) + traffic (Google Maps Directions), generates TTS via edge-tts, plays on Sonos
-- Wind-down routine for evenings
-- All routines triggerable manually from the dashboard
-
-### 📱 Real-time Dashboard
-- SvelteKit + Threlte (Three.js) frontend served directly by FastAPI as a static build
-- WebSocket for bidirectional communication — server pushes `light_update`, `sonos_update`, `mode_update`, `music_suggestion`, `music_auto_played` events
-- Svelte writable stores for granular reactivity: lights, Sonos, automation, music suggestions, connection, and local music-player overlay state
-- Mode-gated Threlte canvas for animated backgrounds (sleeping-mode moon scene shipped) plus global layout chrome for navigation, vitals, now-playing, and the in-page music player overlay
-- Progressive Web App with service worker — installable on Android tablet as a kiosk display, works offline
-
----
-
-## Tech Stack
-
-| Layer | Technologies |
-|---|---|
-| Frontend | SvelteKit 2 + Svelte 4, Threlte 7 (Three.js), Vite 5, WebSocket, PWA + Service Worker |
-| Backend | Python, FastAPI, SQLAlchemy (async), aiosqlite |
-| MCP | FastMCP, Model Context Protocol |
-| Hue | phue2 (v1 API) + httpx CLIP API (v2) |
-| Sonos | SoCo (UPnP) |
-| Music Discovery | Last.fm API, iTunes Search API |
-| TTS | edge-tts → MP3 → Sonos |
-| Scheduling | Custom async cron scheduler |
-| Desktop agents | psutil, OpenCV/MediaPipe, PyAudio/YAMNet, screen capture, Win32 APIs, OpenRGB |
-
----
+- Adaptive Hue lighting with per-mode and time-of-day states, curated scenes,
+  protected-light rules, smooth transitions, external-change reconciliation,
+  and selected preference learning.
+- Presence- and context-aware automation that combines physical observations,
+  activity, time, weather, explicit overrides, away state, and source
+  freshness. Where the current authority gate is supported, fresh physical-room
+  evidence outranks software guesses; broader consumer adoption remains an
+  active rollout.
+- Sonos playback, favorites, mode-to-playlist mapping, text-to-speech,
+  contextual music selection, and optional weather ambience.
+- A Colts-focused Game Day experience with schedule and play data, automatic
+  mode timing, scoring celebrations, lighting and TTS choreography, and a 3D
+  field view.
+- A responsive SvelteKit dashboard and always-on kiosk with live WebSocket
+  updates, mode-aware visuals, controls, analytics, journal, guest, settings,
+  and Game Day views.
+- Optional contextual and ML layers, including fused confidence signals,
+  adaptive lighting, music selection, screen-colour extraction, and shadow-mode
+  predictors. These lanes have different authority levels; code presence alone
+  does not establish that a lane is configured, healthy, or effective live.
 
 ## Architecture
 
-```
-Browser / Android Tablet (kiosk) / Phone (PWA)
-        |  WebSocket + REST
-        v
-   FastAPI Backend (port 8000)
-   ├── HueService (v1/phue2) ──────► Hue Bridge  (basic control, 0.5s polling; demotes to 5s when v2 stream active)
-   ├── HueV2Service (CLIP API) ─────► Hue Bridge  (native scenes, dynamic effects, SSE EventStream push)
-   ├── SonosService (SoCo) ─────────► Sonos Era 100  (UPnP, zero-auth)
-   ├── TTSService ──► edge-tts MP3 ──► Sonos fetches from LAN IP
-   ├── AutomationEngine ──► time + activity → lighting mode
-   ├── MusicMapper ──► mode change → smart Sonos auto-play
-   ├── RecommendationService ──► Last.fm + iTunes → discovery feed
-   ├── LibraryImportService ──► Apple Music XML → taste profile
-   ├── EventLogger ──► mode/light/sonos events → SQLite
-   ├── Scheduler ──► morning routine at 6:40 AM weekdays
-   ├── SQLite (aiosqlite + SQLAlchemy async)
-   └── Serves SvelteKit static build from frontend-svelte/build/
+- Backend: Python, FastAPI, async services, WebSockets, SQLAlchemy, and SQLite.
+- Frontend: SvelteKit 2, Svelte 4, Vite, Three.js, and Threlte.
+- Device integrations: Philips Hue v1/v2 APIs and Sonos through SoCo.
+- Optional context: MediaPipe camera observations, desktop process and screen
+  agents, audio classification, weather, geofence events, and local routines.
+- Production: Ubuntu on the Latitude, with systemd user services and a locally
+  served static frontend on port 8000.
 
-   Desktop PC Agent Supervisor (reports to the Latitude):
-   ├── activity_detector      process/input mode detection
-   ├── emotion_capture        desk presence, bedroom zone/lux, optional emotion
-   ├── screen_sync_agent      screen colors and game events
-   ├── ambient_monitor        optional microphone/audio classification
-   ├── sleep_watcher          desktop sleep/wake coordination
-   ├── monitor_brightness     Windows display integration
-   └── peripheral_rgb_agent  OpenRGB integration
+The backend is the composition and policy boundary. It owns automation state,
+device writes, event logging, and WebSocket broadcasts. The frontend is a live
+control and explanation surface; optional agents report observations rather
+than becoming independent automation authorities.
 
-   AI Integration:
-   └── mcp_server.py  (FastMCP — 31 tools, registered in .mcp.json)
-       ├── Lights, Scenes, Effects
-       ├── Automation mode + schedule
-       ├── Sonos playback + favorites
-       ├── Behavioral event summary
-       └── Read-only SQLite query tool
-```
+## Local development
 
----
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.11+
-- Node.js 18+
-- Philips Hue Bridge on local network (physical button press required on first run)
-- Sonos speaker on local network (auto-discovered via SSDP, or set `SONOS_IP` in `.env`)
-
-### Installation
+CI currently uses Python 3.13 and Node.js 22. Copy the example environment file
+and provide only the integrations you intend to use; do not commit `.env`.
 
 ```bash
-git clone https://github.com/agatte/home-hub.git
-cd home-hub
+Copy-Item .env.example .env  # PowerShell; use `cp .env.example .env` on macOS/Linux
 
-# Create and activate virtual environment
-python -m venv venv
-venv/Scripts/activate        # Windows
-# source venv/bin/activate   # Mac/Linux
+python -m venv .venv
+python -m pip install -r requirements.txt
 
-pip install -r requirements.txt
+cd frontend-svelte
+npm ci
+npm run build
+cd ..
 
-# Build frontend
-cd frontend-svelte && npm install && npm run build && cd ..
-
-# Configure environment
-cp .env.example .env
-# Edit .env — at minimum set HUE_BRIDGE_IP and LOCAL_IP
-```
-
-### Running
-
-```bash
-# Start the main server
 python run.py
-# → http://localhost:8000
-
-# Optional: supervised desktop context bundle
-python -m backend.services.pc_agent.supervisor
-
-# Optional: MCP server for Claude Code integration
-python -m backend.mcp_server
-
-# Frontend hot-reload dev server (proxies API to :8000)
-cd frontend-svelte && npm run dev
-# → http://localhost:3001
 ```
 
----
+The backend serves the built frontend at `http://localhost:8000`.
+Local Hue, Sonos, and other integrations require their corresponding `.env`
+values.
+
+For frontend development, run the backend and Vite separately:
+
+```bash
+cd frontend-svelte
+npm run dev
+```
+
+Vite listens on `http://localhost:3001` and proxies API and WebSocket traffic to
+port 8000.
+
+Operational notes: Hue v2 bridge HTTPS uses the bridge's self-signed
+certificate, and time-sensitive behavior uses the
+`America/Indiana/Indianapolis` timezone.
+
+Useful checks:
+
+```bash
+python -m ruff check backend
+python -m pytest tests -v
+
+cd frontend-svelte
+npm run check
+npm run test:unit
+npm run build
+```
+
+Hardware-dependent behavior should normally be exercised with tests or fakes
+unless a live-device check is explicitly intended.
 
 ## Documentation
 
-Start with [`docs/README.md`](docs/README.md). The authoritative product and
-architecture description is [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md).
-The July 2026 desktop-inactive lighting investigation is preserved in
-[`docs/INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md`](docs/INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md).
+- [Project specification](docs/PROJECT_SPEC.md) — authoritative cross-system
+  product direction, current architecture, status boundaries, and roadmap.
+- [Documentation index](docs/README.md) — subsystem specs, design notes,
+  historical audits, and operational references.
+- [Game Day specification](docs/GAMEDAY_SPEC.md) — detailed Game Day behavior
+  and implementation contract.
 
----
+Dated audits and incident notes are evidence from a point in time, not the
+current architecture by themselves.
 
-## MCP Integration
+## Developer tooling
 
-Home Hub is registered as a Claude Code MCP server via `.mcp.json`. With the MCP server running alongside the main server, Claude Code can inspect and control the live system directly — useful for verifying that code changes work against real hardware without manual testing.
+The repository includes supporting automation for development and operations,
+including Codex-oriented guidance and an MCP integration for inspecting or
+controlling a configured HomeHub instance. These are developer conveniences,
+not the product's central feature or an independent source of automation
+policy.
 
-Example interactions:
-- "What mode is the system in right now?"
-- "Turn on all the lights at 50% brightness"
-- "What music has been playing most this week?"
-- "Show me the mode transition history for the last 3 days"
-- "Activate the movie night scene"
+## Project note
 
-The `query_db` tool accepts any SELECT statement against the live SQLite database — only SELECT is permitted, non-SELECT statements raise a `ValueError`.
-
----
-
-## Music Discovery Pipeline
-
-1. **Import** — Upload an Apple Music library XML export → parses play counts, genre tags, and playlist names to build a `TasteProfile`
-2. **Discovery** — Calls Last.fm `artist.getSimilar` for top artists → fetches 30-second iTunes preview URLs and artwork
-3. **Scoring** — Recommendations ranked by Last.fm similarity × genre overlap × user feedback
-4. **Caching** — Last.fm results stored in SQLite with 30-day TTL to minimize API calls
-
----
-
-## Future development
-
-See [`docs/Future_Development.md`](docs/Future_Development.md) for longer-range
-ideas. Shipped product behavior belongs in the authoritative project spec.
-
----
-
-## Notes
-
-- Hue bridge uses a self-signed SSL cert — CLIP API calls use `verify=False`
-- Sonos TTS requires `LOCAL_IP` in `.env` — Sonos fetches the MP3 directly from the server's LAN address
-- Timezone is set to `America/Indiana/Indianapolis` (Indiana has unique DST rules)
-- The SvelteKit static build catch-all in `main.py` must be registered after all API routes
-- PC agent scripts are standalone processes — they communicate via HTTP POST, not imported by the server
-
----
-
-> Personal project — not affiliated with Philips, Sonos, Apple, Last.fm, or the Indianapolis Colts.
+This is a personal project and is not affiliated with or endorsed by Philips
+Hue, Sonos, Apple, ESPN, the Indianapolis Colts, or the NFL. The repository does
+not currently include a license file.

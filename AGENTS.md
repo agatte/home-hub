@@ -1,258 +1,233 @@
 # Home Hub Codex Guide
 
-This repository is a personal smart-home control system for one apartment. It
-runs a FastAPI backend, a SvelteKit frontend, Hue/Sonos integrations, local
-agents, ML-assisted automation, and operational tooling for the production
-Latitude machine.
+This is the primary repo-local operating guide for Codex work in HomeHub. The
+repository is a personal smart-apartment system with a FastAPI backend,
+SvelteKit dashboard, Hue and Sonos integrations, optional context agents,
+ML-assisted automation, and production tooling for the Latitude host.
 
-## Source Of Truth
+## Source of truth
 
-- `docs/PROJECT_SPEC.md` is the authoritative product and architecture spec.
-- `.claude/CLAUDE.md` is the most complete day-to-day agent guide. Treat it as
-  relevant project documentation even though it is Claude-branded.
-- For ML work, read `docs/ML_SPEC.md`.
-- For game-day work, read `docs/GAMEDAY_SPEC.md`.
-- For personality/mood work, read `docs/PERSONALITY_LAYER.md`.
-- Keep `.env.example` and `backend/config.py` in sync for environment changes.
+- `docs/PROJECT_SPEC.md` is authoritative for cross-system product direction,
+  architecture, status boundaries, and roadmap.
+- `docs/README.md` explains document ownership and routes to subsystem docs.
+- Read `docs/ML_SPEC.md` for ML work, `docs/GAMEDAY_SPEC.md` for Game Day,
+  `docs/PERSONALITY_LAYER.md` for mood/personality work, and
+  `docs/PRESENCE_LIGHTING_SCENARIOS.md` for presence/lighting history.
+- Treat dated incidents, audits, cleanup plans, and delivery notes as historical
+  evidence unless current code or an authoritative spec confirms the claim.
+- Keep `.env.example` and `backend/config.py` aligned when environment settings
+  change. Never overwrite or expose `.env` secrets.
 
-## External Claude Resources
+Do not duplicate large product specifications here. Resolve conflicts in favor
+of `docs/PROJECT_SPEC.md`, then verify shipped claims in current code when
+needed.
 
-These live outside the repo and require explicit filesystem approval before
-Codex can read them:
+## Working model
 
-- `C:\Users\antho\.claude\agents\` - global Claude subagent specs. Use these as
-  checklists, not as code to copy. Especially relevant:
-  - `lighting-curator.md` for static review of lighting palette/state diffs.
-  - `pr-review-backend.md` and `pr-review-frontend.md` for pre-push review
-    rubrics.
-  - `gh-backlog-triager.md` for read-only GitHub issue hygiene.
-  - `homehub-verifier.md` for read-only live-system verification via MCP.
-  - `deploy-verifier.md` for post-deploy semantic checks.
-  - `test-coverage-prospector.md` for deciding what tests to add.
-- `C:\Users\antho\.claude\agents\reference\lighting-curator\INDEX.md` -
-  captioned apartment/light reference photos. Read the index first, then only
-  the specific image relevant to a lighting diff.
-- `C:\Users\antho\.claude\projects\C--Users-antho-Desktop-home-hub\memory\` -
-  project memories and footguns. Read only the memory files relevant to the
-  touched subsystem.
+Planning and prompt design may happen in ChatGPT; Codex performs bounded
+repository inspection, implementation, testing, review, and integration from
+the terminal. This file is sufficient for normal repository work.
 
-Do not read `.claude/settings.local.json` or other local settings unless the
-user explicitly asks; they may contain private machine-specific data.
+Before editing:
 
-## Stack
+1. Run `git status --short`, identify the current branch/worktree, and inspect
+   relevant diffs.
+2. Preserve unrelated tracked and untracked work. Do not clean, reset, replace,
+   or reformat files outside the requested scope.
+3. Use an isolated branch/worktree for substantial changes or issue work.
+4. Read the governing spec and map the request to concrete files and tests.
+5. Prefer the smallest change that satisfies the accepted contract.
+
+Use targeted validation proportional to the blast radius. Live checks are
+read-only first. Commits, pushes, issue/PR mutations, merges, deployments,
+service restarts, migrations, hardware writes, and destructive actions remain
+separate steps and require explicit user authorization. Authorization for code
+changes alone does not authorize those operations.
+
+Do not add AI-generated, co-author, or tool attribution boilerplate to commits
+or pull requests.
+
+## Stack and runtime
 
 - Backend: Python, FastAPI, async services, SQLite via SQLAlchemy/aiosqlite.
 - Frontend: SvelteKit 2, Svelte 4, Vite 5, Threlte/Three.js, WebSocket stores.
-- Hardware/services: Philips Hue v1/v2 APIs, Sonos via SoCo, Pi-hole/Unbound,
-  desktop pc_agent processes, optional camera and microphone sources.
-- Production server: Latitude at `192.168.86.210`; dev machine is Windows.
+- Devices/services: Philips Hue v1/v2, Sonos via SoCo, optional camera,
+  microphone, desktop activity, screen-sync, and peripheral agents.
+- Current always-on host/server role: Latitude at `192.168.86.210`; Windows is
+  the development machine and can provide optional desktop context.
+- The backend serves `frontend-svelte/build/` on port 8000. Vite normally runs
+  on port 3001 and proxies the API/WebSocket to port 8000.
 
-## Common Commands
+## Common commands
 
 ```bash
 python run.py
 python -m backend.services.pc_agent.activity_detector
 python -m backend.services.pc_agent.ambient_monitor
 python -m backend.services.pc_agent.monitor_brightness --detect
-pip install -r requirements.txt
-pytest
-python -m ruff check
-python -m ruff check --fix
-cd frontend-svelte && npm install
-cd frontend-svelte && npm run dev
-cd frontend-svelte && npm run build
-cd frontend-svelte && npm run check
-cd frontend-svelte && npm run test
-cd frontend-svelte && npm run test:e2e
+python -m pip install -r requirements.txt
+python -m pytest tests -v
+python -m ruff check backend
+
+cd frontend-svelte
+npm ci
+npm run dev
+npm run build
+npm run check
+npm run test:unit
+npm run test:e2e
 ```
 
-The backend serves `frontend-svelte/build/` on port 8000. The frontend dev
-server proxies API calls to port 8000 and normally runs on port 3001.
+Use `npm install` only when intentionally changing dependencies or the lockfile.
+Playwright requires a running local stack or an explicit
+`PLAYWRIGHT_BASE_URL`.
 
-## GitHub Workflow
+## Repository map
 
-`gh` is installed and authenticated for `agatte/home-hub`. Use it read-only
-first, then ask before mutating issues, PRs, labels, comments, or releases.
+- `backend/main.py` — FastAPI app, router ordering, WebSocket endpoint, static
+  frontend catch-all.
+- `backend/bootstrap.py` — service composition, callbacks, lifecycle, and
+  background-task startup/shutdown.
+- `backend/api/routes/` — REST endpoints, normally under `/api/{domain}`.
+- `backend/services/` — automation, integrations, context, routines, Game Day,
+  ML, and operational services.
+- `backend/services/pc_agent/` — optional desktop/Latitude observation agents.
+- `frontend-svelte/src/lib/stores/` — client state and WebSocket dispatch.
+- `frontend-svelte/src/lib/components/` — shared dashboard components.
+- `frontend-svelte/src/routes/` — home, music, analytics, Game Day, settings,
+  journal, personality, and guest routes.
+- `tests/` and `frontend-svelte/src/**/*.test.*` — backend and frontend tests.
+- `scripts/` — existing operational, setup, migration, and deployment helpers.
 
-Common commands:
+## GitHub issue workflow
 
-```bash
-gh auth status
-gh issue list --limit 30 --json number,title,labels,state,updatedAt,url
-gh issue view <number> --json number,title,body,labels,state,url,comments
-gh pr list --limit 20 --json number,title,headRefName,baseRefName,state,updatedAt,url
-gh pr checks <number>
-```
+Use GitHub read-only first. Before implementing an issue:
 
-When starting issue work, read the issue body and comments, inspect any linked
-branch/PR, then map the issue to targeted tests before editing. For backlog
-hygiene, mirror the rubric in
-`C:\Users\antho\.claude\agents\gh-backlog-triager.md`.
+1. Read the issue body and comments and inspect linked branches or PRs.
+2. Identify the subsystem and governing spec.
+3. Locate the smallest relevant implementation and existing tests with `rg`.
+4. State acceptance criteria as observable API shapes, state transitions,
+   events, WebSocket messages, UI states, or verification results.
+5. Choose the narrowest validation set that covers the change.
 
-## Codex Skills And Retired Claude Loops
+Do not mutate issues, labels, comments, PRs, or releases unless the user has
+authorized that GitHub write. Record validation commands/results in PR or issue
+text only when that write is in scope.
 
-User-level Codex skills live in `C:\Users\antho\.codex\skills\`. Current
-Home Hub skills include:
+## Issue-to-test mapping
 
-- `$deploy-home` - commit, push, deploy via `scripts/deploy.sh`, then verify.
-- `$api-audit`, `$health-snapshot`, `$why-this-mode`, `$journal-triage`,
-  `$ui-audit` - read-only verification and debugging workflows.
-- `$ci-health`, `$ml-status`, `$override-rate-check` - CI and autonomy checks.
-- `$flag-queue` - Codex follow-up capture/list/sync workflow.
-- `$implement-issue` - small GitHub issue implementation workflow.
-- `$homehub-monitoring` - read-only bridge for checking legacy Claude loop
-  status and digest freshness.
+- Backend route: happy path, authorization/write gate, bad input, and source
+  attribution when events are logged.
+- Service or automation engine: focused unit tests with fake Hue/Sonos/WS;
+  assert side effects, deduplication, callbacks, ownership, and event logging.
+- ML/fusion/source trust: deterministic fixtures, stale-signal behavior,
+  diversity/accuracy guardrails, authority boundaries, and persistence.
+- Scheduler/background task: registration, manual trigger, idempotency,
+  heartbeat/health visibility, and failure logging.
+- Frontend store/WebSocket: message dispatch, store updates, API helpers, and
+  error paths.
+- Frontend component/layout: Svelte checks, relevant unit tests, and browser
+  verification at desktop and mobile sizes.
+- Lighting state/palette: targeted automation tests, protected-light and
+  kitchen-pair checks, plus real-room visual review only when authorized.
+- Ops/deploy: dry-run or read-only inspection first, then an explicit live plan
+  naming endpoints, commands, rollback, and expected evidence.
+- Docs only: validate links and factual claims; do not run unrelated runtime
+  suites unless commands or configuration examples changed.
 
-The old Claude 24/7 monitoring loops are intentionally disabled as of
-2026-07-13. Windows Scheduled Tasks `Home Hub Checkback Loop`,
-`Home Hub Watcher Loop`, and `Home Hub Loops Daily Relaunch` were launching
-hidden `claude.exe` processes, but useful digest/subagent output stopped on
-2026-06-13 after Claude subscription/auth drift. Task XML backups and restore
-commands are in
-`C:\Users\antho\.codex\backups\homehub-claude-loop-tasks\README.md`.
+## Backend patterns
 
-Do not assume `/checkback-loop`, `/watcher-loop`, `homehub-verifier`,
-`homehub-investigator`, or `homehub-remediator` are actively running. Treat the
-Claude agent specs as reusable checklists only unless the user explicitly
-re-enables the old scheduled tasks.
+- Services generally expose `_connected`, `connected`, `async connect()`,
+  `poll_state_loop(...)`, and `close()`, then are composed in
+  `backend/bootstrap.py`.
+- Register API routers in `backend/main.py` before the Svelte catch-all and
+  preserve the documented Pi-hole proxy ordering.
+- WebSocket broadcasts use
+  `WebSocketManager.broadcast("{domain}_{event}", data)`.
+- Persisted settings use `load_setting(key)` and `save_setting(key, value)`;
+  those helpers open their own sessions.
+- Write endpoints use `source_from_request(...)` where event attribution is
+  required.
+- Mode-change callbacks registered through
+  `automation.register_on_mode_change(async_fn)` must stay fast.
+- Keep external I/O failure-tolerant and preserve existing circuit-breaker,
+  lifecycle, and observability patterns.
 
-## Issue-To-Test Checklist
+## Automation and lighting invariants
 
-Before editing for a GitHub issue:
+- `AutomationEngine` is the central activity-mode policy coordinator. Travel is
+  a HOME/TRAVEL host state above activity modes, not another mode priority.
+- Physical room evidence outranks process/activity guesses. Latitude evidence
+  is living-room/couch context; desktop evidence owns desk context. Do not
+  revive dormant bed-zone assumptions.
+- Optional desktop signals may be absent. Consumers must honor freshness and
+  degrade authority rather than retain stale context.
+- Do not bypass automation apply chokepoints unless the feature explicitly owns
+  bridge writes, such as screen sync or celebration sequences.
+- Respect manual, transit, scene, away/external-off, and screen-sync ownership.
+  Preserve protected lights and fresh screen-sync ownership of L2/L5.
+- Kitchen lights L3/L4 match in functional modes and guest party scenes.
+- Never mix CT and HSB fields in a Hue bridge payload.
+- Preserve in-flight transition/event-stream reconciliation to avoid stale
+  echoes, brightness pops, and UI snapback.
+- Sleeping, DND, arrival, away, manual override, and reacquisition behavior have
+  distinct lifecycle semantics; do not collapse them into a generic override.
 
-1. Read the issue body and comments with `gh issue view <number>`.
-2. Identify the subsystem: backend route, service/engine, ML lane, scheduler,
-   frontend route/component/store, ops/deploy, docs, or hardware/live behavior.
-3. Map the likely files and existing tests before coding. Prefer `rg` over broad
-   recursive listing.
-4. Define acceptance criteria in concrete terms: API shape, state transition,
-   event row, WebSocket message, UI state, or live verification result.
-5. Pick the smallest validation set that covers the blast radius.
+## Frontend patterns
 
-Default test mapping:
+- `frontend-svelte/src/lib/stores/init.js` is the central WebSocket dispatcher.
+- Reuse established stores, API helpers, Lucide icons, live cards, and mode
+  visual language before introducing new patterns.
+- Root layout owns kiosk chrome: `FloatingNav`, `VitalStrip`, `ModeOverlay`,
+  `NowPlayingChip`, and `MusicPlayerOverlay`. Guest routes intentionally remove
+  that chrome.
+- The now-playing chip opens the overlay; `/music` remains the deeper discovery
+  and settings page.
+- For Three.js/Threlte changes, verify rendering, cleanup, reduced-motion
+  behavior, and desktop/mobile viewport layouts.
 
-- Backend route: route tests for happy path, auth/write gate, bad input, and
-  source attribution when events are logged.
-- Service or automation engine: focused unit tests with fake Hue/Sonos/WS and
-  assertions on side effects, dedup state, callbacks, and event logging.
-- ML/fusion/source-trust: deterministic fixtures, stale-signal behavior, class
-  diversity/accuracy guardrails, and persistence if model state changes.
-- Scheduler/background task: registration in health/scheduler state, manual
-  trigger behavior, idempotency, and failure logging.
-- Frontend store/WebSocket: unit tests for message dispatch, store updates, API
-  helper behavior, and error paths.
-- Frontend UI/component: Svelte check, relevant unit test, and screenshot/browser
-  verification for layout-heavy or 3D changes.
-- Lighting palette/state: targeted automation tests plus lighting-curator static
-  review; use visual references for palette-sensitive changes.
-- Ops/deploy/live-system issue: dry-run or read-only command where possible,
-  then live MCP verification plan with exact endpoints/queries.
-- Docs-only issue: no runtime tests unless commands/config examples changed.
+## Review and validation
 
-Before closing or marking an issue fixed, capture the validation commands and
-results in the PR body or issue comment.
+For Python changes, run the focused tests and `python -m ruff check backend`.
+For Svelte changes, run `npm run check`, relevant unit tests, and `npm run build`.
+Use broader suites only when shared contracts or blast radius justify them.
 
-### Issue Completion Default
+Backend review should check API contracts, auth/source attribution, event
+logging, service lifecycle, async failure handling, scheduler registration,
+database compatibility, and Hue/Sonos ownership. Frontend review should check
+store dispatch, loading/error states, accessibility, responsive layout, kiosk
+behavior, and subscription cleanup.
 
-When the user asks Codex to work a GitHub issue or PR, treat the expected
-end-state as: inspect the issue/PR, implement or validate the fix, run the
-mapped tests/checks, push the branch, wait for GitHub checks where applicable,
-merge/close linked work when the fix is complete, add a concise validation
-comment, deploy runtime backend/frontend changes, and verify production health.
+Master has a known unrelated red backend CI baseline tracked by GitHub issue
+#151. Do not hide, reinterpret, or repair it as part of unrelated work. Report
+targeted results separately from inherited baseline failures.
 
-If the issue/PR should not be merged, closed, deployed, or commented after
-validation, the user will say so up front. Otherwise, continue through the
-completion workflow without waiting for extra prompts.
+## Live and operational safety
 
-## Editing Rules
+- Start live verification with read-only health/state endpoints and bounded
+  `SELECT` queries. Never infer current health from committed code alone.
+- Hardware-dependent behavior should use fakes/tests unless live access is
+  explicitly requested.
+- Use `scripts/deploy.sh` for an authorized production deployment; do not invent
+  a parallel deployment path.
+- Before an authorized deploy, capture the current build ID and relevant state.
+  Afterward, confirm build rollover when expected, health, touched API/UI
+  surfaces, and the post-restart event window.
+- `HOME_HUB_API_KEY` gates writes unless the configured localhost/LAN bypass
+  applies. Do not broaden trusted origins casually.
+- `LOCAL_IP` must be a reachable LAN address for Sonos TTS; `localhost` will not
+  work for the speaker.
+- Pi-hole admin is loopback-only in production. Behind Google Wifi, `.lan`
+  records are unreliable; `homehub-dashboard.local:8000` is the zero-config
+  dashboard name.
+- Database migrations, production restarts, device writes, and `.env` edits
+  require explicit authorization, a bounded plan, and rollback awareness.
 
-- Preserve user work. This repo may have active uncommitted refactors; inspect
-  `git status --short` and relevant diffs before editing.
-- Do not overwrite secrets in `.env`.
-- Avoid broad refactors unless the requested change requires them.
-- Add or adjust tests when touching shared services, automation policy, route
-  contracts, WebSocket behavior, or frontend stores.
-- Prefer existing service and component patterns over introducing new ones.
-- Keep comments useful and sparse. Many files already document non-obvious
-  hardware or operational constraints.
+## Legacy reference
 
-## Backend Patterns
-
-- New services generally expose `_connected`, `connected`, `async connect()`,
-  `poll_state_loop(...)`, and `close()`, then get wired in `backend/bootstrap.py`.
-- API routers live in `backend/api/routes/` and must be registered in
-  `backend/main.py` before the Svelte catch-all.
-- REST endpoints use `/api/{domain}` except `/health` and `/ws`.
-- WebSocket broadcasts use `WebSocketManager.broadcast("{domain}_{event}", data)`.
-- Persisted app settings use `load_setting(key)` and `save_setting(key, value)`;
-  these helpers open their own sessions.
-- Write endpoints should use `source_from_request(...)` when logging events.
-- Mode-change callbacks are registered through
-  `automation.register_on_mode_change(async_fn)` and should stay fast.
-
-## Automation And Lighting Footguns
-
-- `AutomationEngine` is the central mode policy coordinator. It combines time,
-  activity, overrides, ML, DND, away suppression, scene overrides, brightness
-  multipliers, weather, screen sync, and event logging.
-- Do not bypass the automation apply chokepoints unless the feature explicitly
-  owns bridge writes, as screen sync and celebration sequences do.
-- Respect protected lights: manual per-light overrides, transit overrides, and
-  screen-sync-owned L2/L5 while sync is fresh.
-- Kitchen lights L3/L4 must match in functional modes and guest party scenes.
-- CT and HSB color spaces must not be mixed in bridge payloads.
-- The SvelteKit catch-all in `main.py` must remain after all API routers and
-  after the Pi-hole proxy ordering rules documented there.
-
-## Frontend Patterns
-
-- Main source is `frontend-svelte/src/`.
-- Stores live in `src/lib/stores/`; `stores/init.js` dispatches WebSocket events
-  into domain stores.
-- Shared components live in `src/lib/components/`.
-- Routes live in `src/routes/`: home, music, analytics, gameday, settings,
-  journal, personality, and guest pages.
-- Use existing visual language: dense smart-home dashboard, live cards, mode
-  backgrounds, Lucide icons, and established store/API helpers.
-- Root layout owns kiosk chrome (`FloatingNav`, `VitalStrip`, `ModeOverlay`,
-  `NowPlayingChip`, `MusicPlayerOverlay`); guest routes intentionally strip it.
-  The now-playing chip opens the overlay, while `/music` remains the deeper
-  discovery/settings page.
-- For Three.js/Threlte work, verify the scene renders in browser-sized desktop
-  and mobile viewports.
-
-## Validation
-
-- Backend targeted tests are usually faster and safer than full-suite runs for
-  narrow changes, for example `pytest tests/test_automation_engine.py`.
-- Run `python -m ruff check` for Python edits.
-- Run `cd frontend-svelte && npm run check` for Svelte edits.
-- Run `cd frontend-svelte && npm run test` for frontend logic edits.
-- Hardware-dependent behavior should be verified with mocks/tests unless the
-  user explicitly asks to hit live devices.
-
-## Review Checklists
-
-- Backend changes: use the `pr-review-backend.md` rubric when touching
-  automation, API routes, scheduler tasks, source attribution, event logging,
-  Hue/Sonos calls, DB schema, or service lifecycle.
-- Frontend changes: use the `pr-review-frontend.md` rubric when touching
-  Svelte routes/components/stores, WebSocket dispatch, theme/mode config, or
-  responsive dashboard layout.
-- Lighting-state changes: use `lighting-curator.md` plus the visual reference
-  index before committing changes to `light_state_calculator.py`, `scenes.py`,
-  or `celebration_orchestrator.py`.
-- Live verification: use read-only Home Hub MCP checks first. Start with
-  `get_live_state`; use bounded `query_db` SELECTs for event/history questions.
-- Deploy verification: capture pre-deploy `build_id`, deploy, then confirm
-  build rollover, health, live state shape, API smoke endpoints, and the
-  post-restart event window.
-
-## Operational Cautions
-
-- Production deployment is documented in `.claude/CLAUDE.md`; use the existing
-  `scripts/deploy.sh` flow rather than inventing a new one.
-- Pi-hole admin runs loopback-only on production; `.lan` records are unreliable
-  behind Google Wifi. `homehub-dashboard.local:8000` is the zero-config name.
-- `HOME_HUB_API_KEY` gates write endpoints unless LAN/localhost bypass applies.
-- `LOCAL_IP` must be a LAN IP for Sonos TTS; `localhost` will not work.
+`.claude/CLAUDE.md` and other Claude-era repository artifacts may contain useful
+historical operational detail, but they are optional references rather than the
+active workflow or a prerequisite for normal work. Retired external memories,
+agent directories, and scheduled monitoring loops are not sources of current
+architecture or live-system truth. Do not access machine-local legacy settings
+or memories unless the user explicitly requests a relevant historical inquiry.
