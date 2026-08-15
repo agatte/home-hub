@@ -201,7 +201,7 @@ class TestRefreshPlayoffState:
 
     @pytest.mark.asyncio
     async def test_persists_to_save_setting(self, monkeypatch):
-        """End-to-end: mock HTTP + capture the save_setting call."""
+        """End-to-end: ESPN uses default headers and persists its result."""
         # Stub httpx.AsyncClient to return a fixed schedule.
         import httpx
 
@@ -211,12 +211,19 @@ class TestRefreshPlayoffState:
             def json(self): return self._p
 
         class _FakeClient:
-            def __init__(self, *a, **kw): self._payload = {
-                "events": [_final_game(colts_score=24, opp_score=10)],
-            }
+            init_kwargs: dict = {}
+            get_kwargs: dict = {}
+
+            def __init__(self, *args, **kwargs):
+                self.__class__.init_kwargs = kwargs
+                self._payload = {
+                    "events": [_final_game(colts_score=24, opp_score=10)],
+                }
             async def __aenter__(self): return self
             async def __aexit__(self, *a): return False
-            async def get(self, url): return _FakeResponse(self._payload)
+            async def get(self, url, **kwargs):
+                self.__class__.get_kwargs = kwargs
+                return _FakeResponse(self._payload)
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
@@ -230,6 +237,8 @@ class TestRefreshPlayoffState:
         assert captured["key"] == PLAYOFF_STATE_KEY
         assert captured["value"]["record"] == [1, 0, 0]
         assert result["record"] == [1, 0, 0]
+        assert "headers" not in _FakeClient.init_kwargs
+        assert "headers" not in _FakeClient.get_kwargs
 
     @pytest.mark.asyncio
     async def test_http_failure_returns_empty_no_write(self, monkeypatch):

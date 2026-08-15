@@ -35,7 +35,6 @@ _ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
 _SCHEDULE_URL = f"{_ESPN_BASE}/teams/11/schedule"  # COLTS = team id 11
 
 _HTTP_TIMEOUT = 10.0
-_HTTP_HEADERS = {"User-Agent": "HomeHub/1.0 (https://github.com/agatte/home-hub)"}
 
 # Tuesday after NFL Monday Night Football final — playoff models recompute
 # around this window. Spec §10.5.
@@ -159,9 +158,7 @@ async def refresh_playoff_state(save_setting_fn) -> dict[str, Any]:
         The computed state dict (also persisted).
     """
     try:
-        async with httpx.AsyncClient(
-            timeout=_HTTP_TIMEOUT, headers=_HTTP_HEADERS
-        ) as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(_SCHEDULE_URL)
             resp.raise_for_status()
             payload = resp.json()
