@@ -21,6 +21,7 @@ from backend.services.light_state_calculator import (
     TZ,
     apply_brightness_multiplier,
     apply_functional_weather_brightness,
+    apply_gaming_day_surround_brightness,
     apply_lux_multiplier,
     apply_weather_adjust,
     apply_zone_overlay,
@@ -916,6 +917,144 @@ class TestFunctionalWeatherBrightness:
         )
         # relax isn't a functional-weather mode → bri unchanged by that layer.
         assert weather_relax["1"]["bri"] == after_lux_relax["1"]["bri"]
+
+
+class TestGamingDaySurroundBrightness:
+
+    @staticmethod
+    def _state(game=None):
+        return resolve_activity_state("gaming", "day", game=game)
+
+    @staticmethod
+    def _after_weather(state, condition):
+        return apply_functional_weather_brightness(
+            state, "gaming", "day", condition,
+        )
+
+    @pytest.mark.parametrize(
+        ("condition", "expected_l1", "expected_kitchen"),
+        [
+            ("clear", 130, 30),
+            ("clouds", 155, 50),
+            ("rain", 170, 70),
+            ("thunderstorm", 180, 75),
+        ],
+    )
+    def test_weather_floors(self, condition, expected_l1, expected_kitchen):
+        state = self._after_weather(self._state(), condition)
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", condition,
+        )
+        assert out["1"]["bri"] == expected_l1
+        assert out["3"]["bri"] == out["4"]["bri"] == expected_kitchen
+
+    def test_misleading_high_lux_cannot_cancel_rain_floor(self):
+        state = self._after_weather(self._state(), "rain")
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", "rain",
+            lux_reading=139.30, baseline_lux=73.97,
+        )
+        assert out["1"]["bri"] == 170
+        assert out["3"]["bri"] == out["4"]["bri"] == 70
+
+    def test_dark_lux_lifts_within_caps_and_preserves_pair(self):
+        state = self._state()
+        state["3"]["bri"] = 80
+        state["4"]["bri"] = 60
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", "clear",
+            lux_reading=20.0, baseline_lux=90.0,
+        )
+        assert out["1"]["bri"] == 169
+        assert out["3"]["bri"] == out["4"]["bri"] == 85
+        assert out["1"]["bri"] <= 190
+
+    def test_lift_caps_never_dim_pre_lifted_values(self):
+        state = self._state()
+        state["1"]["bri"] = 220
+        state["3"]["bri"] = 100
+        state["4"]["bri"] = 95
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", "thunderstorm",
+        )
+        assert out["1"]["bri"] == 220
+        assert out["3"]["bri"] == out["4"]["bri"] == 100
+
+    def test_only_surround_brightness_changes(self):
+        state = self._state()
+        original = {lid: light.copy() for lid, light in state.items()}
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", "rain",
+        )
+        assert out["2"] == original["2"]
+        assert out["5"] == original["5"]
+        for lid in ("1", "3", "4"):
+            assert out[lid]["hue"] == original[lid]["hue"]
+            assert out[lid]["sat"] == original[lid]["sat"]
+
+    def test_game_profile_keeps_colors_and_receives_floor(self):
+        state = self._state("rust")
+        original = {lid: light.copy() for lid, light in state.items()}
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", "rain",
+        )
+        assert out["1"]["bri"] == 170
+        assert out["3"]["bri"] == out["4"]["bri"] == 70
+        for lid in ("1", "3", "4"):
+            assert out[lid]["hue"] == original[lid]["hue"]
+            assert out[lid]["sat"] == original[lid]["sat"]
+
+    def test_mode_multiplier_composes_before_floor(self):
+        multiplied = apply_brightness_multiplier(
+            self._state(), "gaming", {"gaming": 1.2},
+        )
+        out = apply_gaming_day_surround_brightness(
+            multiplied, "gaming", "day", "clear",
+            brightness_multiplier=1.2,
+        )
+        assert out["1"]["bri"] == 156
+        assert out["3"]["bri"] == out["4"]["bri"] == 36
+
+    def test_clear_weather_respects_reduced_mode_multiplier(self):
+        multiplied = apply_brightness_multiplier(
+            self._state(), "gaming", {"gaming": 0.5},
+        )
+        out = apply_gaming_day_surround_brightness(
+            multiplied, "gaming", "day", "clear",
+            brightness_multiplier=0.5,
+        )
+        assert out["1"]["bri"] == 65
+        assert out["3"]["bri"] == out["4"]["bri"] == 15
+
+    @pytest.mark.parametrize(
+        ("multiplier", "expected_l1", "expected_kitchen"),
+        [
+            (0.5, 85, 35),
+            (1.2, 204, 84),
+            (1.5, 254, 105),
+        ],
+    )
+    def test_rain_envelope_scales_with_mode_multiplier(
+        self, multiplier, expected_l1, expected_kitchen,
+    ):
+        state = apply_brightness_multiplier(
+            self._state(), "gaming", {"gaming": multiplier},
+        )
+        state = self._after_weather(state, "rain")
+        out = apply_gaming_day_surround_brightness(
+            state, "gaming", "day", "rain",
+            brightness_multiplier=multiplier,
+        )
+        assert out["1"]["bri"] == expected_l1
+        assert out["3"]["bri"] == out["4"]["bri"] == expected_kitchen
+
+    @pytest.mark.parametrize("period", ["evening", "night", "late_night"])
+    def test_other_periods_are_unchanged(self, period):
+        state = resolve_activity_state("gaming", period)
+        assert apply_gaming_day_surround_brightness(
+            state, "gaming", period, "thunderstorm",
+            lux_reading=20.0, baseline_lux=90.0,
+        ) is state
 
 
 # ---------------------------------------------------------------------------

@@ -1411,3 +1411,77 @@ def apply_functional_weather_brightness(
     if result.get("on", True) and "bri" in result:
         result["bri"] = max(1, min(254, int(result["bri"] * mult)))
     return result
+
+
+# Nominal 1.0x Gaming/day functional floors and lift caps. These are
+# deliberately not palette definitions: the overlay changes brightness only.
+# Both floors and caps scale with the user's configured Gaming brightness
+# multiplier so that control remains meaningful.
+GAMING_DAY_SURROUND_WEATHER_FLOORS: dict[str, tuple[int, int]] = {
+    "clouds": (155, 50),
+    "rain": (170, 70),
+    "thunderstorm": (180, 75),
+}
+GAMING_DAY_SURROUND_CAPS = {"1": 190, "3": 85, "4": 85}
+
+
+def apply_gaming_day_surround_brightness(
+    state: dict[str, Any],
+    mode: str,
+    period: str,
+    condition: Optional[str],
+    lux_reading: Optional[float] = None,
+    baseline_lux: Optional[float] = None,
+    brightness_multiplier: float = 1.0,
+) -> dict[str, Any]:
+    """Apply the lift-only Gaming/day L1/L3/L4 functional surround."""
+    if mode != "gaming" or period != "day" or not _is_per_light_dict(state):
+        return state
+
+    result = {lid: light.copy() for lid, light in state.items()}
+    weather_l1, weather_kitchen = GAMING_DAY_SURROUND_WEATHER_FLOORS.get(
+        condition or "", (0, 0),
+    )
+    lux_mult = 1.0
+    if lux_reading is not None:
+        lux_mult = max(1.0, lux_to_multiplier(
+            lux_reading,
+            float(baseline_lux) if baseline_lux else LUX_NEUTRAL_LUX,
+        ))
+
+    mode_mult = max(0.0, float(brightness_multiplier))
+
+    def scaled(value: int) -> int:
+        return max(1, min(254, int(round(value * mode_mult))))
+
+    def target(light_id: str, weather_floor: int) -> int:
+        current = int(result[light_id]["bri"])
+        cap = scaled(GAMING_DAY_SURROUND_CAPS[light_id])
+        floor = scaled(weather_floor) if weather_floor > 0 else 0
+        proposed_lift = min(
+            cap,
+            max(floor, int(current * lux_mult)),
+        )
+        # Strictly lift-only: never clamp a brighter upstream result down.
+        return max(current, proposed_lift)
+
+    if result.get("1", {}).get("on", True) and "bri" in result.get("1", {}):
+        result["1"]["bri"] = target("1", weather_l1)
+
+    kitchen_ids = [
+        lid for lid in ("3", "4")
+        if result.get(lid, {}).get("on", True) and "bri" in result.get(lid, {})
+    ]
+    if kitchen_ids:
+        pair_current = max(int(result[lid]["bri"]) for lid in kitchen_ids)
+        pair_cap = scaled(GAMING_DAY_SURROUND_CAPS["3"])
+        pair_floor = scaled(weather_kitchen) if weather_kitchen > 0 else 0
+        proposed_lift = min(
+            pair_cap,
+            max(pair_floor, int(pair_current * lux_mult)),
+        )
+        pair_bri = max(pair_current, proposed_lift)
+        for lid in kitchen_ids:
+            result[lid]["bri"] = pair_bri
+
+    return result

@@ -97,6 +97,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     adjust_single_light as _adjust_single_light_pure,
     apply_brightness_multiplier as _calc_apply_brightness_multiplier,
     apply_functional_weather_brightness as _calc_apply_functional_weather_brightness,
+    apply_gaming_day_surround_brightness as _calc_apply_gaming_day_surround_brightness,
     apply_lux_multiplier as _calc_apply_lux_multiplier,
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
@@ -3052,6 +3053,7 @@ class AutomationEngine:
             )
             state = self._apply_lux_multiplier(state, mode)
             state = self._functional_weather_brightness(state, mode, period)
+            state = self._gaming_day_surround_brightness(state, mode, period)
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
@@ -3307,6 +3309,17 @@ class AutomationEngine:
         return _calc_apply_functional_weather_brightness(
             state, mode, period, condition,
             learner_has_learned=learned,
+        )
+
+    def _gaming_day_surround_brightness(
+        self, state: dict[str, Any], mode: str, period: str,
+    ) -> dict[str, Any]:
+        """Apply the bounded L1/L3/L4 Gaming/day functional surround."""
+        ema, baseline = self._read_fresh_camera_lux()
+        return _calc_apply_gaming_day_surround_brightness(
+            state, mode, period, self._get_current_weather_condition(),
+            lux_reading=ema, baseline_lux=baseline,
+            brightness_multiplier=self._mode_brightness.get(mode, 1.0),
         )
 
     def _get_desired_effect(
