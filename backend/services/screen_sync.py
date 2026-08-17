@@ -263,10 +263,13 @@ class ScreenSyncService:
         self._last_sent_state: dict[str, dict[str, int]] = {}
 
         # Status tracking — retain the legacy global most-recent write plus
-        # per-source timestamps for read-only ownership evaluation.
+        # per-source and per-light timestamps. The target list is a capability
+        # set (desktop uses L2/L5; laptop can use L1/L3/L4), so bridge ownership
+        # must be derived from the lights that actually received fresh frames.
         self._last_color_at: Optional[datetime] = None
         self._last_source: Optional[str] = None
         self._last_color_at_by_source: dict[str, datetime] = {}
+        self._last_color_at_by_light: dict[str, datetime] = {}
 
         # Runtime overrides for specific (mode, zone, posture, light_id) caps —
         # settings page writes through this dict, persisted in app_settings.
@@ -483,14 +486,20 @@ class ScreenSyncService:
 
     @property
     def last_color_at_by_source(self) -> dict[str, datetime]:
-        """Most recent successful screen-sync write for each reporting source."""
+        """Most recent accepted screen-sync frame for each reporting source."""
         return dict(self._last_color_at_by_source)
 
-    def _record_source_write(self, source: str) -> None:
+    @property
+    def last_color_at_by_light(self) -> dict[str, datetime]:
+        """Most recent accepted screen-sync frame for each managed light."""
+        return dict(self._last_color_at_by_light)
+
+    def _record_source_write(self, source: str, light_id: str) -> None:
         observed_at = datetime.now(timezone.utc)
         self._last_color_at = observed_at
         self._last_source = source
         self._last_color_at_by_source[source] = observed_at
+        self._last_color_at_by_light[light_id] = observed_at
 
     @property
     def target_light(self) -> str:
@@ -505,6 +514,26 @@ class ScreenSyncService:
     def target_lights(self) -> list[str]:
         """All Hue light ids this service can write to."""
         return list(self._targets)
+
+    def fresh_owned_light_ids(self) -> set[str]:
+        """Lights with a screen-sync frame inside the ownership grace window."""
+        now = datetime.now(timezone.utc)
+
+        # Preserve the legacy service-wide liveness gate, then refine
+        # ownership per light. A fresh desktop L2/L5 frame must not
+        # refresh laptop-capable L1/L3/L4 ownership.
+        last_global = self._last_color_at
+        if last_global is None:
+            return set()
+        global_age = (now - last_global).total_seconds()
+        if global_age < -2.0 or global_age >= SCREEN_SYNC_FRESH_SECONDS:
+            return set()
+
+        return {
+            light_id
+            for light_id, observed_at in self._last_color_at_by_light.items()
+            if -2.0 <= (now - observed_at).total_seconds() < SCREEN_SYNC_FRESH_SECONDS
+        }
 
     def invalidate_sent_state(self, light_ids: list[str]) -> None:
         """Forget cached bridge state for the selected managed lights.
@@ -533,11 +562,19 @@ class ScreenSyncService:
         gate before an old, still-fresh screen-sync target has been safely
         re-established and its effect released.
         """
-        last_color_at = self._last_color_at
+        now = datetime.now(timezone.utc)
+        last_global = self._last_color_at
+        if last_global is None:
+            return None
+        global_age = (now - last_global).total_seconds()
+        if global_age < -2.0 or global_age >= SCREEN_SYNC_FRESH_SECONDS:
+            return None
+
+        last_color_at = self._last_color_at_by_light.get(light_id)
         if last_color_at is None:
             return None
-        age = (datetime.now(timezone.utc) - last_color_at).total_seconds()
-        if age >= SCREEN_SYNC_FRESH_SECONDS:
+        age = (now - last_color_at).total_seconds()
+        if age < -2.0 or age >= SCREEN_SYNC_FRESH_SECONDS:
             return None
         return self.authoritative_state(light_id)
 
@@ -706,7 +743,7 @@ class ScreenSyncService:
             and abs(last_sent.get("bri", ibri) - int(br)) < 2
             and self._within_deadband(last_sent, ih, isat, ibri, mode, period)
         ):
-            self._record_source_write(source)
+            self._record_source_write(source, light_id)
             return
         success = await self._set_light_serialized(light_id, {
             "on": True,
@@ -718,7 +755,7 @@ class ScreenSyncService:
         if success is not True:
             return
         self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
-        self._record_source_write(source)
+        self._record_source_write(source, light_id)
         await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
 
     async def _apply_generic_gaming_state(
@@ -761,7 +798,7 @@ class ScreenSyncService:
         self._last_sat[light_id] = float(stable["sat"])
         self._last_bri[light_id] = float(stable["bri"])
         if self._last_sent_state.get(light_id) == stable:
-            self._record_source_write(source)
+            self._record_source_write(source, light_id)
             return
 
         success = await self._set_light_serialized(
@@ -775,7 +812,7 @@ class ScreenSyncService:
         if success is not True:
             return
         self._last_sent_state[light_id] = stable
-        self._record_source_write(source)
+        self._record_source_write(source, light_id)
         await self._maybe_log_adjustment(
             light_id,
             stable["hue"],
@@ -914,7 +951,7 @@ class ScreenSyncService:
         self._last_sent_state[light_id] = {
             "hue": int(sh), "sat": int(ss), "bri": int(sb),
         }
-        self._record_source_write(source)
+        self._record_source_write(source, light_id)
         await self._maybe_log_adjustment(
             light_id, int(sh), int(ss), int(sb), "gaming",
             trigger="rust_brightness_sync",

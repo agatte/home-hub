@@ -63,6 +63,7 @@ class _FakeAutomation:
         self._override_mode = override_mode
         self.transit_calls: list[dict] = []
         self.clear_calls: list[dict] = []
+        self.recent_desktop_interaction: bool = False
 
     @property
     def current_mode(self) -> str:
@@ -71,6 +72,12 @@ class _FakeAutomation:
     @property
     def manual_override(self) -> bool:
         return self._manual_override
+
+    def is_recent_desktop_interaction(
+        self, *, max_idle_seconds: float, max_report_age_seconds: float,
+    ) -> bool:
+        _ = (max_idle_seconds, max_report_age_seconds)
+        return self.recent_desktop_interaction
 
     async def apply_transit_override(self, states, duration_seconds, transition_time):
         self.transit_calls.append(
@@ -491,6 +498,23 @@ class TestStickyDeskGate:
         await _drive_absent_window(svc)
         assert svc.active is False
         assert auto.transit_calls == []
+
+    async def test_recent_desktop_input_blocks_after_sticky_window_lapses(self):
+        # Aug 17 production regression: camera/fusion desk authority aged out
+        # while the user was still actively browsing at the desktop. Fresh
+        # real input must bridge that sensor gap and clear any absent dwell.
+        svc, auto, _ = self._make(
+            self._fusion_with_desk(
+                age_seconds=DESK_STICKY_SECONDS + 5, then_absent=True
+            )
+        )
+        auto.recent_desktop_interaction = True
+
+        await _drive_absent_window(svc)
+
+        assert svc.active is False
+        assert auto.transit_calls == []
+        assert svc._camera_absent_since is None
 
     async def test_fires_after_sticky_window_lapses(self):
         # Last desk confirmation older than DESK_STICKY_SECONDS and the latest

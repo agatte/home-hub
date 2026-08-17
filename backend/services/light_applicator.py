@@ -3,7 +3,7 @@ Light applicator — GH#87 step 5 of the automation_engine decomposition.
 
 Owns the low-level bridge-write layer: the away/external-off chokepoint,
 the per-light dedup cache compare/record, the protected-light skip filter
-(manual + transit overrides + sync-owned L2/L5), and the uniform/per-light
+(manual + transit overrides + fresh screen-sync-owned lights), and the uniform/per-light
 write + event-logging fan-out.
 
 This is the bottom of the lighting pipeline. ``AutomationEngine._apply_mode``
@@ -104,7 +104,7 @@ class LightApplicator:
         """Light ids the mode-apply pipeline must NOT write this tick.
 
         Always includes manual + transit per-light overrides. Additionally
-        includes the screen-sync target lamps (L2/L5) while sync is actively
+        includes the screen-sync lamps with fresh per-light ownership while sync is actively
         owning them — current mode is a SCREEN_SYNC_MODE and a color was
         pushed within ``SCREEN_SYNC_FRESH_SECONDS``. Screen sync writes those
         lamps directly to the bridge (bypassing the per-light dedup cache),
@@ -117,11 +117,17 @@ class LightApplicator:
         protected = set(self._st.manual_light_overrides) | set(self._st.transit_light_overrides)
         sync = self._screen_sync_getter()
         if sync is not None and self._current_mode_getter() in SCREEN_SYNC_MODES:
-            last = sync.last_color_at
-            if last is not None:
-                age = (datetime.now(timezone.utc) - last).total_seconds()
-                if age < SCREEN_SYNC_FRESH_SECONDS:
-                    protected |= set(sync.target_lights)
+            fresh_owned = getattr(sync, "fresh_owned_light_ids", None)
+            if callable(fresh_owned):
+                protected |= set(fresh_owned())
+            else:
+                # Compatibility for older stubs: legacy screen-sync exposed
+                # only one global freshness stamp plus its target list.
+                last = sync.last_color_at
+                if last is not None:
+                    age = (datetime.now(timezone.utc) - last).total_seconds()
+                    if age < SCREEN_SYNC_FRESH_SECONDS:
+                        protected |= set(sync.target_lights)
         return protected
 
     # ── Apply entry point ───────────────────────────────────────────────
@@ -219,7 +225,7 @@ class LightApplicator:
         self._overrides.prune_expired_transit()
 
         # Filter out protected lights: manual + transit per-light overrides,
-        # plus screen-sync-owned L2/L5 while sync is fresh (see
+        # plus screen-fresh screen-sync-owned lights while sync is fresh (see
         # protected_light_ids — stops the static-vs-sync flicker).
         protected = self.protected_light_ids()
         skipped: set[str] = set()

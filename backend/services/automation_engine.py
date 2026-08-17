@@ -1222,6 +1222,29 @@ class AutomationEngine:
         ).total_seconds()
         return age < window_seconds
 
+    def is_recent_desktop_interaction(
+        self,
+        *,
+        max_idle_seconds: float,
+        max_report_age_seconds: float,
+    ) -> bool:
+        """Whether fresh desktop process evidence proves recent real input.
+
+        This is deliberately narrower than the activity detector's Gaming hold:
+        callers choose a short idle bound suitable for physical-presence
+        arbitration. A stale/missing desktop agent, missing idle factor, clock
+        skew, or an idle value at/above the bound all fail open so physical
+        navigation can proceed.
+        """
+        evidence = self._last_process_semantic_by_device.get("desktop")
+        if evidence is None or evidence.idle_seconds is None:
+            return False
+        age = (datetime.now(tz=TZ) - evidence.received_at).total_seconds()
+        return bool(
+            -2.0 <= age <= max_report_age_seconds
+            and 0.0 <= evidence.idle_seconds < max_idle_seconds
+        )
+
     def _record_process_semantic(
         self,
         mode: str,
@@ -3189,7 +3212,7 @@ class AutomationEngine:
     def _protected_light_ids(self) -> set[str]:
         """Light ids the mode-apply pipeline must NOT write this tick — GH#87
         step-5 delegate to :class:`LightApplicator`. (manual + transit
-        overrides, plus sync-owned L2/L5 while sync is fresh.)
+        overrides, plus fresh screen-sync-owned lights while sync is fresh.)
         """
         return self._applicator.protected_light_ids()
 

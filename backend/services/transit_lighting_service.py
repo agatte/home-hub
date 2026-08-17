@@ -129,6 +129,16 @@ BED_EXIT_ABSENT_FRAMES = 5
 # detector, so a long head-down streak isn't mistaken for leaving.
 DESK_STICKY_SECONDS = 15
 
+# Desktop process evidence is an independent anti-flicker attendance signal.
+# Keep its idle bound aligned with DESK_STICKY_SECONDS: active keyboard/mouse
+# use can bridge a lost camera desk confirmation, but once input stops the
+# existing real-exit timing is not extended into the activity detector's much
+# longer Gaming hold. Process reports are normally frequent; 10s freshness
+# gives brief reporter jitter room while stale/missing desktop context fails
+# open to the camera/fusion state machine.
+DESKTOP_INPUT_STICKY_SECONDS = DESK_STICKY_SECONDS
+DESKTOP_PROCESS_FRESH_SECONDS = 10
+
 # Face confidence below which transit treats the detection as "not really
 # there." Imported from camera_service so the two stay in lockstep — values
 # below this are commonly chair-backs / picture frames / wall art that
@@ -356,6 +366,28 @@ class TransitLightingService:
         ).total_seconds() < REFIRE_COOLDOWN_SECONDS:
             self._record_block("refire cooldown")
             return
+
+        # Fresh real desktop input corroborates that the user is still at the
+        # PC when camera/fused desk evidence temporarily flakes. This is a
+        # short physical-attendance veto, not the activity detector's 180s
+        # Gaming hold: the idle bound matches DESK_STICKY_SECONDS so a genuine
+        # desk exit can still progress through the ordinary absent dwell.
+        recent_desktop_interaction = getattr(
+            self._automation, "is_recent_desktop_interaction", None,
+        )
+        if callable(recent_desktop_interaction):
+            try:
+                if recent_desktop_interaction(
+                    max_idle_seconds=DESKTOP_INPUT_STICKY_SECONDS,
+                    max_report_age_seconds=DESKTOP_PROCESS_FRESH_SECONDS,
+                ):
+                    self._record_block("recent desktop interaction")
+                    return
+            except Exception:
+                logger.debug(
+                    "Recent desktop interaction check failed",
+                    exc_info=True,
+                )
 
         # Watching + reclined: user is consuming content, not navigating —
         # even if zone is null/uncommitted. Closes the 2026-05-12 incident
