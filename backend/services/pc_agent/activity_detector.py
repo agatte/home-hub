@@ -456,6 +456,56 @@ class ActivityDetector:
         except Exception:
             return None, None, None
 
+    @staticmethod
+    def _command_line_has_runelite_client_marker(command_line: list[str]) -> bool:
+        """Return whether a Java command line has conclusive RuneLite identity."""
+        normalized = " ".join(command_line).lower().replace("/", "\\")
+        return "net.runelite\\client" in normalized
+
+    def _pid_has_runelite_client_marker(self, pid: int) -> bool:
+        """Fail closed unless ``pid`` exposes the conclusive RuneLite marker."""
+        try:
+            return self._command_line_has_runelite_client_marker(
+                psutil.Process(pid).cmdline(),
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            return False
+
+    def _find_running_runelite_java_pid(self) -> Optional[int]:
+        """Find a live Java RuneLite client even when another app is foreground.
+
+        Only java.exe/javaw.exe candidates are inspected. Gradle daemons, IDE
+        runtimes, and unrelated Java processes fail closed unless their own
+        command line contains RuneLite's ``net.runelite\\client`` classpath
+        marker. No sticky state is retained: process exit or PID reuse removes
+        the evidence on the next poll.
+        """
+        try:
+            processes = psutil.process_iter(["pid", "name"])
+        except (psutil.Error, OSError):
+            return None
+
+        try:
+            for proc in processes:
+                try:
+                    name = (proc.info.get("name") or "").lower()
+                    if name not in {"java.exe", "javaw.exe"}:
+                        continue
+                    if self._command_line_has_runelite_client_marker(proc.cmdline()):
+                        return int(proc.info["pid"])
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                    OSError,
+                    TypeError,
+                    ValueError,
+                ):
+                    continue
+        except (psutil.Error, OSError):
+            return None
+        return None
+
     def _is_foreground_runelite_java(
         self,
         process_name: Optional[str],
@@ -470,12 +520,7 @@ class ActivityDetector:
             or not RUNELITE_JAVA_WINDOW_TITLE_RE.fullmatch(window_title)
         ):
             return False
-
-        try:
-            command_line = " ".join(psutil.Process(pid).cmdline()).lower()
-        except Exception:
-            return False
-        return "net.runelite\\client" in command_line.replace("/", "\\")
+        return self._pid_has_runelite_client_marker(pid)
 
     def _get_foreground_window(self) -> tuple[Optional[str], Optional[str]]:
         """
@@ -524,6 +569,13 @@ class ActivityDetector:
             else next(iter(sorted(processes & game_processes)), None)
         )
         browser_running = bool(processes & BROWSER_PROCESSES)
+        running_runelite_java_pid = (
+            self._find_running_runelite_java_pid()
+            if processes & {"java.exe", "javaw.exe"}
+            else None
+        )
+        if matched_game_process is None and running_runelite_java_pid is not None:
+            matched_game_process = "runelite-java"
         gaming_qualification_reason: Optional[str] = None
 
         if fg_proc and fg_proc in game_processes:
@@ -594,16 +646,27 @@ class ActivityDetector:
         if self._is_foreground_runelite_java(fg_proc, fg_title, fg_pid):
             return classified("gaming", "foreground_game", "foreground_runelite_java")
 
-        if processes & game_processes:
-            if fg_proc in game_processes:
-                return classified("gaming", "foreground_game", "foreground_game")
+        if fg_proc in game_processes:
+            return classified("gaming", "foreground_game", "foreground_game")
+
+        has_regular_game = bool(processes & game_processes)
+        has_background_runelite_java = running_runelite_java_pid is not None
+        if has_regular_game or has_background_runelite_java:
             if idle_seconds < GAMING_IDLE_THRESHOLD:
-                return classified(
-                    "gaming", "recent_input_game_hold", "recent_input_game_hold",
+                qualification = (
+                    "recent_input_runelite_java_hold"
+                    if has_background_runelite_java and not has_regular_game
+                    else "recent_input_game_hold"
                 )
-            # Game process exists but is unfocused AND user is idle —
-            # likely an abandoned launcher. Fall through to normal detection.
-            gaming_qualification_reason = "background_game_idle"
+                return classified("gaming", "recent_input_game_hold", qualification)
+            # A verified background game exists, but recent real input has
+            # expired. Release Gaming normally instead of inventing a sticky
+            # RuneLite/browser exception.
+            gaming_qualification_reason = (
+                "background_runelite_java_idle"
+                if has_background_runelite_java and not has_regular_game
+                else "background_game_idle"
+            )
 
         # Media / work / browser disambiguation via foreground window.
         # Media apps (especially Stremio) leave background services running

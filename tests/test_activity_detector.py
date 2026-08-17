@@ -358,19 +358,112 @@ class TestForegroundRuneLiteJava:
             process.return_value.cmdline.side_effect = psutil.AccessDenied(pid=1376)
             assert detector._classify() == "idle"
 
-    def test_background_runelite_java_does_not_promote_gaming(self):
+    def test_background_runelite_java_with_recent_input_preserves_gaming(self):
         detector = _make_detector(
-            processes={"java.exe"},
-            fg_proc="code.exe",
-            fg_title="activity_detector.py - home-hub",
+            processes={"java.exe", "firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Old School RuneScape Wiki - Mozilla Firefox",
+            idle_seconds=GAMING_IDLE_THRESHOLD - 30,
         )
-        detector._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
-            "code.exe",
-            "activity_detector.py - home-hub",
-            42,
+        detector._find_running_runelite_java_pid = lambda: 1376  # type: ignore[method-assign]
+
+        assert detector._classify() == "gaming"
+        assert detector._last_classification is not None
+        assert detector._last_classification.candidate_reason == "recent_input_game_hold"
+        assert detector._last_classification.matched_game_process == "runelite-java"
+        assert (
+            detector._last_classification.gaming_qualification
+            == "recent_input_runelite_java_hold"
         )
 
+    def test_background_runelite_java_releases_after_input_hold_expires(self):
+        detector = _make_detector(
+            processes={"java.exe", "firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Old School RuneScape Wiki - Mozilla Firefox",
+            idle_seconds=GAMING_IDLE_THRESHOLD,
+        )
+        detector._find_running_runelite_java_pid = lambda: 1376  # type: ignore[method-assign]
+
+        assert detector._classify() != "gaming"
+        assert detector._last_classification is not None
+        assert (
+            detector._last_classification.gaming_qualification
+            == "background_runelite_java_idle"
+        )
+
+    def test_background_unverified_java_does_not_promote_gaming(self):
+        detector = _make_detector(
+            processes={"java.exe", "firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="GitHub - Mozilla Firefox",
+            idle_seconds=0,
+        )
+        detector._find_running_runelite_java_pid = lambda: None  # type: ignore[method-assign]
+
         assert detector._classify() == "idle"
+
+
+class TestRunningRuneLiteJavaIdentity:
+    """Background Java qualification requires RuneLite's classpath marker."""
+
+    class _Proc:
+        def __init__(self, pid: int, name: str, command_line):
+            self.info = {"pid": pid, "name": name}
+            self._command_line = command_line
+
+        def cmdline(self):
+            if isinstance(self._command_line, BaseException):
+                raise self._command_line
+            return self._command_line
+
+    def test_finds_runelite_among_multiple_java_processes(self):
+        detector = ActivityDetector()
+        processes = [
+            self._Proc(100, "java.exe", ["java", "org.gradle.launcher.daemon.bootstrap.GradleDaemon"]),
+            self._Proc(200, "javaw.exe", [r"C:\Java\bin\javaw.exe", r"net.runelite\client\1.12.35\client-1.12.35.jar"]),
+            self._Proc(300, "java.exe", ["java", "custom-tool.jar"]),
+        ]
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.process_iter",
+            return_value=iter(processes),
+        ):
+            assert detector._find_running_runelite_java_pid() == 200
+
+    def test_gradle_and_unrelated_java_do_not_qualify(self):
+        detector = ActivityDetector()
+        processes = [
+            self._Proc(100, "java.exe", ["java", "org.gradle.launcher.daemon.bootstrap.GradleDaemon"]),
+            self._Proc(300, "javaw.exe", ["javaw", "custom-tool.jar"]),
+        ]
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.process_iter",
+            return_value=iter(processes),
+        ):
+            assert detector._find_running_runelite_java_pid() is None
+
+    def test_access_denied_java_fails_closed(self):
+        detector = ActivityDetector()
+        processes = [
+            self._Proc(100, "java.exe", psutil.AccessDenied(pid=100)),
+        ]
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.process_iter",
+            return_value=iter(processes),
+        ):
+            assert detector._find_running_runelite_java_pid() is None
+
+    def test_non_java_process_with_marker_does_not_qualify(self):
+        detector = ActivityDetector()
+        processes = [
+            self._Proc(400, "python.exe", [r"net.runelite\client\client.jar"]),
+        ]
+        with patch(
+            "backend.services.pc_agent.activity_detector.psutil.process_iter",
+            return_value=iter(processes),
+        ):
+            assert detector._find_running_runelite_java_pid() is None
+
 
 # ---------------------------------------------------------------------------
 # Dwell — watching ↔ working symmetric stickiness at night
