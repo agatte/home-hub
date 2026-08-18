@@ -61,5 +61,5 @@ if (Test-Path $PidFile) {
         Write-Host "ERROR: PID file exists but process not running" -ForegroundColor Red
     }
 } else {
-    Write-Host "WARNING: PID file not created yet — check logs\activity_detector.log" -ForegroundColor Yellow
+    Write-Host "WARNING: PID file not created yet - check logs\activity_detector.log" -ForegroundColor Yellow
 }
