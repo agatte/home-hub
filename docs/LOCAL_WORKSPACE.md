@@ -114,8 +114,8 @@ C:\Users\antho\Documents\home-hub-project\worktrees\<worktree-name>
 Before creating one, inspect `git worktree list` and the intended branch.
 Preserve active work and never overwrite or clean unrelated work.
 
-The preserved `worktree-projector-kasa` branch may be recreated under this
-directory when needed.
+The preserved `worktree-projector-kasa` branch is currently checked out at
+`worktrees\projector-kasa`.
 
 ## Migration status
 
@@ -130,11 +130,12 @@ Completed on 2026-08-18:
 - `Home Hub Agent Supervisor` recreated from the new checkout;
 - all seven PC-agent threads started successfully;
 - activity reporting reached the backend with HTTP 200;
-- OpenRGB was relaunched and reconnected by the peripheral RGB agent.
+- OpenRGB was relaunched and reconnected by the peripheral RGB agent;
+- the lean ChatGPT snapshot helper was installed, tested, committed, and pushed;
+- the user-global `deploy-home` skill was updated to the canonical checkout path;
+- the preserved `worktree-projector-kasa` branch was recreated under
+  `worktrees\projector-kasa`.
 
-Remaining local workspace follow-up:
-
-1. install and test the ChatGPT snapshot helper;
-2. update the user-global `deploy-home` skill to the canonical checkout path;
-3. recreate only useful worktrees under `worktrees\`;
-4. keep backups/notifier/SSH/global tooling outside the workspace.
+Workspace migration closeout is complete. Keep backups, notifier/runtime
+installations, SSH configuration, and other user-global tooling outside this
+workspace unless a separate migration explicitly covers them.
