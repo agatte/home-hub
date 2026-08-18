@@ -77,8 +77,12 @@ async def test_generic_gaming_report_applies_canonical_target_states():
     assert set(result["lights"]) == {"2", "5"}
     assert set(hue.lights_touched()) == {"2", "5"}
     expected = resolve_activity_state("gaming", "day")
-    assert hue.last_for("2")["hue"] == expected["2"]["hue"]
-    assert hue.last_for("5")["hue"] == expected["5"]["hue"]
+    l2 = hue.last_for("2")
+    l5 = hue.last_for("5")
+    assert l2["ct"] == expected["2"]["ct"] == 286
+    assert l5["ct"] == expected["5"]["ct"] == 286
+    assert "hue" not in l2 and "sat" not in l2
+    assert "hue" not in l5 and "sat" not in l5
 
 
 @pytest.mark.asyncio

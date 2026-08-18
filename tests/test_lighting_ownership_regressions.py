@@ -145,9 +145,10 @@ async def test_newer_other_light_does_not_refresh_stale_authoritative_target(
 
 @pytest.mark.asyncio
 async def test_transit_clear_reapplies_living_room_with_fresh_desktop_sync(
-    mock_hue, mock_hue_v2, mock_ws,
+    mock_hue, mock_hue_v2, mock_ws, monkeypatch,
 ):
     engine = _engine(mock_hue, mock_hue_v2, mock_ws)
+    monkeypatch.setattr(engine, "_get_time_period", lambda: "day")
     engine._current_mode = "gaming"
 
     # Model the production incident: Gaming was already established and the
@@ -198,7 +199,7 @@ async def test_transit_clear_reapplies_living_room_with_fresh_desktop_sync(
         for call in mock_hue.set_light.await_args_list
     }
     assert set(writes) == {"1", "3", "4"}
-    assert all("ct" not in state for state in writes.values())
-    assert all("hue" in state and "sat" in state for state in writes.values())
+    assert all(state.get("ct") == 286 for state in writes.values())
+    assert all("hue" not in state and "sat" not in state for state in writes.values())
     assert engine._transit_light_overrides == {}
     assert engine._protected_light_ids() == {"2", "5"}

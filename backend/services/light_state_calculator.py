@@ -321,12 +321,17 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         # sat bumped (teal desaturates toward white faster than blue, so it
         # needs more sat to hold color): 170/180/185/165 -> 185/195/200/180.
         # Echoes the L1 ceramic base + monstera pot; live-previewed + approved.
+        # Daytime Gaming is functional fill, not mood lighting. With only
+        # five fixtures, saturated blue/teal consumes too much of the
+        # apartment's daytime light budget. Hold a coherent 3500K neutral
+        # white across the room; weather/lux may still lift brightness only.
+        # Evening/night retain the atmospheric blue/teal palette.
         "day": {
-            "1": {"on": True, "bri": 130, "hue": 47000, "sat": 180},
-            "2": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
-            "3": {"on": True, "bri": 30,  "hue": 39500, "sat": 185},
-            "4": {"on": True, "bri": 30,  "hue": 39500, "sat": 185},
-            "5": {"on": True, "bri": 90,  "hue": 48500, "sat": 160},
+            "1": {"on": True, "bri": 130, "ct": 286},
+            "2": {"on": True, "bri": 240, "ct": 286},
+            "3": {"on": True, "bri": 30,  "ct": 286},
+            "4": {"on": True, "bri": 30,  "ct": 286},
+            "5": {"on": True, "bri": 90,  "ct": 286},
         },
         # Surround floor raised 2026-05-30 (lighting-curator stage-1, advisory
         # agent a627831): L1 + kitchen L3/L4 lifted across evening/night/

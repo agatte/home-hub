@@ -989,8 +989,9 @@ class TestGamingDaySurroundBrightness:
         assert out["2"] == original["2"]
         assert out["5"] == original["5"]
         for lid in ("1", "3", "4"):
-            assert out[lid]["hue"] == original[lid]["hue"]
-            assert out[lid]["sat"] == original[lid]["sat"]
+            assert {k: v for k, v in out[lid].items() if k != "bri"} == {
+                k: v for k, v in original[lid].items() if k != "bri"
+            }
 
     def test_game_profile_keeps_colors_and_receives_floor(self):
         state = self._state("rust")

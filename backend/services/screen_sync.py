@@ -767,7 +767,7 @@ class ScreenSyncService:
         posture: Optional[str],
         period: Optional[str],
     ) -> None:
-        """Hold generic gaming on its canonical HSB state and safe cap."""
+        """Hold generic gaming on its canonical CT/HSB state and safe cap."""
         mode_state = resolve_activity_state("gaming", period)
         base = mode_state.get(light_id)
         if not isinstance(base, dict):
@@ -775,8 +775,9 @@ class ScreenSyncService:
 
         hue = base.get("hue")
         sat = base.get("sat")
+        ct = base.get("ct")
         bri = base.get("bri")
-        if hue is None or sat is None or bri is None:
+        if bri is None:
             return
 
         cap = self.get_cap(
@@ -788,14 +789,26 @@ class ScreenSyncService:
             1.0,
             None,
         )
-        stable = {
-            "hue": int(hue),
-            "sat": int(sat),
-            "bri": min(int(bri), cap),
-        }
+        if ct is not None:
+            # Generic Gaming/day uses neutral CT. Keep the bridge payload
+            # in one color space; evening/night remain canonical HSB.
+            stable = {
+                "ct": int(ct),
+                "bri": min(int(bri), cap),
+            }
+        elif hue is not None and sat is not None:
+            stable = {
+                "hue": int(hue),
+                "sat": int(sat),
+                "bri": min(int(bri), cap),
+            }
+        else:
+            return
 
-        self._last_hue[light_id] = float(stable["hue"])
-        self._last_sat[light_id] = float(stable["sat"])
+        if "hue" in stable:
+            self._last_hue[light_id] = float(stable["hue"])
+        if "sat" in stable:
+            self._last_sat[light_id] = float(stable["sat"])
         self._last_bri[light_id] = float(stable["bri"])
         if self._last_sent_state.get(light_id) == stable:
             self._record_source_write(source, light_id)
@@ -815,10 +828,11 @@ class ScreenSyncService:
         self._record_source_write(source, light_id)
         await self._maybe_log_adjustment(
             light_id,
-            stable["hue"],
-            stable["sat"],
+            stable.get("hue"),
+            stable.get("sat"),
             stable["bri"],
             "gaming",
+            ct=stable.get("ct"),
         )
 
     def _smooth(
@@ -859,19 +873,26 @@ class ScreenSyncService:
         self._event_logger = event_logger
 
     async def _maybe_log_adjustment(
-        self, light_id: str, hue: int, sat: int, bri: int, mode: str,
+        self,
+        light_id: str,
+        hue: Optional[int],
+        sat: Optional[int],
+        bri: int,
+        mode: str,
         trigger: str = "screen_sync",
+        *,
+        ct: Optional[int] = None,
     ) -> None:
         """Throttled event-log of a synced bridge write (closes syncfight-3).
 
         ``apply_color`` writes the bridge directly, bypassing the engine's
-        event logger, so without this the synced colors never reach
+        event logger, so without this the synced targets never reach
         ``light_adjustments`` / analytics. Throttled to one row per light per
         ``SCREEN_SYNC_LOG_INTERVAL_S`` so the ~2.5s capture cadence doesn't
-        flood the table. Logs the post-EMA applied values. ``trigger``
-        distinguishes the color path (``screen_sync``) from the Rust
-        luma-brightness path (``rust_brightness_sync``) in analytics. No-op
-        when no event logger is wired."""
+        flood the table. HSB writes record hue/sat; canonical CT writes record
+        ct instead. ``trigger`` distinguishes the color path (``screen_sync``)
+        from the Rust luma-brightness path (``rust_brightness_sync``) in
+        analytics. No-op when no event logger is wired."""
         if self._event_logger is None:
             return
         now = datetime.now(timezone.utc)
@@ -883,6 +904,7 @@ class ScreenSyncService:
             light_id=light_id,
             hue_after=hue,
             sat_after=sat,
+            ct_after=ct,
             bri_after=bri,
             mode_at_time=mode,
             trigger=trigger,

@@ -648,7 +648,7 @@ async def test_rust_config_partial_merge_and_validation():
 
 
 @pytest.mark.asyncio
-async def test_generic_gaming_full_spectrum_samples_keep_canonical_hsb_and_bri():
+async def test_generic_gaming_full_spectrum_samples_keep_canonical_state_and_bri():
     """Dark/red/green/blue samples cannot sweep generic gaming output."""
     expected = ss.resolve_activity_state("gaming", "day")
     samples = ((0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255))
@@ -661,14 +661,14 @@ async def test_generic_gaming_full_spectrum_samples_keep_canonical_hsb_and_bri()
 
         l2 = hue.last_for("2")
         l5 = hue.last_for("5")
-        assert (l2["hue"], l2["sat"], l2["bri"]) == (
-            expected["2"]["hue"], expected["2"]["sat"], expected["2"]["bri"]
+        assert l2["ct"] == expected["2"]["ct"] == 286
+        assert l2["bri"] == expected["2"]["bri"]
+        assert "hue" not in l2 and "sat" not in l2
+        assert l5["ct"] == expected["5"]["ct"] == 286
+        assert l5["bri"] == min(
+            expected["5"]["bri"], ss.MODE_MAX_BRIGHTNESS[("gaming", "5")]
         )
-        assert (l5["hue"], l5["sat"], l5["bri"]) == (
-            expected["5"]["hue"],
-            expected["5"]["sat"],
-            min(expected["5"]["bri"], ss.MODE_MAX_BRIGHTNESS[("gaming", "5")]),
-        )
+        assert "hue" not in l5 and "sat" not in l5
 
 
 @pytest.mark.asyncio
