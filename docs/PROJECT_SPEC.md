@@ -32,6 +32,38 @@ The apartment should feel alive because Home Hub notices, interprets,
 responds, and occasionally invites Anthony into a decision. “Alive” does not
 mean random output or constant light movement.
 
+**DECIDED TARGET.** Runtime status must distinguish three concepts that are
+currently overloaded by the legacy `idle` mode:
+
+1. **House state** — `Away`, `Home`, `Winding Down`, or `Sleeping`. House state
+   answers whether the apartment is occupied/awake and which overnight or
+   absence policy is authoritative. `Away` means the apartment is unoccupied
+   and normal autonomous actuation is suppressed; `Home` is the occupied,
+   awake baseline. `Winding Down` and `Sleeping` remain distinct states with
+   their own contracts below.
+2. **Activity** — what Home Hub is actually optimizing the environment for:
+   `General` when Anthony is home and awake but no stronger activity is known,
+   plus specific activities such as `Working`, `Gaming`, `Watching`,
+   `Cooking`, `Relax`, and `Social`. A specific activity owns the environment
+   only when its evidence has earned that authority.
+3. **Inferred context** — softer, bounded hypotheses such as `Getting Ready`,
+   `Heading to Kitchen`, `Returning to Desk`, `Sitting on Couch`, or
+   `Late-Night Kitchen Visit`. These are not peer activity modes and must not
+   silently claim the same authority as Working/Gaming/Watching/etc. Surface
+   them as secondary context (for example, `Likely: Getting Ready`) and begin
+   observationally; an inference may later earn narrowly scoped reversible
+   actions after measured reliability.
+
+**DECIDED TARGET.** `idle` is an internal detector/evidence condition, not a
+user-facing house state or activity. A device reporting `idle` means only that
+the device currently has no meaningful semantic activity; it does not prove
+that the apartment is Away, Home, or Sleeping. Apartment absence is owned by
+the explicit away/presence lifecycle. When Home Hub has credible evidence that
+Anthony is home and awake but no stronger activity is established, the
+user-facing state is `Home` with `General` activity and a deliberate
+general-home response. Initial, stale, or otherwise untrusted `idle` evidence
+must retain conservative behavior and must not relight the apartment overnight.
+
 ### Autonomy, trust, and interaction
 
 **SHIPPED/CURRENT.** Committed code contains confidence fusion, fixed
@@ -314,12 +346,14 @@ versus normal, and a useful leave-time adjustment—one useful sentence, not a
 long report.
 
 **DECIDED TARGET.** Explicitly leaving Sleeping for Auto is itself a strong
-wake signal. Home Hub must immediately restore an appropriate awake lighting
-state rather than leaving the apartment dark while desktop activity
-classification settles. A stronger activity such as Working, Gaming, Watching,
-or Cooking may replace that initial awake state once its normal evidence
+wake signal. Home Hub must immediately transition the house to `Home` and
+restore the `General` awake baseline rather than leaving the apartment dark
+while desktop activity classification settles. A fresh stronger activity such
+as Working, Gaming, Watching, or Cooking may replace `General` immediately when
+its evidence is trustworthy; otherwise it takes over once its normal evidence
 commits. Conversely, a PC/device wake during an established Sleeping session
-without corresponding human-wake evidence is not a morning transition.
+without corresponding human-wake evidence is not a morning transition and must
+not change the house state out of Sleeping.
 
 **RESEARCH NEEDED.** Apple Watch / Apple Health sleep integration, including
 delivery architecture, freshness, privacy, sleep-onset latency, confidence
@@ -464,8 +498,10 @@ appropriate—not to maximize automation for its own sake.
   schedule. Explicit user choices expire only when a fresh non-idle semantic
   mode is available to replace them; stale/absent desktop evidence must not
   expose old idle state. Sleeping remains persistent until manually cleared.
-- Functional daytime idle uses CT-only neutral white (`ct=250`), not an HSB
-  tint.
+- Legacy functional daytime `idle` currently uses CT-only neutral white
+  (`ct=250`), not an HSB tint. Under the decided product model above, `idle`
+  remains detector/internal terminology rather than the target user-facing
+  house/activity state.
 - Transit lighting is presence-edge-triggered: one activation per confirmed
   presence session, latched after activation/timeout until fresh strong
   presence re-arms it.
