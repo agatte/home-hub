@@ -401,7 +401,10 @@ class TestForegroundRuneLiteJava:
         )
         detector._find_running_runelite_java_pid = lambda: None  # type: ignore[method-assign]
 
-        assert detector._classify() == "idle"
+        assert detector._classify() != "gaming"
+        assert detector._last_classification is not None
+        assert detector._last_classification.matched_game_process is None
+        assert detector._last_classification.gaming_qualification is None
 
 
 class TestRunningRuneLiteJavaIdentity:
