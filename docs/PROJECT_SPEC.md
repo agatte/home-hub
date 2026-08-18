@@ -278,13 +278,27 @@ the underlying activity while Anthony may still watch the projector, use the
 desktop, listen, or move around. It gradually warms/dims the bedroom, reduces
 stimulation, adjusts music, suppresses unrelated prompts, preserves warm path
 lighting, arms projector shutdown, and makes the later Sleeping transition
-smooth. Sleeping is the final shutdown state.
+smooth. Sleeping is the final overnight state.
+
+**DECIDED TARGET.** Sleeping is a human/house state, not a PC-activity
+classification. Once Sleeping is established, background media playback,
+desktop process classifications, unexplained PC wakes, or other weak software
+activity must not by themselves end it. Sleeping remains authoritative until
+there is credible evidence that Anthony has actually awakened or he explicitly
+ends Sleeping.
+
+**DECIDED TARGET.** Future sleep confirmation uses sustained multi-signal
+evidence rather than any single weak signal. Candidate evidence includes manual
+Sleeping intent, local inactivity, physical presence/movement, and Apple Watch
+sleep evidence. The exact weighting, freshness requirements, and required
+combination of signals remain subject to research.
 
 The first projector behavior is a visible default timer (for example, 60
 minutes) when Winding Down starts, adjustable/cancelable through Alexa or the
-dashboard. Sleeping may shut down immediately only through the safest supported
-sequence. Later, sustained multi-signal sleep evidence may trigger a subtle
-warning and shutdown that cancels on movement, response, or activity.
+dashboard. Sleeping may shut down the projector immediately only through the
+safest supported sequence. Later, sustained multi-signal sleep evidence may
+trigger a subtle warning and projector shutdown that cancels on movement,
+response, or activity.
 
 **RESEARCH NEEDED.** Projector safe shutdown and smart-outlet integration. Do
 not cut outlet power until the projector’s normal shutdown and cooling needs
@@ -298,6 +312,19 @@ dim and returns to Sleeping. After confirmation, one suggestion chime may make
 a concise brief available with weather, schedule/calendar, current commute
 versus normal, and a useful leave-time adjustment—one useful sentence, not a
 long report.
+
+**DECIDED TARGET.** Explicitly leaving Sleeping for Auto is itself a strong
+wake signal. Home Hub must immediately restore an appropriate awake lighting
+state rather than leaving the apartment dark while desktop activity
+classification settles. A stronger activity such as Working, Gaming, Watching,
+or Cooking may replace that initial awake state once its normal evidence
+commits. Conversely, a PC/device wake during an established Sleeping session
+without corresponding human-wake evidence is not a morning transition.
+
+**RESEARCH NEEDED.** Apple Watch / Apple Health sleep integration, including
+delivery architecture, freshness, privacy, sleep-onset latency, confidence
+requirements, and how much evidence is required before Home Hub may trigger
+higher-consequence actions such as PC or projector shutdown.
 
 ### Social, guests, and privacy
 
