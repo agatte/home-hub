@@ -3,7 +3,7 @@
 #
 # Usage: powershell -File scripts\restart-detector.ps1
 
-$ProjectRoot = "C:\Users\antho\Desktop\home-hub"
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PidFile = Join-Path $ProjectRoot "logs\activity_detector.pid"
 
 Write-Host "Stopping old detector instances..."

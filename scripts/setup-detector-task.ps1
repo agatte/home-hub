@@ -4,7 +4,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\setup-detector-task.ps1
 
 $TaskName = "Home Hub PC Activity Detector"
-$ProjectRoot = "C:\Users\antho\Desktop\home-hub"
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PythonW = "$ProjectRoot\venv\Scripts\pythonw.exe"
 # Server URL from the HOME_HUB_URL user env var; falls back to the current Latitude LAN IP.
 $Server = if ($env:HOME_HUB_URL) { $env:HOME_HUB_URL } else { "http://192.168.86.210:8000" }

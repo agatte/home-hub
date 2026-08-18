@@ -22,4 +22,7 @@
 ' fast no-op when an instance is already running -- it just exits and
 ' the whole chain unwinds in ~100ms with zero visible artifacts.
 Set objShell = WScript.CreateObject("Wscript.Shell")
-objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""C:\Users\antho\Desktop\home-hub\scripts\start-supervisor.ps1""", 0, False
+Set objFSO = WScript.CreateObject("Scripting.FileSystemObject")
+scriptDir = objFSO.GetParentFolderName(WScript.ScriptFullName)
+supervisorScript = objFSO.BuildPath(scriptDir, "start-supervisor.ps1")
+objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & supervisorScript & """", 0, False

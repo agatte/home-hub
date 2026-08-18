@@ -7,13 +7,14 @@ if [[ "$OS" != "Windows_NT" ]]; then
 fi
 
 CHANGED=$(git diff-tree -r --name-only ORIG_HEAD HEAD)
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
 
 if echo "$CHANGED" | grep -qE "pc_agent/(game_list|activity_detector)\.py$"; then
     echo "=== Post-merge: PC agent code changed, restarting detector ==="
     powershell -Command "
         Get-Process pythonw -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Seconds 1
-        Start-Process pythonw -ArgumentList '-m','backend.services.pc_agent.activity_detector','--server','http://192.168.86.210:8000' -WorkingDirectory 'C:\Users\antho\Desktop\home-hub' -WindowStyle Hidden
+        Start-Process pythonw -ArgumentList '-m','backend.services.pc_agent.activity_detector','--server','http://192.168.86.210:8000' -WorkingDirectory '$PROJECT_ROOT' -WindowStyle Hidden
         Write-Host 'Detector restarted'
     "
 fi

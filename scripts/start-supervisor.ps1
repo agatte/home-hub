@@ -12,7 +12,7 @@
 # --copies was tried (python -m venv --copies) and ignored by Python 3.13:
 # produces the same launcher binary byte-for-byte.
 
-$ProjectRoot = "C:\Users\antho\Desktop\home-hub"
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $SystemPythonW = "C:\Python313\pythonw.exe"
 
 $env:PYTHONPATH = "$ProjectRoot\venv\Lib\site-packages;$ProjectRoot"

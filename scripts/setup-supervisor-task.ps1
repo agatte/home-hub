@@ -7,7 +7,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\setup-supervisor-task.ps1
 
 $TaskName = "Home Hub Agent Supervisor"
-$ProjectRoot = "C:\Users\antho\Desktop\home-hub"
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 # Action chain at fire time:
 #   wscript.exe (windowless from process creation)
