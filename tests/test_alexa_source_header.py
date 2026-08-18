@@ -111,6 +111,28 @@ async def test_override_route_threads_header_to_set_manual_override():
 
 
 @pytest.mark.asyncio
+async def test_override_route_marks_auto_as_explicit_user_intent():
+    """The route, not generic clear callers, owns Sleeping→Auto wake intent."""
+    from backend.api.routes.automation import set_override
+    from backend.api.schemas.automation import ManualOverride
+
+    engine = MagicMock()
+    engine.clear_override = AsyncMock()
+
+    request = _real_request(headers={}, client_host="192.168.1.30")
+    request.scope["app"] = MagicMock()
+    request.scope["app"].state.automation = engine
+    request.scope["app"].state.limiter = None
+
+    await set_override(ManualOverride(mode="auto"), request)
+
+    engine.clear_override.assert_awaited_once_with(
+        source="api:192.168.1.30",
+        user_requested_auto=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_override_route_falls_back_to_api_ip():
     """No X-Source → falls back to api:<remote_ip> (preserves existing
     dashboard / curl behavior)."""

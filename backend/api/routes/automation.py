@@ -327,6 +327,8 @@ async def get_status(request: Request) -> AutomationStatus:
     return AutomationStatus(
         current_mode=engine.current_mode,
         mode_source=engine.mode_source,
+        house_state=engine.house_state,
+        activity=engine.activity,
         manual_override=engine.manual_override,
         override_mode=engine.override_mode,
         last_activity_change=(
@@ -478,7 +480,10 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
     remote = getattr(request.client, "host", None) or "unknown"
     caller = source_from_request(request, fallback=f"api:{remote}")
     if override.mode == "auto":
-        await engine.clear_override(source=caller)
+        await engine.clear_override(
+            source=caller,
+            user_requested_auto=True,
+        )
         return {"status": "ok", "message": "Override cleared — returning to auto"}
 
     await engine.set_manual_override(override.mode, source=caller)

@@ -212,8 +212,18 @@ class TestAutomationEngine:
     def test_initial_state(self, engine):
         assert engine.current_mode == "idle"
         assert engine.mode_source == "time"
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
         assert engine.manual_override is False
         assert engine.enabled is True
+
+    def test_sleeping_projects_house_state_without_awake_activity(self, engine):
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+
+        assert engine.house_state == "sleeping"
+        assert engine.activity is None
 
     async def test_activity_report_updates_mode(self, engine):
         await engine.report_activity("gaming", source="pc_agent")
@@ -248,6 +258,253 @@ class TestAutomationEngine:
         await engine.clear_override()
         assert engine.manual_override is False
 
+    async def test_explicit_sleeping_auto_establishes_home_general(self, engine):
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process"
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        engine._external_off_detected = True
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+
+        await engine.clear_override(
+            source="api:test", user_requested_auto=True,
+        )
+
+        assert engine.manual_override is False
+        assert engine._current_mode == "idle"
+        assert engine.current_mode == "idle"
+        assert engine.mode_source == "user_auto"
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert engine._home_awake_confirmed is True
+        assert engine._external_off_detected is False
+        assert engine._away_hold is False
+        engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+
+    async def test_explicit_sleeping_auto_keeps_hard_away_dark(self, engine):
+        engine._current_mode = "working"
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        engine._external_off_detected = True
+        engine._away_hold = True
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+
+        await engine.clear_override(
+            source="api:test", user_requested_auto=True,
+        )
+
+        assert engine.manual_override is False
+        assert engine._current_mode == "idle"
+        assert engine.house_state == "away"
+        assert engine.activity is None
+        assert engine._home_awake_confirmed is False
+        assert engine._external_off_detected is True
+        assert engine._away_hold is True
+        engine._apply_mode.assert_not_awaited()
+        engine._fire_mode_change_callbacks.assert_not_awaited()
+
+    async def test_explicit_auto_wakes_detected_non_override_sleeping(
+        self, engine,
+    ):
+        # This regression owns state-transition semantics, not the asynchronous
+        # Hue sleep fade. Stub application before creating detected Sleeping so
+        # pytest does not leave an unrelated background fade task pending.
+        engine._apply_mode = AsyncMock()
+        await engine.report_activity("sleeping", source="process")
+        assert engine.current_mode == "sleeping"
+        assert engine.manual_override is False
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+
+        await engine.clear_override(
+            source="api:test", user_requested_auto=True,
+        )
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
+        assert engine.mode_source == "user_auto"
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert engine._home_awake_confirmed is True
+        engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+
+    async def test_explicit_sleeping_auto_is_user_authority_during_dnd(
+        self, engine,
+    ):
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "alexa:AutoIntent"
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
+        engine._apply_mode = AsyncMock()
+
+        await engine.clear_override(
+            source="alexa:AutoIntent", user_requested_auto=True,
+        )
+
+        assert engine.manual_override is False
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert engine._user_cleared_override_at is not None
+        engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
+
+    async def test_internal_sleeping_clear_stays_blocked_during_dnd(self, engine):
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "internal"
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
+        engine._apply_mode = AsyncMock()
+
+        await engine.clear_override(source="internal")
+
+        assert engine.manual_override is True
+        assert engine.house_state == "sleeping"
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_non_explicit_sleeping_clear_keeps_legacy_safe_behavior(
+        self, engine,
+    ):
+        engine._current_mode = "working"
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "internal"
+        engine._apply_mode = AsyncMock()
+
+        await engine.clear_override(source="internal")
+
+        assert engine.current_mode == "working"
+        assert engine.house_state == "home"
+        assert engine.activity == "working"
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_fresh_semantic_activity_refines_general_after_explicit_wake(
+        self, engine,
+    ):
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        engine._apply_mode = AsyncMock()
+
+        await engine.clear_override(
+            source="api:test", user_requested_auto=True,
+        )
+        await engine.report_activity("working", source="process")
+
+        assert engine.house_state == "home"
+        assert engine.activity == "working"
+        assert engine.current_mode == "working"
+
+    async def test_confirmed_home_ignores_process_sleeping_after_wake(self, engine):
+        engine._home_awake_confirmed = True
+        engine._current_mode = "idle"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process"
+        engine._apply_mode = AsyncMock()
+
+        await engine.report_activity("sleeping", source="process")
+
+        assert engine.current_mode == "idle"
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_explicit_sleeping_transition_clears_confirmed_home(self, engine):
+        engine._home_awake_confirmed = True
+        engine._apply_mode = AsyncMock()
+
+        await engine.set_manual_override("sleeping", source="api:test")
+
+        assert engine._home_awake_confirmed is False
+        assert engine.house_state == "sleeping"
+
+    def test_away_transition_clears_confirmed_home(self, engine):
+        engine._home_awake_confirmed = True
+
+        engine.arm_away_suppression("test")
+
+        assert engine._home_awake_confirmed is False
+        assert engine.house_state == "away"
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_confirmed_general_overnight_uses_dim_awake_baseline(
+        self, mock_dt, engine,
+    ):
+        now = datetime(2026, 8, 18, 3, 0, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._home_awake_confirmed = True
+        engine._apply_state = AsyncMock()
+        engine._weather_adjust = MagicMock(side_effect=lambda state: state)
+
+        await engine._apply_time_based()
+
+        engine._apply_state.assert_awaited_once_with({
+            "on": True,
+            "bri": engine.schedule_config.weekday.wake_brightness,
+            "hue": 6000,
+            "sat": 200,
+        })
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_unconfirmed_idle_overnight_stays_dark(self, mock_dt, engine):
+        now = datetime(2026, 8, 18, 3, 0, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._apply_state = AsyncMock()
+        engine._weather_adjust = MagicMock(side_effect=lambda state: state)
+
+        await engine._apply_time_based()
+
+        engine._apply_state.assert_awaited_once_with({"on": False})
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_explicit_sleeping_auto_overnight_renders_awake_general(
+        self, mock_dt, engine, mock_hue,
+    ):
+        now = datetime(2026, 8, 18, 3, 0, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        for light in mock_hue._lights.values():
+            light["on"] = False
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        engine._external_off_detected = True
+
+        await engine.clear_override(
+            source="api:test", user_requested_auto=True,
+        )
+
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert engine._home_awake_confirmed is True
+        assert all(light["on"] for light in mock_hue._lights.values())
+        assert {
+            light["bri"] for light in mock_hue._lights.values()
+        } == {engine.schedule_config.weekday.wake_brightness}
+
+    async def test_confirmed_general_idle_heartbeats_keep_awake_baseline(
+        self, engine,
+    ):
+        engine._home_awake_confirmed = True
+        engine._current_mode = "idle"
+        engine._apply_time_based = AsyncMock()
+
+        await engine.report_activity("idle", source="process")
+        await engine.report_activity("idle", source="process")
+
+        assert engine.current_mode == "idle"
+        assert engine.activity == "general"
+        assert engine._apply_time_based.await_count == 2
+
     async def test_set_override_logs_source(self, engine, caplog):
         with caplog.at_level("INFO", logger="home_hub.automation"):
             await engine.set_manual_override("relax", source="api:192.168.1.30")
@@ -267,6 +524,8 @@ class TestAutomationEngine:
         mode_broadcasts = [b for b in mock_ws.broadcasts if b[0] == "mode_update"]
         assert len(mode_broadcasts) >= 1
         assert mode_broadcasts[-1][1]["mode"] == "movie"
+        assert mode_broadcasts[-1][1]["house_state"] == "home"
+        assert mode_broadcasts[-1][1]["activity"] == "movie"
 
     def test_schedule_config_has_weekday_and_weekend(self, engine):
         config = engine.schedule_config
@@ -468,6 +727,7 @@ class TestAutonomousOverrideDisplacement:
         assert engine.override_mode == "relax"
 
     async def test_idle_does_not_displace_watching_sleep_guard_sleeping(self, engine):
+        engine._apply_mode = AsyncMock()
         await engine.set_manual_override("sleeping", source="watching_sleep_guard")
         await engine.report_activity("idle", source="ambient")
 
@@ -517,6 +777,10 @@ class TestSleepingFloor:
         """Establish non-override sleeping (source=process, no manual override),
         mirroring the PC sleep-watcher re-asserting sleeping after the original
         Alexa override lapsed."""
+        # These tests own the Sleeping floor semantics, not Hue fade timing.
+        # Stub mode application so entering detected Sleeping cannot leave an
+        # unrelated background _sleep_fade task pending at pytest teardown.
+        engine._apply_mode = AsyncMock()
         await engine.report_activity("sleeping", source="process")
         assert engine.current_mode == "sleeping"
         assert engine.manual_override is False
@@ -573,6 +837,7 @@ class TestSleepingFloor:
     async def test_manual_sleeping_override_unaffected_by_floor(self, engine):
         # The floor is gated on `not manual_override`; a user/Alexa sleeping
         # override keeps its existing (downstream) protection.
+        engine._apply_mode = AsyncMock()
         await engine.set_manual_override("sleeping", source="api:1.2.3.4")
         await engine.report_activity("idle", source="audio_ml")
         assert engine.manual_override is True
@@ -1592,6 +1857,26 @@ class TestApplyModeDedup:
         assert calls == [], (
             f"same-mode heartbeats wrote to {calls}; force_resend should be "
             f"False on no-mode-change reports so the dedup cache is preserved"
+        )
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_confirmed_general_idle_heartbeats_do_not_thrash_bridge(
+        self, mock_dt, engine, mock_hue,
+    ):
+        now = datetime(2026, 8, 18, 3, 0, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._home_awake_confirmed = True
+
+        await engine.report_activity("idle", source="process")
+        calls = self._wrap_set_light(mock_hue)
+
+        await engine.report_activity("idle", source="process")
+        await engine.report_activity("idle", source="process")
+        await engine.report_activity("idle", source="process")
+
+        assert calls == [], (
+            "confirmed General idle heartbeats should remain dedup-friendly"
         )
 
     async def test_mode_change_report_still_invalidates_cache(
@@ -3106,6 +3391,10 @@ class TestWatchingSleepGuard:
         eng._camera_service = _FakeCamera(zone="bed", posture="reclined")
         eng._current_mode = "watching"
         eng._ml_logger = _FakeMLLogger()
+        # This class verifies guard/dwell/refractory semantics, not Hue fade
+        # timing. A real sleeping application starts a background _sleep_fade
+        # task that can outlive an individual pytest event loop.
+        eng._apply_mode = AsyncMock()
         return eng
 
     # 02:00 weekday — solidly inside the late_night window (23:00 → wake_hour 5).

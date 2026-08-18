@@ -45,6 +45,8 @@ class TestAutomationAPI:
         data = resp.json()
         assert "current_mode" in data
         assert "mode_source" in data
+        assert "house_state" in data
+        assert "activity" in data
         assert "manual_override" in data
 
     def test_config_returns_200(self, client):

@@ -43,6 +43,14 @@ class AutomationStatus(BaseModel):
         default="time",
         description="What set the current mode: time, process, ambient, manual",
     )
+    house_state: str = Field(
+        default="home",
+        description="Projected house state: away, home, winding_down, sleeping",
+    )
+    activity: Optional[str] = Field(
+        default="general",
+        description="Projected user-facing activity; idle maps to general while home",
+    )
     manual_override: bool = Field(
         default=False,
         description="Whether a manual override is active",

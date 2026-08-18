@@ -402,6 +402,13 @@ class AutomationEngine:
         # detecting the Hue app's all-off) never sets this, preserving
         # its original "any non-idle activity resumes" semantics.
         self._away_hold: bool = False
+        # Compatibility latch for the decided Home + General model. False at
+        # boot so stale/initial idle remains conservative overnight. Explicit
+        # Sleeping → Auto confirms a human wake and sets this until a real
+        # lifecycle transition (Sleeping/Away) clears it. While set, detector
+        # idle renders an awake General baseline instead of the legacy overnight
+        # off rule, and weak process ``sleeping`` cannot reclaim house authority.
+        self._home_awake_confirmed: bool = False
 
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
@@ -528,6 +535,38 @@ class AutomationEngine:
         return self._current_mode
 
     @property
+    def house_state(self) -> str:
+        """Project the legacy mode engine onto the decided house-state model.
+
+        Away is owned by the hard away hold, not by detector ``idle``/``away``
+        vocabulary. Sleeping remains represented by the effective legacy mode
+        until the broader house-state migration lands. Winding Down is not
+        inferred from the clock; it becomes a real state only when GH#138 does.
+        """
+        if self._away_hold:
+            return "away"
+        if self.current_mode == "sleeping":
+            return "sleeping"
+        return "home"
+
+    @property
+    def activity(self) -> Optional[str]:
+        """Return the decided user-facing activity projected from legacy mode.
+
+        ``idle`` is detector/internal evidence. While Home, it projects to the
+        General activity baseline. Away and Sleeping intentionally expose no
+        awake activity.
+        """
+        if self.house_state != "home":
+            return None
+        mode = self.current_mode
+        if mode in {"idle", "away"}:
+            return "general"
+        if mode == "sleeping":
+            return None
+        return mode
+
+    @property
     def last_weather_class(self) -> Optional[str]:
         """Most recent weather class applied to the lux-multiplier curve.
 
@@ -611,6 +650,8 @@ class AutomationEngine:
         )
         process_arbitration = self._physical_context_process_arbitration(now)
         return {
+            "house_state": self.house_state,
+            "activity": self.activity,
             "current_activity": self._current_mode,
             "current_activity_source": self._mode_source,
             "current_activity_source_key": self._mode_source_key,
@@ -1178,6 +1219,7 @@ class AutomationEngine:
         already_armed = self._external_off_detected
         self._external_off_detected = True
         self._away_hold = True
+        self._home_awake_confirmed = False
         self._invalidate_dedup_cache()
         if not already_armed:
             logger.info(
@@ -1921,6 +1963,22 @@ class AutomationEngine:
         self._last_mode_source_report_at[source_key] = now
         self._last_mode_source_report_at[source] = now
 
+        # Explicit Sleeping → Auto establishes Home as human authority. A PC
+        # sleep-watcher report is device lifecycle evidence, not proof that the
+        # human went back to sleep, so it cannot reclaim Sleeping while that
+        # awake-home latch is active. A later explicit/trusted Sleeping override
+        # clears the latch in set_manual_override().
+        if (
+            self._home_awake_confirmed
+            and source == "process"
+            and mode == "sleeping"
+        ):
+            logger.debug(
+                "Confirmed Home: ignored process sleeping report after "
+                "explicit wake"
+            )
+            return
+
         # Fresh desk presence is stronger evidence than a passive idle detector
         # for active desk work. Windows input can sit idle while Anthony is
         # visibly at the desk reading or thinking. Watching already has process-
@@ -2179,6 +2237,12 @@ class AutomationEngine:
                 )
                 return
 
+        # A committed Sleeping lifecycle transition ends any previously
+        # confirmed awake-home session. Do this only after all override gates
+        # above pass so a blocked autonomous sleep push cannot clear wake state.
+        if mode == "sleeping":
+            self._home_awake_confirmed = False
+
         # Capture the effective mode (override if active, else detected) so that
         # event logging and callback gating see the real "previous" mode, not
         # the stale private _current_mode which only reflects PC agent state.
@@ -2227,24 +2291,35 @@ class AutomationEngine:
                 source=source,
             )
 
-    async def clear_override(self, source: str = "internal") -> None:
+    async def clear_override(
+        self,
+        source: str = "internal",
+        *,
+        user_requested_auto: bool = False,
+    ) -> None:
         """Clear the manual override and return to automatic mode.
 
-        Special case: if we were sleeping, don't re-apply anything. The fade
-        already finished hours ago and lights are off. Re-applying a detected
-        mode (working/idle with its time-based night rule, etc.) would blast
-        bright lights on while the user is still asleep — exactly the
-        "lights turn back on" bug.
+        Ordinary/internal clears preserve the historical Sleeping safety rule:
+        clearing a Sleeping override must not blindly relight the apartment.
+        The explicit Auto control is different. When the user deliberately
+        selects Auto while Sleeping, that action is authoritative wake intent
+        and transitions the compatibility runtime to Home + General immediately.
 
         Args:
             source: Caller identifier for telemetry — see set_manual_override.
                 Useful for diagnosing surprise clear events (e.g. an API
                 client posting ``mode=auto`` mid-evening).
+            user_requested_auto: True only for the explicit user Auto action.
+                Internal timeout/recovery callers must leave this False.
         """
         # DND blocks autonomous override clears (4h timeout, fusion, etc.) so
         # the locked state survives the DND window. User-initiated clears via
         # the API route still pass.
-        if self.is_dnd_active() and not source.startswith("api:"):
+        if (
+            self.is_dnd_active()
+            and not source.startswith("api:")
+            and not user_requested_auto
+        ):
             logger.info(
                 "DND active — blocking autonomous override clear (source=%s)",
                 source,
@@ -2256,8 +2331,13 @@ class AutomationEngine:
         # suppressed for USER_CLEAR_AUTO_PUSH_COOLDOWN_SECONDS so the user's
         # explicit "auto" choice isn't immediately undone by a sensor lane.
         old_effective = self._override_mode
+        # Sleeping can also be held directly in `_current_mode` by the PC
+        # sleep watcher with no manual override. Explicit Auto must still see
+        # that as a Sleeping → Home wake boundary.
+        if user_requested_auto and self.current_mode == "sleeping":
+            old_effective = "sleeping"
         old_source = self._override_source
-        if source.startswith("api:"):
+        if source.startswith("api:") or user_requested_auto:
             self._user_cleared_override_at = datetime.now(tz=TZ)
             self._user_clear_allows_physical_context_relax = (
                 old_effective == "sleeping"
@@ -2292,14 +2372,76 @@ class AutomationEngine:
         await self._persist_override_state()
 
         if old_effective == "sleeping":
-            # User is (probably) still asleep or just waking — they'll pick a
-            # new mode on the dashboard. Leave lights off, but DO fire mode
-            # change callbacks so subscribers (camera unpause, ambient sound,
-            # ML logger) sync to the new effective mode. The 2026-05-05 bug:
-            # camera stayed paused all day after each morning's "Auto" tap
-            # because this branch skipped callbacks entirely. MusicMapper has
-            # its own auto-play gates (idle has no playlist) so waking to
-            # idle won't trigger music.
+            if user_requested_auto:
+                # Explicit Sleeping → Auto is a strong human wake signal. Do
+                # not resurrect whatever detector mode happened to accumulate
+                # underneath the Sleeping override; establish the compatibility
+                # representation of Home + General first. Fresh semantic
+                # activity may refine it normally on the next report.
+                now = datetime.now(tz=TZ)
+                self._current_mode = "idle"
+                self._current_game = None
+                self._mode_source = "user_auto"
+                self._mode_source_key = "user_auto"
+                self._last_activity = "idle"
+                self._last_activity_change = now
+                self._idle_entered_at = now
+                self._last_mode_source_report_at["user_auto"] = now
+
+                # Cancel any still-running sleep fade even when Away prevents
+                # the lighting apply below.
+                if (
+                    self._sleep_fade_task
+                    and not self._sleep_fade_task.done()
+                ):
+                    self._sleep_fade_task.cancel()
+                    self._sleep_fade_task = None
+                    logger.info(
+                        "Sleep fade cancelled — explicit Auto wake requested"
+                    )
+
+                if self._away_hold:
+                    # Hard Away/geofence authority outranks the wake control.
+                    # Keep both suppression bits intact and expose the new raw
+                    # activity only for later reacquisition.
+                    logger.info(
+                        "Sleeping→Auto wake held by hard Away suppression "
+                        "(source=%s)",
+                        source,
+                    )
+                    # Match the engine's normal Away contract: expose raw
+                    # state, but do not fire downstream mode callbacks that may
+                    # actuate Sonos or other integrations while nobody is home.
+                    await self._broadcast_mode()
+                    return
+
+                self._home_awake_confirmed = True
+
+                if self._external_off_detected:
+                    # Sleeping/off can leave the soft all-lights-off latch set.
+                    # Explicit wake intent may release that soft latch, but this
+                    # path never clears the hard Away hold above.
+                    self._external_off_detected = False
+                    self._invalidate_dedup_cache()
+                    logger.info(
+                        "Sleeping→Auto wake released soft external-off "
+                        "suppression (source=%s)",
+                        source,
+                    )
+
+                logger.info(
+                    "Sleeping→Auto wake: house=home activity=general "
+                    "(source=%s)",
+                    source,
+                )
+                await self._apply_mode("idle", force_resend=True)
+                await self._broadcast_mode()
+                await self._fire_mode_change_callbacks(self._current_mode)
+                return
+
+            # Non-explicit clears keep the historical safety contract: the
+            # user may still be asleep, so leave lights off but wake lifecycle
+            # subscribers (camera, ambient, ML logger) to the exposed mode.
             await self._broadcast_mode()
             if old_effective != self._current_mode:
                 await self._fire_mode_change_callbacks(self._current_mode)
@@ -3395,6 +3537,23 @@ class AutomationEngine:
             if now.weekday() < 5
             else self._schedule_config.weekend
         )
+
+        # Legacy idle is intentionally dark from midnight until wake_hour so
+        # stale/initial detector evidence cannot relight a sleeping apartment.
+        # Once explicit Sleeping → Auto has confirmed a human wake, that same
+        # idle evidence means Home + General instead. Reuse the established
+        # pre-ramp dim-warm state until the normal schedule becomes active.
+        if self._home_awake_confirmed and 0 <= hour < schedule.wake_hour:
+            state: dict[str, Any] = {
+                "on": True,
+                "bri": schedule.wake_brightness,
+                "hue": 6000,
+                "sat": 200,
+            }
+            state = self._weather_adjust(state)
+            await self._apply_state(state)
+            return
+
         rules = self._build_time_rules(schedule)
 
         # Evening → wind-down fade: interpolate over the 30 min before winddown_start_hour
@@ -4571,6 +4730,8 @@ class AutomationEngine:
         await self._ws_manager.broadcast("mode_update", {
             "mode": self.current_mode,
             "source": self.mode_source,
+            "house_state": self.house_state,
+            "activity": self.activity,
             "manual_override": self._manual_override,
             "time_period": self._get_time_period(),
         })
