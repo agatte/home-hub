@@ -49,8 +49,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run Svelte checks
+        run: npm run check
+
       - name: Run vitest unit tests
         run: npm run test:unit
+
+      - name: Build frontend
+        run: npm run build
 
       # Playwright e2e tests require a live backend + frontend; not run in
       # CI yet. Run locally with `npm run test:e2e` after starting the dev
