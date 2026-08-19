@@ -1,6 +1,6 @@
 <script>
-  import ModeCardDeck from '$lib/components/ModeCardDeck.svelte'
-  import ModeIndicator from '$lib/components/ModeIndicator.svelte'
+  import ActivityOverrideControl from '$lib/components/ActivityOverrideControl.svelte'
+  import HomeContextHeader from '$lib/components/HomeContextHeader.svelte'
   import RoutineCard from '$lib/components/RoutineCard.svelte'
   import ApartmentWidget from '$lib/components/ApartmentWidget.svelte'
   import SonosCard from '$lib/components/SonosCard.svelte'
@@ -13,31 +13,32 @@
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
   import ModeSuggestionCard from '$lib/components/ModeSuggestionCard.svelte'
   import BrightnessSuggestionCard from '$lib/components/BrightnessSuggestionCard.svelte'
+  import { sonos } from '$lib/stores/sonos.js'
 
   /** @type {any} */
   export let data = undefined
   /** @type {any} */
   export let params = undefined
   data; params;
+
+  $: hasSonosMedia = $sonos.state === 'PLAYING' || !!$sonos.track
 </script>
 
 <main class="home-page">
-  <!-- Now Playing strip — full width at top -->
-  <section class="widget widget-sonos-strip">
-    <SonosCard />
-  </section>
+  <HomeContextHeader />
 
-  <ModeCardDeck />
+  {#if hasSonosMedia}
+    <section class="widget widget-sonos-strip" aria-label="Now playing">
+      <SonosCard />
+    </section>
+  {/if}
+
+  <ActivityOverrideControl />
 
   <ModeSuggestionCard />
   <BrightnessSuggestionCard />
 
   <div class="widget-grid">
-    <section class="widget widget-mode">
-      <h2 class="widget-title">House &amp; Activity</h2>
-      <ModeIndicator />
-    </section>
-
     <section class="widget widget-weather">
       <h2 class="widget-title">Weather</h2>
       <WeatherCard />
@@ -83,12 +84,26 @@
 </main>
 
 <style>
+  :global(.app.app-home) {
+    padding-top: 32px;
+  }
+
   .widget-sonos-strip {
-    margin-bottom: 8px;
+    margin-bottom: 16px;
     padding: 8px 12px;
   }
 
+  @media (max-width: 768px) {
+    :global(.app.app-home) {
+      padding-top: 24px;
+    }
+  }
+
   @media (max-width: 480px) {
+    :global(.app.app-home) {
+      padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    }
+
     .widget-sonos-strip {
       padding: 4px 8px;
     }
