@@ -1,0 +1,24 @@
+{
+  "schema": "homehub.apartment-projection-contract.v1",
+  "source_geometry": "geometry_v1.json + geometry_v1_1_patch.json + aperture_registry_v1.json",
+  "status": "accepted_converter_contract",
+  "rules": [
+    "Preserve approved x/y coordinates exactly; projection never rewrites plan geometry.",
+    "Treat wall polygons as one even-odd wall topology, not independent solid polygons.",
+    "Use the aperture registry to classify wall gaps as windows or doors.",
+    "Do not fill a registered door aperture when extruding walls.",
+    "For registered windows, add provisional sill/lintel/glass geometry rather than leaving a floor-to-ceiling gap.",
+    "Window and door z dimensions are provisional and may change without altering aperture x/y spans.",
+    "PC tower is physically under the desk in z-space.",
+    "Microwave is physically above the stove/oven in z-space.",
+    "Camera yaw/pitch may change only after topology validation passes."
+  ],
+  "sanity_gate": [
+    "Bedroom door remains in the approved location.",
+    "Kitchen island preserves approved orientation.",
+    "Living chair/couch/TV relationships match the top-down plan.",
+    "Registered windows remain semantic apertures rather than missing or filled walls.",
+    "White chair sits on the living rug and the rug stops before the couch.",
+    "Closet opening is treated as a double/folding door, not an anonymous wall gap."
+  ]
+}
