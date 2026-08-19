@@ -17,6 +17,9 @@ Use this page as the entry point for repository documentation.
   [`ML_SPEC.md`](ML_SPEC.md), [`GAMEDAY_SPEC.md`](GAMEDAY_SPEC.md),
   [`PERSONALITY_LAYER.md`](PERSONALITY_LAYER.md), and
   [`PRESENCE_LIGHTING_SCENARIOS.md`](PRESENCE_LIGHTING_SCENARIOS.md).
+- [`DASHBOARD_REDESIGN_VISION.md`](DASHBOARD_REDESIGN_VISION.md) owns the active
+  Dashboard UI/UX target language and information-architecture direction for
+  #157 while deferring cross-system policy to `PROJECT_SPEC.md`.
 - [`Future_Development.md`](Future_Development.md) is a concise,
   non-authoritative idea and GitHub-issue index. Its entries and issue labels
   do not set roadmap priority.
@@ -26,6 +29,7 @@ Use this page as the entry point for repository documentation.
 
 ## Architecture and design
 
+- [`DASHBOARD_REDESIGN_VISION.md`](DASHBOARD_REDESIGN_VISION.md) — active Dashboard redesign vision: living apartment canvas, contextual hierarchy, semantic motion, Analytics/inference-machine language, mobile/desktop composition, and explicit rejected precedents
 - [`CONFIDENCE_FUSION.md`](CONFIDENCE_FUSION.md) — multi-source confidence and activity fusion
 - [`PRESENCE_LIGHTING_SCENARIOS.md`](PRESENCE_LIGHTING_SCENARIOS.md) —
   historical presence/lighting decisions and subsystem implementation detail
@@ -38,6 +42,7 @@ Use this page as the entry point for repository documentation.
 
 ## Incidents and audits
 
+- [`DASHBOARD_UX_AUDIT_2026_08_18.md`](DASHBOARD_UX_AUDIT_2026_08_18.md) — dated pre-redesign Dashboard UI/UX audit and issue-reconciliation evidence; target direction now lives in `DASHBOARD_REDESIGN_VISION.md`
 - [`INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md`](INCIDENT_2026_07_DESKTOP_INACTIVE_LIGHTING.md) — lighting instability while Anthony was home but the desktop was inactive, plus its remediation plan
 - [`REPO_CLEANUP_2026_07_31.md`](REPO_CLEANUP_2026_07_31.md) — cleanup inventory, deletion reasoning, retained local state, and regeneration commands
 - [audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md](audits/PRODUCTION_AUTONOMY_EVIDENCE_AUDIT_2026_08_01.md) — dated, read-only production/autonomy evidence snapshot and implementation handoff
