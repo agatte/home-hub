@@ -18,6 +18,30 @@ This document locks the physical/spatial contract for the Home Apartment Canvas 
 
 A future render is wrong if it looks attractive but violates this hierarchy.
 
+## Approved deterministic geometry baseline
+
+The geometry-first review is complete for the top-down apartment layout.
+
+Anthony explicitly approved the **v1 top-down geometry baseline on 2026-08-19** after iterative correction against the canonical floor plan, annotated furniture plan, and apartment photographs.
+
+Durable artifacts:
+- `docs/dashboard/apartment_canvas/geometry_v1.json` — canonical normalized coordinate model;
+- `docs/dashboard/apartment_canvas/truth_map_v1.svg` — approved plain top-down truth map rendered from that model.
+
+The coordinate system uses **Apartment Geometry Units (GU)** with the traced apartment width normalized to `1000 GU`; x and y use the same uniform scale so the floor plan cannot be stretched independently.
+
+From this point forward:
+- approved x/y coordinates and wall polygons are spatial truth, not a styling suggestion;
+- camera projection, wall height/cutaway, z-height, object extrusion, occlusion, and materials may be iterated without changing x/y geometry;
+- any future x/y geometry change requires new real-world evidence and explicit approval;
+- image generation must not be used to reconstruct or reinterpret apartment geometry.
+
+Important 3D semantics preserved by the approved model:
+- the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk**;
+- the monitor is centered along the main desk at the wall-side edge;
+- microphone, headphones, and both desk lamps sit toward the rear of the desk near the monitor line;
+- the microwave is an **over-range unit above the stove/oven**, despite sharing that footprint in the top-down representation.
+
 ## Camera / framing
 
 Desktop Home uses a fixed elevated 3/4 roofless-diorama camera from the **upper/desk-side corner of the bedroom**, looking outward across the apartment. This is a cinematic architectural viewpoint, not a literal first-person view from the chair and not a generic showroom angle.
@@ -31,33 +55,33 @@ Mobile uses context-aware framing rather than shrinking the full desktop view: d
 The bedroom has dual semantic identity: **desk/PC/Gaming/Working** and **Sleeping/Winding Down**.
 
 Canonical anchors:
-- bed at the real photographed/annotated orientation;
-- **L-shaped desk** along the lower bedroom wall near the doorway;
+- bed flush to the real upper/window-side and west-wall position from the approved coordinate model;
+- **L-shaped desk** hard-anchored along the lower bedroom wall near the doorway;
+- thin desk return against the side wall with only a very small gap before the bed;
 - chair facing the main desk section; when seated, the bedroom door is to the left;
-- the thinner desk return extends close to the bed;
-- monitor/PC setup;
-- microphone;
-- headphones;
-- both bedroom lamps;
+- monitor centered along the rear/wall-side edge of the main desk;
+- microphone and headphones on the rear part of the desk beside the monitor;
+- both bedroom lamps on the rear part of the desk;
 - desk Alexa near the lamp closest to the door;
-- **projector hardware on the thin desk return**.
+- PC tower on the opposite/left side of the desk and physically **under the desk**;
+- **projector hardware on the thin desk return**, aimed diagonally toward the projector wall area in front of the bed.
 
 There are **no bedroom plants** in the current physical model.
 
-The projector aims at the opposite bedroom wall. The projector wall should remain understated when inactive and become a strong illuminated rectangular projection surface only while the projector is active.
+The projector wall should remain understated when inactive and become a strong illuminated rectangular projection surface only while the projector is active.
 
 ## Living room
 
 Canonical anchors:
-- brown sofa in its real orientation;
+- brown sofa in its approved real orientation and shortened footprint;
 - rectangular coffee table close to/in front of the couch;
 - simplified living-room rug under the seating group;
-- white rounded chair near the balcony/window side;
-- TV and TV stand/media console at the real location;
-- subwoofer immediately next to the TV stand;
+- white rounded chair in front of the left living-room window, clear of the balcony door;
+- TV and TV stand/media console at the approved wall position;
+- subwoofer tucked into the inside corner at the TV-stand / balcony-wall end;
 - living-room lamp;
-- plant grouping at the annotated location;
-- living-room end-table cluster with **Alexa on top and Sonos Era 100 on the lower shelf**.
+- snake plant + ZZ plant staggered and tucked near the wall in the approved plant area;
+- living-room end-table cluster **between the balcony wall and couch**, with Alexa on top and Sonos Era 100 on the lower shelf.
 
 Treat Alexa + Sonos as one visual furniture/device cluster. The **TV**, not the projector, is the living-room screen state.
 
@@ -70,6 +94,8 @@ Current plant truth:
 - ZZ plant — inside in the living-room plant grouping;
 - monstera — on the balcony during warm season and brought indoors during fall/winter.
 
+The exact warm-season balcony coordinate for the monstera remains intentionally unplaced until supported by trustworthy placement evidence.
+
 Seasonal plant placement may eventually become real apartment state rather than static decoration.
 
 ## Kitchen
@@ -81,7 +107,7 @@ Recognizable anchors:
 - perimeter white/gray cabinetry;
 - refrigerator;
 - stove/oven;
-- microwave;
+- **over-range microwave above the stove/oven**;
 - two stools;
 - pendant lights;
 - simplified kitchen runner rug.
@@ -93,12 +119,15 @@ Countertop clutter is not required.
 These support spatial recognition but stay lower-detail than bedroom/living/kitchen.
 
 Preserve canonical geometry and simplified recognizable anchors:
-- bathroom vanity/sink, toilet, shower;
+- bathroom vanity/sink flush to its wall and extending toward the toilet;
+- toilet against its approved wall position;
+- shower;
 - closet footprint;
+- closet dresser flush against the closet/entry dividing wall;
 - laundry area;
 - water-heater/mechanical enclosure;
 - entry/front door;
-- annotated entry dresser.
+- elongated **entry cubby** flush against the opposite side of the closet/entry dividing wall.
 
 ## Balcony / exterior band
 
@@ -142,22 +171,26 @@ Home normally emphasizes layers 1–2. Layer 3 is mostly dormant; Analytics/Insi
 
 ## Geometry-first concept gate
 
-Before another polished Home dashboard composition is attempted, create and review a **geometry-first Apartment Canvas concept** with:
-- no dashboard sidebars;
-- no fake telemetry or confidence values;
-- no causality traces;
-- no decorative machine UI;
-- no invented room geometry;
-- only canonical architecture, accepted furniture/device anchors, camera/framing, and basic architectural materials.
+The top-down geometry portion of this gate is now satisfied by the approved v1 coordinate model and truth map.
 
-Reject the concept if the apartment itself is spatially wrong, even if the styling is attractive. Only after geometry/content is visually accepted should live lights, device state, ambient events, causality, or surrounding Home UI be layered in.
+The next gate is the **deterministic 2.5D projection**. Until that projection is accepted:
+- do not add dashboard sidebars or surrounding Home layout;
+- do not add fake telemetry or confidence values;
+- do not add causality traces or decorative machine UI;
+- do not add Hue/live-state lighting, ambient events, or final materials;
+- do not alter the approved top-down x/y geometry to make a camera angle look better.
+
+Reject a 2.5D candidate if camera, wall cutaway, z-height, or occlusion makes the apartment spatially misleading even when the underlying x/y coordinates are correct.
+
+Only after the projected geometry is visually accepted should live lights, device state, ambient events, causality, or surrounding Home UI be layered in.
 
 ## Still-open visual questions
 
-These are design explorations, not geometry uncertainties:
+These are design explorations, not top-down geometry uncertainties:
 - exact wall height/cutaway depth;
-- degree of furniture simplification;
+- object z-heights and degree of extrusion/simplification;
+- exact camera pitch/yaw needed to preserve visibility without distortion;
+- object/wall occlusion strategy;
 - inactive/active Alexa-node treatment;
 - projector-wall active visual strength;
-- exact camera pitch/yaw needed to preserve visibility without distortion;
 - final wall/floor/material palette.
