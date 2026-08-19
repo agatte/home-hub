@@ -7,7 +7,7 @@ import { HubSocket } from '$lib/ws.js'
 import { apiGet, apiPost, apiDelete } from '$lib/api.js'
 import { lights, setLightsFromList, applyLightUpdate, optimisticLightPatch } from './lights.js'
 import { sonos } from './sonos.js'
-import { automation } from './automation.js'
+import { automation, automationStateFromStatus, mergeAutomationUpdate } from './automation.js'
 import { connected, deviceStatus } from './connection.js'
 import { showMusicSuggestion, showMusicAutoPlayed } from './music.js'
 import { showModeSuggestion, dismissModeSuggestion } from './modeSuggestion.js'
@@ -49,17 +49,7 @@ export function initStores() {
 
   apiGet('/api/automation/status')
     .then((data) => {
-      const d = /** @type {any} */ (data)
-      automation.set({
-        mode: d.current_mode,
-        source: d.mode_source,
-        manual_override: d.manual_override,
-        dnd: {
-          enabled: !!d.dnd_enabled,
-          expiry_utc: d.dnd_expiry_utc ?? null,
-          minutes_remaining: d.dnd_minutes_remaining ?? 0,
-        },
-      })
+      automation.set(automationStateFromStatus(/** @type {any} */ (data)))
     })
     .catch(() => {})
 
@@ -98,7 +88,7 @@ export function initStores() {
             modeUpdateLockUntil = 0
             pendingOverride = null
           }
-          automation.update((prev) => ({ ...prev, ...data }))
+          automation.update((prev) => mergeAutomationUpdate(prev, data))
           break
         case 'dnd_update':
           automation.update((prev) => ({

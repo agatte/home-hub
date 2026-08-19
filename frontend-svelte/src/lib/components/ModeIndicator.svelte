@@ -1,8 +1,9 @@
 <script>
-  import { automation } from '$lib/stores/automation.js'
-  import { MODE_CONFIG, modeColor } from '$lib/theme.js'
+  import { automation, activityLabel, houseStateLabel } from '$lib/stores/automation.js'
+  import { modeColor } from '$lib/theme.js'
 
-  $: config = MODE_CONFIG[$automation.mode] || MODE_CONFIG.idle
+  $: houseLabel = houseStateLabel($automation.house_state)
+  $: currentActivityLabel = activityLabel($automation.activity)
   $: color = modeColor($automation.mode)
   $: dnd = $automation.dnd?.enabled ?? false
   $: dndRemaining = $automation.dnd?.minutes_remaining ?? 0
@@ -11,12 +12,18 @@
     : `DND • ${dndRemaining}m`
 </script>
 
-<div class="mode-indicator-compact">
-  <div class="mode-dot-ring" style="border-color: {color}; box-shadow: 0 0 8px {color}40"></div>
-  <div class="mode-detail">
-    <span class="mode-label-text" style="color: {color}">
-      {config.label}
-    </span>
+<div class="state-indicator-compact">
+  <div class="state-dot-ring" style="border-color: {color}; box-shadow: 0 0 8px {color}40"></div>
+  <div class="state-detail">
+    <div class="state-summary">
+      <span class="house-state-text" style="color: {color}">
+        {houseLabel || 'State unavailable'}
+      </span>
+      {#if currentActivityLabel}
+        <span class="state-separator" aria-hidden="true">•</span>
+        <span class="activity-text">{currentActivityLabel}</span>
+      {/if}
+    </div>
     {#if dnd}
       <span class="dnd-badge" title="Do Not Disturb active — autonomous changes blocked">
         {dndLabel}
@@ -26,19 +33,21 @@
 </div>
 
 <style>
-  .mode-indicator-compact {
+  .state-indicator-compact {
     display: flex;
     align-items: center;
     gap: 10px;
   }
 
-  .mode-detail {
+  .state-detail,
+  .state-summary {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
   }
 
-  .mode-dot-ring {
+  .state-dot-ring {
     width: 10px;
     height: 10px;
     border-radius: 50%;
@@ -53,13 +62,19 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .mode-dot-ring { animation: none; }
+    .state-dot-ring { animation: none; }
   }
 
-  .mode-label-text {
+  .house-state-text,
+  .activity-text {
     font-family: var(--font-body);
     font-size: 14px;
     font-weight: 500;
+  }
+
+  .activity-text,
+  .state-separator {
+    color: var(--text-muted);
   }
 
   .dnd-badge {
@@ -73,5 +88,13 @@
     background: rgba(140, 100, 200, 0.22);
     border: 1px solid rgba(140, 100, 200, 0.45);
     white-space: nowrap;
+  }
+
+  @media (max-width: 480px) {
+    .state-detail {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 5px;
+    }
   }
 </style>
