@@ -9,17 +9,17 @@
   import ScenePickerPopover from '$lib/components/settings/ScenePickerPopover.svelte'
   import Slider from '$lib/components/Slider.svelte'
 
-  /** @typedef {{key: string, label: string, icon: string, accent: string, hasBrightness: boolean, hasVolume: boolean, hasPosture: boolean, hasSceneOverride: boolean}} ModeDef */
+  /** @typedef {{key: string, label: string, icon: string, accent: string, hasBrightness: boolean, hasVolume: boolean, hasSceneOverride: boolean}} ModeDef */
 
   /** @type {ModeDef[]} */
   const MODES = [
-    { key: 'gaming',   label: 'Gaming',    icon: '🎮', accent: 'rgba(74, 108, 247, 0.22)',  hasBrightness: true,  hasVolume: true,  hasPosture: false, hasSceneOverride: true  },
-    { key: 'working',  label: 'Working',   icon: '💻', accent: 'rgba(74, 108, 247, 0.18)',  hasBrightness: true,  hasVolume: true,  hasPosture: false, hasSceneOverride: true  },
-    { key: 'watching', label: 'Watching',  icon: '🎬', accent: 'rgba(190, 165, 235, 0.20)', hasBrightness: true,  hasVolume: true,  hasPosture: true,  hasSceneOverride: true  },
-    { key: 'relax',    label: 'Relax',     icon: '🛋️', accent: 'rgba(251, 191, 36, 0.18)',  hasBrightness: true,  hasVolume: true,  hasPosture: false, hasSceneOverride: true  },
-    { key: 'cooking',  label: 'Cooking',   icon: '🍳', accent: 'rgba(248, 113, 113, 0.18)', hasBrightness: true,  hasVolume: true,  hasPosture: false, hasSceneOverride: true  },
-    { key: 'social',   label: 'Social',    icon: '🎉', accent: 'rgba(244, 114, 182, 0.22)', hasBrightness: true,  hasVolume: true,  hasPosture: false, hasSceneOverride: true  },
-    { key: 'gameday',  label: 'Game Day',  icon: '🏈', accent: 'rgba(52, 211, 153, 0.18)',  hasBrightness: false, hasVolume: true,  hasPosture: false, hasSceneOverride: false },
+    { key: 'gaming',   label: 'Gaming',    icon: '🎮', accent: 'rgba(74, 108, 247, 0.22)',  hasBrightness: true,  hasVolume: true, hasSceneOverride: true  },
+    { key: 'working',  label: 'Working',   icon: '💻', accent: 'rgba(74, 108, 247, 0.18)',  hasBrightness: true,  hasVolume: true, hasSceneOverride: true  },
+    { key: 'watching', label: 'Watching',  icon: '🎬', accent: 'rgba(190, 165, 235, 0.20)', hasBrightness: true,  hasVolume: true,  hasSceneOverride: true  },
+    { key: 'relax',    label: 'Relax',     icon: '🛋️', accent: 'rgba(251, 191, 36, 0.18)',  hasBrightness: true,  hasVolume: true, hasSceneOverride: true  },
+    { key: 'cooking',  label: 'Cooking',   icon: '🍳', accent: 'rgba(248, 113, 113, 0.18)', hasBrightness: true,  hasVolume: true, hasSceneOverride: true  },
+    { key: 'social',   label: 'Social',    icon: '🎉', accent: 'rgba(244, 114, 182, 0.22)', hasBrightness: true,  hasVolume: true, hasSceneOverride: true  },
+    { key: 'gameday',  label: 'Game Day',  icon: '🏈', accent: 'rgba(52, 211, 153, 0.18)',  hasBrightness: false, hasVolume: true, hasSceneOverride: false },
   ]
 
   const PERIODS = [
@@ -32,8 +32,6 @@
   let modeBrightness = null
   /** @type {Record<string, {day: number, evening: number, night: number, fade_duration_s: number}> | null} */
   let modeVolume = null
-  /** @type {{reclined_sync_cap?: number, reclined_l1_night?: number, upright_sync_cap?: number} | null} */
-  let watchingPosture = null
   /** @type {any[]} */
   let modeSceneOverrides = []
   /** @type {any[]} */
@@ -46,7 +44,6 @@
   onMount(async () => {
     try { modeBrightness = await apiGet('/api/automation/mode-brightness') } catch {}
     try { modeVolume = await apiGet('/api/automation/mode-volume') } catch {}
-    try { watchingPosture = await apiGet('/api/automation/watching-posture') } catch {}
     try {
       const data = /** @type {any} */ (await apiGet('/api/automation/mode-scenes'))
       modeSceneOverrides = data.overrides || []
@@ -89,13 +86,6 @@
     saving = null
   }
 
-  /** @param {Record<string, number>} updates */
-  async function saveWatchingPosture(updates) {
-    watchingPosture = { ...(watchingPosture || {}), ...updates }
-    saving = 'posture'
-    try { await apiPut('/api/automation/watching-posture', watchingPosture) } catch {}
-    saving = null
-  }
 
   /** @param {string} mode @param {string} period */
   function getOverride(mode, period) {
@@ -138,7 +128,7 @@
 
 <SettingsSection
   title="Modes"
-  description="Brightness, volume, scene mapping, and posture tuning — one card per mode. Tap to expand."
+  description="Brightness, volume, and scene mapping — one card per mode. Tap to expand."
   icon={Palette}
 >
   <div class="mode-stack">
@@ -199,43 +189,6 @@
           </SettingGroup>
         {/if}
 
-        {#if mode.hasPosture && watchingPosture}
-          <SettingGroup title="Posture tuning (currently inactive)" hint="Bed-zone overlay retired with the 2026-05-27 Latitude→living-room move — no camera frames the bed now, so reclined/upright detection doesn't fire and these caps don't apply. Values stay editable in case bed-zone detection comes back later (e.g. via the desktop's wide FoV).">
-            <div class="posture-row">
-              <span class="posture-label">Reclined — projector cap</span>
-              <span class="posture-value">{watchingPosture.reclined_sync_cap}</span>
-              <Slider
-                value={watchingPosture.reclined_sync_cap ?? 50}
-                min={1}
-                max={100}
-                liveUpdate={false}
-                onChange={(v) => saveWatchingPosture({ reclined_sync_cap: v })}
-              />
-            </div>
-            <div class="posture-row">
-              <span class="posture-label">Reclined — L1 at night</span>
-              <span class="posture-value">{watchingPosture.reclined_l1_night}</span>
-              <Slider
-                value={watchingPosture.reclined_l1_night ?? 30}
-                min={1}
-                max={100}
-                liveUpdate={false}
-                onChange={(v) => saveWatchingPosture({ reclined_l1_night: v })}
-              />
-            </div>
-            <div class="posture-row">
-              <span class="posture-label">Upright — projector cap</span>
-              <span class="posture-value">{watchingPosture.upright_sync_cap}</span>
-              <Slider
-                value={watchingPosture.upright_sync_cap ?? 80}
-                min={1}
-                max={100}
-                liveUpdate={false}
-                onChange={(v) => saveWatchingPosture({ upright_sync_cap: v })}
-              />
-            </div>
-          </SettingGroup>
-        {/if}
 
         {#if mode.hasSceneOverride}
           <SettingGroup title="Scene override by period" hint="Map a Hue scene to this mode at each time of day. Overrides default automation lighting.">
@@ -315,48 +268,17 @@
     border-color: var(--accent);
   }
 
+  .fade-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .fade-unit {
     font-family: var(--font-body);
     font-size: 11px;
     color: var(--text-muted);
   }
 
-  .posture-row {
-    display: grid;
-    grid-template-columns: 1fr 36px;
-    grid-template-rows: auto auto;
-    column-gap: 12px;
-    align-items: center;
-    padding: 8px 0;
-  }
-
-  .posture-row + .posture-row {
-    border-top: 1px solid var(--border);
-  }
-
-  .posture-label {
-    font-family: var(--font-body);
-    font-size: 13px;
-    color: var(--text-primary);
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .posture-value {
-    font-family: var(--font-body);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    text-align: right;
-    grid-column: 2;
-    grid-row: 1;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .posture-row :global(.slider-container) {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
 
   .scene-row {
     display: grid;
