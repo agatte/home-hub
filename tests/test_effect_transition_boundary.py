@@ -466,7 +466,7 @@ async def test_failed_required_safety_write_aborts_release_and_stays_retryable(
     mock_hue, mock_hue_v2, mock_ws,
 ):
     engine = _engine(mock_hue, mock_hue_v2, mock_ws)
-    engine._get_time_period = lambda: "night"
+    engine._get_time_period = lambda now=None: "night"
     mock_hue_v2.stop_effect_all = AsyncMock(return_value=True)
     attempts: list[str] = []
 
@@ -491,7 +491,7 @@ async def test_transit_protected_gaming_to_watching_reestablishes_held_targets(
     mock_hue, mock_hue_v2, mock_ws,
 ):
     engine = _engine(mock_hue, mock_hue_v2, mock_ws)
-    engine._get_time_period = lambda: "night"
+    engine._get_time_period = lambda now=None: "night"
     deadline = datetime.now(tz=TZ) + timedelta(minutes=5)
     held = {
         "1": {"on": True, "bri": 75, "ct": 400},
@@ -681,7 +681,7 @@ async def test_transit_clear_effect_reconcile_uses_safe_order(
 ):
     engine = _engine(mock_hue, mock_hue_v2, mock_ws)
     engine._current_mode = "watching"
-    engine._get_time_period = lambda: "night"
+    engine._get_time_period = lambda now=None: "night"
     engine._transit_light_overrides = {
         "1": datetime.now(tz=TZ) + timedelta(minutes=5),
     }
@@ -720,7 +720,7 @@ async def test_august_3_254_fixture_never_exposes_unprotected_transit_lamps(
     mock_hue, mock_hue_v2, mock_ws,
 ):
     engine = _engine(mock_hue, mock_hue_v2, mock_ws)
-    engine._get_time_period = lambda: "night"
+    engine._get_time_period = lambda now=None: "night"
     deadline = datetime.now(tz=TZ) + timedelta(minutes=5)
     held_bri = {"1": 75, "3": 35, "4": 35}
     engine._transit_light_overrides = {

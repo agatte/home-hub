@@ -570,7 +570,7 @@ async def test_engine_uses_existing_dedup_and_preserves_l2_l5(
     engine._override_source = "physical_context_relax"
     engine._override_time = START
     _pin_evening_outside_winddown_ramp(engine)
-    engine._get_time_period = lambda: "evening"
+    engine._get_time_period = lambda now=None: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
     calls: list[str] = []
     original = mock_hue.set_light
@@ -616,7 +616,7 @@ async def test_engine_live_evening_lux_case_floors_only_atmosphere_lights(
     engine._override_source = "physical_context_relax"
     engine._override_time = START
     _pin_evening_outside_winddown_ramp(engine)
-    engine._get_time_period = lambda: "evening"
+    engine._get_time_period = lambda now=None: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
 
     await engine._apply_mode("relax", force_resend=True)
@@ -666,7 +666,7 @@ async def test_learner_cannot_replace_atmosphere_owned_lights(
     engine._override_source = "physical_context_relax"
     engine._override_time = START
     _pin_evening_outside_winddown_ramp(engine)
-    engine._get_time_period = lambda: "evening"
+    engine._get_time_period = lambda now=None: "evening"
     engine._mode_brightness["relax"] = 0.80
     engine._effect_manager.needs_reconcile = lambda _desired: False
 
@@ -699,7 +699,7 @@ async def test_configured_scene_override_wins_before_curator_palette(
     engine._override_source = "physical_context_relax"
     engine._override_time = START
     _pin_evening_outside_winddown_ramp(engine)
-    engine._get_time_period = lambda: "evening"
+    engine._get_time_period = lambda now=None: "evening"
     engine._scene_overrides = {"relax": {"evening": "bridge-scene"}}
     engine._effect_manager.replace_with_action = AsyncMock(return_value=True)
     mock_hue.set_light = AsyncMock(return_value=True)
@@ -730,7 +730,7 @@ async def test_selector_failure_falls_back_to_ordinary_relax(
     engine._override_source = "physical_context_relax"
     engine._override_time = START
     _pin_evening_outside_winddown_ramp(engine)
-    engine._get_time_period = lambda: "evening"
+    engine._get_time_period = lambda now=None: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
 
     await engine._apply_mode("relax", force_resend=True)
@@ -757,7 +757,7 @@ async def test_disabled_switch_applies_ordinary_relax_in_engine(
     engine._override_source = "physical_context_relax"
     engine._override_time = START
     _pin_evening_outside_winddown_ramp(engine)
-    engine._get_time_period = lambda: "evening"
+    engine._get_time_period = lambda now=None: "evening"
     engine._effect_manager.needs_reconcile = lambda _desired: False
 
     await engine._apply_mode("relax", force_resend=True)
