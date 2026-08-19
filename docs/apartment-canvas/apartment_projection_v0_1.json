@@ -1,0 +1,85 @@
+{
+  "schema": "homehub.apartment-projection.v0_1",
+  "status": "review_candidate_not_approved",
+  "source_geometry": {
+    "file": "apartment_geometry_v1.json",
+    "sha256": "aee59d54bb4a654978472e0a870a34749722dedbaea3b59af19a90534ca6049a",
+    "geometry_status": "approved"
+  },
+  "invariant": "Projection consumes approved X/Y coordinates and object footprints without modification. Camera and Z/extrusion parameters are independently reviewable.",
+  "camera": {
+    "projection": "orthographic_axonometric",
+    "view_intent": "elevated 3/4 view from bedroom/upper side looking outward",
+    "formula": {
+      "screen_x": "0.82*x - 0.58*y",
+      "screen_y": "0.34*x + 0.48*y - 0.92*z"
+    },
+    "coefficients": {
+      "xx": 0.82,
+      "xy": -0.58,
+      "yx": 0.34,
+      "yy": 0.48,
+      "yz": -0.92
+    },
+    "perspective": false,
+    "status": "review_candidate"
+  },
+  "wall_height_gu": 60,
+  "object_z_rules_gu": {
+    "bedroom.bed": {"z": 0, "height": 30},
+    "bedroom.desk_main": {"z": 34, "height": 4},
+    "bedroom.desk_return": {"z": 34, "height": 4},
+    "bedroom.chair": {"z": 0, "height": 36},
+    "bedroom.monitor": {"z": 38, "height": 32},
+    "bedroom.pc": {"z": 0, "height": 42},
+    "bedroom.projector": {"z": 38, "height": 8},
+    "bedroom.lamp_l2": {"z": 38, "height": 12},
+    "bedroom.lamp_l5": {"z": 38, "height": 12},
+    "bedroom.alexa": {"z": 38, "height": 7},
+    "bedroom.microphone": {"z": 38, "height": 8},
+    "bedroom.headphones": {"z": 38, "height": 8},
+    "living.rug": {"z": 0.5, "height": 0.8},
+    "living.couch": {"z": 0, "height": 46},
+    "living.coffee_table": {"z": 0, "height": 20},
+    "living.white_chair": {"z": 0, "height": 38},
+    "living.tv_stand": {"z": 0, "height": 24},
+    "living.tv": {"z": 24, "height": 48},
+    "living.subwoofer": {"z": 0, "height": 38},
+    "living.end_table_cluster": {"z": 0, "height": 30},
+    "living.lamp": {"z": 0, "height": 55},
+    "living.snake_plant": {"z": 0, "height": 48},
+    "living.zz_plant": {"z": 0, "height": 42},
+    "kitchen.island": {"z": 0, "height": 34},
+    "kitchen.sink": {"z": 34, "height": 2},
+    "kitchen.stool_1": {"z": 0, "height": 28},
+    "kitchen.stool_2": {"z": 0, "height": 28},
+    "kitchen.pendant_1": {"z": 72, "height": 8},
+    "kitchen.pendant_2": {"z": 72, "height": 8},
+    "kitchen.cabinet_run": {"z": 0, "height": 34},
+    "kitchen.microwave": {"z": 48, "height": 24},
+    "kitchen.stove": {"z": 0, "height": 34},
+    "kitchen.fridge": {"z": 0, "height": 72},
+    "kitchen.pantry": {"z": 0, "height": 70},
+    "kitchen.runner": {"z": 0.5, "height": 0.8},
+    "bath.vanity": {"z": 0, "height": 34},
+    "bath.toilet": {"z": 0, "height": 24},
+    "bath.shower": {"z": 0, "height": 18},
+    "service.laundry": {"z": 0, "height": 38},
+    "service.water_heater": {"z": 0, "height": 58},
+    "entry.dresser": {"z": 0, "height": 48},
+    "closet.dresser": {"z": 0, "height": 42}
+  },
+  "open_questions": [
+    "camera yaw / pitch / framing",
+    "wall height and cutaway depth",
+    "occlusion/readability from the fixed bedroom-side view",
+    "object extrusion simplification"
+  ],
+  "explicitly_not_in_scope": [
+    "materials",
+    "Hue/live lighting",
+    "ambient weather/audio events",
+    "causality traces",
+    "Dashboard shell/chrome"
+  ]
+}
