@@ -1,6 +1,6 @@
 {
   "schema": "homehub.apartment-projection-contract.v1",
-  "source_geometry": "geometry_v1.json + geometry_v1_1_patch.json + aperture_registry_v1.json",
+  "source_geometry": "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json",
   "status": "accepted_converter_contract",
   "rules": [
     "Preserve approved x/y coordinates exactly; projection never rewrites plan geometry.",
@@ -9,9 +9,14 @@
     "Do not fill a registered door aperture when extruding walls.",
     "For registered windows, add provisional sill/lintel/glass geometry rather than leaving a floor-to-ceiling gap.",
     "Window and door z dimensions are provisional and may change without altering aperture x/y spans.",
+    "Render floor-plane rugs as underlays beneath furniture; they must never visually clip objects sitting on them.",
+    "Model the bedroom bed as a lower base/mattress plus a separate west-wall headboard rather than one tall solid prism.",
     "PC tower is physically under the desk in z-space.",
     "Microwave is physically above the stove/oven in z-space.",
-    "Camera yaw/pitch may change only after topology validation passes."
+    "Model the shower as a low tray plus enclosure edges, not one solid block.",
+    "Model the toilet with contained tank/pedestal/bowl sub-shapes inside its approved footprint; do not extrude the whole top-down oval into the shower divider.",
+    "Treat kitchen pendants as suspended overhead objects; their plan projection must not be mistaken for sink hardware.",
+    "Camera yaw/pitch may change only after topology and z-model sanity validation passes."
   ],
   "sanity_gate": [
     "Bedroom door remains in the approved location.",
@@ -19,6 +24,10 @@
     "Living chair/couch/TV relationships match the top-down plan.",
     "Registered windows remain semantic apertures rather than missing or filled walls.",
     "White chair sits on the living rug and the rug stops before the couch.",
-    "Closet opening is treated as a double/folding door, not an anonymous wall gap."
+    "Closet opening is treated as a double/folding door, not an anonymous wall gap.",
+    "White chair remains fully visible above the living rug underlay.",
+    "Toilet remains visually clear of the shower divider and vanity.",
+    "Pendant pair is distributed symmetrically along the island long axis.",
+    "No camera candidate is valid if it makes approved room/opening/object relationships appear to move or rotate."
   ]
 }
