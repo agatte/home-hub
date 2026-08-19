@@ -1,0 +1,35 @@
+{
+  "schema": "homehub.apartment-geometry-delta.v1.6",
+  "status": "approved",
+  "base": "geometry_v1.json",
+  "approved_date": "2026-08-19",
+  "supersedes": "geometry_v1_1_patch.json",
+  "changes": [
+    {
+      "object_id": "living.rug",
+      "rect": {"x": 666.30, "y": 268.61, "w": 181.44, "h": 375.87},
+      "reason": "White chair sits on the rug; rug stops before the couch."
+    },
+    {
+      "object_id": "bath.vanity",
+      "rect": {"x": 9.76, "y": 567.13, "w": 74.86, "h": 125.00},
+      "reason": "Shortened while preserving wall/top anchor to create real open floor around the toilet."
+    },
+    {
+      "object_id": "bath.toilet",
+      "rect": {"x": 17.90, "y": 738.33, "w": 110.00, "h": 56.00},
+      "reason": "Accepted bathroom spacing: same wall anchor, approximately equal clearance to vanity and fixed shower divider."
+    },
+    {
+      "object_id": "kitchen.pendant_1",
+      "rect": {"x": 680.63, "y": 844.32, "w": 19.53, "h": 19.53},
+      "reason": "Pendant pair distributed symmetrically along the island long axis."
+    },
+    {
+      "object_id": "kitchen.pendant_2",
+      "rect": {"x": 680.63, "y": 943.32, "w": 19.53, "h": 19.53},
+      "reason": "Pendant pair distributed symmetrically along the island long axis."
+    }
+  ],
+  "effective_baseline_rule": "geometry_v1.json + this approved consolidated delta + aperture_registry_v1.json define the current approved x/y baseline. The earlier v1.1 patch is obsolete."
+}
