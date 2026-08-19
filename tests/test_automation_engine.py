@@ -1915,7 +1915,7 @@ class TestApplyModeDedup:
 
         sync = _FakeScreenSync()
         engine._screen_sync = sync
-        engine._get_time_period = lambda: "night"
+        engine._get_time_period = lambda now=None: "night"
 
         await engine._apply_mode("watching", force_resend=True)
 
@@ -1925,6 +1925,35 @@ class TestApplyModeDedup:
         assert period == "night"
         assert states["2"]["bri"] == 20
         assert states["5"]["bri"] == 12
+
+    async def test_apply_mode_preserves_winddown_ramp_from_one_clock_sample(
+        self, engine,
+    ):
+        """20:39 evening still interpolates Watching while sampling once."""
+
+        class _FakeScreenSync:
+            def __init__(self) -> None:
+                self.calls = []
+                self.last_color_at = None
+                self.target_lights = ["2", "5"]
+
+            def prime_from_mode_state(self, mode, period, states) -> None:
+                self.calls.append((mode, period, states))
+
+        fixed_now = datetime(2026, 8, 18, 20, 39, tzinfo=TZ)
+        clock = MagicMock(return_value=fixed_now)
+        engine._now = clock
+        sync = _FakeScreenSync()
+        engine._screen_sync = sync
+
+        await engine._apply_mode("watching", force_resend=True)
+
+        mode, period, states = sync.calls[-1]
+        assert mode == "watching"
+        assert period == "evening"
+        assert states["2"]["bri"] == 27
+        assert states["5"]["bri"] == 14
+        clock.assert_called_once_with()
 
     async def test_learner_overlay_does_not_change_generic_screen_sync_source(
         self, mock_hue, mock_hue_v2, mock_ws,
@@ -1963,7 +1992,7 @@ class TestApplyModeDedup:
             lighting_learner=_Learner(),
             screen_sync=sync,
         )
-        engine._get_time_period = lambda: "day"
+        engine._get_time_period = lambda now=None: "day"
 
         await engine._apply_mode("gaming", force_resend=True)
 
@@ -2972,7 +3001,7 @@ class TestDesktopUnavailableLightingPolicy:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "day",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "day",
         )
         await engine.set_manual_override("working", source="api:test")
         engine._override_time = (
@@ -2997,7 +3026,7 @@ class TestDesktopUnavailableLightingPolicy:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "day",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "day",
         )
         await engine.set_manual_override("relax", source="api:test")
         engine._override_time = (
@@ -3018,7 +3047,7 @@ class TestDesktopUnavailableLightingPolicy:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "day",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "day",
         )
         await engine.set_manual_override("relax", source="ambient_relax")
         engine._override_time = (
@@ -3204,7 +3233,7 @@ class TestRecentDeskAttendanceVeto:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "late_night",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "late_night",
         )
         engine._presence_fusion = _StickyDeskPresence(
             120, at_desk_fresh=False,
@@ -3223,7 +3252,7 @@ class TestRecentDeskAttendanceVeto:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "evening",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
         )
         engine._presence_fusion = _StickyDeskPresence(
             120, at_desk_fresh=False,
@@ -3243,7 +3272,7 @@ class TestRecentDeskAttendanceVeto:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "evening",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
         )
         engine._presence_fusion = _StickyDeskPresence(
             120, at_desk_fresh=False,
@@ -3259,7 +3288,7 @@ class TestRecentDeskAttendanceVeto:
         self, monkeypatch, engine,
     ):
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "evening",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
         )
         engine._presence_fusion = _StickyDeskPresence(
             120, at_desk_fresh=False,
@@ -3301,7 +3330,7 @@ class TestFusionAutoApplyNoOp:
         test_confidence_fusion.py / project_fusion_test_time_gotcha.md.
         """
         monkeypatch.setattr(
-            AutomationEngine, "_get_time_period", lambda self: "evening",
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
         )
 
     @pytest.fixture

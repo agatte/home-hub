@@ -884,9 +884,13 @@ class AutomationEngine:
         self._invalidate_dedup_cache()  # Force re-apply
         logger.info(f"Mode brightness updated: {brightness}")
 
-    def _get_time_period(self) -> str:
+    def _now(self) -> datetime:
+        """Return local wall time for deterministic automation decisions."""
+        return datetime.now(tz=TZ)
+
+    def _get_time_period(self, now: Optional[datetime] = None) -> str:
         """Resolve the current time period via the calculator (shim)."""
-        return _calc_get_time_period(self._schedule_config, datetime.now(tz=TZ))
+        return _calc_get_time_period(self._schedule_config, now or self._now())
 
     def get_time_period(self) -> str:
         """Public accessor for the current time period.
@@ -2943,13 +2947,19 @@ class AutomationEngine:
         # POST /api/automation/screen-color and are gated by SCREEN_SYNC_MODES
         # at the route handler. No engine-side action needed when modes change.
 
+        # Capture one local timestamp for every clock-dependent decision in
+        # this mode application. Period/effect selection, the watching-asleep
+        # guard, and wind-down interpolation must not observe different clocks.
+        now = self._now()
+        period = self._get_time_period(now)
+
         # Determine what effect should be active for this mode+period.
         # IMPORTANT: don't stop the current effect yet. Stopping an active
         # effect before the new brightness target is on the bridge causes the
         # bridge to reset brightness to 100%, producing the visible "pop" on
         # mode change. We reconcile effects at the END of this function, after
         # _apply_state (or scene activation) has established the new target.
-        desired_effect = self._get_desired_effect(mode)
+        desired_effect = self._get_desired_effect(mode, period)
         pre_transition_targets = {
             light_id: target.copy()
             for light_id, target in self._last_applied_per_light.items()
@@ -3006,7 +3016,6 @@ class AutomationEngine:
             return
 
         # Check for scene override (user-mapped Hue scene for this mode+time)
-        period = self._get_time_period()
         # Asleep-in-bed gate for watching mode: hold the night state past
         # wake_hour when the user appears to still be asleep. The 2026-05-15
         # incident saw watching mode's late_night→day transition jump L2/L5
@@ -3018,7 +3027,7 @@ class AutomationEngine:
         if (
             mode == "watching"
             and period == "day"
-            and self._is_likely_still_asleep(datetime.now(tz=TZ))
+            and self._is_likely_still_asleep(now)
         ):
             logger.info(
                 "Watching mode holding night state past wake_hour — "
@@ -3123,7 +3132,6 @@ class AutomationEngine:
         if mode_states is not None:
             if "day" in mode_states:
                 # Time-aware mode: blend evening → night during the 30-min ramp window
-                now = datetime.now(tz=TZ)
                 schedule = (
                     self._schedule_config.weekday
                     if now.weekday() < 5
@@ -3133,7 +3141,10 @@ class AutomationEngine:
                 current_total = now.hour * 60 + now.minute
                 minutes_until_winddown = winddown_total - current_total
 
-                if 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES:
+                if (
+                    period == "evening"
+                    and 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES
+                ):
                     progress = (WINDDOWN_RAMP_MINUTES - minutes_until_winddown) / WINDDOWN_RAMP_MINUTES
                     evening_state = _resolve_activity_state(mode, "evening", game)
                     night_state = _resolve_activity_state(mode, "night", game)
@@ -3488,10 +3499,11 @@ class AutomationEngine:
         )
 
     def _get_desired_effect(
-        self, mode: str,
+        self, mode: str, period: Optional[str] = None,
     ) -> Optional[str | dict[str, Any]]:
         """Determine the dynamic effect target for a mode (shim → effect_manager)."""
-        return self._effect_manager.get_desired_effect(mode, self._get_time_period())
+        resolved_period = period if period is not None else self._get_time_period()
+        return self._effect_manager.get_desired_effect(mode, resolved_period)
 
     def _get_weather_effect(self) -> str | None:
         """Weather-condition effect override (shim → effect_manager)."""
