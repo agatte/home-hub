@@ -34,7 +34,7 @@
 
   <div class="widget-grid">
     <section class="widget widget-mode">
-      <h2 class="widget-title">Mode</h2>
+      <h2 class="widget-title">House &amp; Activity</h2>
       <ModeIndicator />
     </section>
 

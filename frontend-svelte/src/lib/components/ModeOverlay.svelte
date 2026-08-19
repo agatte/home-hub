@@ -1,15 +1,19 @@
 <script>
-  import { automation } from '$lib/stores/automation.js'
+  import { automation, activityLabel, houseStateLabel } from '$lib/stores/automation.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { modeColor } from '$lib/theme.js'
   import StatusDot from './StatusDot.svelte'
+  import { onMount, onDestroy } from 'svelte'
 
-  let displayedMode = $automation.mode
-  let modeChars = displayedMode.toUpperCase().split('')
+  function overlayStateLabel(state) {
+    return houseStateLabel(state.house_state) || 'HomeHub'
+  }
+
+  let displayedState = overlayStateLabel($automation)
+  let modeChars = displayedState.toUpperCase().split('')
   let animating = false
   let currentTime = ''
 
-  // Update clock every minute
   function updateClock() {
     const now = new Date()
     currentTime = now.toLocaleTimeString('en-US', {
@@ -19,8 +23,6 @@
     })
   }
 
-  // Update clock on mount
-  import { onMount, onDestroy } from 'svelte'
   let clockInterval
 
   onMount(() => {
@@ -32,18 +34,19 @@
     clearInterval(clockInterval)
   })
 
-  // Animate mode name change character-by-character
-  $: if ($automation.mode !== displayedMode) {
+  $: currentState = overlayStateLabel($automation)
+  $: if (currentState !== displayedState) {
     animating = true
-    displayedMode = $automation.mode
-    modeChars = displayedMode.toUpperCase().split('')
-    // Reset animation after it completes
+    displayedState = currentState
+    modeChars = displayedState.toUpperCase().split('')
     setTimeout(() => { animating = false }, modeChars.length * 30 + 300)
   }
 
+  $: currentActivity = activityLabel($automation.activity)
   $: source = $automation.manual_override
     ? 'Manual override'
     : `Auto (${$automation.source || 'time'})`
+  $: context = currentActivity ? `${currentActivity} • ${source}` : source
 
   $: color = modeColor($automation.mode)
 </script>
@@ -61,7 +64,7 @@
     </h1>
     <div class="mode-time">{currentTime}</div>
   </div>
-  <div class="mode-source">{source}</div>
+  <div class="mode-source">{context}</div>
   <div class="mode-status">
     <StatusDot active={$connected} label="Server" />
     <StatusDot active={$deviceStatus.hue} label="Hue" />
