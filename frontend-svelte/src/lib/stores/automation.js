@@ -37,15 +37,19 @@ const ACTIVITY_LABELS = {
 
 /**
  * Internal detectors may still report `idle`; it is not a user-facing Activity.
- * The backend already projects it to General while Home, and this guard keeps
- * stale/compatibility payloads from reintroducing Idle into the UI.
+ * While Home it projects to General. Away/Sleeping never retain an Activity,
+ * and compatibility payloads must not create contradictory user-facing state.
  * @param {unknown} activity
+ * @param {string | null | undefined} houseState
  * @returns {string | null}
  */
-export function normalizeActivity(activity) {
+export function normalizeActivity(activity, houseState = null) {
   if (activity == null || activity === '') return null
+  if (houseState === 'away' || houseState === 'sleeping') return null
+
   const value = String(activity)
-  return value === 'idle' ? 'general' : value
+  if (value === 'idle') return houseState === 'home' ? 'general' : null
+  return value
 }
 
 /**
@@ -76,11 +80,13 @@ export function activityLabel(value) {
  * @returns {AutomationState}
  */
 export function automationStateFromStatus(data) {
+  const houseState = data.house_state ?? null
+
   return {
     mode: data.current_mode ?? 'idle',
     source: data.mode_source ?? 'time',
-    house_state: data.house_state ?? null,
-    activity: normalizeActivity(data.activity),
+    house_state: houseState,
+    activity: normalizeActivity(data.activity, houseState),
     time_period: data.time_period ?? null,
     manual_override: !!data.manual_override,
     dnd: {
@@ -100,16 +106,19 @@ export function automationStateFromStatus(data) {
  * @returns {AutomationState}
  */
 export function mergeAutomationUpdate(prev, data) {
+  const hasHouseState = Object.prototype.hasOwnProperty.call(data, 'house_state')
+  const hasActivity = Object.prototype.hasOwnProperty.call(data, 'activity')
+  const houseState = hasHouseState ? data.house_state ?? null : prev.house_state
+  const activity = hasActivity
+    ? normalizeActivity(data.activity, houseState)
+    : (houseState === 'away' || houseState === 'sleeping' ? null : prev.activity)
+
   return {
     ...prev,
     mode: data.mode ?? data.current_mode ?? prev.mode,
     source: data.source ?? data.mode_source ?? prev.source,
-    house_state: Object.prototype.hasOwnProperty.call(data, 'house_state')
-      ? data.house_state ?? null
-      : prev.house_state,
-    activity: Object.prototype.hasOwnProperty.call(data, 'activity')
-      ? normalizeActivity(data.activity)
-      : prev.activity,
+    house_state: houseState,
+    activity,
     time_period: Object.prototype.hasOwnProperty.call(data, 'time_period')
       ? data.time_period ?? null
       : prev.time_period,
