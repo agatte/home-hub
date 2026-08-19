@@ -148,7 +148,7 @@ async def test_transit_clear_reapplies_living_room_with_fresh_desktop_sync(
     mock_hue, mock_hue_v2, mock_ws, monkeypatch,
 ):
     engine = _engine(mock_hue, mock_hue_v2, mock_ws)
-    monkeypatch.setattr(engine, "_get_time_period", lambda: "day")
+    monkeypatch.setattr(engine, "_get_time_period", lambda now=None: "day")
     engine._current_mode = "gaming"
 
     # Model the production incident: Gaming was already established and the
