@@ -46,8 +46,7 @@ describe('ErrorToast', () => {
     addError('two')
     await tick()
 
-    const stack = container.querySelector('.error-toast-stack')
-    expect(stack).toBeInTheDocument()
-    expect(stack.querySelectorAll('.error-toast')).toHaveLength(2)
+    expect(container.querySelector('.error-toast-stack')).toBeInTheDocument()
+    expect(container.querySelectorAll('.error-toast-stack .error-toast')).toHaveLength(2)
   })
 })
