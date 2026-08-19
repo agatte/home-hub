@@ -20,24 +20,9 @@
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/native.winoffice.txt', label: 'Windows Telemetry' },
   ]
 
-  // Pi-hole local-DNS (dns.hosts) records — kept in sync with Pi-hole.
-  // CAVEAT (post-2026-06 Google Wifi migration): the router runs its own
-  // resolver that owns the .lan TLD and answers it authoritatively
-  // (NXDOMAIN), so it never forwards .lan upstream to Pi-hole. These names
-  // therefore only resolve for clients pointed DIRECTLY at Pi-hole
-  // (192.168.86.210) as their DNS server — not via the default router DNS.
-  // For zero-config name access from ANY device, use the mDNS name the
-  // Latitude advertises via avahi: `homehub-dashboard.local` (multicast,
-  // bypasses both the router hijack and Pi-hole). Don't add .local records
-  // to Pi-hole — mDNS owns that TLD.
-  const DEFAULT_DNS_HOSTS = [
-    { ip: '192.168.86.210', hostname: 'homehub.lan' },
-    { ip: '192.168.86.210', hostname: 'pihole.lan' },
-    { ip: '192.168.86.50',  hostname: 'hue.lan' },
-    { ip: '192.168.86.157', hostname: 'sonos.lan' },
-    { ip: '192.168.86.30',  hostname: 'desktop.lan' },
-    { ip: '192.168.86.209', hostname: 'tablet.lan' },
-  ]
+  // Pi-hole local-DNS records are maintenance-only for clients configured to
+  // query Pi-hole directly. Google Wifi's default resolver does not forward
+  // the apartment's historical .lan aliases to Pi-hole.
 
   /** @type {any[] | null} */
   let dnsHosts = null
@@ -94,22 +79,6 @@
     saving = null
   }
 
-  async function addAllDefaultDns() {
-    saving = 'dns-defaults'
-    for (const host of DEFAULT_DNS_HOSTS) {
-      const exists = (dnsHosts || []).some(
-        (/** @type {any} */ r) => r.ip === host.ip && r.hostname === host.hostname
-      )
-      if (!exists) {
-        try { await apiPost('/api/pihole/dns', host) } catch {}
-      }
-    }
-    try {
-      const resp = /** @type {any} */ (await apiGet('/api/pihole/dns'))
-      dnsHosts = resp.dns_hosts || []
-    } catch {}
-    saving = null
-  }
 
   /** @param {string} url */
   async function addBlocklist(url) {
@@ -185,13 +154,15 @@
 
 <SettingsSection
   title="Network"
-  description="Pi-hole local DNS aliases and ad/tracker blocklists. Hidden if Pi-hole isn't reachable."
+  description="Pi-hole DNS maintenance and ad/tracker blocklists. Hidden if Pi-hole isn't reachable."
   icon={Network}
 >
   {#if !piholeAvailable && dnsHosts === null && blocklists === null}
     <p class="muted">Pi-hole not detected. Set <code>PIHOLE_API_URL</code> + <code>PIHOLE_API_KEY</code> in <code>.env</code> to enable.</p>
   {:else}
-    <SettingGroup title="Local DNS" hint="Friendly hostnames for the apartment network. Added directly to Pi-hole's local DNS records.">
+    <SettingGroup title="Pi-hole local DNS" hint="Advanced: aliases here resolve only for clients using Pi-hole directly. Default Google Wifi clients do not resolve the historical .lan aliases through Pi-hole; HomeHub itself is available via mDNS at homehub-dashboard.local.">
+      <p class="dns-note">Existing records are shown for maintenance; adding a record here does not make it resolve through Google Wifi's default DNS.</p>
+
       {#if dnsHosts && dnsHosts.length > 0}
         <div class="rows">
           {#each dnsHosts as record (record.ip + record.hostname)}
@@ -203,31 +174,31 @@
       {/if}
 
       <div class="add-form">
-        <input
-          type="text"
-          class="form-input"
-          placeholder="hostname.lan"
-          bind:value={newDnsHostname}
-        />
-        <input
-          type="text"
-          class="form-input form-input-sm"
-          placeholder="192.168.86.x"
-          bind:value={newDnsIp}
-        />
+        <label class="form-field">
+          <span class="form-label">Hostname</span>
+          <input
+            type="text"
+            class="form-input"
+            placeholder="custom-hostname"
+            bind:value={newDnsHostname}
+          />
+        </label>
+        <label class="form-field form-field-sm">
+          <span class="form-label">IP address</span>
+          <input
+            type="text"
+            class="form-input"
+            inputmode="decimal"
+            placeholder="192.168.86.x"
+            bind:value={newDnsIp}
+          />
+        </label>
         <SettingButton
           variant="ghost"
           disabled={!newDnsHostname || !newDnsIp || saving === 'dns-add'}
           loading={saving === 'dns-add'}
           on:click={addDnsHost}
         >Add</SettingButton>
-      </div>
-
-      <div class="defaults-row">
-        <SettingButton variant="accent" loading={saving === 'dns-defaults'} on:click={addAllDefaultDns}>
-          {saving === 'dns-defaults' ? 'Adding…' : 'Seed apartment devices'}
-        </SettingButton>
-        <span class="muted-mini">homehub · pihole · hue · sonos · desktop · tablet</span>
       </div>
     </SettingGroup>
 
@@ -243,12 +214,15 @@
       {/if}
 
       <div class="add-form">
-        <input
-          type="url"
-          class="form-input form-input-wide"
-          placeholder="https://blocklist-url..."
-          bind:value={newBlocklistUrl}
-        />
+        <label class="form-field form-field-wide">
+          <span class="form-label">Blocklist URL</span>
+          <input
+            type="url"
+            class="form-input"
+            placeholder="https://blocklist-url..."
+            bind:value={newBlocklistUrl}
+          />
+        </label>
         <SettingButton
           variant="ghost"
           disabled={!newBlocklistUrl || saving === 'list-add'}
@@ -287,12 +261,15 @@
         {/if}
 
         <div class="add-form">
-          <input
-            type="text"
-            class="form-input form-input-wide"
-            placeholder="click.email-example.com"
-            bind:value={newAllowDomain}
-          />
+          <label class="form-field form-field-wide">
+            <span class="form-label">Domain</span>
+            <input
+              type="text"
+              class="form-input"
+              placeholder="click.email-example.com"
+              bind:value={newAllowDomain}
+            />
+          </label>
           <SettingButton
             variant="ghost"
             disabled={!newAllowDomain || saving === 'allow-add'}
@@ -329,6 +306,18 @@
     gap: 4px;
   }
 
+  .dns-note {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    font-family: var(--font-body);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
   .empty {
     margin: 0;
     padding: 12px 4px;
@@ -339,12 +328,36 @@
 
   .add-form {
     display: flex;
+    align-items: flex-end;
     gap: 8px;
     margin-top: 4px;
   }
 
+  .form-field {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .form-field-sm {
+    flex: 0.6 1 0;
+  }
+
+  .form-field-wide {
+    flex: 2 1 0;
+  }
+
+  .form-label {
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
   .form-input {
-    flex: 1;
+    width: 100%;
     min-width: 0;
     padding: 8px 12px;
     border: 1px solid var(--border);
@@ -361,17 +374,15 @@
     border-color: var(--accent);
   }
 
+  .form-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .form-input::placeholder {
     color: var(--text-muted);
   }
 
-  .form-input-sm {
-    flex: 0.6;
-  }
-
-  .form-input-wide {
-    flex: 2;
-  }
 
   .defaults-row {
     display: flex;
@@ -427,6 +438,11 @@
     border-color: var(--accent);
   }
 
+  .allow-del:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .allow-del:disabled {
     opacity: 0.5;
     cursor: default;
@@ -443,8 +459,9 @@
     .add-form {
       flex-wrap: wrap;
     }
-    .form-input-sm,
-    .form-input-wide {
+    .form-field,
+    .form-field-sm,
+    .form-field-wide {
       flex: 1 1 100%;
     }
   }

@@ -40,11 +40,14 @@ describe('ErrorToast', () => {
     expect(toast).toHaveAttribute('aria-atomic', 'true')
   })
 
-  it('renders one toast per error in the store', async () => {
+  it('stacks multiple errors inside one fixed toast region', async () => {
     const { container } = render(ErrorToast)
     addError('one')
     addError('two')
     await tick()
-    expect(container.querySelectorAll('.error-toast')).toHaveLength(2)
+
+    const stack = container.querySelector('.error-toast-stack')
+    expect(stack).toBeInTheDocument()
+    expect(stack.querySelectorAll('.error-toast')).toHaveLength(2)
   })
 })
