@@ -27,6 +27,7 @@
   ]
 
   let expanded = false
+  /** @type {string | null} */
   let pending = null
 
   $: isAuto = !$automation.manual_override
@@ -36,11 +37,12 @@
     ? `Auto${detectedActivity ? ` · ${detectedActivity}` : ''}`
     : `Manual · ${manualLabel}`
 
+  /** @param {string} mode */
   async function chooseMode(mode) {
     pending = mode
     try {
       await setManualMode(mode)
-      if (mode !== 'auto') expanded = false
+      expanded = false
     } finally {
       pending = null
     }

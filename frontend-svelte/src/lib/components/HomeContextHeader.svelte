@@ -5,6 +5,7 @@
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { modeColor } from '$lib/theme.js'
 
+  /** @type {Record<string, string>} */
   const SOURCE_LABELS = {
     process: 'PC activity',
     time: 'Schedule',
@@ -15,6 +16,7 @@
     ambient_relax: 'Room context',
   }
 
+  /** @param {string | null | undefined} value */
   function titleCase(value) {
     if (!value) return ''
     return String(value)
@@ -22,14 +24,16 @@
       .replace(/\b\w/g, (char) => char.toUpperCase())
   }
 
+  /** @param {string | null | undefined} source @param {boolean} manualOverride */
   function sourceLabel(source, manualOverride) {
     if (manualOverride) return 'Manual override'
-    const detail = SOURCE_LABELS[source]
+    const detail = source ? SOURCE_LABELS[source] : null
     return detail ? `Automatic · ${detail}` : 'Automatic'
   }
 
   let currentTime = ''
-  let clockInterval
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let clockInterval = null
 
   function updateClock() {
     currentTime = new Date().toLocaleTimeString('en-US', {
@@ -44,7 +48,9 @@
     clockInterval = setInterval(updateClock, 10000)
   })
 
-  onDestroy(() => clearInterval(clockInterval))
+  onDestroy(() => {
+    if (clockInterval) clearInterval(clockInterval)
+  })
 
   $: house = houseStateLabel($automation.house_state) || 'Connecting'
   $: activity = activityLabel($automation.activity)
