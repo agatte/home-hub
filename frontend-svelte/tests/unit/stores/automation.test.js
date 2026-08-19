@@ -38,10 +38,18 @@ describe('automation state contract', () => {
     })
   })
 
-  it('projects stale idle activity to General instead of exposing Idle', () => {
-    expect(normalizeActivity('idle')).toBe('general')
-    expect(activityLabel('idle')).toBe('General')
-    expect(automationStateFromStatus({ activity: 'idle' }).activity).toBe('general')
+  it('projects stale idle activity to General only while Home', () => {
+    expect(normalizeActivity('idle', 'home')).toBe('general')
+    expect(normalizeActivity('idle', 'away')).toBeNull()
+    expect(normalizeActivity('idle', 'sleeping')).toBeNull()
+    expect(activityLabel('idle')).toBeNull()
+    expect(automationStateFromStatus({ house_state: 'home', activity: 'idle' }).activity).toBe('general')
+    expect(automationStateFromStatus({ house_state: 'sleeping', activity: 'idle' }).activity).toBeNull()
+  })
+
+  it('suppresses contradictory Activity while Away or Sleeping', () => {
+    expect(automationStateFromStatus({ house_state: 'away', activity: 'gaming' }).activity).toBeNull()
+    expect(automationStateFromStatus({ house_state: 'sleeping', activity: 'working' }).activity).toBeNull()
   })
 
   it('formats accepted lifecycle labels and future values safely', () => {
@@ -91,6 +99,23 @@ describe('automation state contract', () => {
       activity: 'watching',
       time_period: 'evening',
       manual_override: true,
+    })
+  })
+
+  it('clears stale Activity when a live update moves the house to an inactive state', () => {
+    const prev = {
+      ...initialAutomationState,
+      house_state: 'home',
+      activity: 'watching',
+    }
+
+    expect(mergeAutomationUpdate(prev, { house_state: 'sleeping' })).toMatchObject({
+      house_state: 'sleeping',
+      activity: null,
+    })
+    expect(mergeAutomationUpdate(prev, { house_state: 'away', activity: 'gaming' })).toMatchObject({
+      house_state: 'away',
+      activity: null,
     })
   })
 })
