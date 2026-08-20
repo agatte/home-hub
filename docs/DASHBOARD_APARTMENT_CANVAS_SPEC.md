@@ -32,10 +32,19 @@ Durable artifacts:
 - `docs/dashboard/apartment_canvas/projection_contract_v1.json` — topology-safe 2D→3D conversion and z-model rules;
 - `docs/dashboard/apartment_canvas/camera_v1.json` — accepted desktop hero camera;
 - `docs/dashboard/apartment_canvas/visibility_contract_v1.json` — accepted conceptual cutaway / bedroom visibility treatment.
+- `docs/dashboard/apartment_canvas/topology_authority_v1.json` — accepted additive physical-XY topology authority for the future ArchitectureTopologyV1 layer.
 
 The effective spatial baseline is `geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json`. `truth_map_v1.svg` is its human-readable effective top-down representation, including every v1.6 object refinement.
 
 The coordinate system uses **Apartment Geometry Units (GU)** with the traced apartment width normalized to `1000 GU`; x and y use the same uniform scale so the floor plan cannot be stretched independently.
+
+## TopologyAuthorityV1 boundary
+
+`TopologyAuthorityV1` is additive physical-XY authority: one continuous apartment slab (excluding the balcony), one even-odd dissolved physical wall-body owner, and fail-closed semantic-face/aperture resolution policies. It does not alter `SemanticSceneV1`, its six-source manifest, or its canonical serialization. Room zoning remains intentionally deferred; this is not room-floor or mesh authority.
+
+The slab retains the provenance breakpoint at `[441.01, 222.13]`. Its adjacent `[440.20, 222.13]` junction is a frozen support-line intersection: the 0.81 GU endpoint reconciliation is a source-trace mismatch, not a physical notch. The accepted balcony footprint is referenced rather than copied.
+
+Whitebox planar topology, wall-band resolution, polygonization, and mesh/extrusion are the next `ArchitectureTopologyV1` layer and are deliberately outside this contract slice.
 
 From this point forward:
 - approved approximate x/y/orientation, wall polygons, semantic wall edges, balcony footprint, and registered aperture spans are spatial truth, not styling suggestions;
