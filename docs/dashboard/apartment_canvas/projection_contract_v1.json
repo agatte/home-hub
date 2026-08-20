@@ -1,0 +1,48 @@
+{
+  "schema": "homehub.apartment-projection-contract.v1",
+  "source_geometry": "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json",
+  "status": "accepted_converter_contract",
+  "coordinate_mapping": {
+    "plan_handedness": "+x right, +y down",
+    "scene_mapping": "A compiler must declare one fixed plan-to-scene transform and use it for every shell, aperture, object, and camera target; it may not mirror one class independently.",
+    "invariant": "Accepted left/right ordering and orientation in plan space must be preserved in scene space."
+  },
+  "immutability": {
+    "xy_orientation": "accepted_approximate and immutable during projection",
+    "z_only_refinement": "z height, extrusion, materials, and silhouette detail may change only without changing accepted object or architecture x/y/orientation.",
+    "provenance": "Use source_proven geometry first, owner_verified relationships second, and provisional detail last. Never promote a provisional choice into spatial truth."
+  },
+  "rules": [
+    "Treat wall contour rings as one even-odd wall topology, not independent solid polygons.",
+    "Compile the balcony from balcony.footprint's closed ring and shared architectural edge; never from a decorative open polyline.",
+    "Resolve each aperture against its named parent_wall_id and host_face_id; segment_gu is the immutable approved trace collinear with that face's explicit bearing_line_gu, not a collinearity requirement on the wall's semantic edge.",
+    "Construct the opening perpendicular to the named host face through the full host wall volume before capping, glass assignment, or visibility treatment; do not project or snap segment_gu to a semantic edge.",
+    "Preserve aperture jambs/posts, corners, headers/lintels, and sills/thresholds as parent architecture.",
+    "Do not fill a registered door aperture when extruding walls.",
+    "For registered windows, add provisional sill/lintel/glass geometry rather than leaving a floor-to-ceiling gap.",
+    "Window and door z dimensions are provisional and may change without altering aperture x/y spans.",
+    "Render floors and floor-plane rugs as underlays beneath walls and furniture; they must not painter-sort over wall faces or clip objects sitting on them.",
+    "Model the bedroom bed as a lower base/mattress plus a separate west-wall headboard; keep its accepted footprint clear of walls and add two pillows as separate provisional-z objects.",
+    "Model the bedroom PC tower under the desk on the accepted opposite/left side; relationship provenance is owner_verified.",
+    "Model the projector on the thin desk return, aimed only by its accepted plan relationship; relationship provenance is source_proven.",
+    "Model the microwave above the stove/oven in z-space.",
+    "Model the shower as a low tray plus enclosure edges: only its intended camera/front-facing enclosure span may be glass; fixed side/back architecture remains opaque.",
+    "Model the vanity with a visible basin and an upright faucet on the wall/back side facing into that basin.",
+    "Model the toilet with contained tank/pedestal/bowl sub-shapes inside its approved footprint; do not extrude the whole top-down oval into the shower divider.",
+    "Model laundry as recognizable washing/drying equipment within the accepted laundry footprint; presence is owner_verified and arrangement/form factor remains provisional.",
+    "Treat kitchen pendants as exactly two suspended overhead objects at the accepted one-third/two-thirds island positions; their plan projection must not be mistaken for sink hardware.",
+    "Camera yaw/pitch may change only after topology and z-model sanity validation passes; camera_v1.json remains the locked desktop hero camera."
+  ],
+  "sanity_gate": [
+    "No duplicate, protruding, or impossible wall solid is emitted from the even-odd topology.",
+    "Bedroom door remains in the approved location and its posts/corners remain opaque architecture.",
+    "Bedroom translucent treatment affects only named wall faces, never bathroom boundaries, aperture structure, or the bedroom/living projector divider.",
+    "Kitchen island preserves approved orientation and pendant positions.",
+    "Living chair/couch/TV relationships match the top-down plan; the white chair sits on the rug and the rug stops before the couch.",
+    "Registered windows remain semantic apertures rather than missing or filled walls.",
+    "Closet opening is treated as a double/folding door, not an anonymous wall gap.",
+    "Vanity basin/faucet and shower glass/opaque faces remain recognizable and correctly assigned.",
+    "Washer and dryer are recognizable within the laundry footprint without inventing an unverified arrangement.",
+    "No camera candidate is valid if it makes approved room/opening/object relationships appear to move or rotate."
+  ]
+}

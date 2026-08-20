@@ -1,0 +1,53 @@
+{
+  "schema": "homehub.apartment-visibility-contract.v1",
+  "status": "accepted_conceptual_visibility_contract",
+  "source_geometry": "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json",
+  "camera": "camera_v1.json",
+  "accepted_direction": {
+    "global_cutaway": {
+      "name": "B",
+      "rule": "Lower only the true camera-facing south/front exterior shell. Rear walls and interior partitions remain architectural walls rather than being removed by a global depth slice.",
+      "target_wall_ids": ["wall_volume.exterior.south_entry"],
+      "target_face_ids": ["wall_face.exterior.south_entry.exterior_south"],
+      "excluded_wall_ids": ["wall_volume.living.balcony_north", "wall_volume.bedroom.south_desk_facing", "wall_volume.bedroom.south_doorway_parent", "wall_volume.bedroom.bath_hall_boundary", "wall_volume.bedroom_living.projector_divider", "wall_volume.bath.hall_east", "wall_volume.laundry.hall_east", "wall_volume.water_heater.hall_east", "wall_volume.closet.hall_south"],
+      "exact_lip_height_gu": "provisional"
+    },
+    "bedroom_front_wall": {
+      "name": "C",
+      "rule": "Preserve the desk-facing bedroom wall as a solid lower base plus a translucent upper wall so bedroom/bath separation remains legible while the desk and monitor can be read through it.",
+      "target_wall_id": "wall_volume.bedroom.south_desk_facing",
+      "target_face_id": "wall_face.bedroom.south_desk_facing.bedroom_north",
+      "translucent_face_id": "bedroom_front_wall.translucent_upper",
+      "solid_face_id": "bedroom_front_wall.solid_lower",
+      "excluded_wall_ids": ["wall_volume.bedroom.south_doorway_parent", "wall_volume.bedroom.bath_hall_boundary", "wall_volume.bedroom_living.projector_divider"],
+      "excluded_aperture_ids": ["bedroom_door"],
+      "opaque_architecture": ["bedroom_door.jambs_or_posts", "bedroom_door.corners", "bedroom_door.lintel", "bedroom_door.threshold"],
+      "presentation_semantics": "The translucent upper wall is a dashboard/dollhouse visibility treatment, not a claim that the real apartment has a glass wall.",
+      "exact_base_height_gu": "provisional",
+      "exact_opacity": "provisional"
+    },
+    "projector_wall": {
+      "target_wall_id": "wall_volume.bedroom_living.projector_divider",
+      "rule": "Keep the bedroom/living divider and projector wall as normal opaque physical architecture. Do not delete it or invent a double-sided/fake projector screen solely to expose the bedroom-facing projection surface to the accepted camera.",
+      "active_projector_visual": "deferred to live-state/lighting design after physical-world blocking acceptance"
+    }
+  },
+  "renderer_requirements": [
+    "Preserve approved x/y wall geometry and aperture spans exactly.",
+    "Do not use image generation to reconstruct, reinterpret, or compare apartment geometry or camera visibility.",
+    "Render the floor as a guaranteed underlay so it cannot painter-sort over and visually erase wall faces.",
+    "Depth-sort wall caps with wall/object faces rather than painting caps as a final overlay.",
+    "Apply cutaway and translucency only by the named stable wall/face IDs; a camera-depth heuristic is not an allowed selector.",
+    "Cut bedroom_door from its parent wall before applying treatment. The opening, posts, corners, header, and threshold remain normal opaque architecture.",
+    "Bedroom treatment C must not alter bathroom boundaries, the bedroom/living projector divider, or any aperture parentage.",
+    "Visibility treatments may alter presentation opacity/height only; they do not move rooms, walls, openings, or objects in x/y."
+  ],
+  "still_provisional": [
+    "full wall height",
+    "south/front cutaway lip height",
+    "bedroom solid-base height",
+    "bedroom upper-wall opacity/material treatment",
+    "window sill/head z-heights",
+    "object z-heights and silhouette detail"
+  ]
+}
