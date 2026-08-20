@@ -1,0 +1,40 @@
+{
+  "schema": "homehub.apartment-visibility-contract.v1",
+  "status": "accepted_conceptual_visibility_contract",
+  "source_geometry": "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json",
+  "camera": "camera_v1.json",
+  "accepted_direction": {
+    "global_cutaway": {
+      "name": "B",
+      "rule": "Lower only the true camera-facing south/front exterior shell. Rear walls and interior partitions remain architectural walls rather than being removed by a global depth slice.",
+      "exact_lip_height_gu": "provisional"
+    },
+    "bedroom_front_wall": {
+      "name": "C",
+      "rule": "Preserve the desk-facing bedroom wall as a solid lower base plus a translucent upper wall so bedroom/bath separation remains legible while the desk and monitor can be read through it.",
+      "presentation_semantics": "The translucent upper wall is a dashboard/dollhouse visibility treatment, not a claim that the real apartment has a glass wall.",
+      "exact_base_height_gu": "provisional",
+      "exact_opacity": "provisional"
+    },
+    "projector_wall": {
+      "rule": "Keep the bedroom/living divider and projector wall as normal physical architecture. Do not delete it or invent a double-sided/fake projector screen solely to expose the bedroom-facing projection surface to the accepted camera.",
+      "active_projector_visual": "deferred to live-state/lighting design after physical-world blocking acceptance"
+    }
+  },
+  "renderer_requirements": [
+    "Preserve approved x/y wall geometry and aperture spans exactly.",
+    "Do not use image generation to reconstruct, reinterpret, or compare apartment geometry or camera visibility.",
+    "Render the floor as a guaranteed underlay so it cannot painter-sort over and visually erase wall faces.",
+    "Depth-sort wall caps with wall/object faces rather than painting caps as a final overlay.",
+    "The bedroom translucent upper wall must preserve the bedroom-door aperture rather than glazing across the opening.",
+    "Visibility treatments may alter presentation opacity/height only; they do not move rooms, walls, openings, or objects in x/y."
+  ],
+  "still_provisional": [
+    "full wall height",
+    "south/front cutaway lip height",
+    "bedroom solid-base height",
+    "bedroom upper-wall opacity/material treatment",
+    "window sill/head z-heights",
+    "object z-heights and silhouette detail"
+  ]
+}
