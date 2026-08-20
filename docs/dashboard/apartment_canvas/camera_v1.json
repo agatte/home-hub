@@ -1,0 +1,35 @@
+{
+  "schema": "homehub.apartment-camera-lock.v1",
+  "status": "accepted",
+  "accepted_on": "2026-08-19",
+  "source_geometry": "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json",
+  "projection": "perspective",
+  "camera": {
+    "yaw_degrees_right": 20.0,
+    "pitch_degrees_down": 36.0,
+    "horizontal_fov_degrees": 45.0,
+    "approx_full_frame_focal_mm": 43.46,
+    "horizontal_radius_gu": 1040.0,
+    "eye_gu": [1005.70, 1532.28, 771.58],
+    "target_gu": [650.0, 555.0, 16.0]
+  },
+  "rationale": [
+    "A front-side camera from the entry/kitchen/bath side preserves whole-apartment readability better than the rejected bedroom-side camera family.",
+    "A 20-degree right yaw creates an intentional three-quarter view while keeping the apartment legible and avoiding an overly side-on composition.",
+    "A 36-degree downward pitch preserves clear 3D depth while keeping bedroom, living room, kitchen, bathroom, entry, and balcony readable.",
+    "A 45-degree horizontal field of view preserves stronger visibility of the distant bedroom and balcony than wider tested lenses and gives the calmest architectural hero composition."
+  ],
+  "rejected_or_superseded_candidates": {
+    "camera_side": [
+      "bedroom-side / back-right-shoulder family",
+      "straight-on front-side family"
+    ],
+    "yaw_degrees_right": [0, 15, 18, 25, 35],
+    "horizontal_fov_degrees": [47.5, 50, 55]
+  },
+  "constraints": [
+    "This is a projection lock only; it must not alter approved x/y geometry, wall topology, apertures, or object placement.",
+    "Do not reopen broad camera exploration unless new real-world geometry evidence materially invalidates this composition.",
+    "Future visual-model work must use this camera as the default desktop hero view while topology and z-model semantics remain authoritative."
+  ]
+}
