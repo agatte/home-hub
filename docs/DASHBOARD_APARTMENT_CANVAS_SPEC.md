@@ -26,30 +26,33 @@ Anthony explicitly approved the top-down geometry baseline on 2026-08-19 after i
 
 Durable artifacts:
 - `docs/dashboard/apartment_canvas/geometry_v1.json` — original approved normalized coordinate model;
-- `docs/dashboard/apartment_canvas/geometry_v1_6_patch.json` — consolidated approved x/y refinements from topology review;
+- `docs/dashboard/apartment_canvas/geometry_v1_6_patch.json` — consolidated approved x/y refinements plus stable semantic wall-edge, balcony, provenance, and placement-status metadata;
 - `docs/dashboard/apartment_canvas/aperture_registry_v1.json` — semantic registry for four windows and seven architectural doors;
 - `docs/dashboard/apartment_canvas/truth_map_v1.svg` — approved plain top-down truth map;
 - `docs/dashboard/apartment_canvas/projection_contract_v1.json` — topology-safe 2D→3D conversion and z-model rules;
 - `docs/dashboard/apartment_canvas/camera_v1.json` — accepted desktop hero camera;
 - `docs/dashboard/apartment_canvas/visibility_contract_v1.json` — accepted conceptual cutaway / bedroom visibility treatment.
 
-The effective spatial baseline is `geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json`.
+The effective spatial baseline is `geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json`. `truth_map_v1.svg` is its human-readable effective top-down representation, including every v1.6 object refinement.
 
 The coordinate system uses **Apartment Geometry Units (GU)** with the traced apartment width normalized to `1000 GU`; x and y use the same uniform scale so the floor plan cannot be stretched independently.
 
 From this point forward:
-- approved x/y coordinates, wall polygons, and registered aperture spans are spatial truth, not styling suggestions;
+- approved approximate x/y/orientation, wall polygons, semantic wall edges, balcony footprint, and registered aperture spans are spatial truth, not styling suggestions;
 - wall height/cutaway, provisional aperture z-heights, object z-heights, extrusion, occlusion, and materials may be refined without changing x/y geometry;
 - any future x/y geometry change requires new real-world evidence and explicit approval;
 - image generation must not be used to reconstruct, reinterpret, or compare apartment geometry or camera visibility.
 
 Important 3D semantics preserved by the approved model:
-- the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk**;
+- the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk** (**owner-verified** relationship);
 - the monitor is centered along the main desk at the wall-side edge;
 - microphone, headphones, and both desk lamps sit toward the rear of the desk near the monitor line;
 - the microwave is an **over-range unit above the stove/oven**, despite sharing that footprint in the top-down representation;
 - the bed is a low base/mattress plus separate west-wall headboard rather than one tall prism;
-- the shower is a low tray plus enclosure edges, not a solid block;
+- the shower is a low tray plus enclosure edges, not a solid block; only the intended front-facing enclosure span may be glass while fixed side/back architecture remains opaque;
+- the vanity has a visible basin and an upright wall/back-side faucet facing into it;
+- the bed has two pillows as separate later objects; their z/silhouette detail remains provisional;
+- washing/drying equipment is present in the laundry area (**owner-verified**); exact arrangement/form factor remains provisional;
 - the toilet uses contained tank/pedestal/bowl sub-shapes inside its approved footprint;
 - kitchen pendants are suspended overhead objects.
 
@@ -86,6 +89,7 @@ The accepted conceptual visibility treatment is defined by `docs/dashboard/apart
 - **Bedroom wall treatment C:** preserve the desk-facing bedroom wall as a **solid lower base plus translucent upper wall**. The wall must still read as the boundary separating bedroom from bathroom/hall while allowing the desk, monitor, chair, and desk-device cluster to remain legible.
 - The translucent bedroom upper wall is a **dollhouse/dashboard visibility treatment**, not a claim that the real apartment has a glass wall.
 - Preserve the bedroom-door aperture through the translucent treatment; never glaze across the registered door opening.
+- Bedroom-door posts, corners, header, and threshold remain opaque architecture; bathroom boundaries and the bedroom/living projector divider are explicitly excluded from treatment C.
 - Keep the bedroom/living divider / projector wall as normal physical architecture. Do not remove it or invent a double-sided projector surface solely to make the bedroom-facing projection directly visible from the accepted camera.
 - Exact cutaway-lip height, bedroom solid-base height, and translucent opacity remain provisional visual-model parameters.
 
@@ -165,14 +169,14 @@ Preserve canonical geometry and simplified recognizable anchors:
 - shower architecture fixed to the approved footprint;
 - closet footprint and double/folding closet-door semantics;
 - closet dresser flush against the closet/entry dividing wall;
-- laundry area;
+- laundry area with recognizable washing/drying equipment; exact arrangement/form factor remains provisional;
 - water-heater/mechanical enclosure;
 - entry/front door;
 - elongated **entry cubby** flush against the opposite side of the closet/entry dividing wall.
 
 ## Balcony / exterior band
 
-Preserve exact balcony geometry from the floor plan. The balcony/exterior edge becomes the restrained ambient-world boundary for daylight, weather, seasonal monstera placement, and confidence-gated outside audio micro-events such as birds, sirens, rain, or traffic.
+Preserve the closed semantic balcony footprint and its named shared living/balcony architectural edge exactly from the floor plan. The balcony/exterior edge becomes the restrained ambient-world boundary for daylight, weather, seasonal monstera placement, and confidence-gated outside audio micro-events such as birds, sirens, rain, or traffic.
 
 Do not invent exact outdoor localization that sensing does not support.
 
@@ -212,7 +216,7 @@ Home normally emphasizes layers 1–2. Layer 3 is mostly dormant; Analytics/Insi
 
 ## Geometry / projection gate
 
-The top-down geometry, topology-safe converter contract, desktop camera selection, and conceptual cutaway/bedroom visibility direction are now satisfied by the approved artifacts above.
+The top-down geometry, topology-safe converter contract, desktop camera selection, and conceptual cutaway/bedroom visibility direction are now satisfied by the approved artifacts above. Approximate x/y/orientation is accepted; only z/appearance/silhouette detail explicitly marked provisional remains open.
 
 The current gate is **deterministic visual-model refinement under the accepted camera and visibility treatment**. During this stage:
 - do not add dashboard sidebars or surrounding Home layout;

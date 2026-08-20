@@ -31,5 +31,55 @@
       "reason": "Pendant pair distributed symmetrically along the island long axis."
     }
   ],
-  "effective_baseline_rule": "geometry_v1.json + this approved consolidated delta + aperture_registry_v1.json define the current approved x/y baseline. The earlier v1.1 patch is obsolete."
+  "effective_baseline_rule": "geometry_v1.json + this approved consolidated delta + aperture_registry_v1.json define the current approved x/y baseline. The earlier v1.1 patch is obsolete.",
+  "contract_amendments": {
+    "status": "approved_baseline_metadata",
+    "provenance_policy": {
+      "source_proven": "Primary floor-plan, annotated-plan, or photograph evidence under the authority hierarchy.",
+      "owner_verified": "Owner-confirmed physical relationship; valid for semantic construction but not a substitute for primary spatial geometry.",
+      "provisional": "A future compiler may choose the detail only within the named invariant; it must not infer new accepted x/y geometry."
+    },
+    "placement_status_interpretation": {
+      "base_geometry_placement_status": "review_required",
+      "effective_xy_orientation": "accepted_approximate",
+      "provisional_dimensions": ["z_height", "extrusion", "appearance", "minor silhouette detail"],
+      "rule": "The legacy review_required labels in geometry_v1.json do not reopen the approved approximate x/y/orientation baseline. They identify only retained reviewability of z/appearance detail unless new primary spatial evidence is approved."
+    },
+    "semantic_wall_edges_gu": [
+      {"id":"wall.exterior.bedroom_north","points":[[13.83,46.38],[427.18,46.38]],"role":"exterior","provenance":"source_proven"},
+      {"id":"wall.living.balcony_north","points":[[441.01,222.13],[996.75,222.13]],"role":"balcony_shared_architecture","provenance":"source_proven"},
+      {"id":"wall.bedroom.south_desk_facing","points":[[21.16,530.51],[300.24,530.51]],"role":"interior_partition","provenance":"source_proven"},
+      {"id":"wall.bedroom.south_doorway_parent","points":[[300.24,534.58],[429.62,534.58]],"role":"interior_partition_with_aperture","provenance":"source_proven"},
+      {"id":"wall.bedroom.bath_hall_boundary","points":[[427.18,65.91],[427.18,528.07]],"role":"interior_partition","provenance":"source_proven"},
+      {"id":"wall.bedroom_living.projector_divider","points":[[440.20,241.66],[440.20,546.79]],"role":"interior_partition","provenance":"source_proven"},
+      {"id":"wall.bath.hall_east","points":[[281.53,546.79],[281.53,707.08]],"role":"interior_partition_with_aperture","provenance":"source_proven"},
+      {"id":"wall.laundry.hall_east","points":[[436.13,710.33],[436.13,860.05]],"role":"interior_partition_with_aperture","provenance":"source_proven"},
+      {"id":"wall.water_heater.hall_east","points":[[436.13,878.76],[436.13,1016.27]],"role":"interior_partition_with_aperture","provenance":"source_proven"},
+      {"id":"wall.closet.hall_south","points":[[157.85,1022.78],[280.72,1022.78]],"role":"interior_partition_with_aperture","provenance":"source_proven"},
+      {"id":"wall.exterior.south_entry","points":[[1.63,1262.82],[997.56,1262.82]],"role":"camera_facing_exterior_shell","provenance":"source_proven"}
+    ],
+    "semantic_wall_volumes": [
+      {"id":"wall_volume.exterior.bedroom_north","semantic_edge_id":"wall.exterior.bedroom_north","faces":[{"id":"wall_face.exterior.bedroom_north.exterior_north","bearing_line_gu":[[13.83,46.38],[427.18,46.38]],"plan_normal":"-y","role":"exterior"},{"id":"wall_face.exterior.bedroom_north.interior_south","bearing_line_gu":[[13.83,52.88852725793328],[427.18,52.88852725793328]],"plan_normal":"+y","role":"interior"}]},
+      {"id":"wall_volume.living.balcony_north","semantic_edge_id":"wall.living.balcony_north","faces":[{"id":"wall_face.living.balcony_north.balcony_north","bearing_line_gu":[[441.01,222.13],[996.75,222.13]],"plan_normal":"-y","role":"balcony"},{"id":"wall_face.living.balcony_north.living_south","bearing_line_gu":[[441.01,228.64117168429618],[996.75,228.64117168429618]],"plan_normal":"+y","role":"living"}]},
+      {"id":"wall_volume.bedroom.south_desk_facing","semantic_edge_id":"wall.bedroom.south_desk_facing","faces":[{"id":"wall_face.bedroom.south_desk_facing.bedroom_north","bearing_line_gu":[[21.16,530.51],[300.24,530.51]],"plan_normal":"-y","role":"bedroom"},{"id":"wall_face.bedroom.south_desk_facing.hall_south","bearing_line_gu":[[21.16,530.51],[300.24,530.51]],"plan_normal":"+y","role":"hall"}]},
+      {"id":"wall_volume.bedroom.south_doorway_parent","semantic_edge_id":"wall.bedroom.south_doorway_parent","faces":[{"id":"wall_face.bedroom.south_doorway_parent.bedroom_north","bearing_line_gu":[[300.24,534.58],[429.62,534.58]],"plan_normal":"-y","role":"bedroom"},{"id":"wall_face.bedroom.south_doorway_parent.hall_south","bearing_line_gu":[[300.24,534.58],[429.62,534.58]],"plan_normal":"+y","role":"hall"}]},
+      {"id":"wall_volume.bedroom.bath_hall_boundary","semantic_edge_id":"wall.bedroom.bath_hall_boundary","faces":[{"id":"wall_face.bedroom.bath_hall_boundary.bedroom_west","bearing_line_gu":[[427.18,65.91],[427.18,528.07]],"plan_normal":"-x","role":"bedroom"},{"id":"wall_face.bedroom.bath_hall_boundary.bath_hall_east","bearing_line_gu":[[427.18,65.91],[427.18,528.07]],"plan_normal":"+x","role":"bath_hall"}]},
+      {"id":"wall_volume.bedroom_living.projector_divider","semantic_edge_id":"wall.bedroom_living.projector_divider","faces":[{"id":"wall_face.bedroom_living.projector_divider.bedroom_west","bearing_line_gu":[[440.20,241.66],[440.20,546.79]],"plan_normal":"-x","role":"bedroom"},{"id":"wall_face.bedroom_living.projector_divider.living_east","bearing_line_gu":[[440.20,241.66],[440.20,546.79]],"plan_normal":"+x","role":"living"}]},
+      {"id":"wall_volume.bath.hall_east","semantic_edge_id":"wall.bath.hall_east","faces":[{"id":"wall_face.bath.hall_east.bath_west","bearing_line_gu":[[281.53,546.79],[281.53,707.08]],"plan_normal":"-x","role":"bath"},{"id":"wall_face.bath.hall_east.hall_east","bearing_line_gu":[[281.53,546.79],[281.53,707.08]],"plan_normal":"+x","role":"hall"}]},
+      {"id":"wall_volume.laundry.hall_east","semantic_edge_id":"wall.laundry.hall_east","faces":[{"id":"wall_face.laundry.hall_east.laundry_west","bearing_line_gu":[[436.13,710.33],[436.13,860.05]],"plan_normal":"-x","role":"laundry"},{"id":"wall_face.laundry.hall_east.hall_east","bearing_line_gu":[[436.13,710.33],[436.13,860.05]],"plan_normal":"+x","role":"kitchen_hall"}]},
+      {"id":"wall_volume.water_heater.hall_east","semantic_edge_id":"wall.water_heater.hall_east","faces":[{"id":"wall_face.water_heater.hall_east.water_heater_west","bearing_line_gu":[[436.13,878.76],[436.13,1016.27]],"plan_normal":"-x","role":"water_heater"},{"id":"wall_face.water_heater.hall_east.hall_east","bearing_line_gu":[[436.13,878.76],[436.13,1016.27]],"plan_normal":"+x","role":"kitchen_hall"}]},
+      {"id":"wall_volume.closet.hall_south","semantic_edge_id":"wall.closet.hall_south","faces":[{"id":"wall_face.closet.hall_south.closet_north","bearing_line_gu":[[157.85,1022.78],[280.72,1022.78]],"plan_normal":"-y","role":"closet"},{"id":"wall_face.closet.hall_south.hall_south","bearing_line_gu":[[157.85,1022.78],[280.72,1022.78]],"plan_normal":"+y","role":"hall_entry"}]},
+      {"id":"wall_volume.exterior.south_entry","semantic_edge_id":"wall.exterior.south_entry","faces":[{"id":"wall_face.exterior.south_entry.entry_north","bearing_line_gu":[[1.63,1255.49],[997.56,1255.49]],"plan_normal":"-y","role":"entry"},{"id":"wall_face.exterior.south_entry.exterior_south","bearing_line_gu":[[1.63,1262.82],[997.56,1262.82]],"plan_normal":"+y","role":"exterior"}]}
+    ],
+    "wall_volume_contract": "Each semantic_wall_volume is the stable construction owner for its semantic edge and named bearing faces. Every face declares an explicit bearing_line_gu and plan_normal. An aperture's immutable segment_gu is an exact trace on its named host_face_id bearing line, not a collinearity constraint on semantic_edge_id. Cut the opening perpendicular to that host face through the full host wall volume; preserve the aperture trace and named surrounding architecture.",
+    "balcony_semantics": {
+      "id": "balcony.footprint",
+      "type": "closed_semantic_footprint",
+      "ring_gu": [[441.01,4.07],[996.75,4.07],[996.75,222.13],[441.01,222.13],[441.01,4.07]],
+      "shared_architecture_edge_id": "wall.living.balcony_north",
+      "shared_aperture_ids": ["balcony_door","living_window_left","living_window_right"],
+      "exterior_facade_edges": ["north","east"],
+      "rule": "Compile the balcony from this closed footprint and its shared architectural edge; do not infer a balcony solid from the old decorative open polyline."
+    }
+  }
 }

@@ -1,28 +1,36 @@
 {
   "schema": "homehub.apartment-aperture-registry.v1",
   "status": "approved_xy_provisional_z",
-  "source": "canonical floor plan + approved geometry v1",
+  "source": "canonical floor plan + approved geometry v1 + geometry v1.6 contract amendments",
   "authority": {
-    "xy": "approved",
-    "vertical": "provisional"
+    "xy": "source_proven",
+    "vertical": "provisional",
+    "parent_wall_identity": "source_proven semantic wall-volume and bearing-face IDs in geometry_v1_6_patch.json"
+  },
+  "aperture_defaults": {
+    "parent_processing": "Cut every aperture from its named parent wall volume through its explicit host face before material assignment.",
+    "preserve_architecture": ["parent_wall", "jambs_or_posts", "corners", "sill_or_threshold", "lintel_or_header"],
+    "visibility_rule": "An aperture does not inherit a neighboring translucent wall treatment unless explicitly named. Doorway posts, corners, frames, and headers remain opaque architecture."
   },
   "apertures": [
-    {"id":"bedroom_window_left","type":"window","segment_gu":[[118.79576891781937,52.88852725793328],[222.94548413344185,52.88852725793328]],"orientation":"horizontal","connects":["bedroom","exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78}},
-    {"id":"bedroom_window_right","type":"window","segment_gu":[[235.96419853539464,52.88852725793328],[353.1326281529699,52.88852725793328]],"orientation":"horizontal","connects":["bedroom","exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78}},
-    {"id":"living_window_left","type":"window","segment_gu":[[677.786818551668,228.64117168429618],[795.7689178193654,228.64117168429618]],"orientation":"horizontal","connects":["living","balcony_exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78}},
-    {"id":"living_window_right","type":"window","segment_gu":[[807.9739625711961,228.64117168429618],[912.9373474369406,228.64117168429618]],"orientation":"horizontal","connects":["living","balcony_exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78}},
-    {"id":"bedroom_door","type":"door","segment_gu":[[301.06,534.58],[418.23,534.58]],"orientation":"horizontal","connects":["bedroom","hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84}},
-    {"id":"balcony_door","type":"door","segment_gu":[[522.38,222.13],[652.56,222.13]],"orientation":"horizontal","connects":["living","balcony"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84}},
-    {"id":"front_door","type":"door","segment_gu":[[515.87,1255.49],[639.54,1255.49]],"orientation":"horizontal","connects":["entry","exterior"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84}},
-    {"id":"bathroom_door","type":"door","segment_gu":[[281.53,560.62],[281.53,683.48]],"orientation":"vertical","connects":["bath","hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84}},
-    {"id":"laundry_door","type":"door","segment_gu":[[436.13,742.88],[436.13,847.03]],"orientation":"vertical","connects":["laundry","kitchen_hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84}},
-    {"id":"water_heater_door","type":"door","segment_gu":[[436.13,899.1],[436.13,1003.25]],"orientation":"vertical","connects":["water_heater","kitchen_hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84}},
-    {"id":"closet_opening","type":"door","subtype":"double_folding","segment_gu":[[157.85,1022.78],[280.72,1022.78]],"orientation":"horizontal","connects":["closet","hall_entry"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"note":"Canonical floor plan shows a double/folding closet door at this clear opening."}
+    {"id":"bedroom_window_left","type":"window","parent_wall_id":"wall_volume.exterior.bedroom_north","host_face_id":"wall_face.exterior.bedroom_north.interior_south","segment_gu":[[118.79576891781937,52.88852725793328],[222.94548413344185,52.88852725793328]],"orientation":"horizontal","connects":["bedroom","exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78},"preservation":{"sill":true,"lintel":true,"jambs":true,"corners":true,"glass":"provisional"}},
+    {"id":"bedroom_window_right","type":"window","parent_wall_id":"wall_volume.exterior.bedroom_north","host_face_id":"wall_face.exterior.bedroom_north.interior_south","segment_gu":[[235.96419853539464,52.88852725793328],[353.1326281529699,52.88852725793328]],"orientation":"horizontal","connects":["bedroom","exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78},"preservation":{"sill":true,"lintel":true,"jambs":true,"corners":true,"glass":"provisional"}},
+    {"id":"living_window_left","type":"window","parent_wall_id":"wall_volume.living.balcony_north","host_face_id":"wall_face.living.balcony_north.living_south","segment_gu":[[677.786818551668,228.64117168429618],[795.7689178193654,228.64117168429618]],"orientation":"horizontal","connects":["living","balcony_exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78},"preservation":{"sill":true,"lintel":true,"jambs":true,"corners":true,"glass":"provisional"}},
+    {"id":"living_window_right","type":"window","parent_wall_id":"wall_volume.living.balcony_north","host_face_id":"wall_face.living.balcony_north.living_south","segment_gu":[[807.9739625711961,228.64117168429618],[912.9373474369406,228.64117168429618]],"orientation":"horizontal","connects":["living","balcony_exterior"],"vertical":{"status":"provisional","sill_gu":28,"head_gu":78},"preservation":{"sill":true,"lintel":true,"jambs":true,"corners":true,"glass":"provisional"}},
+    {"id":"bedroom_door","type":"door","parent_wall_id":"wall_volume.bedroom.south_doorway_parent","host_face_id":"wall_face.bedroom.south_doorway_parent.bedroom_north","segment_gu":[[301.06,534.58],[418.23,534.58]],"orientation":"horizontal","connects":["bedroom","hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true},"visibility_exclusion":"bedroom_front_wall.translucent_upper"},
+    {"id":"balcony_door","type":"door","parent_wall_id":"wall_volume.living.balcony_north","host_face_id":"wall_face.living.balcony_north.balcony_north","segment_gu":[[522.38,222.13],[652.56,222.13]],"orientation":"horizontal","connects":["living","balcony"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true}},
+    {"id":"front_door","type":"door","parent_wall_id":"wall_volume.exterior.south_entry","host_face_id":"wall_face.exterior.south_entry.entry_north","segment_gu":[[515.87,1255.49],[639.54,1255.49]],"orientation":"horizontal","connects":["entry","exterior"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true}},
+    {"id":"bathroom_door","type":"door","parent_wall_id":"wall_volume.bath.hall_east","host_face_id":"wall_face.bath.hall_east.hall_east","segment_gu":[[281.53,560.62],[281.53,683.48]],"orientation":"vertical","connects":["bath","hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true}},
+    {"id":"laundry_door","type":"door","parent_wall_id":"wall_volume.laundry.hall_east","host_face_id":"wall_face.laundry.hall_east.hall_east","segment_gu":[[436.13,742.88],[436.13,847.03]],"orientation":"vertical","connects":["laundry","kitchen_hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true}},
+    {"id":"water_heater_door","type":"door","parent_wall_id":"wall_volume.water_heater.hall_east","host_face_id":"wall_face.water_heater.hall_east.hall_east","segment_gu":[[436.13,899.1],[436.13,1003.25]],"orientation":"vertical","connects":["water_heater","kitchen_hall"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true}},
+    {"id":"closet_opening","type":"door","subtype":"double_folding","parent_wall_id":"wall_volume.closet.hall_south","host_face_id":"wall_face.closet.hall_south.hall_south","segment_gu":[[157.85,1022.78],[280.72,1022.78]],"orientation":"horizontal","connects":["closet","hall_entry"],"vertical":{"status":"provisional","sill_gu":0,"head_gu":84},"preservation":{"threshold":true,"lintel":true,"jambs_or_posts":true,"corners":true,"opaque_architecture":true},"note":"Canonical floor plan shows a double/folding closet door at this clear opening."}
   ],
   "rules": [
     "Registered wall gaps are semantic apertures, never missing geometry.",
     "Window spans remain open in x/y but receive sill/lintel/glass geometry in 3D.",
     "Door spans remain floor-to-head openings in 3D.",
-    "Changing provisional sill/head heights does not change approved x/y geometry."
+    "Changing provisional sill/head heights does not change approved x/y geometry.",
+    "Every aperture must resolve to exactly one parent_wall_id and one host_face_id before scene construction.",
+    "segment_gu is immutable approved face-trace geometry; it is not required to be collinear with the host wall's semantic edge."
   ]
 }
