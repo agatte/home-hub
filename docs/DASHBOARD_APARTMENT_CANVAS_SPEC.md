@@ -30,7 +30,8 @@ Durable artifacts:
 - `docs/dashboard/apartment_canvas/aperture_registry_v1.json` — semantic registry for four windows and seven architectural doors;
 - `docs/dashboard/apartment_canvas/truth_map_v1.svg` — approved plain top-down truth map;
 - `docs/dashboard/apartment_canvas/projection_contract_v1.json` — topology-safe 2D→3D conversion and z-model rules;
-- `docs/dashboard/apartment_canvas/camera_v1.json` — accepted desktop hero camera.
+- `docs/dashboard/apartment_canvas/camera_v1.json` — accepted desktop hero camera;
+- `docs/dashboard/apartment_canvas/visibility_contract_v1.json` — accepted conceptual cutaway / bedroom visibility treatment.
 
 The effective spatial baseline is `geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json`.
 
@@ -40,7 +41,7 @@ From this point forward:
 - approved x/y coordinates, wall polygons, and registered aperture spans are spatial truth, not styling suggestions;
 - wall height/cutaway, provisional aperture z-heights, object z-heights, extrusion, occlusion, and materials may be refined without changing x/y geometry;
 - any future x/y geometry change requires new real-world evidence and explicit approval;
-- image generation must not be used to reconstruct or reinterpret apartment geometry.
+- image generation must not be used to reconstruct, reinterpret, or compare apartment geometry or camera visibility.
 
 Important 3D semantics preserved by the approved model:
 - the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk**;
@@ -76,6 +77,19 @@ Why this camera won:
 The camera is now a **projection contract, not an open styling suggestion**. Do not reopen broad camera exploration unless new real-world geometry evidence materially invalidates the composition.
 
 Mobile may later use context-aware framing rather than shrinking the full desktop view: desk/bedroom for Gaming or Working, sleep side for Sleeping/Winding Down, living room for Watching/Relax/Social, kitchen for Cooking, with an explicit whole-apartment view available. Those mobile crops do not change desktop geometry or the accepted desktop camera.
+
+## Accepted desktop visibility / cutaway treatment
+
+The accepted conceptual visibility treatment is defined by `docs/dashboard/apartment_canvas/visibility_contract_v1.json`.
+
+- **Global cutaway B:** lower only the true camera-facing south/front exterior shell. Rear walls and interior partitions remain architectural walls; do not use apartment-depth slicing to decide which walls exist.
+- **Bedroom wall treatment C:** preserve the desk-facing bedroom wall as a **solid lower base plus translucent upper wall**. The wall must still read as the boundary separating bedroom from bathroom/hall while allowing the desk, monitor, chair, and desk-device cluster to remain legible.
+- The translucent bedroom upper wall is a **dollhouse/dashboard visibility treatment**, not a claim that the real apartment has a glass wall.
+- Preserve the bedroom-door aperture through the translucent treatment; never glaze across the registered door opening.
+- Keep the bedroom/living divider / projector wall as normal physical architecture. Do not remove it or invent a double-sided projector surface solely to make the bedroom-facing projection directly visible from the accepted camera.
+- Exact cutaway-lip height, bedroom solid-base height, and translucent opacity remain provisional visual-model parameters.
+
+Renderer correctness is part of this contract: the floor is an underlay and may not painter-sort over wall faces; wall caps must depth-sort with the rest of the scene rather than being painted as a final overlay.
 
 ## Bedroom
 
@@ -198,28 +212,30 @@ Home normally emphasizes layers 1–2. Layer 3 is mostly dormant; Analytics/Insi
 
 ## Geometry / projection gate
 
-The top-down geometry, topology-safe converter contract, and desktop camera-selection portions of this gate are now satisfied by the approved artifacts above.
+The top-down geometry, topology-safe converter contract, desktop camera selection, and conceptual cutaway/bedroom visibility direction are now satisfied by the approved artifacts above.
 
-The next gate is **deterministic visual-model refinement under the accepted camera**. During this stage:
+The current gate is **deterministic visual-model refinement under the accepted camera and visibility treatment**. During this stage:
 - do not add dashboard sidebars or surrounding Home layout;
 - do not add fake telemetry or confidence values;
 - do not add causality traces or decorative machine UI;
 - do not add Hue/live-state lighting, ambient events, or final material polish;
 - do not alter approved top-down x/y geometry to improve the view;
-- do not alter the accepted desktop camera merely to hide modeling/occlusion defects.
+- do not alter the accepted desktop camera merely to hide modeling/occlusion defects;
+- do not replace the accepted cutaway/bedroom treatment with generated or composition-driven geometry.
 
-Reject a candidate if wall cutaway, z-height, extrusion, or occlusion makes the apartment spatially misleading even though the underlying x/y coordinates are correct.
+Reject a candidate if wall treatment, z-height, extrusion, or occlusion makes the apartment spatially misleading even though the underlying x/y coordinates are correct.
 
 Only after the projected physical-world model is visually accepted should live lights, device state, ambient events, causality, or surrounding Home UI be layered in.
 
 ## Still-open visual questions
 
-These are visual-model explorations, not geometry or desktop-camera uncertainties:
-- exact wall height/cutaway depth and which near walls require visibility treatment;
+These are visual-model explorations, not geometry, desktop-camera, or broad cutaway uncertainties:
+- exact full-wall height, south/front cutaway-lip height, and bedroom solid-base height;
+- exact translucent-bedroom-wall opacity / visual material treatment;
 - final provisional sill/lintel/window-glass z-heights;
 - object z-heights and degree of extrusion/simplification;
 - furniture silhouette fidelity needed for recognition at hero scale;
-- object/wall occlusion strategy under the accepted 20°/36°/45° camera;
+- object/wall occlusion strategy within the accepted visibility treatment;
 - inactive/active Alexa-node treatment;
 - projector-wall active visual strength;
 - final wall/floor/material palette.
