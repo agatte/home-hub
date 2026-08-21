@@ -29,8 +29,57 @@ TOPOLOGY_AUTHORITY_DESCRIPTOR = ContractDescriptor(
     "topology_authority_v1.json",
     "homehub.apartment-topology-authority.v1",
     "accepted_physical_xy_topology_authority",
-    "780a945140fdde74b8efa39078f8ef93315a3548e40dc0eaec196ed2ecc8c3f5",
+    "5cf870dc9706e41423da6c774ca4345395626165ceb02d5be81cbfcc890e51cb",
 )
+
+
+_REGISTERED_GAP_FACE_CONTINUITY = {
+    "semantic_face_may_span_registered_aperture_gaps": True,
+    "physical_boundary_rail_may_be_interrupted_by_registered_aperture_gaps": True,
+    "realized_physical_runs": "derived_around_registered_apertures",
+}
+
+_REGISTERED_GAP_RECONSTRUCTION = {
+    "prerequisite": "required_when_exact_registered_jamb_trace_lacks_local_wall_band",
+    "evidence_source": "accepted_physical_slice_1_wall_body_topology_only",
+    "forbidden_evidence": [
+        "registered_gap_reconstruction",
+        "virtual_pre_aperture_band",
+        "derived_semantic_face_runs",
+        "future_construction_topology",
+        "inferred_or_guessed_geometry",
+    ],
+    "tangent_search": {
+        "order": "monotonic_outward_from_registered_interval_on_each_open_tangent_side",
+        "decisive_candidate": "first_positive_area_physical_slice_1_wall_remnant",
+        "nearest_incompatible_remnant": "fail_closed_immediately",
+        "farther_compatible_after_nearer_obstruction": "forbidden",
+    },
+    "candidate_compatibility": [
+        "parent_wall_id",
+        "host_face_id",
+        "required_directed_host_opposite_relationship",
+    ],
+    "same_nearest_event": "exactly_one_compatible_directed_continuation_required_else_fail_closed",
+    "both_tangent_sides": "required_and_must_establish_same_unique_directed_host_opposite_continuation",
+    "construction_band": "derived_virtual_pre_aperture_band_limited_to_registered_aperture_interval",
+    "authority": [
+        "derived_construction_topology_only",
+        "never_write_accepted_physical_xy_wall_topology",
+        "never_mutate_slice_1",
+        "never_create_wall_owner",
+        "never_alter_segment_gu_parent_wall_id_or_host_face_id",
+    ],
+    "fail_closed": [
+        "missing_positive_area_physical_slice_1_wall_remnant",
+        "nearest_positive_area_physical_slice_1_wall_remnant_is_incompatible",
+        "same_nearest_event_does_not_leave_exactly_one_compatible_directed_continuation",
+        "tangent_sides_fail_to_establish_same_unique_directed_host_opposite_continuation",
+        "degenerate_pre_aperture_band",
+        "requires_snapping_epsilon_coordinate_repair_or_override",
+    ],
+    "wall_band_geometry": "exact_tapered_or_non_parallel_opposite_rail_allowed_no_constant_thickness_assumption",
+}
 
 
 @dataclass(frozen=True)
@@ -473,7 +522,9 @@ def validate_topology_authority(document: dict[str, Any], bundle: ContractBundle
     if (
         not isinstance(face_policy, dict)
         or face_policy.get("policy") != "normal_directed_unique_wall_band"
+        or face_policy.get("registered_gap_continuity") != _REGISTERED_GAP_FACE_CONTINUITY
         or face_policy.get("overrides") != []
+        or set(face_policy) != {"policy", "registered_gap_continuity", "overrides"}
     ):
         errors.append(
             Diagnostic(
@@ -486,12 +537,21 @@ def validate_topology_authority(document: dict[str, Any], bundle: ContractBundle
         not isinstance(aperture_policy, dict)
         or aperture_policy.get("policy") != "unique_two_jamb_wall_band_traversal"
         or aperture_policy.get("overrides") != []
+        or set(aperture_policy) != {"policy", "registered_gap_reconstruction", "overrides"}
     ):
         errors.append(
             Diagnostic(
                 "topology.aperture_policy",
                 "aperture_resolution",
                 "v1 requires fail-closed policy and empty overrides",
+            )
+        )
+    elif aperture_policy["registered_gap_reconstruction"] != _REGISTERED_GAP_RECONSTRUCTION:
+        errors.append(
+            Diagnostic(
+                "topology.aperture_reconstruction",
+                "aperture_resolution.registered_gap_reconstruction",
+                "v1 requires the global derived-only registered-gap reconstruction contract",
             )
         )
     if errors:

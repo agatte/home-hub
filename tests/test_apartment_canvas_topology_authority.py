@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from backend.apartment_canvas.compiler import canonical_scene_json, compile_scene
-from backend.apartment_canvas.contracts import ContractError, load_contracts
+from backend.apartment_canvas.contracts import ContractError, fingerprint, load_contracts
 from backend.apartment_canvas.models import deep_freeze, deep_thaw
 from backend.apartment_canvas.topology_authority import (
+    TOPOLOGY_AUTHORITY_DESCRIPTOR,
     load_topology_authority,
     validate_topology_authority,
 )
@@ -51,8 +52,142 @@ def patch_mutation(mutator):
 def test_happy_path_is_separate_and_deterministic():
     authority = load_topology_authority(CONTRACTS)
     assert authority.schema == "homehub.apartment-topology-authority.v1"
-    assert authority.to_dict()["semantic_face_resolution"]["overrides"] == []
-    assert authority.to_dict()["aperture_resolution"]["overrides"] == []
+    document = authority.to_dict()
+    assert document["semantic_face_resolution"]["policy"] == "normal_directed_unique_wall_band"
+    assert document["semantic_face_resolution"]["overrides"] == []
+    assert document["aperture_resolution"]["policy"] == "unique_two_jamb_wall_band_traversal"
+    assert document["aperture_resolution"]["overrides"] == []
+
+
+def test_registered_gap_reconstruction_is_global_derived_only_and_fail_closed():
+    document = load_topology_authority(CONTRACTS).to_dict()
+    face = document["semantic_face_resolution"]["registered_gap_continuity"]
+    reconstruction = document["aperture_resolution"]["registered_gap_reconstruction"]
+
+    assert face == {
+        "semantic_face_may_span_registered_aperture_gaps": True,
+        "physical_boundary_rail_may_be_interrupted_by_registered_aperture_gaps": True,
+        "realized_physical_runs": "derived_around_registered_apertures",
+    }
+    assert set(document["aperture_resolution"]) == {
+        "policy", "registered_gap_reconstruction", "overrides",
+    }
+    assert "aperture_id" not in reconstruction
+    assert all(
+        aperture["id"] not in json.dumps(reconstruction, sort_keys=True)
+        for aperture in deep_thaw(bundle().aperture_registry)["apertures"]
+    )
+    assert set(reconstruction) == {
+        "prerequisite",
+        "evidence_source",
+        "forbidden_evidence",
+        "tangent_search",
+        "candidate_compatibility",
+        "same_nearest_event",
+        "both_tangent_sides",
+        "construction_band",
+        "authority",
+        "fail_closed",
+        "wall_band_geometry",
+    }
+    assert reconstruction["evidence_source"] == "accepted_physical_slice_1_wall_body_topology_only"
+    assert reconstruction["forbidden_evidence"] == [
+        "registered_gap_reconstruction",
+        "virtual_pre_aperture_band",
+        "derived_semantic_face_runs",
+        "future_construction_topology",
+        "inferred_or_guessed_geometry",
+    ]
+    assert reconstruction["tangent_search"] == {
+        "order": "monotonic_outward_from_registered_interval_on_each_open_tangent_side",
+        "decisive_candidate": "first_positive_area_physical_slice_1_wall_remnant",
+        "nearest_incompatible_remnant": "fail_closed_immediately",
+        "farther_compatible_after_nearer_obstruction": "forbidden",
+    }
+    assert reconstruction["candidate_compatibility"] == [
+        "parent_wall_id",
+        "host_face_id",
+        "required_directed_host_opposite_relationship",
+    ]
+    assert reconstruction["same_nearest_event"] == (
+        "exactly_one_compatible_directed_continuation_required_else_fail_closed"
+    )
+    assert reconstruction["both_tangent_sides"] == (
+        "required_and_must_establish_same_unique_directed_host_opposite_continuation"
+    )
+    assert reconstruction["authority"] == [
+        "derived_construction_topology_only",
+        "never_write_accepted_physical_xy_wall_topology",
+        "never_mutate_slice_1",
+        "never_create_wall_owner",
+        "never_alter_segment_gu_parent_wall_id_or_host_face_id",
+    ]
+    assert reconstruction["fail_closed"] == [
+        "missing_positive_area_physical_slice_1_wall_remnant",
+        "nearest_positive_area_physical_slice_1_wall_remnant_is_incompatible",
+        "same_nearest_event_does_not_leave_exactly_one_compatible_directed_continuation",
+        "tangent_sides_fail_to_establish_same_unique_directed_host_opposite_continuation",
+        "degenerate_pre_aperture_band",
+        "requires_snapping_epsilon_coordinate_repair_or_override",
+    ]
+    assert reconstruction["wall_band_geometry"] == (
+        "exact_tapered_or_non_parallel_opposite_rail_allowed_no_constant_thickness_assumption"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"].__setitem__(
+            "evidence_source", "derived_reconstruction_is_allowed"
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"][
+            "forbidden_evidence"
+        ].remove("virtual_pre_aperture_band"),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"]["tangent_search"].__setitem__(
+            "nearest_incompatible_remnant", "continue_search"
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"]["tangent_search"].__setitem__(
+            "farther_compatible_after_nearer_obstruction", "allowed"
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"].__setitem__(
+            "same_nearest_event", "multiple_compatible_continuations_allowed"
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"].__setitem__(
+            "both_tangent_sides", "one_side_is_enough"
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"].__setitem__(
+            "fail_closed", []
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"]["authority"].remove(
+            "never_write_accepted_physical_xy_wall_topology"
+        ),
+        lambda d: d["aperture_resolution"]["registered_gap_reconstruction"].__setitem__(
+            "wall_band_geometry", "constant_thickness_required"
+        ),
+    ],
+)
+def test_registered_gap_reconstruction_contract_mutations_fail_closed(mutator):
+    assert diagnostic_codes(mutator) == {"topology.aperture_reconstruction"}
+
+
+def test_authority_fingerprint_is_the_new_deterministic_provenance_channel():
+    authority = load_topology_authority(CONTRACTS)
+    expected = "5cf870dc9706e41423da6c774ca4345395626165ceb02d5be81cbfcc890e51cb"
+    assert fingerprint(authority.to_dict()) == expected
+    assert authority.fingerprint == expected
+    assert TOPOLOGY_AUTHORITY_DESCRIPTOR.fingerprint == expected
+
+
+def test_geometry_scene_boundary_leaves_vertical_realization_undecided():
+    spec = (CONTRACTS.parents[1] / "DASHBOARD_APARTMENT_CANVAS_SPEC.md").read_text(
+        encoding="utf-8"
+    )
+    assert "derived pre-aperture construction topology suitable as an input to a future `GeometrySceneV1`" in spec
+    assert "separate `GeometrySceneV1` design and authority decision" in spec
+    assert "does not make provisional sill/head metadata final" in spec
+    assert "defines no z geometry, extrusion algorithm, mesh topology, sill/lintel/header construction, or rendering behavior" in spec
+    assert "derive wall below the sill" not in spec
 
 
 def test_semantic_scene_serialization_and_six_source_manifest_are_unchanged():
