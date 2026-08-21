@@ -1,0 +1,389 @@
+{
+  "schema": "homehub.apartment-physical-family-authority.v1",
+  "status": "accepted_physical_gap_continuation_authority",
+  "identity_payload": {
+    "physical_source": {
+      "schema": "homehub.architecture-wall-topology.slice-1.physical-subset.v1",
+      "sha256": "88979801ec535b816be189cf2438bf8feaa474cbb3618b6a24cd9f57ef00a3f8"
+    },
+    "algorithm": {
+      "id": "homehub.apartment-physical-family-preflight.exact-directed-rails.v1",
+      "arithmetic": "fractions_only",
+      "atom_identity": "maximal_directed_paired_rail_local_continuity_class",
+      "directed_orientation": "ordered_tangent_normal_host_opposite",
+      "undirected_certificate_expansion": "emit_forward_and_inverse_directed_edges"
+    },
+    "permitted_local_edge_classes": [
+      "positive_area_strip_adjacency",
+      "exact_order_preserving_contour_vertex_continuation",
+      "accepted_exact_junction_unique_directed_continuation"
+    ],
+    "gap_continuation_certificates": [
+      {
+        "id": "physical_gap.646cf1a01ffccf7cf896",
+        "orientation": {"tangent": [1, 0], "normal": [0, 1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["11717/100", "6509/100"],
+          "opposite_point": ["11717/100", "2319/50"],
+          "cap_path": [["11717/100", "6509/100"], ["5899/50", "297/5"], ["11717/100", "2319/50"]],
+          "atomic_cap_edges": [
+            {"edge": [["11717/100", "6509/100"], ["5899/50", "297/5"]], "source_segments": ["wall.contour.c006.segment.s100"]},
+            {"edge": [["5899/50", "297/5"], ["11717/100", "2319/50"]], "source_segments": ["wall.contour.c006.segment.s101"]}
+          ],
+          "host_rail_germ": {"edge": [["11717/100", "6509/100"], ["1383/100", "6591/100"]], "source_segments": ["wall.contour.c006.segment.s099"]},
+          "opposite_rail_germ": {"edge": [["11717/100", "2319/50"], ["163/100", "2319/50"]], "source_segments": ["wall.contour.c006.segment.s102"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["5594/25", "6509/100"],
+          "opposite_point": ["4459/20", "2319/50"],
+          "cap_path": [["5594/25", "6509/100"], ["4459/20", "2319/50"]],
+          "atomic_cap_edges": [{"edge": [["5594/25", "6509/100"], ["4459/20", "2319/50"]], "source_segments": ["wall.contour.c005.segment.s001"]}],
+          "host_rail_germ": {"edge": [["5594/25", "6509/100"], ["11717/50", "6509/100"]], "source_segments": ["wall.contour.c005.segment.s002"]},
+          "opposite_rail_germ": {"edge": [["4459/20", "2319/50"], ["11717/50", "2319/50"]], "source_segments": ["wall.contour.c005.segment.s004"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.214f88dd64952ef8af05",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.c1b14875aaceb17d81b0",
+        "orientation": {"tangent": [1, 0], "normal": [0, 1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["11717/50", "6509/100"],
+          "opposite_point": ["11717/50", "2319/50"],
+          "cap_path": [["11717/50", "6509/100"], ["11717/50", "2319/50"]],
+          "atomic_cap_edges": [{"edge": [["11717/50", "6509/100"], ["11717/50", "2319/50"]], "source_segments": ["wall.contour.c005.segment.s003"]}],
+          "host_rail_germ": {"edge": [["11717/50", "6509/100"], ["5594/25", "6509/100"]], "source_segments": ["wall.contour.c005.segment.s002"]},
+          "opposite_rail_germ": {"edge": [["11717/50", "2319/50"], ["4459/20", "2319/50"]], "source_segments": ["wall.contour.c005.segment.s004"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.214f88dd64952ef8af05",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["35151/100", "6509/100"],
+          "opposite_point": ["35151/100", "2319/50"],
+          "cap_path": [["35151/100", "6509/100"], ["35151/100", "2319/50"]],
+          "atomic_cap_edges": [{"edge": [["35151/100", "6509/100"], ["35151/100", "2319/50"]], "source_segments": ["wall.contour.c004.segment.s001"]}],
+          "host_rail_germ": {"edge": [["35151/100", "6509/100"], ["21359/50", "6591/100"]], "source_segments": ["wall.contour.c004.segment.s002"]},
+          "opposite_rail_germ": {"edge": [["35151/100", "2319/50"], ["2201/5", "2319/50"]], "source_segments": ["wall.contour.c004.segment.s018"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.0e83a13deac2c79da8e5",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.fb0b72a9a9941e211c6c",
+        "orientation": {"tangent": [1, 0], "normal": [0, 1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["13039/25", "11717/50"],
+          "opposite_point": ["13039/25", "441/2"],
+          "cap_path": [["13039/25", "11717/50"], ["13039/25", "441/2"]],
+          "atomic_cap_edges": [{"edge": [["13039/25", "11717/50"], ["13039/25", "441/2"]], "source_segments": ["wall.contour.c004.segment.s013"]}],
+          "host_rail_germ": {"edge": [["13039/25", "11717/50"], ["21847/50", "4703/20"]], "source_segments": ["wall.contour.c004.segment.s012"]},
+          "opposite_rail_germ": {"edge": [["13039/25", "441/2"], ["21847/50", "5533/25"]], "source_segments": ["wall.contour.c004.segment.s014"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.0e83a13deac2c79da8e5",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["16314/25", "11717/50"],
+          "opposite_point": ["16314/25", "22213/100"],
+          "cap_path": [["16314/25", "11717/50"], ["16314/25", "22213/100"]],
+          "atomic_cap_edges": [{"edge": [["16314/25", "11717/50"], ["16314/25", "22213/100"]], "source_segments": ["wall.contour.c003.segment.s001"]}],
+          "host_rail_germ": {"edge": [["16314/25", "11717/50"], ["67697/100", "11717/50"]], "source_segments": ["wall.contour.c003.segment.s002"]},
+          "opposite_rail_germ": {"edge": [["16314/25", "22213/100"], ["67697/100", "22213/100"]], "source_segments": ["wall.contour.c003.segment.s008"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.90ece97d57d9a51bde5f",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.b4b46cd5d0f3ab38e1a2",
+        "orientation": {"tangent": [1, 0], "normal": [0, 1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["67697/100", "11717/50"],
+          "opposite_point": ["67697/100", "22213/100"],
+          "cap_path": [["67697/100", "11717/50"], ["67941/100", "2319/10"], ["67697/100", "23027/100"], ["67697/100", "1131/5"], ["67941/100", "22457/100"], ["67697/100", "22213/100"]],
+          "atomic_cap_edges": [
+            {"edge": [["67697/100", "11717/50"], ["67941/100", "2319/10"]], "source_segments": ["wall.contour.c003.segment.s003"]},
+            {"edge": [["67941/100", "2319/10"], ["67697/100", "23027/100"]], "source_segments": ["wall.contour.c003.segment.s004"]},
+            {"edge": [["67697/100", "23027/100"], ["67697/100", "1131/5"]], "source_segments": ["wall.contour.c003.segment.s005"]},
+            {"edge": [["67697/100", "1131/5"], ["67941/100", "22457/100"]], "source_segments": ["wall.contour.c003.segment.s006"]},
+            {"edge": [["67941/100", "22457/100"], ["67697/100", "22213/100"]], "source_segments": ["wall.contour.c003.segment.s007"]}
+          ],
+          "host_rail_germ": {"edge": [["67697/100", "11717/50"], ["16314/25", "11717/50"]], "source_segments": ["wall.contour.c003.segment.s002"]},
+          "opposite_rail_germ": {"edge": [["67697/100", "22213/100"], ["16314/25", "22213/100"]], "source_segments": ["wall.contour.c003.segment.s008"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.90ece97d57d9a51bde5f",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["39829/50", "11717/50"],
+          "opposite_point": ["39829/50", "22213/100"],
+          "cap_path": [["39829/50", "11717/50"], ["22583401/28450", "6627201/28450"], ["39829/50", "5777/25"], ["39829/50", "22539/100"], ["7917/10", "22213/100"], ["19874/25", "5594/25"], ["39829/50", "22213/100"]],
+          "atomic_cap_edges": [
+            {"edge": [["39829/50", "11717/50"], ["22583401/28450", "6627201/28450"]], "source_segments": ["wall.contour.c002.segment.s005"]},
+            {"edge": [["22583401/28450", "6627201/28450"], ["39829/50", "5777/25"]], "source_segments": ["wall.contour.c002.segment.s003"]},
+            {"edge": [["39829/50", "5777/25"], ["39829/50", "22539/100"]], "source_segments": ["wall.contour.c002.segment.s002"]},
+            {"edge": [["39829/50", "22539/100"], ["7917/10", "22213/100"]], "source_segments": ["wall.contour.c002.segment.s001"]},
+            {"edge": [["7917/10", "22213/100"], ["19874/25", "5594/25"]], "source_segments": ["wall.contour.c002.segment.s010"]},
+            {"edge": [["19874/25", "5594/25"], ["39829/50", "22213/100"]], "source_segments": ["wall.contour.c002.segment.s009"]}
+          ],
+          "host_rail_germ": {"edge": [["39829/50", "11717/50"], ["20179/25", "11717/50"]], "source_segments": ["wall.contour.c002.segment.s006"]},
+          "opposite_rail_germ": {"edge": [["39829/50", "22213/100"], ["20179/25", "22213/100"]], "source_segments": ["wall.contour.c002.segment.s008"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.ef37dfe6480608de1060",
+          "accepted_exact_junction": {"required": true, "events": [{"kind": "accepted_proper_crossing", "point": ["22583401/28450", "6627201/28450"], "source_segments": ["wall.contour.c002.segment.s003", "wall.contour.c002.segment.s005"]}]}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.89a323d82cacc5e28dd0",
+        "orientation": {"tangent": [1, 0], "normal": [0, 1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["20179/25", "11717/50"],
+          "opposite_point": ["20179/25", "22213/100"],
+          "cap_path": [["20179/25", "11717/50"], ["20179/25", "22213/100"]],
+          "atomic_cap_edges": [{"edge": [["20179/25", "11717/50"], ["20179/25", "22213/100"]], "source_segments": ["wall.contour.c002.segment.s007"]}],
+          "host_rail_germ": {"edge": [["20179/25", "11717/50"], ["39829/50", "11717/50"]], "source_segments": ["wall.contour.c002.segment.s006"]},
+          "opposite_rail_germ": {"edge": [["20179/25", "22213/100"], ["39829/50", "22213/100"]], "source_segments": ["wall.contour.c002.segment.s008"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.ef37dfe6480608de1060",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["3655/4", "11717/50"],
+          "opposite_point": ["3655/4", "22213/100"],
+          "cap_path": [["3655/4", "11717/50"], ["45647/50", "22539/100"], ["3655/4", "22213/100"]],
+          "atomic_cap_edges": [
+            {"edge": [["3655/4", "11717/50"], ["45647/50", "22539/100"]], "source_segments": ["wall.contour.c001.segment.s003"]},
+            {"edge": [["45647/50", "22539/100"], ["3655/4", "22213/100"]], "source_segments": ["wall.contour.c001.segment.s002"]}
+          ],
+          "host_rail_germ": {"edge": [["3655/4", "11717/50"], ["49471/50", "11717/50"]], "source_segments": ["wall.contour.c001.segment.s004"]},
+          "opposite_rail_germ": {"edge": [["3655/4", "22213/100"], ["3987/4", "22213/100"]], "source_segments": ["wall.contour.c001.segment.s001"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.4c6c6d5527dcb8e8cf89",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.e1bfb5d835228eb0a5a0",
+        "orientation": {"tangent": [1, 0], "normal": [0, -1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["7506/25", "53051/100"],
+          "opposite_point": ["7506/25", "54679/100"],
+          "cap_path": [["7506/25", "53051/100"], ["7506/25", "54679/100"]],
+          "atomic_cap_edges": [{"edge": [["7506/25", "53051/100"], ["7506/25", "54679/100"]], "source_segments": ["wall.contour.c006.segment.s094"]}],
+          "host_rail_germ": {"edge": [["7506/25", "53051/100"], ["529/25", "53051/100"]], "source_segments": ["wall.contour.c006.segment.s095"]},
+          "opposite_rail_germ": {"edge": [["7506/25", "54679/100"], ["29373/100", "2738/5"]], "source_segments": ["wall.contour.c006.segment.s093"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["10476/25", "53377/100"],
+          "opposite_point": ["41823/100", "54679/100"],
+          "cap_path": [["10476/25", "53377/100"], ["41823/100", "54679/100"]],
+          "atomic_cap_edges": [{"edge": [["10476/25", "53377/100"], ["41823/100", "54679/100"]], "source_segments": ["wall.contour.c004.segment.s007"]}],
+          "host_rail_germ": {"edge": [["10476/25", "53377/100"], ["10781/25", "53377/100"]], "source_segments": ["wall.contour.c004.segment.s006"]},
+          "opposite_rail_germ": {"edge": [["41823/100", "54679/100"], ["2201/5", "54679/100"]], "source_segments": ["wall.contour.c004.segment.s008"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.0e83a13deac2c79da8e5",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.6000c80a2ad4bfdcd960",
+        "orientation": {"tangent": [0, 1], "normal": [-1, 0]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["7018/25", "2799/5"],
+          "opposite_point": ["29373/100", "2799/5"],
+          "cap_path": [["7018/25", "2799/5"], ["14117/50", "28031/50"], ["29373/100", "2799/5"]],
+          "atomic_cap_edges": [
+            {"edge": [["7018/25", "2799/5"], ["14117/50", "28031/50"]], "source_segments": ["wall.contour.c006.segment.s090"]},
+            {"edge": [["14117/50", "28031/50"], ["29373/100", "2799/5"]], "source_segments": ["wall.contour.c006.segment.s091"]}
+          ],
+          "host_rail_germ": {"edge": [["7018/25", "2799/5"], ["7018/25", "54679/100"]], "source_segments": ["wall.contour.c006.segment.s089"]},
+          "opposite_rail_germ": {"edge": [["29373/100", "2799/5"], ["29373/100", "2738/5"]], "source_segments": ["wall.contour.c006.segment.s092"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["7018/25", "6843/10"],
+          "opposite_point": ["29373/100", "17087/25"],
+          "cap_path": [["7018/25", "6843/10"], ["29373/100", "17087/25"]],
+          "atomic_cap_edges": [{"edge": [["7018/25", "6843/10"], ["29373/100", "17087/25"]], "source_segments": ["wall.contour.c006.segment.s044"]}],
+          "host_rail_germ": {"edge": [["7018/25", "6843/10"], ["7018/25", "18389/25"]], "source_segments": ["wall.contour.c006.segment.s045"]},
+          "opposite_rail_germ": {"edge": [["29373/100", "17087/25"], ["5891/20", "71033/100"]], "source_segments": ["wall.contour.c006.segment.s043"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.d0d733e18eff25d70aef",
+        "orientation": {"tangent": [0, 1], "normal": [-1, 0]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["21481/50", "18572/25"],
+          "opposite_point": ["22213/50", "74207/100"],
+          "cap_path": [["21481/50", "18572/25"], ["22213/50", "74207/100"]],
+          "atomic_cap_edges": [{"edge": [["21481/50", "18572/25"], ["22213/50", "74207/100"]], "source_segments": ["wall.contour.c006.segment.s037"]}],
+          "host_rail_germ": {"edge": [["21481/50", "18572/25"], ["21481/50", "14581/20"]], "source_segments": ["wall.contour.c006.segment.s036"]},
+          "opposite_rail_germ": {"edge": [["22213/50", "74207/100"], ["22213/50", "71033/100"]], "source_segments": ["wall.contour.c006.segment.s038"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["21481/50", "42311/50"],
+          "opposite_point": ["22213/50", "84703/100"],
+          "cap_path": [["21481/50", "42311/50"], ["22213/50", "84703/100"]],
+          "atomic_cap_edges": [{"edge": [["21481/50", "42311/50"], ["22213/50", "84703/100"]], "source_segments": ["wall.contour.c006.segment.s031"]}],
+          "host_rail_germ": {"edge": [["21481/50", "42311/50"], ["21481/50", "17201/20"]], "source_segments": ["wall.contour.c006.segment.s032"]},
+          "opposite_rail_germ": {"edge": [["22213/50", "84703/100"], ["8869/20", "89829/100"]], "source_segments": ["wall.contour.c006.segment.s030"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.a0bbd75e2d66da562f95",
+        "orientation": {"tangent": [0, 1], "normal": [-1, 0]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["43043/100", "89829/100"],
+          "opposite_point": ["8869/20", "89829/100"],
+          "cap_path": [["43043/100", "89829/100"], ["8869/20", "89829/100"]],
+          "atomic_cap_edges": [{"edge": [["43043/100", "89829/100"], ["8869/20", "89829/100"]], "source_segments": ["wall.contour.c006.segment.s029"]}],
+          "host_rail_germ": {"edge": [["43043/100", "89829/100"], ["10781/25", "4406/5"]], "source_segments": ["wall.contour.c006.segment.s028"]},
+          "opposite_rail_germ": {"edge": [["8869/20", "89829/100"], ["22213/50", "84703/100"]], "source_segments": ["wall.contour.c006.segment.s030"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["43043/100", "4013/4"],
+          "opposite_point": ["22213/50", "4013/4"],
+          "cap_path": [["43043/100", "4013/4"], ["22213/50", "4013/4"]],
+          "atomic_cap_edges": [{"edge": [["43043/100", "4013/4"], ["22213/50", "4013/4"]], "source_segments": ["wall.contour.c006.segment.s018"]}],
+          "host_rail_germ": {"edge": [["43043/100", "4013/4"], ["21481/50", "101627/100"]], "source_segments": ["wall.contour.c006.segment.s019"]},
+          "opposite_rail_germ": {"edge": [["22213/50", "4013/4"], ["8869/20", "21611/20"]], "source_segments": ["wall.contour.c006.segment.s017"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.647eecd57a9e6ed0f4c2",
+        "orientation": {"tangent": [1, 0], "normal": [0, -1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["3926/25", "51139/50"],
+          "opposite_point": ["3926/25", "2083/2"],
+          "cap_path": [["3926/25", "51139/50"], ["3926/25", "25956/25"], ["15867/100", "51953/50"], ["3926/25", "2083/2"]],
+          "atomic_cap_edges": [
+            {"edge": [["3926/25", "51139/50"], ["3926/25", "25956/25"]], "source_segments": ["wall.contour.c006.segment.s075"]},
+            {"edge": [["3926/25", "25956/25"], ["15867/100", "51953/50"]], "source_segments": ["wall.contour.c006.segment.s074"]},
+            {"edge": [["15867/100", "51953/50"], ["3926/25", "2083/2"]], "source_segments": ["wall.contour.c006.segment.s073"]}
+          ],
+          "host_rail_germ": {"edge": [["3926/25", "51139/50"], ["773/50", "51139/50"]], "source_segments": ["wall.contour.c006.segment.s076"]},
+          "opposite_rail_germ": {"edge": [["3926/25", "2083/2"], ["3519/25", "2083/2"]], "source_segments": ["wall.contour.c006.segment.s072"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["7018/25", "51139/50"],
+          "opposite_point": ["28153/100", "2083/2"],
+          "cap_path": [["7018/25", "51139/50"], ["28153/100", "2083/2"]],
+          "atomic_cap_edges": [{"edge": [["7018/25", "51139/50"], ["28153/100", "2083/2"]], "source_segments": ["wall.contour.c006.segment.s051"]}],
+          "host_rail_germ": {"edge": [["7018/25", "51139/50"], ["5891/20", "102197/100"]], "source_segments": ["wall.contour.c006.segment.s050"]},
+          "opposite_rail_germ": {"edge": [["28153/100", "2083/2"], ["17331/50", "104231/100"]], "source_segments": ["wall.contour.c006.segment.s052"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": true, "events": [{"kind": "accepted_exact_junction_unique_directed_continuation", "point": ["7018/25", "51139/50"], "source_segments": ["wall.contour.c006.segment.s050", "wall.contour.c006.segment.s051"]}]}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      },
+      {
+        "id": "physical_gap.b78fe900b85b775ca70c",
+        "orientation": {"tangent": [1, 0], "normal": [0, -1]},
+        "endpoint_a": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["51587/100", "6249/5"],
+          "opposite_point": ["51587/100", "126363/100"],
+          "cap_path": [["51587/100", "6249/5"], ["51587/100", "126363/100"]],
+          "atomic_cap_edges": [{"edge": [["51587/100", "6249/5"], ["51587/100", "126363/100"]], "source_segments": ["wall.contour.c006.segment.s009"]}],
+          "host_rail_germ": {"edge": [["51587/100", "6249/5"], ["35883/100", "6249/5"]], "source_segments": ["wall.contour.c006.segment.s010"]},
+          "opposite_rail_germ": {"edge": [["51587/100", "126363/100"], ["163/100", "63141/50"]], "source_segments": ["wall.contour.c006.segment.s008"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.1250568bd6154fbb02f7",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "endpoint_b": {
+          "terminal_kind": "exact_ordered_rail_cap",
+          "host_point": ["31977/50", "125061/100"],
+          "opposite_point": ["31977/50", "63141/50"],
+          "cap_path": [["31977/50", "125061/100"], ["31977/50", "63141/50"]],
+          "atomic_cap_edges": [{"edge": [["31977/50", "125061/100"], ["31977/50", "63141/50"]], "source_segments": ["wall.contour.c001.segment.s037"]}],
+          "host_rail_germ": {"edge": [["31977/50", "125061/100"], ["8991/10", "125061/100"]], "source_segments": ["wall.contour.c001.segment.s036"]},
+          "opposite_rail_germ": {"edge": [["31977/50", "63141/50"], ["24939/25", "63141/50"]], "source_segments": ["wall.contour.c001.segment.s038"]},
+          "wall_body_polygon": "wall_body.apartment.polygon.4c6c6d5527dcb8e8cf89",
+          "accepted_exact_junction": {"required": false, "events": []}
+        },
+        "rail_mapping": {"host": ["endpoint_a.host", "endpoint_b.host"], "opposite": ["endpoint_a.opposite", "endpoint_b.opposite"]},
+        "assertions": {"both_endpoint_terminals_exist_exactly_in_accepted_physical_slice_1": true, "rail_germs_nonzero": true, "no_competing_complete_terminal": true, "no_branch_silently_crossed": true, "creates_positive_area_wall": false}
+      }
+    ],
+    "fail_closed": [
+      "unknown_or_duplicate_certificate_id",
+      "physical_source_sha256_mismatch",
+      "missing_endpoint_cap_or_atomic_edge",
+      "cap_or_germ_provenance_mismatch",
+      "degenerate_host_or_opposite_germ",
+      "host_opposite_order_mismatch",
+      "tangent_or_normal_mismatch",
+      "multiple_matching_endpoint_atoms",
+      "competing_terminal_or_branch",
+      "certificate_would_join_an_already_connected_family",
+      "certificate_would_create_positive_area_geometry",
+      "requires_tolerance_epsilon_snap_buffer_repair_or_approximation"
+    ],
+    "authority_limitations": [
+      "metadata_and_continuation_only",
+      "never_positive_area_wall",
+      "never_alter_slice_1",
+      "never_modify_coordinates",
+      "never_infer_missing_certificates",
+      "never_use_semantic_face_aperture_transition_or_activity_room_identity",
+      "never_use_reconstruction_cutter_transition_or_face_output_as_evidence",
+      "absence_of_certificate_means_no_gap_edge",
+      "no_tolerance_epsilon_snap_repair_or_approximate_adjacency"
+    ]
+  },
+  "fingerprint": {
+    "algorithm": "sha256",
+    "canonicalization": "homehub.canonical-json.v1.physical-gap-set.v1",
+    "included_projection": "identity_payload",
+    "value": "6c4f1c74d0eced609f2349d2972d982edacb34e5abe245d1c00d25a98353d536"
+  }
+}
