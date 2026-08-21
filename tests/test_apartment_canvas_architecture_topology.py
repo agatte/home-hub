@@ -110,7 +110,7 @@ def test_accepted_exact_arrangement_and_canonical_owner_output():
     assert result["wall_body"]["physical_owner_count"] == 1
     assert len(polygons) == 7
     assert sha256(canonical_json(result).encode("utf-8")).hexdigest() == (
-        "06794386d1b308c298cff5f664ecbc5e025b4f968377c68205a73f83fc73f866"
+        "4b7ce08a4bedaf3c8f5e605774412f9cd4b970d05fa87d3c1ec3fd0044c0d2d8"
     )
     assert result["provenance"] == {
         "semantic_scene_schema": scene.schema,
@@ -125,6 +125,20 @@ def test_accepted_exact_arrangement_and_canonical_owner_output():
         assert shoelace(ring) > 0
         assert ring[0] == min(ring)
         assert polygon["id"].startswith("wall_body.apartment.polygon.")
+
+
+def test_slice_1_golden_hash_change_is_topology_authority_provenance_only():
+    result = compiled()
+    previous = json.loads(canonical_json(result))
+    previous["provenance"]["topology_authority_sha256"] = (
+        "1cab0fe6dfe80a3bd0b88f2c912c16121514958849dcb4db636be520cdb25976"
+    )
+    assert sha256(canonical_json(previous).encode("utf-8")).hexdigest() == (
+        "8210b624ef3a475f258fe03c3b026cd7d1c17b6f6cf98a3ab0188937a799ebf9"
+    )
+    assert {key: value for key, value in previous.items() if key != "provenance"} == {
+        key: value for key, value in result.items() if key != "provenance"
+    }
 
 
 def test_even_odd_nested_case_emits_a_hole_boundary_candidate():
