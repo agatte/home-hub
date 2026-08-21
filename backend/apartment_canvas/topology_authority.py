@@ -29,7 +29,7 @@ TOPOLOGY_AUTHORITY_DESCRIPTOR = ContractDescriptor(
     "topology_authority_v1.json",
     "homehub.apartment-topology-authority.v1",
     "accepted_physical_xy_topology_authority",
-    "5cf870dc9706e41423da6c774ca4345395626165ceb02d5be81cbfcc890e51cb",
+    "b552cab7716ccc9bfbcecf4049a5b2f3d607db5b3b3e2681b773f42901024c62",
 )
 
 
@@ -37,6 +37,81 @@ _REGISTERED_GAP_FACE_CONTINUITY = {
     "semantic_face_may_span_registered_aperture_gaps": True,
     "physical_boundary_rail_may_be_interrupted_by_registered_aperture_gaps": True,
     "realized_physical_runs": "derived_around_registered_apertures",
+}
+
+_REGISTERED_APERTURE_BOUNDARY_TRANSITION = {
+    "status": "derived_exact_face_continuity_only",
+    "scope": "accepted_resolved_semantic_face_bearing_interval",
+    "aperture_scope": "registered_host_face_and_unique_directed_opposite_face_of_same_parent_wall",
+    "endpoint_source": "immutable_segment_gu_endpoint_or_its_exact_normal_projection_to_the_unique_directed_opposite_face",
+    "evidence_source": "accepted_physical_slice_1_wall_body_topology_only",
+    "candidate_interval": {
+        "kind": "nonempty_open_complement_interval",
+        "containment": "strictly_inside_accepted_resolved_semantic_face_bearing_interval",
+        "registered_aperture_endpoint_boundaries": "exactly_one",
+    },
+    "monotonic_search": {
+        "direction": "away_from_registered_aperture_endpoint",
+        "decisive_candidate": "first_positive_area_accepted_physical_slice_1_wall_remnant",
+        "nearer_incompatible_remnant": "fail_closed_immediately",
+        "farther_compatible_after_nearer_obstruction": "forbidden",
+    },
+    "remnant_compatibility": [
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "required_directed_host_opposite_relationship",
+        "exact_source_contour_jamb_cap_provenance",
+    ],
+    "open_interval_interior_forbidden": [
+        "physical_slice_1_wall_remnant",
+        "registered_aperture_endpoint_or_interior",
+        "accepted_or_derived_junction",
+        "semantic_face_boundary",
+        "competing_directed_continuation",
+    ],
+    "derived_record": [
+        "aperture_id",
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "segment_endpoint_index",
+        "immutable_segment_endpoint_gu",
+        "physical_remnant_event_gu",
+        "exact_open_interval_gu",
+        "exact_source_contour_segment_refs",
+    ],
+    "ordering": [
+        "first_find_decisive_physical_evidence_from_accepted_slice_1_only",
+        "then_emit_boundary_transition_metadata_for_qualifying_exact_in_face_complement_interval",
+        "independently_perform_registered_gap_reconstruction_inside_segment_gu_from_accepted_slice_1_physical_evidence_only",
+        "neither_derived_output_may_supply_evidence_for_the_other",
+    ],
+    "authority": [
+        "face_continuity_jamb_event_metadata_only",
+        "derived_only",
+        "never_positive_area_physical_wall",
+        "never_wall_owner",
+        "never_modify_slice_1",
+        "never_change_segment_gu",
+        "never_reconstruction_evidence",
+        "never_evidence_for_another_boundary_transition_or_aperture",
+        "never_recursively_justify_geometry",
+    ],
+    "exclusions": [
+        "physical_aperture_overlap_is_not_boundary_transition",
+        "front_door_remains_literal_two_jamb_traversal_and_requires_no_boundary_transition",
+        "fully_apertured_face_without_strict_in_face_interval_is_excluded",
+    ],
+    "fail_closed": [
+        "missing_or_multiple_or_competing_evidence",
+        "candidate_interval_not_strictly_inside_resolved_face",
+        "registered_aperture_endpoint_boundary_count_not_exactly_one",
+        "nearest_positive_area_physical_remnant_incompatible",
+        "open_interval_interior_not_empty_of_forbidden_events",
+        "missing_exact_source_contour_jamb_cap_provenance",
+        "requires_tolerance_epsilon_width_gu_threshold_source_pixel_threshold_snapping_buffering_repair_or_approximate_adjacency",
+    ],
 }
 
 _REGISTERED_GAP_RECONSTRUCTION = {
@@ -523,8 +598,15 @@ def validate_topology_authority(document: dict[str, Any], bundle: ContractBundle
         not isinstance(face_policy, dict)
         or face_policy.get("policy") != "normal_directed_unique_wall_band"
         or face_policy.get("registered_gap_continuity") != _REGISTERED_GAP_FACE_CONTINUITY
+        or face_policy.get("registered_aperture_boundary_transition")
+        != _REGISTERED_APERTURE_BOUNDARY_TRANSITION
         or face_policy.get("overrides") != []
-        or set(face_policy) != {"policy", "registered_gap_continuity", "overrides"}
+        or set(face_policy) != {
+            "policy",
+            "registered_gap_continuity",
+            "registered_aperture_boundary_transition",
+            "overrides",
+        }
     ):
         errors.append(
             Diagnostic(
