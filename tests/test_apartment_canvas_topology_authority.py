@@ -59,6 +59,196 @@ def test_happy_path_is_separate_and_deterministic():
     assert document["aperture_resolution"]["overrides"] == []
 
 
+def test_registered_aperture_boundary_transition_is_global_exact_derived_only():
+    document = load_topology_authority(CONTRACTS).to_dict()
+    face_resolution = document["semantic_face_resolution"]
+    transition = face_resolution["registered_aperture_boundary_transition"]
+
+    assert set(face_resolution) == {
+        "policy",
+        "registered_gap_continuity",
+        "registered_aperture_boundary_transition",
+        "overrides",
+    }
+    assert transition["status"] == "derived_exact_face_continuity_only"
+    assert transition["scope"] == "accepted_resolved_semantic_face_bearing_interval"
+    assert transition["aperture_scope"] == (
+        "registered_host_face_and_unique_directed_opposite_face_of_same_parent_wall"
+    )
+    assert transition["endpoint_source"] == (
+        "immutable_segment_gu_endpoint_or_its_exact_normal_projection_to_the_unique_directed_opposite_face"
+    )
+    assert transition["evidence_source"] == "accepted_physical_slice_1_wall_body_topology_only"
+    assert transition["candidate_interval"] == {
+        "kind": "nonempty_open_complement_interval",
+        "containment": "strictly_inside_accepted_resolved_semantic_face_bearing_interval",
+        "registered_aperture_endpoint_boundaries": "exactly_one",
+    }
+    assert transition["monotonic_search"] == {
+        "direction": "away_from_registered_aperture_endpoint",
+        "decisive_candidate": "first_positive_area_accepted_physical_slice_1_wall_remnant",
+        "nearer_incompatible_remnant": "fail_closed_immediately",
+        "farther_compatible_after_nearer_obstruction": "forbidden",
+    }
+    assert transition["remnant_compatibility"] == [
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "required_directed_host_opposite_relationship",
+        "exact_source_contour_jamb_cap_provenance",
+    ]
+    assert transition["open_interval_interior_forbidden"] == [
+        "physical_slice_1_wall_remnant",
+        "registered_aperture_endpoint_or_interior",
+        "accepted_or_derived_junction",
+        "semantic_face_boundary",
+        "competing_directed_continuation",
+    ]
+    assert transition["derived_record"] == [
+        "aperture_id",
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "segment_endpoint_index",
+        "immutable_segment_endpoint_gu",
+        "physical_remnant_event_gu",
+        "exact_open_interval_gu",
+        "exact_source_contour_segment_refs",
+    ]
+    assert transition["ordering"] == [
+        "first_find_decisive_physical_evidence_from_accepted_slice_1_only",
+        "then_emit_boundary_transition_metadata_for_qualifying_exact_in_face_complement_interval",
+        "independently_perform_registered_gap_reconstruction_inside_segment_gu_from_accepted_slice_1_physical_evidence_only",
+        "neither_derived_output_may_supply_evidence_for_the_other",
+    ]
+    assert transition["authority"] == [
+        "face_continuity_jamb_event_metadata_only",
+        "derived_only",
+        "never_positive_area_physical_wall",
+        "never_wall_owner",
+        "never_modify_slice_1",
+        "never_change_segment_gu",
+        "never_reconstruction_evidence",
+        "never_evidence_for_another_boundary_transition_or_aperture",
+        "never_recursively_justify_geometry",
+    ]
+    assert transition["exclusions"] == [
+        "physical_aperture_overlap_is_not_boundary_transition",
+        "front_door_remains_literal_two_jamb_traversal_and_requires_no_boundary_transition",
+        "fully_apertured_face_without_strict_in_face_interval_is_excluded",
+    ]
+    assert transition["fail_closed"] == [
+        "missing_or_multiple_or_competing_evidence",
+        "candidate_interval_not_strictly_inside_resolved_face",
+        "registered_aperture_endpoint_boundary_count_not_exactly_one",
+        "nearest_positive_area_physical_remnant_incompatible",
+        "open_interval_interior_not_empty_of_forbidden_events",
+        "missing_exact_source_contour_jamb_cap_provenance",
+        "requires_tolerance_epsilon_width_gu_threshold_source_pixel_threshold_snapping_buffering_repair_or_approximate_adjacency",
+    ]
+    assert document["aperture_resolution"]["registered_gap_reconstruction"] == {
+        "prerequisite": "required_when_exact_registered_jamb_trace_lacks_local_wall_band",
+        "evidence_source": "accepted_physical_slice_1_wall_body_topology_only",
+        "forbidden_evidence": [
+            "registered_gap_reconstruction",
+            "virtual_pre_aperture_band",
+            "derived_semantic_face_runs",
+            "future_construction_topology",
+            "inferred_or_guessed_geometry",
+        ],
+        "tangent_search": {
+            "order": "monotonic_outward_from_registered_interval_on_each_open_tangent_side",
+            "decisive_candidate": "first_positive_area_physical_slice_1_wall_remnant",
+            "nearest_incompatible_remnant": "fail_closed_immediately",
+            "farther_compatible_after_nearer_obstruction": "forbidden",
+        },
+        "candidate_compatibility": [
+            "parent_wall_id",
+            "host_face_id",
+            "required_directed_host_opposite_relationship",
+        ],
+        "same_nearest_event": "exactly_one_compatible_directed_continuation_required_else_fail_closed",
+        "both_tangent_sides": "required_and_must_establish_same_unique_directed_host_opposite_continuation",
+        "construction_band": "derived_virtual_pre_aperture_band_limited_to_registered_aperture_interval",
+        "authority": [
+            "derived_construction_topology_only",
+            "never_write_accepted_physical_xy_wall_topology",
+            "never_mutate_slice_1",
+            "never_create_wall_owner",
+            "never_alter_segment_gu_parent_wall_id_or_host_face_id",
+        ],
+        "fail_closed": [
+            "missing_positive_area_physical_slice_1_wall_remnant",
+            "nearest_positive_area_physical_slice_1_wall_remnant_is_incompatible",
+            "same_nearest_event_does_not_leave_exactly_one_compatible_directed_continuation",
+            "tangent_sides_fail_to_establish_same_unique_directed_host_opposite_continuation",
+            "degenerate_pre_aperture_band",
+            "requires_snapping_epsilon_coordinate_repair_or_override",
+        ],
+        "wall_band_geometry": "exact_tapered_or_non_parallel_opposite_rail_allowed_no_constant_thickness_assumption",
+    }
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"].__setitem__(
+            "evidence_source", "derived_evidence_is_allowed"
+        ),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "candidate_interval"
+        ].__setitem__("containment", "may_cross_resolved_face_boundary"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "candidate_interval"
+        ].__setitem__("registered_aperture_endpoint_boundaries", "zero_or_many"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "monotonic_search"
+        ].__setitem__("decisive_candidate", "any_compatible_physical_remnant"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "monotonic_search"
+        ].__setitem__("nearer_incompatible_remnant", "skip_for_farther_evidence"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("physical_slice_1_wall_remnant"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("registered_aperture_endpoint_or_interior"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("accepted_or_derived_junction"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("semantic_face_boundary"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("competing_directed_continuation"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "remnant_compatibility"
+        ].remove("exact_source_contour_jamb_cap_provenance"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "ordering"
+        ].__setitem__(3, "derived_outputs_may_supply_evidence"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "authority"
+        ].remove("never_recursively_justify_geometry"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "fail_closed"
+        ].__setitem__(6, "tolerance_allowed"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "exclusions"
+        ].remove("physical_aperture_overlap_is_not_boundary_transition"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "exclusions"
+        ].remove("front_door_remains_literal_two_jamb_traversal_and_requires_no_boundary_transition"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_boundary_transition"][
+            "exclusions"
+        ].remove("fully_apertured_face_without_strict_in_face_interval_is_excluded"),
+    ],
+)
+def test_registered_aperture_boundary_transition_contract_mutations_fail_closed(mutator):
+    assert diagnostic_codes(mutator) == {"topology.face_policy"}
+
+
 def test_registered_gap_reconstruction_is_global_derived_only_and_fail_closed():
     document = load_topology_authority(CONTRACTS).to_dict()
     face = document["semantic_face_resolution"]["registered_gap_continuity"]
@@ -173,7 +363,7 @@ def test_registered_gap_reconstruction_contract_mutations_fail_closed(mutator):
 
 def test_authority_fingerprint_is_the_new_deterministic_provenance_channel():
     authority = load_topology_authority(CONTRACTS)
-    expected = "5cf870dc9706e41423da6c774ca4345395626165ceb02d5be81cbfcc890e51cb"
+    expected = "b552cab7716ccc9bfbcecf4049a5b2f3d607db5b3b3e2681b773f42901024c62"
     assert fingerprint(authority.to_dict()) == expected
     assert authority.fingerprint == expected
     assert TOPOLOGY_AUTHORITY_DESCRIPTOR.fingerprint == expected

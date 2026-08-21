@@ -110,7 +110,7 @@ def test_accepted_exact_arrangement_and_canonical_owner_output():
     assert result["wall_body"]["physical_owner_count"] == 1
     assert len(polygons) == 7
     assert sha256(canonical_json(result).encode("utf-8")).hexdigest() == (
-        "4b7ce08a4bedaf3c8f5e605774412f9cd4b970d05fa87d3c1ec3fd0044c0d2d8"
+        "6864f451fb9344cd2fcce9e39e1f37a871e39c381e015e72397976a135cca25d"
     )
     assert result["provenance"] == {
         "semantic_scene_schema": scene.schema,
@@ -131,10 +131,10 @@ def test_slice_1_golden_hash_change_is_topology_authority_provenance_only():
     result = compiled()
     previous = json.loads(canonical_json(result))
     previous["provenance"]["topology_authority_sha256"] = (
-        "1cab0fe6dfe80a3bd0b88f2c912c16121514958849dcb4db636be520cdb25976"
+        "5cf870dc9706e41423da6c774ca4345395626165ceb02d5be81cbfcc890e51cb"
     )
     assert sha256(canonical_json(previous).encode("utf-8")).hexdigest() == (
-        "8210b624ef3a475f258fe03c3b026cd7d1c17b6f6cf98a3ab0188937a799ebf9"
+        "4b7ce08a4bedaf3c8f5e605774412f9cd4b970d05fa87d3c1ec3fd0044c0d2d8"
     )
     assert {key: value for key, value in previous.items() if key != "provenance"} == {
         key: value for key, value in result.items() if key != "provenance"
