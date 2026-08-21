@@ -29,7 +29,7 @@ TOPOLOGY_AUTHORITY_DESCRIPTOR = ContractDescriptor(
     "topology_authority_v1.json",
     "homehub.apartment-topology-authority.v1",
     "accepted_physical_xy_topology_authority",
-    "b552cab7716ccc9bfbcecf4049a5b2f3d607db5b3b3e2681b773f42901024c62",
+    "f1c63e03fffa35362163068b4aec86152912e4c5805a0390c67137442d1478bd",
 )
 
 
@@ -110,6 +110,99 @@ _REGISTERED_APERTURE_BOUNDARY_TRANSITION = {
         "nearest_positive_area_physical_remnant_incompatible",
         "open_interval_interior_not_empty_of_forbidden_events",
         "missing_exact_source_contour_jamb_cap_provenance",
+        "requires_tolerance_epsilon_width_gu_threshold_source_pixel_threshold_snapping_buffering_repair_or_approximate_adjacency",
+    ],
+}
+
+_REGISTERED_APERTURE_FACE_TERMINAL_TRANSITION = {
+    "status": "derived_exact_face_terminal_continuity_only",
+    "scope": "accepted_resolved_semantic_face_bearing_interval_endpoints",
+    "aperture_scope": "registered_host_face_and_unique_directed_opposite_face_of_same_parent_wall",
+    "endpoint_source": "immutable_segment_gu_endpoint_or_its_exact_normal_projection_to_the_unique_directed_opposite_face",
+    "evidence_source": "accepted_physical_slice_1_wall_body_topology_and_already_accepted_exact_junctions_only",
+    "candidate_interval": {
+        "kind": "nonempty_open_terminal_complement_interval",
+        "semantic_face_endpoint_boundaries": "exactly_one",
+        "registered_aperture_endpoint_boundaries": "exactly_one",
+        "containment": "inside_closed_accepted_resolved_semantic_face_bearing_interval",
+    },
+    "monotonic_outward_search": {
+        "direction": "away_from_resolved_semantic_face_interval",
+        "decisive_candidate": "first_exact_topological_event_at_or_beyond_semantic_face_endpoint",
+        "nearer_unrelated_or_incompatible_event": "fail_closed_immediately",
+        "farther_compatible_after_nearer_obstruction": "forbidden",
+    },
+    "outside_event_proof": {
+        "physical_evidence": "accepted_physical_slice_1_wall_body_topology",
+        "junction_evidence": "already_accepted_exact_junction_with_exactly_one_slice_1_compatible_directed_continuation",
+        "required_result": "same_unique_directed_physical_wall_family",
+        "multiple_or_competing_continuations": "fail_closed_immediately",
+    },
+    "compatibility": [
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "tangent",
+        "normal",
+        "required_directed_host_opposite_relationship",
+        "exact_source_contour_jamb_cap_provenance",
+    ],
+    "open_interval_interior_forbidden": [
+        "physical_slice_1_wall_remnant",
+        "registered_aperture_endpoint_or_interior",
+        "accepted_or_derived_junction",
+        "semantic_face_boundary",
+        "competing_directed_continuation",
+    ],
+    "derived_record": [
+        "aperture_id",
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "semantic_face_endpoint_index",
+        "semantic_face_endpoint_gu",
+        "segment_endpoint_index",
+        "immutable_segment_endpoint_gu",
+        "outside_physical_or_junction_event_gu",
+        "exact_open_interval_gu",
+        "exact_source_contour_segment_refs",
+    ],
+    "ordering": [
+        "first_find_decisive_physical_or_already_accepted_exact_junction_evidence_from_accepted_slice_1_only",
+        "then_emit_terminal_transition_metadata_for_qualifying_exact_face_terminal_interval",
+        "independently_resolve_registered_aperture_boundary_transition_cases",
+        "independently_perform_registered_gap_reconstruction_inside_segment_gu_from_accepted_slice_1_physical_evidence_only",
+        "no_derived_output_from_any_mechanism_may_supply_evidence_to_any_other",
+    ],
+    "authority": [
+        "face_terminal_family_metadata_only",
+        "derived_only",
+        "never_positive_area_physical_wall",
+        "never_wall_owner",
+        "never_modify_slice_1",
+        "never_change_segment_gu",
+        "never_registered_gap_reconstruction_evidence",
+        "never_evidence_for_another_terminal_transition",
+        "never_evidence_for_a_boundary_transition",
+        "never_evidence_for_another_aperture",
+        "never_recursively_justify_geometry",
+    ],
+    "exclusions": [
+        "front_door_remains_literal_two_jamb_traversal_and_requires_no_terminal_transition",
+        "fully_apertured_face_without_nonempty_terminal_complement_interval_is_excluded",
+    ],
+    "fail_closed": [
+        "zero_length_terminal_interval",
+        "missing_or_multiple_or_competing_evidence",
+        "candidate_interval_not_bounded_by_exactly_one_semantic_face_endpoint_and_exactly_one_registered_aperture_endpoint",
+        "candidate_interval_not_inside_closed_resolved_face",
+        "aperture_endpoint_not_immutable_segment_endpoint_or_exact_normal_projection",
+        "outside_physical_or_junction_evidence_missing",
+        "first_outside_event_unrelated_or_incompatible",
+        "outside_event_does_not_prove_exactly_one_same_unique_directed_physical_wall_family",
+        "open_interval_interior_not_empty_of_forbidden_events",
+        "missing_exact_source_contour_jamb_cap_provenance",
+        "requires_recursive_or_derived_evidence",
         "requires_tolerance_epsilon_width_gu_threshold_source_pixel_threshold_snapping_buffering_repair_or_approximate_adjacency",
     ],
 }
@@ -600,11 +693,14 @@ def validate_topology_authority(document: dict[str, Any], bundle: ContractBundle
         or face_policy.get("registered_gap_continuity") != _REGISTERED_GAP_FACE_CONTINUITY
         or face_policy.get("registered_aperture_boundary_transition")
         != _REGISTERED_APERTURE_BOUNDARY_TRANSITION
+        or face_policy.get("registered_aperture_face_terminal_transition")
+        != _REGISTERED_APERTURE_FACE_TERMINAL_TRANSITION
         or face_policy.get("overrides") != []
         or set(face_policy) != {
             "policy",
             "registered_gap_continuity",
             "registered_aperture_boundary_transition",
+            "registered_aperture_face_terminal_transition",
             "overrides",
         }
     ):
