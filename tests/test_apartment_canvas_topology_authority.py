@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,7 @@ def test_registered_aperture_boundary_transition_is_global_exact_derived_only():
         "policy",
         "registered_gap_continuity",
         "registered_aperture_boundary_transition",
+        "registered_aperture_face_terminal_transition",
         "overrides",
     }
     assert transition["status"] == "derived_exact_face_continuity_only"
@@ -325,6 +327,233 @@ def test_registered_gap_reconstruction_is_global_derived_only_and_fail_closed():
     )
 
 
+def test_registered_aperture_face_terminal_transition_is_global_exact_derived_only():
+    document = load_topology_authority(CONTRACTS).to_dict()
+    terminal = document["semantic_face_resolution"][
+        "registered_aperture_face_terminal_transition"
+    ]
+
+    assert terminal["status"] == "derived_exact_face_terminal_continuity_only"
+    assert terminal["scope"] == "accepted_resolved_semantic_face_bearing_interval_endpoints"
+    assert terminal["aperture_scope"] == (
+        "registered_host_face_and_unique_directed_opposite_face_of_same_parent_wall"
+    )
+    assert terminal["endpoint_source"] == (
+        "immutable_segment_gu_endpoint_or_its_exact_normal_projection_to_the_unique_directed_opposite_face"
+    )
+    assert terminal["evidence_source"] == (
+        "accepted_physical_slice_1_wall_body_topology_and_already_accepted_exact_junctions_only"
+    )
+    assert terminal["candidate_interval"] == {
+        "kind": "nonempty_open_terminal_complement_interval",
+        "semantic_face_endpoint_boundaries": "exactly_one",
+        "registered_aperture_endpoint_boundaries": "exactly_one",
+        "containment": "inside_closed_accepted_resolved_semantic_face_bearing_interval",
+    }
+    assert terminal["monotonic_outward_search"] == {
+        "direction": "away_from_resolved_semantic_face_interval",
+        "decisive_candidate": "first_exact_topological_event_at_or_beyond_semantic_face_endpoint",
+        "nearer_unrelated_or_incompatible_event": "fail_closed_immediately",
+        "farther_compatible_after_nearer_obstruction": "forbidden",
+    }
+    assert terminal["outside_event_proof"] == {
+        "physical_evidence": "accepted_physical_slice_1_wall_body_topology",
+        "junction_evidence": (
+            "already_accepted_exact_junction_with_exactly_one_slice_1_compatible_directed_continuation"
+        ),
+        "required_result": "same_unique_directed_physical_wall_family",
+        "multiple_or_competing_continuations": "fail_closed_immediately",
+    }
+    assert terminal["compatibility"] == [
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "tangent",
+        "normal",
+        "required_directed_host_opposite_relationship",
+        "exact_source_contour_jamb_cap_provenance",
+    ]
+    assert terminal["open_interval_interior_forbidden"] == [
+        "physical_slice_1_wall_remnant",
+        "registered_aperture_endpoint_or_interior",
+        "accepted_or_derived_junction",
+        "semantic_face_boundary",
+        "competing_directed_continuation",
+    ]
+    assert terminal["derived_record"] == [
+        "aperture_id",
+        "parent_wall_id",
+        "registered_host_face_id",
+        "resolved_face_id",
+        "semantic_face_endpoint_index",
+        "semantic_face_endpoint_gu",
+        "segment_endpoint_index",
+        "immutable_segment_endpoint_gu",
+        "outside_physical_or_junction_event_gu",
+        "exact_open_interval_gu",
+        "exact_source_contour_segment_refs",
+    ]
+    assert terminal["ordering"] == [
+        "first_find_decisive_physical_or_already_accepted_exact_junction_evidence_from_accepted_slice_1_only",
+        "then_emit_terminal_transition_metadata_for_qualifying_exact_face_terminal_interval",
+        "independently_resolve_registered_aperture_boundary_transition_cases",
+        "independently_perform_registered_gap_reconstruction_inside_segment_gu_from_accepted_slice_1_physical_evidence_only",
+        "no_derived_output_from_any_mechanism_may_supply_evidence_to_any_other",
+    ]
+    assert terminal["authority"] == [
+        "face_terminal_family_metadata_only",
+        "derived_only",
+        "never_positive_area_physical_wall",
+        "never_wall_owner",
+        "never_modify_slice_1",
+        "never_change_segment_gu",
+        "never_registered_gap_reconstruction_evidence",
+        "never_evidence_for_another_terminal_transition",
+        "never_evidence_for_a_boundary_transition",
+        "never_evidence_for_another_aperture",
+        "never_recursively_justify_geometry",
+    ]
+    assert terminal["exclusions"] == [
+        "front_door_remains_literal_two_jamb_traversal_and_requires_no_terminal_transition",
+        "fully_apertured_face_without_nonempty_terminal_complement_interval_is_excluded",
+    ]
+    assert terminal["fail_closed"] == [
+        "zero_length_terminal_interval",
+        "missing_or_multiple_or_competing_evidence",
+        "candidate_interval_not_bounded_by_exactly_one_semantic_face_endpoint_and_exactly_one_registered_aperture_endpoint",
+        "candidate_interval_not_inside_closed_resolved_face",
+        "aperture_endpoint_not_immutable_segment_endpoint_or_exact_normal_projection",
+        "outside_physical_or_junction_evidence_missing",
+        "first_outside_event_unrelated_or_incompatible",
+        "outside_event_does_not_prove_exactly_one_same_unique_directed_physical_wall_family",
+        "open_interval_interior_not_empty_of_forbidden_events",
+        "missing_exact_source_contour_jamb_cap_provenance",
+        "requires_recursive_or_derived_evidence",
+        "requires_tolerance_epsilon_width_gu_threshold_source_pixel_threshold_snapping_buffering_repair_or_approximate_adjacency",
+    ]
+    terminal_json = json.dumps(terminal, sort_keys=True)
+    assert "bedroom_door" not in terminal_json
+    assert "closet_opening" not in terminal_json
+
+
+def test_terminal_transition_geometry_cases_are_exact_and_do_not_add_a_resolver():
+    source_bundle = bundle()
+    patch = deep_thaw(source_bundle.patch)["contract_amendments"]
+    geometry = deep_thaw(source_bundle.geometry)["architecture"]["wall_polygons_gu"]
+    apertures = {
+        aperture["id"]: aperture
+        for aperture in deep_thaw(source_bundle.aperture_registry)["apertures"]
+    }
+    volumes = {volume["id"]: volume for volume in patch["semantic_wall_volumes"]}
+
+    bedroom = volumes["wall_volume.bedroom.south_doorway_parent"]
+    bedroom_faces = bedroom["faces"]
+    assert [face["bearing_line_gu"] for face in bedroom_faces] == [
+        [[300.24, 534.58], [429.62, 534.58]],
+        [[300.24, 534.58], [429.62, 534.58]],
+    ]
+    assert apertures["bedroom_door"]["segment_gu"][0] == [301.06, 534.58]
+    assert Fraction(str(301.06)) - Fraction(str(300.24)) == Fraction(41, 50)
+    assert geometry[5][93:95] == [[300.24, 546.79], [300.24, 530.51]]
+
+    closet = volumes["wall_volume.closet.hall_south"]
+    assert all(
+        face["bearing_line_gu"] == apertures["closet_opening"]["segment_gu"]
+        for face in closet["faces"]
+    )
+
+    entry = volumes["wall_volume.exterior.south_entry"]
+    entry_face = next(
+        face for face in entry["faces"]
+        if face["id"] == apertures["front_door"]["host_face_id"]
+    )
+    assert all(
+        endpoint not in entry_face["bearing_line_gu"]
+        for endpoint in apertures["front_door"]["segment_gu"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"].__setitem__(
+            "evidence_source", "derived_evidence_is_allowed"
+        ),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "candidate_interval"
+        ].__setitem__("kind", "zero_length_interval_allowed"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "candidate_interval"
+        ].__setitem__("semantic_face_endpoint_boundaries", "zero_or_many"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "candidate_interval"
+        ].__setitem__("registered_aperture_endpoint_boundaries", "zero_or_many"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "candidate_interval"
+        ].__setitem__("containment", "may_escape_face"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "monotonic_outward_search"
+        ].__setitem__("direction", "toward_resolved_semantic_face_interval"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "monotonic_outward_search"
+        ].__setitem__("decisive_candidate", "farther_compatible_event"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "monotonic_outward_search"
+        ].__setitem__("nearer_unrelated_or_incompatible_event", "skip_for_farther_evidence"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "outside_event_proof"
+        ].__setitem__("physical_evidence", "derived_terminal_metadata"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "outside_event_proof"
+        ].__setitem__("junction_evidence", "any_junction"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "outside_event_proof"
+        ].__setitem__("multiple_or_competing_continuations", "allowed"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "compatibility"
+        ].remove("tangent"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "compatibility"
+        ].remove("normal"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "compatibility"
+        ].remove("exact_source_contour_jamb_cap_provenance"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("physical_slice_1_wall_remnant"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("registered_aperture_endpoint_or_interior"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("accepted_or_derived_junction"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("semantic_face_boundary"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "open_interval_interior_forbidden"
+        ].remove("competing_directed_continuation"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "authority"
+        ].remove("never_registered_gap_reconstruction_evidence"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "authority"
+        ].remove("never_evidence_for_a_boundary_transition"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "authority"
+        ].remove("never_recursively_justify_geometry"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "ordering"
+        ].__setitem__(4, "derived_outputs_may_supply_evidence"),
+        lambda d: d["semantic_face_resolution"]["registered_aperture_face_terminal_transition"][
+            "fail_closed"
+        ].__setitem__(11, "tolerance_allowed"),
+    ],
+)
+def test_registered_aperture_face_terminal_transition_contract_mutations_fail_closed(mutator):
+    assert diagnostic_codes(mutator) == {"topology.face_policy"}
+
+
 @pytest.mark.parametrize(
     "mutator",
     [
@@ -363,7 +592,7 @@ def test_registered_gap_reconstruction_contract_mutations_fail_closed(mutator):
 
 def test_authority_fingerprint_is_the_new_deterministic_provenance_channel():
     authority = load_topology_authority(CONTRACTS)
-    expected = "b552cab7716ccc9bfbcecf4049a5b2f3d607db5b3b3e2681b773f42901024c62"
+    expected = "f1c63e03fffa35362163068b4aec86152912e4c5805a0390c67137442d1478bd"
     assert fingerprint(authority.to_dict()) == expected
     assert authority.fingerprint == expected
     assert TOPOLOGY_AUTHORITY_DESCRIPTOR.fingerprint == expected
