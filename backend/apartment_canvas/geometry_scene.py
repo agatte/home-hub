@@ -154,6 +154,73 @@ def _wall_extrusions(wall_body: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _semantic_wall_volumes(bundle: ContractBundle) -> list[dict[str, Any]]:
+    """Forward accepted host-wall/face geometry required by renderers.
+
+    Slice 1 remains the one and only wall-mass owner.  This is deliberately
+    narrower than a new topology layer: it carries the already-accepted stable
+    wall-volume and bearing-face identities so a renderer can bind aperture
+    cutters and presentation selectors without reopening upstream contracts.
+    """
+    volumes = deep_thaw(bundle.patch)["contract_amendments"]["semantic_wall_volumes"]
+    return [
+        {
+            "id": volume["id"],
+            "semantic_edge_id": volume["semantic_edge_id"],
+            "faces": [
+                {
+                    "id": face["id"],
+                    "bearing_line_gu": _exact_segment(face["bearing_line_gu"]),
+                    "plan_normal": face["plan_normal"],
+                    "role": face["role"],
+                }
+                for face in sorted(volume["faces"], key=lambda item: item["id"])
+            ],
+        }
+        for volume in sorted(volumes, key=lambda item: item["id"])
+    ]
+
+
+def _inspection_annotations(bundle: ContractBundle) -> dict[str, Any]:
+    """Forward accepted plan annotations without creating render authority.
+
+    These are deliberately annotations, not a room-topology or object-mesh
+    contract.  The local whitebox may use them to explain already accepted XY
+    data, but its labels and fixture blocks must remain optional debug aids.
+    """
+    geometry = deep_thaw(bundle.geometry)
+    rooms = []
+    for room in sorted(geometry["rooms"], key=lambda item: item["id"]):
+        rooms.append({
+            "id": room["id"],
+            "label": room["label"],
+            "label_gu": _exact_segment([room["label_gu"]])[0],
+            "source": "geometry_v1.json#/rooms",
+            "xy_status": "accepted_approximate_label_position",
+        })
+    objects = []
+    for item in sorted(geometry["objects"], key=lambda value: value["id"]):
+        rectangle = item.get("rect")
+        if not rectangle:
+            continue
+        objects.append({
+            "id": item["id"],
+            "label": item["label"],
+            "room": item["room"],
+            "shape": item["shape"],
+            "rect_gu": {key: _exact_number(rectangle[key]) for key in ("x", "y", "w", "h")},
+            "placement_status": item["placement_status"],
+            "source": item["source"],
+            "note": item.get("note"),
+            "xy_status": "accepted_approximate_object_placement",
+        })
+    return {
+        "status": "accepted_annotation_forwarding_for_local_debug_only",
+        "rooms": rooms,
+        "objects": objects,
+    }
+
+
 def _openings(bundle: ContractBundle) -> list[dict[str, Any]]:
     registry = deep_thaw(bundle.aperture_registry)
     openings = []
@@ -198,7 +265,11 @@ def _visibility(bundle: ContractBundle) -> list[dict[str, Any]]:
                 "face_ids": sorted(accepted["global_cutaway"]["target_face_ids"]),
             },
             "rule": accepted["global_cutaway"]["rule"],
-            "parameters": {"lip_height_gu": accepted["global_cutaway"]["exact_lip_height_gu"]},
+            "parameters": {
+                "lip_height_gu": accepted["global_cutaway"]["exact_lip_height_gu"],
+                "inspection_lip_height_gu": accepted["global_cutaway"]["inspection_value_gu"],
+                "inspection_lip_status": "provisional",
+            },
             "status": "accepted_selector_provisional_parameter",
         },
         {
@@ -257,6 +328,8 @@ def compile_geometry_scene(bundle: ContractBundle, authority: TopologyAuthorityV
     topology = deep_thaw(authority.document)
     floor_slabs = _floor_slabs(authority, bundle)
     wall_extrusions = _wall_extrusions(wall_body)
+    semantic_wall_volumes = _semantic_wall_volumes(bundle)
+    inspection_annotations = _inspection_annotations(bundle)
     openings = _openings(bundle)
     scene = {
         "schema": SCHEMA,
@@ -281,8 +354,8 @@ def compile_geometry_scene(bundle: ContractBundle, authority: TopologyAuthorityV
             "aperture_semantic": {
                 "sources": [_source(bundle, "aperture_registry_v1.json")],
             },
-            "camera": {"source": _source(bundle, "camera_v1.json")},
-            "visibility": {"source": _source(bundle, "visibility_contract_v1.json")},
+            "camera": {"source": _source(bundle, "camera_v2.json")},
+            "visibility": {"source": _source(bundle, "visibility_contract_v2.json")},
             "excluded_dependencies": [
                 "PhysicalWallBandAuthorityV1",
                 "PhysicalFamilyPreflight",
@@ -298,6 +371,8 @@ def compile_geometry_scene(bundle: ContractBundle, authority: TopologyAuthorityV
         "z_policy": _provisional_z_policy(),
         "floor_slabs": floor_slabs,
         "wall_extrusions": wall_extrusions,
+        "semantic_wall_volumes": semantic_wall_volumes,
+        "inspection_annotations": inspection_annotations,
         "openings": openings,
         "camera": deep_thaw(bundle.camera),
         "visibility_treatments": _visibility(bundle),

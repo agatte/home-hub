@@ -13,6 +13,7 @@ from backend.apartment_canvas.contracts import (
     ContractError,
     fingerprint,
     load_contracts,
+    load_historical_topology_contracts,
 )
 from backend.apartment_canvas.models import deep_freeze, deep_thaw
 from backend.apartment_canvas.validation import validate_scene
@@ -73,6 +74,21 @@ def test_compilation_and_source_fingerprints_are_canonical_and_repeatable():
     assert [item["id"] for item in first.source_manifest] == list(CONTRACT_FILENAMES)
 
 
+def test_current_and_historical_contract_contexts_are_exact_and_distinct():
+    current = load_contracts(CONTRACTS)
+    historical = load_historical_topology_contracts(CONTRACTS)
+    assert [item["id"] for item in current.source_manifest][-2:] == [
+        "camera_v2.json",
+        "visibility_contract_v2.json",
+    ]
+    assert [item["id"] for item in historical.source_manifest][-2:] == [
+        "camera_v1.json",
+        "visibility_contract_v1.json",
+    ]
+    assert current.camera["schema"] == "homehub.apartment-camera-family.v2"
+    assert historical.camera["schema"] == "homehub.apartment-camera-lock.v1"
+
+
 def test_manifest_fingerprints_raw_authority_not_reconciled_geometry_and_raw_is_unchanged():
     source = documents()
     bundle = load_contracts(documents=source)
@@ -98,7 +114,7 @@ def test_authority_fingerprints_are_independent_of_json_whitespace_and_line_endi
 
 def test_camera_patch_and_balcony_are_preserved_explicitly():
     scene = compiled().to_dict()
-    assert scene["camera"] == documents()["camera_v1.json"]["camera"]
+    assert scene["camera"] == documents()["camera_v2.json"]["camera"]
     rug = next(item for item in scene["objects"] if item["id"] == "living.rug")
     assert rug["rect"] == {"x": 666.3, "y": 268.61, "w": 181.44, "h": 375.87}
     ring = scene["balcony_footprint"]["ring_gu"]
@@ -147,9 +163,9 @@ def test_every_contract_rejects_wrong_schema_and_status(filename):
         ("geometry_v1_6_patch.json", "base"),
         ("aperture_registry_v1.json", "source"),
         ("projection_contract_v1.json", "source_geometry"),
-        ("camera_v1.json", "source_geometry"),
-        ("visibility_contract_v1.json", "source_geometry"),
-        ("visibility_contract_v1.json", "camera"),
+        ("camera_v2.json", "source_geometry"),
+        ("visibility_contract_v2.json", "source_geometry"),
+        ("visibility_contract_v2.json", "camera"),
     ],
 )
 def test_contract_bindings_are_explicitly_authoritative(filename, field):
@@ -193,11 +209,11 @@ def test_scene_is_deeply_immutable_and_serialization_is_detached():
     scene = compiled()
     before = canonical_scene_json(scene)
     with pytest.raises(TypeError):
-        scene.camera["eye_gu"][0] = 1
+        scene.camera["target_gu"][0] = 1
     with pytest.raises(TypeError):
         scene.assemblies[0]["relationships"] = ()
     emitted = scene.to_dict()
-    emitted["camera"]["eye_gu"][0] = 1
+    emitted["camera"]["target_gu"][0] = 1
     emitted["assemblies"][0]["members"].append("mutated")
     assert canonical_scene_json(scene) == before
 
@@ -259,7 +275,7 @@ def test_scene_level_validation_keeps_pendant_exactly_two_cardinality():
         lambda d: d["geometry_v1.json"]["objects"].append(
             copy.deepcopy(d["geometry_v1.json"]["objects"][0])
         ),
-        lambda d: d["camera_v1.json"]["camera"].__setitem__("yaw_degrees_right", 21.0),
+        lambda d: d["camera_v2.json"]["camera"].__setitem__("yaw_degrees_right", 21.0),
         lambda d: d["geometry_v1.json"]["objects"][0]["rect"].__setitem__("x", 15.0),
         lambda d: d["geometry_v1_6_patch.json"]["changes"][0].__setitem__("orientation_deg", 90),
         lambda d: d["geometry_v1_6_patch.json"]["contract_amendments"]["semantic_wall_volumes"][0][
@@ -271,10 +287,10 @@ def test_scene_level_validation_keeps_pendant_exactly_two_cardinality():
         lambda d: d["geometry_v1_6_patch.json"]["contract_amendments"][
             "balcony_semantics"
         ].__setitem__("ring_gu", [[1, 1], [2, 1], [2, 2]]),
-        lambda d: d["visibility_contract_v1.json"]["accepted_direction"][
+        lambda d: d["visibility_contract_v2.json"]["accepted_direction"][
             "bedroom_front_wall"
         ].__setitem__("excluded_wall_ids", []),
-        lambda d: d["visibility_contract_v1.json"]["accepted_direction"][
+        lambda d: d["visibility_contract_v2.json"]["accepted_direction"][
             "bedroom_front_wall"
         ].__setitem__("coordinate_zone", [0, 0, 1, 1]),
     ],

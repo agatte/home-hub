@@ -396,8 +396,8 @@ def _validated_scene_contours(
         canonical_scene_json(scene), parse_float=Decimal, parse_int=Decimal,
     )
     expected_scene = compile_scene(bundle)
-    scene_sha256 = semantic_scene_fingerprint(scene)
-    if scene_sha256 != semantic_scene_fingerprint(expected_scene):
+    current_scene_sha256 = semantic_scene_fingerprint(scene)
+    if current_scene_sha256 != semantic_scene_fingerprint(expected_scene):
         raise ArchitectureTopologyError("SemanticSceneV1 canonical fingerprint is incompatible")
 
     scene_manifest = scene_data.get("source_manifest")
@@ -410,9 +410,8 @@ def _validated_scene_contours(
     if (
         not isinstance(scene_manifest, list)
         or not scene_manifest
-        or scene_manifest != authority_manifest
-        or scene_manifest != document_manifest
         or scene_manifest != expected_manifest
+        or authority_manifest != document_manifest
     ):
         raise ArchitectureTopologyError("SemanticSceneV1 and TopologyAuthorityV1 source manifests are incompatible")
 
@@ -428,7 +427,7 @@ def _validated_scene_contours(
     for index, binding in enumerate(bindings):
         if scene_contours[index] != source_contours[index]:
             raise ArchitectureTopologyError(f"SemanticSceneV1 contour {binding['id']} does not match its source binding")
-    return scene_contours, bindings, scene_sha256
+    return scene_contours, bindings, authority.semantic_scene_sha256
 
 
 def compile_wall_body_slice1(
@@ -448,7 +447,7 @@ def compile_wall_body_slice1(
         "provenance": {
             "semantic_scene_schema": scene.schema,
             "semantic_scene_sha256": scene_sha256,
-            "semantic_source_manifest": scene.to_dict()["source_manifest"],
+            "semantic_source_manifest": deep_thaw(authority.source_manifest),
             "topology_authority_schema": authority.schema,
             "topology_authority_sha256": authority.fingerprint,
         },

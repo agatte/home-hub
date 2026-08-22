@@ -609,9 +609,9 @@ def test_geometry_scene_boundary_leaves_vertical_realization_undecided():
     assert "derive wall below the sill" not in spec
 
 
-def test_semantic_scene_serialization_and_six_source_manifest_are_unchanged():
+def test_current_scene_and_frozen_topology_manifests_are_explicit_and_separate():
     before = compile_scene(bundle())
-    load_topology_authority(CONTRACTS)
+    authority = load_topology_authority(CONTRACTS)
     after = compile_scene(bundle())
     assert canonical_scene_json(before) == canonical_scene_json(after)
     assert [item["id"] for item in after.source_manifest] == [
@@ -619,9 +619,57 @@ def test_semantic_scene_serialization_and_six_source_manifest_are_unchanged():
         "geometry_v1_6_patch.json",
         "aperture_registry_v1.json",
         "projection_contract_v1.json",
+        "camera_v2.json",
+        "visibility_contract_v2.json",
+    ]
+    assert [item["id"] for item in authority.source_manifest] == [
+        "geometry_v1.json",
+        "geometry_v1_6_patch.json",
+        "aperture_registry_v1.json",
+        "projection_contract_v1.json",
         "camera_v1.json",
         "visibility_contract_v1.json",
     ]
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda manifest: manifest.__setitem__(
+            4,
+            {
+                "id": "future_physical_topology.json",
+                "schema": "homehub.physical-topology.v2",
+                "sha256": "0" * 64,
+            },
+        ),
+        lambda manifest: manifest.pop(),
+        lambda manifest: manifest.append(
+            {"id": "extra.json", "schema": "homehub.extra.v1", "sha256": "0" * 64}
+        ),
+        lambda manifest: manifest.__setitem__(
+            4,
+            {**manifest[4], "id": "camera_v2.json"},
+        ),
+    ],
+)
+def test_frozen_topology_manifest_rejects_replacement_missing_and_extra_sources(mutator):
+    assert diagnostic_codes(lambda document: mutator(document["semantic_source_manifest"])) == {
+        "topology.source_manifest"
+    }
+
+
+def test_current_bundle_manifest_rejects_missing_or_extra_sources():
+    original = bundle()
+    for manifest in (
+        deep_thaw(original.source_manifest)[:-1],
+        deep_thaw(original.source_manifest)
+        + [{"id": "extra.json", "schema": "homehub.extra.v1", "sha256": "0" * 64}],
+    ):
+        malformed = replace(original, source_manifest=deep_freeze(manifest))
+        assert diagnostic_codes(lambda document: None, source_bundle=malformed) == {
+            "topology.current_source_manifest"
+        }
 
 
 @pytest.mark.parametrize(

@@ -95,6 +95,7 @@ def test_scan_slab_witness_handles_rectangle_concave_self_crossing_nested_and_to
 def test_accepted_exact_arrangement_and_canonical_owner_output():
     bundle = load_contracts(CONTRACTS)
     scene = compile_scene(bundle)
+    authority = load_topology_authority(CONTRACTS)
     result = compiled()
     audit = result["arrangement_audit"]
     assert audit["source_segments"] == 185
@@ -114,10 +115,10 @@ def test_accepted_exact_arrangement_and_canonical_owner_output():
     )
     assert result["provenance"] == {
         "semantic_scene_schema": scene.schema,
-        "semantic_scene_sha256": semantic_scene_fingerprint(scene),
-        "semantic_source_manifest": scene.to_dict()["source_manifest"],
+        "semantic_scene_sha256": authority.semantic_scene_sha256,
+        "semantic_source_manifest": deep_thaw(authority.source_manifest),
         "topology_authority_schema": "homehub.apartment-topology-authority.v1",
-        "topology_authority_sha256": load_topology_authority(CONTRACTS).fingerprint,
+        "topology_authority_sha256": authority.fingerprint,
     }
     assert all(not polygon["holes"] for polygon in polygons)
     for polygon in polygons:
@@ -224,6 +225,23 @@ def test_semantic_scene_and_authority_source_bindings_fail_closed():
         compile_wall_body_slice1(scene, replace(authority, source_manifest=()), bundle)
     document = deep_thaw(authority.document)
     document["semantic_source_manifest"][0]["sha256"] = "0" * 64
+    with pytest.raises(ArchitectureTopologyError):
+        compile_wall_body_slice1(
+            scene,
+            replace(
+                authority,
+                document=deep_freeze(document),
+                fingerprint=document_fingerprint(document),
+            ),
+            bundle,
+        )
+
+    document = deep_thaw(authority.document)
+    document["semantic_source_manifest"][4] = {
+        "id": "future_physical_topology.json",
+        "schema": "homehub.physical-topology.v2",
+        "sha256": "0" * 64,
+    }
     with pytest.raises(ArchitectureTopologyError):
         compile_wall_body_slice1(
             scene,

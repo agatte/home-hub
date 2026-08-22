@@ -1,0 +1,50 @@
+:root {
+  color: #252a2d;
+  background: #dfe4e5;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; min-width: 320px; overflow: hidden; }
+
+#app, #whitebox-canvas { display: block; height: 100dvh; width: 100vw; }
+
+#whitebox-canvas { touch-action: none; }
+
+.inspection-panel {
+  background: rgb(247 249 248 / 91%);
+  border: 1px solid rgb(74 85 88 / 23%);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgb(30 40 43 / 13%);
+  left: 18px;
+  max-width: min(370px, calc(100vw - 36px));
+  padding: 15px 16px;
+  position: fixed;
+  top: 18px;
+}
+
+.eyebrow { color: #5a6b70; font-size: 10px; font-weight: 750; letter-spacing: .11em; margin: 0 0 5px; }
+h1 { font-size: 18px; letter-spacing: -.02em; margin: 0 0 8px; }
+.summary, .treatment-note, .controls, .camera-readout { color: #526165; font-size: 12px; line-height: 1.4; margin: 4px 0; }
+.fingerprint { color: #65757a; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; line-height: 1.35; margin: 8px 0; overflow-wrap: anywhere; }
+button { background: #2f4c54; border: 0; border-radius: 6px; color: #fff; cursor: pointer; font: inherit; font-size: 12px; font-weight: 650; padding: 8px 10px; }
+button:hover { background: #213b42; }
+.view-controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 5px; }
+.view-controls button.active { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #2f4c54; }
+.camera-readout { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
+.overlay-controls { display: grid; gap: 5px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 10px 0; }
+.overlay-controls label { color: #44565b; font-size: 11px; white-space: nowrap; }
+.overlay-controls input { accent-color: #2f4c54; margin: 0 4px 0 0; vertical-align: -1px; }
+.authority-legend, .selection { border-left: 3px solid #79929a; color: #46585d; font-size: 10px; line-height: 1.4; margin: 8px 0; padding-left: 7px; }
+.authority-legend strong, .authority-legend span { display: block; }
+.selection { background: rgb(225 233 232 / 65%); border-left-color: #4d6971; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; min-height: 42px; overflow-wrap: anywhere; padding: 6px 7px; }
+.cutaway-control { color: #44565b; display: block; font-size: 11px; font-weight: 700; margin: 10px 0 4px; }
+.cutaway-control select { display: block; font: inherit; font-weight: 500; margin-top: 4px; max-width: 100%; padding: 4px; }
+.cutaway-status { white-space: pre-line; }
+
+@media (max-width: 600px) {
+  .inspection-panel { padding: 11px 12px; top: 10px; left: 10px; }
+  .controls { display: none; }
+  .overlay-controls { grid-template-columns: 1fr; }
+}

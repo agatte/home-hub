@@ -7,7 +7,9 @@ later stages will consume.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 from itertools import combinations
 import json
 import math
@@ -15,12 +17,15 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import (
+    CURRENT_CONTRACT_DESCRIPTORS,
+    HISTORICAL_TOPOLOGY_CONTRACT_DESCRIPTORS,
     ContractBundle,
     ContractDescriptor,
     ContractError,
     Diagnostic,
     fingerprint,
     load_contracts,
+    load_historical_topology_contracts,
 )
 from .models import deep_freeze, deep_thaw
 
@@ -256,6 +261,7 @@ class TopologyAuthorityV1:
     status: str
     document: Any
     source_manifest: tuple[Any, ...]
+    semantic_scene_sha256: str
     fingerprint: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -498,6 +504,33 @@ def _validate_contours(contours: list[Any], allowlist: Any, errors: list[Diagnos
         )
 
 
+def _descriptor_manifest(
+    descriptors: tuple[ContractDescriptor, ...],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "id": descriptor.filename,
+            "schema": descriptor.schema,
+            "sha256": descriptor.fingerprint,
+        }
+        for descriptor in descriptors
+    ]
+
+
+def _exact_manifest_records(value: Any) -> list[dict[str, str]] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    records = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"id", "schema", "sha256"}:
+            return None
+        record = {key: item[key] for key in ("id", "schema", "sha256")}
+        if not all(isinstance(field, str) for field in record.values()):
+            return None
+        records.append(record)
+    return records
+
+
 def validate_topology_authority(document: dict[str, Any], bundle: ContractBundle) -> None:
     errors: list[Diagnostic] = []
     if (
@@ -505,17 +538,26 @@ def validate_topology_authority(document: dict[str, Any], bundle: ContractBundle
         or document.get("status") != TOPOLOGY_AUTHORITY_DESCRIPTOR.status
     ):
         errors.append(Diagnostic("topology.identity", "topology", "wrong schema or status"))
-    sources = document.get("semantic_source_manifest")
-    expected_manifest = [
-        {"id": item["id"], "schema": item["schema"], "sha256": item["sha256"]}
-        for item in bundle.source_manifest
-    ]
-    if sources != expected_manifest:
+    sources = _exact_manifest_records(document.get("semantic_source_manifest"))
+    current_manifest = _exact_manifest_records(bundle.source_manifest)
+    expected_current = _descriptor_manifest(CURRENT_CONTRACT_DESCRIPTORS)
+    expected_historical = _descriptor_manifest(
+        HISTORICAL_TOPOLOGY_CONTRACT_DESCRIPTORS,
+    )
+    if current_manifest != expected_current:
+        errors.append(
+            Diagnostic(
+                "topology.current_source_manifest",
+                "bundle.source_manifest",
+                "must bind the exact current six-source v2 inventory",
+            )
+        )
+    if sources != expected_historical:
         errors.append(
             Diagnostic(
                 "topology.source_manifest",
                 "semantic_source_manifest",
-                "must bind exact six semantic sources",
+                "must bind the exact frozen six-source v1 topology inventory",
             )
         )
     slab = document.get("apartment_slab")
@@ -768,14 +810,25 @@ def load_topology_authority(
         )
     bundle = bundle or load_contracts(directory)
     validate_topology_authority(document, bundle)
-    manifest = tuple(
+    historical_bundle = load_historical_topology_contracts(directory)
+    historical_manifest = tuple(
         deep_freeze({"id": item["id"], "schema": item["schema"], "sha256": item["sha256"]})
-        for item in bundle.source_manifest
+        for item in historical_bundle.source_manifest
     )
+    # Imported locally to keep the topology validator independent of the scene
+    # compiler at module import time. This reconstructs the exact accepted v1
+    # semantic scene whose provenance Slice 1 historically recorded.
+    from .compiler import canonical_scene_json, compile_scene
+
+    historical_scene = compile_scene(historical_bundle)
+    historical_scene_sha256 = sha256(
+        canonical_scene_json(historical_scene).rstrip("\n").encode("utf-8")
+    ).hexdigest()
     return TopologyAuthorityV1(
         document["schema"],
         document["status"],
         deep_freeze(document),
-        manifest,
+        historical_manifest,
+        historical_scene_sha256,
         fingerprint(document),
     )
