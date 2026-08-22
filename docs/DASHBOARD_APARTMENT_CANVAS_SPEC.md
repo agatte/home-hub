@@ -7,6 +7,21 @@ Established: 2026-08-19
 
 ## Purpose
 
+### 2026-08-22 visual authority update
+
+First real whitebox inspection invalidated the fixed entry/kitchen-side
+`camera_v1.json` and legacy Cutaway B; both remain superseded history.
+`camera_v2.json` is the current responsive bedroom-side/right-shoulder camera
+family: 20° right yaw, 36° down pitch, 45° horizontal FOV, target
+`[499.60, 633.85, 118.00]`, and deterministic bounds-corner containment with
+a 1.14 margin. Eye/distance and vertical FOV derive per viewport; no universal
+eye is authoritative. `visibility_contract_v2.json` accepts only the named
+bedroom-north and living-balcony-north shell selectors; no west cutaway is
+required. Its 72 GU inspection lip remains provisional. Bedroom Treatment C
+is conceptually unchanged. The corrected top-down truth view validates display
+orientation only (+X right, +Y down); its presentation transform is not
+geometry authority. Hidden wall-band/preflight decomposition remains deferred.
+
 This document locks the physical/spatial and desktop hero-projection contract for the Home Apartment Canvas before visual rendering or frontend implementation. It exists specifically to prevent future concepts from inventing a different apartment, moving approved objects for composition, or silently changing the accepted camera while pursuing the living-instrument / 2.5D-diorama direction.
 
 ## Source-of-truth hierarchy
@@ -30,8 +45,9 @@ Durable artifacts:
 - `docs/dashboard/apartment_canvas/aperture_registry_v1.json` — semantic registry for four windows and seven architectural doors;
 - `docs/dashboard/apartment_canvas/truth_map_v1.svg` — approved plain top-down truth map;
 - `docs/dashboard/apartment_canvas/projection_contract_v1.json` — topology-safe 2D→3D conversion and z-model rules;
-- `docs/dashboard/apartment_canvas/camera_v1.json` — accepted desktop hero camera;
-- `docs/dashboard/apartment_canvas/visibility_contract_v1.json` — accepted conceptual cutaway / bedroom visibility treatment.
+- `docs/dashboard/apartment_canvas/camera_v2.json` — current accepted responsive desktop camera family;
+- `docs/dashboard/apartment_canvas/visibility_contract_v2.json` — current accepted bedroom-side north cutaway selectors and Bedroom Treatment C;
+- `docs/dashboard/apartment_canvas/camera_v1.json` and `visibility_contract_v1.json` — superseded historical presentation artifacts retained for provenance and debug comparison only, not simultaneous current authority.
 - `docs/dashboard/apartment_canvas/topology_authority_v1.json` — accepted additive physical-XY topology authority for the future ArchitectureTopologyV1 layer.
 - `docs/dashboard/apartment_canvas/physical_family_authority_v1.json` — accepted physical-only cross-void paired-rail continuation authority.
 
@@ -93,7 +109,7 @@ From this point forward:
 
 The artifact preserves exact plan-space XY as reduced rational GU tokens alongside source rings/segments where applicable. It emits one vertical extrusion per accepted visible wall-body polygon and leaves all registered apertures as exact named cutter/opening descriptors for a later renderer; no boolean solid realization, trim, furniture, device, material, or frontend work is part of this boundary.
 
-No accepted wall height or slab thickness exists. GeometrySceneV1 therefore declares, rather than implies, provisional whitebox defaults: floor slabs span `-4` to `0 GU`, and wall bodies span `0` to `240 GU`. The registry's window sill/head and door head values remain provisional, as do the south/front cutaway lip height, bedroom solid-base height, and bedroom upper-wall opacity. These z choices may be changed without changing accepted XY authority.
+No accepted wall height or slab thickness exists. GeometrySceneV1 therefore declares, rather than implies, provisional whitebox defaults: floor slabs span `-4` to `0 GU`, and wall bodies span `0` to `240 GU`. The registry's window sill/head and door head values remain provisional, as do the bedroom-side north cutaway lip height, bedroom solid-base height, and bedroom upper-wall opacity. These z choices may be changed without changing accepted XY authority.
 
 Important 3D semantics preserved by the approved model:
 - the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk** (**owner-verified** relationship);
@@ -110,40 +126,34 @@ Important 3D semantics preserved by the approved model:
 
 ## Accepted desktop camera / framing
 
-Desktop Home uses a fixed elevated roofless-diorama **perspective** camera from the **front / entry-kitchen-bath side**, shifted to the right and looking back left into the apartment.
-
-The accepted camera is defined by `docs/dashboard/apartment_canvas/camera_v1.json`:
+Desktop Home uses the accepted elevated roofless-diorama **perspective** family from the **bedroom/northwest right shoulder**, defined by `docs/dashboard/apartment_canvas/camera_v2.json`:
 - yaw: **20° right**;
 - pitch: **36° down**;
 - horizontal field of view: **45°**;
-- approximate 35mm full-frame equivalent: **43.46 mm**;
-- horizontal camera radius: **1040 GU**;
-- eye: `[1005.70, 1532.28, 771.58] GU`;
-- target: `[650, 555, 16] GU`.
+- target: **`[499.60, 633.85, 118.00] GU`**;
+- deterministic GeometryScene bounds-corner fit margin: **1.14**.
 
-This replaces the earlier bedroom-side / back-right-shoulder camera hypothesis and the older wording that described the desktop camera as coming from the upper/desk-side corner of the bedroom.
+Camera v2 has no universal fixed eye, radius, or distance. Vertical FOV derives from horizontal FOV and viewport aspect ratio; distance derives by fitting every current GeometryScene bounds corner; eye derives from the accepted target, direction, and solved distance. The family/direction, target, horizontal FOV, and fit policy are accepted authority. Each viewport's derived eye, distance, and vertical FOV are responsive results rather than new camera authority.
 
-Why this camera won:
-- the front-side family makes the whole apartment substantially more legible than the bedroom-side family;
-- 20° yaw gives an intentional architectural three-quarter view without becoming too side-on;
-- 36° pitch preserves a bird's-eye read while retaining visible 3D depth;
-- 45° HFOV keeps the distant bedroom and balcony stronger than the wider tested fields of view and produces the calmest composition.
+`camera_v1.json` records the superseded fixed entry/kitchen-side camera and remains historical evidence only. Its fixed eye, radius, and target may be exposed in an explicitly labeled legacy comparison mode, but they are not current normative values and must not influence Camera v2 fitting.
 
-The camera is now a **projection contract, not an open styling suggestion**. Do not reopen broad camera exploration unless new real-world geometry evidence materially invalidates the composition.
-
-Mobile may later use context-aware framing rather than shrinking the full desktop view: desk/bedroom for Gaming or Working, sleep side for Sleeping/Winding Down, living room for Watching/Relax/Social, kitchen for Cooking, with an explicit whole-apartment view available. Those mobile crops do not change desktop geometry or the accepted desktop camera.
+The v2 camera is a **projection contract, not an open styling suggestion**. Do not reopen broad camera exploration unless new real-world geometry evidence materially invalidates the accepted composition. Future context-aware crops must preserve the v2 authority boundary and accepted XY.
 
 ## Accepted desktop visibility / cutaway treatment
 
-The accepted conceptual visibility treatment is defined by `docs/dashboard/apartment_canvas/visibility_contract_v1.json`.
+The current accepted visibility treatment is defined by `docs/dashboard/apartment_canvas/visibility_contract_v2.json`.
 
-- **Global cutaway B:** lower only the true camera-facing south/front exterior shell. Rear walls and interior partitions remain architectural walls; do not use apartment-depth slicing to decide which walls exist.
+- **Bedroom-side north cutaway:** lower only `wall_volume.exterior.bedroom_north` / `wall_face.exterior.bedroom_north.exterior_north` and `wall_volume.living.balcony_north` / `wall_face.living.balcony_north.balcony_north`.
+- Select cutaway architecture only through those exact named stable wall/face pairs. There is no current south-entry selector, west-shell selector, camera-depth selector, or nearest-wall heuristic.
+- The current **72 GU** cutaway lip is a provisional inspection value, not accepted physical z authority.
 - **Bedroom wall treatment C:** preserve the desk-facing bedroom wall as a **solid lower base plus translucent upper wall**. The wall must still read as the boundary separating bedroom from bathroom/hall while allowing the desk, monitor, chair, and desk-device cluster to remain legible.
 - The translucent bedroom upper wall is a **dollhouse/dashboard visibility treatment**, not a claim that the real apartment has a glass wall.
 - Preserve the bedroom-door aperture through the translucent treatment; never glaze across the registered door opening.
 - Bedroom-door posts, corners, header, and threshold remain opaque architecture; bathroom boundaries and the bedroom/living projector divider are explicitly excluded from treatment C.
 - Keep the bedroom/living divider / projector wall as normal physical architecture. Do not remove it or invent a double-sided projector surface solely to make the bedroom-facing projection directly visible from the accepted camera.
 - Exact cutaway-lip height, bedroom solid-base height, and translucent opacity remain provisional visual-model parameters.
+
+`visibility_contract_v1.json` and its south-entry Cutaway B remain superseded historical evidence. The inspector may retain Cutaway B and no-cutaway as explicitly labeled historical/debug comparisons, but neither is simultaneous current authority.
 
 Renderer correctness is part of this contract: the floor is an underlay and may not painter-sort over wall faces; wall caps must depth-sort with the rest of the scene rather than being painted as a final overlay.
 
@@ -286,7 +296,7 @@ Only after the projected physical-world model is visually accepted should live l
 ## Still-open visual questions
 
 These are visual-model explorations, not geometry, desktop-camera, or broad cutaway uncertainties:
-- exact full-wall height, south/front cutaway-lip height, and bedroom solid-base height;
+- exact full-wall height, bedroom-side north cutaway-lip height, and bedroom solid-base height;
 - exact translucent-bedroom-wall opacity / visual material treatment;
 - final provisional sill/lintel/window-glass z-heights;
 - object z-heights and degree of extrusion/simplification;

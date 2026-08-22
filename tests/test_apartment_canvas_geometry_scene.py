@@ -82,8 +82,8 @@ def test_schema_status_and_pinned_separated_upstream_provenance():
         "aperture_registry_v1.json",
     }.issubset(source_ids)
     assert "projection_contract_v1.json" not in source_ids
-    assert provenance["camera"]["source"]["id"] == "camera_v1.json"
-    assert provenance["visibility"]["source"]["id"] == "visibility_contract_v1.json"
+    assert provenance["camera"]["source"]["id"] == "camera_v2.json"
+    assert provenance["visibility"]["source"]["id"] == "visibility_contract_v2.json"
     assert provenance["excluded_dependencies"] == [
         "PhysicalWallBandAuthorityV1",
         "PhysicalFamilyPreflight",
@@ -141,6 +141,52 @@ def test_all_registered_apertures_are_exact_opening_descriptors_without_guessed_
     assert any(opening["source_aperture_id"] == "balcony_door" for opening in openings)
 
 
+def test_semantic_host_wall_faces_are_forwarded_exactly_for_renderer_binding():
+    bundle = load_contracts(CONTRACTS)
+    source = deep_thaw(bundle.patch)["contract_amendments"]["semantic_wall_volumes"]
+    volumes = {item["id"]: item for item in compiled()["semantic_wall_volumes"]}
+
+    assert set(volumes) == {item["id"] for item in source}
+    for source_volume in source:
+        volume = volumes[source_volume["id"]]
+        assert volume["semantic_edge_id"] == source_volume["semantic_edge_id"]
+        assert {face["id"] for face in volume["faces"]} == {
+            face["id"] for face in source_volume["faces"]
+        }
+        for face in volume["faces"]:
+            expected = next(item for item in source_volume["faces"] if item["id"] == face["id"])
+            assert face["bearing_line_gu"] == _exact_tokens(expected["bearing_line_gu"])
+            assert face["plan_normal"] == expected["plan_normal"]
+            assert face["role"] == expected["role"]
+
+    faces = {face["id"] for volume in volumes.values() for face in volume["faces"]}
+    for opening in compiled()["openings"]:
+        assert opening["parent_wall_id"] in volumes
+        assert opening["host_face_id"] in faces
+
+
+def test_inspection_annotations_only_forward_accepted_room_and_object_xy():
+    source = deep_thaw(load_contracts(CONTRACTS).geometry)
+    annotations = compiled()["inspection_annotations"]
+    assert annotations["status"] == "accepted_annotation_forwarding_for_local_debug_only"
+    rooms = {room["id"]: room for room in annotations["rooms"]}
+    for source_room in source["rooms"]:
+        room = rooms[source_room["id"]]
+        assert room["label"] == source_room["label"]
+        assert room["label_gu"] == _exact_tokens([source_room["label_gu"]])[0]
+        assert room["source"] == "geometry_v1.json#/rooms"
+    objects = {item["id"]: item for item in annotations["objects"]}
+    for source_object in source["objects"]:
+        if "rect" not in source_object:
+            continue
+        item = objects[source_object["id"]]
+        assert item["rect_gu"] == {
+            key: geometry_scene._exact_number(source_object["rect"][key])
+            for key in ("x", "y", "w", "h")
+        }
+        assert item["source"] == source_object["source"]
+
+
 def test_camera_and_named_visibility_treatments_bind_the_accepted_contracts():
     bundle = load_contracts(CONTRACTS)
     scene = compiled()
@@ -148,14 +194,26 @@ def test_camera_and_named_visibility_treatments_bind_the_accepted_contracts():
     treatments = {item["id"]: item for item in scene["visibility_treatments"]}
     cutaway = treatments["visibility.global_cutaway"]
     bedroom = treatments["visibility.bedroom_front_wall"]
-    assert cutaway["selector"]["wall_ids"] == ["wall_volume.exterior.south_entry"]
+    assert cutaway["selector"]["wall_ids"] == ["wall_volume.exterior.bedroom_north", "wall_volume.living.balcony_north"]
     assert cutaway["parameters"]["lip_height_gu"] == "provisional"
+    assert cutaway["parameters"]["inspection_lip_height_gu"] == 72
+    assert cutaway["parameters"]["inspection_lip_status"] == "provisional"
     assert bedroom["selector"]["solid_face_id"] == "bedroom_front_wall.solid_lower"
     assert bedroom["selector"]["translucent_face_id"] == "bedroom_front_wall.translucent_upper"
     assert bedroom["excluded_aperture_ids"] == ["bedroom_door"]
     assert bedroom["parameters"] == {
         "solid_base_height_gu": "provisional", "upper_opacity": "provisional",
     }
+    volumes = {item["id"]: item for item in scene["semantic_wall_volumes"]}
+    faces = {face["id"] for volume in volumes.values() for face in volume["faces"]}
+    assert cutaway["selector"]["wall_ids"] == ["wall_volume.exterior.bedroom_north", "wall_volume.living.balcony_north"]
+    assert cutaway["selector"]["face_ids"] == ["wall_face.exterior.bedroom_north.exterior_north", "wall_face.living.balcony_north.balcony_north"]
+    assert bedroom["selector"]["wall_id"] == "wall_volume.bedroom.south_desk_facing"
+    assert bedroom["selector"]["face_id"] == "wall_face.bedroom.south_desk_facing.bedroom_north"
+    assert set(cutaway["selector"]["wall_ids"]) <= set(volumes)
+    assert set(cutaway["selector"]["face_ids"]) <= faces
+    assert bedroom["selector"]["wall_id"] in volumes
+    assert bedroom["selector"]["face_id"] in faces
 
 
 def test_all_new_vertical_values_are_explicitly_provisional():

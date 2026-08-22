@@ -22,14 +22,26 @@ class ContractDescriptor:
     bindings: tuple[tuple[str, str], ...] = ()
 
 
-CONTRACT_DESCRIPTORS = (
+PHYSICAL_SEMANTIC_CONTRACT_DESCRIPTORS = (
     ContractDescriptor("geometry_v1.json", "homehub.apartment-geometry.v1", "approved_top_down_geometry", "099e73be4c9140836ec28be203ffee4a60d2314f0f789dd6f866c8c3f613b481"),
     ContractDescriptor("geometry_v1_6_patch.json", "homehub.apartment-geometry-delta.v1.6", "approved", "88c72d267822a9fa0bc8d874ad4178101f166e05820e72086625a89ddf58f6d1", (("base", "geometry_v1.json"),)),
     ContractDescriptor("aperture_registry_v1.json", "homehub.apartment-aperture-registry.v1", "approved_xy_provisional_z", "e09211152b57b240132c56a9e92dc9c3d5b4d48fee69465a002a6d3ef68a256a", (("source", "canonical floor plan + approved geometry v1 + geometry v1.6 contract amendments"),)),
     ContractDescriptor("projection_contract_v1.json", "homehub.apartment-projection-contract.v1", "accepted_converter_contract", "ae31274efad175607420102f2a5b39c488dac35bd05a87790438711ed1a47cce", (("source_geometry", "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json"),)),
+)
+CURRENT_CONTRACT_DESCRIPTORS = (
+    *PHYSICAL_SEMANTIC_CONTRACT_DESCRIPTORS,
+    ContractDescriptor("camera_v2.json", "homehub.apartment-camera-family.v2", "accepted_responsive_camera_family", "934fa4224dcc84e84854531b216e787c5594759961353824877e24c7f28b5e80", (("source_geometry", "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json"),)),
+    ContractDescriptor("visibility_contract_v2.json", "homehub.apartment-visibility-contract.v2", "accepted_bedroom_side_north_visibility_contract", "4002a010c31ef33b05b85377661bbe7f8d8bad218b065905a96ba02cfac17a21", (("source_geometry", "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json"), ("camera", "camera_v2.json"))),
+)
+HISTORICAL_TOPOLOGY_CONTRACT_DESCRIPTORS = (
+    *PHYSICAL_SEMANTIC_CONTRACT_DESCRIPTORS,
     ContractDescriptor("camera_v1.json", "homehub.apartment-camera-lock.v1", "accepted", "c92297f1b38cb63ae20a3a4130e12e062162c4d09c3388892355ce28938a637c", (("source_geometry", "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json"),)),
     ContractDescriptor("visibility_contract_v1.json", "homehub.apartment-visibility-contract.v1", "accepted_conceptual_visibility_contract", "76e614c5b46b7ff61b28edc0fbba0334f7607793fef55ad44bcf73a3238dadfb", (("source_geometry", "geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json"), ("camera", "camera_v1.json"))),
 )
+# Public aliases describe current compilation authority only. Historical v1
+# presentation files are loaded solely through the explicit frozen-topology
+# context below.
+CONTRACT_DESCRIPTORS = CURRENT_CONTRACT_DESCRIPTORS
 CONTRACT_FILENAMES = tuple(descriptor.filename for descriptor in CONTRACT_DESCRIPTORS)
 EXPECTED_SCHEMAS = {descriptor.filename: descriptor.schema for descriptor in CONTRACT_DESCRIPTORS}
 
@@ -73,10 +85,12 @@ class ContractBundle:
     source_manifest: tuple[Any, ...]
 
 
-def _read_directory(directory: Path) -> dict[str, Any]:
+def _read_directory(
+    directory: Path, descriptors: tuple[ContractDescriptor, ...],
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
     errors: list[Diagnostic] = []
-    for name in CONTRACT_FILENAMES:
+    for name in (descriptor.filename for descriptor in descriptors):
         try:
             values[name] = json.loads((directory / name).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -86,9 +100,11 @@ def _read_directory(directory: Path) -> dict[str, Any]:
     return values
 
 
-def _validate_authority(raw: dict[str, Any]) -> None:
+def _validate_authority(
+    raw: dict[str, Any], descriptors: tuple[ContractDescriptor, ...],
+) -> None:
     errors: list[Diagnostic] = []
-    for descriptor in CONTRACT_DESCRIPTORS:
+    for descriptor in descriptors:
         document = raw.get(descriptor.filename)
         if not isinstance(document, dict):
             errors.append(Diagnostic("contract.missing", descriptor.filename, "required JSON object is missing"))
@@ -106,17 +122,58 @@ def _validate_authority(raw: dict[str, Any]) -> None:
         raise ContractError(errors)
 
 
-def load_contracts(directory: str | Path | None = None, *, documents: dict[str, Any] | None = None) -> ContractBundle:
-    """Load raw accepted sources once, then reconcile only a separate working copy."""
+def _load_contracts(
+    descriptors: tuple[ContractDescriptor, ...],
+    directory: str | Path | None = None,
+    *,
+    documents: dict[str, Any] | None = None,
+) -> ContractBundle:
     if documents is None:
         directory = Path(directory or Path(__file__).resolve().parents[2] / "docs/dashboard/apartment_canvas")
-        documents = _read_directory(directory)
-    raw_plain = {name: json.loads(canonical_json(documents[name])) for name in CONTRACT_FILENAMES if name in documents}
-    _validate_authority(raw_plain)
-    manifest = tuple(deep_freeze({"id": d.filename, "schema": d.schema, "sha256": fingerprint(raw_plain[d.filename])}) for d in CONTRACT_DESCRIPTORS)
+        documents = _read_directory(directory, descriptors)
+    filenames = tuple(descriptor.filename for descriptor in descriptors)
+    raw_plain = {
+        name: json.loads(canonical_json(documents[name]))
+        for name in filenames
+        if name in documents
+    }
+    _validate_authority(raw_plain, descriptors)
+    manifest = tuple(
+        deep_freeze({
+            "id": descriptor.filename,
+            "schema": descriptor.schema,
+            "sha256": fingerprint(raw_plain[descriptor.filename]),
+        })
+        for descriptor in descriptors
+    )
     effective_geometry = _reconcile_geometry(deep_thaw(raw_plain["geometry_v1.json"]), raw_plain["geometry_v1_6_patch.json"])
     raw_documents = deep_freeze(raw_plain)
-    return ContractBundle(raw_documents, deep_freeze(effective_geometry), raw_documents["geometry_v1_6_patch.json"], raw_documents["aperture_registry_v1.json"], raw_documents["projection_contract_v1.json"], raw_documents["camera_v1.json"], raw_documents["visibility_contract_v1.json"], manifest)
+    return ContractBundle(
+        raw_documents,
+        deep_freeze(effective_geometry),
+        raw_documents["geometry_v1_6_patch.json"],
+        raw_documents["aperture_registry_v1.json"],
+        raw_documents["projection_contract_v1.json"],
+        raw_documents[descriptors[4].filename],
+        raw_documents[descriptors[5].filename],
+        manifest,
+    )
+
+
+def load_contracts(
+    directory: str | Path | None = None, *, documents: dict[str, Any] | None = None,
+) -> ContractBundle:
+    """Load current v2 authority, then reconcile only a separate working copy."""
+    return _load_contracts(CURRENT_CONTRACT_DESCRIPTORS, directory, documents=documents)
+
+
+def load_historical_topology_contracts(
+    directory: str | Path | None = None, *, documents: dict[str, Any] | None = None,
+) -> ContractBundle:
+    """Load the exact frozen six-source context accepted by TopologyAuthorityV1."""
+    return _load_contracts(
+        HISTORICAL_TOPOLOGY_CONTRACT_DESCRIPTORS, directory, documents=documents,
+    )
 
 
 def _reconcile_geometry(geometry: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
