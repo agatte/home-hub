@@ -87,6 +87,14 @@ From this point forward:
 - any future x/y geometry change requires new real-world evidence and explicit approval;
 - image generation must not be used to reconstruct, reinterpret, or compare apartment geometry or camera visibility.
 
+## GeometrySceneV1 artifact
+
+`backend/apartment_canvas/geometry_scene.py` now compiles the isolated renderer-neutral `homehub.apartment-geometry-scene.v1` whitebox artifact. It consumes the accepted Slice 1 even-odd dissolved visible wall-body polygons, the accepted apartment slab and balcony footprints, registered aperture descriptors, and the accepted camera and visibility contracts. Its provenance keeps physical XY, aperture semantics, camera, and visibility sources separate. It does not consume `PhysicalFamilyAuthorityV1`, `PhysicalWallBandAuthorityV1`, or `PhysicalFamilyPreflight`, and it creates no hidden wall-family, paired-rail, or junction-seam geometry.
+
+The artifact preserves exact plan-space XY as reduced rational GU tokens alongside source rings/segments where applicable. It emits one vertical extrusion per accepted visible wall-body polygon and leaves all registered apertures as exact named cutter/opening descriptors for a later renderer; no boolean solid realization, trim, furniture, device, material, or frontend work is part of this boundary.
+
+No accepted wall height or slab thickness exists. GeometrySceneV1 therefore declares, rather than implies, provisional whitebox defaults: floor slabs span `-4` to `0 GU`, and wall bodies span `0` to `240 GU`. The registry's window sill/head and door head values remain provisional, as do the south/front cutaway lip height, bedroom solid-base height, and bedroom upper-wall opacity. These z choices may be changed without changing accepted XY authority.
+
 Important 3D semantics preserved by the approved model:
 - the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk** (**owner-verified** relationship);
 - the monitor is centered along the main desk at the wall-side edge;
