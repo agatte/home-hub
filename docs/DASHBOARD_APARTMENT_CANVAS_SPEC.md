@@ -45,7 +45,7 @@ The coordinate system uses **Apartment Geometry Units (GU)** with the traced apa
 
 The slab retains the provenance breakpoint at `[441.01, 222.13]`. Its adjacent `[440.20, 222.13]` junction is a frozen support-line intersection: the 0.81 GU endpoint reconciliation is a source-trace mismatch, not a physical notch. The accepted balcony footprint is referenced rather than copied.
 
-Whitebox planar topology, wall-band resolution, polygonization, and mesh/extrusion are the next `ArchitectureTopologyV1` layer and are deliberately outside this contract slice.
+The next geometry milestone is `GeometrySceneV1`: a deterministic extruded 3D whitebox built directly from accepted visible wall-body polygons, registered openings/apertures, and the accepted camera/cutaway/visibility contracts. Wall-band/family decomposition is not a prerequisite for that milestone and remains outside this contract slice.
 
 Registered aperture gaps are intentional semantic apertures, never missing wall geometry. A semantic wall face may span one or more registered aperture gaps even when its realized Slice 1 physical boundary rail is interrupted; the physical runs are derived around the apertures. Sixteen of the 22 accepted faces have this interruption.
 
@@ -70,6 +70,16 @@ The directed physical frame is independently derived with exact Fractions from t
 The eleven gap certificates are a closed-world set, not a semantic sequence. Authority fingerprinting canonicalizes only `gap_continuation_certificates` by complete physical certificate record before canonical JSON hashing; other array contracts retain their declared ordering.
 
 Semantic faces and apertures may consume physical families produced by a future physical-family preflight, but they can never create, rename, merge, or supply evidence for those families. This amendment defines metadata and continuation only; it adds no z, mesh, extrusion, rendering, or `GeometrySceneV1` behavior.
+
+## GeometrySceneV1 decision boundary
+
+The accepted Slice 1 exact wall-body geometry remains authoritative, as do the accepted openings/apertures, semantic-face metadata, and camera/cutaway/visibility contracts. `PhysicalFamilyAuthorityV1` remains valid frozen metadata; this decision does not alter it or delete historical authority/research artifacts.
+
+The previous physical-family / wall-band investigation established that hidden decomposition of filled wall junctions into paired rails, internal seams, local strip families, or junction-port continuations is **not required** to build `GeometrySceneV1`. The floor plan does not uniquely encode those invisible seams, and they do not affect the intended Apartment Canvas whitebox when it produces the same accepted visible wall volume. Historical 27/54 local-component and 16/32 family counts are therefore provisional research results, not acceptance targets.
+
+`PhysicalWallBandAuthorityV1` and `PhysicalFamilyPreflight` are deferred unless a future concrete feature demonstrates a need for them. `GeometrySceneV1` must not guess geometry: it consumes the accepted 2D wall-body polygons plus accepted openings/apertures and camera/cutaway/visibility contracts to produce a deterministic extruded 3D whitebox.
+
+The next-phase acceptance question is visual and physical: “Does this look like Anthony’s apartment in 3D?” Review remains focused on the correct wall footprint, openings, room proportions, sightlines/cutaway, and—when introduced—furniture/device blocking.
 
 From this point forward:
 - approved approximate x/y/orientation, wall polygons, semantic wall edges, balcony footprint, and registered aperture spans are spatial truth, not styling suggestions;
