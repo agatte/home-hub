@@ -10,6 +10,55 @@ import {
 import './styles.css'
 
 const data = adaptGeometryScene(geometryScene)
+
+// Measured vertical inspection authority.
+const inspectionCeilingTopZ = 364.43
+const originalWallTopZ = Math.max(...data.walls.map((wall) => wall.zMax))
+
+for (const wall of data.walls) {
+  if (Math.abs(wall.zMax - originalWallTopZ) < 0.001) {
+    wall.zMax = inspectionCeilingTopZ
+  }
+}
+
+const measuredApertureZ = new Map([
+  ['bedroom_window_left',  { min: 81.36, max: 311.88 }],
+  ['bedroom_window_right', { min: 81.36, max: 311.88 }],
+  ['living_window_left',   { min: 81.36, max: 311.88 }],
+  ['living_window_right',  { min: 81.36, max: 311.88 }],
+
+      ['balcony_door', { min: 0, max: 267.81 }],
+  ['bedroom_door',      { min: 0, max: 271.20 }],
+  ['bathroom_door',     { min: 0, max: 271.20 }],
+  ['laundry_door',      { min: 0, max: 271.20 }],
+  ['water_heater_door', { min: 0, max: 271.20 }],
+  ['front_door',        { min: 0, max: 271.20 }],
+  ['closet_opening',    { min: 0, max: 271.20 }],
+])
+
+for (const opening of data.openings) {
+  const measured = measuredApertureZ.get(opening.sourceApertureId)
+  if (!measured) continue
+
+  opening.void = { ...measured }
+
+  if (!opening.closureFootprint) continue
+
+  opening.solidRanges = opening.kind === 'window'
+    ? [
+        { min: 0, max: measured.min },
+        { min: measured.max, max: inspectionCeilingTopZ },
+      ]
+    : [
+        { min: measured.max, max: inspectionCeilingTopZ },
+      ]
+}
+
+data.bounds.maxZ = inspectionCeilingTopZ
+
+// Inspection-only override so low bedroom furniture remains visible behind the
+// accepted north cutaway. Source Visibility v2 authority remains unchanged.
+const inspectionCutawayLipGu = data.presentation.cutaway.lipHeightGu
 const canvas = document.querySelector('#whitebox-canvas')
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -28,6 +77,15 @@ scene.add(key)
 
 const perspectiveCamera = new THREE.PerspectiveCamera(40, 1, 1, 10000)
 perspectiveCamera.up.set(0, 0, 1)
+
+// Camera v2 geometry stays in accepted plan coordinates. The accepted
+// perspective needs a presentation-only horizontal projection reflection
+// so the displayed 3D view has the same chirality as the verified plan.
+function setPerspectivePresentationReflection(enabled) {
+  perspectiveCamera.updateProjectionMatrix()
+  if (enabled) perspectiveCamera.projectionMatrix.elements[0] *= -1
+  perspectiveCamera.projectionMatrixInverse.copy(perspectiveCamera.projectionMatrix).invert()
+}
 const truthCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000)
 truthCamera.up.set(0, -1, 0)
 let activeCamera = perspectiveCamera
@@ -38,6 +96,9 @@ controls.enableDamping = true
 controls.dampingFactor = 0.08
 const overlayGroups = {
   rooms: new THREE.Group(), fixtures: new THREE.Group(), openings: new THREE.Group(), architecture: new THREE.Group(),
+  primaryBlockers: new THREE.Group(), secondaryBlockers: new THREE.Group(), objectLabels: new THREE.Group(),
+  plants: new THREE.Group(),
+  floorTreatments: new THREE.Group(),
 }
 Object.values(overlayGroups).forEach((group) => world.add(group))
 const inspectable = []
@@ -78,6 +139,81 @@ function extrusionFromRings(outer, holes, zMin, zMax) {
   return geometry
 }
 
+function ellipseExtrusion(x, y, w, h, zMin, zMax) {
+  const shape = new THREE.Shape()
+  shape.absellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, Math.PI * 2, false, 0)
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: zMax - zMin,
+    bevelEnabled: false,
+    curveSegments: 16,
+  })
+  geometry.translate(0, 0, zMin)
+  return geometry
+}
+
+function primitiveBounds(footprint, primitive) {
+  return {
+    x: footprint.x + footprint.w * (primitive.x ?? 0),
+    y: footprint.y + footprint.h * (primitive.y ?? 0),
+    w: footprint.w * (primitive.w ?? 1),
+    h: footprint.h * (primitive.h ?? 1),
+  }
+}
+
+function blockerInspection(blocker, primitive) {
+  return {
+    renderObjectType: blocker.renderObjectType ?? 'provisional physical blocker',
+    objectId: blocker.id,
+    acceptedSourceFootprint: `${blocker.id} ${JSON.stringify(blocker.sourceFootprint)}`,
+    blockerRecipe: blocker.recipe,
+    blockerPrimitive: primitive.name,
+    provisionalZRangeGu: `${primitive.zMin}–${primitive.zMax}`,
+    xyStatus: 'accepted source footprint',
+    zStatus: 'provisional inspection',
+    silhouetteStatus: 'provisional inspection',
+  }
+}
+
+function addBlockerPrimitive(group, blocker, primitive, material) {
+  const renderFootprint = blocker.renderFootprint ?? blocker.sourceFootprint
+  const makeMesh = (part, bounds) => {
+    let geometry
+    if (part.kind === 'ellipsoid') {
+      const radiusZ = (part.zMax - part.zMin) / 2
+      geometry = new THREE.SphereGeometry(1, 24, 16)
+      geometry.scale(bounds.w / 2, bounds.h / 2, radiusZ)
+      geometry.translate(
+        bounds.x + bounds.w / 2,
+        bounds.y + bounds.h / 2,
+        part.zMin + radiusZ,
+      )
+    } else if (part.kind === 'ellipse') {
+      geometry = ellipseExtrusion(bounds.x, bounds.y, bounds.w, bounds.h, part.zMin, part.zMax)
+    } else {
+      geometry = extrusionFromRings([
+        { x: bounds.x, y: bounds.y }, { x: bounds.x + bounds.w, y: bounds.y },
+        { x: bounds.x + bounds.w, y: bounds.y + bounds.h }, { x: bounds.x, y: bounds.y + bounds.h },
+      ], [], part.zMin, part.zMax)
+    }
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.userData.inspection = blockerInspection(blocker, part)
+    group.add(mesh)
+    inspectable.push(mesh)
+  }
+  if (primitive.kind !== 'open_frame') {
+    makeMesh(primitive, primitiveBounds(renderFootprint, primitive))
+    return
+  }
+  const { x, y, w, h } = renderFootprint
+  const t = primitive.thickness
+  // Sparse rails deliberately preserve the shower's open enclosure reading.
+  for (const rail of [
+    { kind: 'box', name: `${primitive.name} west rail`, x: 0, y: 0, w: t, h: 1, zMin: primitive.zMin, zMax: primitive.zMax },
+    { kind: 'box', name: `${primitive.name} east rail`, x: 1 - t, y: 0, w: t, h: 1, zMin: primitive.zMin, zMax: primitive.zMax },
+    { kind: 'box', name: `${primitive.name} north rail`, x: 0, y: 1 - t, w: 1, h: t, zMin: primitive.zMin, zMax: primitive.zMax },
+  ]) makeMesh(rail, primitiveBounds({ x, y, w, h }, rail))
+}
+
 function textSprite(text, color = '#26383d') {
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d')
@@ -103,7 +239,7 @@ function metadataText(metadata) {
 }
 
 function updateSelection(object) {
-  selection.textContent = object ? metadataText(object.userData.inspection) : 'Hover or click a wall/opening for its source metadata.'
+  selection.textContent = object ? metadataText(object.userData.inspection) : 'Hover or click a wall, opening, or blocker for source metadata.'
 }
 
 function boundsUniforms(bounds) {
@@ -145,7 +281,15 @@ inCutaway = inCutaway || (cutawayCount > 1 && whiteboxWorldPosition.x >= cutaway
 if (inCutaway && whiteboxWorldPosition.z > cutawayLip) discard;
 bool onBedroomFace = whiteboxWorldPosition.x >= bedroomMinX && whiteboxWorldPosition.x <= bedroomMaxX
   && abs(whiteboxWorldPosition.y - bedroomMinY) < 0.001 && whiteboxWorldPosition.z > bedroomBase;
-if (onBedroomFace) diffuseColor.a = bedroomOpacity;`)
+if (onBedroomFace) diffuseColor.a = bedroomOpacity;
+
+bool inEntryTallCabinetFalseWall =
+  whiteboxWorldPosition.x >= 359.64 &&
+  whiteboxWorldPosition.x <= 444.39 &&
+  whiteboxWorldPosition.y >= 1041.315 &&
+  whiteboxWorldPosition.y <= 1085.385;
+
+if (inEntryTallCabinetFalseWall) discard;`)
   }
   return material
 }
@@ -172,6 +316,21 @@ for (const wall of data.walls) {
   overlayGroups.architecture.add(id)
 }
 
+// presentation-only kitchen east wall skin
+// Covers small canonical contour jogs that become distracting fins in perspective.
+// Canonical GeometryScene coordinates remain unchanged; Top-down truth hides this skin.
+const kitchenWallSkin = new THREE.Group()
+const kitchenWallSkinMesh = new THREE.Mesh(
+  extrusionFromRings([
+    { x: 980.50, y: 755.90 },
+    { x: 981.30, y: 755.90 },
+    { x: 981.30, y: 1230.27 },
+    { x: 980.50, y: 1230.27 },
+  ], [], 0, Math.max(...data.walls.map((wall) => wall.zMax))),
+  wallMaterial,
+)
+kitchenWallSkin.add(kitchenWallSkinMesh)
+world.add(kitchenWallSkin)
 const openingClosureMaterial = new THREE.MeshStandardMaterial({ color: 0xd9ddda, roughness: 0.88, side: THREE.DoubleSide })
 
 for (const opening of data.openings) {
@@ -199,10 +358,91 @@ for (const opening of data.openings) {
   overlayGroups.architecture.add(openingId)
 }
 
+// measured balcony door panel visual
+const balconyDoor = data.openings.find((opening) => opening.sourceApertureId === 'balcony_door')
+if (balconyDoor?.closureFootprint) {
+  const xs = balconyDoor.closureFootprint.map((point) => point.x)
+  const ys = balconyDoor.closureFootprint.map((point) => point.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+
+  const doorWidth = maxX - minX
+  const glassWidth = 81.36 // 24in
+  const sideRail = Math.max(0, (doorWidth - glassWidth) / 2)
+  const doorTop = 267.81 // 79in
+  const glassBottom = 40.68 // 12in
+  const glassTop = 252.56 // 4.5in below top
+
+  const frameMaterial = new THREE.MeshStandardMaterial({ color: 0xd5d7d4, roughness: 0.9 })
+  const glassMaterial = new THREE.MeshStandardMaterial({ color: 0xaab8bd, transparent: true, opacity: 0.32, roughness: 0.35, side: THREE.DoubleSide })
+
+  const addDoorPart = (x0, x1, z0, z1, material) => {
+    if (x1 <= x0 || z1 <= z0) return
+    world.add(new THREE.Mesh(
+      extrusionFromRings([
+        { x: x0, y: minY },
+        { x: x1, y: minY },
+        { x: x1, y: maxY },
+        { x: x0, y: maxY },
+      ], [], z0, z1),
+      material,
+    ))
+  }
+
+  addDoorPart(minX, maxX, 0, glassBottom, frameMaterial)
+  addDoorPart(minX, maxX, glassTop, doorTop, frameMaterial)
+  addDoorPart(minX, minX + sideRail, glassBottom, glassTop, frameMaterial)
+  addDoorPart(maxX - sideRail, maxX, glassBottom, glassTop, frameMaterial)
+  addDoorPart(minX + sideRail, maxX - sideRail, glassBottom, glassTop, glassMaterial)
+}
 for (const room of data.rooms) {
   const label = textSprite(room.label, '#182f35')
   label.position.set(room.position.x, room.position.y, 14)
   overlayGroups.rooms.add(label)
+}
+
+const measuredLivingRug = Object.freeze({
+  id: 'living.rug.measured',
+  // 9 ft x 6 ft at the apartment's calibrated ~3.39 GU/in scale.
+  // Rotated 90° and nudged toward the couch.
+  x: 580.00,
+  y: 234.34,
+  w: 244.08,
+  h: 366.12,
+})
+
+const rugMaterial = new THREE.MeshStandardMaterial({
+  color: 0x8f9c91,
+  roughness: 1,
+  metalness: 0,
+  transparent: true,
+  opacity: 0.72,
+})
+
+{
+  const { x, y, w, h } = measuredLivingRug
+  const mesh = new THREE.Mesh(
+    extrusionFromRings([
+      { x, y },
+      { x: x + w, y },
+      { x: x + w, y: y + h },
+      { x, y: y + h },
+    ], [], 0.5, 2),
+    rugMaterial,
+  )
+
+  mesh.userData.inspection = {
+    renderObjectType: 'measured non-blocking floor treatment',
+    objectId: measuredLivingRug.id,
+    dimensions: '108in x 72in',
+    placement: 'under white chair and coffee table; excluded from couch footprint',
+    status: 'provisional visual placement',
+  }
+
+  overlayGroups.floorTreatments.add(mesh)
+  inspectable.push(mesh)
 }
 
 for (const fixture of data.fixtureDebugAids) {
@@ -221,6 +461,90 @@ for (const fixture of data.fixtureDebugAids) {
   overlayGroups.fixtures.add(label)
 }
 
+const blockerMaterials = Object.freeze({
+  bed: new THREE.MeshStandardMaterial({ color: 0xc9b8a7, roughness: 0.94, metalness: 0 }),
+  seating: new THREE.MeshStandardMaterial({ color: 0xaeb9c9, roughness: 0.94, metalness: 0 }),
+  furniture: new THREE.MeshStandardMaterial({ color: 0xb7c5bf, roughness: 0.94, metalness: 0 }),
+  fixture: new THREE.MeshStandardMaterial({ color: 0xc4c0b6, roughness: 0.94, metalness: 0 }),
+  secondary: new THREE.MeshStandardMaterial({ color: 0xb8b0c4, roughness: 0.94, metalness: 0 }),
+  fallback: new THREE.MeshStandardMaterial({ color: 0xd9dfde, roughness: 0.94, metalness: 0 }),
+})
+
+function materialForBlocker(blocker) {
+  if (blocker.scope === 'secondary') return blockerMaterials.secondary
+  if (blocker.id === 'bedroom.bed') return blockerMaterials.bed
+  if (/(chair|stool|couch)/.test(blocker.id)) return blockerMaterials.seating
+  if (/(desk|table|stand|dresser|island|cabinet)/.test(blocker.id)) return blockerMaterials.furniture
+  if (/(stove|fridge|pantry|vanity|toilet|shower|laundry|water_heater)/.test(blocker.id)) return blockerMaterials.fixture
+  return blockerMaterials.fallback
+}
+const plantStandMaterial = new THREE.MeshStandardMaterial({ color: 0x85796e, roughness: 0.96, metalness: 0 })
+const plantPotMaterial = new THREE.MeshStandardMaterial({ color: 0xa99482, roughness: 0.96, metalness: 0 })
+const plantFoliageMaterial = new THREE.MeshStandardMaterial({ color: 0x788a70, roughness: 0.98, metalness: 0 })
+
+const couchForPlants = data.blockers.find((blocker) => blocker.id === 'living.couch')
+const couchPlantFootprint = couchForPlants.renderFootprint ?? couchForPlants.sourceFootprint
+const couchSouth = couchPlantFootprint.y + couchPlantFootprint.h
+
+function standFramePrimitives(topZ) {
+  const t = .06
+  const railZ = 2.2
+  return [
+    { kind: 'box', name: 'northwest leg', x: 0, y: 0, w: t, h: t, zMin: railZ, zMax: topZ - 2.2 },
+    { kind: 'box', name: 'northeast leg', x: 1 - t, y: 0, w: t, h: t, zMin: railZ, zMax: topZ - 2.2 },
+    { kind: 'box', name: 'southwest leg', x: 0, y: 1 - t, w: t, h: t, zMin: railZ, zMax: topZ - 2.2 },
+    { kind: 'box', name: 'southeast leg', x: 1 - t, y: 1 - t, w: t, h: t, zMin: railZ, zMax: topZ - 2.2 },
+    { kind: 'box', name: 'bottom north rail', x: 0, y: 0, w: 1, h: t, zMin: 0, zMax: railZ },
+    { kind: 'box', name: 'bottom south rail', x: 0, y: 1 - t, w: 1, h: t, zMin: 0, zMax: railZ },
+    { kind: 'box', name: 'bottom west rail', x: 0, y: 0, w: t, h: 1, zMin: 0, zMax: railZ },
+    { kind: 'box', name: 'bottom east rail', x: 1 - t, y: 0, w: t, h: 1, zMin: 0, zMax: railZ },
+    { kind: 'box', name: 'thin top', x: 0, y: 0, w: 1, h: 1, zMin: topZ - 2.2, zMax: topZ },
+  ]
+}
+const plantVisuals = [
+  { id: 'living.snake_plant', sourceLabel: 'Snake plant', recipe: 'measured_living_plant_stand_tall', renderObjectType: 'visual-only plant group', source: 'user measurements', sourceFootprint: { x: 917.45, y: couchSouth + 40.68, w: 33.36, h: 33.36 }, renderFootprint: { x: 917.45, y: couchSouth + 40.68, w: 33.36, h: 33.36 }, primitives: [
+    ...standFramePrimitives(93.39),
+    { kind: 'ellipse', name: 'pot', x: .18, y: .18, w: .64, h: .64, zMin: 93.39, zMax: 119.16 },
+    { kind: 'ellipsoid', name: 'foliage lower', x: .08, y: .08, w: .84, h: .84, zMin: 114, zMax: 175 },
+    { kind: 'ellipsoid', name: 'foliage upper', x: .24, y: .18, w: .52, h: .64, zMin: 150, zMax: 205 },
+  ]},
+  { id: 'living.zz_plant', sourceLabel: 'ZZ plant', recipe: 'measured_living_plant_stand_short', renderObjectType: 'visual-only plant group', source: 'user measurements', sourceFootprint: { x: 865.24, y: couchSouth + 23.73, w: 29.36, h: 29.36 }, renderFootprint: { x: 865.24, y: couchSouth + 23.73, w: 29.36, h: 29.36 }, primitives: [
+    ...standFramePrimitives(80.07),
+    { kind: 'ellipse', name: 'pot', x: .18, y: .18, w: .64, h: .64, zMin: 80.07, zMax: 104.71 },
+    { kind: 'ellipsoid', name: 'foliage lower', x: .05, y: .05, w: .90, h: .90, zMin: 101, zMax: 148 },
+    { kind: 'ellipsoid', name: 'foliage upper', x: .20, y: .16, w: .60, h: .68, zMin: 130, zMax: 174 },
+  ]},
+]
+
+for (const plant of plantVisuals) {
+  plant.primitives.forEach((primitive, index) => {
+    const material = index === 0 ? plantStandMaterial : index === 1 ? plantPotMaterial : plantFoliageMaterial
+    addBlockerPrimitive(overlayGroups.plants, plant, primitive, material)
+  })
+}
+const kitchenUpperCabinets = [
+  { id: 'kitchen.cabinet_upper_left', scope: 'primary', sourceLabel: 'Upper cabinet left', source: 'user measurements + kitchen photo', recipe: 'measured_24x13x42', sourceFootprint: { x: 936.43, y: 718.52, w: 44.07, h: 81.36 }, renderFootprint: { x: 936.43, y: 718.52, w: 44.07, h: 81.36 }, primitives: [{ kind: 'box', name: 'cabinet mass', x: 0, y: 0, w: 1, h: 1, zMin: 183.91, zMax: 326.29 }] },
+  { id: 'kitchen.cabinet_above_microwave', scope: 'primary', sourceLabel: 'Cabinet above microwave', source: 'user measurements + kitchen photo', recipe: 'measured_29_5x13x23_5', sourceFootprint: { x: 936.43, y: 803.27, w: 44.07, h: 100.01 }, renderFootprint: { x: 936.43, y: 803.27, w: 44.07, h: 100.01 }, primitives: [{ kind: 'box', name: 'cabinet mass', x: 0, y: 0, w: 1, h: 1, zMin: 246.62, zMax: 326.29 }] },
+  { id: 'kitchen.cabinet_upper_right', scope: 'primary', sourceLabel: 'Upper cabinet right', source: 'user measurements + kitchen photo', recipe: 'measured_27x13x42', sourceFootprint: { x: 936.43, y: 903.28, w: 44.07, h: 91.53 }, renderFootprint: { x: 936.43, y: 903.28, w: 44.07, h: 91.53 }, primitives: [{ kind: 'box', name: 'cabinet mass', x: 0, y: 0, w: 1, h: 1, zMin: 183.91, zMax: 326.29 }] },
+  { id: 'kitchen.cabinet_above_fridge', scope: 'primary', sourceLabel: 'Cabinet above fridge', source: 'user measurements + kitchen photo', recipe: 'measured_36x13x23_5', sourceFootprint: { x: 936.43, y: 995.65, w: 44.07, h: 122.04 }, renderFootprint: { x: 936.43, y: 995.65, w: 44.07, h: 122.04 }, primitives: [{ kind: 'box', name: 'cabinet mass', x: 0, y: 0, w: 1, h: 1, zMin: 246.62, zMax: 326.29 }] },
+]
+for (const cabinet of kitchenUpperCabinets) {
+  const material = materialForBlocker(cabinet)
+  cabinet.primitives.forEach((primitive) => addBlockerPrimitive(overlayGroups.primaryBlockers, cabinet, primitive, material))
+}
+for (const blocker of data.blockers) {
+  const group = blocker.scope === 'primary' ? overlayGroups.primaryBlockers : overlayGroups.secondaryBlockers
+  const material = materialForBlocker(blocker)
+  blocker.primitives.forEach((primitive) => addBlockerPrimitive(group, blocker, primitive, material))
+  const label = textSprite(`${blocker.sourceLabel} · provisional`, '#53666b')
+  label.position.set(
+    blocker.sourceFootprint.x + blocker.sourceFootprint.w / 2,
+    blocker.sourceFootprint.y + blocker.sourceFootprint.h / 2,
+    Math.max(...blocker.primitives.map((primitive) => primitive.zMax)) + 8,
+  )
+  overlayGroups.objectLabels.add(label)
+}
+
 function bindToggle(selector, group) {
   const input = document.querySelector(selector)
   group.visible = input.checked
@@ -229,6 +553,9 @@ function bindToggle(selector, group) {
 
 bindToggle('#toggle-room-labels', overlayGroups.rooms)
 bindToggle('#toggle-fixtures', overlayGroups.fixtures)
+bindToggle('#toggle-primary-blockers', overlayGroups.primaryBlockers)
+bindToggle('#toggle-secondary-blockers', overlayGroups.secondaryBlockers)
+bindToggle('#toggle-object-labels', overlayGroups.objectLabels)
 bindToggle('#toggle-opening-labels', overlayGroups.openings)
 bindToggle('#toggle-architecture-ids', overlayGroups.architecture)
 
@@ -272,13 +599,22 @@ function inspectAtEvent(event) {
   pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1
   pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1
   raycaster.setFromCamera(pointer, activeCamera)
-  updateSelection(raycaster.intersectObjects(inspectable, false)[0]?.object ?? null)
+  const hit = raycaster.intersectObjects(inspectable, false).find(({ object }) => {
+    let current = object
+    while (current) {
+      if (!current.visible) return false
+      current = current.parent
+    }
+    return true
+  })?.object ?? null
+
+  updateSelection(hit)
 }
 
 canvas.addEventListener('pointermove', inspectAtEvent)
 canvas.addEventListener('click', inspectAtEvent)
 
-document.querySelector('#scene-summary').textContent = `${data.slabs.length} slabs · ${data.walls.length} wall extrusions · ${data.openings.length} registered openings`
+document.querySelector('#scene-summary').textContent = `${data.slabs.length} slabs · ${data.walls.length} wall extrusions · ${data.openings.length} registered openings · ${data.blockers.filter((item) => item.scope === 'primary').length} primary blockers`
 document.querySelector('#fingerprint').textContent = `GeometryScene fingerprint ${data.fingerprint}`
 const candidateReadout = document.querySelector('#candidate-camera')
 
@@ -291,9 +627,11 @@ function updateCandidateReadout(candidate) {
 }
 
 function setView(name) {
+  kitchenWallSkin.visible = name !== 'truth'
   activeView = name
   const preset = presets[name]
   activeCamera = name === 'truth' ? truthCamera : perspectiveCamera
+  if (name !== 'truth') setPerspectivePresentationReflection(name === 'candidate')
   if (name === 'truth') {
     const presentation = preset.presentationTransform
     world.scale.set(presentation.scale.x, presentation.scale.y, presentation.scale.z)

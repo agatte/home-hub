@@ -6,6 +6,8 @@
  * Numbers for Three.js buffers and camera state.
  */
 
+import { buildBlockingProfiles } from './blocking-profiles.js'
+
 export const INSPECTION_VERTICALS = Object.freeze({
   // Presentation-only review controls. They are deliberately not GeometryScene
   // authority and can be revised after the first visual inspection.
@@ -344,9 +346,7 @@ export function adaptGeometryScene(scene) {
       throw new Error(`Opening ${opening.id} cannot resolve its named host wall/face`)
     }
     const oppositeFace = pairedFace(parentWall, hostFace.id)
-    const footprint = opening.kind === 'window'
-      ? openingFootprint(opening, hostFace, oppositeFace)
-      : null
+    const footprint = openingFootprint(opening, hostFace, oppositeFace)
     const vertical = {
       min: numberToken(opening.vertical.z_min_gu),
       max: numberToken(opening.vertical.z_max_gu),
@@ -363,8 +363,12 @@ export function adaptGeometryScene(scene) {
       // accepted non-degenerate host/opposite faces let the renderer restore
       // only the required sill and lintel solids around that void.
       closureFootprint: footprint,
-      solidRanges: opening.kind === 'window' && footprint
-        ? [{ min: 0, max: vertical.min }, { min: vertical.max, max: null }]
+      solidRanges: footprint
+        ? opening.kind === 'window'
+          ? [{ min: 0, max: vertical.min }, { min: vertical.max, max: null }]
+          : opening.kind === 'door'
+            ? [{ min: vertical.max, max: null }]
+            : []
         : [],
       inspection: {
         renderObjectType: 'registered opening',
@@ -383,6 +387,12 @@ export function adaptGeometryScene(scene) {
       .map((range) => ({ ...range, max: range.max ?? wallTop }))
       .filter((range) => range.max > range.min)
   }
+
+  const objects = scene.inspection_annotations.objects.map((item) => ({
+    ...item,
+    rect: rectangleToWorld(item.rect_gu),
+  }))
+  const blockers = buildBlockingProfiles(objects)
 
   const adapted = {
     fingerprint: scene.fingerprint,
@@ -415,13 +425,13 @@ export function adaptGeometryScene(scene) {
       position: pointToWorld(room.label_gu),
       classification: 'accepted approximate XY label position / provisional debug overlay',
     })),
-    fixtureDebugAids: scene.inspection_annotations.objects
+    fixtureDebugAids: objects
       .filter((item) => ['bath.shower', 'bath.vanity', 'bath.toilet'].includes(item.id))
       .map((item) => ({
         ...item,
-        rect: rectangleToWorld(item.rect_gu),
         classification: 'accepted approximate XY / provisional 3D debug aid',
       })),
+    blockers,
     camera: {
       ...scene.camera.camera,
       legacyComparison: scene.camera.legacy_comparison,

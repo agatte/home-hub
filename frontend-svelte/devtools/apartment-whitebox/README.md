@@ -42,10 +42,31 @@ current accepted semantic authority has no stable west-exterior wall/face pair.
 The selector does not use camera depth, nearest-wall detection, or alter the
 visibility contract. Bedroom Treatment C remains a separate treatment.
 
+## Physical blocking preview
+
+The initial accepted perspective opens with **Primary blockers** on and
+secondary devices, object labels, room labels, fixture debug aids, opening
+labels, and architecture IDs off. The top-down truth view may re-enable room
+and fixture diagnostics; it does not change any GeometryScene coordinate.
+
+Every blocker reads its rectangle from the forwarded accepted object annotation.
+`blocking-profiles.js` is the single inspector-only profile table for its
+recipe, normalized sub-shapes, and provisional z range. It contains no object
+x/y coordinates and does not apply `orientation_deg`: the accepted rectangle
+is already the occupied plan footprint. The inspector always states:
+
+> Object XY accepted / blocker Z + silhouette provisional
+
+Hover or click a blocker to inspect its object ID, accepted source footprint,
+recipe, primitive, and provisional z range. These are visual massing aids, not
+accepted 3D furniture models. `balcony.monstera`, rugs/runners, lamps, Alexa
+nodes, microphones, headphones, plants, and other tiny decor are intentionally
+not modeled in this pass.
+
 ## Readability overlays
 
-Room labels default on and are forwarded from the accepted `geometry_v1.json`
-room label positions. Fixture debug aids default on for the accepted baseline
+Room labels are forwarded from the accepted `geometry_v1.json` room label
+positions. Fixture debug aids are available for the accepted baseline
 `bath.shower`, `bath.vanity`, and `bath.toilet` placements only. They are
 explicitly marked accepted approximate XY / provisional 3D debug aids, never
 architectural geometry.
