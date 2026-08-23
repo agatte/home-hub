@@ -49,20 +49,16 @@ secondary devices, object labels, room labels, fixture debug aids, opening
 labels, and architecture IDs off. The top-down truth view may re-enable room
 and fixture diagnostics; it does not change any GeometryScene coordinate.
 
-Every blocker reads its rectangle from the forwarded accepted object annotation.
-`blocking-profiles.js` is the single inspector-only profile table for its
-recipe, normalized sub-shapes, and provisional z range. It contains no object
-x/y coordinates and does not apply `orientation_deg`: the accepted rectangle
-is already the occupied plan footprint. The inspector always states:
+Every blocker retains its forwarded accepted object annotation as the source
+footprint. `blocking-profiles.js` may also provide a measured inspector-only
+render footprint where visual review established a more accurate occupied
+footprint. These overrides do not mutate GeometryScene authority. The inspector always states:
 
 > Object XY accepted / blocker Z + silhouette provisional
 
 Hover or click a blocker to inspect its object ID, accepted source footprint,
 recipe, primitive, and provisional z range. These are visual massing aids, not
-accepted 3D furniture models. `balcony.monstera`, rugs/runners, lamps, Alexa
-nodes, microphones, headphones, plants, and other tiny decor are intentionally
-not modeled in this pass.
-
+accepted 3D furniture models. `balcony.monstera`, lamps, Alexa nodes, microphones, headphones, and other tiny decor are intentionally not modeled as physical blockers in this pass. The living rug and two living plants are presentation-only visuals and do not participate in physical blocking.
 ## Readability overlays
 
 Room labels are forwarded from the accepted `geometry_v1.json` room label

@@ -56,9 +56,6 @@ for (const opening of data.openings) {
 
 data.bounds.maxZ = inspectionCeilingTopZ
 
-// Inspection-only override so low bedroom furniture remains visible behind the
-// accepted north cutaway. Source Visibility v2 authority remains unchanged.
-const inspectionCutawayLipGu = data.presentation.cutaway.lipHeightGu
 const canvas = document.querySelector('#whitebox-canvas')
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -165,10 +162,11 @@ function blockerInspection(blocker, primitive) {
     renderObjectType: blocker.renderObjectType ?? 'provisional physical blocker',
     objectId: blocker.id,
     acceptedSourceFootprint: `${blocker.id} ${JSON.stringify(blocker.sourceFootprint)}`,
+    renderedFootprint: JSON.stringify(blocker.renderFootprint ?? blocker.sourceFootprint),
     blockerRecipe: blocker.recipe,
     blockerPrimitive: primitive.name,
     provisionalZRangeGu: `${primitive.zMin}–${primitive.zMax}`,
-    xyStatus: 'accepted source footprint',
+    xyStatus: blocker.xy_source,
     zStatus: 'provisional inspection',
     silhouetteStatus: 'provisional inspection',
   }
@@ -518,7 +516,7 @@ const plantVisuals = [
 
 for (const plant of plantVisuals) {
   plant.primitives.forEach((primitive, index) => {
-    const material = index === 0 ? plantStandMaterial : index === 1 ? plantPotMaterial : plantFoliageMaterial
+    const material = primitive.name === 'pot' ? plantPotMaterial : primitive.name.startsWith('foliage') ? plantFoliageMaterial : plantStandMaterial
     addBlockerPrimitive(overlayGroups.plants, plant, primitive, material)
   })
 }

@@ -37,7 +37,9 @@ describe('Apartment Canvas whitebox adapter', () => {
       const source = scene.inspection_annotations.objects.find((item) => item.id === blocker.id)
       expect(source).toBeDefined()
       expect(blocker.sourceFootprint).toEqual(Object.fromEntries(Object.entries(source.rect_gu).map(([key, value]) => [key, parseRational(value)])))
-      expect(blocker.xy_source).toBe('accepted_object_footprint')
+      expect(blocker.xy_source).toBe(
+  blocker.renderFootprint ? 'measured_inspection_override' : 'accepted_object_footprint',
+)
       expect(blocker.z_status).toBe('provisional_inspection')
       expect(blocker.silhouette_status).toBe('provisional_inspection')
     }

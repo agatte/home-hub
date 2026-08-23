@@ -25,7 +25,6 @@ const ellipse = (name, x, y, w, h, zMin, zMax) => ({ kind: 'ellipse', name, x, y
 const frame = (name, zMin, zMax, thickness = 0.035) => ({ kind: 'open_frame', name, zMin, zMax, thickness })
 
 const shared = {
-  xy_source: 'accepted_object_footprint',
   z_status: 'provisional_inspection',
   silhouette_status: 'provisional_inspection',
 }
@@ -119,6 +118,7 @@ export function buildBlockingProfiles(objects) {
       ...profile,
       id,
       scope: PRIMARY_IDS.includes(id) ? 'primary' : 'secondary',
+      xy_source: profile.renderFootprint ? 'measured_inspection_override' : 'accepted_object_footprint',
       sourceFootprint: source.rect,
       sourceLabel: source.label,
       source: source.source,
