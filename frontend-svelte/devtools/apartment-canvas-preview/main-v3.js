@@ -5,8 +5,9 @@ import { addApartmentFurnitureIdentity } from './furniture-v1.js'
 
 // Transitional preview compositor: capture the shell's accepted world group,
 // then layer production-intent furniture into the exact same Three.js scene.
-// This keeps the accepted shell implementation frozen while #182 is under
-// visual review; the layers can be consolidated after acceptance.
+// Keep this bootstrap deliberately boring: the project build target does not
+// allow top-level await, and a furniture-layer failure must not silently blank
+// the already-accepted architectural shell.
 let apartmentWorld = null
 const originalAdd = THREE.Object3D.prototype.add
 THREE.Object3D.prototype.add = function (...objects) {
@@ -17,24 +18,37 @@ THREE.Object3D.prototype.add = function (...objects) {
   return result
 }
 
-try {
-  await import('./main-v2.js')
-} finally {
+function restoreObjectAdd() {
   THREE.Object3D.prototype.add = originalAdd
 }
 
-if (!apartmentWorld) throw new Error('Apartment Canvas furniture pass could not capture the accepted shell world')
+function patchPreviewTitle(text) {
+  const subtitle = document.querySelector('.preview-title small')
+  if (subtitle) subtitle.textContent = text
+}
 
-const data = adaptGeometryScene(geometryScene)
-addApartmentFurnitureIdentity(apartmentWorld, data)
-
-document.querySelector('.preview-title small').textContent = 'Furniture identity v1 · static production preview'
-
-const patchDebugTitle = () => {
+function patchDebugTitle() {
   const panel = document.querySelector('#debug-panel')
   if (panel && !panel.hidden && panel.textContent) {
     panel.textContent = panel.textContent.replace('architectural shell v2', 'furniture identity v1')
   }
 }
-patchDebugTitle()
-window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))
+
+import('./main-v2.js')
+  .then(() => {
+    restoreObjectAdd()
+    if (!apartmentWorld) {
+      throw new Error('Apartment Canvas furniture pass could not capture the accepted shell world')
+    }
+
+    const data = adaptGeometryScene(geometryScene)
+    addApartmentFurnitureIdentity(apartmentWorld, data)
+    patchPreviewTitle('Furniture identity v1 · static production preview')
+    patchDebugTitle()
+    window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))
+  })
+  .catch((error) => {
+    restoreObjectAdd()
+    console.error('Apartment Canvas furniture preview failed', error)
+    patchPreviewTitle(`Furniture preview error · ${error.message}`)
+  })
