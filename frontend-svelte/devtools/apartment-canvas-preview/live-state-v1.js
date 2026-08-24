@@ -6,6 +6,7 @@ import { parseRational } from '../apartment-whitebox/adapter.js'
 // the synthetic review harness and are NOT production Hue colors/brightness.
 const PREVIEW_LAMP_COLOR = 0xffd6a3
 const PREVIEW_MONITOR_COLOR = 0x9fc6d2
+const PREVIEW_TV_COLOR = 0xb7c9d8
 
 const materials = Object.freeze({
   lampSource: new THREE.MeshStandardMaterial({
@@ -26,6 +27,13 @@ const materials = Object.freeze({
     emissive: PREVIEW_MONITOR_COLOR,
     emissiveIntensity: 1.75,
     roughness: 0.34,
+    side: THREE.DoubleSide,
+  }),
+  tvScreen: new THREE.MeshStandardMaterial({
+    color: 0x1b2024,
+    emissive: PREVIEW_TV_COLOR,
+    emissiveIntensity: 1.35,
+    roughness: 0.3,
     side: THREE.DoubleSide,
   }),
 })
@@ -139,6 +147,33 @@ function addMonitorState(group, data, enabled) {
   group.add(glow)
 }
 
+function addTvState(group, data, enabled) {
+  if (!enabled) return
+  const f = blockerFootprint(data, 'living.tv')
+  if (!f) return
+
+  // The accepted TV blocker is a thin x-oriented panel spanning the y axis.
+  // Render an emissive face directly over that measured display envelope.
+  const screenHeight = 82
+  const screenWidth = f.h * 0.90
+  const geometry = new THREE.PlaneGeometry(screenHeight, screenWidth)
+  geometry.rotateY(Math.PI / 2)
+
+  const screen = new THREE.Mesh(geometry, materials.tvScreen)
+  screen.position.set(
+    f.x + f.w / 2 + 0.6,
+    f.y + f.h / 2,
+    184,
+  )
+  group.add(screen)
+
+  // Preview-only screen spill toward the seating area. This is intentionally
+  // weaker than a room light and is not a production display/Hue policy.
+  const glow = new THREE.PointLight(PREVIEW_TV_COLOR, 520, 420, 1.9)
+  glow.position.set(f.x + f.w / 2 + 26, f.y + f.h / 2, 178)
+  group.add(glow)
+}
+
 export function addApartmentLiveStateV1(world, data, state) {
   const group = new THREE.Group()
   group.name = `apartment-live-state:${state.id}`
@@ -146,6 +181,7 @@ export function addApartmentLiveStateV1(world, data, state) {
   addLampState(group, 'bedroom.lamp_l2', state.lamps.bedroomL2)
   addLampState(group, 'bedroom.lamp_l5', state.lamps.bedroomL5)
   addMonitorState(group, data, state.displays.monitor)
+  addTvState(group, data, state.displays.tv)
 
   world.add(group)
   return group
