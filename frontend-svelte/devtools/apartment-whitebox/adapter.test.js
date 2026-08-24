@@ -15,12 +15,80 @@ import {
   topDownCameraBasis,
   topDownTruthView,
 } from './adapter.js'
+import { blockingProfiles, primaryBlockerIds, secondaryBlockerIds } from './blocking-profiles.js'
 
 const data = adaptGeometryScene(scene)
 const toolDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryDirectory = path.resolve(toolDirectory, '../../..')
 
 describe('Apartment Canvas whitebox adapter', () => {
+  it('keeps the current generated GeometryScene fingerprint unchanged for inspector-only blockers', () => {
+    expect(scene.fingerprint).toBe('ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43')
+  })
+
+  it('maps every requested primary blocker to one forwarded accepted object footprint', () => {
+    expect(primaryBlockerIds).toEqual([
+      'bedroom.bed', 'bedroom.desk_main', 'bedroom.desk_return', 'bedroom.chair',
+      'living.couch', 'living.coffee_table', 'living.white_chair', 'living.tv_stand', 'living.end_table_cluster',
+      'kitchen.island', 'kitchen.stool_1', 'kitchen.stool_2', 'kitchen.cabinet_run', 'kitchen.stove', 'kitchen.fridge', 'kitchen.pantry',
+      'bath.vanity', 'bath.toilet', 'bath.shower', 'service.laundry', 'service.water_heater', 'entry.dresser', 'closet.dresser',
+    ])
+    for (const blocker of data.blockers.filter((item) => item.scope === 'primary')) {
+      const source = scene.inspection_annotations.objects.find((item) => item.id === blocker.id)
+      expect(source).toBeDefined()
+      expect(blocker.sourceFootprint).toEqual(Object.fromEntries(Object.entries(source.rect_gu).map(([key, value]) => [key, parseRational(value)])))
+      expect(blocker.xy_source).toBe(
+  blocker.renderFootprint ? 'measured_inspection_override' : 'accepted_object_footprint',
+)
+      expect(blocker.z_status).toBe('provisional_inspection')
+      expect(blocker.silhouette_status).toBe('provisional_inspection')
+    }
+  })
+
+  it('keeps every generated blocker primitive within its accepted source rectangle', () => {
+    for (const blocker of data.blockers) {
+      for (const primitive of blocker.primitives) {
+        if (primitive.kind === 'open_frame') {
+          expect(primitive.thickness).toBeGreaterThan(0)
+          expect(primitive.thickness).toBeLessThanOrEqual(1)
+          continue
+        }
+        expect(primitive.x).toBeGreaterThanOrEqual(0)
+        expect(primitive.y).toBeGreaterThanOrEqual(0)
+        expect(primitive.x + primitive.w).toBeLessThanOrEqual(1)
+        expect(primitive.y + primitive.h).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
+  it('excludes balcony foliage, surface treatments, and tiny decor from primary blocking', () => {
+    expect(primaryBlockerIds).not.toEqual(expect.arrayContaining([
+      'balcony.monstera', 'living.rug', 'kitchen.runner', 'bedroom.lamp_1', 'bedroom.lamp_2', 'living.lamp',
+    ]))
+    expect(Object.keys(blockingProfiles)).not.toContain('balcony.monstera')
+  })
+
+  it('keeps secondary device semantics provisional but spatially distinct', () => {
+    expect(secondaryBlockerIds).toEqual([
+      'bedroom.monitor', 'bedroom.pc', 'bedroom.projector', 'living.tv', 'living.subwoofer', 'kitchen.microwave',
+    ])
+    const deskTop = Math.max(...blockingProfiles['bedroom.desk_main'].primitives.map((primitive) => primitive.zMax))
+    const pcTop = Math.max(...blockingProfiles['bedroom.pc'].primitives.map((primitive) => primitive.zMax))
+    const stoveTop = Math.max(...blockingProfiles['kitchen.stove'].primitives.map((primitive) => primitive.zMax))
+    const microwaveBottom = Math.min(...blockingProfiles['kitchen.microwave'].primitives.map((primitive) => primitive.zMin))
+    expect(pcTop).toBeLessThan(deskTop)
+    expect(microwaveBottom).toBeGreaterThan(stoveTop)
+  })
+
+  it('uses the measured shower enclosure and stacked GE laundry arrangement', () => {
+    const shower = blockingProfiles['bath.shower']
+    expect(shower.recipe).toBe('measured_48_5x35x73_shower_fixed_panel_plus_door')
+    expect(shower.primitives.some((primitive) => primitive.kind === 'open_frame')).toBe(true)
+    expect(shower.primitives.some((primitive) => primitive.kind === 'box' && primitive.zMax >= 247)).toBe(true)
+    expect(blockingProfiles['service.laundry'].arrangement).toBe('dryer_above_washer')
+    expect(blockingProfiles['entry.dresser'].semantic_role).toBe('fixed_built_in_architecture')
+    expect(blockingProfiles['entry.dresser'].legacy_source_id).toBe(true)
+  })
   it('converts every GeometryScene slab and wall extrusion into renderable geometry', () => {
     expect(data.slabs).toHaveLength(scene.floor_slabs.length)
     expect(data.walls).toHaveLength(scene.wall_extrusions.length)
@@ -38,9 +106,13 @@ describe('Apartment Canvas whitebox adapter', () => {
     expect(data.openings.filter((opening) => opening.kind === 'window').every(
       (opening) => opening.closureFootprint && opening.solidRanges.length === 2,
     )).toBe(true)
-    expect(data.openings.filter((opening) => opening.kind === 'door').every(
-      (opening) => opening.closureFootprint === null && opening.solidRanges.length === 0
-        && !Object.hasOwn(opening, 'headerSurface'),
+    const doors = data.openings.filter((opening) => opening.kind === 'door')
+    expect(doors.every((opening) => opening.closureFootprint
+      ? opening.solidRanges.length === 1 && opening.solidRanges[0].min === opening.void.max
+      : opening.solidRanges.length === 0,
+    )).toBe(true)
+    expect(doors.every(
+      (opening) => !Object.hasOwn(opening, 'headerSurface'),
     )).toBe(true)
   })
 
@@ -183,10 +255,12 @@ describe('Apartment Canvas whitebox adapter', () => {
   })
 
   it('treats overlay visibility as presentation-only and leaves adapted XY immutable', () => {
-    const before = JSON.stringify({ walls: data.walls.map((wall) => wall.outer), openings: data.openings.map((opening) => opening.segment) })
-    const overlayVisibility = { rooms: false, fixtures: false, openings: true, architecture: true }
-    expect(overlayVisibility).toEqual({ rooms: false, fixtures: false, openings: true, architecture: true })
-    expect(JSON.stringify({ walls: data.walls.map((wall) => wall.outer), openings: data.openings.map((opening) => opening.segment) })).toBe(before)
+    const before = JSON.stringify(scene)
+    const overlayVisibility = { rooms: false, fixtures: false, primaryBlockers: true, secondaryBlockers: false, objectLabels: false, openings: true, architecture: true }
+    overlayVisibility.primaryBlockers = false
+    overlayVisibility.secondaryBlockers = true
+    expect(overlayVisibility).toMatchObject({ primaryBlockers: false, secondaryBlockers: true })
+    expect(JSON.stringify(scene)).toBe(before)
   })
 
   it('binds accepted north cutaway and Bedroom C only through their named wall/face selectors', () => {

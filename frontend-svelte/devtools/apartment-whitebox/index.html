@@ -25,8 +25,11 @@
         </label>
         <section id="cutaway-status" class="selection cutaway-status" aria-live="polite"></section>
         <div class="overlay-controls" aria-label="Inspection overlays">
-          <label><input id="toggle-room-labels" type="checkbox" checked /> Room labels</label>
-          <label><input id="toggle-fixtures" type="checkbox" checked /> Fixture debug aids</label>
+          <label><input id="toggle-primary-blockers" type="checkbox" checked /> Primary blockers</label>
+          <label><input id="toggle-secondary-blockers" type="checkbox" /> Secondary device blockers</label>
+          <label><input id="toggle-object-labels" type="checkbox" /> Object labels</label>
+          <label><input id="toggle-room-labels" type="checkbox" /> Room labels</label>
+          <label><input id="toggle-fixtures" type="checkbox" /> Fixture debug aids</label>
           <label><input id="toggle-opening-labels" type="checkbox" /> Opening labels</label>
           <label><input id="toggle-architecture-ids" type="checkbox" /> Architecture IDs</label>
         </div>
@@ -36,9 +39,10 @@
           <span>B · accepted approximate room/object XY</span>
           <span>C · accepted Camera v2 family + north selector set</span>
           <span>P · provisional derived eye/distance, lip, Bedroom C parameters, debug extrusion</span>
+          <span>Object XY accepted / blocker Z + silhouette provisional</span>
           <span>H · historical/debug legacy camera v1, Cutaway B, and no-cutaway comparison</span>
         </section>
-        <section id="selection" class="selection" aria-live="polite">Hover or click a wall/opening for its source metadata.</section>
+        <section id="selection" class="selection" aria-live="polite">Hover or click a wall, opening, or blocker for source metadata.</section>
         <div class="view-controls" aria-label="Visual debug views">
           <button id="perspective-candidate" data-view="candidate" type="button">Accepted perspective</button>
           <button id="top-down-truth" data-view="truth" type="button">Top-down truth view</button>
