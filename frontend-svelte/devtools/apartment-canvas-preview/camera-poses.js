@@ -25,12 +25,13 @@ export const CONTEXT_CAMERA_POSES = Object.freeze({
     strategy: 'tv-couch-axis',
     tvId: 'living.tv',
     couchId: 'living.couch',
-    // Preview-only composition distances. The XY direction comes from the
-    // accepted TV/couch footprints; these values control framing only.
-    eyeBeyondCouchGu: 230,
-    targetTowardCouchGu: 135,
-    eyeZGu: 500,
-    targetZGu: 145,
+    // Preview-only composition distances. XY direction comes from the accepted
+    // TV/couch footprints. Keep enough distance and height to preserve the
+    // living-room relationship instead of collapsing into a TV close-up.
+    eyeBeyondCouchGu: 760,
+    targetTowardCouchGu: 230,
+    eyeZGu: 690,
+    targetZGu: 132,
   }),
 })
 
