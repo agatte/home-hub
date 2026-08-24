@@ -4,11 +4,12 @@ import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
 import { addApartmentStaticPolishV1 } from './polish-v1.js'
 import { resolveSyntheticPreviewState } from './live-state.js'
 import { addApartmentLiveStateV1 } from './live-state-v1.js'
+import { installContextCameraMotionPreview } from './camera-motion-v1.js'
 
 // Transitional preview compositor: capture the accepted shell world, then layer
-// Static Apartment v1 and the synthetic review-only live-state group into the
-// exact same Three.js scene. A live-state failure must not silently blank the
-// accepted architectural baseline.
+// Static Apartment v1, synthetic review-only live state, and a bounded
+// contextual camera transition into the exact same Three.js scene. A preview
+// layer failure must not silently blank the accepted architectural baseline.
 let apartmentWorld = null
 const originalAdd = THREE.Object3D.prototype.add
 THREE.Object3D.prototype.add = function (...objects) {
@@ -38,6 +39,7 @@ function patchDebugTitle(state) {
 }
 
 const previewState = resolveSyntheticPreviewState(window.location.search)
+const restoreCameraMotion = installContextCameraMotionPreview(previewState.id, window.location.search)
 
 import('./main-v2.js')
   .then(() => {
@@ -54,6 +56,7 @@ import('./main-v2.js')
   })
   .catch((error) => {
     restoreObjectAdd()
+    restoreCameraMotion()
     console.error('Apartment Canvas live-state preview failed', error)
     patchPreviewTitle(`Live-state preview error · ${error.message}`)
   })
