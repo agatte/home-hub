@@ -2,6 +2,7 @@ export const CONTEXT_CAMERA_POSES = Object.freeze({
   rest: Object.freeze({
     id: 'rest',
     label: 'Whole apartment',
+    strategy: 'camera-policy',
     yawDeltaDegrees: 0,
     pitchDeltaDegrees: 0,
     targetOffsetGu: Object.freeze([0, 0, 0]),
@@ -10,6 +11,7 @@ export const CONTEXT_CAMERA_POSES = Object.freeze({
   desk: Object.freeze({
     id: 'desk',
     label: 'Desk focus',
+    strategy: 'camera-policy',
     // Keep the accepted bedroom-side family; just bias the composition toward
     // the desk zone and move in slightly.
     yawDeltaDegrees: 5,
@@ -20,13 +22,15 @@ export const CONTEXT_CAMERA_POSES = Object.freeze({
   living: Object.freeze({
     id: 'living',
     label: 'Living media focus',
-    // Cross to the TV-facing side of the accepted hero family so the physical
-    // display face becomes readable. This is a bounded contextual pose, not a
-    // new geometry/camera authority.
-    yawDeltaDegrees: -46,
-    pitchDeltaDegrees: -2,
-    targetOffsetGu: Object.freeze([125, -165, 8]),
-    distanceScale: 0.92,
+    strategy: 'tv-couch-axis',
+    tvId: 'living.tv',
+    couchId: 'living.couch',
+    // Preview-only composition distances. The XY direction comes from the
+    // accepted TV/couch footprints; these values control framing only.
+    eyeBeyondCouchGu: 230,
+    targetTowardCouchGu: 135,
+    eyeZGu: 500,
+    targetZGu: 145,
   }),
 })
 
@@ -37,6 +41,9 @@ export function resolveContextCameraPose(stateId = DEFAULT_CONTEXT_CAMERA_POSE) 
 }
 
 export function cameraPolicyForPose(baseCameraPolicy, pose) {
+  if (pose.strategy !== 'camera-policy') {
+    throw new TypeError(`Camera pose ${pose.id} does not derive from Camera v2 policy`)
+  }
   const [baseX, baseY, baseZ] = baseCameraPolicy.target_gu.map(Number)
   const [dx, dy, dz] = pose.targetOffsetGu
   return {
