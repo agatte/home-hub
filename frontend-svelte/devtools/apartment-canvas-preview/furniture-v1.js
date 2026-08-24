@@ -241,13 +241,21 @@ function addKitchenSinkCue(world, island) {
 export function addApartmentFurnitureIdentity(world, data) {
   // Approved bedroom interior faces from the deterministic top-down geometry.
   // This is a presentation-only surface and does not alter the underlying slab.
-  addSoftFloor(world, { x: 13.83, y: 65.91, w: 405.21, h: 464.60 }, materials.carpet)
+  // Overlap beneath the room walls by a few GU so the apartment hardwood
+  // cannot peek through as a false border along the bedroom edges.
+  addSoftFloor(world, { x: 9.8, y: 61.8, w: 413.5, h: 472.8 }, materials.carpet)
 
   // Low-detail floor textiles: identity and room zoning, not texture recreation.
   addSoftFloor(world, { x: 580.00, y: 234.34, w: 244.08, h: 366.12 }, materials.rug, 0.72, 1.22)
   addSoftFloor(world, { x: 790.07, y: 840.52, w: 65.09, h: 280.72 }, materials.runner, 0.72, 1.22)
 
   for (const blocker of data.blockers) {
+    // Bedroom workstation identity is deliberately owned by bedroom-v1.js.
+    // The accepted blocker footprints remain data anchors, but rendering their
+    // generic primitives here would leave duplicate desk, chair, and monitor
+    // geometry underneath the faithful replacements.
+    if (['bedroom.bed', 'bedroom.desk_main', 'bedroom.desk_return', 'bedroom.chair', 'bedroom.monitor', 'bedroom.projector'].includes(blocker.id)) continue
+
     // End table becomes an open cluster rather than a solid whitebox mass.
     if (blocker.id === 'living.end_table_cluster') {
       const f = blocker.renderFootprint ?? blocker.sourceFootprint

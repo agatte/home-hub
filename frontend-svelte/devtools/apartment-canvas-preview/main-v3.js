@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import geometryScene from '../apartment-whitebox/generated/geometry-scene.json'
 import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
 import { addApartmentStaticPolishV1 } from './polish-v1.js'
+import { addBedroomDesignPassV1 } from './bedroom-v1.js'
 
 // Transitional preview compositor: capture the shell's accepted world group,
 // then layer production-intent furniture/details into the exact same Three.js
@@ -43,7 +44,8 @@ import('./main-v2.js')
 
     const data = adaptGeometryScene(geometryScene)
     addApartmentStaticPolishV1(apartmentWorld, data)
-    patchPreviewTitle('Static apartment polish v1 · production preview')
+    addBedroomDesignPassV1(apartmentWorld, data)
+    patchPreviewTitle('Bedroom workstation fidelity pass · static production preview')
     patchDebugTitle()
     window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))
   })

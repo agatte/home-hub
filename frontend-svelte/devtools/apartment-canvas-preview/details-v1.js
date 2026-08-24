@@ -237,12 +237,9 @@ function addMediaContrast(world, data) {
 
 export function addApartmentDetailsV1(world, data) {
   addApartmentFurnitureIdentityV2(world, data)
-  addDeskEdgeIdentity(world, data)
-  addBedroomLamp(world, 'bedroom.lamp_l2', 'geometric')
-  addBedroomLamp(world, 'bedroom.lamp_l5', 'clear')
-  addDeskMicrophone(world)
-  addDeskHeadphones(world)
-  addDeskAlexa(world)
+  // The workstation's desk edge, lamps, and microphone are faithfully owned
+  // by bedroom-v1.js. Its headphones and Alexa are fixed world-space groups,
+  // so do not retain the old generic ring or loose cylinder underneath.
   addSnakePlant(world, data)
   addZZPlant(world, data)
   addMediaContrast(world, data)

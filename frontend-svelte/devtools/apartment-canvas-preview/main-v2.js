@@ -9,6 +9,12 @@ import {
 import './styles.css'
 
 const EXPECTED_FINGERPRINT = 'ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43'
+// Camera v2 remains the authority for the viewpoint family, target, 45-degree
+// horizontal FOV, reflection, and responsive corner-containment solve. This is
+// the static preview's only presentation allowance: a smaller, still-positive
+// desktop breathing room so the contained apartment reads as the hero rather
+// than a distant object. It does not mutate the accepted policy artifact.
+const PRESENTATION_FIT_MARGIN = 1.06
 const debugEnabled = new URLSearchParams(window.location.search).has('debug')
 const data = adaptGeometryScene(geometryScene)
 
@@ -52,7 +58,7 @@ data.bounds.maxZ = ceilingTopZ
 const canvas = document.querySelector('#apartment-canvas')
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-renderer.setClearColor(0x0c1110, 1)
+renderer.setClearColor(0x111816, 1)
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 1.32
@@ -60,7 +66,7 @@ renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x0c1110)
+scene.background = new THREE.Color(0x111816)
 const world = new THREE.Group()
 scene.add(world)
 
@@ -100,7 +106,7 @@ scene.add(rim)
 
 const stage = new THREE.Mesh(
   new THREE.PlaneGeometry(2400, 2200),
-  new THREE.MeshStandardMaterial({ color: 0x181e1c, roughness: 1, metalness: 0 }),
+  new THREE.MeshStandardMaterial({ color: 0x26302c, roughness: 0.98, metalness: 0 }),
 )
 stage.position.set(500, 640, -18)
 stage.receiveShadow = true
@@ -357,6 +363,16 @@ function applyAcceptedProjectionReflection() {
   camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert()
 }
 
+function presentationCameraPolicy(cameraPolicy) {
+  return {
+    ...cameraPolicy,
+    fit_policy: {
+      ...cameraPolicy.fit_policy,
+      margin: PRESENTATION_FIT_MARGIN,
+    },
+  }
+}
+
 const debugPanel = document.querySelector('#debug-panel')
 if (debugEnabled) debugPanel.hidden = false
 
@@ -367,7 +383,7 @@ function resize() {
   renderer.setSize(width, height, false)
   camera.aspect = aspect
   camera.fov = horizontalFovToVertical(data.camera.horizontal_fov_degrees, aspect)
-  const candidate = perspectiveCandidate(data.bounds, aspect, data.camera)
+  const candidate = perspectiveCandidate(data.bounds, aspect, presentationCameraPolicy(data.camera))
   camera.position.set(candidate.eye.x, candidate.eye.y, candidate.eye.z)
   controls.target.set(candidate.target.x, candidate.target.y, candidate.target.z)
   camera.lookAt(controls.target)

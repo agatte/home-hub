@@ -297,10 +297,11 @@ function addServiceIdentity(world, data) {
 
 export function addApartmentFurnitureIdentityV2(world, data) {
   addApartmentFurnitureIdentity(world, data)
-  addBedIdentity(world, data)
+  // bedroom-v1.js owns the Braya frame and bedding replacement.
   addCouchIdentity(world, data)
   addWhiteChairIdentity(world, data)
-  addDeskIdentity(world, data)
+  // bedroom-v1.js owns the complete Burgener workstation replacement. Keep
+  // this broader apartment layer from recreating its old generic top/monitor.
   addCoffeeTableIdentity(world, data)
   addMediaIdentity(world, data)
   addKitchenIdentity(world, data)
