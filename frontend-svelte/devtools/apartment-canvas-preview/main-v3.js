@@ -1,12 +1,12 @@
 import * as THREE from 'three'
 import geometryScene from '../apartment-whitebox/generated/geometry-scene.json'
 import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
-import { addApartmentFurnitureIdentityV2 } from './furniture-v2.js'
+import { addApartmentDetailsV1 } from './details-v1.js'
 
 // Transitional preview compositor: capture the shell's accepted world group,
-// then layer production-intent furniture into the exact same Three.js scene.
-// Keep this bootstrap deliberately boring: the project build target does not
-// allow top-level await, and a furniture-layer failure must not silently blank
+// then layer production-intent furniture/details into the exact same Three.js
+// scene. Keep this bootstrap deliberately boring: the project build target does
+// not allow top-level await, and a detail-layer failure must not silently blank
 // the already-accepted architectural shell.
 let apartmentWorld = null
 const originalAdd = THREE.Object3D.prototype.add
@@ -30,7 +30,7 @@ function patchPreviewTitle(text) {
 function patchDebugTitle() {
   const panel = document.querySelector('#debug-panel')
   if (panel && !panel.hidden && panel.textContent) {
-    panel.textContent = panel.textContent.replace('architectural shell v2', 'furniture identity v2')
+    panel.textContent = panel.textContent.replace('architectural shell v2', 'apartment identity details v1')
   }
 }
 
@@ -38,17 +38,17 @@ import('./main-v2.js')
   .then(() => {
     restoreObjectAdd()
     if (!apartmentWorld) {
-      throw new Error('Apartment Canvas furniture pass could not capture the accepted shell world')
+      throw new Error('Apartment Canvas detail pass could not capture the accepted shell world')
     }
 
     const data = adaptGeometryScene(geometryScene)
-    addApartmentFurnitureIdentityV2(apartmentWorld, data)
-    patchPreviewTitle('Furniture identity v2 · static production preview')
+    addApartmentDetailsV1(apartmentWorld, data)
+    patchPreviewTitle('Apartment identity details v1 · static production preview')
     patchDebugTitle()
     window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))
   })
   .catch((error) => {
     restoreObjectAdd()
-    console.error('Apartment Canvas furniture preview failed', error)
-    patchPreviewTitle(`Furniture preview error · ${error.message}`)
+    console.error('Apartment Canvas detail preview failed', error)
+    patchPreviewTitle(`Apartment detail preview error · ${error.message}`)
   })
