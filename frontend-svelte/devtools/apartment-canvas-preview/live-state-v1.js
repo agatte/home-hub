@@ -30,10 +30,10 @@ const materials = Object.freeze({
     side: THREE.DoubleSide,
   }),
   tvScreen: new THREE.MeshStandardMaterial({
-    color: 0x1b2024,
+    color: 0x536a73,
     emissive: PREVIEW_TV_COLOR,
-    emissiveIntensity: 1.35,
-    roughness: 0.3,
+    emissiveIntensity: 2.25,
+    roughness: 0.24,
     side: THREE.DoubleSide,
   }),
 })
@@ -49,13 +49,13 @@ function blockerFootprint(data, id) {
   return blocker ? blocker.renderFootprint ?? blocker.sourceFootprint : null
 }
 
-function softPoolMaterial(opacity) {
+function softPoolMaterial(color, opacity) {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     uniforms: {
-      poolColor: { value: new THREE.Color(PREVIEW_LAMP_COLOR) },
+      poolColor: { value: new THREE.Color(color) },
       poolOpacity: { value: opacity },
     },
     vertexShader: `
@@ -78,10 +78,10 @@ function softPoolMaterial(opacity) {
   })
 }
 
-function addSoftPool(group, x, y, z, width, height, opacity) {
+function addSoftPool(group, x, y, z, width, height, color, opacity) {
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(width, height),
-    softPoolMaterial(opacity),
+    softPoolMaterial(color, opacity),
   )
   mesh.position.set(x, y, z)
   group.add(mesh)
@@ -120,8 +120,8 @@ function addLampState(group, id, enabled) {
 
   // Soft pools ensure the local physical consequence survives the neutral
   // studio rig at the accepted hero camera without painting the whole room.
-  addSoftPool(group, cx, cy, 3.2, 205, 175, 0.10)
-  addSoftPool(group, cx, cy, 104.7, 92, 78, 0.20)
+  addSoftPool(group, cx, cy, 3.2, 205, 175, PREVIEW_LAMP_COLOR, 0.10)
+  addSoftPool(group, cx, cy, 104.7, 92, 78, PREVIEW_LAMP_COLOR, 0.20)
 }
 
 function addMonitorState(group, data, enabled) {
@@ -153,25 +153,28 @@ function addTvState(group, data, enabled) {
   if (!f) return
 
   // The accepted TV blocker is a thin x-oriented panel spanning the y axis.
-  // Render an emissive face directly over that measured display envelope.
+  // Render an emissive face just proud of that measured display envelope.
   const screenHeight = 82
   const screenWidth = f.h * 0.90
   const geometry = new THREE.PlaneGeometry(screenHeight, screenWidth)
   geometry.rotateY(Math.PI / 2)
 
   const screen = new THREE.Mesh(geometry, materials.tvScreen)
-  screen.position.set(
-    f.x + f.w / 2 + 0.6,
-    f.y + f.h / 2,
-    184,
-  )
+  const screenX = f.x + f.w / 2 + 0.9
+  const screenY = f.y + f.h / 2
+  const screenZ = 184
+  screen.position.set(screenX, screenY, screenZ)
   group.add(screen)
 
-  // Preview-only screen spill toward the seating area. This is intentionally
-  // weaker than a room light and is not a production display/Hue policy.
-  const glow = new THREE.PointLight(PREVIEW_TV_COLOR, 520, 420, 1.9)
-  glow.position.set(f.x + f.w / 2 + 26, f.y + f.h / 2, 178)
+  // TV light should read as a screen affecting the seating zone, not as a
+  // substitute room lamp. Keep the source cool, directional-in-feel, and local.
+  const glow = new THREE.PointLight(PREVIEW_TV_COLOR, 1450, 470, 1.85)
+  glow.position.set(screenX + 36, screenY, screenZ - 4)
   group.add(glow)
+
+  // A broad, very low-opacity pool makes the emitted consequence survive the
+  // neutral studio rig at the fixed hero camera without painting the room blue.
+  addSoftPool(group, 676, 392, 3.1, 355, 265, PREVIEW_TV_COLOR, 0.07)
 }
 
 export function addApartmentLiveStateV1(world, data, state) {
