@@ -3,9 +3,9 @@ import geometryScene from '../apartment-whitebox/generated/geometry-scene.json'
 import { adaptGeometryScene, perspectiveCandidate } from '../apartment-whitebox/adapter.js'
 import { cameraPolicyForPose, resolveContextCameraPose } from './camera-poses.js'
 
-const DURATION_MS = 1250
-const HERO_HOLD_MS = 800
-const ARC_HEIGHT_GU = 12
+const DURATION_MS = 2200
+const HERO_HOLD_MS = 900
+const ARC_HEIGHT_GU = 18
 
 function ease(value) {
   const t = THREE.MathUtils.clamp(value, 0, 1)
