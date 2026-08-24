@@ -4,7 +4,7 @@ import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
 import { addApartmentStaticPolishV1 } from './polish-v1.js'
 import { resolveSyntheticPreviewState } from './live-state.js'
 import { addApartmentLiveStateV1 } from './live-state-v1.js'
-import { installContextCameraMotionPreview } from './camera-motion-v1.js'
+import { installContextCameraMotionPreview } from './camera-motion-v2.js'
 
 // Transitional preview compositor: capture the accepted shell world, then layer
 // Static Apartment v1, synthetic review-only live state, and a bounded
