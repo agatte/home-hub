@@ -27,12 +27,12 @@ describe('Apartment Canvas contextual camera poses', () => {
     expect(BASE.target_gu).toEqual([499.6, 633.85, 118])
   })
 
-  it('crosses to the TV-facing side for living media', () => {
+  it('derives living composition from the accepted TV/couch axis', () => {
     const pose = resolveContextCameraPose('living')
-    const derived = cameraPolicyForPose(BASE, pose)
 
-    expect(derived.yaw_degrees_right).toBe(-26)
-    expect(derived.pitch_degrees_down).toBe(34)
-    expect(derived.target_gu).toEqual([624.6, 468.85, 126])
+    expect(pose.strategy).toBe('tv-couch-axis')
+    expect(pose.tvId).toBe('living.tv')
+    expect(pose.couchId).toBe('living.couch')
+    expect(() => cameraPolicyForPose(BASE, pose)).toThrow(/does not derive from Camera v2 policy/)
   })
 })
