@@ -19,6 +19,14 @@ describe('Apartment Canvas synthetic preview state', () => {
     expect(state.displays.monitor).toBe(true)
   })
 
+  it('selects the living media fixture deterministically', () => {
+    const state = resolveSyntheticPreviewState('?state=living')
+    expect(state).toBe(SYNTHETIC_PREVIEW_STATES.living)
+    expect(state.activeZone).toBe('living.media')
+    expect(state.displays.monitor).toBe(false)
+    expect(state.displays.tv).toBe(true)
+  })
+
   it('falls back to rest for unknown state names', () => {
     expect(resolveSyntheticPreviewState('?state=not-a-state')).toBe(SYNTHETIC_PREVIEW_STATES.rest)
   })
