@@ -19,99 +19,116 @@ function scaledEye(candidate, distanceScale) {
 }
 
 /**
- * Preview-only camera transition hook for #184.
+ * Preview-only contextual camera experiment for #184.
  *
- * The accepted Camera v2 policy remains the Rest anchor. Context poses derive a
- * temporary candidate from that policy; they do not become geometry/camera
- * authority. This intentionally avoids changing main-v2 while the visual
- * behavior is still experimental.
+ * Camera v2 remains the Rest authority. This hook captures the actual preview
+ * PerspectiveCamera during main-v2's initial lookAt(), restores Three's
+ * prototype immediately, and then animates that concrete camera instance.
+ * It intentionally avoids changing the accepted renderer while the behavior is
+ * still under visual review.
  */
 export function installContextCameraMotionPreview(stateId, search = window.location.search) {
   const pose = resolveContextCameraPose(stateId)
-  const params = search instanceof URLSearchParams ? search : new URLSearchParams(String(search).replace(/^\?/, ''))
+  const params = search instanceof URLSearchParams
+    ? search
+    : new URLSearchParams(String(search).replace(/^\?/, ''))
   const debug = params.has('debug')
   if (pose.id === 'rest' || debug) return () => {}
 
   const data = adaptGeometryScene(geometryScene)
   const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-  const originalRender = THREE.WebGLRenderer.prototype.render
+  const originalLookAt = THREE.Object3D.prototype.lookAt
 
-  let lastAspect = null
-  let initialized = false
-  let completed = false
-  let startAt = 0
-  let fromEye = null
-  let fromTarget = null
-  let toEye = null
-  let toTarget = null
+  let disposed = false
+  let capturedCamera = null
+  let animationFrame = null
+  let startTimer = null
+  let hookInstalled = true
 
-  function deriveTargets(camera) {
+  function restoreLookAtHook() {
+    if (!hookInstalled) return
+    THREE.Object3D.prototype.lookAt = originalLookAt
+    hookInstalled = false
+  }
+
+  function derivePose(camera) {
     const aspect = camera.aspect > 0 ? camera.aspect : 1
     const baseCandidate = perspectiveCandidate(data.bounds, aspect, data.camera)
     const contextualPolicy = cameraPolicyForPose(data.camera, pose)
     const contextualCandidate = perspectiveCandidate(data.bounds, aspect, contextualPolicy)
 
-    fromEye = initialized
-      ? camera.position.clone()
-      : new THREE.Vector3(baseCandidate.eye.x, baseCandidate.eye.y, baseCandidate.eye.z)
-    fromTarget = initialized
-      ? fromTarget?.clone() ?? new THREE.Vector3(baseCandidate.target.x, baseCandidate.target.y, baseCandidate.target.z)
-      : new THREE.Vector3(baseCandidate.target.x, baseCandidate.target.y, baseCandidate.target.z)
-    toEye = scaledEye(contextualCandidate, pose.distanceScale)
-    toTarget = new THREE.Vector3(
-      contextualCandidate.target.x,
-      contextualCandidate.target.y,
-      contextualCandidate.target.z,
-    )
-    lastAspect = aspect
+    return {
+      fromEye: camera.position.clone(),
+      fromTarget: new THREE.Vector3(
+        baseCandidate.target.x,
+        baseCandidate.target.y,
+        baseCandidate.target.z,
+      ),
+      toEye: scaledEye(contextualCandidate, pose.distanceScale),
+      toTarget: new THREE.Vector3(
+        contextualCandidate.target.x,
+        contextualCandidate.target.y,
+        contextualCandidate.target.z,
+      ),
+    }
   }
 
-  THREE.WebGLRenderer.prototype.render = function (scene, camera) {
-    if (camera?.isPerspectiveCamera) {
-      const aspectChanged = lastAspect !== null && Math.abs(camera.aspect - lastAspect) > 0.0001
+  function applyLookAt(camera, target) {
+    originalLookAt.call(camera, target)
+  }
 
-      if (!initialized) {
-        deriveTargets(camera)
-        initialized = true
-        startAt = performance.now() + (prefersReducedMotion ? 0 : MOTION_DELAY_MS)
-      } else if (aspectChanged) {
-        deriveTargets(camera)
-        if (completed || prefersReducedMotion) {
-          camera.position.copy(toEye)
-          camera.lookAt(toTarget)
-        }
-      }
+  function startMotion(camera) {
+    if (disposed) return
+    const { fromEye, fromTarget, toEye, toTarget } = derivePose(camera)
 
-      if (!completed) {
-        const now = performance.now()
-        if (prefersReducedMotion) {
-          camera.position.copy(toEye)
-          camera.lookAt(toTarget)
-          completed = true
-        } else if (now < startAt) {
-          camera.position.copy(fromEye)
-          camera.lookAt(fromTarget)
-        } else {
-          const linear = Math.min(1, (now - startAt) / MOTION_DURATION_MS)
-          const eased = smootherStep(linear)
-          camera.position.lerpVectors(fromEye, toEye, eased)
-          camera.position.z += Math.sin(Math.PI * eased) * MOTION_ARC_HEIGHT_GU
-          const target = new THREE.Vector3().lerpVectors(fromTarget, toTarget, eased)
-          camera.lookAt(target)
-          if (linear >= 1) completed = true
-        }
+    if (prefersReducedMotion) {
+      camera.position.copy(toEye)
+      applyLookAt(camera, toTarget)
+      return
+    }
+
+    const startedAt = performance.now()
+    const target = new THREE.Vector3()
+
+    const tick = (now) => {
+      if (disposed) return
+      const linear = Math.min(1, (now - startedAt) / MOTION_DURATION_MS)
+      const eased = smootherStep(linear)
+
+      camera.position.lerpVectors(fromEye, toEye, eased)
+      camera.position.z += Math.sin(Math.PI * eased) * MOTION_ARC_HEIGHT_GU
+      target.lerpVectors(fromTarget, toTarget, eased)
+      applyLookAt(camera, target)
+
+      if (linear < 1) {
+        animationFrame = window.requestAnimationFrame(tick)
       } else {
-        // Keep the contextual pose stable if the base preview recomputes Camera
-        // v2 after a resize. There is no ongoing flyaround or idle movement.
         camera.position.copy(toEye)
-        camera.lookAt(toTarget)
+        applyLookAt(camera, toTarget)
       }
     }
 
-    return originalRender.call(this, scene, camera)
+    animationFrame = window.requestAnimationFrame(tick)
+  }
+
+  THREE.Object3D.prototype.lookAt = function (...args) {
+    const result = originalLookAt.apply(this, args)
+
+    if (!capturedCamera && this?.isPerspectiveCamera) {
+      capturedCamera = this
+      // main-v2 still has controls.update() to run in this same resize call.
+      // Restore Three immediately, then begin after the intended hero pause.
+      restoreLookAtHook()
+      startTimer = window.setTimeout(() => startMotion(capturedCamera), MOTION_DELAY_MS)
+    }
+
+    return result
   }
 
   return () => {
-    THREE.WebGLRenderer.prototype.render = originalRender
+    disposed = true
+    restoreLookAtHook()
+    if (startTimer !== null) window.clearTimeout(startTimer)
+    if (animationFrame !== null) window.cancelAnimationFrame(animationFrame)
   }
 }
