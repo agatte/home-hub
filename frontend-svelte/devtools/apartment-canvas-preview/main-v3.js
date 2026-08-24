@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import geometryScene from '../apartment-whitebox/generated/geometry-scene.json'
 import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
-import { addApartmentDetailsV1 } from './details-v1.js'
+import { addApartmentStaticPolishV1 } from './polish-v1.js'
 
 // Transitional preview compositor: capture the shell's accepted world group,
 // then layer production-intent furniture/details into the exact same Three.js
@@ -30,7 +30,7 @@ function patchPreviewTitle(text) {
 function patchDebugTitle() {
   const panel = document.querySelector('#debug-panel')
   if (panel && !panel.hidden && panel.textContent) {
-    panel.textContent = panel.textContent.replace('architectural shell v2', 'apartment identity details v1')
+    panel.textContent = panel.textContent.replace('architectural shell v2', 'static apartment polish v1')
   }
 }
 
@@ -38,17 +38,17 @@ import('./main-v2.js')
   .then(() => {
     restoreObjectAdd()
     if (!apartmentWorld) {
-      throw new Error('Apartment Canvas detail pass could not capture the accepted shell world')
+      throw new Error('Apartment Canvas static-polish pass could not capture the accepted shell world')
     }
 
     const data = adaptGeometryScene(geometryScene)
-    addApartmentDetailsV1(apartmentWorld, data)
-    patchPreviewTitle('Apartment identity details v1 · static production preview')
+    addApartmentStaticPolishV1(apartmentWorld, data)
+    patchPreviewTitle('Static apartment polish v1 · production preview')
     patchDebugTitle()
     window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))
   })
   .catch((error) => {
     restoreObjectAdd()
-    console.error('Apartment Canvas detail preview failed', error)
-    patchPreviewTitle(`Apartment detail preview error · ${error.message}`)
+    console.error('Apartment Canvas static-polish preview failed', error)
+    patchPreviewTitle(`Apartment polish preview error · ${error.message}`)
   })
