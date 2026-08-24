@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import geometryScene from '../apartment-whitebox/generated/geometry-scene.json'
 import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
-import { addApartmentFurnitureIdentity } from './furniture-v1.js'
+import { addApartmentFurnitureIdentityV2 } from './furniture-v2.js'
 
 // Transitional preview compositor: capture the shell's accepted world group,
 // then layer production-intent furniture into the exact same Three.js scene.
@@ -30,7 +30,7 @@ function patchPreviewTitle(text) {
 function patchDebugTitle() {
   const panel = document.querySelector('#debug-panel')
   if (panel && !panel.hidden && panel.textContent) {
-    panel.textContent = panel.textContent.replace('architectural shell v2', 'furniture identity v1')
+    panel.textContent = panel.textContent.replace('architectural shell v2', 'furniture identity v2')
   }
 }
 
@@ -42,8 +42,8 @@ import('./main-v2.js')
     }
 
     const data = adaptGeometryScene(geometryScene)
-    addApartmentFurnitureIdentity(apartmentWorld, data)
-    patchPreviewTitle('Furniture identity v1 · static production preview')
+    addApartmentFurnitureIdentityV2(apartmentWorld, data)
+    patchPreviewTitle('Furniture identity v2 · static production preview')
     patchDebugTitle()
     window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))
   })
