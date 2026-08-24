@@ -15,6 +15,14 @@ export const SYNTHETIC_PREVIEW_STATES = Object.freeze({
     displays: Object.freeze({ monitor: true, tv: false }),
     alexa: 'dormant',
   }),
+  living: Object.freeze({
+    id: 'living',
+    label: 'Living media active',
+    activeZone: 'living.media',
+    lamps: Object.freeze({ bedroomL2: false, bedroomL5: false }),
+    displays: Object.freeze({ monitor: false, tv: true }),
+    alexa: 'dormant',
+  }),
 })
 
 export const DEFAULT_SYNTHETIC_PREVIEW_STATE = 'rest'
