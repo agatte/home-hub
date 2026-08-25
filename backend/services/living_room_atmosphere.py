@@ -1,7 +1,7 @@
 """Deterministic living-room atmosphere selection for couch-driven Relax.
 
 This is intentionally a narrow first slice.  It ranks three local palettes,
-owns only its session/decision bookkeeping, and returns an L1/L3/L4 overlay.
+owns only its session/decision bookkeeping, and returns an L1/L3/L4/L6 overlay.
 Hue writes stay in :class:`AutomationEngine`'s existing application pipeline.
 """
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 ATMOSPHERE_HISTORY_SOURCE = "atmosphere"
 ATMOSPHERE_SCENE_PREFIX = "living_room_atmosphere:"
-LIVING_ROOM_ATMOSPHERE_LIGHT_IDS = frozenset({"1", "3", "4"})
+LIVING_ROOM_ATMOSPHERE_LIGHT_IDS = frozenset({"1", "3", "4", "6"})
 ORDINARY_RELAX_LIGHT_IDS = ("2", "5")
 SETTLED_SECONDS = 15 * 60
 EVOLUTION_SECONDS = 30 * 60
@@ -77,19 +77,20 @@ class AtmospherePlan:
 
 def _period_palettes(
     *,
-    day: tuple[dict[str, Any], dict[str, Any]],
-    evening: tuple[dict[str, Any], dict[str, Any]],
-    night: tuple[dict[str, Any], dict[str, Any]],
-    late_night: tuple[dict[str, Any], dict[str, Any]],
+    day: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
+    evening: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
+    night: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
+    late_night: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
 ) -> dict[str, dict[str, dict[str, Any]]]:
-    """Expand L1 + matched-kitchen tuples into period-specific overlays."""
+    """Expand L1 + matched-kitchen + Plant Wash period overlays."""
     return {
         period: {
             "1": living.copy(),
             "3": kitchen.copy(),
             "4": kitchen.copy(),
+            "6": plant_wash.copy(),
         }
-        for period, (living, kitchen) in {
+        for period, (living, kitchen, plant_wash) in {
             "day": day,
             "evening": evening,
             "night": night,
@@ -107,18 +108,22 @@ ATMOSPHERES: dict[str, AtmosphereDefinition] = {
             day=(
                 {"on": True, "bri": 110, "hue": 7500, "sat": 200},
                 {"on": True, "bri": 40, "hue": 20000, "sat": 100},
+                {"on": True, "bri": 185, "hue": 44000, "sat": 165},
             ),
             evening=(
                 {"on": True, "bri": 90, "hue": 6000, "sat": 230},
                 {"on": True, "bri": 30, "hue": 20000, "sat": 100},
+                {"on": True, "bri": 165, "hue": 64000, "sat": 185},
             ),
             night=(
                 {"on": True, "bri": 38, "hue": 5000, "sat": 254},
                 {"on": True, "bri": 8, "hue": 20000, "sat": 100},
+                {"on": True, "bri": 110, "hue": 65000, "sat": 200},
             ),
             late_night=(
                 {"on": True, "bri": 34, "hue": 3000, "sat": 240},
                 {"on": True, "bri": 5, "hue": 20000, "sat": 100},
+                {"on": True, "bri": 75, "hue": 65000, "sat": 190},
             ),
         ),
     ),
@@ -130,18 +135,22 @@ ATMOSPHERES: dict[str, AtmosphereDefinition] = {
             day=(
                 {"on": True, "bri": 90, "hue": 7000, "sat": 180},
                 {"on": True, "bri": 35, "hue": 39500, "sat": 120},
+                {"on": True, "bri": 180, "hue": 42000, "sat": 150},
             ),
             evening=(
                 {"on": True, "bri": 65, "hue": 5500, "sat": 210},
                 {"on": True, "bri": 20, "hue": 39500, "sat": 130},
+                {"on": True, "bri": 170, "hue": 44000, "sat": 160},
             ),
             night=(
                 {"on": True, "bri": 42, "hue": 5000, "sat": 220},
                 {"on": True, "bri": 12, "hue": 39500, "sat": 130},
+                {"on": True, "bri": 130, "hue": 46000, "sat": 155},
             ),
             late_night=(
                 {"on": True, "bri": 36, "hue": 4000, "sat": 220},
                 {"on": True, "bri": 8, "hue": 39500, "sat": 120},
+                {"on": True, "bri": 90, "hue": 64000, "sat": 175},
             ),
         ),
     ),
@@ -153,18 +162,22 @@ ATMOSPHERES: dict[str, AtmosphereDefinition] = {
             day=(
                 {"on": True, "bri": 115, "hue": 48000, "sat": 140},
                 {"on": True, "bri": 40, "hue": 6500, "sat": 170},
+                {"on": True, "bri": 190, "hue": 44000, "sat": 160},
             ),
             evening=(
                 {"on": True, "bri": 85, "hue": 48000, "sat": 150},
                 {"on": True, "bri": 28, "hue": 6000, "sat": 185},
+                {"on": True, "bri": 185, "hue": 46000, "sat": 165},
             ),
             night=(
                 {"on": True, "bri": 55, "hue": 47000, "sat": 150},
                 {"on": True, "bri": 18, "hue": 5500, "sat": 190},
+                {"on": True, "bri": 130, "hue": 64000, "sat": 185},
             ),
             late_night=(
                 {"on": True, "bri": 45, "hue": 46000, "sat": 130},
                 {"on": True, "bri": 12, "hue": 5000, "sat": 175},
+                {"on": True, "bri": 85, "hue": 65000, "sat": 180},
             ),
         ),
     ),
@@ -175,7 +188,7 @@ def merge_living_room_atmosphere(
     ordinary_relax: dict[str, dict[str, Any]],
     overlay: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Merge only L1/L3/L4, preserving all ordinary Relax lamps otherwise."""
+    """Merge only atmosphere-owned lights, preserving other Relax lamps."""
     merged = {
         light_id: state.copy()
         for light_id, state in ordinary_relax.items()
@@ -195,7 +208,7 @@ def bound_living_room_atmosphere_brightness(
 
     ``basis`` is the curated atmosphere state after the user's global Relax
     brightness multiplier, but before lux, weather, and zone processing. The
-    helper changes only ``bri`` on L1/L3/L4 and never mutates either input.
+    helper changes only ``bri`` on L1/L3/L4/L6 and never mutates either input.
     """
     bounds = ATMOSPHERE_BRIGHTNESS_BOUNDS.get(period)
     if bounds is None:

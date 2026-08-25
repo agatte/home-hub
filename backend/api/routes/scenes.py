@@ -25,6 +25,8 @@ logger = logging.getLogger("home_hub.scenes")
 router = APIRouter(prefix="/api/scenes", tags=["scenes"])
 
 _OFF = {"on": False}
+PLANT_WASH_LIGHT_ID = "6"
+CURATED_SCENE_EFFECT_LIGHT_IDS = ("1", "2", "3", "4", "5")
 
 
 # ------------------------------------------------------------------
@@ -35,7 +37,8 @@ _OFF = {"on": False}
 #
 # Lights: L1=living room corner, L2=bedroom desk lamp left,
 #         L3=kitchen front, L4=kitchen back,
-#         L5=bedroom desk lamp right (clear housing, added 2026-05-11)
+#         L5=bedroom desk lamp right (clear housing, added 2026-05-11),
+#         L6=Plant Wash (conservative off until each preset is room-calibrated)
 # ------------------------------------------------------------------
 
 SCENE_PRESETS: dict[str, dict[str, Any]] = {
@@ -376,6 +379,47 @@ SCENE_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Preserve every established L1-L5 preset exactly while giving Plant Wash an
+# explicit safe target. This also makes bridge-wide effect release resolvable
+# immediately after a clean process start, before any per-light cache exists.
+for _preset in SCENE_PRESETS.values():
+    _preset["lights"][PLANT_WASH_LIGHT_ID] = _OFF.copy()
+
+
+def _curated_effect_target(effect: str | None) -> dict[str, Any] | None:
+    """Keep existing curated-scene effects on their reviewed L1-L5 scope."""
+    if effect is None:
+        return None
+    return {"effect": effect, "lights": list(CURATED_SCENE_EFFECT_LIGHT_IDS)}
+
+
+def _custom_effect_target(
+    effect: str | None, light_states: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Scope a custom-scene effect to the fixtures saved by that scene."""
+    if effect is None:
+        return None
+    return {
+        "effect": effect,
+        "lights": sorted({str(light_id) for light_id in light_states}),
+    }
+
+
+def _custom_scene_release_targets(light_states: dict[str, Any]) -> dict[str, dict]:
+    """Add safety-only targets for canonical fixtures old scenes omit.
+
+    Old persisted scenes keep their saved representation and those fixtures
+    remain the scene's only aesthetic scope. Plant Wash has no generic
+    current-mode target resolver on this scene path, so an omitted target is
+    conservatively off solely for effect-release safety.
+    """
+    targets = {
+        str(light_id): state.copy()
+        for light_id, state in light_states.items()
+    }
+    targets.setdefault(PLANT_WASH_LIGHT_ID, _OFF.copy())
+    return targets
+
 
 # ------------------------------------------------------------------
 # Scene list + activate
@@ -396,7 +440,7 @@ async def _activate_scene_safely(
     automation,
     effect_manager,
     light_states: dict,
-    effect: str | None,
+    effect: str | dict[str, Any] | None,
     *,
     transitiontime: int = 10,
     action=None,
@@ -531,7 +575,7 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
             automation,
             effect_manager,
             preset["lights"],
-            preset.get("effect"),
+            _curated_effect_target(preset.get("effect")),
         )
         if not success:
             raise HTTPException(
@@ -573,11 +617,12 @@ async def activate_scene(scene_id: str, request: Request) -> dict:
                 light_states = json.loads(row[1]) if isinstance(row[1], str) else row[1]
                 effect = row[2] if len(row) > 2 else None
 
+                safety_targets = _custom_scene_release_targets(light_states)
                 success = await _activate_scene_safely(
                     automation,
                     effect_manager,
-                    light_states,
-                    effect,
+                    safety_targets,
+                    _custom_effect_target(effect, light_states),
                 )
                 if not success:
                     raise HTTPException(

@@ -198,7 +198,7 @@ async def test_transit_clear_reapplies_living_room_with_fresh_desktop_sync(
         call.args[0]: call.args[1]
         for call in mock_hue.set_light.await_args_list
     }
-    assert set(writes) == {"1", "3", "4"}
+    assert set(writes) == {"1", "3", "4", "6"}
     assert all(state.get("ct") == 286 for state in writes.values())
     assert all("hue" not in state and "sat" not in state for state in writes.values())
     assert engine._transit_light_overrides == {}

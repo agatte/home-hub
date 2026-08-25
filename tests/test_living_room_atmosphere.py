@@ -147,7 +147,7 @@ def test_missing_weather_is_safe_and_recent_history_breaks_only_a_tie() -> None:
     assert _decide(rainy, _envelope(weather="Heavy rain")).atmosphere_id == "rainy_forest"
 
 
-def test_merge_is_l1_l3_l4_only_with_matched_kitchen_and_one_colorspace() -> None:
+def test_merge_owns_l1_l3_l4_l6_with_matched_kitchen_and_one_colorspace() -> None:
     ordinary = ACTIVITY_LIGHT_STATES["relax"]["evening"]
     for definition in ATMOSPHERES.values():
         merged = merge_living_room_atmosphere(
@@ -156,6 +156,7 @@ def test_merge_is_l1_l3_l4_only_with_matched_kitchen_and_one_colorspace() -> Non
         )
         assert merged["2"] == ordinary["2"]
         assert merged["5"] == ordinary["5"]
+        assert merged["6"] == definition.palettes["evening"]["6"]
         assert merged["3"] == merged["4"]
         for state in merged.values():
             assert not ("ct" in state and ({"hue", "sat"} & state.keys()))
@@ -167,41 +168,45 @@ def test_moss_raw_calibration_changes_only_day_evening_brightness() -> None:
         "1": {"on": True, "bri": 110, "hue": 7500, "sat": 200},
         "3": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
         "4": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
+        "6": {"on": True, "bri": 185, "hue": 44000, "sat": 165},
     }
     assert moss["evening"] == {
         "1": {"on": True, "bri": 90, "hue": 6000, "sat": 230},
         "3": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
         "4": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
+        "6": {"on": True, "bri": 165, "hue": 64000, "sat": 185},
     }
     assert moss["night"] == {
         "1": {"on": True, "bri": 38, "hue": 5000, "sat": 254},
         "3": {"on": True, "bri": 8, "hue": 20000, "sat": 100},
         "4": {"on": True, "bri": 8, "hue": 20000, "sat": 100},
+        "6": {"on": True, "bri": 110, "hue": 65000, "sat": 200},
     }
     assert moss["late_night"] == {
         "1": {"on": True, "bri": 34, "hue": 3000, "sat": 240},
         "3": {"on": True, "bri": 5, "hue": 20000, "sat": 100},
         "4": {"on": True, "bri": 5, "hue": 20000, "sat": 100},
+        "6": {"on": True, "bri": 75, "hue": 65000, "sat": 190},
     }
 
 
 def test_rainy_forest_and_listening_glow_raw_palettes_are_unchanged() -> None:
     expected = {
         "rainy_forest": {
-            "day": ((90, 7000, 180), (35, 39500, 120)),
-            "evening": ((65, 5500, 210), (20, 39500, 130)),
-            "night": ((42, 5000, 220), (12, 39500, 130)),
-            "late_night": ((36, 4000, 220), (8, 39500, 120)),
+            "day": ((90, 7000, 180), (35, 39500, 120), (180, 42000, 150)),
+            "evening": ((65, 5500, 210), (20, 39500, 130), (170, 44000, 160)),
+            "night": ((42, 5000, 220), (12, 39500, 130), (130, 46000, 155)),
+            "late_night": ((36, 4000, 220), (8, 39500, 120), (90, 64000, 175)),
         },
         "listening_glow": {
-            "day": ((115, 48000, 140), (40, 6500, 170)),
-            "evening": ((85, 48000, 150), (28, 6000, 185)),
-            "night": ((55, 47000, 150), (18, 5500, 190)),
-            "late_night": ((45, 46000, 130), (12, 5000, 175)),
+            "day": ((115, 48000, 140), (40, 6500, 170), (190, 44000, 160)),
+            "evening": ((85, 48000, 150), (28, 6000, 185), (185, 46000, 165)),
+            "night": ((55, 47000, 150), (18, 5500, 190), (130, 64000, 185)),
+            "late_night": ((45, 46000, 130), (12, 5000, 175), (85, 65000, 180)),
         },
     }
     for atmosphere_id, periods in expected.items():
-        for period, (living, kitchen) in periods.items():
+        for period, (living, kitchen, plant_wash) in periods.items():
             palette = ATMOSPHERES[atmosphere_id].palettes[period]
             assert palette["1"] == {
                 "on": True,
@@ -214,6 +219,12 @@ def test_rainy_forest_and_listening_glow_raw_palettes_are_unchanged() -> None:
                 "bri": kitchen[0],
                 "hue": kitchen[1],
                 "sat": kitchen[2],
+            }
+            assert palette["6"] == {
+                "on": True,
+                "bri": plant_wash[0],
+                "hue": plant_wash[1],
+                "sat": plant_wash[2],
             }
 
 
@@ -423,7 +434,7 @@ async def test_history_advances_only_after_genuine_successful_application() -> N
 
     await curator.observe_application(
         plan,
-        LightApplyResult(failed={"1"}, successful={"3", "4"}),
+        LightApplyResult(failed={"1"}, successful={"3", "4", "6"}),
     )
     log_activation.assert_not_awaited()
     assert curator._recent_history == []
@@ -432,7 +443,7 @@ async def test_history_advances_only_after_genuine_successful_application() -> N
     assert retry_plan.record_history is True
     await curator.observe_application(
         retry_plan,
-        LightApplyResult(successful={"1", "3", "4"}),
+        LightApplyResult(successful={"1", "3", "4", "6"}),
     )
     log_activation.assert_awaited_once_with(
         "living_room_atmosphere:moss_ember",
@@ -455,7 +466,7 @@ async def test_protected_target_does_not_block_successful_history() -> None:
 
     await curator.observe_application(
         plan,
-        LightApplyResult(successful={"1", "4"}, skipped={"3"}),
+        LightApplyResult(successful={"1", "4", "6"}, skipped={"3"}),
     )
 
     log_activation.assert_awaited_once_with(
@@ -480,7 +491,7 @@ async def test_all_protected_targets_do_not_persist_history() -> None:
 
     await curator.observe_application(
         plan,
-        LightApplyResult(skipped={"1", "3", "4"}),
+        LightApplyResult(skipped={"1", "3", "4", "6"}),
     )
 
     log_activation.assert_not_awaited()
@@ -516,7 +527,7 @@ async def test_successful_application_persists_in_existing_scene_history(
     plan = _decide(curator, _envelope())
     await curator.observe_application(
         plan,
-        LightApplyResult(successful={"1", "3", "4"}),
+        LightApplyResult(successful={"1", "3", "4", "6"}),
     )
 
     history = await curator.history(10)
@@ -535,7 +546,7 @@ async def test_history_failure_does_not_escape_application_path() -> None:
     plan = _decide(curator, _envelope())
     await curator.observe_application(
         plan,
-        LightApplyResult(successful={"1", "3", "4"}),
+        LightApplyResult(successful={"1", "3", "4", "6"}),
     )
     assert curator.current_status()["application"]["state"] == "applied"
     assert curator._recent_history == []
@@ -589,6 +600,32 @@ async def test_engine_uses_existing_dedup_and_preserves_l2_l5(
     await engine._apply_mode("relax")
     assert len(calls) == first_count
     assert curator.current_status()["application"]["state"] == "held"
+
+
+@pytest.mark.asyncio
+async def test_manual_plant_wash_target_is_not_overwritten_by_curator(
+    mock_hue, mock_hue_v2, mock_ws,
+) -> None:
+    curator = LivingRoomAtmosphereCurator(enabled=True, now_provider=Clock())
+    engine = AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+    engine.set_living_room_decision_gate(FakeGate(_envelope()))
+    engine.set_living_room_atmosphere_curator(curator)
+    engine._manual_override = True
+    engine._override_mode = "relax"
+    engine._override_source = "physical_context_relax"
+    engine._override_time = START
+    _pin_evening_outside_winddown_ramp(engine)
+    engine._get_time_period = lambda now=None: "evening"
+    engine._effect_manager.needs_reconcile = lambda _desired: False
+    manual = {"on": True, "bri": 42, "hue": 12000, "sat": 90}
+    mock_hue._lights["6"].update(manual)
+    engine.mark_light_manual("6", manual)
+
+    await engine._apply_mode("relax", force_resend=True)
+
+    assert {
+        key: mock_hue._lights["6"][key] for key in manual
+    } == manual
 
 
 @pytest.mark.asyncio

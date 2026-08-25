@@ -9,8 +9,10 @@ import pytest
 from backend.models import LightAdjustment
 from backend.services.ml.lighting_learner import (
     EMA_ALPHA,
+    LIGHT_ID_TO_ROOM,
     MIN_ADJUSTMENTS,
     MIN_ADJUSTMENTS_WEATHER,
+    ROOM_LIGHT_IDS,
     WEATHER_ANY,
     LightingPreferenceLearner,
 )
@@ -28,6 +30,11 @@ def learner(tmp_model_manager):
 # row-to-sample mapping; the collapse helper breaks that for same-timestamp
 # rows. Bumping by 1 minute per call preserves the original test intent.
 _ADJ_TS_COUNTER = [0]
+
+
+def test_plant_wash_belongs_to_living_room_learning_group():
+    assert LIGHT_ID_TO_ROOM["6"] == "living_room"
+    assert ROOM_LIGHT_IDS["living_room"] == ("1", "6")
 
 
 def _make_adjustment(*, light_id="1", mode="working", hour=14,

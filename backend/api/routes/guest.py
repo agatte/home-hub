@@ -15,6 +15,7 @@ from backend.api.auth import require_api_key
 from backend.api.routes.scenes import (
     SCENE_PRESETS,
     _activate_scene_safely,
+    _curated_effect_target,
     _log_scene_activation,
 )
 from backend.config import settings
@@ -252,7 +253,7 @@ async def activate_guest_scene(name: str, request: Request) -> dict:
         automation,
         effect_manager,
         preset["lights"],
-        preset.get("effect"),
+        _curated_effect_target(preset.get("effect")),
     )
     if not success:
         raise HTTPException(
@@ -322,7 +323,7 @@ async def reset_guest_scene(name: str, request: Request) -> dict:
         automation,
         effect_manager,
         preset["lights"],
-        preset.get("effect"),
+        _curated_effect_target(preset.get("effect")),
     )
     if not success:
         raise HTTPException(

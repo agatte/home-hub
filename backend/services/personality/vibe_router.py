@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from backend.api.routes.scenes import (
     SCENE_PRESETS,
     _activate_scene_safely,
+    _curated_effect_target,
 )
 from backend.config import settings
 from backend.database import async_session
@@ -220,7 +221,7 @@ class VibeRouter:
             automation,
             effect_manager,
             preset["lights"],
-            preset.get("effect"),
+            _curated_effect_target(preset.get("effect")),
         )
         if not success:
             raise VibeRouterError(

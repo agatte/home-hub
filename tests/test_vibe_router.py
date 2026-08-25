@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -210,3 +210,61 @@ async def test_apply_pending_arrival_retains_pending_vibe_when_safe_release_fail
     automation.mark_light_manual.assert_not_called()
     event_logger.log_scene_activation.assert_not_awaited()
     assert settings.store[PENDING_ARRIVAL_VIBE_KEY] == pending
+
+
+async def test_apply_plan_scopes_curated_effect_to_l1_through_l5(
+    db_engine, mock_hue, mock_hue_v2, mock_ws,
+):
+    """Effect-bearing vibe presets must not turn Plant Wash into a bridge target."""
+    settings = FakeSettings()
+    automation = FakeAutomation()
+    mock_hue_v2.mapped_light_ids = ["1", "2", "3", "4", "5", "6"]
+    mock_hue_v2.set_effect = AsyncMock(return_value=True)
+    mock_hue_v2.set_effect_all = AsyncMock(return_value=True)
+    app_state = SimpleNamespace(
+        automation=automation,
+        hue=mock_hue,
+        effect_manager=EffectManager(mock_hue_v2),
+        ws_manager=mock_ws,
+    )
+    router = _router(app_state, settings, db_engine)
+    plan = VibePlan(
+        mode="relax",
+        scene_id="ember",
+        acknowledgement="Ember lighting ready.",
+        confidence=1.0,
+        parser="test",
+    )
+
+    with patch("backend.services.effect_manager.asyncio.sleep", new=AsyncMock()):
+        await router.apply_plan(plan, source="test")
+
+    mock_hue_v2.set_effect.assert_has_awaits([
+        call(light_id, "fire") for light_id in ["1", "2", "3", "4", "5"]
+    ])
+    assert [args.args[0] for args in mock_hue_v2.set_effect.await_args_list] == [
+        "1", "2", "3", "4", "5",
+    ]
+    mock_hue_v2.set_effect_all.assert_not_awaited()
+
+
+async def test_apply_plan_leaves_effect_free_curated_preset_without_starting_effect(
+    db_engine, mock_hue, mock_hue_v2, mock_ws,
+):
+    settings = FakeSettings()
+    automation = FakeAutomation()
+    mock_hue_v2.set_effect = AsyncMock(return_value=True)
+    mock_hue_v2.set_effect_all = AsyncMock(return_value=True)
+    app_state = SimpleNamespace(
+        automation=automation,
+        hue=mock_hue,
+        effect_manager=EffectManager(mock_hue_v2),
+        ws_manager=mock_ws,
+    )
+    router = _router(app_state, settings, db_engine)
+    plan = VibePlan("social", "house_party", "Party lighting ready.", 1.0, "test")
+
+    await router.apply_plan(plan, source="test")
+
+    mock_hue_v2.set_effect.assert_not_awaited()
+    mock_hue_v2.set_effect_all.assert_not_awaited()

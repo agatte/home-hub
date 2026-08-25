@@ -26,6 +26,7 @@ from backend.services.automation_constants import (
 )
 from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
+    ALL_LIGHT_IDS,
     get_time_period_static as _get_time_period_static,
     resolve_activity_state,
 )
@@ -216,6 +217,12 @@ class TestAutomationEngine:
         assert engine.activity == "general"
         assert engine.manual_override is False
         assert engine.enabled is True
+
+    async def test_global_off_still_covers_every_canonical_light(self, engine, mock_hue):
+        await engine._apply_state({"on": False})
+
+        assert set(mock_hue._lights) == set(ALL_LIGHT_IDS)
+        assert all(light["on"] is False for light in mock_hue._lights.values())
 
     def test_sleeping_projects_house_state_without_awake_activity(self, engine):
         engine._manual_override = True
@@ -446,12 +453,17 @@ class TestAutomationEngine:
 
         await engine._apply_time_based()
 
-        engine._apply_state.assert_awaited_once_with({
+        target = engine._apply_state.await_args.args[0]
+        legacy = {
             "on": True,
             "bri": engine.schedule_config.weekday.wake_brightness,
             "hue": 6000,
             "sat": 200,
-        })
+        }
+        assert {light_id: target[light_id] for light_id in "12345"} == {
+            light_id: legacy for light_id in "12345"
+        }
+        assert target["6"] == {"on": False}
 
     @patch("backend.services.automation_engine.datetime")
     async def test_unconfirmed_idle_overnight_stays_dark(self, mock_dt, engine):
@@ -463,7 +475,30 @@ class TestAutomationEngine:
 
         await engine._apply_time_based()
 
-        engine._apply_state.assert_awaited_once_with({"on": False})
+        target = engine._apply_state.await_args.args[0]
+        assert {light_id: target[light_id] for light_id in "12345"} == {
+            light_id: {"on": False} for light_id in "12345"
+        }
+        assert target["6"] == {"on": False}
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_daytime_idle_preserves_l1_to_l5_ct_target_and_leaves_plant_wash_off(
+        self, mock_dt, engine,
+    ):
+        now = datetime(2026, 8, 18, 10, 0, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        engine._apply_state = AsyncMock()
+        engine._weather_adjust = MagicMock(side_effect=lambda state: state)
+
+        await engine._apply_time_based()
+
+        target = engine._apply_state.await_args.args[0]
+        legacy = {"on": True, "bri": 220, "ct": 250}
+        assert {light_id: target[light_id] for light_id in "12345"} == {
+            light_id: legacy for light_id in "12345"
+        }
+        assert target["6"] == {"on": False}
 
     @patch("backend.services.automation_engine.datetime")
     async def test_explicit_sleeping_auto_overnight_renders_awake_general(
@@ -486,9 +521,10 @@ class TestAutomationEngine:
         assert engine.house_state == "home"
         assert engine.activity == "general"
         assert engine._home_awake_confirmed is True
-        assert all(light["on"] for light in mock_hue._lights.values())
+        assert all(mock_hue._lights[light_id]["on"] for light_id in "12345")
+        assert mock_hue._lights["6"]["on"] is False
         assert {
-            light["bri"] for light in mock_hue._lights.values()
+            mock_hue._lights[light_id]["bri"] for light_id in "12345"
         } == {engine.schedule_config.weekday.wake_brightness}
 
     async def test_confirmed_general_idle_heartbeats_keep_awake_baseline(
@@ -2352,7 +2388,7 @@ class TestScreenSyncTargetProtection:
 
         await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
 
-        assert engine._hue.set_light.await_count == 5
+        assert engine._hue.set_light.await_count == 6
         assert sync._last_sent_state == {}
 
     async def test_failed_uniform_write_preserves_sync_cache_and_retries(self, engine):
@@ -2375,13 +2411,13 @@ class TestScreenSyncTargetProtection:
 
         await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
 
-        assert engine._hue.set_light.await_count == 5
+        assert engine._hue.set_light.await_count == 6
         assert sync._last_sent_state == cached
         assert engine._last_applied_per_light == {}
 
         engine._hue.set_light.reset_mock()
         await engine._apply_uniform({"on": True, "bri": 160, "ct": 350})
-        assert engine._hue.set_light.await_count == 5
+        assert engine._hue.set_light.await_count == 6
 
     async def test_successful_per_light_l2_write_invalidates_only_l2(self, engine):
         """A successful L2 automation write dirties only L2's sync cache."""
@@ -3836,6 +3872,30 @@ class TestIsLikelyStillAsleep:
         assert engine._is_likely_still_asleep(self.NOW) is False
 
 
+class TestRelaxDriftFixtureScope:
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    async def test_relax_drift_keeps_plant_wash_out_of_random_scope(self, engine):
+        engine._scene_drift_enabled = True
+        engine._current_mode = "relax"
+        engine._last_activity_change = datetime.now(tz=TZ) - timedelta(
+            minutes=engine._drift_interval_minutes + 1,
+        )
+        engine._apply_state = AsyncMock()
+        engine._weather_adjust = MagicMock(side_effect=lambda state: state)
+
+        with patch("backend.services.automation_engine.random.randint", return_value=0):
+            await engine._maybe_drift()
+
+        target = engine._apply_state.await_args.args[0]
+        assert list(target) == ["1", "2", "3", "4", "5"]
+        assert "6" not in target
+
+
 class TestMorningRampAsleepGate:
     """The morning_ramp inside `_apply_time_based` honors the asleep gate.
 
@@ -3883,7 +3943,9 @@ class TestMorningRampAsleepGate:
         await self._drive_with_capture(engine, captured_states, self.NOW)
 
         assert len(captured_states) == 1
-        state = captured_states[0]
+        target = captured_states[0]
+        assert target["6"] == {"on": False}
+        state = target["1"]
         assert state["on"] is True
         assert state["bri"] > 60  # clearly past the pre-ramp dim hold
 
@@ -3901,7 +3963,9 @@ class TestMorningRampAsleepGate:
         await self._drive_with_capture(engine, captured_states, self.NOW)
 
         assert len(captured_states) == 1
-        state = captured_states[0]
+        target = captured_states[0]
+        assert target["6"] == {"on": False}
+        state = target["1"]
         # Pre-ramp dim shape from `_build_time_rules` (wake_hour → ramp
         # band): wake_brightness=40 with warm hue 6000, sat 200.
         assert state["on"] is True
@@ -3924,7 +3988,9 @@ class TestMorningRampAsleepGate:
 
         await self._drive_with_capture(engine, captured_states, self.NOW)
 
-        state = captured_states[0]
+        target = captured_states[0]
+        assert target["6"] == {"on": False}
+        state = target["1"]
         assert state["bri"] > 60
 
     async def test_ramp_runs_when_process_working_recent(
@@ -3940,7 +4006,9 @@ class TestMorningRampAsleepGate:
 
         await self._drive_with_capture(engine, captured_states, self.NOW)
 
-        state = captured_states[0]
+        target = captured_states[0]
+        assert target["6"] == {"on": False}
+        state = target["1"]
         assert state["bri"] > 60
 
     async def test_ramp_runs_when_stamp_stale_by_failsafe(
@@ -3953,7 +4021,9 @@ class TestMorningRampAsleepGate:
 
         await self._drive_with_capture(engine, captured_states, self.NOW)
 
-        state = captured_states[0]
+        target = captured_states[0]
+        assert target["6"] == {"on": False}
+        state = target["1"]
         assert state["bri"] > 60
 
 

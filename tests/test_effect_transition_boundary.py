@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from backend.api.routes.scenes import _activate_scene_safely
+from backend.api.routes.scenes import (
+    SCENE_PRESETS,
+    _activate_scene_safely,
+    _custom_effect_target,
+    _custom_scene_release_targets,
+    _curated_effect_target,
+)
 from backend.services.automation_constants import TZ
 from backend.services.automation_engine import AutomationEngine
 from backend.services.effect_manager import EffectManager
@@ -675,6 +681,82 @@ async def test_preset_and_native_scene_paths_release_only_after_safety(
     assert events == expected
 
 
+def test_curated_presets_resolve_plant_wash_without_expanding_effects():
+    for preset in SCENE_PRESETS.values():
+        assert preset["lights"]["6"] == {"on": False}
+        target = _curated_effect_target(preset.get("effect"))
+        if target is not None:
+            assert target["lights"] == ["1", "2", "3", "4", "5"]
+            assert "6" not in target["lights"]
+
+
+def test_legacy_custom_scene_effect_keeps_saved_five_light_scope():
+    saved_states = {
+        light_id: {"on": True, "bri": 80, "ct": 400}
+        for light_id in "12345"
+    }
+
+    assert _custom_effect_target("candle", saved_states) == {
+        "effect": "candle",
+        "lights": ["1", "2", "3", "4", "5"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_custom_scene_release_is_six_light_safe_after_clean_start(
+    mock_hue, mock_hue_v2, mock_ws,
+):
+    engine = _engine(mock_hue, mock_hue_v2, mock_ws)
+    saved_states = {
+        light_id: {"on": True, "bri": 80, "ct": 400}
+        for light_id in "12345"
+    }
+    safety_targets = _custom_scene_release_targets(saved_states)
+    assert set(saved_states) == {"1", "2", "3", "4", "5"}
+    assert safety_targets["6"] == {"on": False}
+    assert engine._last_applied_per_light == {}
+    engine._transition_boundary.wait_for_settle = AsyncMock()
+    mock_hue_v2.stop_effect_all = AsyncMock(return_value=True)
+    mock_hue_v2.set_effect = AsyncMock(return_value=True)
+
+    with patch("backend.services.effect_manager.asyncio.sleep", new=AsyncMock()):
+        success = await _activate_scene_safely(
+            engine,
+            engine._effect_manager,
+            safety_targets,
+            _custom_effect_target("candle", saved_states),
+        )
+
+    assert success is True
+    assert set(engine._last_applied_per_light) == {"1", "2", "3", "4", "5", "6"}
+    assert engine._last_applied_per_light["6"] == {"on": False}
+    mock_hue_v2.set_effect.assert_has_awaits([
+        call(light_id, "candle") for light_id in "12345"
+    ])
+    assert all(args.args[0] != "6" for args in mock_hue_v2.set_effect.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_curated_scene_release_is_six_light_safe_after_clean_start(
+    mock_hue, mock_hue_v2, mock_ws,
+):
+    engine = _engine(mock_hue, mock_hue_v2, mock_ws)
+    assert engine._last_applied_per_light == {}
+    engine._transition_boundary.wait_for_settle = AsyncMock()
+    mock_hue_v2.stop_effect_all = AsyncMock(return_value=True)
+
+    success = await _activate_scene_safely(
+        engine,
+        engine._effect_manager,
+        SCENE_PRESETS["movie_night"]["lights"],
+        None,
+    )
+
+    assert success is True
+    assert set(engine._last_applied_per_light) == {"1", "2", "3", "4", "5", "6"}
+    mock_hue_v2.stop_effect_all.assert_awaited_once_with()
+
+
 @pytest.mark.asyncio
 async def test_transit_clear_effect_reconcile_uses_safe_order(
     mock_hue, mock_hue_v2, mock_ws,
@@ -730,7 +812,9 @@ async def test_august_3_254_fixture_never_exposes_unprotected_transit_lamps(
         light_id: {"on": True, "bri": bri, "ct": 400}
         for light_id, bri in held_bri.items()
     }
-    physical = {light_id: 254 for light_id in ["1", "2", "3", "4", "5"]}
+    physical = {
+        light_id: 254 for light_id in ["1", "2", "3", "4", "5", "6"]
+    }
     exposed_254: list[str] = []
 
     async def write(light_id: str, state: dict) -> bool:
