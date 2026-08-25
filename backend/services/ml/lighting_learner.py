@@ -77,10 +77,11 @@ LIGHT_ID_TO_ROOM: dict[str, str] = {
     "3": "kitchen",
     "4": "kitchen",
     "5": "bedroom",
+    "6": "living_room",
 }
 
 ROOM_LIGHT_IDS: dict[str, tuple[str, ...]] = {
-    "living_room": ("1",),
+    "living_room": ("1", "6"),
     "bedroom": ("2", "5"),
     "kitchen": ("3", "4"),
 }

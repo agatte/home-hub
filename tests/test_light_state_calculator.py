@@ -14,9 +14,13 @@ import pytest
 
 from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
+    ALL_LIGHT_IDS,
+    AUTOMATIC_EFFECT_LIGHT_IDS,
     BED_RECLINED_L1_NIGHT_DEFAULT,
     DEFAULT_MODE_BRIGHTNESS,
+    EFFECT_AUTO_MAP,
     GAME_LIGHT_PROFILES,
+    LIGHT_IDS,
     LUX_MULT_EPSILON,
     TZ,
     apply_brightness_multiplier,
@@ -87,6 +91,41 @@ class TestResolveActivityState:
     def test_known_mode_period(self):
         state = resolve_activity_state("working", "day")
         assert state == ACTIVITY_LIGHT_STATES["working"]["day"]
+
+    def test_plant_wash_is_canonical_and_every_mode_state_covers_it(self):
+        assert LIGHT_IDS["plant_wash"] == "6"
+        assert ALL_LIGHT_IDS == ("1", "2", "3", "4", "5", "6")
+
+        for mode_state in ACTIVITY_LIGHT_STATES.values():
+            period_states = (
+                mode_state.values() if "day" in mode_state else (mode_state,)
+            )
+            for state in period_states:
+                assert set(state) == set(ALL_LIGHT_IDS)
+
+        for profile in GAME_LIGHT_PROFILES.values():
+            for state in profile.values():
+                assert set(state) == set(ALL_LIGHT_IDS)
+
+    def test_plant_wash_modes_are_deliberate_and_non_uniform(self):
+        states = [
+            ACTIVITY_LIGHT_STATES["gaming"]["evening"]["6"],
+            ACTIVITY_LIGHT_STATES["working"]["night"]["6"],
+            ACTIVITY_LIGHT_STATES["relax"]["day"]["6"],
+            ACTIVITY_LIGHT_STATES["relax"]["night"]["6"],
+            ACTIVITY_LIGHT_STATES["cooking"]["day"]["6"],
+        ]
+        assert len({tuple(sorted(state.items())) for state in states}) == len(states)
+        assert ACTIVITY_LIGHT_STATES["relax"]["day"]["6"]["bri"] == 185
+        assert ACTIVITY_LIGHT_STATES["working"]["night"]["6"] == {"on": False}
+
+    def test_automatic_effect_scopes_preserve_original_five_lights(self):
+        assert AUTOMATIC_EFFECT_LIGHT_IDS == ("1", "2", "3", "4", "5")
+        for periods in EFFECT_AUTO_MAP.values():
+            for target in periods.values():
+                if target is not None:
+                    assert target["lights"] is not None
+                    assert "6" not in target["lights"]
 
     def test_generic_gaming_state_is_detached_from_canonical(self):
         state = resolve_activity_state("gaming", "day")

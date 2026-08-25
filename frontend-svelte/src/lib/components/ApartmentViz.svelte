@@ -12,7 +12,7 @@
    *   +----------+------------------+
    *   |          |               *1 |
    *   | BEDROOM  |   LIVING ROOM    |
-   *   |          |                  |
+   *   |          |      *6          |
    *   |  *2  *5  |                  |
    *   +----+-----+------+---------+
    *   |    |             |         |
@@ -26,12 +26,14 @@
    *  Light 3: Kitchen front (above island)
    *  Light 4: Kitchen back (below island)
    *  Light 5: Bedroom Lamp Right (desk side, clear housing — added 2026-05-11)
+   *  Light 6: Plant Wash (schematic rear plant stand at couch-right)
    */
 
   const LIGHT_POSITIONS = {
     '2': { x: 70,  y: 105 },   // Bedroom Lamp Left — desk side
     '5': { x: 110, y: 105 },   // Bedroom Lamp Right — desk side, clear housing
     '1': { x: 335, y: 42 },    // Living room lamp — top-right area (inset from wall)
+    '6': { x: 252, y: 96, label: 'Plant Wash' }, // Rear plant stand at couch-right (schematic)
     '3': { x: 195, y: 195 },   // Kitchen front — left of island
     '4': { x: 280, y: 195 },   // Kitchen back — right of island
   }
@@ -208,7 +210,7 @@
     <!-- Light name labels -->
     {#each Object.entries(LIGHT_POSITIONS) as [id, pos]}
       {@const state = effectiveState(id, liveMap)}
-      {@const name = liveMap[id]?.name ?? `Light ${id}`}
+      {@const name = liveMap[id]?.name ?? pos.label ?? `Light ${id}`}
       <text
         x={pos.x} y={pos.y + 17}
         text-anchor="middle"

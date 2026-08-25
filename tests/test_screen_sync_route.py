@@ -386,7 +386,10 @@ async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopbac
 @pytest.mark.asyncio
 async def test_desktop_screen_color_stays_bedroom_when_service_can_write_all_lamps():
     hue = _FakeHue()
-    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5", "1", "3", "4"])
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4", "6"],
+    )
     engine = _fake_engine("watching")
     req = _make_request(engine, sync)
 
@@ -402,7 +405,10 @@ async def test_desktop_screen_color_stays_bedroom_when_service_can_write_all_lam
 @pytest.mark.asyncio
 async def test_laptop_watching_screen_color_targets_living_room_and_kitchen():
     hue = _FakeHue()
-    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5", "1", "3", "4"])
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4", "6"],
+    )
     engine = _fake_engine("watching")
     req = _make_request(engine, sync)
 

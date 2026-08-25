@@ -241,7 +241,10 @@ class TestGetDesiredEffect:
             weather_service=_make_weather("Light snow"),
         )
         result = mgr.get_desired_effect("working", "evening")
-        assert result == "opal"
+        assert result == {
+            "effect": "opal",
+            "lights": ["1", "2", "3", "4", "5"],
+        }
 
     def test_weather_fallback_skipped_during_day(self):
         # snow → opal is evening/night only — day returns None
@@ -257,7 +260,10 @@ class TestGetDesiredEffect:
             hue_v2=_make_hue_v2(),
             weather_service=_make_weather("Thunderstorm with rain"),
         )
-        assert mgr.get_desired_effect("working", "day") == "sparkle"
+        assert mgr.get_desired_effect("working", "day") == {
+            "effect": "sparkle",
+            "lights": ["1", "2", "3", "4", "5"],
+        }
 
 
 # ---------------------------------------------------------------------------

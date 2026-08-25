@@ -7,12 +7,15 @@ slip through.
 """
 import asyncio
 import time
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 from fastapi import HTTPException
 
 import backend.api.routes.guest as guest
+from backend.services.effect_manager import EffectManager
+from backend.services.light_applicator import LightApplyResult
 
 
 def _reset_cooldown_state() -> None:
@@ -134,3 +137,64 @@ def _stub_request():
         client = _Client()
 
     return _Request()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activation", [
+    guest.activate_guest_scene,
+    guest.reset_guest_scene,
+])
+async def test_guest_curated_effect_is_scoped_when_future_whitelist_allows_it(
+    monkeypatch, activation,
+):
+    """A future effect-bearing guest preset must retain the curated L1-L5 scope."""
+    _reset_cooldown_state()
+    monkeypatch.setitem(guest.GUEST_SCENE_WHITELIST, "effect_test", "candlelit")
+
+    class Hue:
+        connected = True
+        breaker_open = False
+
+        async def get_all_lights(self):
+            return []
+
+    class Automation:
+        current_mode = "social"
+
+        async def establish_effect_release(self, _states, _transitiontime, light_ids):
+            return LightApplyResult(successful=set(light_ids))
+
+        async def set_manual_override(self, *_args, **_kwargs):
+            return None
+
+    hue_v2 = SimpleNamespace(
+        connected=True,
+        mapped_light_ids=["1", "2", "3", "4", "5", "6"],
+        stop_effect_all=AsyncMock(return_value=True),
+        set_effect_all=AsyncMock(return_value=True),
+        set_effect=AsyncMock(return_value=True),
+    )
+    app_state = SimpleNamespace(
+        hue=Hue(),
+        hue_v2=hue_v2,
+        ws_manager=SimpleNamespace(broadcast=AsyncMock()),
+        automation=Automation(),
+        effect_manager=EffectManager(hue_v2),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=app_state),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+
+    with patch("backend.api.routes.guest.asyncio.sleep", new=AsyncMock()), \
+            patch("backend.services.effect_manager.asyncio.sleep", new=AsyncMock()), \
+            patch.object(guest, "_log_scene_activation", AsyncMock()):
+        await activation("effect_test", request)
+
+    hue_v2.set_effect.assert_has_awaits([
+        call(light_id, "candle") for light_id in ["1", "2", "3", "4", "5"]
+    ])
+    assert [args.args[0] for args in hue_v2.set_effect.await_args_list] == [
+        "1", "2", "3", "4", "5",
+    ]
+    hue_v2.set_effect_all.assert_not_awaited()

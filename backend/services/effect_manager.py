@@ -16,7 +16,11 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
-from backend.services.light_state_calculator import ALL_LIGHT_IDS, EFFECT_AUTO_MAP
+from backend.services.light_state_calculator import (
+    ALL_LIGHT_IDS,
+    AUTOMATIC_EFFECT_LIGHT_IDS,
+    EFFECT_AUTO_MAP,
+)
 from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 
 logger = logging.getLogger("home_hub.automation.effects")
@@ -120,9 +124,8 @@ class EffectManager:
 
         `desired` accepts three shapes:
           - None:                 no effect should be active
-          - str (e.g., "candle"): apply effect to all lights (legacy shape,
-                                  used by weather-effect fallback and callers
-                                  that don't need per-light targeting)
+          - str (e.g., "candle"): apply effect to all lights (legacy shape for
+                                  callers that explicitly need bridge-wide scope)
           - dict {"effect": name, "lights": list[str] | None}:
               explicit — `lights=None` means all mapped lights; a list scopes
               the effect to specific v1 light IDs (e.g., candle on living-room
@@ -290,7 +293,7 @@ class EffectManager:
 
         Returns either:
           - None                                   (no effect)
-          - str                                    (weather fallback, all lights)
+          - str                                    (legacy caller, all lights)
           - {"effect": name, "lights": list|None}  (mode-specific, per-light scope)
 
         Sleeping and social manage their own effects (sleeping = none,
@@ -309,7 +312,10 @@ class EffectManager:
             period in ("evening", "night", "late_night")
             or weather_effect == "sparkle"
         ):
-            return weather_effect
+            return {
+                "effect": weather_effect,
+                "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
+            }
         return None
 
     def get_weather_effect(self) -> str | None:

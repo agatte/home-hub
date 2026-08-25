@@ -2,7 +2,8 @@
 
 **Audited:** August 5, 2026  
 **Fit update:** August 5, 2026 — plant-zone space confirmed, Flux cable route measured at 60 in, bedroom cabinet measured at 39 × 16 × 29 in.  
-**Status:** Replacement master plan for the earlier `LIGHTING_EXPANSION.md`  
+**Plant-wash calibration:** August 24, 2026 — installed and paired as Hue/HomeHub ID 6, `Plant Wash`.
+**Status:** Current expansion plan with the completed plant-wash result recorded below.
 **Price basis:** Regular US list prices observed on August 5, 2026. Temporary sales, coupon codes, tax, shipping, raceway, and small installation supplies are excluded unless noted.
 
 ---
@@ -11,7 +12,8 @@
 
 The apartment does not need a large number of exposed smart-light fixtures. It needs a small number of deliberately placed **light layers**:
 
-1. **A concealed low wall/plant wash** at the right side of the living-room sofa.
+1. **A low wall/plant wash** at the right side of the living-room sofa, with
+   partial fixture visibility accepted at the open-frame stand.
 2. **A broad horizontal cabinet-top wash** across the kitchen.
 3. **Two separate high-CRI task lights** over the useful kitchen counters.
 4. **Physical scene control** that is faster than opening HomeHub or the Hue app.
@@ -37,8 +39,9 @@ These are the physical facts used by this audit.
 - **L2** — bedroom desk lamp left.
 - **L3/L4** — kitchen pendants.
 - **L5** — bedroom desk lamp right.
+- **L6** — Plant Wash, Hue Play Light Bar on the rear living-room plant stand.
 
-New lights should not receive permanent L6/L7/etc. labels until they are paired and their actual Hue IDs are known.
+Future lights should not receive permanent L7/etc. labels until they are paired and their actual Hue IDs are known.
 
 ### Kitchen
 
@@ -133,7 +136,7 @@ trial demonstrates that dedicated occupancy evidence is needed.
 
 ### 1A. Living-room plant wash
 
-**Primary recommendation:** one **Hue Play Light Bar single pack**, placed horizontally and concealed low behind the rear plant stand or along the baseboard.
+**Installed result:** one **Hue Play Light Bar single pack**, paired as Hue/v1 ID **6** and named **Plant Wash**.
 
 - Regular price: **$109.99**
 - Output: **500 lm**
@@ -153,22 +156,23 @@ https://www.philips-hue.com/en-us/p/hue-play-light-bar/7820130U7
 - The outlets are already within practical cable distance.
 - Its power supply leaves an upgrade path for another Play bar later.
 
-**Fit status: confirmed**
+**Fit and calibration status: complete**
 
-The plant stands can be moved, so there is ample room to create the required clear strip behind the rear stand or along the baseboard. Reserve at least:
+The bar is horizontal on the back edge of the rear/taller plant stand. Its broad face aims up the wall with a slight left bias toward the couch and plant mass. Full fixture concealment is not physically possible through the thin open stand frame; the remaining housing visibility is accepted.
 
-- **10.5 in clear length**
-- about **4 in usable depth**, including the stand/mount and cable bend
+- Couch sightline passed.
+- Kitchen/island sightline passed.
+- Entry sightline passed.
+- The observed direct LED/glare level from all three views is accepted.
 
-The final position should be chosen by sightline and beam quality rather than by a hard space constraint.
+**Real-room color and brightness result**
 
-**Starting placement**
-
-- Lay the bar horizontally.
-- Put it as close to the wall as the cable and stand allow.
-- Aim the broad face up the wall and slightly toward the corner.
-- Keep direct LEDs out of the couch, kitchen, and entry sightlines.
-- Begin at only 10–20% brightness.
+- The original 10–20% starting assumption is disproven; it does not produce the intended architectural read.
+- Teal/blue-violet at approximately 70–75% is a successful reference for the `connor_color` direction.
+- Saturated deep blue is effective but too dominant for ordinary architectural scenes.
+- Amber and burgundy are accepted after dark. Phone photos are not reliable evidence for their in-room appearance.
+- L1 remains the warm anchor in colorful scenes.
+- Entertainment/screen-sync membership remains deferred; L6 is not an automatic sync target.
 
 ### 1B. Kitchen cabinet-top cove
 
@@ -422,20 +426,21 @@ The cabinet envelope is no longer a fit concern; projector clearance and aiming 
 
 ## Option 1 — Hue Play Light Bar single
 
-**Decision: preferred**
+**Decision: installed and calibrated as L6 / Plant Wash**
 
 | Attribute | Assessment |
 |---|---|
 | Price | $109.99 |
 | Output | 500 lm |
 | Physical form | 10 in long; very low when laid horizontally |
-| Concealment | Best of the three |
+| Concealment | Partial; accepted with the thin open stand geometry |
 | Beam | Broad, soft wash |
 | Plant shadows | Softer, more diffuse |
 | Cable | About 6.6 ft; outlets nearby |
 | HomeHub/Hue support | Native Hue |
-| Main fit question | Need 10.5 in × ~4 in clear strip behind rear stand |
-| Best scene use | Teal/blue-violet; amber/burgundy/olive |
+| Final placement | Horizontal on back edge of rear/taller stand, upward with slight left bias |
+| Sightlines | Couch, kitchen/island, and entry glare tests passed |
+| Calibrated use | Teal/blue-violet at ~70–75%; amber/burgundy after dark |
 
 This is only about $7 more than the verified two-can GU10 package plus one Hue GU10 bulb, while being lower, easier to hide, and fully integrated.
 
@@ -669,14 +674,16 @@ The balcony is a legitimate future zone, but it should remain restrained:
 
 # 8. Scene design
 
-These are design targets, not final calibrated Hue values.
+The broader scene families remain design targets. Plant Wash guidance below is
+the completed real-room calibration boundary and supersedes the original paper
+brightness assumptions.
 
 ## `connor_color`
 
 | Layer | Starting role |
 |---|---|
 | L1 living-room lamp | Warm 2200–2500 K, 20–35% |
-| Plant Play Bar | Teal/cyan/blue-violet, 10–25% |
+| L6 Plant Wash | Teal/blue-violet, approximately 70–75% reference; avoid ordinary saturated deep blue |
 | Cabinet Flux | Muted coral/peach/red-orange, 20–35% |
 | Kitchen pendants | Magenta/violet/cyan, 5–15% |
 | Counter task bars | Off |
@@ -689,7 +696,7 @@ Rule: retain the warm L1 anchor so the apartment does not become a gaming-room p
 | Layer | Starting role |
 |---|---|
 | L1 | Deep warm white/amber |
-| Plant Play Bar | Dark amber, burgundy, bronze, or muted olive at 8–18% |
+| L6 Plant Wash | Amber/burgundy accepted after dark; tune by eye in-room, not from phone photos |
 | Cabinet Flux | 2200 K amber or subdued burnt orange at 15–25% |
 | Pendants | Amber at 3–8%, or off |
 | Future picture light | Focused warm white |
@@ -844,6 +851,20 @@ Add:
 
 ## Adding each new light
 
+L6 is now integrated as `plant_wash` / **Plant Wash** using its stable Hue/v1
+ID `"6"`; no Hue v2 UUID is stored. Hue v2 discovers the corresponding UUID
+from the bridge's `/light` resources on each fresh connection.
+
+- Global off, sleeping, away, and uniform all-light safety paths include L6.
+- Automatic mode/weather effects remain explicitly scoped to L1–L5. L6 stays
+  static unless a future room calibration deliberately opts it in.
+- Curated presets give L6 an explicit conservative off target so effect release
+  is safe after a clean restart and established L1–L5 appearances do not drift.
+- Manual explicitly all-light effect endpoints retain their literal semantics
+  and therefore include L6. Per-light effect endpoints can target it directly.
+- Bedroom screen sync remains L2/L5; Latitude laptop sync remains L1/L3/L4.
+  L6 is not in bootstrap, Entertainment, or screen-sync target configuration.
+
 After pairing:
 
 1. Record its actual Hue/v1 ID and name.
@@ -861,12 +882,18 @@ After pairing:
 
 ## Plant wash
 
-1. Confirm clear baseboard strip.
-2. Mock up a 10 in × ~4 in object at the intended location.
-3. Test from couch, kitchen, and entry.
-4. Test teal, blue-violet, amber, and burgundy at low brightness.
-5. Confirm no direct LED glare.
-6. Conceal power adapter and excess cable without pinching or heat buildup.
+Completed August 24, 2026:
+
+1. Installed horizontally on the back edge of the rear/taller plant stand.
+2. Aimed upward with a slight left bias toward the couch/plant mass.
+3. Accepted partial housing visibility imposed by the thin stand frame.
+4. Passed couch, kitchen/island, and entry sightline/glare checks.
+5. Disproved the 10–20% paper assumption; teal/blue-violet reads
+   architecturally at approximately 70–75%.
+6. Confirmed saturated deep blue is too dominant for ordinary scenes and
+   accepted amber/burgundy after dark.
+7. Paired as Hue/v1 ID 6 and named Plant Wash. Entertainment/screen-sync
+   remains deferred.
 
 ## Cabinet Flux
 
@@ -905,7 +932,9 @@ No more broad apartment photo survey is needed.
 
 ## Plant Play Bar
 
-No additional space measurement is required. The stands can be repositioned to create the needed footprint. Final placement should be selected by a low-brightness nighttime mockup from the couch, kitchen, and entry sightlines.
+No remaining physical information is required. Installation, pairing,
+sightline review, and real-room color/brightness calibration are complete; the
+results are recorded in sections 4, 5, 8, 10, and 11.
 
 ## Flux power route
 

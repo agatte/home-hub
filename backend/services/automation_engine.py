@@ -91,7 +91,9 @@ from backend.services.light_state_calculator import (  # noqa: E402
     DEFAULT_MODE_BRIGHTNESS,
     EFFECT_AUTO_MAP,
     LUX_STALE_SECONDS,
+    LEGACY_TIME_BASED_LIGHT_IDS,
     MODE_TRANSITION_TIME,
+    RELAX_DRIFT_LIGHT_IDS,
     WINDDOWN_RAMP_MINUTES,
     ZONE_POSTURE_FRESHNESS_SECONDS,
     adjust_single_light as _adjust_single_light_pure,
@@ -3157,7 +3159,7 @@ class AutomationEngine:
             atmosphere_active = bool(
                 atmosphere_plan is not None and atmosphere_plan.should_apply
             )
-            # The curator owns only its bounded L1/L3/L4 overlay. The ordinary
+            # The curator owns only its bounded L1/L3/L4/L6 overlay. The ordinary
             # pipeline still owns global brightness, environmental processing,
             # protected-light gates, dedup, and Hue application.
             if atmosphere_active:
@@ -3421,7 +3423,7 @@ class AutomationEngine:
             return
 
         drifted: dict[str, dict] = {}
-        for lid in ALL_LIGHT_IDS:
+        for lid in RELAX_DRIFT_LIGHT_IDS:
             ls = base.get(lid, {})
             if not ls or not ls.get("on", True):
                 drifted[lid] = ls
@@ -3563,7 +3565,7 @@ class AutomationEngine:
                 "sat": 200,
             }
             state = self._weather_adjust(state)
-            await self._apply_state(state)
+            await self._apply_legacy_time_based_state(state)
             return
 
         rules = self._build_time_rules(schedule)
@@ -3579,7 +3581,7 @@ class AutomationEngine:
             winddown_state: dict[str, Any] = {"on": True, "bri": 60, "hue": 5500, "sat": 220}
             state = _lerp_light_state(evening_state, winddown_state, progress)
             state = self._weather_adjust(state)
-            await self._apply_state(state)
+            await self._apply_legacy_time_based_state(state)
             return
 
         for start, end, rule in rules:
@@ -3613,8 +3615,21 @@ class AutomationEngine:
                     logger.warning("Unknown rule shape in time-based rules: %r", rule)
                     return
                 state = self._weather_adjust(state)
-                await self._apply_state(state)
+                await self._apply_legacy_time_based_state(state)
                 return
+
+    async def _apply_legacy_time_based_state(
+        self, state: dict[str, Any],
+    ) -> LightApplyResult:
+        """Apply legacy idle scheduling without enrolling Plant Wash in it."""
+        targets = {
+            light_id: state.copy()
+            for light_id in LEGACY_TIME_BASED_LIGHT_IDS
+        }
+        # The old uniform schedule has no reviewed Plant Wash calibration.
+        # Keep this legacy path conservative without changing global fan-out.
+        targets["6"] = {"on": False}
+        return await self._apply_state(targets)
 
     # ------------------------------------------------------------------
     # Background loop

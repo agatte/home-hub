@@ -17,6 +17,7 @@ from backend.services.living_room_context import (
     DecisionOutcome,
     Evidence,
     FreshnessStatus,
+    LIVING_ROOM_LIGHT_IDS,
     LightOwnership,
     ProcessArbitration,
     LivingRoomDecisionGate,
@@ -499,6 +500,19 @@ def test_laptop_screen_sync_living_room_is_safe_fallback() -> None:
         active=True,
         source="laptop",
         light_ids=("1", "3", "4"),
+        freshness=FreshnessStatus.FRESH,
+    )
+    result = _decision(_snapshot(screen_sync_ownership=owner))
+    assert result.outcome == DecisionOutcome.SAFE_FALLBACK
+    assert "screen_sync_living_room_owner" in result.reason_codes
+
+
+def test_plant_wash_is_living_room_ownership() -> None:
+    assert "6" in LIVING_ROOM_LIGHT_IDS
+    owner = LightOwnership(
+        active=True,
+        source="unexpected",
+        light_ids=("6",),
         freshness=FreshnessStatus.FRESH,
     )
     result = _decision(_snapshot(screen_sync_ownership=owner))

@@ -124,13 +124,19 @@ class HueV2Service:
         resp.raise_for_status()
         data = resp.json()
 
+        v1_to_v2: dict[str, str] = {}
+        v2_to_v1: dict[str, str] = {}
         for light in data.get("data", []):
             v2_id = light.get("id", "")
             v1_ref = light.get("id_v1", "")
             if v1_ref.startswith("/lights/"):
                 v1_id = v1_ref.split("/")[-1]
-                self._v1_to_v2[v1_id] = v2_id
-                self._v2_to_v1[v2_id] = v1_id
+                v1_to_v2[v1_id] = v2_id
+                v2_to_v1[v2_id] = v1_id
+        # Bridge inventory can change between connects. Swap only a fully
+        # rebuilt pair so removed fixtures cannot leave stale reverse entries.
+        self._v1_to_v2 = v1_to_v2
+        self._v2_to_v1 = v2_to_v1
 
     def v1_to_v2_id(self, v1_id: str) -> Optional[str]:
         """Convert a v1 light ID to its v2 UUID."""

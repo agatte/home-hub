@@ -43,6 +43,7 @@ LIGHT_IDS: dict[str, str] = {
     "kitchen_front": "3",
     "kitchen_back": "4",
     "bedroom_lamp_right": "5",
+    "plant_wash": "6",
 }
 
 # Canonical tuple of every fixture ID. Use this anywhere operational
@@ -50,6 +51,24 @@ LIGHT_IDS: dict[str, str] = {
 # single LIGHT_IDS edit rather than a tree-wide audit of hardcoded
 # tuples.
 ALL_LIGHT_IDS: tuple[str, ...] = tuple(LIGHT_IDS.values())
+
+# The legacy idle/time schedule predates Plant Wash. Keep its ordinary-bulb
+# targets on the original fixtures only; Plant Wash has an explicit
+# conservative target at that call site instead of inheriting a uniform state.
+LEGACY_TIME_BASED_LIGHT_IDS: tuple[str, ...] = (
+    "1", "2", "3", "4", "5",
+)
+
+# Relax drift is a deliberately aesthetic, pre-Plant-Wash fixture effect.
+# Plant Wash remains static under its reviewed mode/atmosphere ownership.
+RELAX_DRIFT_LIGHT_IDS: tuple[str, ...] = (
+    "1", "2", "3", "4", "5",
+)
+
+# Automatic Hue v2 effects preserve the reviewed five-fixture scope. Newly
+# installed fixtures must opt in after a deliberate effect-capability review;
+# Plant Wash is intentionally static and absent from this tuple.
+AUTOMATIC_EFFECT_LIGHT_IDS: tuple[str, ...] = ("1", "2", "3", "4", "5")
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +278,10 @@ _LIGHT_OFF = {"on": False}
 # _get_desired_effect returns None for it.
 EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     "relax": {
-        "day":        {"effect": "opal",   "lights": None},
+        "day":        {
+            "effect": "opal",
+            "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
+        },
         # Evening previously fired candle on L1+L2; removed 2026-05-09 because
         # the effect locked color values and persisted through mode changes,
         # masking other lighting decisions. Static palette is enough.
@@ -274,8 +296,14 @@ EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     "cooking":  {"day": None, "evening": None, "night": None},
     "watching": {
         "day":     None,
-        "evening": {"effect": "glisten", "lights": None},
-        "night":   {"effect": "glisten", "lights": None},
+        "evening": {
+            "effect": "glisten",
+            "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
+        },
+        "night": {
+            "effect": "glisten",
+            "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
+        },
     },
     # Gameday — fully custom CelebrationOrchestrator sequences own all
     # visual effects during plays (Decision 1.3a in docs/GAMEDAY_SPEC.md).
@@ -321,8 +349,8 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         # sat bumped (teal desaturates toward white faster than blue, so it
         # needs more sat to hold color): 170/180/185/165 -> 185/195/200/180.
         # Echoes the L1 ceramic base + monstera pot; live-previewed + approved.
-        # Daytime Gaming is functional fill, not mood lighting. With only
-        # five fixtures, saturated blue/teal consumes too much of the
+        # Daytime Gaming is functional fill, not mood lighting. Saturated
+        # blue/teal consumes too much of the
         # apartment's daytime light budget. Hold a coherent 3500K neutral
         # white across the room; weather/lux may still lift brightness only.
         # Evening/night retain the atmospheric blue/teal palette.
@@ -332,6 +360,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 30,  "ct": 286},
             "4": {"on": True, "bri": 30,  "ct": 286},
             "5": {"on": True, "bri": 90,  "ct": 286},
+            "6": {"on": True, "bri": 90,  "ct": 286},
         },
         # Surround floor raised 2026-05-30 (lighting-curator stage-1, advisory
         # agent a627831): L1 + kitchen L3/L4 lifted across evening/night/
@@ -346,6 +375,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 40,  "hue": 39500, "sat": 195},
             "4": {"on": True, "bri": 40,  "hue": 39500, "sat": 195},
             "5": {"on": True, "bri": 75,  "hue": 48000, "sat": 170},
+            "6": {"on": True, "bri": 185, "hue": 45000, "sat": 165},
         },
         "night": {
             "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 190},
@@ -353,6 +383,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 25,  "hue": 39500, "sat": 190},
             "4": {"on": True, "bri": 25,  "hue": 39500, "sat": 190},
             "5": {"on": True, "bri": 45,  "hue": 48000, "sat": 165},
+            "6": {"on": True, "bri": 170, "hue": 46500, "sat": 165},
         },
         # Late-night gaming — warmer accent, less saturation, dimmed overall.
         # L1 shifts toward muted teal, L2 (desk dominant) keeps the blue but
@@ -364,6 +395,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 18,  "hue": 39500, "sat": 160},
             "4": {"on": True, "bri": 18,  "hue": 39500, "sat": 160},
             "5": {"on": True, "bri": 35,  "hue": 47500, "sat": 140},
+            "6": {"on": True, "bri": 90,  "hue": 64000, "sat": 185},
         },
     },
     # ── Working ───────────────────────────────────────────────────────
@@ -386,6 +418,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             # dual-CT fight in the desk zone (L2 at ct=210 is the daytime
             # exception; L1+L5 anchor at 233 for coherence).
             "5": {"on": True, "bri": 220, "ct": 233},
+            "6": {"on": True, "bri": 100, "ct": 286},
         },
         "evening": {
             "1": {"on": True, "bri": 100, "ct": 370},
@@ -395,6 +428,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             # L5 evening: dim + warm step-back (fixture physics already
             # push L5 cooler at mirror values; correction reverses it).
             "5": {"on": True, "bri": 140, "ct": 370},
+            "6": {"on": True, "bri": 65, "ct": 400},
         },
         "night": {
             "1": {"on": True, "bri": 45,  "ct": 440},
@@ -404,6 +438,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             # L5 night: depth gradient — L2 stays dominant desk read,
             # L5 sits in ambient layer alongside L1.
             "5": {"on": True, "bri": 60,  "ct": 420},
+            "6": _LIGHT_OFF,
         },
         # Distinct from night: warmer and slightly brighter so 1am+ desk
         # work stays readable without falling back to relax-dim. Kitchen
@@ -416,6 +451,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             # L5 late_night: clear housing reads bright from the desk, so keep
             # it as a warm low accent while L2 carries the task read.
             "5": {"on": True, "bri": 40, "ct": 470},
+            "6": _LIGHT_OFF,
         },
     },
     # ── Watching ──────────────────────────────────────────────────────
@@ -429,6 +465,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 30,  "ct": 333},
             "4": {"on": True, "bri": 30,  "ct": 333},
             "5": {"on": True, "bri": 70,  "ct": 333},
+            "6": {"on": True, "bri": 65,  "ct": 333},
         },
         # L5 Phase C 2026-05-11: dimmer + warmer than L2 in watching evening/
         # night. Seated user-perspective photo shows L5 in line-of-sight peripheral
@@ -441,6 +478,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
             "5": {"on": True, "bri": 15,  "ct": 454},
+            "6": {"on": True, "bri": 35,  "ct": 454},
         },
         "night": {
             "1": {"on": True, "bri": 45,  "ct": 454},
@@ -448,6 +486,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": _LIGHT_OFF,
             "4": _LIGHT_OFF,
             "5": {"on": True, "bri": 12,  "ct": 500},
+            "6": {"on": True, "bri": 20,  "ct": 500},
         },
     },
     # ── Social ────────────────────────────────────────────────────────
@@ -474,6 +513,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
         # slightly brighter at equal bri, so 140 there exaggerates that
         # deliberately into a foreground-vs-background pair.
         "5": {"on": True, "bri": 140, "hue": 7500,  "sat": 185},
+        "6": {"on": True, "bri": 175, "hue": 64000, "sat": 185},
     },
     # ── Gameday ──────────────────────────────────────────────────────
     # PLACEHOLDER values — slice B's CelebrationOrchestrator authoring
@@ -493,6 +533,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 140, "hue": 8000,  "sat": 130},
             "4": {"on": True, "bri": 140, "hue": 8000,  "sat": 130},
             "5": {"on": True, "bri": 200, "hue": 8000,  "sat": 130},
+            "6": {"on": True, "bri": 150, "hue": 47000, "sat": 170},
         },
         "evening": {
             "1": {"on": True, "bri": 110, "hue": 47000, "sat": 200},
@@ -500,6 +541,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 60,  "hue": 7000,  "sat": 160},
             "4": {"on": True, "bri": 60,  "hue": 7000,  "sat": 160},
             "5": {"on": True, "bri": 150, "hue": 7000,  "sat": 160},
+            "6": {"on": True, "bri": 120, "hue": 47000, "sat": 180},
         },
         "night": {
             "1": {"on": True, "bri": 70,  "hue": 47000, "sat": 200},
@@ -507,6 +549,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 30,  "hue": 6500,  "sat": 200},
             "4": {"on": True, "bri": 30,  "hue": 6500,  "sat": 200},
             "5": {"on": True, "bri": 100, "hue": 6500,  "sat": 200},
+            "6": {"on": True, "bri": 85,  "hue": 47000, "sat": 180},
         },
         "late_night": {
             "1": {"on": True, "bri": 50,  "hue": 47000, "sat": 200},
@@ -514,6 +557,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 18,  "hue": 6000,  "sat": 180},
             "4": {"on": True, "bri": 18,  "hue": 6000,  "sat": 180},
             "5": {"on": True, "bri": 70,  "hue": 6000,  "sat": 200},
+            "6": {"on": True, "bri": 60,  "hue": 47000, "sat": 170},
         },
     },
     # ── Pregameday ────────────────────────────────────────────────────
@@ -531,6 +575,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 120, "hue": 8500,  "sat": 105},
             "4": {"on": True, "bri": 120, "hue": 8500,  "sat": 105},
             "5": {"on": True, "bri": 180, "hue": 8500,  "sat": 105},
+            "6": {"on": True, "bri": 130, "hue": 47000, "sat": 155},
         },
         "evening": {
             "1": {"on": True, "bri": 100, "hue": 47000, "sat": 175},
@@ -538,6 +583,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 50,  "hue": 7500,  "sat": 135},
             "4": {"on": True, "bri": 50,  "hue": 7500,  "sat": 135},
             "5": {"on": True, "bri": 130, "hue": 7500,  "sat": 135},
+            "6": {"on": True, "bri": 100, "hue": 47000, "sat": 165},
         },
         "night": {
             "1": {"on": True, "bri": 60,  "hue": 47000, "sat": 175},
@@ -545,6 +591,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 25,  "hue": 6800,  "sat": 170},
             "4": {"on": True, "bri": 25,  "hue": 6800,  "sat": 170},
             "5": {"on": True, "bri": 85,  "hue": 6800,  "sat": 170},
+            "6": {"on": True, "bri": 70,  "hue": 47000, "sat": 165},
         },
         # Late-night L5 bumped to bri=75 (vs L2's 60) per lighting-curator
         # advisory 2026-05-15: L5 clear-housing fixture amplifies saturation
@@ -558,6 +605,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 15,  "hue": 6300,  "sat": 150},
             "4": {"on": True, "bri": 15,  "hue": 6300,  "sat": 150},
             "5": {"on": True, "bri": 75,  "hue": 6300,  "sat": 170},
+            "6": {"on": True, "bri": 50,  "hue": 47000, "sat": 155},
         },
     },
     # ── Relax ─────────────────────────────────────────────────────────
@@ -572,6 +620,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 85, "hue": 8000,  "sat": 190},
+            "6": {"on": True, "bri": 185, "hue": 44000, "sat": 165},
         },
         # L5 Phase C 2026-05-11: raised above L2 mirror so it registers as a
         # genuine second accent — bedroomL2andL5TogetherSittingAtDesk.jpeg
@@ -584,6 +633,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 15, "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 15, "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 75, "hue": 6000,  "sat": 210},
+            "6": {"on": True, "bri": 165, "hue": 64000, "sat": 185},
         },
         # L5 Phase C 2026-05-11: brighter seed for the fire-effect host. Fire is
         # scoped to L1+L2+L5 (per EFFECT_AUTO_MAP), so L5 at higher bri makes
@@ -596,6 +646,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 8,  "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 38, "hue": 4000,  "sat": 240},
+            "6": {"on": True, "bri": 110, "hue": 65000, "sat": 200},
         },
         # Late-night relax — retuned 2026-05-05. L1/L2 sat254 at bri 28/22
         # produced oppressive cave-burgundy. Sat dropped to 240 (still
@@ -606,6 +657,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 5,  "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 26, "hue": 2500,  "sat": 240},
+            "6": {"on": True, "bri": 75,  "hue": 65000, "sat": 190},
         },
     },
     # ── Cooking ───────────────────────────────────────────────────────
@@ -616,6 +668,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 254, "ct": 286},
             "4": {"on": True, "bri": 254, "ct": 286},
             "5": {"on": True, "bri": 80,  "ct": 333},
+            "6": {"on": True, "bri": 90,  "ct": 320},
         },
         "evening": {
             "1": {"on": True, "bri": 100, "ct": 370},
@@ -623,6 +676,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 230, "ct": 333},
             "4": {"on": True, "bri": 230, "ct": 333},
             "5": {"on": True, "bri": 50,  "ct": 400},
+            "6": {"on": True, "bri": 55,  "ct": 400},
         },
         "night": {
             "1": {"on": True, "bri": 45,  "ct": 420},
@@ -630,6 +684,7 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 130, "ct": 370},
             "4": {"on": True, "bri": 130, "ct": 370},
             "5": {"on": True, "bri": 18,  "ct": 454},
+            "6": _LIGHT_OFF,
         },
     },
 }
@@ -839,6 +894,7 @@ GAME_LIGHT_PROFILES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 35,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 35,  "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 105, "hue": 6500, "sat": 195},
+            "6": {"on": True, "bri": 130, "hue": 39500, "sat": 140},
         },
         "evening": {
             "1": {"on": True, "bri": 70,  "hue": 5500, "sat": 215},
@@ -846,6 +902,7 @@ GAME_LIGHT_PROFILES: dict[str, dict[str, Any]] = {
             "3": {"on": True, "bri": 40,  "hue": 20000, "sat": 100},
             "4": {"on": True, "bri": 40,  "hue": 20000, "sat": 100},
             "5": {"on": True, "bri": 80,  "hue": 6500, "sat": 195},
+            "6": {"on": True, "bri": 120, "hue": 64000, "sat": 185},
         },
         "night": {
             "1": {"on": True, "bri": 70,  "hue": 5500, "sat": 215},
@@ -857,6 +914,7 @@ GAME_LIGHT_PROFILES: dict[str, dict[str, Any]] = {
             # pops as the brightest desk element (clear_housing_perceptual_luma).
             # Keeps the ember "spark" present without becoming the glare point.
             "5": {"on": True, "bri": 58,  "hue": 6500, "sat": 195},
+            "6": {"on": True, "bri": 90,  "hue": 65000, "sat": 195},
         },
         # L2 holds the canonical ember (hue 6000/sat 200) in EVERY period so it
         # stays in lock-step with RUST_EMBER_* in screen_sync.py — only its bri
@@ -870,6 +928,7 @@ GAME_LIGHT_PROFILES: dict[str, dict[str, Any]] = {
             # L5 trimmed 55→46 (curator a495d62): same glare-pop guard as night,
             # L2 floors to ~22 at late_night.
             "5": {"on": True, "bri": 46,  "hue": 6000, "sat": 195},
+            "6": {"on": True, "bri": 60,  "hue": 65000, "sat": 185},
         },
     },
 }
