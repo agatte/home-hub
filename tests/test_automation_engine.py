@@ -2966,10 +2966,12 @@ class _StubFusion:
 
     def __init__(
         self, fused_mode: str, fused_confidence: float, *, can_override=False,
+        auto_apply=False,
     ):
         self._fm = fused_mode
         self._fc = fused_confidence
         self._can_override = can_override
+        self._auto_apply = auto_apply
 
     def compute_fusion(self):
         return {
@@ -2978,6 +2980,7 @@ class _StubFusion:
             "agreement": 0.9,
             "signals": {},
             "can_override": self._can_override,
+            "auto_apply": self._auto_apply,
         }
 
     def report_signal(self, *args, **kwargs):
@@ -3314,11 +3317,18 @@ class TestRecentDeskAttendanceVeto:
             120, at_desk_fresh=False,
         )
         engine._current_mode = "idle"
-        engine._confidence_fusion = _StubFusion("working", 0.96)
+        engine._confidence_fusion = _StubFusion(
+            "working", 0.96, auto_apply=True,
+        )
 
         await _drive_one_tick(engine)
 
         assert engine.manual_override is False
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "fusion"
+        assert call["applied"] is False
+        assert call["factors"]["shadow_candidate"] == "auto_apply"
+        assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
 
     async def test_fusion_override_vetoes_recent_desk_attendance(
         self, monkeypatch, engine,
@@ -3342,28 +3352,17 @@ class TestRecentDeskAttendanceVeto:
         assert call["applied"] is False
         assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
 
-class TestFusionAutoApplyNoOp:
-    """Regression coverage for the 2026-05-12 idle-lock incident.
-
-    Bug: ``fusion_auto_apply`` (automation_engine.py:2378) fired with
-    ``fm=idle, fc=0.96, _current_mode=idle`` at 14:10 UTC and set a 4h
-    manual override to ``idle`` — the same mode that was already in
-    place. The override then rejected 116 minutes of organic PC-agent
-    activity reports via the ``_manual_override`` guard at line 895.
-
-    Fix: add ``fm != self._current_mode`` to the elif condition (matches
-    the sibling ``fusion_can_override`` branch's no-op guard at 2330).
-    """
+class TestFusionShadowOnlyAuthority:
+    """Fusion remains observable but has no mode-actuation authority."""
 
     @pytest.fixture(autouse=True)
     def _pin_evening_period(self, monkeypatch):
         """Pin ``_get_time_period`` to ``"evening"`` for every test in this
-        class. Without this, the late_night_rescue branch (run_loop ~2615)
-        fires first whenever the test suite runs after 23:00 local and
-        overrides mode to ``"relax"`` before fusion_auto_apply can act —
-        the test then sees ``_override_mode='relax'`` instead of the
-        expected ``'working'``. Same pattern as ``_force_daytime`` in
-        test_confidence_fusion.py / project_fusion_test_time_gotcha.md.
+        class. This isolates the fusion shadow-only assertions from the
+        unrelated late-night rescue path, which may set an autonomous
+        ``relax`` override before the fusion tick is evaluated. Fusion
+        eligibility remains observable here, but fusion itself cannot
+        actuate or set an override.
         """
         monkeypatch.setattr(
             AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
@@ -3374,8 +3373,9 @@ class TestFusionAutoApplyNoOp:
         eng = AutomationEngine(
             hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
         )
-        # No camera + no process-working stamp → both attendance vetoes
-        # return False, so they don't mask the no-op guard's behavior.
+        eng._ml_logger = _FakeMLLogger()
+        # No camera + no process-working stamp means former actuation
+        # eligibility is recorded as an unvetoed shadow candidate.
         eng._camera_service = None
         eng._last_process_working_at = None
         return eng
@@ -3383,54 +3383,95 @@ class TestFusionAutoApplyNoOp:
     async def test_skips_when_predicted_equals_current(self, engine):
         engine._current_mode = "idle"
         engine._manual_override = False
-        engine._confidence_fusion = _StubFusion("idle", 0.96)
+        engine._confidence_fusion = _StubFusion(
+            "idle", 0.96, auto_apply=True,
+        )
 
         await _drive_one_tick(engine)
 
         assert engine.manual_override is False
         assert engine._override_mode is None
 
-    async def test_fires_when_predicted_differs_from_current(self, engine):
-        # Positive case: with fm != current, the branch SHOULD fire so the
-        # no-op guard doesn't accidentally widen into a regression on
-        # legitimate auto-apply.
+    async def test_auto_apply_result_cannot_set_manual_override(self, engine):
         engine._current_mode = "idle"
         engine._manual_override = False
-        engine._confidence_fusion = _StubFusion("working", 0.96)
+        engine._confidence_fusion = _StubFusion(
+            "working", 0.96, auto_apply=True,
+        )
+        engine.set_manual_override = AsyncMock(
+            wraps=engine.set_manual_override,
+        )
 
         await _drive_one_tick(engine)
 
-        assert engine.manual_override is True
-        assert engine._override_mode == "working"
+        engine.set_manual_override.assert_not_awaited()
+        assert engine.manual_override is False
+        assert engine._last_fusion_result["auto_apply"] is True
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "fusion"
+        assert call["applied"] is False
+        assert call["broadcast"] is False
+        assert call["factors"]["action"] == "shadow"
+        assert call["factors"]["shadow_candidate"] == "auto_apply"
 
-    async def test_camera_at_desk_blocks_even_when_modes_differ(self, engine):
-        # Defense-in-depth guard #1: camera-at-desk veto.
+    async def test_can_override_result_cannot_set_manual_override(self, engine):
+        engine._current_mode = "working"
+        engine._manual_override = False
+        engine._confidence_fusion = _StubFusion(
+            "watching", 0.93, can_override=True,
+        )
+        engine.set_manual_override = AsyncMock(
+            wraps=engine.set_manual_override,
+        )
+
+        await _drive_one_tick(engine)
+
+        engine.set_manual_override.assert_not_awaited()
+        assert engine.manual_override is False
+        assert engine._last_fusion_result["can_override"] is True
+        call = engine._ml_logger.calls[0]
+        assert call["decision_source"] == "fusion"
+        assert call["applied"] is False
+        assert call["broadcast"] is False
+        assert call["factors"]["action"] == "shadow"
+        assert call["factors"]["shadow_candidate"] == "override"
+
+    async def test_camera_at_desk_veto_is_preserved_in_shadow(self, engine):
         recent = datetime.now(timezone.utc) - timedelta(seconds=5)
         engine._camera_service = _FakeEnabledCamera(
             zone="desk", enabled=True, zone_committed_at=recent,
         )
         engine._current_mode = "idle"
         engine._manual_override = False
-        engine._confidence_fusion = _StubFusion("working", 0.96)
+        engine._confidence_fusion = _StubFusion(
+            "working", 0.96, auto_apply=True,
+        )
 
         await _drive_one_tick(engine)
 
         assert engine.manual_override is False
+        call = engine._ml_logger.calls[0]
+        assert call["factors"]["shadow_candidate"] == "auto_apply"
+        assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
 
-    async def test_recent_process_working_blocks_even_when_modes_differ(
+    async def test_recent_process_working_veto_is_preserved_in_shadow(
         self, engine,
     ):
-        # Defense-in-depth guard #2: process-attendance veto.
         engine._last_process_working_at = (
             datetime.now(tz=TZ) - timedelta(seconds=60)
         )
         engine._current_mode = "idle"
         engine._manual_override = False
-        engine._confidence_fusion = _StubFusion("watching", 0.96)
+        engine._confidence_fusion = _StubFusion(
+            "watching", 0.96, auto_apply=True,
+        )
 
         await _drive_one_tick(engine)
 
         assert engine.manual_override is False
+        call = engine._ml_logger.calls[0]
+        assert call["factors"]["shadow_candidate"] == "auto_apply"
+        assert call["factors"]["vetoed_by"] == "process_working_recent"
 
 
 # ---------------------------------------------------------------------------
