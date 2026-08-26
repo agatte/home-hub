@@ -2,9 +2,9 @@
 
 Combines confidence scores from multiple detection signals (process
 detection, camera presence, audio classification, rule engine) into
-a single weighted ensemble. The fused result can auto-apply mode
-changes at high confidence or suggest them via the dashboard at
-lower thresholds.
+a single weighted ensemble. The fused result exposes confidence and
+agreement-derived diagnostic flags for shadow observation; it does not
+actuate production mode changes.
 
 Pure Python — no external dependencies beyond the standard library.
 """

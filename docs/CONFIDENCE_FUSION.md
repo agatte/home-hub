@@ -6,7 +6,18 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-05-26 (v4)
+> **Last updated:** 2026-08-25 (shadow-only authority contract)
+
+## Current Authority Contract (2026-08-25)
+
+ConfidenceFusion computes the same four-lane weighted result, including the
+`auto_apply` and `can_override` diagnostic flags, but it is strictly
+shadow-only. `AutomationEngine` records every fusion result as `applied=False`
+and has no fusion call path to `set_manual_override`. Former actuation
+eligibility is retained as `factors.shadow_candidate` telemetry, and existing
+attendance vetoes remain visible through `factors.vetoed_by`. Any future mode
+authority requires a separate, explicitly approved gate and implementation
+change. The changelogs below retain the historical evolution of the subsystem.
 
 ## v4 Changelog (2026-05-26)
 
@@ -120,7 +131,7 @@ Fusion takes the independent signals and makes them **vote together**:
 
 **After (v3):** Four signals — process / camera / audio_ml / rule_engine — report their current best guess + confidence into a shared pool. The fusion service weights them, groups votes by mode, computes an ensemble confidence score, and asks "do enough signals agree?" (Earlier ensemble shapes — v1 5-signal, v2 6-signal — are documented in the changelog above.)
 
-**New capability:** Fusion can **override stale process detection**. If you close a game but the client is still running, pre-fusion the system would keep saying "gaming" forever. Now, if camera says absent + audio says silence + rule engine agrees, fusion can hit 92%+ confidence and override the stale process state. (The phone-WiFi presence lane was retired 2026-04-27 alongside the home/away concept; v3 fusion has 4 lanes: process / camera / audio_ml / rule_engine.)
+**New diagnostic capability:** Fusion can identify a strong stale-process replacement candidate. If camera says absent + audio says silence + rule engine agrees, fusion can set `can_override=True` at 92%+ confidence and 80%+ agreement. That flag is observable shadow evidence only and cannot override the production mode. (The phone-WiFi presence lane was retired 2026-04-27 alongside the home/away concept; v3 fusion has 4 lanes: process / camera / audio_ml / rule_engine.)
 
 **The key conceptual shift:**
 
@@ -196,13 +207,14 @@ idle votes:
 - **Fused confidence** = the winner's total. In this case: **66.7%**
 - **Agreement** = (signals voting for winner) / (total active signals). In this case: 2/3 = **67%**
 
-The 66.7% confidence is below the 95% auto-apply threshold, so fusion won't act. The UI would show "working 67% · 2/3 agree" and the existing priority system continues handling the decision.
+The 66.7% confidence is below the 95% `auto_apply` diagnostic threshold. The UI would show "working 67% · 2/3 agree" and the existing priority system continues handling the decision. Even above the threshold, fusion remains shadow-only.
 
 ---
 
-## Action Thresholds
+## Diagnostic Thresholds
 
-Fusion only acts when specific conditions are met:
+Fusion exposes candidate flags when specific conditions are met; neither flag
+grants actuation authority:
 
 | Threshold | Meaning | Requires |
 |-----------|---------|----------|
@@ -211,9 +223,15 @@ Fusion only acts when specific conditions are met:
 
 The difference matters:
 
-- **`auto_apply`** is used when you're idle/away and fusion is confident enough to set a mode. This is the normal "I think you're about to game, let me set the lights" case.
+- **`auto_apply`** identifies the high-confidence idle-mode case that was the
+  former auto-apply eligibility path. It is now shadow telemetry only; it
+  never sets a production mode or lights.
 
-- **`can_override`** is the dramatic one — it can override an **active** process detection. This is the "you left a game running but everything else says you left the apartment" case. Because it's overriding what the PC is actively reporting, the bar is much higher.
+- **`can_override`** identifies strong evidence that could replace an
+  **active** process detection, such as a game left running after departure.
+  It is now shadow telemetry only; it never overrides the production mode.
+  Because this evidence conflicts with active PC reporting, the diagnostic bar
+  is much higher.
 
 ---
 
@@ -256,7 +274,7 @@ idle votes:
   idle total:                 0.230  (23.0%)
 ```
 
-**Result:** working at 67% · 3 of 4 signals agree. **Below auto-apply threshold** (95%) — fusion doesn't act. Process detection's priority-based decision stands.
+**Result:** working at 67% · 3 of 4 signals agree. **Below the `auto_apply` diagnostic threshold** (95%). Process detection's priority-based decision stands; fusion would remain non-actuating even above the threshold.
 
 ### Example 2: Stale Process Override (The Dramatic Case)
 
@@ -286,7 +304,7 @@ Votes:
 - **Agreement:** 2/3 = 67%
 - **Fused confidence:** 72.3%
 
-Below 95% auto-apply and below the 80% agreement bar for `can_override`, so fusion does not displace gaming on its own. But the stale process lane is no longer dominating — **without it, the remaining 3 voters can speak**, and the next refresh of process (or scheduler tick that flips into sleeping mode) will close the loop. This is the design intent of stale-redistribution: the system stops being held hostage by the dead process lane without flipping modes erratically.
+Below 95% `auto_apply` and below the 80% agreement bar for `can_override`, so neither diagnostic flag is set. The stale process lane is no longer dominating — **without it, the remaining 3 voters can speak** in the observable result. Production mode ownership remains with the non-fusion automation paths.
 
 ### Example 3: Can_override Triggering (or Not)
 
@@ -314,7 +332,7 @@ idle votes:
 
 Below the 92% `can_override` threshold (and below 80% agreement). Fusion does **not** override the active process lane. Gaming stays.
 
-For `can_override` to actually fire — pulling the live process lane down — every non-process voter needs to be screaming in agreement at near-1.0 confidence. With process at 0.438 of the weight, the other 3 lanes sum to 0.562 of the weight, and even at perfect 1.0 confidence each, idle tops out at 0.562. **That's by design.** `can_override` is the conservative path — it's meant to fire only when the camera/audio/rule consensus is so loud that the dead process detection becomes obvious noise.
+For `can_override` to become true diagnostically, every non-process voter needs to be screaming in agreement at near-1.0 confidence. With process at 0.438 of the weight, the other 3 lanes sum to 0.562 of the weight, and even at perfect 1.0 confidence each, idle tops out at 0.562. **That's by design.** The flag identifies only unusually strong camera/audio/rule consensus; it does not pull down the live process lane.
 
 In practice, `can_override` fires more naturally **once process goes stale** (Example 2's mechanic) than from a 4-vs-1 disagreement against a live process lane. The 5-min stale window is short enough that this almost always happens within a few minutes of you leaving the apartment.
 
@@ -326,7 +344,7 @@ The static weights above are the starting point. Accuracy-driven tuning runs nig
 
 **How it works:**
 
-1. Every fusion auto-apply or override (and every silent 60s tick — see "Fusion shadow logging") writes an `ml_decisions` row with `decision_source="fusion"`. The automation engine stamps `factors.signal_details` with a per-source dict (each source's voted mode + confidence + stale flag) at log time.
+1. Every fusion result writes an `applied=False, broadcast=False` `ml_decisions` row with `decision_source="fusion"`. The automation engine stamps `factors.signal_details` with a per-source dict (each source's voted mode + confidence + stale flag) and records former actuation eligibility in `factors.shadow_candidate`.
 2. `MLDecisionLogger.compute_per_source_metrics(days=14)` walks those rows where `actual_mode` has been backfilled, and for each non-stale signal source, returns `{accuracy, samples, correct}` per source. The legacy `compute_accuracy_by_source` is now a thin wrapper that flattens this to `{src: accuracy}` for callers that only need the ratios.
 3. `ConfidenceFusion.update_weights_from_accuracy()` normalizes those accuracies so the active weights sum to 1.0. Sources with zero usable samples in the window fall back to `DEFAULT_WEIGHTS`. **Weight floor (2026-05-26):** before normalization, each lane's raw value is floored at `DEFAULT_WEIGHTS[src] * WEIGHT_FLOOR_FRACTION` (currently 0.5). This prevents the nightly tuner from starving camera/audio_ml — those lanes vote presence/ambient correctly but their mode-match accuracy is structurally low (~8-9%), which without the floor would drive process toward ~0.62 and the other lanes toward zero, making fusion effectively process-only. Surfaced by the 2026-05-25 fusion-lane audit.
 4. **New (2026-04-28):** `MLDecisionLogger.persist_accuracy_metrics()` writes one `MLMetric` row per source per UTC day (`metric_name="accuracy_<source>"`, value in `[0, 1]`, `extra={samples, correct, window_days}`). Idempotent for a given date via delete-then-insert, so re-runs leave one final row per source. Before this, the `ml_metrics` table existed but was never written to — the analytics dashboard had no historical accuracy to query.
@@ -373,4 +391,4 @@ The whole thing updates in real-time via the existing `pipeline_state` WebSocket
 
 Fusion is the piece that makes Home Hub's ML actually *feel* intelligent. Before, each specialist knew part of the story. Now the system has a shared view of what's happening and can catch cases no individual signal could catch on its own — like realizing you've left even when a game process is still running.
 
-It's also the foundation for Phase 3 full autonomy. With accuracy-driven weight learning shipped, the remaining gate is: override rate sustained below 2/day for 30 days → the system has earned the right to run on autopilot. Rate is tracked at `GET /api/learning/override-rate` (7d + 30d windows). A/B accuracy of fusion vs rule-engine vs process-priority on the same backfilled row set lives at `GET /api/learning/compare`.
+It's also an evidence source for any future Phase 3 autonomy proposal. Accuracy-driven weight learning, override rate (`GET /api/learning/override-rate`), and the A/B comparison (`GET /api/learning/compare`) can inform that proposal, but they do not grant authority. Fusion remains shadow-only until a separate, explicitly approved authority gate and implementation change exist.

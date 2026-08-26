@@ -4014,7 +4014,9 @@ class AutomationEngine:
                     # when nothing to expire (single indexed query per tick).
                     await rule_engine.expire_stale_pending()
 
-                # Confidence fusion — compute and optionally act
+                # Confidence fusion — compute and observe only. Fusion has no
+                # mode-actuation authority; promotion requires a separate,
+                # explicitly approved authority gate in a future change.
                 fusion = getattr(self, "_confidence_fusion", None)
                 if fusion:
                     fusion_result = fusion.compute_fusion()
@@ -4022,13 +4024,12 @@ class AutomationEngine:
                         self._last_fusion_result = fusion_result
                         fc = fusion_result["fused_confidence"]
                         fm = fusion_result["fused_mode"]
-                        acted = False
+                        shadow_candidate = None
+                        veto_reason = None
 
-                        # Can override stale process detection at 92%+
-                        # with 80%+ agreement — unless camera sees Anthony
-                        # at the desk, in which case fusion's vote loses
-                        # to direct physical presence and the decision is
-                        # logged as vetoed instead of actuated.
+                        # Preserve former actuation eligibility and attendance
+                        # vetoes as shadow telemetry without granting fusion a
+                        # writer path into set_manual_override().
                         if (
                             fusion_result.get("can_override")
                             and not self._manual_override
@@ -4036,95 +4037,36 @@ class AutomationEngine:
                             and fm != self._current_mode
                         ):
                             veto_reason = self._attendance_veto_reason()
-                            if veto_reason is not None:
-                                logger.debug(
-                                    "Fusion override suppressed (%s): %s -> %s @ %.2f",
-                                    veto_reason, self._current_mode, fm, fc,
-                                )
-                                if ml_logger:
-                                    await ml_logger.log_decision(
-                                        predicted_mode=fm,
-                                        confidence=fc,
-                                        decision_source="fusion",
-                                        factors={
-                                            "agreement": fusion_result["agreement"],
-                                            "signal_details": fusion_result["signals"],
-                                            "action": "override",
-                                            "vetoed_by": veto_reason,
-                                        },
-                                        applied=False,
-                                    )
-                                acted = True  # don't double-log as shadow below
-                            else:
-                                logger.info(
-                                    "Fusion override: %s -> %s "
-                                    "(%.0f%% confidence, %.0f%% agreement)",
-                                    self._current_mode, fm, fc * 100,
-                                    fusion_result["agreement"] * 100,
-                                )
-                                await self.set_manual_override(fm, source="fusion_can_override")
-                                acted = True
-                                if ml_logger:
-                                    await ml_logger.log_decision(
-                                        predicted_mode=fm,
-                                        confidence=fc,
-                                        decision_source="fusion",
-                                        factors={
-                                            "agreement": fusion_result["agreement"],
-                                            "active_signals": len([
-                                                s for s in
-                                                fusion_result["signals"].values()
-                                                if not s["stale"]
-                                            ]),
-                                            "signal_details": fusion_result["signals"],
-                                            "action": "override",
-                                        },
-                                        applied=True,
-                                    )
+                            shadow_candidate = "override"
                         elif (
-                            fc >= 0.95
+                            fusion_result.get("auto_apply")
                             and not self._manual_override
                             and self._current_mode in ("idle",)
                             and fm != self._current_mode
-                            and not self.is_recently_at_desk()
-                            and not self.is_recent_process_working()
                         ):
-                            logger.info(
-                                "Fusion auto-apply: %s (%.0f%% confidence)",
-                                fm, fc * 100,
-                            )
-                            await self.set_manual_override(fm, source="fusion_auto_apply")
-                            acted = True
-                            if ml_logger:
-                                await ml_logger.log_decision(
-                                    predicted_mode=fm,
-                                    confidence=fc,
-                                    decision_source="fusion",
-                                    factors={
-                                        "agreement":
-                                            fusion_result["agreement"],
-                                        "signal_details":
-                                            fusion_result["signals"],
-                                        "action": "auto_apply",
-                                    },
-                                    applied=True,
-                                )
+                            veto_reason = self._attendance_veto_reason()
+                            shadow_candidate = "auto_apply"
 
-                        # Shadow-log every silent fusion tick so
+                        # Shadow-log every fusion tick so
                         # compute_accuracy_by_source has per-signal data
                         # to tune weights against. broadcast=False to
                         # avoid flooding the pipeline WebSocket at 1/min.
-                        if not acted and ml_logger:
+                        if ml_logger:
+                            factors = {
+                                "agreement": fusion_result["agreement"],
+                                "signal_details": fusion_result["signals"],
+                                "current_mode": self._current_mode,
+                                "action": "shadow",
+                            }
+                            if shadow_candidate is not None:
+                                factors["shadow_candidate"] = shadow_candidate
+                            if veto_reason is not None:
+                                factors["vetoed_by"] = veto_reason
                             await ml_logger.log_decision(
                                 predicted_mode=fm,
                                 confidence=fc,
                                 decision_source="fusion",
-                                factors={
-                                    "agreement": fusion_result["agreement"],
-                                    "signal_details": fusion_result["signals"],
-                                    "current_mode": self._current_mode,
-                                    "action": "shadow",
-                                },
+                                factors=factors,
                                 applied=False,
                                 broadcast=False,
                             )

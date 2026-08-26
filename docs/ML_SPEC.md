@@ -59,7 +59,7 @@ rare.
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
 | **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle` (vs 10-min PC idle timer); it does not report `away`. Explicit away/home state belongs to `AwayManager`. Post 2026-05-27 Latitude→living-room relocation: camera emits only `ZONE_COUCH`; original desk/bed zone split retired; `zone=desk` now sourced exclusively from the desktop pc_agent. Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
-| **Phase 3: Confidence fusion** (historical name: Autonomous Operation) | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; current code can auto-apply at 95%+ and override stale context at 92%+). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: production/autonomy evidence audit and action-specific graduation | Evidence quality and intervention outcomes by action; aggregate override rate remains supporting evidence |
+| **Phase 3: Confidence fusion** (historical name: Autonomous Operation) | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; `auto_apply` and `can_override` remain diagnostic outputs, but fusion is strictly shadow-only and cannot actuate modes). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: production/autonomy evidence audit and action-specific graduation | Evidence quality and intervention outcomes by action; aggregate override rate remains supporting evidence |
 | **Phase 4 (sibling track): AI Personality Layer** | Phase A and VibeRouter C v1 committed; Phase B gated; passive suggestions/Alexa and D remain | Mood-vector inference (V/A/F) from face blendshapes (Phase A shadow log), proposed mood-ring accent light (Phase B, gated on Spearman ρ > 0.4), constrained VibeRouter (Phase C v1), and remaining suggestion/Alexa/cost hardening | The detector’s Spearman gate applies only to its proposed experiment. Full subsystem history: `docs/PERSONALITY_LAYER.md`; current product policy: temporary Mood Context in `docs/PROJECT_SPEC.md`. No fusion-math contribution in v1. |
 
 ### Design Principles
@@ -71,11 +71,12 @@ rare.
 2. **Local-only processing.** No cloud ML services, no telemetry, no external
    API calls for inference. All models run on the Latitude 7420's CPU.
 
-3. **Current confidence gate; target consequence-based autonomy.** Committed
-   confidence-fusion code can auto-apply mode changes at 95%+, suggest at
-   70–95%, and stay silent below 70%. Those thresholds are implementation
-   facts, not authorization for every action. Target promotion is action-specific
-   and considers reversibility, evidence quality, feedback, and operational health.
+3. **Current shadow authority; target consequence-based autonomy.** Committed
+   confidence-fusion code computes `auto_apply` at 95%+ and `can_override` at
+   92%+ confidence with 80%+ agreement, but those are diagnostic flags only:
+   fusion cannot actuate a mode. Any future authority requires a separate,
+   explicitly approved gate and must consider reversibility, evidence quality,
+   feedback, and operational health.
 
 4. **Shadow before promote.** Every ML feature runs in shadow mode for 1-2 weeks
    (predicting without acting, logging accuracy) before being promoted to active.
@@ -145,8 +146,9 @@ confident prediction:
 1. Manual override          → Always wins (4h timeout)
 2. Confidence fusion        → Weighted ensemble of 4 signals: process, camera,
                               audio_ml, rule_engine (Phase 3)
-   - Can auto-apply at 95%+ when idle
-   - Can override stale process detection at 92%+ with 80%+ agreement
+   - Observational only: records `auto_apply` at 95%+ as a diagnostic flag
+   - Records `can_override` at 92%+ with 80%+ agreement as a diagnostic flag
+   - Never actuates a production mode
 3. Activity detection       → Process-based (gaming, working, watching)
    + Camera presence        → Absent/present (Phase 2)
    + Audio classification   → Speech, music, silence (Phase 2)
@@ -192,10 +194,11 @@ Audio Classifier ─┘──> /api/learning/audio-decision
                                    │
                                    ├──> time_rules (hardcoded fallback)
                                    │
-                                   ├──────> Confidence gate
-                                   │        >=95%: auto-apply
-                                   │        70-95%: suggest via toast
-                                   │        <70%: silent
+                                   ├──────> Fusion diagnostics (shadow-only)
+                                   │        >=95%: auto_apply flag
+                                   │        >=92% + 80% agreement:
+                                   │          can_override flag
+                                   │        all results: non-applied evidence
                                    │
                                    ├──> HueService.set_light()
                                    ├──> MusicMapper.on_mode_change()
@@ -863,9 +866,10 @@ clear camera/audio evidence (`confidence_fusion.py:23-29, 206-214`).
 
 Each cycle, `fusion.compute_fusion()` returns a `FusionResult` with fused mode,
 fused confidence, per-signal breakdown, and action flags (`auto_apply`,
-`can_override`). The automation engine acts on high-confidence results and
-broadcasts the full result in every pipeline state update so the dashboard can
-render signal gauges in real-time.
+`can_override`). These are diagnostic flags only: the automation engine logs
+each result as non-applied shadow evidence and broadcasts the full result in
+every pipeline state update so the dashboard can render signal gauges in
+real-time.
 
 ### WebSocket Events
 
@@ -878,22 +882,19 @@ New event types for ML status and predictions:
 | `ml_decision` | On any mode switch | `{mode, decision_chain, factors}` (see Explainability) |
 | `pipeline_state` | On state change (throttled to 1s) | Now includes a `fusion` field with `{fused_mode, fused_confidence, agreement, auto_apply, can_override, signals: {process, camera, audio_ml, rule_engine}}` for each active signal |
 
-### Confidence-Gated Actions (Current Mechanism)
+### Fusion Diagnostic Thresholds (Current Mechanism)
 
-This section documents committed confidence-fusion behavior. It is not the
-canonical target trust ladder for lighting, music, notifications, projector
-control, guest actions, or other consequences.
+This section documents the committed, shadow-only confidence-fusion mechanism.
+It is not the canonical target trust ladder for lighting, music, notifications,
+projector control, guest actions, or other consequences.
 
-Applies to both individual ML predictions and the fused ensemble score:
+Applies only to the fused ensemble score:
 
 ```
->=92% fused confidence  →  Can override stale process detection
-                            (requires 80%+ signal agreement)
->=95% fused confidence  →  Auto-apply mode when idle. Log decision.
-70-95% confidence       →  Show ModeSuggestionToast with reasoning.
-                            User accepts or dismisses. Log outcome.
-<70% confidence         →  Silent. Log prediction for shadow evaluation.
-                            Fall through to rule engine or time rules.
+>=92% fused confidence + 80% agreement
+                         →  `can_override=True` diagnostic flag
+>=95% fused confidence  →  `auto_apply=True` diagnostic flag
+all confidence levels   →  Log non-applied shadow evidence; do not actuate
 ```
 
 ---
@@ -1502,10 +1503,10 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 **Shipped (April 15, 2026):**
 - ✓ `ConfidenceFusion` service — weighted ensemble. Lane-count evolution: **v1** 5-signal (April 15). **v2** 6-signal after phone-WiFi presence joined as the 6th voter (April 21). **v3** 4-signal after presence + behavioral lanes were both removed (April 27) — current shape is process / camera / audio_ml / rule_engine.
 - ✓ Fusion integrated into automation loop — computes every 60s cycle
-- ✓ Auto-apply at 95%+ confidence when idle; explicit away/home state is managed separately by `AwayManager`
-- ✓ Stale process override at 92%+ confidence with 80%+ signal agreement
+- ⊘ Auto-apply at 95%+ confidence when idle — historical actuation path; current code retains only the `auto_apply` diagnostic flag and shadow candidate logging
+- ⊘ Stale-process override at 92%+ confidence with 80%+ signal agreement — historical actuation path; current code retains only the `can_override` diagnostic flag and shadow candidate logging
 - ✓ Live pipeline dashboard — replaced with the force-directed signal constellation in v2
-- ✓ Decision logging with `decision_source="fusion"`
+- ✓ Decision logging with `decision_source="fusion"`; every result is `applied=False` and fusion has no `set_manual_override` call path
 
 **Shipped (April 21, 2026) — v2:**
 - ⊘ **Presence joined as 6th voter** (weight 0.18). Prior voter weights scaled by 0.82. Votes `away` at conf 0.95 when phone is off home WiFi; abstaining-ish `idle` at 0.30 when home. *Retired 2026-04-27 (v3)* — phone-WiFi was too noisy on its own; the camera tuning below is the part that stayed.
@@ -1544,11 +1545,14 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
 ```
 Current:    Shadow logging + backfill now live. By 2026-04-22 cron,
             expect hundreds of fusion rows with actual_mode filled.
-            /override-rate and /compare answer immediately.
+            /override-rate and /compare answer immediately. Fusion mode
+            actuation is disabled by architecture, not by threshold.
 
 Next:       Audit production evidence quality, actor attribution, and live lane
-            health before changing thresholds. Graduate actions individually;
-            do not lower a universal threshold from aggregate false positives.
+            health before changing thresholds. Any future fusion authority
+            requires a separate, explicitly approved gate. Graduate actions
+            individually; do not lower a universal threshold from aggregate
+            false positives.
 
 Target:     Fewer than 2 manual overrides per day, sustained
             over 30 days.
