@@ -250,7 +250,19 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
     if not engine:
         raise HTTPException(status_code=503, detail="Automation engine not initialized")
 
-    await engine.report_activity(report.mode, report.source, factors=report.factors)
+    engine_result = await engine.report_activity(
+        report.mode, report.source, factors=report.factors,
+    )
+    # Third-party/legacy activity adapters returned None before #189. Keep the
+    # route tolerant while the real engine now provides the richer contract.
+    result = engine_result if isinstance(engine_result, dict) else {
+        "reported_mode": report.mode,
+        "semantic_disposition": "accepted",
+        "reason": "legacy_engine",
+        "semantic_mode": report.mode,
+        "authoritative_mode": getattr(engine, "current_mode", report.mode),
+        "included_in_fusion": False,
+    }
     await _handle_latitude_streaming_side_effects(report, request)
 
     # Fan the report to the LoL champion service so a champion factor (set
@@ -263,8 +275,12 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
 
     return {
         "status": "ok",
-        "accepted_mode": report.mode,
         "source": report.source,
+        # Retained for clients that used the original response shape.  Unlike
+        # the old echo, it now reflects the accepted semantic (or None for a
+        # retraction/rejection) rather than the submitted detector output.
+        "accepted_mode": result.get("semantic_mode"),
+        **result,
     }
 
 
@@ -275,9 +291,14 @@ async def get_activity(request: Request) -> dict:
     if not engine:
         return {"mode": "idle", "source": "none"}
 
+    context = engine.get_activity_context()
     return {
         "mode": engine.current_mode,
         "source": engine.mode_source,
+        "process_evidence_by_device": context["process_evidence_by_device"],
+        "process_observations_by_device": (
+            context["process_observations_by_device"]
+        ),
     }
 
 

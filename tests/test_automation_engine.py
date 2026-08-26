@@ -24,6 +24,7 @@ from backend.services.camera_service import CameraService, spawn_camera_service
 from backend.services.automation_constants import (
     PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
 )
+from backend.services.ml.confidence_fusion import ConfidenceFusion
 from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
     ALL_LIGHT_IDS,
@@ -415,13 +416,17 @@ class TestAutomationEngine:
         engine._mode_source = "process"
         engine._mode_source_key = "process"
         engine._apply_mode = AsyncMock()
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
 
-        await engine.report_activity("sleeping", source="process")
+        result = await engine.report_activity("sleeping", source="process")
 
+        assert result["semantic_disposition"] == "rejected"
+        assert result["reason"] == "home_awake_confirmed"
         assert engine.current_mode == "idle"
         assert engine.house_state == "home"
         assert engine.activity == "general"
         engine._apply_mode.assert_not_awaited()
+        engine._event_logger.log_mode_change.assert_not_awaited()
 
     async def test_explicit_sleeping_transition_clears_confirmed_home(self, engine):
         engine._home_awake_confirmed = True
@@ -3200,6 +3205,194 @@ class TestRecentDeskAttendanceVeto:
         assert engine.current_mode == "working"
         assert engine._last_mode_source_report_at["process:desktop"] is not None
         assert engine._idle_entered_at is None
+
+    async def test_rejected_desktop_idle_keeps_accepted_semantic_and_fusion_age(
+        self, engine,
+    ):
+        engine._confidence_fusion = ConfidenceFusion()
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        desktop = [{"key": "device", "value": "desktop"}]
+        await engine.report_activity("working", source="process", factors=desktop)
+        engine._event_logger.log_mode_change.reset_mock()
+        accepted_at = engine._last_process_semantic_by_device["desktop"].received_at
+        fusion_at = engine._confidence_fusion._signals["process"].timestamp
+
+        engine._presence_fusion = _StickyDeskPresence(120, at_desk_fresh=False)
+        result = await engine.report_activity(
+            "idle", source="process", factors=desktop,
+        )
+
+        assert result["semantic_disposition"] == "rejected"
+        assert result["reason"] == "recent_desk_presence"
+        assert result["semantic_mode"] == "working"
+        assert result["included_in_fusion"] is False
+        assert engine._last_process_observation_by_device["desktop"].observed_mode == "idle"
+        assert engine._last_process_semantic_by_device["desktop"].committed_mode == "working"
+        assert engine._last_process_semantic_by_device["desktop"].received_at == accepted_at
+        assert engine._confidence_fusion._signals["process"].timestamp == fusion_at
+        engine._event_logger.log_mode_change.assert_not_awaited()
+        factors = engine._ml_logger.calls[-1]["factors"]
+        assert factors["semantic_disposition"] == "rejected"
+        assert factors["included_in_fusion"] is False
+
+        engine._presence_fusion = _StickyDeskPresence(None, at_desk_fresh=False)
+        engine._apply_mode = AsyncMock()
+        accepted = await engine.report_activity(
+            "idle", source="process", factors=desktop,
+        )
+
+        refreshed_at = engine._last_process_semantic_by_device["desktop"].received_at
+        assert accepted["semantic_disposition"] == "accepted"
+        assert refreshed_at > accepted_at
+        assert engine._confidence_fusion._signals["process"].timestamp == refreshed_at
+
+    def test_fresh_semantic_beats_stale_higher_priority_semantic_for_fusion(
+        self, engine,
+    ):
+        engine._confidence_fusion = ConfidenceFusion()
+        stale_at = datetime.now(tz=TZ) - timedelta(
+            seconds=SOURCE_STALE_SECONDS + 1,
+        )
+        fresh_at = datetime.now(tz=TZ) - timedelta(seconds=1)
+        engine._record_process_semantic(
+            "gaming", [{"key": "device", "value": "desktop"}], stale_at,
+        )
+        engine._record_process_semantic(
+            "working", [{"key": "device", "value": "latitude"}], fresh_at,
+        )
+
+        semantic_mode, included = engine._sync_process_fusion()
+
+        assert semantic_mode == "working"
+        assert included is True
+        assert engine._confidence_fusion._signals["process"].mode == "working"
+        assert engine._confidence_fusion._signals["process"].timestamp == fresh_at
+
+    async def test_latitude_idle_retracts_only_latitude_and_restores_desktop(
+        self, engine,
+    ):
+        engine._confidence_fusion = ConfidenceFusion()
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        await engine.report_activity("working", source="process", factors=desktop)
+        desktop_at = engine._last_process_semantic_by_device["desktop"].received_at
+        await engine.report_activity("watching", source="process", factors=latitude)
+        assert engine._confidence_fusion._signals["process"].mode == "watching"
+
+        result = await engine.report_activity("idle", source="process", factors=latitude)
+
+        assert result["semantic_disposition"] == "retracted"
+        assert result["semantic_mode"] == "working"
+        assert result["authoritative_mode"] == "watching"
+        assert "latitude" not in engine._last_process_semantic_by_device
+        assert engine._last_process_observation_by_device["latitude"].observed_mode == "idle"
+        assert engine._confidence_fusion._signals["process"].mode == "working"
+        assert engine._confidence_fusion._signals["process"].timestamp == desktop_at
+
+    async def test_retraction_clears_fusion_when_only_retained_semantic_is_stale(
+        self, engine,
+    ):
+        engine._confidence_fusion = ConfidenceFusion()
+        stale_at = datetime.now(tz=TZ) - timedelta(
+            seconds=SOURCE_STALE_SECONDS + 1,
+        )
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        engine._record_process_semantic("gaming", desktop, stale_at)
+        await engine.report_activity("watching", source="process", factors=latitude)
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["semantic_disposition"] == "retracted"
+        assert result["semantic_mode"] is None
+        assert "process" not in engine._confidence_fusion._signals
+
+    async def test_source_priority_rejection_keeps_one_existing_process_voter(
+        self, engine,
+    ):
+        engine._confidence_fusion = ConfidenceFusion()
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        await engine.report_activity("gaming", source="process", factors=desktop)
+        engine._event_logger.log_mode_change.reset_mock()
+        original_at = engine._confidence_fusion._signals["process"].timestamp
+
+        result = await engine.report_activity(
+            "working", source="process", factors=latitude,
+        )
+
+        assert result["semantic_disposition"] == "rejected"
+        assert result["reason"] == "source_priority"
+        assert result["semantic_mode"] == "gaming"
+        assert "latitude" not in engine._last_process_semantic_by_device
+        assert engine._last_process_observation_by_device["latitude"].observed_mode == "working"
+        assert engine._confidence_fusion._signals["process"].mode == "gaming"
+        assert engine._confidence_fusion._signals["process"].timestamp == original_at
+        engine._event_logger.log_mode_change.assert_not_awaited()
+
+    async def test_dnd_rejection_has_no_authoritative_activity_event(self, engine):
+        engine._confidence_fusion = ConfidenceFusion()
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
+
+        result = await engine.report_activity(
+            "working", source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert result["semantic_disposition"] == "rejected"
+        assert result["reason"] == "dnd_active"
+        assert engine.current_mode == "idle"
+        assert engine._last_process_semantic_by_device == {}
+        assert "process" not in engine._confidence_fusion._signals
+        engine._event_logger.log_mode_change.assert_not_awaited()
+
+    async def test_sleeping_floor_rejection_has_no_authoritative_activity_event(
+        self, engine,
+    ):
+        engine._confidence_fusion = ConfidenceFusion()
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        engine._current_mode = "sleeping"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+
+        result = await engine.report_activity(
+            "idle", source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert result["semantic_disposition"] == "rejected"
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+        assert engine._last_process_semantic_by_device == {}
+        assert "process" not in engine._confidence_fusion._signals
+        engine._event_logger.log_mode_change.assert_not_awaited()
+
+    async def test_disabled_process_report_records_raw_abstention_only(self, engine):
+        engine._confidence_fusion = ConfidenceFusion()
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        engine._enabled = False
+
+        result = await engine.report_activity(
+            "working", source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+
+        assert result["semantic_disposition"] == "abstaining"
+        assert result["reason"] == "automation_disabled"
+        assert result["authoritative_mode"] == "idle"
+        assert result["included_in_fusion"] is False
+        assert engine._last_process_observation_by_device["desktop"].observed_mode == "working"
+        assert engine._last_process_semantic_by_device == {}
+        assert "process" not in engine._confidence_fusion._signals
+        engine._event_logger.log_mode_change.assert_not_awaited()
+        logged = engine._ml_logger.calls[-1]["factors"]
+        assert logged["semantic_disposition"] == "abstaining"
+        assert logged["reason"] == "automation_disabled"
 
     async def test_same_desktop_process_idle_releases_watching_at_desk(self, engine):
         engine._presence_fusion = _StickyDeskPresence(

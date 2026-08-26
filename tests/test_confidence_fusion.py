@@ -390,3 +390,29 @@ class TestReportSignalRobustness:
         # fire-and-forget invariant: invalid types must never propagate.
         fusion.report_signal("process", "working", "not_a_number")
         assert "process" not in fusion._signals
+
+
+class TestProcessLaneRetraction:
+    def test_clear_and_restore_preserves_retained_signal_timestamp(self):
+        fusion = ConfidenceFusion()
+        original = datetime.now(timezone.utc) - timedelta(seconds=47)
+        fusion.report_signal("process", "working", 1.0, timestamp=original)
+
+        fusion.clear_signal("process")
+        assert "process" not in fusion._signals
+
+        # A semantic retraction may restore another device's retained vote, but
+        # must not make that old evidence fresh just because it was restored.
+        fusion.report_signal("process", "working", 1.0, timestamp=original)
+        assert fusion._signals["process"].timestamp == original
+
+    def test_restored_stale_signal_remains_stale(self):
+        fusion = ConfidenceFusion()
+        original = datetime.now(timezone.utc) - timedelta(
+            seconds=STALE_SIGNAL_SECONDS + 1,
+        )
+        fusion.report_signal("process", "working", 1.0, timestamp=original)
+        fusion.clear_signal("process")
+        fusion.report_signal("process", "working", 1.0, timestamp=original)
+
+        assert fusion.compute_fusion() is None

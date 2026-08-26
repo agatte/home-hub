@@ -181,8 +181,44 @@ def _activity_source_key(source: str, factors: Optional[list[dict]]) -> str:
 
 
 @dataclass(frozen=True)
+class ProcessObservation:
+    """Latest raw process-classifier observation for one device."""
+
+    observed_mode: str
+    candidate_mode: Optional[str]
+    candidate_reason: Optional[str]
+    idle_seconds: Optional[float]
+    pending_mode: Optional[str]
+    pending_dwell_age: Optional[float]
+    gaming_qualification: Optional[str]
+    source: str
+    device: str
+    received_at: datetime
+
+    @property
+    def committed_mode(self) -> str:
+        """Compatibility alias for physical-context consumers."""
+        return self.observed_mode
+
+    def as_context(self, now: datetime) -> dict[str, Any]:
+        return {
+            "observed_mode": self.observed_mode,
+            "candidate_mode": self.candidate_mode,
+            "candidate_reason": self.candidate_reason,
+            "idle_seconds": self.idle_seconds,
+            "pending_mode": self.pending_mode,
+            "pending_dwell_age": self.pending_dwell_age,
+            "gaming_qualification": self.gaming_qualification,
+            "source": self.source,
+            "device": self.device,
+            "received_at": self.received_at.isoformat(),
+            "age_seconds": (now - self.received_at).total_seconds(),
+        }
+
+
+@dataclass(frozen=True)
 class ProcessSemanticEvidence:
-    """Latest bounded process-classifier evidence for one device."""
+    """Accepted process semantic evidence for one device."""
 
     committed_mode: str
     candidate_mode: Optional[str]
@@ -217,7 +253,7 @@ class PhysicalContextProcessArbitration:
 
     state: str
     reason: str
-    evidence: Optional[ProcessSemanticEvidence] = None
+    evidence: Optional[ProcessObservation | ProcessSemanticEvidence] = None
 
     def as_context(self, now: datetime) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -226,6 +262,10 @@ class PhysicalContextProcessArbitration:
         }
         if self.evidence is not None:
             result.update(self.evidence.as_context(now))
+            if isinstance(self.evidence, ProcessObservation):
+                # Arbitration remains backward-compatible for diagnostics while
+                # the raw observation layer names its detector value honestly.
+                result["committed_mode"] = self.evidence.observed_mode
         return result
 
 
@@ -312,8 +352,12 @@ class AutomationEngine:
         # camera blip doesn't strand the user in relax while they're actively
         # at the keyboard. See RECENT_PROCESS_WORKING_SECONDS.
         self._last_process_working_at: Optional[datetime] = None
-        # Fallback-specific freshness. Each device owns its latest process
-        # report, so newer idle immediately clears only that device's veto.
+        # Raw observations remain per-device for physical-context consumers.
+        self._last_process_observation_by_device: dict[
+            str, ProcessObservation
+        ] = {}
+        # Accepted semantics are intentionally distinct from raw observations.
+        # Only a single derived voter from this layer enters fusion.
         self._last_process_semantic_by_device: dict[
             str, ProcessSemanticEvidence
         ] = {}
@@ -674,6 +718,12 @@ class AutomationEngine:
                 device: evidence.as_context(now)
                 for device, evidence in sorted(
                     self._last_process_semantic_by_device.items()
+                )
+            },
+            "process_observations_by_device": {
+                device: observation.as_context(now)
+                for device, observation in sorted(
+                    self._last_process_observation_by_device.items()
                 )
             },
             "physical_context_process_arbitration": (
@@ -1284,7 +1334,7 @@ class AutomationEngine:
         skew, or an idle value at/above the bound all fail open so physical
         navigation can proceed.
         """
-        evidence = self._last_process_semantic_by_device.get("desktop")
+        evidence = self._last_process_observation_by_device.get("desktop")
         if evidence is None or evidence.idle_seconds is None:
             return False
         age = (datetime.now(tz=TZ) - evidence.received_at).total_seconds()
@@ -1293,16 +1343,16 @@ class AutomationEngine:
             and 0.0 <= evidence.idle_seconds < max_idle_seconds
         )
 
-    def _record_process_semantic(
+    def _record_process_observation(
         self,
         mode: str,
         factors: Optional[list[dict]],
         now: datetime,
-    ) -> None:
-        """Store only the latest process/classifier evidence for one device."""
+    ) -> ProcessObservation:
+        """Store the latest raw process/classifier observation for one device."""
         device = _activity_device(factors) or "unknown"
-        self._last_process_semantic_by_device[device] = ProcessSemanticEvidence(
-            committed_mode=mode,
+        observation = ProcessObservation(
+            observed_mode=mode,
             candidate_mode=_string_factor(factors, "candidate_mode"),
             candidate_reason=_string_factor(factors, "candidate_reason"),
             idle_seconds=_number_factor(factors, "idle"),
@@ -1315,6 +1365,50 @@ class AutomationEngine:
             device=device,
             received_at=now,
         )
+        self._last_process_observation_by_device[device] = observation
+        if (
+            len(self._last_process_observation_by_device)
+            > PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT
+        ):
+            oldest_device = min(
+                self._last_process_observation_by_device,
+                key=lambda key: (
+                    self._last_process_observation_by_device[key].received_at
+                ),
+            )
+            self._last_process_observation_by_device.pop(oldest_device, None)
+        return observation
+
+    def _record_process_semantic(
+        self,
+        observation: ProcessObservation | str,
+        factors: Optional[list[dict]] = None,
+        now: Optional[datetime] = None,
+    ) -> None:
+        """Commit one already-arbitrated process observation as a semantic.
+
+        The string/factors form is retained for existing physical-context
+        fixtures and callers. Runtime reporting always passes a raw observation
+        that was captured before arbitration.
+        """
+        if isinstance(observation, str):
+            observation = self._record_process_observation(
+                observation, factors, now or datetime.now(tz=TZ),
+            )
+        self._last_process_semantic_by_device[observation.device] = (
+            ProcessSemanticEvidence(
+                committed_mode=observation.observed_mode,
+                candidate_mode=observation.candidate_mode,
+                candidate_reason=observation.candidate_reason,
+                idle_seconds=observation.idle_seconds,
+                pending_mode=observation.pending_mode,
+                pending_dwell_age=observation.pending_dwell_age,
+                gaming_qualification=observation.gaming_qualification,
+                source=observation.source,
+                device=observation.device,
+                received_at=observation.received_at,
+            )
+        )
         if (
             len(self._last_process_semantic_by_device)
             > PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT
@@ -1326,6 +1420,103 @@ class AutomationEngine:
                 ),
             )
             self._last_process_semantic_by_device.pop(oldest_device, None)
+
+    def _derived_process_semantic(self) -> Optional[ProcessSemanticEvidence]:
+        """Return the freshest accepted process voter for fusion.
+
+        Fusion freshness is an eligibility condition, not a tiebreaker.  A
+        stale higher-priority semantic must not suppress a fresh lower-priority
+        semantic from another device; once eligible, the established mode
+        priority and then recency choose the single non-double-counting voter.
+        """
+        now = datetime.now(tz=TZ)
+        fresh_semantics = [
+            evidence
+            for evidence in self._last_process_semantic_by_device.values()
+            if (now - evidence.received_at).total_seconds()
+            <= SOURCE_STALE_SECONDS
+        ]
+        if not fresh_semantics:
+            return None
+        return max(
+            fresh_semantics,
+            key=lambda evidence: (
+                MODE_PRIORITY.get(evidence.committed_mode, 0),
+                evidence.received_at,
+            ),
+        )
+
+    def _sync_process_fusion(self) -> tuple[Optional[str], bool]:
+        """Replace fusion's process lane from accepted semantics only."""
+        fusion = getattr(self, "_confidence_fusion", None)
+        semantic = self._derived_process_semantic()
+        if fusion is None:
+            return (semantic.committed_mode if semantic else None, False)
+        clear_signal = getattr(fusion, "clear_signal", None)
+        if callable(clear_signal):
+            clear_signal("process")
+        if semantic is None:
+            return None, False
+        fusion.report_signal(
+            "process",
+            semantic.committed_mode,
+            1.0,
+            factors=[
+                {"key": "device", "label": "Device", "value": semantic.device,
+                 "display": semantic.device, "impact": 1.0},
+                {"key": "semantic_mode", "label": "Accepted semantic",
+                 "value": semantic.committed_mode,
+                 "display": semantic.committed_mode, "impact": 1.0},
+            ],
+            timestamp=semantic.received_at,
+        )
+        return semantic.committed_mode, True
+
+    async def _finalize_process_report(
+        self,
+        *,
+        observation: ProcessObservation,
+        disposition: str,
+        reason: str,
+        agent_factors: Optional[list[dict]],
+    ) -> dict[str, Any]:
+        """Log a truthful process observation and update the semantic voter."""
+        included_in_fusion = False
+        if disposition == "accepted":
+            self._record_process_semantic(observation)
+            semantic_mode, included_in_fusion = self._sync_process_fusion()
+        elif disposition == "retracted":
+            self._last_process_semantic_by_device.pop(observation.device, None)
+            semantic_mode, included_in_fusion = self._sync_process_fusion()
+        else:
+            semantic = self._derived_process_semantic()
+            semantic_mode = semantic.committed_mode if semantic else None
+
+        result = {
+            "reported_mode": observation.observed_mode,
+            "observed_source": f"process:{observation.device}",
+            "semantic_disposition": disposition,
+            "reason": reason,
+            "semantic_mode": semantic_mode,
+            "authoritative_mode": self.current_mode,
+            "included_in_fusion": included_in_fusion,
+        }
+        if self._ml_logger is not None:
+            await self._ml_logger.log_decision(
+                predicted_mode=observation.observed_mode,
+                confidence=1.0,
+                decision_source="process",
+                factors={
+                    "engine_priority": MODE_PRIORITY.get(
+                        observation.observed_mode, 0,
+                    ),
+                    "agent_factors": agent_factors or [],
+                    **result,
+                },
+                applied=False,
+                broadcast=False,
+            )
+        return result
 
     def _physical_context_desk_absence_qualified(self, now: datetime) -> bool:
         """Whether fresh explicit desktop absence has held for 30 seconds."""
@@ -1385,8 +1576,8 @@ class AutomationEngine:
         self, now: datetime,
     ) -> PhysicalContextProcessArbitration:
         """Resolve fresh process intent against strong physical couch authority."""
-        meaningful: list[tuple[float, ProcessSemanticEvidence]] = []
-        for evidence in self._last_process_semantic_by_device.values():
+        meaningful: list[tuple[float, ProcessObservation]] = []
+        for evidence in self._last_process_observation_by_device.values():
             age = (now - evidence.received_at).total_seconds()
             if (
                 evidence.committed_mode in {"gaming", "watching", "working"}
@@ -1400,8 +1591,8 @@ class AutomationEngine:
             )
 
         discount_supported = self._physical_context_process_discount_supported(now)
-        vetoes: list[tuple[float, ProcessSemanticEvidence]] = []
-        discounted: list[tuple[float, ProcessSemanticEvidence]] = []
+        vetoes: list[tuple[float, ProcessObservation]] = []
+        discounted: list[tuple[float, ProcessObservation]] = []
         for age, evidence in meaningful:
             if (
                 evidence.device == "desktop"
@@ -1842,7 +2033,7 @@ class AutomationEngine:
         mode: str,
         source: str,
         factors: Optional[list[dict]] = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         """
         Process an activity report from the PC agent, ambient monitor, or camera.
 
@@ -1851,47 +2042,61 @@ class AutomationEngine:
             source: Detection source ("process", "ambient", "audio_ml", or "camera").
             factors: Optional sub-factor list surfaced to the analytics
                 constellation (foreground app / idle bucket / YAMNet classes /
-                etc). Passed through to the confidence fusion without affecting
-                fusion math.
+                etc). Process factors remain attached to the raw observation;
+                only accepted process semantics are eligible for fusion.
         """
-        if not self._enabled:
-            return
-
         source_key = _activity_source_key(source, factors)
         report_now = datetime.now(tz=TZ)
+        observation: Optional[ProcessObservation] = None
         if source == "process":
-            self._record_process_semantic(mode, factors, report_now)
+            observation = self._record_process_observation(
+                mode, factors, report_now,
+            )
+
+        # Raw process diagnostics intentionally remain observable while
+        # automation is disabled.  They abstain before physical arbitration,
+        # accepted semantics, fusion, authority, or ActivityEvent handling.
+        if not self._enabled:
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="abstaining",
+                    reason="automation_disabled",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode,
+                "semantic_disposition": "abstaining",
+                "reason": "automation_disabled",
+                "semantic_mode": None,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
+
+        if observation is not None:
             await self._evaluate_physical_context_relax(
                 now=report_now, trigger="process_report",
             )
 
-        # Report to confidence fusion BEFORE mode-change guards — fusion is a
-        # voting system, every signal should be heard even when it loses the
-        # mode-change vote. "ambient" (RMS) aliases to the audio_ml lane.
+        # Non-process sources own their own lanes. Process takes the separate
+        # accepted-semantic path below; raw device reports never vote directly.
         fusion = getattr(self, "_confidence_fusion", None)
         if fusion:
-            if source == "process":
-                fusion.report_signal("process", mode, 1.0, factors=factors)
-            elif source == "ambient":
+            if source == "ambient":
                 fusion.report_signal("audio_ml", mode, 0.7, factors=factors)
-            else:
+            elif source != "process":
                 fusion.report_signal(source, mode, 0.8, factors=factors)
 
-        # Persist a per-lane row in ml_decisions so per-source accuracy and
-        # the analytics dashboard see the process voter directly. Shadow row
-        # (applied=False) — process is a voter, not an actuator. Mirrors the
-        # rule_engine wiring shipped 2026-04-28.
-        if source == "process" and self._ml_logger is not None:
-            await self._ml_logger.log_decision(
-                predicted_mode=mode,
-                confidence=1.0,
-                decision_source="process",
-                factors={
-                    "engine_priority": MODE_PRIORITY.get(mode, 0),
-                    "agent_factors": factors or [],
-                },
-                applied=False,
-                broadcast=False,
+        # Latitude's idle heartbeat is a media-intent retraction. It removes
+        # that device's accepted semantic but is never global idle evidence.
+        if source == "process" and observation is not None and (
+            observation.device == "latitude" and mode == "idle"
+        ):
+            return await self._finalize_process_report(
+                observation=observation,
+                disposition="retracted",
+                reason="latitude_media_intent_retracted",
+                agent_factors=factors,
             )
 
         # DND blocks autonomous mode changes after fusion has logged its
@@ -1901,7 +2106,19 @@ class AutomationEngine:
         # without a source check.
         if self.is_dnd_active():
             logger.debug("DND active — ignoring %s report (mode=%s)", source, mode)
-            return
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="rejected",
+                    reason="dnd_active",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "rejected",
+                "reason": "dnd_active", "semantic_mode": None,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
 
         # Priority guard — a lower-priority mode can't displace a higher-priority
         # current mode unless the report comes from the source that owns it
@@ -1930,7 +2147,21 @@ class AutomationEngine:
                     # source doesn't age out while being guarded against.
                     self._last_mode_source_report_at[source_key] = now
                     self._last_mode_source_report_at[source] = now
-                    return
+                    if observation is not None:
+                        return await self._finalize_process_report(
+                            observation=observation,
+                            disposition="rejected",
+                            reason="source_priority",
+                            agent_factors=factors,
+                        )
+                    return {
+                        "reported_mode": mode,
+                        "semantic_disposition": "rejected",
+                        "reason": "source_priority",
+                        "semantic_mode": None,
+                        "authoritative_mode": self.current_mode,
+                        "included_in_fusion": False,
+                    }
 
         # Sleeping floor — sleeping carries MODE_PRIORITY=0 (the global floor),
         # so the priority guard above can never protect it: `new_priority < 0`
@@ -1962,7 +2193,19 @@ class AutomationEngine:
             )
             self._last_mode_source_report_at[source_key] = now
             self._last_mode_source_report_at[source] = now
-            return
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="rejected",
+                    reason="sleeping_floor",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "rejected",
+                "reason": "sleeping_floor", "semantic_mode": None,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
 
         # Record this source's last-seen time regardless of whether the report
         # caused a mode change. Source freshness tracks liveness, not edges.
@@ -1983,7 +2226,19 @@ class AutomationEngine:
                 "Confirmed Home: ignored process sleeping report after "
                 "explicit wake"
             )
-            return
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="rejected",
+                    reason="home_awake_confirmed",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "rejected",
+                "reason": "home_awake_confirmed", "semantic_mode": None,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
 
         # Fresh desk presence is stronger evidence than a passive idle detector
         # for active desk work. Windows input can sit idle while Anthony is
@@ -2001,7 +2256,19 @@ class AutomationEngine:
                 source,
                 self._current_mode,
             )
-            return
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="rejected",
+                    reason="recent_desk_presence",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "rejected",
+                "reason": "recent_desk_presence", "semantic_mode": None,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
 
         # Stamp process-working liveness for the late-night rescue veto.
         # Updated on every confirming report, not just on mode edges, so a
@@ -2114,7 +2381,19 @@ class AutomationEngine:
                         source=source,
                     )
             await self._broadcast_mode()
-            return
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="accepted",
+                    reason="manual_override_held",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "accepted",
+                "reason": "manual_override_held", "semantic_mode": mode,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
 
         # Clear external off detection on any activity — UNLESS the
         # suppression is hard-held by a geofence LEAVE. The PC's
@@ -2147,7 +2426,19 @@ class AutomationEngine:
                         source=source,
                     )
             await self._broadcast_mode()
-            return
+            if observation is not None:
+                return await self._finalize_process_report(
+                    observation=observation,
+                    disposition="accepted",
+                    reason="external_off_suppressed",
+                    agent_factors=factors,
+                )
+            return {
+                "reported_mode": mode, "semantic_disposition": "accepted",
+                "reason": "external_off_suppressed", "semantic_mode": mode,
+                "authoritative_mode": self.current_mode,
+                "included_in_fusion": False,
+            }
 
         # Apply the appropriate light state. force_resend=True only on a
         # real mode change — invalidates the per-light dedup cache so any
@@ -2179,6 +2470,21 @@ class AutomationEngine:
 
         # Broadcast mode change
         await self._broadcast_mode()
+        if observation is not None:
+            return await self._finalize_process_report(
+                observation=observation,
+                disposition="accepted",
+                reason="accepted",
+                agent_factors=factors,
+            )
+        return {
+            "reported_mode": mode,
+            "semantic_disposition": "accepted",
+            "reason": "accepted",
+            "semantic_mode": mode,
+            "authoritative_mode": self.current_mode,
+            "included_in_fusion": False,
+        }
 
     async def set_manual_override(self, mode: str, source: str = "internal") -> None:
         """Set a manual mode override from the dashboard.
