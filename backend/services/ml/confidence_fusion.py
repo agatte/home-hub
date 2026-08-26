@@ -183,6 +183,7 @@ class ConfidenceFusion:
         mode: str,
         confidence: float,
         factors: Optional[list[dict[str, Any]]] = None,
+        timestamp: Optional[datetime] = None,
     ) -> None:
         """Store the latest reading from a signal source.
 
@@ -208,14 +209,31 @@ class ConfidenceFusion:
                 return
             confidence = max(0.0, min(1.0, float(confidence)))
 
+            if timestamp is not None and timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+
             self._signals[source] = Signal(
                 source=source,
                 mode=mode,
                 confidence=confidence,
+                timestamp=timestamp or datetime.now(timezone.utc),
                 factors=_clean_factors(factors),
             )
         except Exception:
             logger.exception("Error recording signal from %s", source)
+
+    def clear_signal(self, source: str) -> None:
+        """Remove one lane's current vote without changing other lane ages.
+
+        Process-semantic retractions use this before restoring any retained
+        semantic voter.  The caller can then report that retained signal with
+        its original timestamp instead of accidentally making old evidence
+        fresh again.
+        """
+        if source not in SIGNAL_SOURCES:
+            logger.warning("Unknown signal source: %s", source)
+            return
+        self._signals.pop(source, None)
 
     def compute_fusion(self) -> Optional[dict[str, Any]]:
         """Compute the weighted fusion of all active signals.

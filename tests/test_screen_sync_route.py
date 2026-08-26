@@ -323,6 +323,21 @@ class _FakeActivityEngine:
         self.reports.append((mode, source, factors))
 
 
+class _DispositionActivityEngine:
+    current_mode = "working"
+
+    async def report_activity(self, mode: str, source: str, factors=None) -> dict:
+        return {
+            "reported_mode": mode,
+            "observed_source": "process:desktop",
+            "semantic_disposition": "rejected",
+            "reason": "recent_desk_presence",
+            "semantic_mode": "working",
+            "authoritative_mode": "working",
+            "included_in_fusion": False,
+        }
+
+
 class _FakeLoopback:
     def __init__(self, running: bool = False) -> None:
         self.running = running
@@ -381,6 +396,29 @@ async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopbac
     assert presence.latest_zone() is None
     assert loopback.running is False
     assert loopback.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_activity_route_returns_truthful_semantic_disposition():
+    req = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(automation=_DispositionActivityEngine()),
+        ),
+    )
+    response = await report_activity(
+        ActivityReport(
+            mode="idle", source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        ),
+        req,  # type: ignore[arg-type]
+    )
+
+    assert response["accepted_mode"] == "working"
+    assert response["reported_mode"] == "idle"
+    assert response["semantic_disposition"] == "rejected"
+    assert response["reason"] == "recent_desk_presence"
+    assert response["authoritative_mode"] == "working"
+    assert response["included_in_fusion"] is False
 
 
 @pytest.mark.asyncio
