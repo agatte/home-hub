@@ -108,6 +108,24 @@ describe('Bedroom Physical World v1', () => {
     expect(projector.placement.status).toBe('provisional_review_required')
   })
 
+  it('keeps Epson projector visual identity local to the accepted return footprint', () => {
+    const root = path.dirname(fileURLToPath(import.meta.url))
+    const renderer = readFileSync(path.join(root, 'bedroom-v1.js'), 'utf8')
+    const { projector, return: returnDesk } = resolved.objects
+    expect(projector.plan_bounds_gu.w).toBe(21.4)
+    expect(projector.plan_bounds_gu.h).toBe(24.4)
+    expect(projector.plan_bounds_gu.x).toBeGreaterThanOrEqual(returnDesk.plan_bounds_gu.x)
+    expect(projector.plan_bounds_gu.maxX).toBeLessThanOrEqual(returnDesk.plan_bounds_gu.maxX)
+    expect(renderer).toContain('function frontRoundedBox')
+    expect(renderer).toContain("'Epson H421A deep rounded front vent cavity'")
+    expect(renderer).toContain("'Epson H421A tall vertical front vent louver'")
+    expect(renderer).toContain("'Epson H421A large centered black lens outer barrel'")
+    expect(renderer).toContain("'Epson H421A recessed top lens-shift adjustment well'")
+    expect(renderer).toContain("'Epson H421A circular top navigation ring'")
+    expect(renderer).toContain("'Epson H421A black knurled front adjustment foot'")
+    expect(renderer).not.toContain("'Epson H421A offset horizontal lens'")
+  })
+
   it('keeps unmeasured placement facts explicit and does not read migrated dimensions from blockers', () => {
     const source = JSON.stringify(physicalWorldV1)
     expect(source).toContain('"status":"unmeasured"')

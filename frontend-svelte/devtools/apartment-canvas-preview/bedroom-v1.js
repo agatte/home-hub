@@ -50,6 +50,16 @@ const m = Object.freeze({
   pcPanel: new THREE.MeshStandardMaterial({ color: 0x101413, roughness: 0.52, metalness: 0.28 }),
   pcComponent: new THREE.MeshStandardMaterial({ color: 0x252a28, roughness: 0.62, metalness: 0.34 }),
   pcAccent: new THREE.MeshStandardMaterial({ color: 0x167d83, roughness: 0.38, metalness: 0.2, emissive: 0x063a3d, emissiveIntensity: 0.48 }),
+  projectorShell: new THREE.MeshStandardMaterial({ color: 0xf4f1e8, roughness: 0.34, metalness: 0.02 }),
+  projectorVent: new THREE.MeshStandardMaterial({ color: 0xc7cbc6, roughness: 0.62, metalness: 0.02 }),
+  projectorVentVoid: new THREE.MeshStandardMaterial({ color: 0x303534, roughness: 0.78 }),
+  projectorLensHousing: new THREE.MeshStandardMaterial({ color: 0x111514, roughness: 0.27, metalness: 0.22 }),
+  projectorLensGlass: new THREE.MeshStandardMaterial({ color: 0x142b27, roughness: 0.1, metalness: 0.46, emissive: 0x06130f, emissiveIntensity: 0.45 }),
+  projectorControl: new THREE.MeshStandardMaterial({ color: 0x313635, roughness: 0.48, metalness: 0.16 }),
+  projectorIndicator: new THREE.MeshStandardMaterial({ color: 0x5da8ff, roughness: 0.24, emissive: 0x2877d5, emissiveIntensity: 0.9 }),
+  chairUpholstery: new THREE.MeshStandardMaterial({ color: 0xf2efe6, roughness: 0.76, metalness: 0 }),
+  chairSeam: new THREE.MeshStandardMaterial({ color: 0xd1cabd, roughness: 0.9, metalness: 0 }),
+  chairUnderside: new THREE.MeshStandardMaterial({ color: 0x252827, roughness: 0.61, metalness: 0.16 }),
 })
 
 function mesh(world, geometry, material, name) {
@@ -158,6 +168,15 @@ function addBrayaBed(world) {
     pillow.position.set(f.x + f.w * 0.29, y, 73.8)
     pillow.rotation.z = rotation
   }
+}
+
+// A rounded module mounted on the outward-facing (+x) projector fascia. The
+// renderer keeps the physical return footprint untouched while making the
+// front's recognizably rounded gray vent wells readable at preview distance.
+function frontRoundedBox(world, w, h, depth, x, y, z, material, name, radius = 2) {
+  const item = roundedBox(world, h, w, depth, x, y, z, material, name, radius)
+  item.rotation.y = Math.PI / 2
+  return item
 }
 
 function addBurgenerDesk(world, data) {
@@ -340,24 +359,46 @@ function addHomeZeerChair(world, data) {
   const f = workstationAccessories.chair.bounds
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
-  ellipsoid(world, f.w * 0.66, f.h * 0.5, 14, cx, cy + 8, 56, m.white, 'HomeZeer padded seat')
-  box(world, f.w * 0.63, 7.5, 58, cx, f.y + 9.5, 94, m.white, 'HomeZeer stitched mid-back')
-  for (const x of [-f.w * 0.16, f.w * 0.16]) box(world, 1, 8, 54, cx + x, f.y + 5.4, 94, m.stitch, 'HomeZeer vertical seam')
-  box(world, f.w * 0.55, 1.1, 1.1, cx, f.y + 5.8, 96, m.stitch, 'HomeZeer horizontal seam')
+  // One continuous cushion gives the chair its ordinary upholstered-office
+  // silhouette. It is deliberately not assembled from separate padded cells.
+  const seatY = cy + 8
+  const backY = f.y + 13.4
+  const backFrontY = backY + 3.56
+  roundedBox(world, f.w * 0.72, f.h * 0.49, 10.4, cx, seatY, 58.3, m.chairUpholstery, 'HomeZeer single continuous rounded upholstered seat cushion', 4.2)
+  roundedBox(world, f.w * 0.67, 7.1, 63, cx, backY, 95, m.chairUpholstery, 'HomeZeer single continuous tall rounded upholstered backrest', 5.4)
+
+  // The reference's 2-by-3 face is a lightly pinched upholstery treatment in
+  // one backrest. Low-contrast, near-flush seam strips provide that read at
+  // normal preview distance without turning the back into floating cushions.
+  box(world, 0.52, 0.12, 53.5, cx, backFrontY + 0.07, 95, m.chairSeam, 'HomeZeer shallow central vertical backrest seam')
+  for (const z of [84.7, 105.1]) {
+    box(world, f.w * 0.56, 0.12, 0.48, cx, backFrontY + 0.07, z, m.chairSeam, 'HomeZeer shallow horizontal backrest tuft seam')
+  }
+
+  // Narrow white pads sit on polished bent side loops; their low profile is
+  // visible in both the front and side product views.
   for (const sign of [-1, 1]) {
     const x = cx + sign * f.w * 0.38
-    rod(world, new THREE.Vector3(x, cy + 8, 53), new THREE.Vector3(x, cy + 5, 80), 1.55, m.chrome, 'HomeZeer chrome arm upright')
-    rod(world, new THREE.Vector3(x, cy + 5, 80), new THREE.Vector3(x, f.y + 10, 88), 1.55, m.chrome, 'HomeZeer chrome arm return')
-    ellipsoid(world, 6.5, 17, 3.8, x, cy + 1.5, 88, m.white, 'HomeZeer white arm pad')
+    rod(world, new THREE.Vector3(x, seatY + 12, 54), new THREE.Vector3(x, backY + 1.8, 54), 1.16, m.chrome, 'HomeZeer polished lower arm loop rail')
+    rod(world, new THREE.Vector3(x, backY + 1.8, 54), new THREE.Vector3(x, backY + 1.8, 80.5), 1.16, m.chrome, 'HomeZeer polished rear arm loop upright')
+    rod(world, new THREE.Vector3(x, backY + 1.8, 80.5), new THREE.Vector3(x, seatY - 3.2, 85.2), 1.16, m.chrome, 'HomeZeer polished upper arm loop rail')
+    roundedBox(world, 5.7, 17.4, 2.85, x, seatY - 2.6, 86.4, m.chairUpholstery, 'HomeZeer narrow rounded white upholstered arm pad', 1.2)
   }
-  cylinderZ(world, 3.4, 3.4, 39, cx, cy + 9, 30, m.chrome, 'HomeZeer chrome gas lift')
-  cylinderZ(world, 6.6, 7.6, 4, cx, cy + 9, 10.5, m.chrome, 'HomeZeer five-star hub')
+  roundedBox(world, f.w * 0.47, f.h * 0.22, 2.8, cx, cy + 9, 48.6, m.chairUnderside, 'HomeZeer dark under-seat tilt plate', 1.2)
+  rod(world, new THREE.Vector3(cx - f.w * 0.23, cy + 11, 49), new THREE.Vector3(cx - f.w * 0.29, cy + 17, 45.8), 0.82, m.chairUnderside, 'HomeZeer black under-seat adjustment lever')
+  ellipsoid(world, 2.1, 2.1, 3.1, cx - f.w * 0.29, cy + 17, 45.8, m.chairUnderside, 'HomeZeer black adjustment lever handle')
+  cylinderZ(world, 3.4, 3.4, 39, cx, cy + 9, 30, m.chrome, 'HomeZeer polished central gas lift')
+  cylinderZ(world, 6.6, 7.6, 4, cx, cy + 9, 10.5, m.chrome, 'HomeZeer polished five-star hub')
   const center = new THREE.Vector3(cx, cy + 9, 10)
   for (let index = 0; index < 5; index += 1) {
     const angle = Math.PI * 2 * index / 5 + Math.PI / 2
     const tip = new THREE.Vector3(cx + Math.cos(angle) * f.w * 0.37, cy + 9 + Math.sin(angle) * f.h * 0.31, 6)
-    rod(world, center, tip, 1.65, m.chrome, 'HomeZeer chrome five-star spoke')
-    ellipsoid(world, 7, 6, 8, tip.x, tip.y, 4.5, m.caster, 'HomeZeer black caster')
+    rod(world, center, tip, 1.48, m.chrome, 'HomeZeer polished five-star base spoke')
+    cylinderZ(world, 1.25, 1.5, 3.2, tip.x, tip.y, 5.1, m.chairUnderside, 'HomeZeer dark twin-wheel caster fork', 12)
+    const tangent = new THREE.Vector3(-Math.sin(angle), Math.cos(angle), 0)
+    for (const sign of [-1, 1]) {
+      ellipsoid(world, 3.9, 3.2, 5.2, tip.x + tangent.x * sign * 1.55, tip.y + tangent.y * sign * 1.55, 3.25, m.caster, 'HomeZeer black twin-wheel caster')
+    }
   }
 }
 
@@ -430,12 +471,62 @@ function addEpsonProjector(world) {
   const bodyW = f.w
   const bodyD = f.h
   const bodyH = 8.3
-  box(world, bodyW, bodyD, 1.5, cx, cy, z - 0.75, m.black, 'Epson H421A supported feet')
-  roundedBox(world, bodyW, bodyD, bodyH, cx, cy, z + bodyH / 2, m.white, 'Epson H421A projector body above return', 2.6)
-  roundedBox(world, bodyW * 0.62, bodyD * 0.72, 0.7, cx - bodyW * 0.10, cy, z + bodyH + 0.35, m.stone, 'Epson H421A gray top inset', 1.4)
-  cylinderX(world, cx + bodyW / 2 - 0.3, cx + bodyW / 2 + 2.6, 3.25, cy - bodyD * 0.23, z + bodyH * 0.56, m.void, 'Epson H421A offset horizontal lens', 24)
-  for (const yOffset of [-0.27, -0.08, 0.11, 0.30]) {
-    box(world, 0.8, bodyD * 0.12, 2.8, cx + bodyW / 2 + 0.14, cy + bodyD * yOffset, z + bodyH * 0.53, m.black, 'Epson H421A front grille')
+  const frontX = cx + bodyW / 2
+  const topZ = z + bodyH
+
+  // The supplied front reference has separate black adjustable feet under a
+  // broad glossy shell, not one continuous dark plinth.
+  for (const y of [cy - bodyD * 0.36, cy + bodyD * 0.36]) {
+    cylinderZ(world, 1.22, 1.42, 1.35, frontX - 1.35, y, z - 0.68, m.projectorLensHousing, 'Epson H421A black knurled front adjustment foot', 16)
+    cylinderZ(world, 1.55, 1.55, 0.24, frontX - 1.35, y, z - 1.42, m.projectorControl, 'Epson H421A front foot contact pad', 16)
+  }
+  for (const y of [cy - bodyD * 0.34, cy + bodyD * 0.34]) {
+    cylinderZ(world, 1.08, 1.08, 0.92, cx - bodyW * 0.35, y, z - 0.46, m.projectorShell, 'Epson H421A rear shell support foot', 16)
+  }
+
+  roundedBox(world, bodyW, bodyD, bodyH, cx, cy, z + bodyH / 2, m.projectorShell, 'Epson H421A wide rounded glossy white shell above return', 2.6)
+
+  // The real fascia is a three-part composition: two deep gray louver bays
+  // framing a much larger centered lens, rather than a generic single grille.
+  const ventW = bodyD * 0.237
+  const ventH = bodyH * 0.66
+  const ventCenters = [cy - bodyD * 0.335, cy + bodyD * 0.335]
+  for (const y of ventCenters) {
+    frontRoundedBox(world, ventW, ventH, 0.55, frontX + 0.19, y, z + bodyH * 0.51, m.projectorVentVoid, 'Epson H421A deep rounded front vent cavity', 1.75)
+    frontRoundedBox(world, ventW * 0.91, ventH * 0.91, 0.19, frontX + 0.51, y, z + bodyH * 0.51, m.projectorVent, 'Epson H421A light gray rounded vent surround', 1.4)
+    for (const offset of [-0.34, -0.17, 0, 0.17, 0.34]) {
+      box(world, 0.24, 0.42, ventH * 0.77, frontX + 0.67, y + ventW * offset, z + bodyH * 0.51, m.projectorVent, 'Epson H421A tall vertical front vent louver')
+    }
+  }
+
+  const lensZ = z + bodyH * 0.51
+  cylinderX(world, frontX - 0.18, frontX + 0.92, 3.92, cy, lensZ, m.projectorLensHousing, 'Epson H421A large centered black lens outer barrel', 32)
+  cylinderX(world, frontX + 0.84, frontX + 1.13, 3.34, cy, lensZ, m.projectorControl, 'Epson H421A stepped lens inner barrel', 32)
+  cylinderX(world, frontX + 1.10, frontX + 1.22, 2.68, cy, lensZ, m.projectorLensGlass, 'Epson H421A centered green-black lens glass', 32)
+  cylinderX(world, frontX + 1.21, frontX + 1.25, 1.08, cy, lensZ, m.projectorIndicator, 'Epson H421A small illuminated lens core', 24)
+
+  // Its deep top adjustment bay sits forward of the wordmark. It is bounded
+  // visual relief only: no plan, anchor, support, or desk dimensions change.
+  const recessX = cx + bodyW * 0.13
+  roundedBox(world, bodyW * 0.38, bodyD * 0.25, 0.25, recessX, cy, topZ + 0.12, m.projectorVentVoid, 'Epson H421A recessed top lens-shift adjustment well', 1.05)
+  roundedBox(world, bodyW * 0.25, bodyD * 0.15, 0.3, recessX + bodyW * 0.015, cy, topZ + 0.25, m.projectorControl, 'Epson H421A black lens-shift adjustment assembly', 0.65)
+  box(world, bodyW * 0.19, 0.58, 0.17, recessX + bodyW * 0.015, cy - bodyD * 0.06, topZ + 0.44, m.projectorVent, 'Epson H421A lens-shift slider highlight')
+
+  // Compact control island from the top reference: power/source below a
+  // circular navigation ring, with distinct Menu and Esc buttons nearby.
+  const controlsX = cx - bodyW * 0.18
+  const controlsY = cy - bodyD * 0.12
+  cylinderZ(world, 1.66, 1.66, 0.2, controlsX, controlsY, topZ + 0.13, m.projectorControl, 'Epson H421A circular top navigation ring', 24)
+  cylinderZ(world, 0.82, 0.82, 0.26, controlsX, controlsY, topZ + 0.29, m.projectorShell, 'Epson H421A central enter control', 20)
+  cylinderZ(world, 1.03, 1.03, 0.26, controlsX - bodyW * 0.12, controlsY, topZ + 0.27, m.projectorControl, 'Epson H421A round source control', 20)
+  cylinderZ(world, 1.03, 1.03, 0.26, controlsX + bodyW * 0.12, controlsY, topZ + 0.27, m.projectorShell, 'Epson H421A round blue power control surround', 20)
+  cylinderZ(world, 0.48, 0.48, 0.31, controlsX + bodyW * 0.12, controlsY, topZ + 0.43, m.projectorIndicator, 'Epson H421A blue power button center', 16)
+  for (const [x, y, name] of [
+    [controlsX - bodyW * 0.10, controlsY - bodyD * 0.16, 'Epson H421A top Menu button'],
+    [controlsX + bodyW * 0.02, controlsY - bodyD * 0.16, 'Epson H421A top Esc button'],
+  ]) roundedBox(world, 1.55, 0.92, 0.22, x, y, topZ + 0.17, m.projectorControl, name, 0.36)
+  for (const x of [controlsX - bodyW * 0.19, controlsX - bodyW * 0.24]) {
+    cylinderZ(world, 0.23, 0.23, 0.18, x, controlsY + bodyD * 0.15, topZ + 0.18, m.projectorControl, 'Epson H421A top status indicator aperture', 12)
   }
 }
 

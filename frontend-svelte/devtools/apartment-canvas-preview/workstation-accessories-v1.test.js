@@ -158,8 +158,20 @@ describe('Bedroom workstation accessory preview anchors', () => {
 
   it('leaves the chair in the main working span and physical desk/projector authority untouched', () => {
     const main = physical.objects.main.plan_bounds_gu
+    const chair = accessories.chair
     expect(accessories.chair.bounds.maxY).toBeLessThanOrEqual(main.y)
-    expect(accessories.chair.relationship).toBe('main_front_centered_working_knee_span')
+    expect(chair).toEqual({
+      relationship: 'main_front_centered_working_knee_span',
+      bounds: {
+        x: main.x + main.w * 0.5 - 63.47 / 2,
+        y: main.y - 7.54 - 66.72,
+        w: 63.47,
+        h: 66.72,
+        maxX: main.x + main.w * 0.5 + 63.47 / 2,
+        maxY: main.y - 7.54,
+      },
+      status: 'provisional_review_required',
+    })
     expect(resolveBurgenerDeskStructure(physical).main.top).toEqual(main)
     expect(physical.objects.projector.plan_bounds_gu.y).toBeGreaterThanOrEqual(physical.objects.return.plan_bounds_gu.y)
   })
