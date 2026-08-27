@@ -1,4 +1,5 @@
 import { resolveBedroomPhysicalWorld } from './physical-world-v1.js'
+import { resolveBurgenerDeskStructure } from './burgener-desk-v1.js'
 
 function rectangle(x, y, w, h) {
   return Object.freeze({ x, y, w, h, maxX: x + w, maxY: y + h })
@@ -25,6 +26,7 @@ function fromMainDeskLocal(main, { leftOpenU, rearInset, w, h }) {
 export function resolveBedroomWorkstationAccessories(physical = resolveBedroomPhysicalWorld()) {
   const main = physical.objects.main.plan_bounds_gu
   const returnDesk = physical.objects.return.plan_bounds_gu
+  const blackSurface = resolveBurgenerDeskStructure(physical).main.blackSurface
   const chairWidth = 63.47
   const chairDepth = 66.72
 
@@ -47,6 +49,21 @@ export function resolveBedroomWorkstationAccessories(physical = resolveBedroomPh
       relationship: 'main_monitor_right_slightly_roomward',
       local_anchor: 'monitor_right_clearance_forward',
       bounds: fromMainDeskLocal(main, { leftOpenU: 0.69, rearInset: 18, w: 11.39, h: 11.39 }),
+      status: 'provisional_review_required',
+    }),
+    // The keyboard is centered in the primary work zone below the monitor.
+    // Mouse screen-right becomes lower raw x at the reflected presentation
+    // boundary, and remains forward of the Yeti.
+    keyboard: Object.freeze({
+      relationship: 'black_work_surface_centered_below_monitor',
+      local_anchor: 'main_center_forward_of_monitor',
+      bounds: rectangle(main.x + main.w * 0.5 - 35.4, blackSurface.y + 12, 70.8, 21),
+      status: 'provisional_review_required',
+    }),
+    mouse: Object.freeze({
+      relationship: 'keyboard_right_forward_of_yeti',
+      local_anchor: 'keyboard_right_front',
+      bounds: rectangle(blackSurface.x + 8.8, blackSurface.y + 11, 14.8, 22.4),
       status: 'provisional_review_required',
     }),
     // The accepted reflected presentation maps raw +x to the user's left.

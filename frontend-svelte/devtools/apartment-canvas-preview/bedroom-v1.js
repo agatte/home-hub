@@ -60,6 +60,10 @@ const m = Object.freeze({
   chairUpholstery: new THREE.MeshStandardMaterial({ color: 0xf2efe6, roughness: 0.76, metalness: 0 }),
   chairSeam: new THREE.MeshStandardMaterial({ color: 0xd1cabd, roughness: 0.9, metalness: 0 }),
   chairUnderside: new THREE.MeshStandardMaterial({ color: 0x252827, roughness: 0.61, metalness: 0.16 }),
+  keyboard: new THREE.MeshStandardMaterial({ color: 0x171a19, roughness: 0.54, metalness: 0.12 }),
+  keyboardKey: new THREE.MeshStandardMaterial({ color: 0x303534, roughness: 0.68, metalness: 0.04 }),
+  mouse: new THREE.MeshStandardMaterial({ color: 0x1c201f, roughness: 0.45, metalness: 0.1 }),
+  mouseDetail: new THREE.MeshStandardMaterial({ color: 0x454b49, roughness: 0.5, metalness: 0.18 }),
 })
 
 function mesh(world, geometry, material, name) {
@@ -438,6 +442,39 @@ function addBlueYeti(world) {
   box(world, 1.4, 0.2, 0.7, cx, cy - 3.55, z + 8, m.micControl, 'Blue Yeti small front status window')
 }
 
+function addKeyboardAndMouse(world) {
+  const keyboard = workstationAccessories.keyboard.bounds
+  const keyboardCenterX = keyboard.x + keyboard.w / 2
+  const keyboardCenterY = keyboard.y + keyboard.h / 2
+  const deskTopZ = 105.4
+  const keyboardHeight = 2.65
+
+  // The photo establishes a compact dark board centered beneath the monitor.
+  // Keep the key grid intentionally low contrast so it reads at the normal
+  // camera without becoming a branded or exaggerated mechanical keyboard.
+  roundedBox(world, keyboard.w, keyboard.h, keyboardHeight, keyboardCenterX, keyboardCenterY, deskTopZ + keyboardHeight / 2, m.keyboard, 'Bedroom low-profile dark keyboard body', 2.2)
+  const rows = 5
+  const columns = 12
+  const keyGap = 0.9
+  const keyW = (keyboard.w - 7 - keyGap * (columns - 1)) / columns
+  const keyD = (keyboard.h - 5.4 - keyGap * (rows - 1)) / rows
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x = keyboard.x + 3.5 + keyW / 2 + column * (keyW + keyGap)
+      const y = keyboard.y + 2.7 + keyD / 2 + row * (keyD + keyGap)
+      const width = row === rows - 1 && column >= 3 && column <= 7 ? keyW * 1.28 : keyW
+      roundedBox(world, width, keyD, 0.38, x, y, deskTopZ + keyboardHeight + 0.19, m.keyboardKey, 'Bedroom keyboard subtle keycap relief', 0.35)
+    }
+  }
+
+  const mouse = workstationAccessories.mouse.bounds
+  const mouseCenterX = mouse.x + mouse.w / 2
+  const mouseCenterY = mouse.y + mouse.h / 2
+  ellipsoid(world, mouse.w, mouse.h, 4.8, mouseCenterX, mouseCenterY, deskTopZ + 2.4, m.mouse, 'Bedroom compact dark ergonomic mouse', 18)
+  box(world, 0.34, mouse.h * 0.42, 0.16, mouseCenterX, mouse.y + mouse.h * 0.31, deskTopZ + 4.72, m.mouseDetail, 'Bedroom mouse restrained left-right button separation')
+  cylinderZ(world, 0.58, 0.58, 0.28, mouseCenterX, mouse.y + mouse.h * 0.50, deskTopZ + 4.78, m.mouseDetail, 'Bedroom mouse subtle scroll wheel')
+}
+
 function addDrumLamp(world) {
   const f = workstationAccessories.leftLamp.bounds
   const cx = f.x + f.w / 2
@@ -614,6 +651,7 @@ export function addBedroomDesignPassV1(world, data) {
   addHomeZeerChair(world, data)
   addOdysseyMonitor(world)
   addBlueYeti(world)
+  addKeyboardAndMouse(world)
   addDrumLamp(world)
   addMarblePendantLamp(world)
   addUnderMainPc(world)

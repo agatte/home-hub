@@ -84,6 +84,38 @@ describe('Bedroom workstation accessory preview anchors', () => {
     expect(overlaps(yeti, monitor)).toBe(false)
   })
 
+  it('keeps the keyboard and mouse bounded to the unchanged black central work surface', () => {
+    const blackSurface = resolveBurgenerDeskStructure(physical).main.blackSurface
+    const keyboard = accessories.keyboard
+    const mouse = accessories.mouse
+    expect(blackSurface).toEqual({
+      x: 58.672581,
+      y: 443.77684999999997,
+      w: 123.850938,
+      h: 66.7152,
+      maxX: 182.523519,
+      maxY: 510.49204999999995,
+    })
+    expect(keyboard).toEqual({
+      relationship: 'black_work_surface_centered_below_monitor',
+      local_anchor: 'main_center_forward_of_monitor',
+      bounds: { x: 85.19805, y: 455.77684999999997, w: 70.8, h: 21, maxX: 155.99804999999998, maxY: 476.77684999999997 },
+      status: 'provisional_review_required',
+    })
+    expect(mouse).toEqual({
+      relationship: 'keyboard_right_forward_of_yeti',
+      local_anchor: 'keyboard_right_front',
+      bounds: { x: 67.472581, y: 454.77684999999997, w: 14.8, h: 22.4, maxX: 82.272581, maxY: 477.17684999999995 },
+      status: 'provisional_review_required',
+    })
+    expect(contains(blackSurface, keyboard.bounds)).toBe(true)
+    expect(contains(blackSurface, mouse.bounds)).toBe(true)
+    expect(keyboard.bounds.x + keyboard.bounds.w / 2).toBeCloseTo(accessories.monitor.bounds.x + accessories.monitor.bounds.w / 2)
+    // Raw x is reflected, so a lower raw x presents to the user's right.
+    expect(mouse.bounds.x + mouse.bounds.w / 2).toBeLessThan(keyboard.bounds.x)
+    expect(mouse.bounds.y).toBeLessThan(accessories.microphone.bounds.y)
+  })
+
   it('keeps the right lamp base on the main rear-right before the return, oriented inward toward chair/front-center', () => {
     const main = physical.objects.main.plan_bounds_gu
     const returnDesk = physical.objects.return.plan_bounds_gu
