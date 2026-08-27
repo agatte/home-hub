@@ -57,10 +57,13 @@ export function resolveBedroomWorkstationAccessories(physical = resolveBedroomPh
       status: 'provisional_review_required',
     }),
     rightLamp: Object.freeze({
-      relationship: 'main_rear_right_before_return_diagonal_toward_chair',
-      local_anchor: 'main_rear_right_before_return',
-      local_left_open_u: 0.86,
-      bounds: fromMainDeskLocal(main, { leftOpenU: 0.86, rearInset: 10, w: 22, h: 13 }),
+      relationship: 'main_rear_right_corner_diagonal_toward_chair',
+      local_anchor: 'main_rear_right_corner',
+      // Small visual reconciliation: the base stays wholly on the main top,
+      // but now occupies the photographed rear-right corner rather than an
+      // inboard approximation. Reflection is still handled at the boundary.
+      local_left_open_u: 0.94,
+      bounds: fromMainDeskLocal(main, { leftOpenU: 0.94, rearInset: 10, w: 22, h: 13 }),
       orientation: Object.freeze({
         base_long_axis: 'rear_right_to_front_center',
         stem_anchor: 'rear_right',
@@ -72,8 +75,9 @@ export function resolveBedroomWorkstationAccessories(physical = resolveBedroomPh
       status: 'provisional_review_required',
     }),
     headphones: Object.freeze({
-      relationship: 'main_rear_open_side_near_monitor',
-      bounds: fromMain(main, { u: 0.76, rearInset: 22, w: 14.65, h: 14.65 }),
+      relationship: 'main_rear_open_side_behind_work_surface',
+      // Kept on the same wood-side lane, just behind the bounded black mat.
+      bounds: fromMain(main, { u: 0.76, rearInset: 11, w: 14.65, h: 14.65 }),
       status: 'provisional_review_required',
     }),
     alexa: Object.freeze({

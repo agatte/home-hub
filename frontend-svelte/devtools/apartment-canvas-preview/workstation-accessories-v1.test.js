@@ -18,6 +18,40 @@ function overlaps(a, b) {
 }
 
 describe('Bedroom workstation accessory preview anchors', () => {
+  it('keeps every non-right-lamp renderer resolver output byte-for-byte stable', () => {
+    expect({
+      monitor: accessories.monitor,
+      microphone: accessories.microphone,
+      leftLamp: accessories.leftLamp,
+      alexa: accessories.alexa,
+    }).toEqual({
+      monitor: {
+        relationship: 'main_rear_edge_centered_working_zone',
+        local_anchor: 'main_center_rear',
+        bounds: { x: 88.86305, y: 513.185, w: 63.47, h: 14.65, maxX: 152.33305000000001, maxY: 527.8349999999999 },
+        status: 'provisional_review_required',
+      },
+      microphone: {
+        relationship: 'main_monitor_right_slightly_roomward',
+        local_anchor: 'monitor_right_clearance_forward',
+        bounds: { x: 74.33119100000002, y: 506.815, w: 11.39, h: 11.39, maxX: 85.72119100000002, maxY: 518.205 },
+        status: 'provisional_review_required',
+      },
+      leftLamp: {
+        relationship: 'main_rear_open_end_opposite_return',
+        local_anchor: 'main_rear_left_open_end',
+        bounds: { x: 192.79176800000002, y: 511.56, w: 17.9, h: 17.9, maxX: 210.69176800000002, maxY: 529.46 },
+        status: 'provisional_review_required',
+      },
+      alexa: {
+        relationship: 'main_rear_left_of_fabric_lamp',
+        local_anchor: 'left_of_left_lamp',
+        bounds: { x: 207.228934, y: 513.185, w: 14.65, h: 14.65, maxX: 221.87893400000002, maxY: 527.8349999999999 },
+        status: 'provisional_review_required',
+      },
+    })
+  })
+
   it('keeps the PC under the main on the return/junction side, not in the return cabinet', () => {
     const main = physical.objects.main.plan_bounds_gu
     const returnDesk = physical.objects.return.plan_bounds_gu
@@ -58,11 +92,12 @@ describe('Bedroom workstation accessory preview anchors', () => {
     expect(overlaps(lamp.bounds, returnDesk)).toBe(false)
     expect(lamp.bounds.y).toBeGreaterThan(main.y + main.h * 0.7)
     expect(lamp.bounds.x + lamp.bounds.w / 2).toBeLessThan(accessories.microphone.bounds.x + accessories.microphone.bounds.w / 2)
-    expect(lamp.relationship).toBe('main_rear_right_before_return_diagonal_toward_chair')
-    expect(lamp.local_anchor).toBe('main_rear_right_before_return')
-    expect(lamp.local_left_open_u).toBe(0.86)
-    expect(main.w * (lamp.local_left_open_u - 0.84)).toBeGreaterThan(0)
-    expect(main.w * (lamp.local_left_open_u - 0.84)).toBeLessThan(5)
+    expect(lamp.relationship).toBe('main_rear_right_corner_diagonal_toward_chair')
+    expect(lamp.local_anchor).toBe('main_rear_right_corner')
+    expect(lamp.local_left_open_u).toBe(0.94)
+    expect(lamp.bounds).toEqual({ x: 15.64216600000001, y: 514.01, w: 22, h: 13, maxX: 37.64216600000001, maxY: 527.01 })
+    expect(main.w * (lamp.local_left_open_u - 0.92)).toBeGreaterThan(0)
+    expect(main.w * (lamp.local_left_open_u - 0.92)).toBeLessThan(5)
     expect(lamp.orientation).toEqual({
       base_long_axis: 'rear_right_to_front_center',
       stem_anchor: 'rear_right',
@@ -70,6 +105,22 @@ describe('Bedroom workstation accessory preview anchors', () => {
     })
     expect(lamp.yaw_radians).toBeCloseTo(-Math.PI / 4)
     expect(lamp.stem_local_x_gu).toBeLessThan(lamp.shade_local_x_gu)
+    expect(overlaps(lamp.bounds, accessories.monitor.bounds)).toBe(false)
+    expect(overlaps(lamp.bounds, accessories.microphone.bounds)).toBe(false)
+  })
+
+  it('keeps headphones flat on the rear wood strip, entirely clear of the black work surface', () => {
+    const main = physical.objects.main.plan_bounds_gu
+    const blackSurface = resolveBurgenerDeskStructure(physical).main.blackSurface
+    const headphones = accessories.headphones
+    expect(headphones.relationship).toBe('main_rear_open_side_behind_work_surface')
+    expect(headphones.bounds).toEqual({
+      x: 168.79243600000004, y: 512.185, w: 14.65, h: 14.65,
+      maxX: 183.44243600000004, maxY: 526.8349999999999,
+    })
+    expect(contains(main, headphones.bounds)).toBe(true)
+    expect(overlaps(headphones.bounds, blackSurface)).toBe(false)
+    expect(headphones.bounds.y).toBeGreaterThanOrEqual(blackSurface.maxY)
   })
 
   it('places the Alexa puck to the visual left of the fabric lamp under the accepted reflection', () => {

@@ -23,14 +23,18 @@ const m = Object.freeze({
   caster: new THREE.MeshStandardMaterial({ color: 0x222525, roughness: 0.68, metalness: 0.13 }),
   monitor: new THREE.MeshStandardMaterial({ color: 0x151918, roughness: 0.43, metalness: 0.2 }),
   display: new THREE.MeshStandardMaterial({ color: 0x1a2c2a, roughness: 0.26, emissive: 0x071411, emissiveIntensity: 0.28 }),
+  displayEdge: new THREE.MeshStandardMaterial({ color: 0x090b0b, roughness: 0.36, metalness: 0.24 }),
   mic: new THREE.MeshStandardMaterial({ color: 0x171a1a, roughness: 0.54, metalness: 0.28 }),
   grille: new THREE.MeshStandardMaterial({ color: 0x2e3433, roughness: 0.4, metalness: 0.56 }),
+  micControl: new THREE.MeshStandardMaterial({ color: 0x565d5b, roughness: 0.34, metalness: 0.42 }),
   cream: new THREE.MeshStandardMaterial({ color: 0xd8cfbd, roughness: 0.91 }),
+  lampLinen: new THREE.MeshStandardMaterial({ color: 0xcfc2a6, roughness: 0.98, metalness: 0, side: THREE.DoubleSide }),
   trim: new THREE.MeshStandardMaterial({ color: 0x343736, roughness: 0.58, metalness: 0.18 }),
   stone: new THREE.MeshStandardMaterial({ color: 0x5e625f, roughness: 0.8, metalness: 0.08 }),
   marble: new THREE.MeshStandardMaterial({ color: 0xd8d4ca, roughness: 0.5 }),
+  marbleVein: new THREE.MeshStandardMaterial({ color: 0x928f89, roughness: 0.68, metalness: 0.02 }),
   brass: new THREE.MeshStandardMaterial({ color: 0x9f7b46, roughness: 0.32, metalness: 0.74 }),
-  glass: new THREE.MeshPhysicalMaterial({ color: 0xd9e2dd, roughness: 0.18, transmission: 0.45, transparent: true, opacity: 0.47 }),
+  glass: new THREE.MeshPhysicalMaterial({ color: 0xd9e2dd, roughness: 0.13, metalness: 0, transmission: 0.62, transparent: true, opacity: 0.39, thickness: 0.35, side: THREE.DoubleSide }),
   bulb: new THREE.MeshStandardMaterial({ color: 0xe8d8a7, roughness: 0.35, emissive: 0x2b210e, emissiveIntensity: 0.18 }),
   bedUpholstery: new THREE.MeshStandardMaterial({ color: 0x77736d, roughness: 0.94 }),
   bedUpholsteryLight: new THREE.MeshStandardMaterial({ color: 0x89847d, roughness: 0.96 }),
@@ -40,7 +44,7 @@ const m = Object.freeze({
   duvet: new THREE.MeshStandardMaterial({ color: 0xf0ede5, roughness: 1 }),
   beddingSeam: new THREE.MeshStandardMaterial({ color: 0xcfc8bc, roughness: 1 }),
   sill: new THREE.MeshStandardMaterial({ color: 0x6b706c, roughness: 0.86, metalness: 0.04 }),
-  alexaBand: new THREE.MeshStandardMaterial({ color: 0x3d7180, roughness: 0.4, metalness: 0.18, emissive: 0x092b35, emissiveIntensity: 0.26 }),
+  alexaBand: new THREE.MeshStandardMaterial({ color: 0x59615f, roughness: 0.42, metalness: 0.12, emissive: 0x07100e, emissiveIntensity: 0.06 }),
   pcPanel: new THREE.MeshStandardMaterial({ color: 0x101413, roughness: 0.52, metalness: 0.28 }),
   pcComponent: new THREE.MeshStandardMaterial({ color: 0x252a28, roughness: 0.62, metalness: 0.34 }),
   pcAccent: new THREE.MeshStandardMaterial({ color: 0x167d83, roughness: 0.38, metalness: 0.2, emissive: 0x063a3d, emissiveIntensity: 0.48 }),
@@ -243,11 +247,15 @@ function addOdysseyMonitor(world) {
   const panelY = f.y + f.h * 0.47
   const top = 104.4
   const panelH = f.w * 9 / 16
-  // One 27-inch 16:9 Samsung panel, neck, and stand entirely above desk top.
-  ellipsoid(world, f.w * 0.32, 10, 1.9, cx, f.y + f.h * 0.28, top + 1.4, m.monitor, 'Samsung Odyssey oval stand base')
-  box(world, 5.4, 3.2, 18, cx, f.y + f.h * 0.48, top + 10, m.monitor, 'Samsung Odyssey stand neck')
-  box(world, f.w, 2.8, panelH, cx, panelY, top + 17 + panelH / 2, m.monitor, 'Samsung Odyssey G5 27-inch panel')
-  box(world, f.w * 0.94, 0.45, panelH * 0.91, cx, panelY - 1.63, top + 17 + panelH / 2, m.display, 'Samsung Odyssey display face')
+  // One restrained 27-inch 16:9 Odyssey assembly: a thin black screen shell,
+  // low angular foot, and central neck distinguish it from a generic panel.
+  ellipsoid(world, f.w * 0.37, 10.4, 1.55, cx, f.y + f.h * 0.28, top + 0.9, m.monitor, 'Samsung Odyssey G5 low oval stand foot')
+  box(world, f.w * 0.19, 5.2, 1.05, cx, f.y + f.h * 0.30, top + 1.35, m.displayEdge, 'Samsung Odyssey G5 stand-foot center plate')
+  roundedBox(world, 4.7, 3.4, 18.8, cx, f.y + f.h * 0.48, top + 10.2, m.monitor, 'Samsung Odyssey G5 tapered central neck', 1.1)
+  box(world, f.w, 3.05, panelH, cx, panelY, top + 17 + panelH / 2, m.monitor, 'Samsung Odyssey G5 dark rear housing')
+  box(world, f.w * 0.967, 0.38, panelH * 0.956, cx, panelY - 1.68, top + 17 + panelH / 2, m.displayEdge, 'Samsung Odyssey G5 thin black display bezel')
+  box(world, f.w * 0.942, 0.22, panelH * 0.922, cx, panelY - 1.94, top + 17 + panelH / 2, m.display, 'Samsung Odyssey G5 subtle dark display panel')
+  box(world, 11, 0.5, 1.25, cx, panelY + 1.72, top + 17 + panelH * 0.12, m.displayEdge, 'Samsung Odyssey G5 rear lower control housing')
 }
 
 function addBlueYeti(world) {
@@ -256,15 +264,17 @@ function addBlueYeti(world) {
   const cy = f.y + f.h / 2
   const z = 105.4
   // Accepted raw anchor intentionally becomes the user's right with reflection.
-  cylinderZ(world, 4.2, 4.9, 1.7, cx, cy, z + 0.85, m.mic, 'Blue Yeti small circular base')
-  cylinderZ(world, 3.45, 3.45, 15, cx, cy, z + 9.4, m.grille, 'Blue Yeti small capsule grille')
-  cylinderZ(world, 3.1, 3.45, 4.8, cx, cy, z + 3.3, m.mic, 'Blue Yeti small lower body')
-  ellipsoid(world, 6.8, 6.8, 4.2, cx, cy, z + 17.2, m.grille, 'Blue Yeti small rounded grille cap')
+  cylinderZ(world, 4.65, 5.15, 1.55, cx, cy, z + 0.78, m.mic, 'Blue Yeti weighted circular desktop base')
+  cylinderZ(world, 3.5, 3.62, 12.8, cx, cy, z + 10.1, m.grille, 'Blue Yeti perforated cylindrical grille')
+  cylinderZ(world, 3.15, 3.48, 5.4, cx, cy, z + 3.45, m.mic, 'Blue Yeti matte black lower body')
+  ellipsoid(world, 6.95, 6.95, 4.6, cx, cy, z + 16.5, m.grille, 'Blue Yeti rounded grille cap')
   for (const offset of [-4.2, 4.2]) {
-    rod(world, new THREE.Vector3(cx + offset, cy, z + 3), new THREE.Vector3(cx + offset, cy, z + 14.5), 0.82, m.mic, 'Blue Yeti small side yoke')
-    cylinderZ(world, 1.2, 1.2, 1.4, cx + offset, cy - 3.2, z + 10.4, m.grille, 'Blue Yeti small yoke knob')
+    rod(world, new THREE.Vector3(cx + offset, cy, z + 3), new THREE.Vector3(cx + offset, cy, z + 14.2), 0.78, m.mic, 'Blue Yeti compact side yoke')
+    cylinderZ(world, 1.22, 1.22, 1.55, cx + offset, cy - 3.25, z + 10.1, m.micControl, 'Blue Yeti knurled yoke knob')
   }
-  for (const band of [z + 9, z + 12.5]) box(world, 6.2, 0.45, 0.5, cx, cy - 3.4, band, m.mic, 'Blue Yeti small grille band')
+  for (const band of [z + 9.2, z + 12.4]) box(world, 6.25, 0.38, 0.42, cx, cy - 3.48, band, m.mic, 'Blue Yeti restrained grille band')
+  cylinderZ(world, 0.85, 0.85, 0.28, cx, cy - 3.53, z + 6.2, m.micControl, 'Blue Yeti front gain control')
+  box(world, 1.4, 0.2, 0.7, cx, cy - 3.55, z + 8, m.micControl, 'Blue Yeti small front status window')
 }
 
 function addDrumLamp(world) {
@@ -272,13 +282,16 @@ function addDrumLamp(world) {
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
   const z = 105.4
-  // Keep the left drum lamp upright and opaque: a short, faceted base and
-  // a broad hard white fabric shade prevent the old lantern silhouette.
-  cylinderZ(world, 8.7, 7.2, 11, cx, cy, z + 5.5, m.stone, 'L2 faceted gray lamp base', 6)
-  cylinderZ(world, 2.4, 2.4, 8, cx, cy, z + 14.5, m.trim, 'L2 short centered lamp neck', 12)
-  cylinderZ(world, 14.4, 13.1, 32, cx, cy, z + 34.5, m.cream, 'L2 hard white fabric drum shade', 32)
-  cylinderZ(world, 13.3, 13.3, 1.1, cx, cy, z + 18.7, m.trim, 'L2 dark lower shade trim', 32)
-  cylinderZ(world, 14.55, 14.55, 1.1, cx, cy, z + 50.6, m.trim, 'L2 dark upper shade trim', 32)
+  // Opaque open shell plus perimeter rims: no transparent, spoke, or radial
+  // cap mesh can be exposed from this conventional fabric table lamp.
+  cylinderZ(world, 8.9, 7.05, 10.8, cx, cy, z + 5.4, m.stone, 'L2 broad faceted graphite lamp base', 6)
+  cylinderZ(world, 6.5, 6.5, 1.1, cx, cy, z + 0.55, m.trim, 'L2 dark hexagonal base plinth', 6)
+  cylinderZ(world, 2.25, 2.25, 7.8, cx, cy, z + 14.25, m.trim, 'L2 short centered lamp neck', 12)
+  const shade = mesh(world, new THREE.CylinderGeometry(15.15, 13.35, 32.2, 32, 1, true), m.lampLinen, 'L2 opaque warm fabric shade shell')
+  shade.rotation.x = Math.PI / 2
+  shade.position.set(cx, cy, z + 34.35)
+  mesh(world, new THREE.TorusGeometry(13.35, 0.44, 6, 32), m.trim, 'L2 lower fabric shade perimeter rim').position.set(cx, cy, z + 18.25)
+  mesh(world, new THREE.TorusGeometry(15.15, 0.44, 6, 32), m.trim, 'L2 upper fabric shade perimeter rim').position.set(cx, cy, z + 50.45)
 }
 
 function cylinderX(world, left, right, radius, y, z, material, name, segments = 16) {
@@ -314,12 +327,12 @@ function addDeskAccessories(world) {
     group.position.set(headphones.x + headphones.w / 2, headphones.y + headphones.h / 2, 105.5)
     world.add(group)
     const band = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-5.2, 0, 0), new THREE.Vector3(-5.2, 0, 7.4),
-      new THREE.Vector3(0, 0, 11.1), new THREE.Vector3(5.2, 0, 7.4), new THREE.Vector3(5.2, 0, 0),
+      new THREE.Vector3(-5.3, -1.4, 1.15), new THREE.Vector3(-4.3, 1.9, 1.15),
+      new THREE.Vector3(0, 3.35, 1.15), new THREE.Vector3(4.3, 1.9, 1.15), new THREE.Vector3(5.3, -1.4, 1.15),
     ])
-    mesh(group, new THREE.TubeGeometry(band, 16, 1.0, 10, false), m.mic, 'Desk headphones shaped headband')
-    ellipsoid(group, 4.2, 3.4, 6.8, -5.2, 0, 1.6, m.grille, 'Desk headphones left ear cup')
-    ellipsoid(group, 4.2, 3.4, 6.8, 5.2, 0, 1.6, m.grille, 'Desk headphones right ear cup')
+    mesh(group, new THREE.TubeGeometry(band, 16, 1.05, 10, false), m.mic, 'Desk headphones flat padded headband arc')
+    ellipsoid(group, 5.4, 4.75, 2.6, -4.8, -1.3, 1.3, m.grille, 'Desk headphones flat left ear cup')
+    ellipsoid(group, 5.4, 4.75, 2.6, 4.8, -1.3, 1.3, m.grille, 'Desk headphones flat right ear cup')
   }
 
   const alexa = workstationAccessories.alexa.bounds
@@ -328,8 +341,9 @@ function addDeskAccessories(world) {
     group.name = 'Desk Alexa fixed world-space assembly'
     group.position.set(alexa.x + alexa.w / 2, alexa.y + alexa.h / 2, 105.5)
     world.add(group)
-    cylinderZ(group, 4.2, 4.7, 5.2, 0, 0, 2.6, m.cabinet, 'Desk Alexa stationary puck')
-    cylinderZ(group, 4.28, 4.28, 0.55, 0, 0, 5.5, m.alexaBand, 'Desk Alexa blue top ring')
+    cylinderZ(group, 4.7, 4.95, 3.8, 0, 0, 1.9, m.cabinet, 'Desk Alexa low fabric-style puck body')
+    cylinderZ(group, 4.72, 4.72, 0.34, 0, 0, 3.95, m.alexaBand, 'Desk Alexa subdued top light ring')
+    cylinderZ(group, 3.95, 3.95, 0.24, 0, 0, 4.24, m.black, 'Desk Alexa matte top disk')
   }
 }
 
@@ -340,20 +354,25 @@ function addMarblePendantLamp(world) {
   const cy = f.y + f.h / 2
   const z = 105.4
   const lamp = new THREE.Group()
-  lamp.name = 'L5 return-mounted marble pendant lamp assembly'
+  lamp.name = 'L5 main-desk marble pendant lamp assembly'
   lamp.position.set(cx, cy, z)
   lamp.rotation.z = rightLamp.yaw_radians
   world.add(lamp)
-  box(lamp, 22, 13, 4.2, 0, 0, 2.1, m.marble, 'L5 white marble rectangular base')
-  cylinderZ(lamp, 1.45, 1.45, 47, rightLamp.stem_local_x_gu, 0, 27.7, m.brass, 'L5 thin brass stem', 12)
+  box(lamp, 22, 13, 3.8, 0, 0, 1.9, m.marble, 'L5 white marble rectangular base')
+  box(lamp, 20.6, 11.6, 0.35, 0, 0, 3.95, m.marble, 'L5 raised marble base surface')
+  box(lamp, 8.5, 0.18, 0.24, -2.2, -5.82, 4.16, m.marbleVein, 'L5 restrained marble front vein')
+  box(lamp, 5.8, 0.18, 0.18, 5.1, -5.82, 4.16, m.marbleVein, 'L5 restrained marble front accent vein')
+  cylinderZ(lamp, 1.24, 1.24, 47, rightLamp.stem_local_x_gu, 0, 27.7, m.brass, 'L5 slender brass stem', 12)
+  cylinderZ(lamp, 2.05, 2.05, 1.2, rightLamp.stem_local_x_gu, 0, 4.6, m.brass, 'L5 brass stem foot', 12)
   const hook = new THREE.CatmullRomCurve3([
     new THREE.Vector3(rightLamp.stem_local_x_gu, 0, 50), new THREE.Vector3(rightLamp.stem_local_x_gu, 0, 62),
     new THREE.Vector3(-5, 0, 65), new THREE.Vector3(rightLamp.shade_local_x_gu, 0, 57),
   ])
-  mesh(lamp, new THREE.TubeGeometry(hook, 20, 1.45, 10, false), m.brass, 'L5 curved brass top hook')
-  cylinderZ(lamp, 8.2, 8.2, 29, rightLamp.shade_local_x_gu, 0, 42, m.glass, 'L5 seeded-glass hanging cylinder', 20)
-  ellipsoid(lamp, 5.8, 5.8, 9.5, rightLamp.shade_local_x_gu, 0, 42, m.bulb, 'L5 visible hanging bulb', 14)
-  cylinderZ(lamp, 4.5, 4.5, 3, rightLamp.shade_local_x_gu, 0, 58, m.brass, 'L5 brass glass cap', 16)
+  mesh(lamp, new THREE.TubeGeometry(hook, 20, 1.24, 10, false), m.brass, 'L5 inward-curving brass top hook')
+  cylinderZ(lamp, 8.35, 8.35, 28.5, rightLamp.shade_local_x_gu, 0, 42, m.glass, 'L5 clear seeded-glass hanging shade', 20)
+  cylinderZ(lamp, 3.2, 3.7, 9.2, rightLamp.shade_local_x_gu, 0, 42, m.bulb, 'L5 small visible hanging bulb', 14)
+  cylinderZ(lamp, 4.85, 4.85, 3.15, rightLamp.shade_local_x_gu, 0, 58, m.brass, 'L5 brushed brass glass cap', 16)
+  cylinderZ(lamp, 5.05, 5.05, 0.5, rightLamp.shade_local_x_gu, 0, 56.2, m.brass, 'L5 glass-cap lower collar', 16)
 }
 
 function addUnderMainPc(world) {
