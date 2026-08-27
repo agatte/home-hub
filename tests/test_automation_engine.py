@@ -216,6 +216,18 @@ class TestAutomationEngine:
         assert engine.mode_source == "time"
         assert engine.house_state == "home"
         assert engine.activity == "general"
+        assert engine.effective_mode == "general"
+        assert engine.effective_source == "time_of_day"
+        context = engine.get_activity_context()
+        assert context["current_activity"] == "idle"
+        assert context["effective_mode"] == "general"
+        assert context["effective_source"] == "time_of_day"
+        pipeline = engine._build_pipeline_state()
+        assert pipeline["inputs"]["activity"]["mode"] == "idle"
+        assert pipeline["resolution"]["winning_input"] == "time_of_day"
+        assert pipeline["resolution"]["effective_mode"] == "general"
+        assert pipeline["resolution"]["effective_source"] == "time_of_day"
+        assert pipeline["output"]["mode"] == "general"
         assert engine.manual_override is False
         assert engine.enabled is True
 
@@ -531,6 +543,24 @@ class TestAutomationEngine:
         assert {
             mock_hue._lights[light_id]["bri"] for light_id in "12345"
         } == {engine.schedule_config.weekday.wake_brightness}
+
+    @patch("backend.services.automation_engine.datetime")
+    async def test_general_fallback_light_writes_are_labeled_general(
+        self, mock_dt, engine,
+    ):
+        now = datetime(2026, 8, 27, 11, 0, tzinfo=TZ)
+        mock_dt.now.return_value = now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        logger = SimpleNamespace(log_light_adjustment=AsyncMock())
+        engine._event_logger = logger
+
+        await engine._apply_time_based()
+
+        assert logger.log_light_adjustment.await_count > 0
+        assert {
+            call.kwargs["mode_at_time"]
+            for call in logger.log_light_adjustment.await_args_list
+        } == {"general"}
 
     async def test_confirmed_general_idle_heartbeats_keep_awake_baseline(
         self, engine,
@@ -5349,7 +5379,9 @@ class TestPhysicalContextRelax:
     def test_source_preserves_per_light_overrides(self):
         assert "physical_context_relax" in PRESERVE_PER_LIGHT_OVERRIDE_SOURCES
 
-    async def test_fresh_desktop_conflict_releases_active_fallback(self, context):
+    async def test_transient_desktop_face_does_not_churn_active_couch_relax_over_idle(
+        self, context,
+    ):
         engine, presence, _ = context
         now = datetime.now(tz=TZ)
         couch = self.observe(
@@ -5360,10 +5392,63 @@ class TestPhysicalContextRelax:
             zone="couch",
         )
         await engine.notify_presence_observation(couch)
+        assert engine.override_source == "physical_context_relax"
+
+        engine._apply_time_based = AsyncMock()
+        engine._apply_mode = AsyncMock()
+
+        # A single fresh desktop face can be a contradictory frame while the
+        # committed Latitude couch evidence remains fresh.  It must not tear
+        # down Relax to legacy Idle and then immediately re-enter Relax when
+        # the next desktop heartbeat retracts the face.
         desk = self.observe(
             presence,
             source="desktop",
+            captured_at=now + timedelta(seconds=1),
+            face_present=True,
+            zone="desk",
+        )
+        await engine.notify_presence_observation(desk)
+
+        desktop_absent = self.observe(
+            presence,
+            source="desktop",
+            captured_at=now + timedelta(seconds=2),
+            face_present=False,
+            zone=None,
+        )
+        await engine.notify_presence_observation(desktop_absent)
+
+        assert engine.override_source == "physical_context_relax"
+        assert engine.current_mode == "relax"
+        assert engine.activity == "relax"
+        engine._apply_time_based.assert_not_awaited()
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_fresh_desktop_conflict_releases_after_couch_authority_is_gone(
+        self, context,
+    ):
+        engine, presence, _ = context
+        now = datetime.now(tz=TZ)
+        couch = self.observe(
+            presence,
+            source="latitude",
             captured_at=now,
+            face_present=True,
+            zone="couch",
+        )
+        await engine.notify_presence_observation(couch)
+        self.observe(
+            presence,
+            source="latitude",
+            captured_at=now + timedelta(seconds=1),
+            face_present=False,
+            zone=None,
+        )
+        desk = self.observe(
+            presence,
+            source="desktop",
+            captured_at=now + timedelta(seconds=1),
             face_present=True,
             zone="desk",
         )
@@ -5372,9 +5457,10 @@ class TestPhysicalContextRelax:
 
         assert engine.manual_override is False
         assert engine.current_mode == "idle"
+        assert engine.activity == "general"
 
     @pytest.mark.parametrize("zone", [None, "couch"])
-    async def test_fresh_desktop_face_releases_active_fallback_regardless_of_zone(
+    async def test_fresh_desktop_face_holds_relax_while_couch_remains_qualified(
         self, context, zone,
     ):
         engine, presence, _ = context
@@ -5397,8 +5483,9 @@ class TestPhysicalContextRelax:
 
         await engine.notify_presence_observation(desktop)
 
-        assert engine.manual_override is False
-        assert engine.current_mode == "idle"
+        assert engine.manual_override is True
+        assert engine.override_source == "physical_context_relax"
+        assert engine.current_mode == "relax"
 
     async def test_away_release_clears_without_relighting(self, context):
         engine, presence, _ = context

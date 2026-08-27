@@ -426,7 +426,10 @@ class AutomationEngine:
             overrides=self._overrides,
             hue_getter=lambda: self._hue,
             event_logger_getter=lambda: self._event_logger,
-            current_mode_getter=lambda: self.current_mode,
+            # Actuation/audit boundary uses the user-facing projection so
+            # occupied-awake fallback writes are recorded as General, not the
+            # detector's internal Idle evidence.
+            current_mode_getter=lambda: self.effective_mode,
             screen_sync_getter=lambda: self._screen_sync,
             suppressed_getter=lambda: self._external_off_detected,
             # Cross-dispatch routes back through the engine's _apply_* delegates
@@ -613,6 +616,36 @@ class AutomationEngine:
         return mode
 
     @property
+    def effective_mode(self) -> str:
+        """Return the user-facing effective lifecycle/activity label.
+
+        ``idle`` is detector evidence, not an occupied-awake activity.  Keep
+        the raw value in ``_current_mode`` / activity-context diagnostics, but
+        project Home + idle to General at API, pipeline, and actuation-audit
+        boundaries.
+        """
+        if self.house_state == "away":
+            return "away"
+        if self.house_state == "sleeping":
+            return "sleeping"
+        return self.activity or self.current_mode
+
+    @property
+    def effective_source(self) -> str:
+        """Return the owner of the projected effective mode.
+
+        Home + General is the time-of-day fallback rendered from internal idle
+        evidence; the detector source remains available separately.
+        """
+        if (
+            self.house_state == "home"
+            and not self._manual_override
+            and self._current_mode == "idle"
+        ):
+            return "time_of_day"
+        return self.mode_source
+
+    @property
     def last_weather_class(self) -> Optional[str]:
         """Most recent weather class applied to the lux-multiplier curve.
 
@@ -708,8 +741,8 @@ class AutomationEngine:
             "current_activity_fresh": (
                 report_age is not None and report_age <= SOURCE_STALE_SECONDS
             ),
-            "effective_mode": self.current_mode,
-            "effective_source": self.mode_source,
+            "effective_mode": self.effective_mode,
+            "effective_source": self.effective_source,
             "last_activity_change": (
                 self._last_activity_change.isoformat()
                 if self._last_activity_change is not None else None
@@ -1739,14 +1772,10 @@ class AutomationEngine:
                 )
                 await self.clear_override(source="physical_context_relax")
                 return
-            if desktop_conflict:
-                self._log_physical_context_decision(
-                    "released_desktop_conflict",
-                    "fresh desktop face restored desk authority",
-                    trigger,
-                )
-                await self.clear_override(source="physical_context_relax")
-                return
+            # A real semantic process intent can preempt couch Relax immediately.
+            # Keep this ahead of the physical-conflict hysteresis below so a
+            # genuine desk return to Working/Gaming/Watching does not wait for
+            # the couch-loss timer.
             if process_arbitration.state == "veto" and process_evidence is not None:
                 age = (now - process_evidence.received_at).total_seconds()
                 self._log_physical_context_decision(
@@ -1757,7 +1786,23 @@ class AutomationEngine:
                 )
                 await self.clear_override(source="physical_context_relax")
                 return
+
+            # PresenceFusion's desktop face signal is intentionally raw and can
+            # flicker on a single frame.  When the Latitude still has fresh,
+            # committed couch authority, contradictory desktop-only evidence is
+            # not enough to tear down the incumbent Relax state.  Holding here
+            # prevents Relax -> idle -> Relax repaint loops while preserving
+            # immediate semantic-process preemption above.
             if couch_qualified:
+                return
+
+            if desktop_conflict:
+                self._log_physical_context_decision(
+                    "released_desktop_conflict",
+                    "fresh desktop face restored desk authority after couch loss",
+                    trigger,
+                )
+                await self.clear_override(source="physical_context_relax")
                 return
             lost_at = self._physical_context_presence_lost_at
             if lost_at is None:
@@ -4835,6 +4880,8 @@ class AutomationEngine:
         """Snapshot all active inputs, priority resolution, and final output."""
         now = datetime.now(tz=TZ)
         mode = self.current_mode
+        effective_mode = self.effective_mode
+        effective_source = self.effective_source
         period = self._get_time_period()
 
         # --- Inputs ---
@@ -4949,13 +4996,13 @@ class AutomationEngine:
         resolution = {
             "winning_input": winning,
             "reason": reason,
-            "effective_mode": mode,
-            "effective_source": self.mode_source,
+            "effective_mode": effective_mode,
+            "effective_source": effective_source,
         }
 
         # --- Output ---
         output = {
-            "mode": mode,
+            "mode": effective_mode,
             "time_period": period,
             "effect": self._active_effect_name,
             "brightness_multiplier": brightness_mult,

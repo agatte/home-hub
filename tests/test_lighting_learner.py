@@ -387,6 +387,22 @@ class TestScanForSuggestions:
     async def test_returns_empty_with_no_rows(self, learner, ml_db):
         assert await learner.scan_for_suggestions() == []
 
+    async def test_automation_general_rows_are_not_learning_candidates(
+        self, learner, ml_db,
+    ):
+        async with ml_db() as session:
+            for value, days_ago in zip((210, 212, 211, 213, 209), (5, 4, 3, 2, 1)):
+                session.add(self._recent_adjustment(
+                    mode_at_time="general",
+                    trigger="automation",
+                    bri_after=value,
+                    weather_class="clear",
+                    days_ago=days_ago,
+                ))
+            await session.commit()
+
+        assert await learner.scan_for_suggestions() == []
+
     async def test_three_consistent_rows_are_not_enough_for_a_candidate(
         self, learner, ml_db,
     ):

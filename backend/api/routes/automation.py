@@ -293,8 +293,15 @@ async def get_activity(request: Request) -> dict:
 
     context = engine.get_activity_context()
     return {
-        "mode": engine.current_mode,
-        "source": engine.mode_source,
+        # Backward-compatible ``mode`` now reflects the user-facing effective
+        # activity/lifecycle state.  Keep raw detector evidence explicit for
+        # diagnostics and agent investigations.
+        "mode": engine.effective_mode,
+        "source": engine.effective_source,
+        "house_state": engine.house_state,
+        "activity": engine.activity,
+        "detected_mode": context["current_activity"],
+        "detected_source": context["current_activity_source"],
         "process_evidence_by_device": context["process_evidence_by_device"],
         "process_observations_by_device": (
             context["process_observations_by_device"]
