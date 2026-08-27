@@ -429,6 +429,19 @@ absence before the camera reports `idle`. Explicit away/home state is owned by
 **Solution:** Use MediaPipe BlazePose for real-time presence and posture
 detection from the Latitude's 720p webcam.
 
+**Current Desktop desk-posture status (2026-08-27):** The Latitude path below is
+not the current desk-posture authority. `zone=desk` and desk posture come from
+the Windows desktop `pc_agent` in `backend/services/pc_agent/emotion_capture.py`.
+Issue #56 remains open after bounded live calibration: current Desktop framing
+used the shoulder fallback on every usable labeled frame, and deliberate upright
+produced lower shoulder ratios than deliberate slouch. A reviewed candidate that
+reversed that direction with `<=0.34` upright / `>=0.40` slouched passed focused
+tests but failed live normal-posture stability, committing back to `slouched`
+while normal posture was held. Production code was rolled back unchanged. Before
+future threshold tuning, collect a longer raw-ratio normal-posture window around
+any false transition; do not infer a safe replacement threshold from the failed
+candidate. Bed-zone posture remains out of scope for #56.
+
 | Attribute | Value |
 |-----------|-------|
 | **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Captured at 640×480 for inference (bumped from 320×240 on 2026-04-19 after observing marginal face-detection gains and better future-feature headroom — requires lux recalibration on any change). |
