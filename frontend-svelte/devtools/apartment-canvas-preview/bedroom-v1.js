@@ -2,9 +2,11 @@ import * as THREE from 'three'
 import { resolveBedroomPhysicalWorld } from './physical-world-v1.js'
 import { resolveBurgenerDeskStructure } from './burgener-desk-v1.js'
 import { resolveBedroomWorkstationAccessories } from './workstation-accessories-v1.js'
+import { resolveBedroomStableDecor } from './bedroom-stable-decor-v1.js'
 
 const bedroomPhysical = resolveBedroomPhysicalWorld()
 const workstationAccessories = resolveBedroomWorkstationAccessories(bedroomPhysical)
+const stableDecor = resolveBedroomStableDecor(bedroomPhysical)
 
 // Bounded workstation identity layer. It consumes accepted footprints only;
 // it never changes plan geometry, cutaways, reflection, or Camera v2.
@@ -64,6 +66,13 @@ const m = Object.freeze({
   keyboardKey: new THREE.MeshStandardMaterial({ color: 0x303534, roughness: 0.68, metalness: 0.04 }),
   mouse: new THREE.MeshStandardMaterial({ color: 0x1c201f, roughness: 0.45, metalness: 0.1 }),
   mouseDetail: new THREE.MeshStandardMaterial({ color: 0x454b49, roughness: 0.5, metalness: 0.18 }),
+  printFrame: new THREE.MeshStandardMaterial({ color: 0x252725, roughness: 0.52, metalness: 0.18 }),
+  printPaper: new THREE.MeshStandardMaterial({ color: 0xe0ded5, roughness: 0.92 }),
+  floralStem: new THREE.MeshStandardMaterial({ color: 0x66735d, roughness: 0.94 }),
+  floralPetal: new THREE.MeshStandardMaterial({ color: 0x857594, roughness: 0.86 }),
+  bookLight: new THREE.MeshStandardMaterial({ color: 0xd0c7b7, roughness: 0.9 }),
+  bookDark: new THREE.MeshStandardMaterial({ color: 0x79746d, roughness: 0.86 }),
+  cable: new THREE.MeshStandardMaterial({ color: 0x1d201f, roughness: 0.72, metalness: 0.05 }),
 })
 
 function mesh(world, geometry, material, name) {
@@ -567,6 +576,45 @@ function addEpsonProjector(world) {
   }
 }
 
+function addStableBedroomDecor(world) {
+  const returnTopZ = bedroomPhysical.objects.return.dimensions_gu.high + 2.2
+  const print = stableDecor.floralPrint
+  const printCenterX = print.bounds.x + print.bounds.w / 2
+  const printY = print.bounds.y + print.bounds.h / 2
+
+  // The photo shows a modest black frame resting directly in front of the
+  // clear lamp base, not isolated on the projector return or mounted as art.
+  const frame = new THREE.Group()
+  frame.name = 'Bedroom floral print facing main desk beside right lamp base'
+  frame.position.set(printCenterX, printY, 105.4)
+  // Keep the artwork's broad face directed toward the desk/front. The lamp
+  // base is diagonal, but copying its yaw turned the print edge-on.
+  frame.rotation.set(print.lean_radians, 0, print.yaw_radians)
+  world.add(frame)
+  box(frame, print.bounds.w, print.bounds.h, print.height_gu, 0, 0, print.height_gu / 2, m.printFrame, 'Bedroom freestanding thin black floral-print frame')
+  box(frame, print.bounds.w - 2.0, 0.22, print.height_gu - 2.2, 0, -0.66, print.height_gu / 2, m.printPaper, 'Bedroom floral print simple inset paper')
+  for (const [x, z, scale] of [[-3.3, -3.5, 1], [0.2, 1.8, 0.9], [3.1, -0.8, 0.75]]) {
+    rod(frame, new THREE.Vector3(x, -0.82, 2.1), new THREE.Vector3(x * 0.72, -0.82, print.height_gu / 2 + z), 0.18, m.floralStem, 'Bedroom floral print restrained green stem')
+    ellipsoid(frame, 2.3 * scale, 0.16, 2.3 * scale, x * 0.72, -0.94, print.height_gu / 2 + z, m.floralPetal, 'Bedroom floral print muted purple blossom', 10)
+  }
+
+  const projectorCable = stableDecor.projectorCable
+  const projectorLead = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(projectorCable.start.x, projectorCable.start.y, returnTopZ + 4.2),
+    new THREE.Vector3(projectorCable.bend.x, projectorCable.bend.y, returnTopZ + 2.7),
+    new THREE.Vector3(projectorCable.end.x, projectorCable.end.y, returnTopZ + 1.1),
+  ])
+  mesh(world, new THREE.TubeGeometry(projectorLead, 16, 0.42, 8, false), m.cable, 'Bedroom restrained projector rear power-video lead')
+
+  const deskCable = stableDecor.deskCable
+  const deskLead = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(deskCable.start.x, deskCable.start.y, 104.5),
+    new THREE.Vector3(deskCable.start.x + 1.1, deskCable.start.y - 1.2, 83),
+    new THREE.Vector3(deskCable.end.x, deskCable.end.y, 47),
+  ])
+  mesh(world, new THREE.TubeGeometry(deskLead, 16, 0.48, 8, false), m.cable, 'Bedroom restrained single under-desk power drop')
+}
+
 function addDeskAccessories(world) {
   const headphones = workstationAccessories.headphones.bounds
   {
@@ -656,6 +704,7 @@ export function addBedroomDesignPassV1(world, data) {
   addMarblePendantLamp(world)
   addUnderMainPc(world)
   addEpsonProjector(world)
+  addStableBedroomDecor(world)
   addDeskAccessories(world)
   addBrayaBed(world)
 }
