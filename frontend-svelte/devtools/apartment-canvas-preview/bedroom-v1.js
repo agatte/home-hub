@@ -36,13 +36,15 @@ const m = Object.freeze({
   brass: new THREE.MeshStandardMaterial({ color: 0x9f7b46, roughness: 0.32, metalness: 0.74 }),
   glass: new THREE.MeshPhysicalMaterial({ color: 0xd9e2dd, roughness: 0.13, metalness: 0, transmission: 0.62, transparent: true, opacity: 0.39, thickness: 0.35, side: THREE.DoubleSide }),
   bulb: new THREE.MeshStandardMaterial({ color: 0xe8d8a7, roughness: 0.35, emissive: 0x2b210e, emissiveIntensity: 0.18 }),
-  bedUpholstery: new THREE.MeshStandardMaterial({ color: 0x77736d, roughness: 0.94 }),
-  bedUpholsteryLight: new THREE.MeshStandardMaterial({ color: 0x89847d, roughness: 0.96 }),
+  bedUpholstery: new THREE.MeshStandardMaterial({ color: 0x626663, roughness: 0.92 }),
+  bedUpholsteryLight: new THREE.MeshStandardMaterial({ color: 0x85857f, roughness: 0.95 }),
   bedInterior: new THREE.MeshStandardMaterial({ color: 0x242725, roughness: 0.9 }),
-  mattress: new THREE.MeshStandardMaterial({ color: 0xe5e1d8, roughness: 0.98 }),
-  sheet: new THREE.MeshStandardMaterial({ color: 0xd4cab9, roughness: 0.99 }),
-  duvet: new THREE.MeshStandardMaterial({ color: 0xf0ede5, roughness: 1 }),
-  beddingSeam: new THREE.MeshStandardMaterial({ color: 0xcfc8bc, roughness: 1 }),
+  mattress: new THREE.MeshStandardMaterial({ color: 0xd5d0c5, roughness: 0.98 }),
+  mattressSide: new THREE.MeshStandardMaterial({ color: 0xb4afa5, roughness: 0.99 }),
+  sheet: new THREE.MeshStandardMaterial({ color: 0xc4bcad, roughness: 0.99 }),
+  duvet: new THREE.MeshStandardMaterial({ color: 0xe2ded4, roughness: 1 }),
+  pillow: new THREE.MeshStandardMaterial({ color: 0xe9e4da, roughness: 0.97 }),
+  beddingSeam: new THREE.MeshStandardMaterial({ color: 0xbcb4a7, roughness: 1 }),
   sill: new THREE.MeshStandardMaterial({ color: 0x6b706c, roughness: 0.86, metalness: 0.04 }),
   alexaBand: new THREE.MeshStandardMaterial({ color: 0x59615f, roughness: 0.42, metalness: 0.12, emissive: 0x07100e, emissiveIntensity: 0.06 }),
   pcPanel: new THREE.MeshStandardMaterial({ color: 0x101413, roughness: 0.52, metalness: 0.28 }),
@@ -122,29 +124,39 @@ function addBrayaBed(world) {
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
 
-  // Braya's closed storage base is low and upholstered, with distinctly
-  // substantial rails and raised headboard wings rather than a generic slab.
-  box(world, f.w - 18, f.h - 18, 7, cx + 3, cy, 43, m.bedInterior, 'Braya recessed storage deck')
-  roundedBox(world, f.w - 20, 11, 38, cx + 3, f.y + 7, 25, m.bedUpholstery, 'Braya near upholstered side rail', 3)
-  roundedBox(world, f.w - 20, 11, 38, cx + 3, f.y + f.h - 7, 25, m.bedUpholstery, 'Braya far upholstered side rail', 3)
-  roundedBox(world, 13, f.h - 22, 41, f.x + f.w - 7, cy, 27, m.bedUpholstery, 'Braya upholstered foot rail', 3)
-  box(world, 3.2, f.h - 42, 1.2, f.x + f.w - 12.5, cy, 47.4, m.bedUpholsteryLight, 'Braya foot-rail top seam')
+  // Braya remains entirely inside its accepted footprint. Camera-readable
+  // gray rails form a continuous closed storage-platform perimeter.
+  box(world, f.w - 18, f.h - 18, 8, cx + 2, cy, 40, m.bedInterior, 'Braya recessed closed storage cavity')
+  roundedBox(world, f.w - 12, 15, 42, cx + 1, f.y + 8.2, 27, m.bedUpholstery, 'Braya visible near upholstered side rail', 3.6)
+  roundedBox(world, f.w - 12, 15, 42, cx + 1, f.maxY - 8.2, 27, m.bedUpholstery, 'Braya visible far upholstered side rail', 3.6)
+  roundedBox(world, 17, f.h - 15, 44, f.maxX - 8.8, cy, 28, m.bedUpholstery, 'Braya prominent continuous upholstered foot rail', 3.6)
+  box(world, 1.2, f.h - 31, 1.2, f.maxX - 17.1, cy, 49.15, m.bedUpholsteryLight, 'Braya visible foot-rail center seam')
+  box(world, 11, f.h - 22, 1.15, f.maxX - 17.1, cy, 49.05, m.bedUpholsteryLight, 'Braya visible foot-rail upper welt')
 
-  box(world, 11, f.h - 16, 108, f.x + 6.5, cy, 94, m.bedUpholstery, 'Braya upholstered headboard backing')
-  for (const z of [77, 113]) {
-    roundedBox(world, 6.2, f.h - 38, 28, f.x + 11.2, cy, z, m.bedUpholsteryLight, 'Braya broad horizontal padded headboard band', 3.4)
+  // The product's headboard is thick, lightly winged, and divided into broad
+  // horizontal upholstery bands rather than tufting or a thin slab.
+  roundedBox(world, 15.4, f.h - 6, 122, f.x + 8.7, cy, 97, m.bedUpholstery, 'Braya substantial upholstered headboard backing', 3.5)
+  for (const z of [69, 98, 127]) {
+    roundedBox(world, 6.4, f.h - 26, 25, f.x + 16.3, cy, z, m.bedUpholsteryLight, 'Braya readable broad horizontal upholstered headboard panel', 2.8)
   }
-  for (const y of [f.y + 10, f.y + f.h - 10]) {
-    roundedBox(world, 16, 15, 122, f.x + 7.5, y, 97, m.bedUpholstery, 'Braya raised upholstered headboard wing', 3.5)
+  for (const y of [f.y + 9.2, f.maxY - 9.2]) {
+    roundedBox(world, 17, 17, 130, f.x + 8.5, y, 100, m.bedUpholstery, 'Braya readable upholstered headboard wing', 3.6)
   }
 
-  // Keep recovery bedding intentionally simple until the workstation checkpoint
-  // is visually accepted.
-  roundedBox(world, f.w - 34, f.h - 32, 24, cx + 4, cy, 62, m.mattress, 'Braya mattress', 5)
-  roundedBox(world, f.w - 43, f.h - 42, 2.6, cx + 4, cy, 75.2, m.sheet, 'Braya fitted-sheet reveal', 4)
-  roundedBox(world, f.w * 0.59, f.h * 0.80, 10, f.x + f.w * 0.61, cy, 82.5, m.duvet, 'Braya tidy puffy duvet', 8)
-  for (const y of [f.y + f.h * 0.29, f.y + f.h * 0.70]) {
-    roundedBox(world, f.w * 0.23, f.h * 0.26, 14, f.x + f.w * 0.29, y, 84, m.duvet, 'Braya shaped white pillow', 8)
+  // Keep mattress, sheet, and bedding as visibly separate nested layers.
+  roundedBox(world, f.w - 42, f.h - 38, 20, cx + 1, cy, 58, m.mattressSide, 'Braya clearly inset mattress sidewall', 4.2)
+  roundedBox(world, f.w - 47, f.h - 43, 4.2, cx + 1, cy, 69.8, m.mattress, 'Braya clearly inset mattress top', 3.8)
+  const sheet = mesh(world, new THREE.PlaneGeometry(f.w - 52, f.h - 48), m.sheet, 'Braya near-flush fitted sheet treatment')
+  sheet.position.set(cx + 1, cy, 72.05)
+  const duvet = mesh(world, drapedDuvetGeometry(f.w * 0.57, f.h * 0.70), m.duvet, 'Braya coherent soft draped duvet')
+  duvet.position.set(f.x + f.w * 0.61, cy - 2.8, 72.2)
+  for (const [y, rotation, height] of [
+    [f.y + f.h * 0.30, -0.105, 13.2],
+    [f.y + f.h * 0.70, 0.078, 14.4],
+  ]) {
+    const pillow = mesh(world, softPillowGeometry(f.w * 0.215, f.h * 0.29, height), m.pillow, 'Braya plump crowned pillow')
+    pillow.position.set(f.x + f.w * 0.29, y, 73.8)
+    pillow.rotation.z = rotation
   }
 }
 
@@ -214,6 +226,114 @@ function surfaceMark(world, w, d, x, y, z, material, name, rotation = 0) {
   item.position.set(x, y, z)
   item.rotation.z = rotation
   return item
+}
+
+function softPillowGeometry(w, d, h, segments = 12) {
+  const positions = []
+  const indices = []
+  const stride = segments + 1
+  const count = stride * stride
+  const addPoint = (u, v, z) => positions.push(
+    u * w * 0.5 * (1 - 0.17 * v * v),
+    v * d * 0.5 * (1 - 0.19 * u * u),
+    z,
+  )
+  for (const top of [true, false]) {
+    for (let row = 0; row <= segments; row += 1) {
+      const v = -1 + row * 2 / segments
+      for (let column = 0; column <= segments; column += 1) {
+        const u = -1 + column * 2 / segments
+        const crown = Math.pow(Math.max(0, (1 - u * u) * (1 - v * v)), 0.38)
+        addPoint(u, v, top ? h * (0.06 + 0.94 * crown) : -h * (0.13 + 0.10 * crown))
+      }
+    }
+  }
+  for (let row = 0; row < segments; row += 1) {
+    for (let column = 0; column < segments; column += 1) {
+      const a = row * stride + column
+      const b = a + 1
+      const c = a + stride
+      const d = c + 1
+      indices.push(a, b, d, a, d, c, count + a, count + d, count + b, count + a, count + c, count + d)
+    }
+  }
+  for (let index = 0; index < segments; index += 1) {
+    const first = index * stride
+    const next = (index + 1) * stride
+    const last = first + segments
+    const nextLast = next + segments
+    indices.push(first, next, count + next, first, count + next, count + first)
+    indices.push(last, count + last, nextLast, last, count + last, count + nextLast)
+    indices.push(index, count + index, index + 1, index + 1, count + index, count + index + 1)
+    const far = segments * stride + index
+    indices.push(far, far + 1, count + far + 1, far, count + far + 1, count + far)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+function drapedDuvetGeometry(w, d, segments = 16) {
+  const positions = []
+  const indices = []
+  const stride = segments + 1
+  const count = stride * stride
+  const profile = (u, v) => {
+    const crown = Math.pow(Math.max(0, (1 - u * u) * (1 - v * v)), 0.46)
+    const broadFold = 0.72 * Math.sin((u + 0.18) * Math.PI * 1.45) * (1 - v * v)
+    const crossFold = 0.44 * Math.sin((v - 0.13) * Math.PI * 1.05) * (1 - u * u)
+    const footFall = 1.95 * Math.max(0, u) ** 2.5
+    return 3.35 + 9.1 * crown + broadFold + crossFold - footFall
+  }
+  for (const top of [true, false]) {
+    for (let row = 0; row <= segments; row += 1) {
+      const v = -1 + row * 2 / segments
+      for (let column = 0; column <= segments; column += 1) {
+        const u = -1 + column * 2 / segments
+        const crown = Math.max(0, (1 - u * u) * (1 - v * v))
+        const sideInset = 1 - 0.075 * v * v * (0.65 + 0.35 * u)
+        const footInset = 1 - 0.045 * Math.max(0, u) ** 2
+        const outlineWobble = 0.014 * Math.sin((u + 0.22) * Math.PI * 1.4) * (1 - v * v)
+        const baseX = u * w / 2 * (sideInset + outlineWobble)
+        const baseY = v * d / 2 * footInset
+        const edge = 1 - crown
+        const drapeReach = edge * (0.035 + 0.060 * Math.max(0, u))
+        const lowerDrop = 1.7 + 6.1 * edge + 2.05 * Math.max(0, u) ** 2
+        positions.push(
+          top ? baseX : baseX * (1 + drapeReach),
+          top ? baseY : baseY * (1 + edge * (0.055 + 0.035 * Math.max(0, u))),
+          profile(u, v) - (top ? 0 : lowerDrop),
+        )
+      }
+    }
+  }
+  for (let row = 0; row < segments; row += 1) {
+    for (let column = 0; column < segments; column += 1) {
+      const a = row * stride + column
+      const b = a + 1
+      const c = a + stride
+      const d = c + 1
+      indices.push(a, b, d, a, d, c, count + a, count + d, count + b, count + a, count + c, count + d)
+    }
+  }
+  for (let index = 0; index < segments; index += 1) {
+    const first = index * stride
+    const next = (index + 1) * stride
+    const last = first + segments
+    const nextLast = next + segments
+    indices.push(first, next, count + next, first, count + next, count + first)
+    indices.push(last, count + last, nextLast, last, count + last, count + nextLast)
+    indices.push(index, count + index, index + 1, index + 1, count + index, count + index + 1)
+    const far = segments * stride + index
+    indices.push(far, far + 1, count + far + 1, far, count + far + 1, count + far)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+  return geometry
 }
 
 function addHomeZeerChair(world, data) {

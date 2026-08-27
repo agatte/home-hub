@@ -77,6 +77,26 @@ describe('Bedroom Physical World v1', () => {
     expect(returnDesk).not.toHaveProperty('classification')
   })
 
+  it('keeps the Braya renderer bound only to the accepted bed physical envelope', () => {
+    const root = path.dirname(fileURLToPath(import.meta.url))
+    const renderer = readFileSync(path.join(root, 'bedroom-v1.js'), 'utf8')
+    const { bed } = resolved.objects
+    expect(bed.plan_bounds_gu).toEqual({
+      x: 13.83, y: 70, w: inchesToGu(84), h: inchesToGu(64.1),
+      maxX: 298.59, maxY: 287.299,
+    })
+    expect(bed.orientation).toEqual({ long_axis: '+x', wide_axis: '+y', headboard_face: '-x' })
+    expect(renderer).toContain('const f = bedroomPhysical.objects.bed.plan_bounds_gu')
+    expect(renderer).toContain("'Braya substantial upholstered headboard backing'")
+    expect(renderer).toContain("'Braya clearly inset mattress sidewall'")
+    expect(renderer).toContain('function softPillowGeometry')
+    expect(renderer).toContain('softPillowGeometry(f.w * 0.215, f.h * 0.29, height)')
+    expect(renderer).toContain('pillow.position.set(f.x + f.w * 0.29, y, 73.8)')
+    expect(renderer).toContain('function drapedDuvetGeometry')
+    expect(renderer).not.toContain("'Braya contained layered duvet'")
+    expect(renderer).not.toContain("footprint(data, 'bedroom.bed')")
+  })
+
   it('keeps the provisional projector entirely supported by the return', () => {
     const { projector, return: returnDesk } = resolved.objects
     const support = returnDesk.plan_bounds_gu
