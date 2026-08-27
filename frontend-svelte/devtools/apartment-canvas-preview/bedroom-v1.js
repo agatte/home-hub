@@ -1,16 +1,19 @@
 import * as THREE from 'three'
-import geometryScene from '../apartment-whitebox/generated/geometry-scene.json'
-import { parseRational } from '../apartment-whitebox/adapter.js'
+import { resolveBedroomPhysicalWorld } from './physical-world-v1.js'
+import { resolveBurgenerDeskStructure } from './burgener-desk-v1.js'
+import { resolveBedroomWorkstationAccessories } from './workstation-accessories-v1.js'
+
+const bedroomPhysical = resolveBedroomPhysicalWorld()
+const workstationAccessories = resolveBedroomWorkstationAccessories(bedroomPhysical)
 
 // Bounded workstation identity layer. It consumes accepted footprints only;
 // it never changes plan geometry, cutaways, reflection, or Camera v2.
 const m = Object.freeze({
-  top: new THREE.MeshStandardMaterial({ color: 0xaa8257, roughness: 0.8 }),
-  edge: new THREE.MeshStandardMaterial({ color: 0x6f4f32, roughness: 0.76, metalness: 0.02 }),
-  grain: new THREE.MeshStandardMaterial({ color: 0x785335, roughness: 0.88 }),
+  top: new THREE.MeshStandardMaterial({ color: 0x81796d, roughness: 0.82 }),
+  grain: new THREE.MeshStandardMaterial({ color: 0x666159, roughness: 0.88 }),
   black: new THREE.MeshStandardMaterial({ color: 0x202423, roughness: 0.58, metalness: 0.32 }),
   cabinet: new THREE.MeshStandardMaterial({ color: 0x242625, roughness: 0.76, metalness: 0.08 }),
-  face: new THREE.MeshStandardMaterial({ color: 0x666158, roughness: 0.82 }),
+  face: new THREE.MeshStandardMaterial({ color: 0x898073, roughness: 0.82 }),
   void: new THREE.MeshStandardMaterial({ color: 0x141716, roughness: 0.9 }),
   white: new THREE.MeshStandardMaterial({ color: 0xf0eee7, roughness: 0.72 }),
   stitch: new THREE.MeshStandardMaterial({ color: 0xd5d0c7, roughness: 0.9 }),
@@ -34,6 +37,7 @@ const m = Object.freeze({
   sheet: new THREE.MeshStandardMaterial({ color: 0xd4cab9, roughness: 0.99 }),
   duvet: new THREE.MeshStandardMaterial({ color: 0xf0ede5, roughness: 1 }),
   beddingSeam: new THREE.MeshStandardMaterial({ color: 0xcfc8bc, roughness: 1 }),
+  sill: new THREE.MeshStandardMaterial({ color: 0x6b706c, roughness: 0.86, metalness: 0.04 }),
   alexaBand: new THREE.MeshStandardMaterial({ color: 0x3d7180, roughness: 0.4, metalness: 0.18, emissive: 0x092b35, emissiveIntensity: 0.26 }),
 })
 
@@ -104,20 +108,8 @@ function rod(world, start, end, radius, material, name) {
   return item
 }
 
-function footprint(data, id) {
-  const item = data.blockers.find((blocker) => blocker.id === id)
-  return item ? item.renderFootprint ?? item.sourceFootprint : null
-}
-
-function annotation(id) {
-  const item = geometryScene.inspection_annotations.objects.find((object) => object.id === id)
-  if (!item?.rect_gu) return null
-  return Object.fromEntries(Object.entries(item.rect_gu).map(([key, value]) => [key, parseRational(value)]))
-}
-
-function addBrayaBed(world, data) {
-  const f = footprint(data, 'bedroom.bed')
-  if (!f) return
+function addBrayaBed(world) {
+  const f = bedroomPhysical.objects.bed.plan_bounds_gu
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
 
@@ -148,70 +140,50 @@ function addBrayaBed(world, data) {
 }
 
 function addBurgenerDesk(world, data) {
-  const main = footprint(data, 'bedroom.desk_main')
-  const returnDesk = footprint(data, 'bedroom.desk_return')
-  if (!main || !returnDesk) return
-  const topZ = 102.2
-  const mainX = main.x + main.w / 2
-  const mainY = main.y + main.h / 2
-  // Product dimensions are intentionally visible: the clear-wall main work
-  // surface is 31.49in deep, while this return is only 15.74in (half depth).
-  // Its inner edge remains joined to the main desk; no plan-space anchor moves.
-  const returnDepth = Math.min(returnDesk.w, main.h * 15.74 / 31.49)
-  const returnTop = {
-    x: returnDesk.x + returnDesk.w - returnDepth,
-    y: returnDesk.y,
-    w: returnDepth,
-    h: returnDesk.h,
-  }
-  const returnX = returnTop.x + returnTop.w / 2
-  const returnY = returnDesk.y + returnDesk.h / 2
+  const structure = resolveBurgenerDeskStructure(bedroomPhysical)
+  const { main, return: returnModule, topZ, undersideZ } = structure
+  const mainTop = main.top
+  const returnTop = returnModule.top
+  const mainX = main.center.x
+  const mainY = main.center.y
+  const returnX = returnModule.center.x
+  const returnY = returnModule.center.y
 
-  // Light brown manufactured wood and a substantial black storage section are
-  // the key product split. Vertical grain bands keep the laminate from reading
-  // like a flat, generic gray slab.
-  roundedBox(world, main.w, main.h, 4.4, mainX, mainY, topZ, m.top, 'Burgener light-brown main worktop', 2.4)
-  roundedBox(world, returnTop.w, returnTop.h, 4.4, returnX, returnY, topZ, m.top, 'Burgener thinner light-brown return worktop', 2.4)
-  box(world, main.w, 2.2, 1.2, mainX, main.y + 1.1, 99.8, m.edge, 'Burgener main front edge')
-  box(world, 2.2, returnTop.h, 1.2, returnTop.x + returnTop.w - 1.1, returnY, 99.8, m.edge, 'Burgener return edge')
-  for (let index = 1; index < 18; index += 1) {
-    const x = main.x + index * main.w / 18
-    box(world, 0.48, main.h - 4, 0.22, x, mainY, 104.52, m.grain, 'Burgener vertical wood grain mark')
+  // Physical module sizes come exclusively from Physical World v1.
+  roundedBox(world, mainTop.w, mainTop.h, 4.4, mainX, mainY, topZ, m.top, 'Burgener weathered gray-brown main worktop', 2.4)
+  roundedBox(world, returnTop.w, returnTop.h, 4.4, returnX, returnY, topZ, m.top, 'Burgener weathered gray-brown return worktop', 2.4)
+  // The 19.68-inch black-section depth is product evidence. Its long-axis
+  // length is a provisional material treatment, not an object size.
+  roundedBox(world, main.blackSurface.w, main.blackSurface.h, 1.1, main.blackSurface.x + main.blackSurface.w / 2, main.blackSurface.y + main.blackSurface.h / 2, topZ + 2.75, m.black, 'Burgener bounded black central work surface', 1.5)
+
+  for (const leg of main.steelLegs) {
+    box(world, leg.w, leg.d, leg.h, leg.x, leg.y, leg.z, m.black, 'Burgener rectangular steel leg')
   }
-  for (let index = 1; index < 7; index += 1) {
-    const x = returnTop.x + index * returnTop.w / 7
-    box(world, 0.36, returnTop.h - 5, 0.22, x, returnY, 104.52, m.grain, 'Burgener return wood grain mark')
+  for (const [name, apron] of [['Burgener black front apron', main.frontApron], ['Burgener black side apron', main.sideApron]]) {
+    box(world, apron.w, apron.d, apron.h, apron.x, apron.y, apron.z, m.black, name)
   }
 
-  for (const x of [main.x + 8, main.x + main.w - 8]) for (const y of [main.y + 6.5, main.y + main.h - 6.5]) {
-    box(world, 3.8, 3.8, 96, x, y, 48, m.black, 'Burgener rectangular steel leg')
+  // Return storage is a full-length dark, panel-built carcass with a
+  // room-facing upper cubby band and two lower file drawers.
+  for (const panel of returnModule.carcassPanels) {
+    box(world, panel.w, panel.d, panel.h, panel.x, panel.y, panel.z, m.cabinet, 'Burgener dark return cabinet carcass panel')
   }
-  box(world, main.w - 14, 3.1, 7, mainX, main.y + 6, 91, m.black, 'Burgener black front apron')
-  box(world, 3.1, main.h - 12, 7, main.x + main.w - 7, mainY, 91, m.black, 'Burgener side apron')
-
-  // The cabinet is a continuous supporting mass under the entire thin return;
-  // this explicitly removes the previously unsupported floating desk slab.
-  const cabinetY = returnTop.y + 4
-  const cabinetLength = returnTop.h - 8
-  const cabinetCenter = cabinetY + cabinetLength / 2
-  const faceX = returnTop.x + returnTop.w - 0.65
-  box(world, returnTop.w - 1.4, cabinetLength, 92, returnX, cabinetCenter, 48, m.cabinet, 'Burgener full-length black cubby and file-drawer mass')
-  const bay = (cabinetLength - 18) / 3
-  for (const index of [0, 1, 2]) {
-    const y = cabinetY + 4 + index * (bay + 5)
-    if (index === 0) {
-      box(world, 1.35, bay, 35, faceX, y + bay / 2, 67, m.void, 'Burgener open cubby')
-      box(world, 1.75, bay - 4, 1.3, faceX - 0.65, y + bay / 2, 84, m.face, 'Burgener cubby shelf')
-    } else {
-      box(world, 1.8, bay - 2, 31, faceX, y + bay / 2, 48, m.face, 'Burgener file drawer face')
-      box(world, 2.6, Math.min(15, bay * 0.34), 1.7, faceX + 0.6, y + bay / 2, 48, m.black, 'Burgener drawer pull')
-    }
+  for (const divider of returnModule.cubbyDividers) {
+    box(world, divider.w, divider.d, divider.h, divider.x, divider.y, divider.z, m.cabinet, 'Burgener dark cubby divider')
+  }
+  for (const cubby of returnModule.cubbies) {
+    box(world, cubby.w, cubby.d, cubby.h, cubby.x, cubby.y, cubby.z, m.void, 'Burgener room-facing open cubby')
+  }
+  for (const drawer of returnModule.drawers) {
+    box(world, drawer.w, drawer.d, drawer.h, drawer.x, drawer.y, drawer.z, m.face, 'Burgener lower light-wood file drawer face')
+  }
+  for (const pull of returnModule.drawerPulls) {
+    box(world, pull.w, pull.d, pull.h, pull.x, pull.y, pull.z, m.black, 'Burgener black drawer pull')
   }
 }
 
 function addHomeZeerChair(world, data) {
-  const f = footprint(data, 'bedroom.chair')
-  if (!f) return
+  const f = workstationAccessories.chair.bounds
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
   ellipsoid(world, f.w * 0.66, f.h * 0.5, 14, cx, cy + 8, 56, m.white, 'HomeZeer padded seat')
@@ -236,8 +208,7 @@ function addHomeZeerChair(world, data) {
 }
 
 function addOdysseyMonitor(world) {
-  const f = annotation('bedroom.monitor')
-  if (!f) return
+  const f = workstationAccessories.monitor.bounds
   const cx = f.x + f.w / 2
   const panelY = f.y + f.h * 0.47
   const top = 104.4
@@ -250,8 +221,7 @@ function addOdysseyMonitor(world) {
 }
 
 function addBlueYeti(world) {
-  const f = annotation('bedroom.microphone')
-  if (!f) return
+  const f = workstationAccessories.microphone.bounds
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
   const z = 105.4
@@ -268,10 +238,7 @@ function addBlueYeti(world) {
 }
 
 function addDrumLamp(world) {
-  // The raw right anchor presents on the room's left after the accepted
-  // reflection. Review established that the drum lamp belongs there.
-  const f = annotation('bedroom.lamp_l5')
-  if (!f) return
+  const f = workstationAccessories.leftLamp.bounds
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
   const z = 105.4
@@ -292,17 +259,13 @@ function cylinderX(world, left, right, radius, y, z, material, name, segments = 
 }
 
 function addEpsonProjector(world) {
-  const f = annotation('bedroom.projector')
-  // The annotation supplies the accepted y anchor. The thin-return x extent
-  // is reproduced here without mutating that accepted plan-space rectangle.
-  if (!f) return
-  const returnRight = 60.22
-  const returnDepth = 46.38 * 15.74 / 31.49
-  const cx = returnRight - returnDepth / 2
+  const f = bedroomPhysical.objects.projector.plan_bounds_gu
+  const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
-  const z = 106.2
-  const bodyW = Math.min(21.4, returnDepth - 1.2)
-  const bodyD = 24.4
+  const supportTopZ = bedroomPhysical.objects.return.dimensions_gu.high + 2.2
+  const z = supportTopZ + 1.5
+  const bodyW = f.w
+  const bodyD = f.h
   const bodyH = 8.3
   box(world, bodyW, bodyD, 1.5, cx, cy, z - 0.75, m.black, 'Epson H421A supported feet')
   roundedBox(world, bodyW, bodyD, bodyH, cx, cy, z + bodyH / 2, m.white, 'Epson H421A projector body above return', 2.6)
@@ -314,8 +277,8 @@ function addEpsonProjector(world) {
 }
 
 function addDeskAccessories(world) {
-  const headphones = annotation('bedroom.headphones')
-  if (headphones) {
+  const headphones = workstationAccessories.headphones.bounds
+  {
     const group = new THREE.Group()
     group.name = 'Desk headphones fixed world-space assembly'
     group.position.set(headphones.x + headphones.w / 2, headphones.y + headphones.h / 2, 105.5)
@@ -329,8 +292,8 @@ function addDeskAccessories(world) {
     ellipsoid(group, 4.2, 3.4, 6.8, 5.2, 0, 1.6, m.grille, 'Desk headphones right ear cup')
   }
 
-  const alexa = annotation('bedroom.alexa')
-  if (alexa) {
+  const alexa = workstationAccessories.alexa.bounds
+  {
     const group = new THREE.Group()
     group.name = 'Desk Alexa fixed world-space assembly'
     group.position.set(alexa.x + alexa.w / 2, alexa.y + alexa.h / 2, 105.5)
@@ -341,39 +304,57 @@ function addDeskAccessories(world) {
 }
 
 function addMarblePendantLamp(world) {
-  // The raw left anchor presents at the right desk corner after reflection.
-  // The real marble lamp sits diagonally at that corner, not square to the top.
-  const f = annotation('bedroom.lamp_l2')
-  if (!f) return
+  const rightLamp = workstationAccessories.rightLamp
+  const f = rightLamp.bounds
   const cx = f.x + f.w / 2
   const cy = f.y + f.h / 2
   const z = 105.4
   const lamp = new THREE.Group()
-  lamp.name = 'L5 diagonal marble pendant lamp assembly'
+  lamp.name = 'L5 return-mounted marble pendant lamp assembly'
   lamp.position.set(cx, cy, z)
-  lamp.rotation.z = Math.PI / 4
+  lamp.rotation.z = rightLamp.yaw_radians
   world.add(lamp)
   box(lamp, 22, 13, 4.2, 0, 0, 2.1, m.marble, 'L5 white marble rectangular base')
-  cylinderZ(lamp, 1.45, 1.45, 47, 4, 0, 27.7, m.brass, 'L5 thin brass stem', 12)
+  cylinderZ(lamp, 1.45, 1.45, 47, rightLamp.stem_local_x_gu, 0, 27.7, m.brass, 'L5 thin brass stem', 12)
   const hook = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(4, 0, 50), new THREE.Vector3(4, 0, 62),
-    new THREE.Vector3(-5, 0, 65), new THREE.Vector3(-7, 0, 57),
+    new THREE.Vector3(rightLamp.stem_local_x_gu, 0, 50), new THREE.Vector3(rightLamp.stem_local_x_gu, 0, 62),
+    new THREE.Vector3(-5, 0, 65), new THREE.Vector3(rightLamp.shade_local_x_gu, 0, 57),
   ])
   mesh(lamp, new THREE.TubeGeometry(hook, 20, 1.45, 10, false), m.brass, 'L5 curved brass top hook')
-  cylinderZ(lamp, 8.2, 8.2, 29, -7, 0, 42, m.glass, 'L5 seeded-glass hanging cylinder', 20)
-  ellipsoid(lamp, 5.8, 5.8, 9.5, -7, 0, 42, m.bulb, 'L5 visible hanging bulb', 14)
-  cylinderZ(lamp, 4.5, 4.5, 3, -7, 0, 58, m.brass, 'L5 brass glass cap', 16)
+  cylinderZ(lamp, 8.2, 8.2, 29, rightLamp.shade_local_x_gu, 0, 42, m.glass, 'L5 seeded-glass hanging cylinder', 20)
+  ellipsoid(lamp, 5.8, 5.8, 9.5, rightLamp.shade_local_x_gu, 0, 42, m.bulb, 'L5 visible hanging bulb', 14)
+  cylinderZ(lamp, 4.5, 4.5, 3, rightLamp.shade_local_x_gu, 0, 58, m.brass, 'L5 brass glass cap', 16)
+}
+
+function addUnderMainPc(world) {
+  const pc = workstationAccessories.pc
+  const f = pc.bounds
+  roundedBox(world, f.w, f.h, pc.height_gu, f.x + f.w / 2, f.y + f.h / 2, pc.height_gu / 2, m.cabinet, 'PC tower under main return-side working span', 2)
+  box(world, f.w * 0.52, 0.7, pc.height_gu * 0.62, f.x + f.w / 2, f.y - 0.36, pc.height_gu * 0.56, m.void, 'PC tower front intake')
+  box(world, 0.65, f.h * 0.82, pc.height_gu * 0.76, f.x + f.w + 0.33, f.y + f.h * 0.52, pc.height_gu * 0.52, m.glass, 'PC tower room-visible glass side panel')
 }
 
 export function addBedroomDesignPassV1(world, data) {
   // Keep the recovered workstation independent of future bedding experiments.
+  addBedroomWindowSill(world)
   addBurgenerDesk(world, data)
   addHomeZeerChair(world, data)
   addOdysseyMonitor(world)
   addBlueYeti(world)
   addDrumLamp(world)
   addMarblePendantLamp(world)
+  addUnderMainPc(world)
   addEpsonProjector(world)
   addDeskAccessories(world)
-  addBrayaBed(world, data)
+  addBrayaBed(world)
+}
+
+function addBedroomWindowSill(world) {
+  const sill = bedroomPhysical.architecture.windowSill
+  const f = sill.plan_bounds_gu
+  const preview = sill.preview_placement
+  // This is an additive, local architectural projection hosted by the bedroom
+  // window—not the Burgener return and not a wall-length band. Its dimensions
+  // remain explicitly provisional until the physical sill is measured.
+  box(world, f.w, f.h, preview.thickness_gu, f.x + f.w / 2, f.y + f.h / 2, preview.top_z_gu - preview.thickness_gu / 2, m.sill, 'Bedroom local window sill / projecting ledge')
 }

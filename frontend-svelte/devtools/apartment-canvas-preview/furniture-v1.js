@@ -68,6 +68,11 @@ const materials = Object.freeze({
   projector: mat(palette.projector, 0.82),
 })
 
+// Presentation-only bedroom carpet coverage. It deliberately reaches beneath
+// the north window/sill host plane so the shared apartment slab cannot show as
+// hardwood inside the carpeted room. It does not alter any physical geometry.
+export const BEDROOM_CARPET_COVERAGE_V1 = Object.freeze({ x: 9.8, y: 46.38, w: 413.5, h: 488.22 })
+
 function shapeFromRing(ring) {
   const shape = new THREE.Shape()
   shape.moveTo(ring[0].x, ring[0].y)
@@ -243,7 +248,7 @@ export function addApartmentFurnitureIdentity(world, data) {
   // This is a presentation-only surface and does not alter the underlying slab.
   // Overlap beneath the room walls by a few GU so the apartment hardwood
   // cannot peek through as a false border along the bedroom edges.
-  addSoftFloor(world, { x: 9.8, y: 61.8, w: 413.5, h: 472.8 }, materials.carpet)
+  addSoftFloor(world, BEDROOM_CARPET_COVERAGE_V1, materials.carpet)
 
   // Low-detail floor textiles: identity and room zoning, not texture recreation.
   addSoftFloor(world, { x: 580.00, y: 234.34, w: 244.08, h: 366.12 }, materials.rug, 0.72, 1.22)
@@ -254,7 +259,7 @@ export function addApartmentFurnitureIdentity(world, data) {
     // The accepted blocker footprints remain data anchors, but rendering their
     // generic primitives here would leave duplicate desk, chair, and monitor
     // geometry underneath the faithful replacements.
-    if (['bedroom.bed', 'bedroom.desk_main', 'bedroom.desk_return', 'bedroom.chair', 'bedroom.monitor', 'bedroom.projector'].includes(blocker.id)) continue
+    if (['bedroom.bed', 'bedroom.desk_main', 'bedroom.desk_return', 'bedroom.chair', 'bedroom.monitor', 'bedroom.pc', 'bedroom.projector'].includes(blocker.id)) continue
 
     // End table becomes an open cluster rather than a solid whitebox mass.
     if (blocker.id === 'living.end_table_cluster') {

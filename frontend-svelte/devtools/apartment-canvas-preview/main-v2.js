@@ -6,6 +6,7 @@ import {
   horizontalFovToVertical,
   perspectiveCandidate,
 } from '../apartment-whitebox/adapter.js'
+import { bedroomWindowWallClosureFootprint } from './bedroom-window-wall-v1.js'
 import './styles.css'
 
 const EXPECTED_FINGERPRINT = 'ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43'
@@ -304,9 +305,10 @@ function cylinderBetween(a, b, radius, material) {
 
 for (const opening of data.openings) {
   if (opening.closureFootprint) {
+    const closureFootprint = bedroomWindowWallClosureFootprint(opening)
     for (const range of opening.solidRanges) {
       const closure = new THREE.Mesh(
-        extrusionFromRings(opening.closureFootprint, [], range.min, range.max),
+        extrusionFromRings(closureFootprint, [], range.min, range.max),
         closureMaterial,
       )
       closure.castShadow = true

@@ -1,0 +1,156 @@
+{
+  "schema": "homehub.apartment-physical-world.v1",
+  "status": "provisional_bedroom_physical_world_pilot",
+  "scope": "Additive physical authority for the Braya bed and Burgener workstation; it does not alter accepted architecture or GeometryScene contracts.",
+  "calibrations": {
+    "apartment_physical_v1": {
+      "physical_unit": "in",
+      "gu_per_in": 3.39,
+      "status": "provisional_apartment_wide",
+      "tolerance_gu_per_in": 0.05,
+      "provenance": {
+        "type": "mathematical_derivation",
+        "sources": [
+          "geometry_v1.json accepted architectural boundaries",
+          "leasing floor plan nominal dimensions"
+        ],
+        "anchors": [
+          { "id": "bedroom_horizontal", "physical_in": 122, "gu_span": 413.35, "implied_gu_per_in": 3.388115, "confidence": "high" },
+          { "id": "bedroom_vertical", "physical_in": 137, "gu_span": 464.6, "implied_gu_per_in": 3.391241, "confidence": "high" },
+          { "id": "living_horizontal", "physical_in": 160, "gu_span": 541.09, "implied_gu_per_in": 3.381813, "confidence": "medium_high" }
+        ],
+        "confident_anchor_relative_spread_percent": 0.278,
+        "supersedes": "~3.53 GU/in bedroom-only estimate; it incorrectly used the recessed/window-host line as the bedroom clear-inside boundary."
+      }
+    }
+  },
+  "architectural_features": [
+    {
+      "id": "bedroom.window_sill",
+      "label": "Bedroom window sill / projecting ledge",
+      "classification": "fixed_architecture",
+      "host_relationship": {
+        "target": "bedroom window opening",
+        "relation": "local elevated sill projects outward into the room from the flat room-side window-wall plane",
+        "provenance": "real_room_photograph+explicit_user_confirmation",
+        "confidence": "high_qualitative"
+      },
+      "extent": {
+        "relation": "spans the window opening and extends slightly beyond both window edges",
+        "must_not_be_interpreted_as": "full bedroom wall feature"
+      },
+      "unresolved": [
+        { "fact": "exact_projection_depth", "status": "unmeasured" },
+        { "fact": "exact_left_right_overhang", "status": "unmeasured" },
+        { "fact": "exact_vertical_section", "status": "unmeasured" }
+      ],
+      "preview_placement": {
+        "status": "provisional_review_required",
+        "host_window_span_gu": { "x_min": 118.79576891781937, "x_max": 353.1326281529699, "window_wall_plane_y": 52.88852725793328 },
+        "side_overhang_each_gu": 6.8,
+        "projection_depth_gu": 17.11147274206672,
+        "thickness_gu": 4,
+        "top_z_gu": 84,
+        "basis": "The frozen host-window span plus deliberately review-required values only reproduce the confirmed flat-wall-to-local-elevated-sill topology; none are measured sill dimensions.",
+        "provenance": "provisional_inference"
+      }
+    }
+  ],
+  "objects": [
+    {
+      "id": "bedroom.braya_bed",
+      "label": "Latitude Run Braya Hydraulic Lift-Up Storage Upholstered Platform Bed",
+      "physical_dimensions_in": { "long": 84, "wide": 64.1 },
+      "dimension_provenance": { "type": "manufacturer_specification", "confidence": "high", "reference": "PHYSICAL_EVIDENCE_PACKET.md#braya-queen-bed" },
+      "calibration_ref": "apartment_physical_v1",
+      "orientation": { "long_axis": "+x", "wide_axis": "+y", "headboard_face": "-x" },
+      "placement": {
+        "anchors": [
+          { "kind": "wall_relative", "target": "bedroom interior west edge", "relation": "headboard face anchored", "confidence": "high", "provenance": "real_room_photograph" },
+          { "kind": "object_relative", "target": "bedroom.window_sill", "relation": "bed is directly adjacent to / may sit underneath the elevated sill projection; exact XY overlap is unresolved", "confidence": "high_qualitative", "provenance": "real_room_photograph+explicit_user_confirmation" }
+        ],
+        "unresolved": [
+          { "fact": "bed_to_sill_xy_overlap", "status": "unmeasured", "must_not_be_interpreted_as": "floor_level_collision_or_required_non_overlap" },
+          { "fact": "bed_to_window_wall_plane_offset", "status": "unmeasured", "must_not_be_interpreted_as": "measured wall clearance" },
+          { "fact": "bed_to_return_clearance", "status": "unmeasured", "must_not_be_interpreted_as": "occupancy-chain result" }
+        ]
+      },
+      "preview_placement": {
+        "status": "provisional_review_required",
+        "origin_gu": { "x": 13.83, "y": 70 },
+        "basis": "Accepted west-wall relationship plus a review-required photo-informed preview coordinate; y is neither a measured wall clearance nor a required sill-boundary contact.",
+        "provenance": "provisional_inference"
+      }
+    },
+    {
+      "id": "bedroom.burgener_main",
+      "label": "Latitude Run Burgener L-Shape Executive Desk — main module",
+      "physical_dimensions_in": { "long": 62.99, "deep": 31.49, "high": 29.52 },
+      "dimension_provenance": { "type": "manufacturer_specification", "confidence": "high", "reference": "PHYSICAL_EVIDENCE_PACKET.md#burgener-l-desk" },
+      "calibration_ref": "apartment_physical_v1",
+      "orientation": { "long_axis": "+x", "depth_axis": "-y", "rear_face": "+y" },
+      "placement": {
+        "anchors": [
+          { "kind": "wall_relative", "target": "bedroom clear/lower desk wall", "relation": "rear edge follows wall", "confidence": "high", "provenance": "real_room_photograph" },
+          { "kind": "seam_junction_relative", "target": "bedroom.burgener_return", "relation": "perpendicular module seam at bed-wall end", "confidence": "high", "provenance": "real_room_photograph+manufacturer_specification" }
+        ],
+        "unresolved": [
+          { "fact": "finished_wall_face_gap", "status": "unmeasured" },
+          { "fact": "exact_room_seam_coordinate", "status": "unmeasured" }
+        ]
+      },
+      "preview_placement": {
+        "status": "provisional_review_required",
+        "x_start_gu": 13.83,
+        "rear_edge_y_gu": 530.51,
+        "basis": "Photo-supported wall/seam orientation, with preview wall-face values retained as reviewable derived placement rather than a measurement.",
+        "provenance": "provisional_inference"
+      }
+    },
+    {
+      "id": "bedroom.burgener_return",
+      "label": "Latitude Run Burgener L-Shape Executive Desk — return/storage module",
+      "physical_dimensions_in": { "long": 39.37, "deep": 15.74, "high": 29.52 },
+      "dimension_provenance": { "type": "manufacturer_specification", "confidence": "high", "reference": "PHYSICAL_EVIDENCE_PACKET.md#burgener-l-desk" },
+      "calibration_ref": "apartment_physical_v1",
+      "orientation": { "long_axis": "+y", "depth_axis": "+x", "cabinet_face": "+x" },
+      "placement": {
+        "anchors": [
+          { "kind": "seam_junction_relative", "target": "bedroom.burgener_main", "relation": "bed-side return end joins main through perpendicular seam", "confidence": "high", "provenance": "real_room_photograph+manufacturer_specification" },
+          { "kind": "object_relative", "target": "bedroom.braya_bed", "relation": "near-adjacent narrow visible separation", "confidence": "high_qualitative", "provenance": "real_room_photograph" }
+        ],
+        "unresolved": [
+          { "fact": "bed_to_return_clearance", "status": "unmeasured", "must_not_be_interpreted_as": "nominal-room residual" },
+          { "fact": "finished_wall_face_gap", "status": "unmeasured" }
+        ]
+      },
+      "preview_placement": {
+        "status": "provisional_review_required",
+        "x_start_gu": 13.83,
+        "seam_y_gu": "derived_from_main_front_edge",
+        "basis": "Perpendicular seam is preserved; bed-side endpoint and resulting visible gap remain a photo-informed preview result for orbit review.",
+        "provenance": "provisional_inference"
+      }
+    }
+  ],
+  "attachments": [
+    {
+      "id": "bedroom.projector_on_return",
+      "object_id": "bedroom.projector",
+      "support_object_id": "bedroom.burgener_return",
+      "relationship": "on_top_of_bed_side_portion",
+      "placement": { "u": 0.5, "v": 0.15, "status": "provisional_review_required", "provenance": "real_room_photograph+provisional_inference" },
+      "unresolved": ["exact_projector_footprint", "yaw", "rear_cable_clearance", "bed_clearance"]
+    }
+  ],
+  "compatibility_preview": {
+    "status": "provisional_review_required",
+    "not_physical_authority": true,
+    "objects": {
+      "bedroom.chair": { "rect_gu": { "x": 88.86, "y": 349.5, "w": 63.47, "h": 66.72 }, "reason": "Kept clear of the newly physical main depth while facing the main work region." },
+      "bedroom.lamp_l5": { "rect_gu": { "x": 195, "y": 509.36, "w": 17.9, "h": 17.9 }, "reason": "Kept on the narrowed physical main top." },
+      "bedroom.alexa": { "rect_gu": { "x": 174, "y": 514.24, "w": 14.65, "h": 14.65 }, "reason": "Kept on the narrowed physical main top." },
+      "bedroom.headphones": { "rect_gu": { "x": 208, "y": 512.61, "w": 14.65, "h": 14.65 }, "reason": "Kept on the narrowed physical main top." }
+    }
+  }
+}

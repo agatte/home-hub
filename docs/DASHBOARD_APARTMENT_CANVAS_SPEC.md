@@ -1,8 +1,8 @@
 # Dashboard Apartment Canvas Spec
 
-Status: **accepted geometry + projection authority for the #157 Apartment Canvas exploration**  
-Owner: Dashboard UI workstream  
-Parent vision: `docs/DASHBOARD_REDESIGN_VISION.md`  
+Status: **accepted architectural + projection authority, with evidence-backed object review under #192**
+Owner: Dashboard UI workstream
+Parent vision: `docs/DASHBOARD_REDESIGN_VISION.md`
 Established: 2026-08-19
 
 ## Purpose
@@ -22,16 +22,51 @@ is conceptually unchanged. The corrected top-down truth view validates display
 orientation only (+X right, +Y down); its presentation transform is not
 geometry authority. Hidden wall-band/preflight decomposition remains deferred.
 
-This document locks the physical/spatial and desktop hero-projection contract for the Home Apartment Canvas before visual rendering or frontend implementation. It exists specifically to prevent future concepts from inventing a different apartment, moving approved objects for composition, or silently changing the accepted camera while pursuing the living-instrument / 2.5D-diorama direction.
+This document protects the architectural and desktop hero-projection contract
+for Home Apartment Canvas while the Physical World model distinguishes verified
+architecture from review-required furnished placement. It exists to prevent
+future concepts from inventing a different apartment, distorting physical
+geometry for composition, or silently changing the accepted camera while
+pursuing the living-instrument / 2.5D-diorama direction.
 
 ## Source-of-truth hierarchy
 
-1. **Canonical floor plan** is absolute authority for walls, room footprints, doors/openings, balcony, kitchen footprint, bath/closet/laundry/mechanical geometry, entry, and circulation.
-2. **Annotated furniture floor plan** is authority for approximate furniture/device positions and orientation inside those canonical rooms.
-3. **Apartment photographs** are authority for object appearance, relative scale, material cues, device relationships, and lighting appearance. Photos do not override canonical geometry.
-4. **Dashboard design language** may simplify or exaggerate objects for readability, but must preserve truthful room/object relationships.
+Authority is fact-specific. See
+[`dashboard/apartment_canvas/PHYSICAL_WORLD_MODEL.md`](dashboard/apartment_canvas/PHYSICAL_WORLD_MODEL.md)
+for the durable evidence, scale, anchor, derivation, and presentation model.
 
-A future render is wrong if it looks attractive but violates this hierarchy.
+1. **Verified architecture** — accepted shell/topology, room boundaries,
+   registered openings, balcony, and fixed architectural features remain
+   protected. The canonical/leasing floor plan is strong architectural
+   evidence, subject to its stated nominal precision; new real-world evidence
+   and explicit approval are required to reopen accepted architecture.
+2. **Product/object physical truth** — direct measurements and manufacturer
+   specifications own physical object dimensions and structure. They outrank
+   provisional furniture rectangles, blockers, and procedural geometry.
+3. **As-built/as-furnished placement** — real-room photographs, direct
+   measurements, and explicit user confirmations establish where furniture
+   and devices actually sit and how they relate to walls, objects, seams, and
+   clearances. Photos are primary placement evidence, not merely appearance
+   references, but they do not silently rewrite protected architecture or
+   establish exact hidden distances.
+4. **Annotated furniture plans and accepted rendering checkpoints** — useful
+   placement evidence and compatibility baselines only to the precision and
+   status recorded. Objects marked `review_required` remain reviewable when
+   stronger physical evidence conflicts.
+5. **Derived geometry** — physical coordinates, GU/world footprints,
+   collision bounds, and renderer anchors derive from accepted facts,
+   constraints, and one apartment-wide calibration. They are not independent
+   physical authority.
+6. **Presentation** — design language, Camera/Director Board framing, cutaway,
+   uniform presentation scaling, materials, lighting, idealization, and the
+   Story Layer may improve legibility and emotional impact without changing
+   relative physical scale or placement.
+
+A future render is wrong if it is attractive but violates protected
+architecture, supported product dimensions, or evidence-backed placement. It
+is also wrong if it sacrifices Apple-level polish, meaningful whole-apartment
+framing, or the living HomeHub experience merely to expose reconstruction
+detail.
 
 ## Approved deterministic geometry baseline
 
@@ -51,9 +86,9 @@ Durable artifacts:
 - `docs/dashboard/apartment_canvas/topology_authority_v1.json` — accepted additive physical-XY topology authority for the future ArchitectureTopologyV1 layer.
 - `docs/dashboard/apartment_canvas/physical_family_authority_v1.json` — accepted physical-only cross-void paired-rail continuation authority.
 
-The effective spatial baseline is `geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json`. `truth_map_v1.svg` is its human-readable effective top-down representation, including every v1.6 object refinement.
+The effective **architectural** baseline is `geometry_v1.json + geometry_v1_6_patch.json + aperture_registry_v1.json`. `truth_map_v1.svg` is its human-readable top-down representation, including the v1.6 object checkpoint. Furniture/device records marked `review_required` remain provisional placement/compatibility data rather than immutable physical truth.
 
-The coordinate system uses **Apartment Geometry Units (GU)** with the traced apartment width normalized to `1000 GU`; x and y use the same uniform scale so the floor plan cannot be stretched independently.
+The coordinate system uses **Apartment Geometry Units (GU)** with the traced apartment width normalized to `1000 GU`; x and y use the same uniform scale so the floor plan cannot be stretched independently. GU remains a compatibility/render boundary, not the source of product dimensions. Future physical migration requires one apartment-wide calibration from multiple independent architectural dimensions/anchors with explicit tolerance; it may not introduce per-room, per-object, or per-axis scale corrections.
 
 ## TopologyAuthorityV1 boundary
 
@@ -98,9 +133,10 @@ The previous physical-family / wall-band investigation established that hidden d
 The next-phase acceptance question is visual and physical: “Does this look like Anthony’s apartment in 3D?” Review remains focused on the correct wall footprint, openings, room proportions, sightlines/cutaway, and—when introduced—furniture/device blocking.
 
 From this point forward:
-- approved approximate x/y/orientation, wall polygons, semantic wall edges, balcony footprint, and registered aperture spans are spatial truth, not styling suggestions;
+- accepted wall polygons, semantic wall edges, balcony footprint, and registered aperture spans remain protected architectural spatial truth;
+- furniture/device x/y/orientation marked `review_required` is a reviewable rendering checkpoint, not immutable physical authority; stronger product and as-furnished evidence may reopen it without reopening architecture;
 - wall height/cutaway, provisional aperture z-heights, object z-heights, extrusion, occlusion, and materials may be refined without changing x/y geometry;
-- any future x/y geometry change requires new real-world evidence and explicit approval;
+- any future architectural x/y change requires new real-world evidence and explicit approval; any object-placement change requires evidence-backed constraint derivation and explicit review;
 - image generation must not be used to reconstruct, reinterpret, or compare apartment geometry or camera visibility.
 
 ## GeometrySceneV1 artifact
@@ -111,7 +147,7 @@ The artifact preserves exact plan-space XY as reduced rational GU tokens alongsi
 
 No accepted wall height or slab thickness exists. GeometrySceneV1 therefore declares, rather than implies, provisional whitebox defaults: floor slabs span `-4` to `0 GU`, and wall bodies span `0` to `240 GU`. The registry's window sill/head and door head values remain provisional, as do the bedroom-side north cutaway lip height, bedroom solid-base height, and bedroom upper-wall opacity. These z choices may be changed without changing accepted XY authority.
 
-Important 3D semantics preserved by the approved model:
+Important 3D relationships preserved by current evidence (without promoting provisional object footprints to physical authority):
 - the PC tower is on the opposite/left side of the bedroom desk and physically **under the desk** (**owner-verified** relationship);
 - the monitor is centered along the main desk at the wall-side edge;
 - microphone, headphones, and both desk lamps sit toward the rear of the desk near the monitor line;
@@ -161,10 +197,13 @@ Renderer correctness is part of this contract: the floor is an underlay and may 
 
 The bedroom has dual semantic identity: **desk/PC/Gaming/Working** and **Sleeping/Winding Down**.
 
-Canonical anchors:
-- bed flush to the real upper/window-side and west-wall position from the approved coordinate model;
-- **L-shaped desk** hard-anchored along the lower bedroom wall near the doorway;
-- thin desk return against the side wall with only a very small gap before the bed;
+Evidence-backed anchors and relationships are recorded in
+[`dashboard/reference/bedroom/PHYSICAL_EVIDENCE_PACKET.md`](dashboard/reference/bedroom/PHYSICAL_EVIDENCE_PACKET.md).
+At current evidence precision:
+- the bed preserves its photographed headboard/wall orientation and has a nonzero window/HVAC/baseboard-side strip; its exact clearance is unresolved;
+- the **L-shaped desk** main follows the clear/lower bedroom wall near the doorway, but its current absolute GU footprint and zero-gap note are provisional;
+- the thin desk return is perpendicular to the main and near-adjacent to the bed with a narrow gap; exact clearance is unresolved;
+- Braya bed and Burgener desk manufacturer dimensions own their physical sizes and outrank the old review-required blocker rectangles;
 - chair facing the main desk section; when seated, the bedroom door is to the left;
 - monitor centered along the rear/wall-side edge of the main desk;
 - microphone and headphones on the rear part of the desk beside the monitor;
@@ -278,20 +317,20 @@ Home normally emphasizes layers 1–2. Layer 3 is mostly dormant; Analytics/Insi
 
 ## Geometry / projection gate
 
-The top-down geometry, topology-safe converter contract, desktop camera selection, and conceptual cutaway/bedroom visibility direction are now satisfied by the approved artifacts above. Approximate x/y/orientation is accepted; only z/appearance/silhouette detail explicitly marked provisional remains open.
+The architectural top-down geometry, topology-safe converter contract, desktop camera selection, and conceptual cutaway/bedroom visibility direction are satisfied by the approved artifacts above. Review-required furniture/device x/y, physical footprints, and derived anchors remain open where stronger evidence conflicts; uncertainty must stay explicit until a coherent apartment-wide physical calibration and placement derivation exist.
 
-The current gate is **deterministic visual-model refinement under the accepted camera and visibility treatment**. During this stage:
+The current gate is **Physical World evidence and derivation before further renderer refinement**, while preserving the accepted camera and visibility treatment. During this stage:
 - do not add dashboard sidebars or surrounding Home layout;
 - do not add fake telemetry or confidence values;
 - do not add causality traces or decorative machine UI;
 - do not add Hue/live-state lighting, ambient events, or final material polish;
-- do not alter approved top-down x/y geometry to improve the view;
+- do not alter protected architectural x/y geometry or distort review-required objects to improve the view;
 - do not alter the accepted desktop camera merely to hide modeling/occlusion defects;
 - do not replace the accepted cutaway/bedroom treatment with generated or composition-driven geometry.
 
 Reject a candidate if wall treatment, z-height, extrusion, or occlusion makes the apartment spatially misleading even though the underlying x/y coordinates are correct.
 
-Only after the projected physical-world model is visually accepted should live lights, device state, ambient events, causality, or surrounding Home UI be layered in.
+Only after the affected Physical World evidence and derived geometry are reviewed should renderer refinement resume. Once the projected physical-world model is visually accepted, live lights, device state, ambient events, causality, and surrounding Home UI remain first-class goals rather than optional polish.
 
 ## Still-open visual questions
 
