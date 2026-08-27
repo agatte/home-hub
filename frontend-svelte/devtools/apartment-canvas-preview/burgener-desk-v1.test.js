@@ -67,6 +67,8 @@ describe('Burgener visible desk structure', () => {
     expect(renderer).toContain("'Burgener bounded black central work surface'")
     expect(renderer).toContain("'Burgener rectangular steel leg'")
     expect(renderer).toContain("'Burgener black front apron'")
+    expect(renderer).toContain("box(world, mainTop.w, mainTop.h, 4.4, mainX, mainY, topZ, m.top, 'Burgener weathered gray-brown main worktop')")
+    expect(renderer).not.toContain('roundedBox(world, mainTop.w, mainTop.h')
     expect(renderer).not.toContain("'Burgener main front edge'")
     expect(renderer).not.toContain("'Burgener return edge'")
     expect(structure.return.seam.explicit).toBe(true)

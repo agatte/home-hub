@@ -94,6 +94,17 @@ describe('Bedroom workstation accessory preview anchors', () => {
     expect(accessories.pc.height_gu).toBe(72)
   })
 
+  it('keeps PC presentation detail bounded to its accepted tower envelope', () => {
+    const root = path.dirname(fileURLToPath(import.meta.url))
+    const renderer = readFileSync(path.join(root, 'bedroom-v1.js'), 'utf8')
+    expect(renderer).toContain("'PC tower inset base foot'")
+    expect(renderer).toContain("'PC tower internal dark component mass'")
+    expect(renderer).toContain('f.y + 0.3')
+    expect(renderer).toContain('f.maxX - 0.28')
+    expect(renderer).not.toContain('f.y - 0.36')
+    expect(renderer).not.toContain('f.x + f.w + 0.33')
+  })
+
   it('leaves the chair in the main working span and physical desk/projector authority untouched', () => {
     const main = physical.objects.main.plan_bounds_gu
     expect(accessories.chair.bounds.maxY).toBeLessThanOrEqual(main.y)

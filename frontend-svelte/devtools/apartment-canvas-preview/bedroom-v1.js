@@ -9,11 +9,13 @@ const workstationAccessories = resolveBedroomWorkstationAccessories(bedroomPhysi
 // Bounded workstation identity layer. It consumes accepted footprints only;
 // it never changes plan geometry, cutaways, reflection, or Camera v2.
 const m = Object.freeze({
-  top: new THREE.MeshStandardMaterial({ color: 0x81796d, roughness: 0.82 }),
-  grain: new THREE.MeshStandardMaterial({ color: 0x666159, roughness: 0.88 }),
-  black: new THREE.MeshStandardMaterial({ color: 0x202423, roughness: 0.58, metalness: 0.32 }),
-  cabinet: new THREE.MeshStandardMaterial({ color: 0x242625, roughness: 0.76, metalness: 0.08 }),
-  face: new THREE.MeshStandardMaterial({ color: 0x898073, roughness: 0.82 }),
+  top: new THREE.MeshStandardMaterial({ color: 0x938778, roughness: 0.84 }),
+  grain: new THREE.MeshStandardMaterial({ color: 0x71695e, roughness: 0.91 }),
+  grainLight: new THREE.MeshStandardMaterial({ color: 0xa79a89, roughness: 0.9 }),
+  black: new THREE.MeshStandardMaterial({ color: 0x1f211f, roughness: 0.64, metalness: 0.08 }),
+  steel: new THREE.MeshStandardMaterial({ color: 0x171a19, roughness: 0.44, metalness: 0.58 }),
+  cabinet: new THREE.MeshStandardMaterial({ color: 0x20221f, roughness: 0.77, metalness: 0.03 }),
+  face: new THREE.MeshStandardMaterial({ color: 0x9a8b79, roughness: 0.85 }),
   void: new THREE.MeshStandardMaterial({ color: 0x141716, roughness: 0.9 }),
   white: new THREE.MeshStandardMaterial({ color: 0xf0eee7, roughness: 0.72 }),
   stitch: new THREE.MeshStandardMaterial({ color: 0xd5d0c7, roughness: 0.9 }),
@@ -39,6 +41,9 @@ const m = Object.freeze({
   beddingSeam: new THREE.MeshStandardMaterial({ color: 0xcfc8bc, roughness: 1 }),
   sill: new THREE.MeshStandardMaterial({ color: 0x6b706c, roughness: 0.86, metalness: 0.04 }),
   alexaBand: new THREE.MeshStandardMaterial({ color: 0x3d7180, roughness: 0.4, metalness: 0.18, emissive: 0x092b35, emissiveIntensity: 0.26 }),
+  pcPanel: new THREE.MeshStandardMaterial({ color: 0x101413, roughness: 0.52, metalness: 0.28 }),
+  pcComponent: new THREE.MeshStandardMaterial({ color: 0x252a28, roughness: 0.62, metalness: 0.34 }),
+  pcAccent: new THREE.MeshStandardMaterial({ color: 0x167d83, roughness: 0.38, metalness: 0.2, emissive: 0x063a3d, emissiveIntensity: 0.48 }),
 })
 
 function mesh(world, geometry, material, name) {
@@ -150,17 +155,35 @@ function addBurgenerDesk(world, data) {
   const returnY = returnModule.center.y
 
   // Physical module sizes come exclusively from Physical World v1.
-  roundedBox(world, mainTop.w, mainTop.h, 4.4, mainX, mainY, topZ, m.top, 'Burgener weathered gray-brown main worktop', 2.4)
+  // The main top is a plain slab: its cap reaches the physical outer bounds
+  // and its straight wood sides retain thickness without a chamfer/rim.
+  box(world, mainTop.w, mainTop.h, 4.4, mainX, mainY, topZ, m.top, 'Burgener weathered gray-brown main worktop')
   roundedBox(world, returnTop.w, returnTop.h, 4.4, returnX, returnY, topZ, m.top, 'Burgener weathered gray-brown return worktop', 2.4)
+  // Flat, irregular surface marks provide weathered grain without modeling
+  // ribs, planks, seams, or a new texture asset pipeline.
+  const mainWoodEnds = [
+    [mainTop.x + mainTop.w * 0.12, mainTop.w * 0.18],
+    [mainTop.maxX - mainTop.w * 0.12, mainTop.w * 0.18],
+  ]
+  for (const [x, width] of mainWoodEnds) {
+    for (const [offset, length, material] of [
+      [-mainTop.h * 0.27, width * 0.78, m.grain], [-mainTop.h * 0.07, width * 0.55, m.grainLight],
+      [mainTop.h * 0.18, width * 0.68, m.grain], [mainTop.h * 0.34, width * 0.42, m.grainLight],
+    ]) surfaceMark(world, length, 0.42, x, mainY + offset, topZ + 2.205, material, 'Burgener restrained main-top wood grain')
+  }
+  for (const [offset, length, material] of [
+    [-returnTop.w * 0.25, returnTop.h * 0.74, m.grain], [-returnTop.w * 0.05, returnTop.h * 0.52, m.grainLight],
+    [returnTop.w * 0.16, returnTop.h * 0.82, m.grain], [returnTop.w * 0.32, returnTop.h * 0.43, m.grainLight],
+  ]) surfaceMark(world, 0.4, length, returnX + offset, returnY, topZ + 2.205, material, 'Burgener restrained return-top wood grain')
   // The 19.68-inch black-section depth is product evidence. Its long-axis
   // length is a provisional material treatment, not an object size.
   roundedBox(world, main.blackSurface.w, main.blackSurface.h, 1.1, main.blackSurface.x + main.blackSurface.w / 2, main.blackSurface.y + main.blackSurface.h / 2, topZ + 2.75, m.black, 'Burgener bounded black central work surface', 1.5)
 
   for (const leg of main.steelLegs) {
-    box(world, leg.w, leg.d, leg.h, leg.x, leg.y, leg.z, m.black, 'Burgener rectangular steel leg')
+    box(world, leg.w, leg.d, leg.h, leg.x, leg.y, leg.z, m.steel, 'Burgener rectangular steel leg')
   }
   for (const [name, apron] of [['Burgener black front apron', main.frontApron], ['Burgener black side apron', main.sideApron]]) {
-    box(world, apron.w, apron.d, apron.h, apron.x, apron.y, apron.z, m.black, name)
+    box(world, apron.w, apron.d, apron.h, apron.x, apron.y, apron.z, m.steel, name)
   }
 
   // Return storage is a full-length dark, panel-built carcass with a
@@ -180,6 +203,13 @@ function addBurgenerDesk(world, data) {
   for (const pull of returnModule.drawerPulls) {
     box(world, pull.w, pull.d, pull.h, pull.x, pull.y, pull.z, m.black, 'Burgener black drawer pull')
   }
+}
+
+function surfaceMark(world, w, d, x, y, z, material, name, rotation = 0) {
+  const item = mesh(world, new THREE.PlaneGeometry(w, d), material, name)
+  item.position.set(x, y, z)
+  item.rotation.z = rotation
+  return item
 }
 
 function addHomeZeerChair(world, data) {
@@ -329,9 +359,22 @@ function addMarblePendantLamp(world) {
 function addUnderMainPc(world) {
   const pc = workstationAccessories.pc
   const f = pc.bounds
-  roundedBox(world, f.w, f.h, pc.height_gu, f.x + f.w / 2, f.y + f.h / 2, pc.height_gu / 2, m.cabinet, 'PC tower under main return-side working span', 2)
-  box(world, f.w * 0.52, 0.7, pc.height_gu * 0.62, f.x + f.w / 2, f.y - 0.36, pc.height_gu * 0.56, m.void, 'PC tower front intake')
-  box(world, 0.65, f.h * 0.82, pc.height_gu * 0.76, f.x + f.w + 0.33, f.y + f.h * 0.52, pc.height_gu * 0.52, m.glass, 'PC tower room-visible glass side panel')
+  const footHeight = 3.2
+  const bodyHeight = pc.height_gu - footHeight
+  const cx = f.x + f.w / 2
+  const cy = f.y + f.h / 2
+  // The visual assembly remains wholly inside the resolved PC envelope.
+  roundedBox(world, f.w, f.h, bodyHeight, cx, cy, footHeight + bodyHeight / 2, m.cabinet, 'PC tower under main return-side working span', 2)
+  for (const x of [f.x + 3.4, f.maxX - 3.4]) {
+    for (const y of [f.y + 3.6, f.maxY - 3.6]) box(world, 3.4, 3.4, footHeight, x, y, footHeight / 2, m.pcPanel, 'PC tower inset base foot')
+  }
+  box(world, f.w * 0.58, 0.5, bodyHeight * 0.66, cx, f.y + 0.3, footHeight + bodyHeight * 0.52, m.void, 'PC tower recessed front intake')
+  box(world, f.w * 0.43, 0.3, bodyHeight * 0.43, cx, f.y + 0.57, footHeight + bodyHeight * 0.55, m.pcPanel, 'PC tower differentiated front face')
+  box(world, 0.55, f.h * 0.8, bodyHeight * 0.78, f.maxX - 0.28, cy, footHeight + bodyHeight * 0.52, m.glass, 'PC tower room-visible glass side panel')
+  box(world, 0.55, f.h * 0.6, bodyHeight * 0.54, f.maxX - 0.72, cy, footHeight + bodyHeight * 0.5, m.pcComponent, 'PC tower internal dark component mass')
+  for (const [y, z] of [[cy - f.h * 0.18, 25], [cy + f.h * 0.12, 42]]) {
+    box(world, 0.3, f.h * 0.22, 2.2, f.maxX - 0.97, y, z, m.pcAccent, 'PC tower restrained cyan internal accent')
+  }
 }
 
 export function addBedroomDesignPassV1(world, data) {
