@@ -272,24 +272,16 @@ _LIGHT_OFF = {"on": False}
 #   None           — no effect
 #   {"effect": name, "lights": None}          — apply to all mapped lights
 #   {"effect": name, "lights": ["1", "2"]}    — apply to specific v1 light IDs only
-# Relax uses per-light targeting so the moss-shadow kitchen pendants
-# (L3/L4) don't get masked by flame-colored candle/fire flicker.
-# Social is static (no cycling) so it has no entry and the engine's
-# _get_desired_effect returns None for it.
+# Relax is intentionally static in every time period. Dynamic effects remain
+# available only through explicit user effect commands; autonomous Relax must
+# settle on the curated Moss & Candlelight palette instead of continuously
+# animating the room. Social is likewise static.
 EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     "relax": {
-        "day":        {
-            "effect": "opal",
-            "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
-        },
-        # Evening previously fired candle on L1+L2; removed 2026-05-09 because
-        # the effect locked color values and persisted through mode changes,
-        # masking other lighting decisions. Static palette is enough.
-        "evening":    None,
-        # L5 added 2026-05-11 (clear-housing desk lamp). Bulb-visible
-        # fixture is a natural fire-flicker host; mirror L2's fire scope.
-        "night":      {"effect": "fire",   "lights": ["1", "2", "5"]},
-        "late_night": {"effect": "fire",   "lights": ["1", "2", "5"]},
+        "day": None,
+        "evening": None,
+        "night": None,
+        "late_night": None,
     },
     "working":  {"day": None, "evening": None, "night": None},
     "gaming":   {"day": None, "evening": None, "night": None},

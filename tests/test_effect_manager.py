@@ -217,12 +217,18 @@ class TestGetDesiredEffect:
         mgr = EffectManager(hue_v2=_make_hue_v2())
         assert mgr.get_desired_effect("social", "evening") is None
 
-    def test_relax_evening_returns_none(self):
-        # Candle removed from EFFECT_AUTO_MAP relax-eve on 2026-05-09
-        # (color-lock + persist-through-mode-change footgun). Manual
-        # candle still callable via scene browser / guest UI / MCP.
+    @pytest.mark.parametrize("period", ["day", "evening", "night", "late_night"])
+    def test_relax_is_static_in_every_period(self, period):
         mgr = EffectManager(hue_v2=_make_hue_v2())
-        assert mgr.get_desired_effect("relax", "evening") is None
+        assert mgr.get_desired_effect("relax", period) is None
+
+    @pytest.mark.parametrize("description", ["Light snow", "Heavy thunderstorm"])
+    def test_relax_rejects_automatic_weather_effects(self, description):
+        mgr = EffectManager(
+            hue_v2=_make_hue_v2(),
+            weather_service=_make_weather(description),
+        )
+        assert mgr.get_desired_effect("relax", "night") is None
 
     def test_late_night_falls_back_to_night_for_undefined_modes(self):
         # watching defines glisten for evening + night; late_night should

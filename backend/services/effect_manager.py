@@ -296,10 +296,11 @@ class EffectManager:
           - str                                    (legacy caller, all lights)
           - {"effect": name, "lights": list|None}  (mode-specific, per-light scope)
 
-        Sleeping and social manage their own effects (sleeping = none,
-        social = none per Velvet Speakeasy static palette).
+        Sleeping, social, and relax are static modes. Relax still receives its
+        ordinary static weather/light-state composition, but never an automatic
+        Hue dynamic effect; explicit manual effect commands remain separate.
         """
-        if mode in ("sleeping", "social"):
+        if mode in ("sleeping", "social", "relax"):
             return None
         effect_map = EFFECT_AUTO_MAP.get(mode, {})
         auto_effect = effect_map.get(period)
