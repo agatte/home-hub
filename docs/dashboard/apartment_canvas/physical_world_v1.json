@@ -1,7 +1,7 @@
 {
   "schema": "homehub.apartment-physical-world.v1",
-  "status": "provisional_bedroom_physical_world_pilot",
-  "scope": "Additive physical authority for the Braya bed and Burgener workstation; it does not alter accepted architecture or GeometryScene contracts.",
+  "status": "provisional_physical_world_with_measured_living_sofa",
+  "scope": "Additive physical authority for the Braya bed, Burgener workstation, and measured Living Room sofa; it does not alter accepted architecture or GeometryScene contracts.",
   "calibrations": {
     "apartment_physical_v1": {
       "physical_unit": "in",
@@ -53,6 +53,22 @@
         "top_z_gu": 84,
         "basis": "The frozen host-window span plus deliberately review-required values only reproduce the confirmed flat-wall-to-local-elevated-sill topology; none are measured sill dimensions.",
         "provenance": "provisional_inference"
+      }
+    },
+    {
+      "id": "living.east_back_wall.finished_room_side_plane",
+      "label": "Living Room east/back wall finished room-side plane",
+      "classification": "fixed_architecture",
+      "host_relationship": {
+        "target": "wall_volume.exterior.east_living",
+        "relation": "finished room-side face at x = 981.29 GU; not the exterior/recessed host plane",
+        "provenance": "geometry_v1.json accepted architectural boundary",
+        "confidence": "high"
+      },
+      "preview_placement": {
+        "room_side_plane_x_gu": 981.29,
+        "basis": "Accepted Living Room east wall interior face traced from the canonical geometry; used only as the sofa's direct wall anchor.",
+        "provenance": "mathematical_derivation"
       }
     }
   ],
@@ -130,6 +146,30 @@
         "seam_y_gu": "derived_from_main_front_edge",
         "basis": "Perpendicular seam is preserved; bed-side endpoint and resulting visible gap remain a photo-informed preview result for orbit review.",
         "provenance": "provisional_inference"
+      }
+    },
+    {
+      "id": "living.sofa",
+      "label": "Living Room brown/mauve rolled-arm sofa",
+      "physical_dimensions_in": { "long": 94, "deep": 42, "high": 32, "seat_high": 19.5 },
+      "dimension_provenance": { "type": "direct_measurement", "confidence": "confirmed", "reference": "reference/living-room/PHYSICAL_EVIDENCE_PACKET.md#sofa" },
+      "calibration_ref": "apartment_physical_v1",
+      "orientation": { "long_axis": "+y", "depth_axis": "-x", "rear_face": "+x" },
+      "placement": {
+        "anchors": [
+          { "kind": "wall_relative", "target": "living.east_back_wall.finished_room_side_plane", "relation": "rear physical envelope flush to the finished room-side wall plane", "confidence": "confirmed", "provenance": "explicit_user_confirmation" }
+        ],
+        "unresolved": [
+          { "fact": "along_wall_start_coordinate", "status": "unmeasured", "must_not_be_interpreted_as": "a measurement or clearance" },
+          { "fact": "soft_decor_above_structural_height", "status": "visual_content", "must_not_be_interpreted_as": "an increase to the 32in structural envelope" }
+        ]
+      },
+      "preview_placement": {
+        "status": "provisional_review_required",
+        "long_axis_start_y_gu": 315.7,
+        "rear_edge_x_gu": 981.29,
+        "basis": "The established along-wall preview start is retained only to avoid moving unmeasured neighboring Living Room anchors. Width, depth, height, seat height, and rear-wall contact derive from new direct measurements and the apartment-wide calibration.",
+        "provenance": "provisional_inference+mathematical_derivation"
       }
     }
   ],

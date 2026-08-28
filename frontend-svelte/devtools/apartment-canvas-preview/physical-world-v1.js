@@ -92,6 +92,35 @@ export function resolveBedroomPhysicalWorld() {
   })
 }
 
+export function resolveLivingRoomSofaPhysicalWorld() {
+  const sofa = objectById('living.sofa')
+  const wall = physicalWorldV1.architectural_features.find((item) => item.id === 'living.east_back_wall.finished_room_side_plane')
+  if (!wall) throw new Error('Physical World v1 is missing living.east_back_wall.finished_room_side_plane')
+  const dimensions = dimensionsGu(sofa)
+  const placement = sofa.preview_placement
+  const rearEdge = placement.rear_edge_x_gu
+  const planBounds = rectangle(
+    rearEdge - dimensions.deep,
+    placement.long_axis_start_y_gu,
+    dimensions.deep,
+    dimensions.long,
+  )
+
+  return Object.freeze({
+    calibration: physicalWorldV1.calibrations.apartment_physical_v1,
+    sofa: Object.freeze({
+      ...sofa,
+      dimensions_gu: Object.freeze(dimensions),
+      plan_bounds_gu: Object.freeze(planBounds),
+      rear_edge_x_gu: rearEdge,
+      seat_height_gu: inchesToGu(sofa.physical_dimensions_in.seat_high, sofa.calibration_ref),
+    }),
+    architecture: Object.freeze({
+      finishedBackWall: Object.freeze({ ...wall, room_side_plane_x_gu: wall.preview_placement.room_side_plane_x_gu }),
+    }),
+  })
+}
+
 export function compatibilityFootprint(id, fallback) {
   return physicalWorldV1.compatibility_preview.objects[id]?.rect_gu ?? fallback
 }
