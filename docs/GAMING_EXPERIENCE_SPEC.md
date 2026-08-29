@@ -176,7 +176,8 @@ Do not install ScriptHook/injected RDR2 mods solely for HomeHub lighting. Stable
 High-value source classes:
 
 - official/local game APIs where available;
-- narrowly scoped local plugins with clear user consent;
+- existing trustworthy local plugin/webhook integrations before custom code, when they expose the needed bounded semantics;
+- narrowly scoped local plugins with clear user consent when reuse is insufficient;
 - passive screen-derived signals when replay demonstrates they are stable.
 
 Avoid process-memory scraping/injection as a default lighting strategy.
@@ -187,7 +188,7 @@ An adapter failure must degrade to the current stable game profile. It must neve
 
 - **League:** champion identity from Riot local Live Client Data API. Candidate later events include match start/end and major objectives, subject to bounded replay/design acceptance.
 - **Rust:** red-vignette damage detector, under-fire hold/release, and luma-driven brightness. Preserve these semantics while reducing duplicate ownership logic only if worthwhile.
-- **OSRS / RuneLite:** RuneLite exposes rich event subscribers; prefer a small privacy-bounded plugin adapter for selected level-up/notable-loot/death semantics. Do not react to every tick/XP/chat event.
+- **OSRS / RuneLite:** prefer a Dink custom-webhook receiver before writing a HomeHub RuneLite plugin. Dink already emits configurable level, loot, death, kill-count, quest, clue, pet, combat-achievement, and related notifications with structured metadata. HomeHub should ingest only an allowlisted subset, discard identity/location/raw payload fields not needed for lighting, and fall back to a custom privacy-bounded plugin only if Dink cannot satisfy an accepted semantic. Do not react to every tick/XP/chat event.
 
 ## Simulation and calibration
 

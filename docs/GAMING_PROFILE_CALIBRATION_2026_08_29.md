@@ -311,3 +311,103 @@ L6 bri185 hue5500 sat175
 Index: **65.6%**. If one low-saturation bedroom echo is later useful, add it only after L5 glare review.
 
 Evening/night/late-night should initially preserve the current Rusted Ember profile and damage/under-fire/luma semantics. Generalize the architecture first; retune proven after-dark colors only from new real-room evidence.
+
+## OSRS telemetry research checkpoint — prefer Dink reuse before a custom plugin
+
+Fresh RuneLite/Dink research found a substantially cheaper and safer first adapter path than writing a HomeHub Plugin Hub plugin from scratch.
+
+**Dink** is an established RuneLite Plugin Hub plugin whose explicit job is to emit noteworthy game events to Discord webhooks **or custom web servers**. Its current notification catalog already overlaps most HomeHub candidates: levels/XP milestones, loot, death, kill count/bosses, quests, clues, pets, combat achievements, slayer, collection log, and more.
+
+Dink also publishes a structured JSON contract for third-party consumers. Payloads without screenshots are sent as `application/json`; screenshot-enabled notifications use multipart with a `payload_json` part. Third-party consumers are instructed to rely on `type` + `extra` rather than rendered Discord text/embeds.
+
+This makes the preferred architecture:
+
+```text
+RuneLite + Dink
+  -> allowlisted Dink notification
+  -> HomeHub OSRS webhook ingress
+  -> privacy-minimized normalized GameTelemetryEvent
+  -> Gaming Director bounded accent
+```
+
+A custom HomeHub RuneLite plugin is now the **fallback**, not the default.
+
+### Ingress/privacy contract
+
+HomeHub should not persist the raw Dink body. At ingress:
+
+- accept only explicitly enabled notification `type` values;
+- reject/ignore screenshots and keep Dink screenshot capture disabled for the HomeHub endpoint;
+- discard `playerName`, `accountType`, `dinkAccountHash`, clan/Discord identity, `world`, `regionId`, and other location/identity metadata unless a future accepted feature specifically requires one;
+- disable Dink `Include Location` for the HomeHub destination where possible;
+- do not enable chat, group-storage, trade, GE, or other privacy-heavy notifications merely because Dink supports them;
+- retain only a compact normalized event, source timestamp/arrival time, useful semantic fields, and adapter health/provenance.
+
+Candidate V1 allowlist:
+
+- `LEVEL` / XP milestone only when it represents an accepted level-up/milestone;
+- loot only above an explicit value/rarity threshold;
+- `DEATH`;
+- selected kill-count/boss completion events if they prove meaningful in dry-run replay.
+
+Dink's own configuration should perform the first spam filter; HomeHub still applies dedupe, cooldown, activity/game authority, and final lighting caps.
+
+### Dink transport feasibility
+
+Current Dink sender code parses every configured destination with OkHttp `HttpUrl::parse`, drops invalid URLs/`example.com`, and POSTs with retry/backoff. The send path does not restrict destinations to Discord and does not contain an explicit localhost/LAN host rejection. A HomeHub-controlled local/LAN receiver is therefore plausible, but must still be proven with a no-actuation dry run on the actual RuneLite/Windows environment before it becomes accepted runtime architecture.
+
+No Dink installation or RuneLite configuration change was performed during this research pass.
+
+### Existing Hue Ambiance plugin — event precedent only
+
+RuneLite Plugin Hub also contains `Hue Ambiance` (`Jallah123/hue-ambiance`). Its source directly owns a Hue room and can react to GameTick/skybox color plus HP, prayer, item-value thresholds, level-up, Zulrah/raid and other overrides. That validates that OSRS lighting can be enjoyable and semantically rich.
+
+Do **not** copy its authority model. HomeHub must remain the Hue writer so schedule envelopes, fixture roles, pairing, manual intent, comfort caps, and idempotence remain authoritative. In particular, do not copy its every-tick/skybox-to-bridge update loop.
+
+## Tier B simulation pass — daytime anchor + after-dark identity
+
+These games remain behind #203/#204/#208. The point of this pass is to establish safe art-direction anchors now, not authorize implementation.
+
+### Oxygen Not Included — Oxygen & Industry
+
+Useful source references: oxygen cyan `#4CB6C9` (~hue 34428/sat 158) and industrial amber `#D58B32` (~5964/194).
+
+**Weekend day:** keep L1/L2/L3/L4/L5 on the weekend functional-white envelope; use L6 `bri185 hue5964 sat125`. Amber wins over cyan in daylight so ONI cannot recreate the disliked green/cold-room failure.
+
+**Night:** L1 `105 ct370`; L2 `120 ct370`; L3/L4 `60 ct370`; L5 `65 hue34428 sat90`; L6 `170 hue5964 sat165`. Cyan is only a subordinate oxygen-system counter-accent.
+
+### Strange Horticulture — Candle, Ink & Plum
+
+References: candle amber `#B97835` (~5544/181), muted plum `#72506E` (~55898/76).
+
+**Weekend day:** functional-white envelope with L6 `bri185 hue5544 sat125`.
+
+**Night:** L1 `105 ct400`; L2 `120 ct400`; L3/L4 `60 ct400`; L5 `55 hue5544 sat95`; L6 `165 hue55898 sat105`. The room should read candlelit/apothecary, not botanical green.
+
+### High On Life — Alien Neon
+
+References: cyan `#3EC8D3` (~33574/179), magenta `#D34BA8` (~58066/164), violet `#7A4FC2` (~47774/151).
+
+**Weekend day:** preserve all functional-white fixtures; use only L6 `bri185 hue47774 sat90`. Violet is safer than cyan during daylight and should read as an architectural hint, not neon room light.
+
+**Night:** L1 `105 ct370`; L2 `120 ct370`; L3/L4 `60 ct370`; L5 `55 hue33574 sat100`; L6 `170 hue58066 sat145`. If this still feels visually noisy, reduce L5 saturation before reducing useful light.
+
+### Realm of the Mad God Exalt — Jewel Chamber
+
+References: jewel purple `#7B5BD6` (~46532/146), cyan `#48BFD4` (~34406/168), gold `#D6A844` (~7481/173).
+
+**Weekend day:** functional-white envelope with L6 `bri185 hue7481 sat120`; gold keeps the daytime room readable and game-specific without becoming green/blue.
+
+**Night:** L1 `105 ct370`; L2 `120 ct370`; L3/L4 `60 ct370`; L5 `55 hue34406 sat95`; L6 `170 hue46532 sat130`. Gold remains available as a brief event/support color later, not a third simultaneous resting accent.
+
+### Planet Zoo — Savanna Sunset
+
+References: savanna gold `#C99545` (~6620/167), terracotta `#B85D3A` (~3034/174), eucalyptus `#6F8161` (~17066/63).
+
+**Weekend day:** functional-white envelope with L6 `bri185 hue6620 sat120`. Do not make the room green merely because the game is botanical/zoo-themed.
+
+**Night:** L1 `105 ct370`; L2 `120 ct370`; L3/L4 `60 ct370`; L5 `55 hue6620 sat85`; L6 `170 hue3034 sat145`. Eucalyptus remains an optional very-low-saturation secondary only if real-room review proves it adds depth instead of muddiness.
+
+### Tier B acceptance rule
+
+All five candidates share one guardrail: daytime identity is carried mostly by a warm/gold/violet L6 architectural signature while normal white light remains responsible for visibility. Cyan/green-heavy families are deliberately delayed until after dark and kept subordinate. This directly addresses the historical daytime Gaming complaint rather than trusting color-theory aesthetics in isolation.
