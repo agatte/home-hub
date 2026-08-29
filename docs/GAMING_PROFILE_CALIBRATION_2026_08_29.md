@@ -411,3 +411,56 @@ References: savanna gold `#C99545` (~6620/167), terracotta `#B85D3A` (~3034/174)
 ### Tier B acceptance rule
 
 All five candidates share one guardrail: daytime identity is carried mostly by a warm/gold/violet L6 architectural signature while normal white light remains responsible for visibility. Cyan/green-heavy families are deliberately delayed until after dark and kept subordinate. This directly addresses the historical daytime Gaming complaint rather than trusting color-theory aesthetics in isolation.
+
+## OSRS Dink semantic mapping — exact fields worth retaining
+
+Dink's published JSON examples make the HomeHub normalization boundary concrete. HomeHub does not need the full payload.
+
+| Dink type | Retain for HomeHub | Explicitly drop/ignore |
+| --- | --- | --- |
+| `LEVEL` | `extra.levelledSkills`, optional combat-level increase | all-skills snapshot after deriving the event, identity fields, rendered content |
+| `XP_MILESTONE` | `extra.milestoneAchieved`, `extra.interval` | full `xpData` after deriving the milestone |
+| `LOOT` | qualifying item id/name/quantity/value, `criteria`, optional rarity, source/category, optional kill count | party names, player identity, raw raid metadata unless an accepted effect later needs one field |
+| `DEATH` | `isPvp`, optional `valueLost`, optional NPC semantic only if useful | killer/player names, item inventories, location |
+| `KILL_COUNT` | boss, count, `isPersonalBest`, optional time/PB | game-message text, party names |
+| `PET` | pet name if available, duplicate flag, milestone if useful | identity/location |
+
+The receiver should derive the compact `GameTelemetryEvent`, then discard the raw request body rather than storing it for later analysis.
+## OSRS bounded event-light simulation
+
+These are transient overlays on top of the current #208 base, not standalone scenes. Unowned functional lights remain untouched.
+
+### Level-up — Gold Rune
+
+- Duration target: ~2.5 s total; one smooth accent, no repeated flash.
+- Day/weekend day: L6 only, antique gold `hue5972 sat180`, brightness capped around `min(base+20, 205)`.
+- Evening/night: L6 gold plus L5 amethyst/rune echo at low saturation; do not exceed the context's normal L5 glare budget by more than ~10 brightness points.
+- Late night: L6 only, warm gold/amber, max around bri120; no cool accent.
+- Return: resolve #208 again from **current** schedule/period, not a pre-event cached state.
+
+### Notable loot — Treasure Glint
+
+- Duration target: ~1.5–2.0 s.
+- L6 becomes slightly brighter/more saturated gold than the stable profile; no pulse/cycle.
+- For very rare/explicitly allowlisted loot, one short L5 amethyst echo is allowed after dark.
+- Value/rarity filtering should happen in Dink first and again at HomeHub ingress; ordinary drops produce no event.
+### Death — Ember Drop
+
+- Duration target: ~1.5 s with a soft transition, not a strobe.
+- L6 only by default: muted leather/red `hue1791 sat140–170`, brightness at or below the stable L6 brightness for the context.
+- Do not darken or recolor the kitchen/functional desk lights as punishment for dying.
+- Late night stays especially restrained: warm burgundy/amber, no brightness lift.
+
+### Boss completion / personal best — Rune Triumph
+
+- Trigger only for selected bosses or `isPersonalBest=true` after dry-run event-rate review.
+- Duration target: ~3 s.
+- Day: L6 gold only; normal white room remains unchanged.
+- Evening/night: L6 gold + one restrained L5 amethyst/rune accent.
+- Personal best may use the strongest accepted saturation of these OSRS effects, but still one stable accent/hold/return rather than animation.
+
+### Pet — Rare Find candidate
+
+Dink exposes a dedicated `PET` event with `petName`, optional milestone, and duplicate status. This is rare enough to be a particularly good future celebratory event. Keep it outside the initial minimum V1 until a real event fixture/replay exists, but prefer it over high-frequency low-health/damage effects if scope expands.
+
+All event overlays remain subject to manual/lifecycle/comfort/protected-light ownership and must be idempotent under duplicated webhook delivery/retry.
