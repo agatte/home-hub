@@ -145,7 +145,7 @@ These are simulation/calibration starting points, not accepted final Hue values.
 | RDR2 | copper, campfire amber, dusty red, restrained moon blue | profile first; optional passive cues later |
 | League of Legends | active champion palette | official local Live Client Data API events |
 | Rust | ember + muted moss | preserve luma and damage/under-fire behavior |
-| Rocket League | electric blue + orange arena contrast | investigate bounded BakkesMod events |
+| OSRS / RuneLite | parchment/gold + rune blue/amethyst | RuneLite plugin events for bounded level-up/loot/death reactions |
 | Planet Zoo | savanna gold + warm botanical neutrals | static profile |
 | Oxygen Not Included | oxygen cyan + industrial amber | static profile; mod only if justified later |
 | High On Life | cyan + magenta + violet | static profile |
@@ -187,7 +187,7 @@ An adapter failure must degrade to the current stable game profile. It must neve
 
 - **League:** champion identity from Riot local Live Client Data API. Candidate later events include match start/end and major objectives, subject to bounded replay/design acceptance.
 - **Rust:** red-vignette damage detector, under-fire hold/release, and luma-driven brightness. Preserve these semantics while reducing duplicate ownership logic only if worthwhile.
-- **Rocket League:** investigate BakkesMod for kickoff, goal, overtime, and result events before installing anything.
+- **OSRS / RuneLite:** RuneLite exposes rich event subscribers; prefer a small privacy-bounded plugin adapter for selected level-up/notable-loot/death semantics. Do not react to every tick/XP/chat event.
 
 ## Simulation and calibration
 
@@ -213,6 +213,8 @@ Phone photographs are supporting evidence, not absolute color truth. Direct live
 
 Simulation values are proposals until accepted through real-room review. Do not promote a palette merely because its RGB/HSB values look mathematically coherent.
 
+Detailed 2026-08-29 profile priority and candidate-state evidence lives in `GAMING_PROFILE_CALIBRATION_2026_08_29.md`.
+
 ## Safety and ownership invariants
 
 Gaming presentation may not weaken:
@@ -233,8 +235,8 @@ L3/L4 pairing remains a hard Gaming presentation invariant.
 2. **#204 RDR2:** first new per-game profile, simulation, and real-room calibration.
 3. Migrate/align Rust only where the generalized boundary improves maintainability without changing proven behavior.
 4. Expand League champion/event behavior through #205 only after the stable-profile boundary is clear.
-5. Evaluate Rocket League plugin feasibility before installation.
-6. Add static profiles for other games only when actual play evidence makes them useful.
+5. Prototype RuneLite event inventory/replay without lighting actuation before selecting V1 reactions.
+6. Add static profiles for other games only when actual play evidence makes them useful; Rocket League remains a later static/integration candidate.
 
 Do not pre-build a huge catalog of unused profiles.
 
