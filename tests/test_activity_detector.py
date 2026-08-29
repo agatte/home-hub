@@ -234,6 +234,15 @@ class TestGamingGate:
         assert "planetzoo.exe" in GAME_PROCESSES
         assert d._classify() == "gaming"
 
+    def test_red_dead_redemption_2_foreground_commits_gaming(self):
+        d = _make_detector(
+            processes={"rdr2.exe"},
+            fg_proc="rdr2.exe",
+            idle_seconds=0,
+        )
+        assert "rdr2.exe" in GAME_PROCESSES
+        assert d._classify() == "gaming"
+
     def test_discovered_steam_game_commits_gaming(self, monkeypatch):
         monkeypatch.setattr(
             "backend.services.pc_agent.activity_detector.get_game_processes",

@@ -48,6 +48,8 @@ GAME_PROCESSES: set[str] = {
     "dota2.exe",
     "gtav.exe",
     "gta5.exe",
+    # Red Dead Redemption 2 - actual game binary, not Rockstar launcher
+    "rdr2.exe",
     "fortniteclient-win64-shipping.exe",
     "overwatch.exe",
     "minecraft.exe",
