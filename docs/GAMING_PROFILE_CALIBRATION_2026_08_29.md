@@ -4,6 +4,7 @@
 - **Umbrella:** GitHub #105
 - **Foundation:** #203
 - **First profile:** #204
+- **Second profile:** #208
 - **Telemetry:** #205
 
 This checkpoint turns the Gaming Director product contract into concrete profile-priority and lighting-simulation evidence while implementation is waiting for a high-confidence code pass.
@@ -258,3 +259,55 @@ Brightness index: **24.9%**. Cool color is removed; the signature collapses back
 3. Evening — tune the handoff between the two.
 4. Weekday day — verify the 4000K functional target is bright without feeling office-like.
 5. Late night — only after the future whole-apartment comfort envelope is reconciled.
+
+## League numeric envelope — champion color sits inside a functional room
+
+These candidates define **brightness/fixture roles**, not one universal League hue. Champion color remains dynamic input, with saturation/ownership caps applied by context.
+
+| Context | L1 | L2 | L3 | L4 | L5 | L6 | Index |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Weekday day | 205 | 235 | 165 | 165 | 180 | 180 | 74.1% |
+| Weekend day | 185 | 215 | 140 | 140 | 155 | 185 | 66.9% |
+| Evening | 135 | 150 | 80 | 80 | 75 | 180 | 45.9% |
+| Night | 90 | 115 | 50 | 50 | 45 | 160 | 33.5% |
+| Late night | 60 | 80 | 25 | 25 | 35 | 100 | 21.3% |
+
+Proposed color allocation:
+
+- weekday day: L1/L3/L4 remain neutral; champion color primarily on L6 at low/moderate saturation, with L2/L5 staying functional unless an accepted champion-owner rule says otherwise;
+- weekend day: L6 can carry a clearer champion signature; one bedroom accent may echo it at lower saturation;
+- evening/night: L2/L5 may preserve current champion ownership while L6 uses either the champion primary or a curated complementary family;
+- never let a dark champion palette reduce the functional envelope merely because its source RGB is dark;
+- objective/match events from #205 are transient layers and return to the current champion-aware base.
+
+## Rust daytime migration simulation
+
+Do not reinterpret the proven after-dark Rust work as broken. The required migration is primarily the new weekday/weekend **daytime** contract.
+
+### Weekday day — functional iron & ember
+
+```text
+L1 bri200 ct250
+L2 bri230 ct250   # may retain bounded luma-driven brightness later
+L3 bri160 ct250
+L4 bri160 ct250
+L5 bri180 ct250
+L6 bri180 hue5500 sat145
+```
+
+Index: **72.8%**. The Rust signature lives mainly on L6; useful light remains neutral.
+
+### Weekend day — restrained Rusted Ember
+
+```text
+L1 bri180 ct286
+L2 bri210 ct286
+L3 bri135 ct286
+L4 bri135 ct286
+L5 bri155 ct286
+L6 bri185 hue5500 sat175
+```
+
+Index: **65.6%**. If one low-saturation bedroom echo is later useful, add it only after L5 glare review.
+
+Evening/night/late-night should initially preserve the current Rusted Ember profile and damage/under-fire/luma semantics. Generalize the architecture first; retune proven after-dark colors only from new real-room evidence.

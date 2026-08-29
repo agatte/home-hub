@@ -3,7 +3,7 @@
 - **Status:** DECIDED TARGET; implementation pending
 - **Updated:** 2026-08-29
 - **Umbrella:** GitHub #105
-- **Implementation children:** #203, #204, #205
+- **Implementation children:** #203, #204, #208, #205
 
 This document owns detailed Gaming presentation policy under the cross-system authority of `PROJECT_SPEC.md`. It does not make Gaming a new house state or create a top-level mode per game.
 
@@ -233,10 +233,11 @@ L3/L4 pairing remains a hard Gaming presentation invariant.
 
 1. **#203 foundation:** generalized GamingContext/profile resolver, schedule-type participation, functional envelopes, idempotence, observability.
 2. **#204 RDR2:** first new per-game profile, simulation, and real-room calibration.
-3. Migrate/align Rust only where the generalized boundary improves maintainability without changing proven behavior.
-4. Expand League champion/event behavior through #205 only after the stable-profile boundary is clear.
-5. Prototype RuneLite event inventory/replay without lighting actuation before selecting V1 reactions.
-6. Add static profiles for other games only when actual play evidence makes them useful; Rocket League remains a later static/integration candidate.
+3. **#208 OSRS / RuneLite:** second generalized stable profile and real-room calibration; no plugin required.
+4. Migrate/align Rust only where the generalized boundary improves maintainability without changing proven behavior.
+5. Expand League champion/event behavior through #205 only after the stable-profile boundary is clear.
+6. Prototype RuneLite event inventory/replay without lighting actuation before selecting V1 reactions.
+7. Add static profiles for other games only when actual play evidence makes them useful; Rocket League remains a later static/integration candidate.
 
 Do not pre-build a huge catalog of unused profiles.
 
@@ -266,6 +267,7 @@ No production write, deploy, migration, or service restart is authorized by this
 - #105 Gaming Director umbrella
 - #203 schedule-aware Gaming foundation
 - #204 RDR2 Frontier profile
+- #208 OSRS / RuneLite Parchment, Rune & Amethyst profile
 - #205 Gaming telemetry adapters
 - #47 evening ScreenSync envelope evidence gate
 - #136 desk-light perceived balance
