@@ -7,10 +7,12 @@ tests assert.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.api.routes.scenes import activate_effect
 from backend.services.effect_manager import (
     WEATHER_EFFECT_MAP,
     WEATHER_SKIP_MODES,
@@ -230,13 +232,43 @@ class TestGetDesiredEffect:
         )
         assert mgr.get_desired_effect("relax", "night") is None
 
-    def test_late_night_falls_back_to_night_for_undefined_modes(self):
-        # watching defines glisten for evening + night; late_night should
-        # fall back to night per the late_night-fallback rule
+    @pytest.mark.parametrize("period", ["day", "evening", "night", "late_night"])
+    def test_watching_is_static_in_every_period(self, period):
         mgr = EffectManager(hue_v2=_make_hue_v2())
-        late = mgr.get_desired_effect("watching", "late_night")
-        night = mgr.get_desired_effect("watching", "night")
-        assert late == night
+        assert mgr.get_desired_effect("watching", period) is None
+
+    @pytest.mark.parametrize("description", ["Light snow", "Heavy thunderstorm"])
+    def test_watching_rejects_automatic_weather_effects(self, description):
+        mgr = EffectManager(
+            hue_v2=_make_hue_v2(),
+            weather_service=_make_weather(description),
+        )
+        assert mgr.get_desired_effect("watching", "night") is None
+
+    @pytest.mark.asyncio
+    async def test_manual_glisten_command_remains_available(self):
+        hue = _make_hue_v2()
+        hue.get_effects = AsyncMock(return_value=[{"name": "glisten"}])
+        manager = MagicMock()
+        manager.reconcile = AsyncMock(return_value=True)
+        automation = MagicMock()
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    hue_v2=hue,
+                    effect_manager=manager,
+                    automation=automation,
+                ),
+            ),
+        )
+
+        result = await activate_effect(
+            "glisten", request,  # type: ignore[arg-type]
+        )
+
+        assert result == {"status": "ok", "effect": "glisten"}
+        manager.reconcile.assert_awaited_once()
+        assert manager.reconcile.await_args.args[0] == "glisten"
 
     def test_weather_fallback_only_when_mode_has_no_auto_effect(self):
         # working has no auto-effect; snow in evening should overlay opal.

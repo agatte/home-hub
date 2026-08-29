@@ -5,6 +5,7 @@ Receives activity reports from the PC agent (process detection) and ambient
 monitor (Blue Yeti mic). Provides the frontend with current automation state
 and manual override controls.
 """
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -38,6 +39,7 @@ from backend.services.automation_constants import (
     # Canonical home is automation_constants (engine re-exports for back-compat).
     DND_STATE_KEY as DND_STATE_KEY,
     SCREEN_SYNC_MODES,
+    SOURCE_STALE_SECONDS,
     DaySchedule,
     ScheduleConfig,
 )
@@ -88,23 +90,28 @@ def _is_latitude_streaming_report(report: ActivityReport) -> bool:
 
 
 async def _handle_latitude_streaming_side_effects(
-    report: ActivityReport, request: Request,
+    report: ActivityReport, request: Request, result: dict,
 ) -> None:
     if not _is_latitude_streaming_report(report):
         return
 
-    playback_active = bool(_factor_value(report.factors, "playback_active"))
-    streaming_present = playback_active and report.mode == "watching"
+    engine = getattr(request.app.state, "automation", None)
+    streaming_present = _latitude_owns_watching_context(report, result, engine)
 
     presence = getattr(request.app.state, "presence", None)
     if presence is not None:
-        presence.on_observation(PresenceReading(
-            source="latitude_streaming",
-            captured_at=datetime.now(timezone.utc),
-            face_present=streaming_present,
-            face_confidence=1.0 if streaming_present else 0.0,
-            zone="couch" if streaming_present else None,
-        ))
+        if streaming_present:
+            # This synthetic reading is a consequence of accepted Latitude
+            # ownership, never an input to its own authority decision.
+            presence.on_observation(PresenceReading(
+                source="latitude_streaming",
+                captured_at=datetime.now(timezone.utc),
+                face_present=True,
+                face_confidence=1.0,
+                zone="couch",
+            ))
+        else:
+            presence.invalidate_source("latitude_streaming")
 
     loopback = getattr(request.app.state, "laptop_loopback", None)
     if loopback is None:
@@ -115,13 +122,77 @@ async def _handle_latitude_streaming_side_effects(
     ))
     if streaming_present:
         if not loopback.running:
-            await loopback.start()
-            request.app.state.latitude_streaming_loopback_started = True
+            start_task = getattr(
+                request.app.state,
+                "latitude_streaming_loopback_start_task",
+                None,
+            )
+            if start_task is None or start_task.done():
+                request.app.state.latitude_streaming_loopback_started = True
+                start_task = asyncio.create_task(
+                    loopback.start(),
+                    name="latitude-streaming-loopback-start",
+                )
+                request.app.state.latitude_streaming_loopback_start_task = start_task
+
+                def _start_done(task: asyncio.Task) -> None:
+                    if getattr(
+                        request.app.state,
+                        "latitude_streaming_loopback_start_task",
+                        None,
+                    ) is task:
+                        request.app.state.latitude_streaming_loopback_start_task = None
+                    if task.cancelled():
+                        return
+                    error = task.exception()
+                    if error is not None:
+                        request.app.state.latitude_streaming_loopback_started = False
+                        logger.warning(
+                            "Latitude streaming loopback start failed: %s",
+                            error,
+                        )
+
+                start_task.add_done_callback(_start_done)
         return
 
+    start_task = getattr(
+        request.app.state, "latitude_streaming_loopback_start_task", None,
+    )
+    if start_task is not None and not start_task.done():
+        start_task.cancel()
     if auto_started and loopback.running:
         await loopback.stop()
     request.app.state.latitude_streaming_loopback_started = False
+
+
+def _latitude_owns_watching_context(
+    report: ActivityReport, result: dict, engine,
+) -> bool:
+    """True only for an accepted, fresh Latitude-owned Watching context.
+
+    The raw detector report is deliberately insufficient: it may have lost
+    engine arbitration to an active desktop session.  Do not use the synthetic
+    ``latitude_streaming`` presence reading here; it is emitted only after this
+    proof succeeds.
+    """
+    if not (
+        report.mode == "watching"
+        and bool(_factor_value(report.factors, "playback_active"))
+        and result.get("semantic_disposition") == "accepted"
+        and result.get("semantic_mode") == "watching"
+        and result.get("authoritative_mode") == "watching"
+    ):
+        return False
+
+    context_reader = getattr(engine, "get_activity_context", None)
+    if not callable(context_reader):
+        return False
+    context = context_reader()
+    return (
+        context.get("current_activity") == "watching"
+        and context.get("current_activity_fresh") is True
+        and context.get("current_activity_source_key") == "process:latitude"
+    )
 
 
 def _screen_sync_target_lights(report: ScreenColorReport, sync) -> list[str]:
@@ -132,6 +203,126 @@ def _screen_sync_target_lights(report: ScreenColorReport, sync) -> list[str]:
             return targets
     targets = [lid for lid in BEDROOM_SCREEN_SYNC_TARGETS if lid in available]
     return targets or sync.target_lights
+
+
+def _reading_is_fresh(reading: PresenceReading | None, max_age_s: float) -> bool:
+    if reading is None:
+        return False
+    captured_at = reading.captured_at
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=timezone.utc)
+    age_s = (datetime.now(timezone.utc) - captured_at).total_seconds()
+    return -2.0 <= age_s <= max_age_s
+
+
+def _watching_screen_sync_authority(engine, presence) -> dict:
+    """Resolve the only screen source allowed to write during Watching.
+
+    Accepted device-qualified activity is the primary ownership signal:
+    Latitude media owns laptop loopback colors, while desktop media owns the
+    desktop capture. Physical desk/couch evidence is a fallback for an
+    explicit/manual Watching mode. A legacy engine that cannot expose activity
+    context retains the pre-audit behavior for compatibility adapters/tests.
+    """
+    if getattr(engine, "current_mode", None) != "watching":
+        return {
+            "enforced": False,
+            "source": None,
+            "reason": "mode_does_not_require_source_arbitration",
+        }
+
+    context_reader = getattr(engine, "get_activity_context", None)
+    if not callable(context_reader):
+        return {
+            "enforced": False,
+            "source": None,
+            "reason": "activity_context_unavailable",
+        }
+
+    context = context_reader()
+    source_key = context.get("current_activity_source_key")
+    if (
+        context.get("current_activity") == "watching"
+        and context.get("current_activity_fresh") is True
+    ):
+        if source_key == "process:latitude":
+            return {
+                "enforced": True,
+                "source": "laptop",
+                "reason": "accepted_latitude_watching",
+            }
+        if source_key == "process:desktop":
+            return {
+                "enforced": True,
+                "source": "desktop",
+                "reason": "accepted_desktop_watching",
+            }
+
+    evidence = context.get("process_evidence_by_device") or {}
+    watching_devices = {
+        device
+        for device, row in evidence.items()
+        if row.get("committed_mode") == "watching"
+        and isinstance(row.get("age_seconds"), (int, float))
+        and -2.0 <= row["age_seconds"] <= SOURCE_STALE_SECONDS
+    }
+    if watching_devices == {"latitude"}:
+        return {
+            "enforced": True,
+            "source": "laptop",
+            "reason": "fresh_latitude_watching_evidence",
+        }
+    if watching_devices == {"desktop"}:
+        return {
+            "enforced": True,
+            "source": "desktop",
+            "reason": "fresh_desktop_watching_evidence",
+        }
+
+    if presence is not None:
+        latest_zone = presence.latest_zone(max_age_s=8)
+        if latest_zone == "desk":
+            desktop = presence.get_source_reading("desktop")
+            if (
+                _reading_is_fresh(desktop, 8.0)
+                and desktop.face_present is True
+                and desktop.zone == "desk"
+            ):
+                return {
+                    "enforced": True,
+                    "source": "desktop",
+                    "reason": "fresh_desktop_desk_presence",
+                }
+
+        if latest_zone == "couch":
+            latitude = presence.get_source_reading("latitude")
+            if (
+                _reading_is_fresh(latitude, 8.0)
+                and latitude.face_present is True
+                and latitude.zone == "couch"
+            ):
+                return {
+                    "enforced": True,
+                    "source": "laptop",
+                    "reason": "fresh_latitude_couch_presence",
+                }
+            streaming = presence.get_source_reading("latitude_streaming")
+            if (
+                _reading_is_fresh(streaming, 8.0)
+                and streaming.face_present is True
+                and streaming.zone == "couch"
+            ):
+                return {
+                    "enforced": True,
+                    "source": "laptop",
+                    "reason": "fresh_latitude_streaming_presence",
+                }
+
+    return {
+        "enforced": True,
+        "source": None,
+        "reason": "no_authoritative_watching_source",
+    }
 
 
 def _bedroom_lux_multiplier(channel) -> float:
@@ -263,7 +454,7 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
         "authoritative_mode": getattr(engine, "current_mode", report.mode),
         "included_in_fusion": False,
     }
-    await _handle_latitude_streaming_side_effects(report, request)
+    await _handle_latitude_streaming_side_effects(report, request, result)
 
     # Fan the report to the LoL champion service so a champion factor (set
     # only when League's Live Client Data API returned 200) can drive the
@@ -548,6 +739,36 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if getattr(engine, "_external_off_detected", False):
         return {"status": "ok", "applied": False}
 
+    # Laptop frames originate solely from the Latitude loopback, whose valid
+    # automatic ownership is Latitude Watching.  Reject them before the
+    # generic Gaming/Rust paths so a rejected/stale Latitude report cannot
+    # inject color or Rust luma into a desktop-owned game session.
+    if engine.current_mode == "gaming" and report.source == "laptop":
+        return {
+            "status": "ok",
+            "applied": False,
+            "reason": "laptop_source_requires_latitude_watching",
+            "reported_source": report.source,
+            "authoritative_source": "desktop",
+            "authority_reason": "desktop_gaming",
+        }
+
+    presence = getattr(request.app.state, "presence", None)
+    source_authority = _watching_screen_sync_authority(engine, presence)
+    authoritative_source = source_authority["source"]
+    if (
+        source_authority["enforced"]
+        and report.source != authoritative_source
+    ):
+        return {
+            "status": "ok",
+            "applied": False,
+            "reason": "non_authoritative_source",
+            "reported_source": report.source,
+            "authoritative_source": authoritative_source,
+            "authority_reason": source_authority["reason"],
+        }
+
     # Pull zone + posture so the sync cap can differ between watching-at-desk
     # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source
     # from PresenceFusion, NOT the raw Latitude camera: since the 2026-05-27
@@ -559,7 +780,6 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # the engine's own light application already resolves zone. Falls back to
     # the raw camera if fusion isn't wired (boot / tests). Bed-variant caps stay
     # in MODE_ZONE_MAX_BRIGHTNESS for revival pending a future bed-zone source.
-    presence = getattr(request.app.state, "presence", None)
     camera = getattr(request.app.state, "camera_service", None)
     if presence is not None:
         zone = presence.latest_zone()
@@ -665,7 +885,14 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
         )
         applied.append(light_id)
 
-    response: dict = {"status": "ok", "applied": bool(applied), "lights": applied}
+    response: dict = {
+        "status": "ok",
+        "applied": bool(applied),
+        "lights": applied,
+    }
+    if source_authority["enforced"]:
+        response["authoritative_source"] = authoritative_source
+        response["authority_reason"] = source_authority["reason"]
     if skipped:
         response["skipped"] = skipped
         response["skip_reasons"] = skip_reasons
@@ -694,6 +921,24 @@ async def get_screen_sync_status(request: Request) -> dict:
     )
     last_source = sync.last_source if sync else None
     laptop_loopback_running = loopback.running if loopback else False
+    source_authority = (
+        _watching_screen_sync_authority(engine, getattr(
+            request.app.state, "presence", None,
+        ))
+        if engine is not None
+        else {
+            "enforced": False,
+            "source": None,
+            "reason": "automation_unavailable",
+        }
+    )
+    authoritative_source = source_authority["source"]
+    authoritative_targets = None
+    if sync is not None and authoritative_source in {"desktop", "laptop"}:
+        authoritative_targets = _screen_sync_target_lights(
+            ScreenColorReport(r=0, g=0, b=0, source=authoritative_source),
+            sync,
+        )
 
     return {
         "enabled_mode": enabled_mode,
@@ -701,6 +946,15 @@ async def get_screen_sync_status(request: Request) -> dict:
         "last_color_at": last_color_at,
         "last_source": last_source,
         "laptop_loopback_enabled": laptop_loopback_running,
+        "source_authority_enforced": source_authority["enforced"],
+        "authoritative_source": authoritative_source,
+        "authority_reason": source_authority["reason"],
+        "authoritative_targets": authoritative_targets,
+        "last_source_authoritative": (
+            last_source == authoritative_source
+            if authoritative_source is not None and last_source is not None
+            else None
+        ),
     }
 
 

@@ -296,11 +296,12 @@ class EffectManager:
           - str                                    (legacy caller, all lights)
           - {"effect": name, "lights": list|None}  (mode-specific, per-light scope)
 
-        Sleeping, social, and relax are static modes. Relax still receives its
-        ordinary static weather/light-state composition, but never an automatic
-        Hue dynamic effect; explicit manual effect commands remain separate.
+        Sleeping, social, relax, and watching are static modes. Relax and
+        watching still receive their ordinary static weather/light-state
+        composition, but never an automatic Hue dynamic effect; explicit
+        manual effect commands remain separate.
         """
-        if mode in ("sleeping", "social", "relax"):
+        if mode in ("sleeping", "social", "relax", "watching"):
             return None
         effect_map = EFFECT_AUTO_MAP.get(mode, {})
         auto_effect = effect_map.get(period)

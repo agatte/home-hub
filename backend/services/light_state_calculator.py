@@ -272,10 +272,10 @@ _LIGHT_OFF = {"on": False}
 #   None           — no effect
 #   {"effect": name, "lights": None}          — apply to all mapped lights
 #   {"effect": name, "lights": ["1", "2"]}    — apply to specific v1 light IDs only
-# Relax is intentionally static in every time period. Dynamic effects remain
-# available only through explicit user effect commands; autonomous Relax must
-# settle on the curated Moss & Candlelight palette instead of continuously
-# animating the room. Social is likewise static.
+# Relax and Watching are intentionally static in every time period. Dynamic
+# effects remain available only through explicit user effect commands;
+# autonomous modes must not compete with their static palette or ScreenSync.
+# Social is likewise static.
 EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     "relax": {
         "day": None,
@@ -287,15 +287,10 @@ EFFECT_AUTO_MAP: dict[str, dict[str, dict[str, Any] | None]] = {
     "gaming":   {"day": None, "evening": None, "night": None},
     "cooking":  {"day": None, "evening": None, "night": None},
     "watching": {
-        "day":     None,
-        "evening": {
-            "effect": "glisten",
-            "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
-        },
-        "night": {
-            "effect": "glisten",
-            "lights": list(AUTOMATIC_EFFECT_LIGHT_IDS),
-        },
+        "day": None,
+        "evening": None,
+        "night": None,
+        "late_night": None,
     },
     # Gameday — fully custom CelebrationOrchestrator sequences own all
     # visual effects during plays (Decision 1.3a in docs/GAMEDAY_SPEC.md).
@@ -602,9 +597,8 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     },
     # ── Relax ─────────────────────────────────────────────────────────
     # The "Moss & Candlelight" / "Moss & Ember" palette names below survive
-    # as colour descriptions, not capability promises. Candle flicker was
-    # removed from the relax-evening EFFECT_AUTO_MAP entry on 2026-05-09;
-    # fire on night/late_night remains the only animated candle analog.
+    # as colour descriptions, not capability promises. Autonomous dynamic
+    # effects are disabled for Relax in every period; the palette stays static.
     "relax": {
         "day": {
             "1": {"on": True, "bri": 95, "hue": 7500,  "sat": 200},

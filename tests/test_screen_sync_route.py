@@ -5,12 +5,17 @@ Mirror semantics: a single ``{r, g, b}`` payload writes to every lamp in
 ``sync.target_lights``. Per-light EMA + caps still differentiate output;
 this test file covers the dispatch surface only.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from backend.api.routes.automation import receive_screen_color, report_activity
+from backend.api.routes.automation import (
+    get_screen_sync_status,
+    receive_screen_color,
+    report_activity,
+)
 from backend.api.schemas.automation import ActivityReport, ScreenColorReport
 from backend.services.automation_engine import AutomationEngine
 from backend.services.light_state_calculator import resolve_activity_state
@@ -51,6 +56,22 @@ def _fake_engine(
     )
 
 
+def _owned_watching_engine(device: str):
+    engine = _fake_engine("watching")
+    engine.get_activity_context = lambda: {
+        "current_activity": "watching",
+        "current_activity_source_key": f"process:{device}",
+        "current_activity_fresh": True,
+        "process_evidence_by_device": {
+            device: {
+                "committed_mode": "watching",
+                "age_seconds": 0.0,
+            },
+        },
+    }
+    return engine
+
+
 def _make_request(engine, sync, camera=None):
     """Build the minimal request shape the handler reads."""
     state = SimpleNamespace(
@@ -83,6 +104,48 @@ async def test_generic_gaming_report_applies_canonical_target_states():
     assert l5["ct"] == expected["5"]["ct"] == 286
     assert "hue" not in l2 and "sat" not in l2
     assert "hue" not in l5 and "sat" not in l5
+
+
+@pytest.mark.asyncio
+async def test_desktop_gaming_rejects_laptop_frames_before_any_light_write():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = _make_request(_fake_engine("gaming"), sync)
+
+    rejected = await receive_screen_color(
+        ScreenColorReport(r=220, g=40, b=40, source="laptop"), req,
+    )  # type: ignore[arg-type]
+    accepted = await receive_screen_color(
+        ScreenColorReport(r=220, g=40, b=40, source="desktop"), req,
+    )  # type: ignore[arg-type]
+
+    assert rejected == {
+        "status": "ok",
+        "applied": False,
+        "reason": "laptop_source_requires_latitude_watching",
+        "reported_source": "laptop",
+        "authoritative_source": "desktop",
+        "authority_reason": "desktop_gaming",
+    }
+    assert accepted["applied"] is True
+    assert set(hue.lights_touched()) == {"2", "5"}
+
+
+@pytest.mark.asyncio
+async def test_rust_cannot_consume_laptop_luma_from_rejected_latitude_session():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _fake_engine("gaming")
+    engine.current_game = "rust"
+    req = _make_request(engine, sync)
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=0, g=0, b=0, luma=0, source="laptop"), req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is False
+    assert result["reason"] == "laptop_source_requires_latitude_watching"
+    assert hue.calls == []
 
 
 @pytest.mark.asyncio
@@ -316,11 +379,34 @@ async def test_watching_desk_cap_fires_off_fused_zone():
 
 
 class _FakeActivityEngine:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        current_mode: str = "watching",
+        result: dict | None = None,
+        context: dict | None = None,
+    ) -> None:
         self.reports: list[tuple[str, str, list[dict] | None]] = []
+        self.current_mode = current_mode
+        self.result = result or {
+            "reported_mode": "watching",
+            "semantic_disposition": "accepted",
+            "reason": "accepted",
+            "semantic_mode": "watching",
+            "authoritative_mode": "watching",
+            "included_in_fusion": True,
+        }
+        self.context = context or {
+            "current_activity": "watching",
+            "current_activity_source_key": "process:latitude",
+            "current_activity_fresh": True,
+        }
 
-    async def report_activity(self, mode: str, source: str, factors=None) -> None:
+    async def report_activity(self, mode: str, source: str, factors=None) -> dict:
         self.reports.append((mode, source, factors))
+        return self.result
+
+    def get_activity_context(self) -> dict:
+        return self.context
 
 
 class _DispositionActivityEngine:
@@ -377,6 +463,7 @@ async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopbac
         ],
     )
     await report_activity(active, req)  # type: ignore[arg-type]
+    await asyncio.sleep(0)
 
     assert presence.latest_zone() == "couch"
     assert presence.is_strongly_present_any() is True
@@ -391,11 +478,167 @@ async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopbac
             {"key": "playback_active", "value": False},
         ],
     )
+    engine.current_mode = "idle"
+    engine.result = {
+        "reported_mode": "idle",
+        "semantic_disposition": "accepted",
+        "reason": "accepted",
+        "semantic_mode": "idle",
+        "authoritative_mode": "idle",
+        "included_in_fusion": True,
+    }
+    engine.context = {
+        "current_activity": "idle",
+        "current_activity_source_key": "process:latitude",
+        "current_activity_fresh": True,
+    }
     await report_activity(idle, req)  # type: ignore[arg-type]
 
     assert presence.latest_zone() is None
     assert loopback.running is False
     assert loopback.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_rejected_latitude_watching_does_not_start_loopback_or_presence():
+    engine = _FakeActivityEngine(
+        current_mode="gaming",
+        result={
+            "reported_mode": "watching",
+            "semantic_disposition": "rejected",
+            "reason": "source_priority",
+            "semantic_mode": None,
+            "authoritative_mode": "gaming",
+            "included_in_fusion": False,
+        },
+        context={
+            "current_activity": "gaming",
+            "current_activity_source_key": "process:desktop",
+            "current_activity_fresh": True,
+        },
+    )
+    presence = PresenceFusion()
+    loopback = _FakeLoopback()
+    req = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                automation=engine,
+                presence=presence,
+                laptop_loopback=loopback,
+            )
+        )
+    )
+
+    response = await report_activity(
+        ActivityReport(
+            mode="watching",
+            source="process",
+            factors=[
+                {"key": "device", "value": "latitude"},
+                {"key": "playback_active", "value": True},
+            ],
+        ),
+        req,  # type: ignore[arg-type]
+    )
+    await asyncio.sleep(0)
+
+    assert response["semantic_disposition"] == "rejected"
+    assert loopback.starts == 0
+    assert loopback.running is False
+    assert presence.get_source_reading("latitude_streaming") is None
+
+
+class _BlockingStartLoopback(_FakeLoopback):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_start = asyncio.Event()
+
+    async def start(self) -> None:
+        self.starts += 1
+        await self.release_start.wait()
+        self.running = True
+
+
+@pytest.mark.asyncio
+async def test_latitude_activity_post_does_not_wait_for_loopback_start():
+    engine = _FakeActivityEngine()
+    loopback = _BlockingStartLoopback()
+    state = SimpleNamespace(automation=engine, laptop_loopback=loopback)
+    req = SimpleNamespace(app=SimpleNamespace(state=state))
+    active = ActivityReport(
+        mode="watching",
+        source="process",
+        factors=[
+            {"key": "device", "value": "latitude"},
+            {"key": "playback_active", "value": True},
+        ],
+    )
+
+    response = await asyncio.wait_for(
+        report_activity(active, req),  # type: ignore[arg-type]
+        timeout=0.1,
+    )
+    await asyncio.sleep(0)
+
+    assert response["status"] == "ok"
+    assert loopback.starts == 1
+    assert loopback.running is False
+
+    loopback.release_start.set()
+    start_task = state.latitude_streaming_loopback_start_task
+    await asyncio.wait_for(start_task, timeout=0.1)
+    assert loopback.running is True
+
+
+@pytest.mark.asyncio
+async def test_latitude_watching_retraction_cancels_pending_auto_start():
+    engine = _FakeActivityEngine()
+    loopback = _BlockingStartLoopback()
+    state = SimpleNamespace(automation=engine, laptop_loopback=loopback)
+    req = SimpleNamespace(app=SimpleNamespace(state=state))
+    active = ActivityReport(
+        mode="watching",
+        source="process",
+        factors=[
+            {"key": "device", "value": "latitude"},
+            {"key": "playback_active", "value": True},
+        ],
+    )
+    await report_activity(active, req)  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    start_task = state.latitude_streaming_loopback_start_task
+
+    engine.current_mode = "idle"
+    engine.result = {
+        "reported_mode": "idle",
+        "semantic_disposition": "accepted",
+        "reason": "accepted",
+        "semantic_mode": "idle",
+        "authoritative_mode": "idle",
+        "included_in_fusion": True,
+    }
+    engine.context = {
+        "current_activity": "idle",
+        "current_activity_source_key": "process:latitude",
+        "current_activity_fresh": True,
+    }
+    await report_activity(
+        ActivityReport(
+            mode="idle",
+            source="process",
+            factors=[
+                {"key": "device", "value": "latitude"},
+                {"key": "playback_active", "value": False},
+            ],
+        ),
+        req,  # type: ignore[arg-type]
+    )
+    await asyncio.sleep(0)
+
+    assert start_task.cancelled() is True
+    assert loopback.running is False
+    assert loopback.stops == 0
+    assert state.latitude_streaming_loopback_started is False
 
 
 @pytest.mark.asyncio
@@ -457,3 +700,110 @@ async def test_laptop_watching_screen_color_targets_living_room_and_kitchen():
     assert result["applied"] is True
     assert set(result["lights"]) == {"1", "3", "4"}
     assert set(hue.lights_touched()) == {"1", "3", "4"}
+
+
+@pytest.mark.asyncio
+async def test_latitude_owned_watching_rejects_desktop_and_accepts_laptop():
+    hue = _FakeHue()
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+    )
+    engine = _owned_watching_engine("latitude")
+    req = _make_request(engine, sync)
+
+    rejected = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="desktop"), req,
+    )  # type: ignore[arg-type]
+    accepted = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="laptop"), req,
+    )  # type: ignore[arg-type]
+
+    assert rejected == {
+        "status": "ok",
+        "applied": False,
+        "reason": "non_authoritative_source",
+        "reported_source": "desktop",
+        "authoritative_source": "laptop",
+        "authority_reason": "accepted_latitude_watching",
+    }
+    assert accepted["applied"] is True
+    assert accepted["authoritative_source"] == "laptop"
+    assert set(accepted["lights"]) == {"1", "3", "4"}
+    assert set(hue.lights_touched()) == {"1", "3", "4"}
+
+
+@pytest.mark.asyncio
+async def test_desktop_owned_watching_uses_desktop_bedroom_targets():
+    hue = _FakeHue()
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+    )
+    engine = _owned_watching_engine("desktop")
+    req = _make_request(engine, sync)
+
+    rejected = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="laptop"), req,
+    )  # type: ignore[arg-type]
+    accepted = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="desktop"), req,
+    )  # type: ignore[arg-type]
+
+    assert rejected["reason"] == "non_authoritative_source"
+    assert rejected["authoritative_source"] == "desktop"
+    assert accepted["applied"] is True
+    assert accepted["authoritative_source"] == "desktop"
+    assert set(accepted["lights"]) == {"2", "5"}
+    assert set(hue.lights_touched()) == {"2", "5"}
+
+
+@pytest.mark.asyncio
+async def test_manual_watching_uses_fresh_desktop_desk_authority():
+    hue = _FakeHue()
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+    )
+    engine = _fake_engine("watching")
+    engine.get_activity_context = lambda: {
+        "current_activity": "idle",
+        "current_activity_source_key": "process:desktop",
+        "current_activity_fresh": True,
+        "process_evidence_by_device": {},
+    }
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=datetime.now(timezone.utc),
+        face_present=True,
+        face_confidence=0.95,
+        zone="desk",
+    ))
+    req = _make_request(engine, sync)
+    req.app.state.presence = presence
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=40, g=80, b=220, source="desktop"), req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is True
+    assert result["authority_reason"] == "fresh_desktop_desk_presence"
+    assert set(result["lights"]) == {"2", "5"}
+
+
+@pytest.mark.asyncio
+async def test_screen_sync_status_exposes_watching_source_authority():
+    hue = _FakeHue()
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+    )
+    req = _make_request(_owned_watching_engine("latitude"), sync)
+
+    status = await get_screen_sync_status(req)  # type: ignore[arg-type]
+
+    assert status["source_authority_enforced"] is True
+    assert status["authoritative_source"] == "laptop"
+    assert status["authority_reason"] == "accepted_latitude_watching"
+    assert status["authoritative_targets"] == ["1", "3", "4"]
