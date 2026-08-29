@@ -1,9 +1,9 @@
 # Gaming Experience / Gaming Director Spec
 
-**Status:** DECIDED TARGET; implementation pending  
-**Updated:** 2026-08-29  
-**Umbrella:** GitHub #105  
-**Implementation children:** #203, #204, #205
+- **Status:** DECIDED TARGET; implementation pending
+- **Updated:** 2026-08-29
+- **Umbrella:** GitHub #105
+- **Implementation children:** #203, #204, #205
 
 This document owns detailed Gaming presentation policy under the cross-system authority of `PROJECT_SPEC.md`. It does not make Gaming a new house state or create a top-level mode per game.
 
@@ -103,6 +103,7 @@ Dynamic behavior should be earned by either:
 - a trustworthy semantic game event.
 
 Every event reaction must define eligible fixtures, duration, cooldown/deduplication, authority gates, and deterministic return to the **current** stable profile.
+
 ## Profile resolution
 
 The generalized implementation should prefer one profile registry/resolver over game-specific conditionals scattered across engine, routes, and ScreenSync.
@@ -134,6 +135,7 @@ ScreenSync is a tool, not the identity of Gaming.
 - Rust uses screen luminance to shape brightness while holding a fixed ember color; this is an accepted special behavior to preserve.
 - League champion ownership may temporarily exclude owned lights from generic ScreenSync.
 - New profiles should choose `off`, `brightness-only`, `bounded-color`, or another explicit policy rather than inheriting dynamic color accidentally.
+
 ## Initial game art direction
 
 These are simulation/calibration starting points, not accepted final Hue values.
