@@ -63,21 +63,24 @@ describe('Living Room measured sofa Physical World v1', () => {
     expect(scene.fingerprint).toBe('ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43')
   })
 
-  it('renders the unchanged minimal shell and two accepted brown seat cushions inside the sofa footprint', () => {
+  it('renders the accepted shell, rolled arms, and two accepted brown seat cushions inside the sofa footprint', () => {
     const sofa = renderMinimalSofa()
     const f = living.sofa.plan_bounds_gu
     const parts = sofa.children
     const back = parts.find((part) => part.name.includes('continuous structural back'))
     const cushions = parts.filter((part) => part.name.includes('brown seat cushion'))
-    const shell = parts.filter((part) => !part.name.includes('brown seat cushion') && !part.name.includes('olive loose back pillow'))
+    const armAssemblies = parts.filter((part) => part.name.includes('rolled arm assembly'))
 
-    expect(shell.map((part) => part.name)).toEqual([
-      'Living Room sofa measured lower body',
-      'Living Room sofa simple continuous structural back',
-      'Living Room sofa north simple arm mass',
-      'Living Room sofa south simple arm mass',
+    expect(armAssemblies.map((part) => part.name)).toEqual([
+      'Living Room sofa north rolled arm assembly',
+      'Living Room sofa south rolled arm assembly',
     ])
     expect(bounds(back).max.x).toBeCloseTo(f.maxX, 5)
+    expect(armAssemblies.every((arm) => {
+      const box = bounds(arm)
+      return box.min.x >= f.x - 0.3 && box.max.x <= f.maxX + 0.3
+        && box.min.y >= f.y - 0.3 && box.max.y <= f.maxY + 0.3
+    })).toBe(true)
     expect(cushions.map((part) => part.name)).toEqual([
       'Living Room sofa north brown seat cushion',
       'Living Room sofa south brown seat cushion',
@@ -108,6 +111,62 @@ describe('Living Room measured sofa Physical World v1', () => {
       expect(box.max.x - box.min.x).toBeCloseTo(93.8, 4)
       expect(box.max.y - box.min.y).toBeCloseTo(112.4, 4)
       expect(box.max.z - box.min.z).toBeCloseTo(22.4, 4)
+    })
+  })
+
+  it('keeps the accepted upholstered arm bodies and rolled tops unchanged', () => {
+    const sofa = renderMinimalSofa()
+    const f = living.sofa.plan_bounds_gu
+    const armAssemblies = sofa.children.filter((part) => part.name.includes('rolled arm assembly'))
+
+    armAssemblies.forEach((arm, index) => {
+      const body = arm.children.find((part) => part.name.includes('lower upholstered arm body'))
+      const roll = arm.children.find((part) => part.name.includes('thick upholstered rolled top'))
+      expect(body).toBeDefined()
+      expect(roll).toBeDefined()
+      expect(center(body).x).toBeCloseTo(910.1, 10)
+      expect(center(body).y).toBeCloseTo(index === 0 ? 340.2 : 609.86, 10)
+      expect(center(body).z).toBeCloseTo(36.5, 10)
+      expect(center(roll).x).toBeCloseTo(910.1, 10)
+      expect(center(roll).y).toBeCloseTo(index === 0 ? 340.2 : 609.86, 10)
+      expect(center(roll).z).toBeCloseTo(86.48, 10)
+      expect(bounds(body).max.x).toBeLessThanOrEqual(f.maxX)
+      expect(bounds(roll).min.x).toBeGreaterThanOrEqual(f.x)
+    })
+  })
+
+  it('keeps dark-walnut carved wood bounded to the room-facing arm-front contour', () => {
+    const sofa = renderMinimalSofa()
+    const f = living.sofa.plan_bounds_gu
+    const armWidth = 44
+    const armAssemblies = sofa.children.filter((part) => part.name.includes('rolled arm assembly'))
+    const rail = sofa.children.find((part) => part.name.includes('dark lower front wood rail'))
+
+    expect(rail).toBeDefined()
+    expect(bounds(rail).min.x).toBeCloseTo(f.x, 5)
+    expect(bounds(rail).max.x).toBeLessThan(f.x + 15)
+    armAssemblies.forEach((arm) => {
+      const upperAccent = arm.children.find((part) => part.name.includes('room-facing carved wood upper scroll accent'))
+      const descendingStrip = arm.children.find((part) => part.name.includes('room-facing carved wood descending strip'))
+      const foot = arm.children.find((part) => part.name.endsWith('dark carved front foot'))
+      const plinth = arm.children.find((part) => part.name.endsWith('dark carved front foot stepped plinth'))
+      expect(upperAccent).toBeDefined()
+      expect(descendingStrip).toBeDefined()
+      expect(foot).toBeDefined()
+      expect(plinth).toBeDefined()
+      ;[upperAccent, descendingStrip, foot, plinth].forEach((part) => {
+        const box = bounds(part)
+        expect(box.min.x).toBeGreaterThanOrEqual(f.x - 0.3)
+        expect(box.max.x).toBeLessThan(f.x + 30)
+      })
+      expect(bounds(upperAccent).max.y - bounds(upperAccent).min.y).toBeLessThan(armWidth * 0.6)
+      expect(bounds(descendingStrip).max.y - bounds(descendingStrip).min.y).toBeLessThan(armWidth * 0.5)
+      expect(bounds(descendingStrip).min.z).toBeLessThan(bounds(upperAccent).min.z)
+      expect(bounds(foot).max.z - bounds(foot).min.z).toBeGreaterThan(18)
+      expect(bounds(foot).min.x).toBeGreaterThanOrEqual(f.x)
+      expect(bounds(foot).max.x).toBeLessThanOrEqual(f.maxX)
+      expect(foot.material.color.getHex()).toBe(0x34211b)
+      expect(foot.material.roughness).toBe(0.66)
     })
   })
 

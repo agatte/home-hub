@@ -14,8 +14,16 @@ const backPillowUpholstery = new THREE.MeshStandardMaterial({
   roughness: 0.98,
 })
 
-function addBox(world, width, length, height, x, y, z, name) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, length, height), upholstery)
+const carvedWood = new THREE.MeshStandardMaterial({
+  // The reference reads as dark walnut, but it remains visibly warmer and
+  // lighter than the deepest upholstery and cast shadows.
+  color: 0x34211b,
+  roughness: 0.66,
+  metalness: 0,
+})
+
+function addBox(world, width, length, height, x, y, z, name, material = upholstery) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, length, height), material)
   mesh.name = name
   mesh.position.set(x, y, z)
   mesh.castShadow = true
@@ -57,6 +65,96 @@ function addRoundedBox(world, width, length, height, x, y, z, name, radius = 4, 
   return mesh
 }
 
+function addSoftRoundedBox(world, width, length, height, x, y, z, name, radius, material = upholstery) {
+  const mesh = new THREE.Mesh(
+    new RoundedBoxGeometry(width, length, height, 5, radius),
+    material,
+  )
+  mesh.name = name
+  mesh.position.set(x, y, z)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  world.add(mesh)
+  return mesh
+}
+
+function addFrontFoot(world, x, y, name) {
+  // Bounded, flared support: the foot reads as a carved termination instead
+  // of a tall arm-front column.
+  const plinth = addRoundedBox(world, 24, 22, 6, x, y, 4, `${name} stepped plinth`, 3, carvedWood)
+  const foot = addRoundedBox(world, 17, 17, 21, x, y, 14.5, name, 4, carvedWood)
+  return { plinth, foot }
+}
+
+function addRolledArm(world, side, f, armWidth, armY, structuralHeight) {
+  const arm = new THREE.Group()
+  arm.name = `Living Room sofa ${side} rolled arm assembly`
+  world.add(arm)
+
+  const armBodyHeight = 73
+  addRoundedBox(
+    arm,
+    f.w - 8,
+    armWidth,
+    armBodyHeight,
+    f.x + f.w / 2,
+    armY,
+    armBodyHeight / 2,
+    `Living Room sofa ${side} lower upholstered arm body`,
+    8,
+  )
+
+  // This short, broad rounded volume overlaps the body. It gives the arm its
+  // traditional padded roll rather than reading as a pipe set on a wall.
+  const rollWidth = f.w - 40
+  addSoftRoundedBox(
+    arm,
+    rollWidth,
+    armWidth - 4,
+    34,
+    f.x + 20 + rollWidth / 2,
+    armY,
+    structuralHeight - 22,
+    `Living Room sofa ${side} thick upholstered rolled top`,
+    12,
+  )
+
+  // The wood is a restrained room-facing appliqué, not an arm-face shell:
+  // a small scroll accent joins a narrow descending strip and bounded foot.
+  addRoundedBox(
+    arm,
+    8,
+    22,
+    15,
+    f.x + 6,
+    armY,
+    72,
+    `Living Room sofa ${side} room-facing carved wood upper scroll accent`,
+    6,
+    carvedWood,
+  )
+  addRoundedBox(
+    arm,
+    7,
+    16,
+    43,
+    f.x + 5.5,
+    armY,
+    43.5,
+    `Living Room sofa ${side} room-facing carved wood descending strip`,
+    5,
+    carvedWood,
+  )
+  addFrontFoot(
+    arm,
+    f.x + 15,
+    armY,
+    `Living Room sofa ${side} dark carved front foot`,
+  )
+
+  return arm
+}
+
 function addRoundedPillowBody(world, depth, width, height, x, y, z, name, radius = 6) {
   // RoundedBoxGeometry receives dimensions on its local X, Y, Z axes. Keeping
   // the pillow's depth on X preserves its established room-facing -X face.
@@ -92,9 +190,24 @@ export function addLivingRoomSofaV1(world) {
   addBox(group, 28, f.h - 48, backHeight, f.maxX - 14, cy, backBottom + backHeight / 2, 'Living Room sofa simple continuous structural back')
 
   const armWidth = 44
-  const armHeight = structuralHeight * 0.82
-  addBox(group, f.w - 4, armWidth, armHeight, cx, f.y + armWidth / 2, armHeight / 2, 'Living Room sofa north simple arm mass')
-  addBox(group, f.w - 4, armWidth, armHeight, cx, f.maxY - armWidth / 2, armHeight / 2, 'Living Room sofa south simple arm mass')
+  const armEdgeInset = 2.5
+  addRolledArm(group, 'north', f, armWidth, f.y + armWidth / 2 + armEdgeInset, structuralHeight)
+  addRolledArm(group, 'south', f, armWidth, f.maxY - armWidth / 2 - armEdgeInset, structuralHeight)
+
+  // Visible just below the upholstery on the coffee-table/room-facing (-X)
+  // side; the rail stays visually secondary to the two carved arm fronts.
+  addRoundedBox(
+    group,
+    10,
+    f.h - 50,
+    11,
+    f.x + 7.2,
+    cy,
+    12,
+    'Living Room sofa room-facing dark lower front wood rail',
+    3,
+    carvedWood,
+  )
 
   // The photos establish two large, separately readable brown/mauve cushions.
   // They are deliberately limited to one soft-edged primitive each: no seams,
