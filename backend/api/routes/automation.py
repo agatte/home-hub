@@ -497,6 +497,7 @@ async def get_activity(request: Request) -> dict:
         "process_observations_by_device": (
             context["process_observations_by_device"]
         ),
+        "gaming": context["gaming"],
     }
 
 

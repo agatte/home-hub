@@ -64,3 +64,31 @@ async def test_get_activity_keeps_sleeping_lifecycle_visible(
     assert result["house_state"] == "sleeping"
     assert result["activity"] is None
     assert result["detected_mode"] == "idle"
+
+
+async def test_get_activity_exposes_compact_gaming_resolution(
+    mock_hue, mock_hue_v2, mock_ws,
+):
+    engine = AutomationEngine(
+        hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+    )
+    await engine.report_activity(
+        "gaming",
+        source="pc_agent",
+        factors=[{"key": "game", "value": "rust"}],
+    )
+
+    result = await get_activity(_request(engine))
+
+    assert result["gaming"] == {
+        "active": True,
+        "requested_game": "rust",
+        "selected_profile": "rust",
+        "schedule_type": result["gaming"]["schedule_type"],
+        "period": result["gaming"]["period"],
+        "selected_variant": result["gaming"]["selected_variant"],
+        "fallback_reason": "game_period",
+        "legacy_daytime_exception": result["gaming"]["period"] == "day",
+        "transition_reason": "activity_entry",
+        "current_plan_differs_from_previous": True,
+    }
