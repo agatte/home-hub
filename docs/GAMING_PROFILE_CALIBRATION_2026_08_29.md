@@ -1,10 +1,10 @@
 # Gaming Director profile calibration checkpoint — 2026-08-29
 
-**Status:** design/simulation evidence; no production actuation  
-**Umbrella:** GitHub #105  
-**Foundation:** #203  
-**First profile:** #204  
-**Telemetry:** #205
+- **Status:** design/simulation evidence; no production actuation
+- **Umbrella:** GitHub #105
+- **Foundation:** #203
+- **First profile:** #204
+- **Telemetry:** #205
 
 This checkpoint turns the Gaming Director product contract into concrete profile-priority and lighting-simulation evidence while implementation is waiting for a high-confidence code pass.
 
