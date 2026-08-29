@@ -20,8 +20,10 @@ that imported them from there.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from math import isfinite
+from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 # Indianapolis timezone — Indiana doesn't follow standard Eastern DST.
@@ -918,6 +920,469 @@ GAME_LIGHT_PROFILES: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Gaming Director composition — pure, opt-in foundation for #203
+# ---------------------------------------------------------------------------
+#
+# The existing ``resolve_activity_state(..., game=...)`` path above intentionally
+# remains the production compatibility seam for this first #203 slice.  The
+# resolver below is a pure, independently-testable target-plan builder. Later
+# work can opt ScreenSync and the engine into it without changing this commit's
+# device behavior.
+
+GAMING_DAYTIME_FUNCTIONAL_ENVELOPES: dict[str, dict[str, dict[str, Any]]] = {
+    # Bright neutral support on ordinary workdays. Game identity may decorate
+    # this state but cannot dim it below these useful-light minima.
+    "weekday": {
+        "1": {"on": True, "bri": 200, "ct": 250},
+        "2": {"on": True, "bri": 230, "ct": 250},
+        "3": {"on": True, "bri": 160, "ct": 250},
+        "4": {"on": True, "bri": 160, "ct": 250},
+        "5": {"on": True, "bri": 180, "ct": 250},
+        "6": {"on": True, "bri": 180, "ct": 250},
+    },
+    # Weekends retain comfortable room function while leaving a little more
+    # headroom for a later game-specific architectural signature.
+    "weekend": {
+        "1": {"on": True, "bri": 180, "ct": 286},
+        "2": {"on": True, "bri": 210, "ct": 286},
+        "3": {"on": True, "bri": 135, "ct": 286},
+        "4": {"on": True, "bri": 135, "ct": 286},
+        "5": {"on": True, "bri": 155, "ct": 286},
+        "6": {"on": True, "bri": 185, "ct": 286},
+    },
+}
+
+# L5's clear housing is deliberately capped below a full-output profile. This
+# is a composition guardrail, not ScreenSync ownership policy (which lands in a
+# later #203 slice).
+GAMING_L5_GLARE_CAP = 180
+
+# Daytime has one intentional exception to neutral functional lighting: L6 can
+# carry an authored, bounded game signature.  Keeping the exception explicit
+# prevents a new profile from turning every useful surface into an RGB scene.
+GAMING_DAYTIME_NEUTRAL_FIXTURE_IDS: tuple[str, ...] = ("1", "2", "3", "4", "5")
+GAMING_DAYTIME_SIGNATURE_FIXTURE_ID = "6"
+
+HUE_BRIGHTNESS_MIN = 0
+HUE_BRIGHTNESS_MAX = 254
+HUE_CT_MIN = 153
+HUE_CT_MAX = 500
+HUE_HUE_MIN = 0
+HUE_HUE_MAX = 65535
+HUE_SATURATION_MIN = 0
+HUE_SATURATION_MAX = 254
+_GAMING_LIGHT_STATE_KEYS = frozenset(("on", "bri", "ct", "hue", "sat"))
+
+GAMING_FIXTURE_ROLES: dict[str, str] = {
+    "1": "functional_anchor",
+    "2": "desk_functional",
+    "3": "paired_open_plan_functional",
+    "4": "paired_open_plan_functional",
+    "5": "subordinate_glare_limited_accent",
+    "6": "architectural_game_signature",
+}
+
+
+@dataclass(frozen=True)
+class GamingContext:
+    """Subordinate Gaming context; it is not an activity/lifecycle authority."""
+
+    game_slug: Optional[str]
+    schedule_type: Optional[str]
+    period: str
+
+
+@dataclass(frozen=True)
+class GameLightingProfile:
+    """Stable game composition variants keyed by ``(schedule_type, period)``.
+
+    ``None`` as the schedule type is a shared period variant.  The legacy Rust
+    profile is explicitly marked compatible, preserving its production-proven
+    values until its separately authorized migration.
+    """
+
+    game_slug: Optional[str]
+    variants: Mapping[tuple[Optional[str], str], Mapping[str, Mapping[str, Any]]]
+    fixture_roles: Mapping[str, str]
+    preserve_legacy_output: bool = False
+    # Rust remains byte-for-byte compatible while its daytime migration is
+    # deferred.  Consumers must not mistake it for a normal compliant profile.
+    legacy_daytime_exception: bool = False
+
+
+@dataclass(frozen=True)
+class GamingResolution:
+    """Resolved stable Gaming target plus transparent selection diagnostics."""
+
+    context: GamingContext
+    selected_profile: GameLightingProfile
+    selected_variant: tuple[Optional[str], str]
+    fallback_reason: str
+    state: dict[str, dict[str, Any]]
+    legacy_daytime_exception: bool = False
+
+
+def _clone_gaming_state(state: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {light_id: dict(light) for light_id, light in state.items()}
+
+
+def _is_integer_in_range(value: object, minimum: int, maximum: int) -> bool:
+    """True for finite integer-compatible numeric Hue values in range."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and isfinite(value)
+        and float(value).is_integer()
+        and minimum <= int(value) <= maximum
+    )
+
+
+def _is_valid_gaming_light_state(light: object) -> bool:
+    """Validate the small, local Hue-state subset accepted by Gaming profiles."""
+    if not isinstance(light, Mapping) or not set(light).issubset(_GAMING_LIGHT_STATE_KEYS):
+        return False
+    if "on" in light and not isinstance(light["on"], bool):
+        return False
+    if "bri" not in light or not _is_integer_in_range(
+        light["bri"], HUE_BRIGHTNESS_MIN, HUE_BRIGHTNESS_MAX,
+    ):
+        return False
+
+    has_ct = "ct" in light
+    has_hue = "hue" in light
+    has_sat = "sat" in light
+    if has_ct and (has_hue or has_sat):
+        return False
+    if has_ct:
+        return _is_integer_in_range(light["ct"], HUE_CT_MIN, HUE_CT_MAX)
+    if has_hue != has_sat:
+        return False
+    if has_hue:
+        return (
+            _is_integer_in_range(light["hue"], HUE_HUE_MIN, HUE_HUE_MAX)
+            and _is_integer_in_range(
+                light["sat"], HUE_SATURATION_MIN, HUE_SATURATION_MAX,
+            )
+        )
+    # An explicitly-off profile light may omit color. An on/default-on light
+    # must supply one complete color space so it cannot retain stale bridge color.
+    return light.get("on") is False
+
+
+def _is_complete_gaming_state(state: object) -> bool:
+    """Require a complete, Hue-valid fixture plan before trusting a variant."""
+    return (
+        isinstance(state, Mapping)
+        and set(state) == set(ALL_LIGHT_IDS)
+        and all(_is_valid_gaming_light_state(light) for light in state.values())
+    )
+
+
+def color_space_safe_gaming_light(light: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a Hue light state while guaranteeing CT and HSB never coexist.
+
+    A CT value wins when an author accidentally supplies both colour spaces.
+    That choice makes malformed authored data conservative and deterministic;
+    callers that need an HSB signature simply omit ``ct``.
+    """
+    result = dict(light)
+    has_ct = result.get("ct") is not None
+    has_hsb = result.get("hue") is not None or result.get("sat") is not None
+    if has_ct:
+        result.pop("hue", None)
+        result.pop("sat", None)
+    elif has_hsb:
+        # Partial HSB cannot be issued meaningfully. Retain only a complete
+        # authored pair, rather than mixing it with an inherited CT value.
+        if result.get("hue") is None or result.get("sat") is None:
+            result.pop("hue", None)
+            result.pop("sat", None)
+    return result
+
+
+def _apply_gaming_fixture_invariants(
+    state: Mapping[str, Mapping[str, Any]],
+    *,
+    preserve_legacy_output: bool,
+) -> dict[str, dict[str, Any]]:
+    """Normalize color validity plus non-negotiable Gaming fixture behavior."""
+    result = {
+        light_id: color_space_safe_gaming_light(light)
+        for light_id, light in state.items()
+    }
+    # The kitchen is one open-plan functional surface, never two independent
+    # accents. L3 is the canonical authored side of the pair.
+    result["4"] = result["3"].copy()
+
+    # The compatibility profile intentionally retains all historical Rust
+    # values. It already satisfies pairing and color-space validity above.
+    if not preserve_legacy_output and result["5"].get("on", True):
+        bri = result["5"].get("bri")
+        if isinstance(bri, (int, float)):
+            result["5"]["bri"] = min(int(bri), GAMING_L5_GLARE_CAP)
+    return result
+
+
+def interpolate_gaming_light_state(
+    state_a: Mapping[str, Any],
+    state_b: Mapping[str, Any],
+    progress: float,
+) -> dict[str, Any]:
+    """Interpolate one same-color-space Gaming fixture state.
+
+    Endpoint calls return detached, color-safe copies exactly.  At intermediate
+    progress, a fixture stays on while either endpoint is on so an on/off
+    handoff cannot black out early.  CT↔HSB (or colored↔uncolored) handoffs are
+    intentionally rejected: an engine must compose explicit phases rather than
+    treating this primitive as a smooth one-command crossfade.
+    """
+    progress = min(1.0, max(0.0, progress))
+    left = color_space_safe_gaming_light(state_a)
+    right = color_space_safe_gaming_light(state_b)
+    if progress == 0.0:
+        return left
+    if progress == 1.0:
+        return right
+
+    def color_space(light: Mapping[str, Any]) -> str:
+        if "ct" in light:
+            return "ct"
+        if "hue" in light and "sat" in light:
+            return "hsb"
+        return "none"
+
+    left_color_space = color_space(left)
+    right_color_space = color_space(right)
+    if left_color_space != right_color_space:
+        raise ValueError(
+            "cross-color-space Gaming transition requires an explicit phased handoff",
+        )
+
+    result: dict[str, Any] = {"on": left.get("on", True) or right.get("on", True)}
+
+    for key in ("bri",):
+        if key in left and key in right:
+            result[key] = int(left[key] + (right[key] - left[key]) * progress)
+        elif key in left:
+            result[key] = left[key]
+        elif key in right:
+            result[key] = right[key]
+
+    if left_color_space == "ct":
+        result["ct"] = int(left["ct"] + (right["ct"] - left["ct"]) * progress)
+    elif left_color_space == "hsb":
+        # Hue is circular: 65535 and 0 are adjacent, so a direct numeric lerp
+        # can otherwise sweep through an unintended opposite color.
+        hue_delta = ((right["hue"] - left["hue"] + 32768) % 65536) - 32768
+        result["hue"] = int((left["hue"] + hue_delta * progress) % 65536)
+        result["sat"] = int(left["sat"] + (right["sat"] - left["sat"]) * progress)
+    return color_space_safe_gaming_light(result)
+
+
+def interpolate_gaming_state(
+    state_a: Mapping[str, Mapping[str, Any]],
+    state_b: Mapping[str, Mapping[str, Any]],
+    progress: float,
+) -> dict[str, dict[str, Any]]:
+    """Color-safe per-fixture transition primitive for composed Gaming plans."""
+    return {
+        light_id: interpolate_gaming_light_state(state_a[light_id], state_b[light_id], progress)
+        for light_id in ALL_LIGHT_IDS
+        if light_id in state_a and light_id in state_b
+    }
+
+
+GENERIC_GAMING_LIGHTING_PROFILE = GameLightingProfile(
+    game_slug=None,
+    variants={
+        ("weekday", "day"): GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"],
+        ("weekend", "day"): GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekend"],
+        # After dark is shared by schedule type unless a future profile opts
+        # into a real distinction.
+        (None, "evening"): ACTIVITY_LIGHT_STATES["gaming"]["evening"],
+        (None, "night"): ACTIVITY_LIGHT_STATES["gaming"]["night"],
+        (None, "late_night"): ACTIVITY_LIGHT_STATES["gaming"]["late_night"],
+    },
+    fixture_roles=GAMING_FIXTURE_ROLES,
+)
+
+GAMING_LIGHTING_PROFILES: dict[str, GameLightingProfile] = {
+    "rust": GameLightingProfile(
+        game_slug="rust",
+        variants={(None, period): state for period, state in GAME_LIGHT_PROFILES["rust"].items()},
+        fixture_roles=GAMING_FIXTURE_ROLES,
+        preserve_legacy_output=True,
+        legacy_daytime_exception=True,
+    ),
+}
+
+
+def _variant_for(
+    profile: object,
+    context: GamingContext,
+) -> Optional[tuple[Optional[str], str]]:
+    if not isinstance(profile, GameLightingProfile) or not isinstance(profile.variants, Mapping):
+        return None
+    for key in ((context.schedule_type, context.period), (None, context.period)):
+        state = profile.variants.get(key)
+        if _is_complete_gaming_state(state):
+            return key
+    return None
+
+
+def _daytime_envelope_for(context: GamingContext) -> tuple[str, Mapping[str, Mapping[str, Any]]]:
+    """Choose a safe daytime envelope; unknown schedule metadata is weekday-safe."""
+    schedule_type = context.schedule_type
+    if schedule_type not in GAMING_DAYTIME_FUNCTIONAL_ENVELOPES:
+        schedule_type = "weekday"
+    return schedule_type, GAMING_DAYTIME_FUNCTIONAL_ENVELOPES[schedule_type]
+
+
+def _compose_daytime_functional_envelope(
+    state: Mapping[str, Mapping[str, Any]],
+    context: GamingContext,
+) -> dict[str, dict[str, Any]]:
+    """Force daytime functional surfaces white while retaining only L6 identity."""
+    result = _clone_gaming_state(state)
+    if context.period != "day":
+        return result
+    _, envelope = _daytime_envelope_for(context)
+    for light_id in GAMING_DAYTIME_NEUTRAL_FIXTURE_IDS:
+        authored = result[light_id]
+        functional_light = envelope[light_id]
+        # The function-first envelope owns the whole command for useful
+        # surfaces: explicit on-state, neutral CT, and a non-reducible floor.
+        result[light_id] = {
+            "on": True,
+            "bri": max(int(authored["bri"]), int(functional_light["bri"])),
+            "ct": functional_light["ct"],
+        }
+
+    l6 = result[GAMING_DAYTIME_SIGNATURE_FIXTURE_ID]
+    l6["on"] = True
+    l6["bri"] = max(int(l6["bri"]), int(envelope["6"]["bri"]))
+    if "ct" not in l6 and not ("hue" in l6 and "sat" in l6):
+        l6["ct"] = envelope["6"]["ct"]
+    return result
+
+
+def _defensive_canonical_fallback(
+    context: GamingContext,
+) -> tuple[GameLightingProfile, tuple[Optional[str], str], Mapping[str, Mapping[str, Any]], str]:
+    """Return a canonical safe state without depending on an injected profile."""
+    if context.period == "day":
+        schedule_type, envelope = _daytime_envelope_for(context)
+        return (
+            GENERIC_GAMING_LIGHTING_PROFILE,
+            (schedule_type, "day"),
+            envelope,
+            f"defensive_canonical_{schedule_type}_daytime_fallback",
+        )
+
+    variant = _variant_for(GENERIC_GAMING_LIGHTING_PROFILE, context)
+    if variant is None:
+        variant = (None, "night")
+    state = GENERIC_GAMING_LIGHTING_PROFILE.variants[variant]
+    return (
+        GENERIC_GAMING_LIGHTING_PROFILE,
+        variant,
+        state,
+        f"defensive_canonical_{variant[1]}_fallback",
+    )
+
+
+def resolve_gaming_lighting(
+    context: GamingContext,
+    *,
+    profiles: Optional[Mapping[str, GameLightingProfile]] = None,
+    generic_profile: GameLightingProfile = GENERIC_GAMING_LIGHTING_PROFILE,
+) -> GamingResolution:
+    """Resolve a pure, schedule-aware stable Gaming composition.
+
+    Selection order is game schedule+period, game period, generic
+    schedule+period, generic period, then a canonical defensive fallback.
+    There is deliberately no schedule-only candidate: period is mandatory.
+    """
+    registry = GAMING_LIGHTING_PROFILES if profiles is None else profiles
+    requested = context.game_slug
+    requested_profile = registry.get(requested) if requested else None
+    profile = requested_profile if isinstance(requested_profile, GameLightingProfile) else None
+    game_variant = _variant_for(profile, context)
+    game_candidate_keys = (
+        (context.schedule_type, context.period),
+        (None, context.period),
+    )
+    game_is_malformed = requested_profile is not None and (
+        profile is None or not isinstance(profile.variants, Mapping) or any(
+            key in profile.variants and not _is_complete_gaming_state(profile.variants[key])
+            for key in game_candidate_keys
+        )
+    )
+    selected: Optional[Mapping[str, Mapping[str, Any]]] = None
+
+    if game_variant is not None:
+        selected_profile = profile
+        selected_variant = game_variant
+        fallback_reason = (
+            "game_schedule_period" if game_variant[0] is not None else "game_period"
+        )
+    else:
+        generic_variant = _variant_for(generic_profile, context)
+        if generic_variant is not None:
+            selected_profile = generic_profile
+            selected_variant = generic_variant
+            prefix = (
+                "no_game" if not requested
+                else "unknown_game" if requested_profile is None
+                else "malformed_game_profile" if game_is_malformed
+                else "missing_game_variant"
+            )
+            fallback_reason = (
+                f"{prefix}_generic_schedule_period"
+                if generic_variant[0] is not None
+                else f"{prefix}_generic_period"
+            )
+        else:
+            selected_profile, selected_variant, selected, defensive_reason = (
+                _defensive_canonical_fallback(context)
+            )
+            prefix = (
+                "no_game" if not requested
+                else "unknown_game" if requested_profile is None
+                else "malformed_game_profile" if game_is_malformed
+                else "missing_game_variant"
+            )
+            fallback_reason = f"{prefix}_{defensive_reason}"
+
+    if selected is None:
+        selected = selected_profile.variants.get(selected_variant)
+    # A malformed generic profile must still return a safe, complete result.
+    if not _is_complete_gaming_state(selected):
+        selected_profile, selected_variant, selected, defensive_reason = (
+            _defensive_canonical_fallback(context)
+        )
+        fallback_reason = f"{fallback_reason}_{defensive_reason}"
+
+    state = _clone_gaming_state(selected)
+    if not selected_profile.preserve_legacy_output:
+        state = _compose_daytime_functional_envelope(state, context)
+    state = _apply_gaming_fixture_invariants(
+        state,
+        preserve_legacy_output=selected_profile.preserve_legacy_output,
+    )
+    return GamingResolution(
+        context=context,
+        selected_profile=selected_profile,
+        selected_variant=selected_variant,
+        fallback_reason=fallback_reason,
+        state=state,
+        legacy_daytime_exception=(
+            selected_profile.legacy_daytime_exception and context.period == "day"
+        ),
+    )
 
 
 def get_mode_state_table(

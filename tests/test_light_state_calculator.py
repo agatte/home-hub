@@ -20,6 +20,11 @@ from backend.services.light_state_calculator import (
     DEFAULT_MODE_BRIGHTNESS,
     EFFECT_AUTO_MAP,
     GAME_LIGHT_PROFILES,
+    GAMING_DAYTIME_FUNCTIONAL_ENVELOPES,
+    GAMING_FIXTURE_ROLES,
+    GAMING_L5_GLARE_CAP,
+    GameLightingProfile,
+    GamingContext,
     LIGHT_IDS,
     LUX_MULT_EPSILON,
     TZ,
@@ -31,8 +36,11 @@ from backend.services.light_state_calculator import (
     apply_zone_overlay,
     classify_weather,
     get_time_period,
+    interpolate_gaming_light_state,
+    interpolate_gaming_state,
     is_zone_posture_freshness_ok,
     path_light_brightness,
+    resolve_gaming_lighting,
     resolve_activity_state,
 )
 from backend.services.automation_engine import DaySchedule, ScheduleConfig
@@ -1202,3 +1210,278 @@ class TestGameLightProfiles:
         day_l2 = resolve_activity_state("gaming", "day", "rust")["2"]["bri"]
         late_l2 = resolve_activity_state("gaming", "late_night", "rust")["2"]["bri"]
         assert late_l2 < day_l2
+
+
+class TestGamingCompositionResolver:
+    """#203 pure Gaming Director resolver; production routing stays legacy."""
+
+    RUST_LEGACY_SNAPSHOTS = {
+        "day": {
+            "1": {"on": True, "bri": 120, "hue": 5500, "sat": 215},
+            "2": {"on": True, "bri": 150, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 35, "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 35, "hue": 20000, "sat": 100},
+            "5": {"on": True, "bri": 105, "hue": 6500, "sat": 195},
+            "6": {"on": True, "bri": 130, "hue": 39500, "sat": 140},
+        },
+        "evening": {
+            "1": {"on": True, "bri": 70, "hue": 5500, "sat": 215},
+            "2": {"on": True, "bri": 130, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
+            "5": {"on": True, "bri": 80, "hue": 6500, "sat": 195},
+            "6": {"on": True, "bri": 120, "hue": 64000, "sat": 185},
+        },
+        "night": {
+            "1": {"on": True, "bri": 70, "hue": 5500, "sat": 215},
+            "2": {"on": True, "bri": 120, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 38, "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 38, "hue": 20000, "sat": 100},
+            "5": {"on": True, "bri": 58, "hue": 6500, "sat": 195},
+            "6": {"on": True, "bri": 90, "hue": 65000, "sat": 195},
+        },
+        "late_night": {
+            "1": {"on": True, "bri": 50, "hue": 5000, "sat": 220},
+            "2": {"on": True, "bri": 100, "hue": 6000, "sat": 200},
+            "3": {"on": True, "bri": 28, "hue": 20000, "sat": 100},
+            "4": {"on": True, "bri": 28, "hue": 20000, "sat": 100},
+            "5": {"on": True, "bri": 46, "hue": 6000, "sat": 195},
+            "6": {"on": True, "bri": 60, "hue": 65000, "sat": 185},
+        },
+    }
+
+    @staticmethod
+    def _profile(slug: str, state: dict[str, dict[str, object]]) -> GameLightingProfile:
+        return GameLightingProfile(
+            game_slug=slug,
+            variants={(None, "day"): state},
+            fixture_roles=GAMING_FIXTURE_ROLES,
+        )
+
+    @staticmethod
+    def _dim_signature() -> dict[str, dict[str, object]]:
+        return {
+            light_id: {"on": True, "bri": 1, "hue": 5000, "sat": 200}
+            for light_id in ALL_LIGHT_IDS
+        }
+
+    def test_weekday_and_weekend_daytime_use_distinct_functional_envelopes(self):
+        weekday = resolve_gaming_lighting(GamingContext(None, "weekday", "day"))
+        weekend = resolve_gaming_lighting(GamingContext(None, "weekend", "day"))
+
+        assert weekday.state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"]
+        assert weekend.state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekend"]
+        assert weekday.state["1"]["bri"] > weekend.state["1"]["bri"]
+        assert weekday.fallback_reason == "no_game_generic_schedule_period"
+
+    def test_after_dark_generic_variant_is_shared_across_schedule_types(self):
+        weekday = resolve_gaming_lighting(GamingContext(None, "weekday", "evening"))
+        weekend = resolve_gaming_lighting(GamingContext(None, "weekend", "evening"))
+
+        assert weekday.selected_variant == weekend.selected_variant == (None, "evening")
+        assert weekday.state == weekend.state == ACTIVITY_LIGHT_STATES["gaming"]["evening"]
+
+    def test_no_game_and_unknown_game_fall_back_to_generic(self):
+        no_game = resolve_gaming_lighting(GamingContext(None, "weekend", "day"))
+        unknown = resolve_gaming_lighting(GamingContext("unknown", "weekend", "day"))
+
+        assert no_game.selected_profile.game_slug is None
+        assert unknown.selected_profile.game_slug is None
+        assert no_game.state == unknown.state
+        assert unknown.fallback_reason == "unknown_game_generic_schedule_period"
+
+    def test_missing_game_variant_uses_generic_period_candidate(self):
+        profiles = {
+            "limited": GameLightingProfile(
+                game_slug="limited",
+                variants={(None, "night"): ACTIVITY_LIGHT_STATES["gaming"]["night"]},
+                fixture_roles=GAMING_FIXTURE_ROLES,
+            ),
+        }
+        result = resolve_gaming_lighting(
+            GamingContext("limited", "weekday", "day"), profiles=profiles,
+        )
+
+        assert result.selected_profile.game_slug is None
+        assert result.fallback_reason == "missing_game_variant_generic_schedule_period"
+
+    def test_malformed_game_profile_defensively_falls_back(self):
+        malformed = self._dim_signature()
+        malformed.pop("6")
+        profiles = {"broken": self._profile("broken", malformed)}
+        result = resolve_gaming_lighting(
+            GamingContext("broken", "weekday", "day"), profiles=profiles,
+        )
+
+        assert result.selected_profile.game_slug is None
+        assert result.fallback_reason == "malformed_game_profile_generic_schedule_period"
+        assert result.state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"]
+
+    @pytest.mark.parametrize("schedule_type", ("weekday", "weekend"))
+    def test_malformed_generic_day_profile_uses_neutral_canonical_daytime_fallback(
+        self, schedule_type,
+    ):
+        malformed = self._dim_signature()
+        malformed.pop("6")
+        generic = GameLightingProfile(
+            game_slug=None,
+            variants={(None, "day"): malformed},
+            fixture_roles=GAMING_FIXTURE_ROLES,
+        )
+        result = resolve_gaming_lighting(
+            GamingContext(None, schedule_type, "day"), generic_profile=generic,
+        )
+
+        assert result.selected_variant == (schedule_type, "day")
+        assert result.fallback_reason == (
+            f"no_game_defensive_canonical_{schedule_type}_daytime_fallback"
+        )
+        assert result.state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES[schedule_type]
+
+    def test_no_schedule_only_fallback_exists(self):
+        result = resolve_gaming_lighting(GamingContext(None, "weekday", "unknown"))
+
+        assert result.selected_variant == (None, "night")
+        assert result.fallback_reason == "no_game_defensive_canonical_night_fallback"
+
+    def test_weekday_daytime_forces_functional_fixtures_neutral_and_on(self):
+        profiles = {"dim": self._profile("dim", self._dim_signature())}
+        result = resolve_gaming_lighting(
+            GamingContext("dim", "weekday", "day"), profiles=profiles,
+        )
+
+        envelope = GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"]
+        for light_id in ("1", "2", "3", "4", "5"):
+            assert result.state[light_id] == envelope[light_id]
+        assert result.state["6"]["hue"] == 5000
+        assert result.state["6"]["bri"] == envelope["6"]["bri"]
+
+    def test_weekday_daytime_authored_off_cannot_disable_functional_anchor_or_kitchen(self):
+        state = self._dim_signature()
+        state["1"] = {"on": False, "bri": 0}
+        state["3"] = {"on": False, "bri": 0}
+        state["4"] = {"on": True, "bri": 1, "hue": 1000, "sat": 200}
+        state["6"] = {"on": False, "bri": 0}
+        profiles = {"off": self._profile("off", state)}
+
+        result = resolve_gaming_lighting(
+            GamingContext("off", "weekday", "day"), profiles=profiles,
+        )
+
+        envelope = GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"]
+        assert result.state["1"] == envelope["1"]
+        assert result.state["3"] == result.state["4"] == envelope["3"]
+        assert result.state["6"] == envelope["6"]
+
+    def test_weekend_daytime_keeps_only_l6_as_the_bounded_signature_surface(self):
+        state = self._dim_signature()
+        state["6"] = {"on": True, "bri": 190, "hue": 6000, "sat": 120}
+        profiles = {"weekend": self._profile("weekend", state)}
+
+        result = resolve_gaming_lighting(
+            GamingContext("weekend", "weekend", "day"), profiles=profiles,
+        )
+
+        envelope = GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekend"]
+        for light_id in ("1", "2", "3", "4", "5"):
+            assert result.state[light_id] == envelope[light_id]
+        assert result.state["6"] == {"on": True, "bri": 190, "hue": 6000, "sat": 120}
+
+    def test_fixture_invariants_keep_kitchen_atomic_and_l5_glare_limited(self):
+        state = self._dim_signature()
+        state["3"]["bri"] = 80
+        state["4"] = {"on": True, "bri": 160, "ct": 250}
+        state["5"]["bri"] = 254
+        profiles = {"fixture-test": self._profile("fixture-test", state)}
+        result = resolve_gaming_lighting(
+            GamingContext("fixture-test", "weekend", "day"), profiles=profiles,
+        )
+
+        assert result.state["3"] == result.state["4"]
+        assert result.state["5"]["bri"] == GAMING_L5_GLARE_CAP
+        assert result.selected_profile.fixture_roles["6"] == "architectural_game_signature"
+
+    @pytest.mark.parametrize(
+        "mutate",
+        (
+            lambda state: state["1"].update(bri="bad"),
+            lambda state: state["1"].update(bri=255),
+            lambda state: state["1"].update(on=1),
+            lambda state: state["1"].pop("sat"),
+            lambda state: state["1"].update(hue=65536),
+            lambda state: state["1"].update(sat=255),
+            lambda state: state["1"].update(ct=100),
+            lambda state: state["1"].update(ct=250),
+            lambda state: state["1"].update(unsupported=True),
+        ),
+    )
+    def test_malformed_game_fields_fall_back_without_runtime_error(self, mutate):
+        state = self._dim_signature()
+        mutate(state)
+        profiles = {"broken": self._profile("broken", state)}
+        result = resolve_gaming_lighting(
+            GamingContext("broken", "weekend", "day"), profiles=profiles,
+        )
+
+        assert result.fallback_reason == "malformed_game_profile_generic_schedule_period"
+        assert result.state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekend"]
+
+    @pytest.mark.parametrize("period", ("day", "evening", "night", "late_night"))
+    def test_rust_compatibility_profile_preserves_exact_legacy_snapshots(self, period):
+        result = resolve_gaming_lighting(GamingContext("rust", "weekday", period))
+
+        assert result.state == self.RUST_LEGACY_SNAPSHOTS[period]
+        assert result.selected_profile.game_slug == "rust"
+        assert result.selected_profile.preserve_legacy_output is True
+        assert result.legacy_daytime_exception is (period == "day")
+
+    def test_transition_endpoints_are_detached_color_safe_copies(self):
+        ct = {"on": True, "bri": 100, "ct": 250}
+        off = {"on": False, "bri": 0}
+        start = interpolate_gaming_light_state(ct, off, 0.0)
+        end = interpolate_gaming_light_state(ct, off, 1.0)
+
+        assert start == ct and start is not ct
+        assert end == off and end is not off
+
+    def test_on_off_intermediate_handoff_keeps_light_on_until_exact_endpoint(self):
+        on = {"on": True, "bri": 100, "hue": 5000, "sat": 180}
+        off = {"on": False, "bri": 0, "hue": 5000, "sat": 180}
+
+        assert interpolate_gaming_light_state(on, off, 0.5)["on"] is True
+        assert interpolate_gaming_light_state(on, off, 1.0) == off
+        assert interpolate_gaming_light_state(off, on, 0.0) == off
+        assert interpolate_gaming_light_state(off, on, 1.0) == on
+
+    @pytest.mark.parametrize(
+        ("left_hue", "right_hue", "quarter_hue"),
+        ((65000, 1000, 65384), (1000, 65000, 616)),
+    )
+    def test_hsb_interpolation_uses_shortest_hue_wheel_path(
+        self, left_hue, right_hue, quarter_hue,
+    ):
+        left = {"on": True, "bri": 100, "hue": left_hue, "sat": 200}
+        right = {"on": True, "bri": 100, "hue": right_hue, "sat": 200}
+
+        assert interpolate_gaming_light_state(left, right, 0.25)["hue"] == quarter_hue
+        assert interpolate_gaming_light_state(left, right, 0.5)["hue"] == 232
+
+    def test_cross_color_space_transition_requires_explicit_phased_handoff(self):
+        ct = {"on": True, "bri": 100, "ct": 250}
+        hsb = {"on": True, "bri": 200, "hue": 5000, "sat": 180}
+
+        with pytest.raises(ValueError, match="explicit phased handoff"):
+            interpolate_gaming_light_state(ct, hsb, 0.5)
+        with pytest.raises(ValueError, match="explicit phased handoff"):
+            interpolate_gaming_state({"1": ct}, {"1": hsb}, 0.5)
+
+    def test_resolver_state_is_detached_and_deterministic(self):
+        context = GamingContext(None, "weekday", "day")
+        first = resolve_gaming_lighting(context)
+        second = resolve_gaming_lighting(context)
+
+        assert first.state == second.state
+        assert first.state is not second.state
+        assert first.state["1"] is not second.state["1"]
+        first.state["1"]["bri"] = 1
+        assert resolve_gaming_lighting(context).state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"]
