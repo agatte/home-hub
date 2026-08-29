@@ -127,6 +127,20 @@ GameLightingProfile
 
 Changing game identity, period, or schedule type may trigger one intentional recomposition. Repeated unchanged heartbeats/context must not generate repeated Hue writes.
 
+## Transition policy
+
+Do not use one transition speed for every Gaming change. Current production uses the generic Gaming 0.5 s transition for Activity entry, game-profile acquisition, and hard period changes; large function-first profile deltas can therefore be correct numerically and still feel like a blast/recolor event.
+
+Transition reason is part of the target contract:
+
+- **Activity entry / profile acquisition:** responsive composed crossfade; candidate roughly 1.5–3 s pending real-room review.
+- **Game switch while Gaming:** one direct stable-profile crossfade; never flash through generic Gaming and never repeat on unchanged heartbeats.
+- **Scheduled period evolution:** blend material day→evening and night→late-night changes instead of hard stepping at an hour boundary. Preserve the existing gradual evening→night/wind-down idea.
+- **Telemetry event:** may enter/release faster because it is an explicit bounded accent, but it returns through the current profile resolver.
+- **Safety/manual/lifecycle changes:** retain stronger authority and are not delayed solely for visual aesthetics.
+
+Weekday/weekend differentiation is primarily a **daytime expression budget**. Prefer shared evening/night/late-night variants unless a specific game later earns a separate design; this avoids an arbitrary midnight weekday→weekend palette flip.
+
 ## ScreenSync policy
 
 ScreenSync is a tool, not the identity of Gaming.
