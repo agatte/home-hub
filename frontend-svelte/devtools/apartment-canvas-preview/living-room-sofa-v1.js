@@ -170,6 +170,22 @@ function addRoundedPillowBody(world, depth, width, height, x, y, z, name, radius
   return mesh
 }
 
+function addOliveBolster(world, x, y, z, name) {
+  // Capsule geometry preserves a soft cylindrical pillow silhouette without
+  // introducing separate structural-looking end pieces.
+  const mesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(10, 38, 6, 12),
+    backPillowUpholstery,
+  )
+  mesh.name = name
+  mesh.position.set(x, y, z)
+  mesh.rotation.z = Math.PI / 2
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  world.add(mesh)
+  return mesh
+}
+
 export function addLivingRoomSofaV1(world) {
   const sofa = physical.sofa
   const f = sofa.plan_bounds_gu
@@ -246,4 +262,9 @@ export function addLivingRoomSofaV1(world) {
       'XYZ',
     )
   }
+
+  // The two loose bolsters are secondary cushions along the arms' inside
+  // edges; they sit on the seat rather than changing either arm assembly.
+  addOliveBolster(group, f.x + 50, f.y + 55, 86, 'Living Room sofa north olive bolster pillow')
+  addOliveBolster(group, f.x + 50, f.maxY - 55, 86, 'Living Room sofa south olive bolster pillow')
 }

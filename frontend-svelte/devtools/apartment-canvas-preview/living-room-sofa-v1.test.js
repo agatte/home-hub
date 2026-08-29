@@ -212,4 +212,33 @@ describe('Living Room measured sofa Physical World v1', () => {
         && roomFacingBroadFace.z > 0
     })).toBe(true)
   })
+
+  it('adds exactly two soft olive bolsters along the corresponding arm-inside seating regions', () => {
+    const sofa = renderMinimalSofa()
+    const f = living.sofa.plan_bounds_gu
+    const bolsters = sofa.children.filter((part) => part.name.includes('olive bolster pillow'))
+    const cushions = sofa.children.filter((part) => part.name.includes('brown seat cushion'))
+    const seatTop = Math.max(...cushions.map((cushion) => bounds(cushion).max.z))
+
+    expect(bolsters.map((bolster) => bolster.name)).toEqual([
+      'Living Room sofa north olive bolster pillow',
+      'Living Room sofa south olive bolster pillow',
+    ])
+    expect(bolsters).toHaveLength(2)
+    bolsters.forEach((bolster, index) => {
+      const box = bounds(bolster)
+      expect(center(bolster).x).toBeCloseTo(f.x + 50, 10)
+      expect(center(bolster).y).toBeCloseTo(index === 0 ? f.y + 55 : f.maxY - 55, 10)
+      expect(center(bolster).z).toBeCloseTo(86, 10)
+      expect(box.min.x).toBeGreaterThanOrEqual(f.x)
+      expect(box.max.x).toBeLessThan(f.x + 85)
+      expect(box.min.y).toBeGreaterThanOrEqual(f.y)
+      expect(box.max.y).toBeLessThanOrEqual(f.maxY)
+      expect(box.max.x - box.min.x).toBeGreaterThan((box.max.y - box.min.y) * 2)
+      expect(box.min.z).toBeLessThan(seatTop)
+      expect(center(bolster).z).toBeLessThanOrEqual(seatTop + 2)
+      expect(box.max.z).toBeLessThan(100)
+      expect(bolster.material.roughness).toBe(0.98)
+    })
+  })
 })
