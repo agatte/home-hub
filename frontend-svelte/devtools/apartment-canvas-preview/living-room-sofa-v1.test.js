@@ -19,6 +19,22 @@ function bounds(item) {
   return new THREE.Box3().setFromObject(item)
 }
 
+function planOverlapArea(first, second) {
+  const a = bounds(first)
+  const b = bounds(second)
+  return Math.max(0, Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x))
+    * Math.max(0, Math.min(a.max.y, b.max.y) - Math.max(a.min.y, b.min.y))
+}
+
+function center(item) {
+  return item.position
+}
+
+function worldDirection(item, localDirection) {
+  item.updateWorldMatrix(true, false)
+  return localDirection.clone().transformDirection(item.matrixWorld)
+}
+
 describe('Living Room measured sofa Physical World v1', () => {
   it('derives the 94 × 42 × 32in envelope and 19.5in seat height from the one apartment calibration', () => {
     const { sofa } = living
@@ -47,22 +63,94 @@ describe('Living Room measured sofa Physical World v1', () => {
     expect(scene.fingerprint).toBe('ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43')
   })
 
-  it('renders only the measured baseline volumes inside the sofa envelope', () => {
+  it('renders the unchanged minimal shell and two accepted brown seat cushions inside the sofa footprint', () => {
     const sofa = renderMinimalSofa()
     const f = living.sofa.plan_bounds_gu
     const parts = sofa.children
     const back = parts.find((part) => part.name.includes('continuous structural back'))
+    const cushions = parts.filter((part) => part.name.includes('brown seat cushion'))
+    const shell = parts.filter((part) => !part.name.includes('brown seat cushion') && !part.name.includes('olive loose back pillow'))
 
-    expect(parts.map((part) => part.name)).toEqual([
+    expect(shell.map((part) => part.name)).toEqual([
       'Living Room sofa measured lower body',
       'Living Room sofa simple continuous structural back',
       'Living Room sofa north simple arm mass',
       'Living Room sofa south simple arm mass',
     ])
     expect(bounds(back).max.x).toBeCloseTo(f.maxX, 5)
-    expect(parts.every((part) => {
+    expect(cushions.map((part) => part.name)).toEqual([
+      'Living Room sofa north brown seat cushion',
+      'Living Room sofa south brown seat cushion',
+    ])
+    expect(cushions).toHaveLength(2)
+    expect(planOverlapArea(cushions[0], cushions[1])).toBe(0)
+    expect(cushions.every((part) => {
       const box = bounds(part)
       return box.min.x >= f.x && box.max.x <= f.maxX && box.min.y >= f.y && box.max.y <= f.maxY
+    })).toBe(true)
+  })
+
+  it('keeps the two accepted brown seat cushions unchanged', () => {
+    const sofa = renderMinimalSofa()
+    const cushions = sofa.children.filter((part) => part.name.includes('brown seat cushion'))
+
+    const expected = [
+      { name: 'Living Room sofa north brown seat cushion', x: 896.61, y: 417.03, z: 74.105 },
+      { name: 'Living Room sofa south brown seat cushion', x: 896.61, y: 533.03, z: 74.105 },
+    ]
+    cushions.forEach((cushion, index) => {
+      const expectedCushion = expected[index]
+      const box = bounds(cushion)
+      expect(cushion.name).toBe(expectedCushion.name)
+      expect(center(cushion).x).toBeCloseTo(expectedCushion.x, 10)
+      expect(center(cushion).y).toBeCloseTo(expectedCushion.y, 10)
+      expect(center(cushion).z).toBeCloseTo(expectedCushion.z, 10)
+      expect(box.max.x - box.min.x).toBeCloseTo(93.8, 4)
+      expect(box.max.y - box.min.y).toBeCloseTo(112.4, 4)
+      expect(box.max.z - box.min.z).toBeCloseTo(22.4, 4)
+    })
+  })
+
+  it('keeps all four olive pillow broad faces room-side, in front of the structural back, and above/behind the seat cushions', () => {
+    const sofa = renderMinimalSofa()
+    const f = living.sofa.plan_bounds_gu
+    const back = sofa.children.find((part) => part.name.includes('continuous structural back'))
+    const cushions = sofa.children.filter((part) => part.name.includes('brown seat cushion'))
+    const pillows = sofa.children.filter((part) => part.name.includes('olive loose back pillow'))
+    const backBounds = bounds(back)
+
+    expect(pillows.map((pillow) => pillow.name)).toEqual([
+      'Living Room sofa north olive loose back pillow',
+      'Living Room sofa inner-north olive loose back pillow',
+      'Living Room sofa inner-south olive loose back pillow',
+      'Living Room sofa south olive loose back pillow',
+    ])
+    expect(pillows).toHaveLength(4)
+    expect(pillows.map((pillow) => center(pillow).toArray())).toEqual([
+      [925.5, 395, 98],
+      [929, 451, 104],
+      [926, 505, 99],
+      [928, 557, 103],
+    ])
+    expect(pillows.every((pillow) => {
+      const box = bounds(pillow)
+      return box.max.x <= backBounds.min.x
+        && box.min.y >= f.y && box.max.y <= f.maxY
+        && center(pillow).x > cushions[0].position.x
+        && center(pillow).z > cushions[0].position.z
+    })).toBe(true)
+    expect(pillows.slice(0, -1).every((pillow, index) => planOverlapArea(pillow, pillows[index + 1]) > 0)).toBe(true)
+    ;[0.14, 0.13, 0.145, 0.135].forEach((lean, index) => {
+      expect(pillows[index].rotation.y).toBeCloseTo(lean, 10)
+    })
+    ;[-0.018, -0.006, 0.008, 0.018].forEach((yaw, index) => {
+      expect(pillows[index].rotation.z).toBeCloseTo(yaw, 10)
+    })
+    expect(pillows.every((pillow) => {
+      const roomFacingBroadFace = worldDirection(pillow, new THREE.Vector3(-1, 0, 0))
+      return roomFacingBroadFace.dot(new THREE.Vector3(-1, 0, 0)) > 0.98
+        && Math.abs(roomFacingBroadFace.y) < 0.02
+        && roomFacingBroadFace.z > 0
     })).toBe(true)
   })
 })
