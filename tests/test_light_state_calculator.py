@@ -1202,3 +1202,22 @@ class TestGameLightProfiles:
         day_l2 = resolve_activity_state("gaming", "day", "rust")["2"]["bri"]
         late_l2 = resolve_activity_state("gaming", "late_night", "rust")["2"]["bri"]
         assert late_l2 < day_l2
+
+
+def test_morning_ramp_uses_ct_and_never_hsb_green_path() -> None:
+    from backend.services.light_state_calculator import morning_ramp
+
+    start = morning_ramp(0, 120)
+    middle = morning_ramp(60, 120)
+    end = morning_ramp(120, 120)
+
+    for state in (start, middle, end):
+        assert "ct" in state
+        assert "hue" not in state
+        assert "sat" not in state
+
+    assert start["ct"] == 400
+    assert middle["ct"] == 325
+    assert end["ct"] == 250
+    assert start["bri"] == 80
+    assert end["bri"] == 254
