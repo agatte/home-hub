@@ -478,6 +478,8 @@ class AutomationEngine:
         # deadline. Reconciliation skips these lights the same way
         # _manual_light_overrides does.
         self._state = EngineState()
+        self._external_light_owners: list[Any] = []
+        self._suspended_external_owner_ids: set[int] = set()
 
         # Per-light override verbs (manual stamps, dedup discipline,
         # transit/desk-exit/corridor lifecycle) — GH#87 step 4. Getters
@@ -517,6 +519,7 @@ class AutomationEngine:
             # detector's internal Idle evidence.
             current_mode_getter=lambda: self.effective_mode,
             screen_sync_getter=lambda: self._screen_sync,
+            external_owners_getter=self._active_external_light_owners,
             suppressed_getter=lambda: self._external_off_detected,
             # Cross-dispatch routes back through the engine's _apply_* delegates
             # so spies that patch engine._apply_per_light / _apply_uniform are
@@ -871,6 +874,13 @@ class AutomationEngine:
             }
             for source, stamp in source_stamps.items()
         }
+        external_owners = []
+        for owner in self._external_light_owners:
+            targets = getattr(owner, "owned_light_targets", lambda: {})()
+            external_owners.append({
+                "name": getattr(owner, "owner_name", type(owner).__name__),
+                "light_ids": sorted(targets),
+            })
         return {
             "manual": {
                 "light_ids": sorted(self._manual_light_overrides),
@@ -894,6 +904,7 @@ class AutomationEngine:
             },
             "protected_light_ids": sorted(self._protected_light_ids()),
             "transit_light_ids": sorted(self._transit_light_overrides),
+            "external_owners": external_owners,
         }
 
     def get_pipeline_status(self) -> dict[str, Any]:
@@ -1698,6 +1709,7 @@ class AutomationEngine:
         self._away_hold = True
         self._home_awake_confirmed = False
         self._invalidate_dedup_cache()
+        self._invalidate_external_light_owners("away")
         if not already_armed:
             logger.info(
                 "Away suppression armed by %s (hard hold) — run_loop will "
@@ -3670,6 +3682,13 @@ class AutomationEngine:
                 of sync with the cache). Leave False on periodic reapply
                 ticks so dedup can no-op when nothing changed.
         """
+        if mode != "gaming" and self._screen_sync is not None:
+            clear_gaming = getattr(
+                self._screen_sync, "clear_accepted_gaming_state", None,
+            )
+            if callable(clear_gaming):
+                clear_gaming()
+
         # Away/external-off CHOKEPOINT: while the apartment is suppressed,
         # NO path may actuate lights — not just run_loop (gated upstream)
         # but the side doors live testing found 2026-06-10: the transit/
@@ -3796,6 +3815,11 @@ class AutomationEngine:
             source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
             override_applied = False
             failure_reason: str | None = None
+            if mode == "gaming" and not await self._release_external_owners_for_scene():
+                logger.warning(
+                    "Gaming scene activation deferred: external owner release failed",
+                )
+                return
             try:
                 if source == "bridge":
                     async def activate_native_override() -> bool:
@@ -3853,6 +3877,18 @@ class AutomationEngine:
 
             if override_applied:
                 if mode == "gaming":
+                    if self._screen_sync is not None:
+                        supersede = getattr(
+                            self._screen_sync, "supersede_light", None,
+                        )
+                        if callable(supersede):
+                            for light_id in self._screen_sync.target_lights:
+                                supersede(light_id)
+                        clear_gaming = getattr(
+                            self._screen_sync, "clear_accepted_gaming_state", None,
+                        )
+                        if callable(clear_gaming):
+                            clear_gaming()
                     self._current_gaming_resolution = None
                     self._gaming_plan_changed = False
                     self._last_gaming_transition_reason = "scene_override"
@@ -4150,6 +4186,12 @@ class AutomationEngine:
                 self._last_gaming_target = {
                     light_id: light.copy() for light_id, light in state.items()
                 }
+                if self._screen_sync is not None:
+                    publish = getattr(
+                        self._screen_sync, "publish_accepted_gaming_state", None,
+                    )
+                    if callable(publish):
+                        publish(state)
                 self._last_gaming_transition_reason = gaming_transition_reason
                 self._gaming_plan_changed = accepted_plan_changed
             if atmosphere_plan is not None and atmosphere_plan.should_apply:
@@ -4259,6 +4301,70 @@ class AutomationEngine:
         overrides, plus fresh screen-sync-owned lights while sync is fresh.)
         """
         return self._applicator.protected_light_ids()
+
+    def register_external_light_owner(self, owner: Any) -> None:
+        """Register a direct bridge writer for final-apply protection."""
+        if owner not in self._external_light_owners:
+            self._external_light_owners.append(owner)
+
+    def _active_external_light_owners(self) -> list[Any]:
+        return [
+            owner for owner in self._external_light_owners
+            if id(owner) not in self._suspended_external_owner_ids
+        ]
+
+    def _invalidate_external_light_owners(self, reason: str) -> None:
+        """Drop direct-writer stamps after authoritative dark/suppressed state."""
+        for owner in self._external_light_owners:
+            invalidate = getattr(owner, "invalidate_ownership", None)
+            if callable(invalidate):
+                invalidate(reason)
+
+    async def _release_external_owners_for_scene(self) -> bool:
+        """Reclaim direct-writer lamps before an explicit Gaming scene."""
+        for owner in self._external_light_owners:
+            release = getattr(owner, "release_for_scene", None)
+            if callable(release) and await release() is not True:
+                return False
+        return True
+
+    async def reclaim_external_light_release(
+        self, owner: Any, light_ids: set[str],
+    ) -> LightApplyResult:
+        """Synchronously replace one writer with the accepted Gaming plan."""
+        targets = {
+            light_id: self._last_gaming_target[light_id].copy()
+            for light_id in light_ids
+            if self._last_gaming_target is not None
+            and light_id in self._last_gaming_target
+        }
+        unresolved = set(light_ids) - set(targets)
+        if unresolved or self.current_mode != "gaming" or self._gaming_scene_override:
+            return LightApplyResult(failed=set(light_ids))
+        if self._external_off_detected:
+            return LightApplyResult(skipped=set(light_ids))
+
+        async with self._transition_boundary.serialized():
+            sync = self._screen_sync
+            supersede = getattr(sync, "supersede_light", None)
+            for light_id in light_ids:
+                if callable(supersede):
+                    supersede(light_id)
+                self._last_applied_per_light.pop(light_id, None)
+
+            self._suspended_external_owner_ids.add(id(owner))
+            try:
+                result = await self._apply_per_light(
+                    targets, MODE_TRANSITION_TIME.get("gaming"),
+                )
+            finally:
+                self._suspended_external_owner_ids.discard(id(owner))
+
+            synchronize = getattr(sync, "synchronize_physical_state", None)
+            if callable(synchronize):
+                for light_id in result.successful:
+                    synchronize(light_id, targets[light_id])
+            return result
 
     async def _apply_uniform(
         self, state: dict[str, Any], transitiontime: int | None = None,
@@ -5401,6 +5507,7 @@ class AutomationEngine:
 
         if all_off and not self._external_off_detected:
             self._external_off_detected = True
+            self._invalidate_external_light_owners("external_off")
             logger.info("All lights off (external) — suppressing auto-control")
             return True
 

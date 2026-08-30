@@ -452,6 +452,7 @@ async def lifespan(app: FastAPI):
         hue_service=hue, automation_engine=automation, ws_manager=ws_manager,
     )
     app.state.lol_champion_service = lol_champion
+    automation.register_external_light_owner(lol_champion)
     automation.register_on_mode_change(lol_champion.on_mode_change)
 
     # Rust damage-reaction (Phase 2): L2/L5 flinch + under-fire glow driven by

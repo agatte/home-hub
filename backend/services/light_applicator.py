@@ -66,6 +66,7 @@ class LightApplicator:
         event_logger_getter: Callable[[], Any],
         current_mode_getter: Callable[[], str],
         screen_sync_getter: Callable[[], Any],
+        external_owners_getter: Callable[[], list[Any]],
         suppressed_getter: Callable[[], bool],
         dispatch_per_light: Callable[
             [dict, Optional[int]], Awaitable[LightApplyResult]
@@ -81,6 +82,7 @@ class LightApplicator:
         self._event_logger_getter = event_logger_getter
         self._current_mode_getter = current_mode_getter
         self._screen_sync_getter = screen_sync_getter
+        self._external_owners_getter = external_owners_getter
         # Cross-dispatch between the uniform / per-light paths routes through
         # the engine's (patchable) ``_apply_uniform`` / ``_apply_per_light``
         # delegates rather than direct self-calls, so test spies that patch
@@ -129,7 +131,32 @@ class LightApplicator:
                     age = (datetime.now(timezone.utc) - last).total_seconds()
                     if age < SCREEN_SYNC_FRESH_SECONDS:
                         protected |= set(sync.target_lights)
+        for owner in self._external_owners_getter():
+            getter = getattr(owner, "owned_light_targets", None)
+            if callable(getter):
+                protected |= set(getter())
         return protected
+
+    def external_owner_targets(self) -> dict[str, dict]:
+        """Return detached authoritative targets from registered writers."""
+        targets: dict[str, dict] = {}
+        for owner in self._external_owners_getter():
+            getter = getattr(owner, "owned_light_targets", None)
+            if not callable(getter):
+                continue
+            for light_id, target in getter().items():
+                if isinstance(target, dict):
+                    targets[str(light_id)] = target.copy()
+        return targets
+
+    def external_owned_light_ids(self) -> set[str]:
+        """Return advertised external ownership independently of target validity."""
+        owned: set[str] = set()
+        for owner in self._external_owners_getter():
+            getter = getattr(owner, "owned_light_targets", None)
+            if callable(getter):
+                owned |= {str(light_id) for light_id in getter()}
+        return owned
 
     # ── Apply entry point ───────────────────────────────────────────────
 
@@ -335,6 +362,8 @@ class LightApplicator:
         self._overrides.prune_expired_transit()
         protected = self.protected_light_ids()
         sync = self._screen_sync_getter()
+        external_targets = self.external_owner_targets()
+        external_owned = self.external_owned_light_ids()
         targets: dict[str, dict] = {}
         unresolved: set[str] = set()
         sync_authoritative: set[str] = set()
@@ -345,6 +374,12 @@ class LightApplicator:
                 target = self._st.transit_light_targets.get(light_id)
                 if target is None:
                     target = self._st.manual_light_targets.get(light_id)
+                # Manual/transit are stronger than an external writer.
+                if target is None:
+                    target = external_targets.get(light_id)
+                if target is None and light_id in external_owned:
+                    unresolved.add(light_id)
+                    continue
             if target is None and sync is not None:
                 getter = getattr(sync, "fresh_authoritative_state", None)
                 if getter is not None:
