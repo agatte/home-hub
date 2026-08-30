@@ -34,6 +34,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from backend.config import settings
+from backend.services.camera_shadow import (
+    InMemoryShadowResultSink,
+    ShadowCoordinator,
+)
+from backend.services.camera_yolo_authority import YoloPresenceAuthority
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -317,10 +324,75 @@ class CameraService:
         ws_manager: Any,
         automation_engine: Any,
         ml_logger: Any = None,
+        shadow_coordinator: ShadowCoordinator | None = None,
+        yolo_authority_adapter: Any = None,
+        yolo_presence_authority: YoloPresenceAuthority | None = None,
     ) -> None:
         self._ws_manager = ws_manager
         self._automation = automation_engine
         self._ml_logger = ml_logger
+        self._shadow_coordinator = shadow_coordinator
+        if self._shadow_coordinator is None and settings.CAMERA_SHADOW_BAKEOFF_ENABLED:
+            shadow_adapters = []
+            if settings.CAMERA_SHADOW_YOLO_ENABLED:
+                model_path = settings.CAMERA_SHADOW_YOLO_MODEL_PATH.strip()
+                if model_path:
+                    from backend.services.camera_shadow_yolo import Yolo26OpenVinoPoseAdapter
+                    shadow_adapters.append(Yolo26OpenVinoPoseAdapter(
+                        model_path,
+                        person_confidence_threshold=settings.CAMERA_SHADOW_YOLO_PERSON_CONFIDENCE,
+                        keypoint_confidence_threshold=settings.CAMERA_SHADOW_YOLO_KEYPOINT_CONFIDENCE,
+                    ))
+                else:
+                    logger.warning(
+                        "camera shadow YOLO enabled without a model path; challenger disabled"
+                    )
+            shadow_sink = InMemoryShadowResultSink()
+            if shadow_adapters:
+                capture_label = settings.CAMERA_SHADOW_CAPTURE_LABEL.strip()
+                if not capture_label:
+                    logger.warning(
+                        "camera shadow challenger configured without a capture label; challenger disabled"
+                    )
+                    shadow_adapters = []
+                else:
+                    try:
+                        from backend.services.camera_shadow_capture import JsonlShadowResultSink
+                        shadow_sink = JsonlShadowResultSink(
+                            label=capture_label,
+                            output_dir=settings.CAMERA_SHADOW_CAPTURE_DIR,
+                            max_records=settings.CAMERA_SHADOW_CAPTURE_MAX_RECORDS,
+                        )
+                        logger.info("camera shadow capture enabled: %s", shadow_sink.path)
+                    except Exception:
+                        logger.exception(
+                            "camera shadow capture sink failed; challenger disabled"
+                        )
+                        shadow_adapters = []
+                        shadow_sink = InMemoryShadowResultSink()
+            self._shadow_coordinator = ShadowCoordinator(
+                adapters=shadow_adapters, sink=shadow_sink,
+            )
+
+        self._yolo_authority_enabled = bool(
+            settings.CAMERA_YOLO_AUTHORITY_ENABLED
+            or yolo_authority_adapter is not None
+        )
+        self._yolo_authority_adapter = yolo_authority_adapter
+        self._yolo_authority_init_error: str | None = None
+        self._yolo_presence_authority = yolo_presence_authority
+        if self._yolo_authority_enabled and self._yolo_presence_authority is None:
+            self._yolo_presence_authority = YoloPresenceAuthority(
+                person_confidence_threshold=(
+                    settings.CAMERA_YOLO_AUTHORITY_PERSON_CONFIDENCE
+                ),
+                blinded_confidence_ceiling=(
+                    settings.CAMERA_YOLO_AUTHORITY_BLINDED_CONFIDENCE
+                ),
+                present_dwell_frames=(
+                    settings.CAMERA_YOLO_AUTHORITY_PRESENT_DWELL_FRAMES
+                ),
+            )
 
         self._enabled = False
         self._paused = False  # Paused during sleeping mode
@@ -412,6 +484,15 @@ class CameraService:
             and self._last_detection_at is not None
         )
 
+    @property
+    def presence_authority_ready(self) -> bool:
+        """Whether the Latitude can currently make presence decisions."""
+        if not self.healthy or self._last_detection not in {"present", "absent"}:
+            return False
+        if not self._yolo_authority_enabled:
+            return True
+        return self._yolo_authority_adapter is not None
+
 
     # ------------------------------------------------------------------
     # Personality / emotion hooks (Phase A — face blendshapes)
@@ -452,6 +533,16 @@ class CameraService:
         if callback not in self._observation_invalidation_callbacks:
             self._observation_invalidation_callbacks.append(callback)
 
+    def _invalidate_presence_observation(self, reason: str) -> None:
+        """Drop Latitude physical authority while keeping the camera lane alive."""
+        self._clear_pending_zone_candidacy(reason)
+        self._clear_committed_zone_posture(reason)
+        for callback in list(self._observation_invalidation_callbacks):
+            try:
+                callback("latitude")
+            except Exception:
+                logger.exception("failed to invalidate Latitude observation")
+
     def _invalidate_live_detection_state(self) -> None:
         """Drop pre-pause evidence that could authorize live decisions."""
         self._last_detection = "unknown"
@@ -459,12 +550,9 @@ class CameraService:
         self._last_confidence = 0.0
         self._last_detection_source = None
         self._face_anchor_at.clear()
-        self._clear_committed_zone_posture("resume from sleeping")
-        for callback in list(self._observation_invalidation_callbacks):
-            try:
-                callback("latitude")
-            except Exception:
-                logger.exception("failed to invalidate Latitude observation")
+        if self._yolo_presence_authority is not None:
+            self._yolo_presence_authority.reset()
+        self._invalidate_presence_observation("resume from sleeping")
 
     def set_emotion_enabled(self, enabled: bool) -> None:
         """Flip the per-frame FaceLandmarker pass on or off.
@@ -656,11 +744,39 @@ class CameraService:
                 )
                 self._pose_landmarker = None
 
+        await self._initialize_yolo_authority()
+
         self._enabled = True
         if self._heartbeat is not None:
             self._heartbeat.register("camera", float(POLL_INTERVAL))
         self._register_camera_sanity()
         logger.info("Camera presence detection started (polling every %ds)", POLL_INTERVAL)
+
+    async def _initialize_yolo_authority(self) -> None:
+        """Initialize promoted YOLO authority without falling back to MediaPipe."""
+        if not self._yolo_authority_enabled or self._yolo_authority_adapter is not None:
+            return
+        model_path = settings.CAMERA_YOLO_AUTHORITY_MODEL_PATH.strip()
+        if not model_path:
+            self._yolo_authority_init_error = "model_path_missing"
+            logger.error("YOLO camera authority enabled without a model path")
+            return
+        try:
+            from backend.services.camera_shadow_yolo import Yolo26OpenVinoPoseAdapter
+            adapter = Yolo26OpenVinoPoseAdapter(
+                model_path,
+                person_confidence_threshold=0.05,
+                keypoint_confidence_threshold=0.25,
+            )
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, adapter.initialize)
+            self._yolo_authority_adapter = adapter
+            self._yolo_authority_init_error = None
+            logger.info("YOLO26 Latitude person authority initialized")
+        except Exception as exc:
+            self._yolo_authority_adapter = None
+            self._yolo_authority_init_error = type(exc).__name__
+            logger.exception("YOLO26 Latitude authority initialization failed")
 
     @staticmethod
     def _download_model(model_path: Path, url: str, label: str) -> bool:
@@ -1368,7 +1484,7 @@ class CameraService:
                     self._clear_pending_zone_candidacy("no frame result")
                     continue
                 if not isinstance(result, dict) or result.get("status") not in {
-                    "present", "absent",
+                    "present", "absent", "unknown",
                 }:
                     self._clear_pending_zone_candidacy("invalid frame result")
                     continue
@@ -1380,6 +1496,39 @@ class CameraService:
                 ambient_lux = result["ambient_lux"]
                 frame_zone = result.get("zone")
                 frame_posture = result.get("posture")
+                authority_reason = result.get("authority_reason")
+
+                if status == "unknown":
+                    prior_detection = self._last_detection
+                    if prior_detection != "unknown":
+                        logger.info(
+                            "Camera authority became unknown (reason=%s)",
+                            authority_reason,
+                        )
+                    self._last_detection = "unknown"
+                    self._last_detection_at = datetime.now(timezone.utc)
+                    self._last_confidence = confidence
+                    self._last_detection_source = source
+                    self._last_ambient_lux = ambient_lux
+                    self._update_ema_lux(ambient_lux)
+                    if prior_detection != "unknown":
+                        self._invalidate_presence_observation(
+                            f"YOLO authority unknown: {authority_reason or 'unknown'}"
+                        )
+                    await self._ws_manager.broadcast(
+                        "camera_update",
+                        {
+                            "detection": "unknown",
+                            "detection_source": source,
+                            "confidence": confidence,
+                            "ambient_lux": ambient_lux,
+                            "ema_lux": self._ema_lux,
+                            "zone": None,
+                            "posture": None,
+                            "authority_reason": authority_reason,
+                        },
+                    )
+                    continue
 
                 if status != self._last_detection:
                     logger.info(
@@ -1940,6 +2089,24 @@ class CameraService:
             return None
         return POSTURE_UPRIGHT if delta >= POSTURE_UPRIGHT_MIN_DELTA else POSTURE_RECLINED
 
+    @staticmethod
+    def _yolo_unknown_result(
+        ambient_lux: float,
+        reason: str,
+        confidence: float | None = None,
+    ) -> dict:
+        return {
+            "status": "unknown",
+            "confidence": confidence or 0.0,
+            "source": "yolo",
+            "pose_landmark_count": 0,
+            "ambient_lux": ambient_lux,
+            "zone": None,
+            "posture": None,
+            "blendshapes": None,
+            "authority_reason": reason,
+        }
+
     def _process_frame(self) -> Optional[dict]:
         """Capture a frame, run both face detection and pose landmarker,
         arbitrate via face-confidence threshold, compute ambient lux.
@@ -1973,6 +2140,7 @@ class CameraService:
             ret, frame = self._cap.read()
         if not ret or frame is None:
             return None
+        captured_at = datetime.now(timezone.utc)
 
         try:
             import mediapipe as mp
@@ -1982,11 +2150,55 @@ class CameraService:
             if w > FRAME_WIDTH or h > FRAME_HEIGHT:
                 frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
 
+            # Shadow challengers observe this exact authoritative frame.
+            shadow = self._shadow_coordinator
+            if shadow is not None:
+                try:
+                    frame_h, frame_w = frame.shape[:2]
+                    shadow.submit(
+                        frame, captured_at=captured_at, width=frame_w, height=frame_h,
+                    )
+                except Exception:
+                    logger.debug("camera shadow submit failed", exc_info=True)
+
             # Compute ambient light level from the zone-matching half of
             # the frame. Full-frame mean was biased by the brighter bed
             # side when the user was at the desk (and vice versa).
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             ambient_lux = _zone_weighted_lux(gray, self._last_zone)
+
+            yolo_decision = None
+            yolo_confidence = None
+            if self._yolo_authority_enabled:
+                adapter = self._yolo_authority_adapter
+                authority = self._yolo_presence_authority
+                if adapter is None or authority is None:
+                    return self._yolo_unknown_result(ambient_lux, "unavailable")
+                try:
+                    yolo_output = adapter.infer_frame(frame)
+                    yolo_confidence = yolo_output.max_person_confidence
+                    yolo_decision = authority.evaluate(yolo_confidence)
+                except Exception:
+                    logger.exception("YOLO26 Latitude authority inference failed")
+                    return self._yolo_unknown_result(ambient_lux, "inference_error")
+                if yolo_decision == "unknown":
+                    reason = "blinded"
+                    if (
+                        yolo_confidence is not None
+                        and yolo_confidence > authority.blinded_confidence_ceiling
+                    ):
+                        reason = "present_dwell"
+                    return self._yolo_unknown_result(
+                        ambient_lux, reason, yolo_confidence
+                    )
+                if yolo_decision == "absent":
+                    return {
+                        "status": "absent", "confidence": yolo_confidence or 0.0,
+                        "source": "yolo", "pose_landmark_count": 0,
+                        "ambient_lux": ambient_lux, "zone": None,
+                        "posture": None, "blendshapes": None,
+                        "authority_reason": "yolo_absent",
+                    }
 
             # Convert to RGB for MediaPipe (reused across both detectors)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -2057,6 +2269,38 @@ class CameraService:
                     # shoulder-center-X split was bedroom desk/bed geometry.
                     pose_zone = ZONE_COUCH
                     pose_posture = self._evaluate_posture(pose_result)
+
+            if yolo_decision == "present":
+                # YOLO owns person authority; MediaPipe may only contribute
+                # the same conservative localization it was already trusted
+                # for before promotion. This preserves existing Couch context
+                # without allowing a furniture-only MediaPipe hit to create
+                # physical presence on its own.
+                support_zone = None
+                support_posture = None
+                if face_best is not None and face_conf >= FACE_TRUST_THRESHOLD:
+                    support_zone = face_zone
+                    support_posture = pose_posture if pose_present else None
+                elif pose_present:
+                    anchor_at = self._face_anchor_at.get(pose_zone) if pose_zone else None
+                    anchor_age = (
+                        (datetime.now(timezone.utc) - anchor_at).total_seconds()
+                        if anchor_at is not None else None
+                    )
+                    if anchor_age is not None and anchor_age <= FACE_ANCHOR_TTL_SECONDS:
+                        support_zone = pose_zone
+                        support_posture = pose_posture
+                return {
+                    "status": "present",
+                    "confidence": yolo_confidence or 0.0,
+                    "source": "yolo",
+                    "pose_landmark_count": pose_count,
+                    "ambient_lux": ambient_lux,
+                    "zone": support_zone,
+                    "posture": support_posture,
+                    "blendshapes": blendshapes,
+                    "authority_reason": "yolo_present",
+                }
 
             # Selection — face wins outright above the trust threshold,
             # otherwise pose-strong overrules a weak face read.
@@ -2328,6 +2572,8 @@ class CameraService:
         if new_mode == "sleeping":
             if not self._paused:
                 self._paused = True
+                if self._shadow_coordinator is not None:
+                    self._shadow_coordinator.on_sleeping()
                 if self._heartbeat is not None:
                     self._heartbeat.deregister("camera")
                 if self._source_trust is not None:
@@ -2356,6 +2602,8 @@ class CameraService:
         else:
             if self._paused:
                 self._paused = False
+                if self._shadow_coordinator is not None:
+                    self._shadow_coordinator.on_resume()
                 if self._heartbeat is not None:
                     self._heartbeat.register("camera", float(POLL_INTERVAL))
                 self._register_camera_sanity()
@@ -2382,6 +2630,8 @@ class CameraService:
         race with the old loop's next iteration.
         """
         self._enabled = False
+        if self._shadow_coordinator is not None:
+            self._shadow_coordinator.stop()
         if self._heartbeat is not None:
             self._heartbeat.deregister("camera")
         if self._source_trust is not None:
@@ -2421,6 +2671,10 @@ class CameraService:
             "detection_source": self._last_detection_source,
             "confidence": self._last_confidence,
             "pose_available": self._pose_landmarker is not None,
+            "presence_authority_ready": self.presence_authority_ready,
+            "yolo_authority_enabled": self._yolo_authority_enabled,
+            "yolo_authority_ready": self._yolo_authority_adapter is not None,
+            "yolo_authority_init_error": self._yolo_authority_init_error,
             "ambient_lux": self._last_ambient_lux,
             "ema_lux": self._ema_lux,
             "baseline_lux": self._baseline_lux,

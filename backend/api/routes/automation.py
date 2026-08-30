@@ -807,10 +807,10 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # nobody's there), so reading it directly hid the ``desk`` zone the desktop
     # pc_agent owns — the watching-desk L2 cap silently stopped firing for
     # screen-sync while the user watches at the desk. ``latest_zone()`` fuses
-    # both sources (falls back to "desk" on a fresh desktop face), mirroring how
-    # the engine's own light application already resolves zone. Falls back to
-    # the raw camera if fusion isn't wired (boot / tests). Bed-variant caps stay
-    # in MODE_ZONE_MAX_BRIGHTNESS for revival pending a future bed-zone source.
+    # both physical sources: close-face desktop observations can resolve Desk,
+    # calibrated distant desktop pose can resolve Bed, and weak Latitude face
+    # evidence cannot claim Couch. Falls back to the raw camera if fusion isn't
+    # wired (boot / tests). Bed-variant caps still require a posture signal.
     camera = getattr(request.app.state, "camera_service", None)
     if presence is not None:
         zone = presence.latest_zone()
@@ -1194,9 +1194,9 @@ async def update_mode_volume(
 
 # ---------------------------------------------------------------------------
 # Watching posture tuning — runtime knobs for projector-in-bed brightness.
-# DORMANT since 2026-05-27 (Latitude→living-room move retired the zone="bed"
-# source the underlying overlay branches depend on); endpoint + storage kept
-# so values stay editable for revival pending a future bed-zone source.
+# Desktop bedroom localization can now produce zone="bed", but these knobs are
+# still posture-specific. They remain inactive unless a trustworthy bed posture
+# (reclined/upright) is available; Bed location alone is not posture evidence.
 # ---------------------------------------------------------------------------
 
 @router.get("/watching-posture")

@@ -118,6 +118,15 @@ HEAD_ABOVE_SHOULDER_UPRIGHT_MIN = 0.50  # ratio ≥ this → upright
 HEAD_ABOVE_SHOULDER_SLOUCHED_MAX = 0.30  # ratio ≤ this → slouched
 HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER = 0.40  # for confidence calc
 
+# Desktop bedroom-zone geometry. Calibrated from preserved 2026-05-21
+# truth-table frames: desk shoulder span=0.471 at center_x=0.487; bed
+# shoulder span=0.068 at center_x=0.132. Scale and frame location must both
+# agree before pose-only evidence can localize the user to Bed.
+DESKTOP_BED_MAX_SHOULDER_SPAN = 0.18
+DESKTOP_BED_MAX_CENTER_X = 0.30
+DESKTOP_BED_MIN_VISIBLE_LANDMARKS = 10
+DESKTOP_ZONE_HYSTERESIS_FRAMES = 3
+
 HTTP_TIMEOUT_S = 5.0
 
 # Bedroom-lux calibration + sampling (D4). DirectShow exposure conventions
@@ -139,11 +148,57 @@ LUX_EXPOSURE_MAX = 0.0
 LUX_SAMPLE_INTERVAL_S = 25.0
 LUX_SAMPLE_SETTLE_S = 0.4   # AGC settle after switching to the fixed exposure
 LUX_SAMPLE_FRAMES = 3       # frames averaged for one lux reading
+LUX_AUTO_RECOVERY_SETTLE_S = 0.4
+LUX_AUTO_RECOVERY_FRAMES = 3
+LUX_AUTO_RECOVERY_REFERENCE_MIN = 8.0
+LUX_AUTO_RECOVERY_BLACK_FLOOR = 5.0
+LUX_AUTO_RECOVERY_MIN_RATIO = 0.20
 
 
 # ---------------------------------------------------------------------------
 # Pure classifier helpers (testable without MediaPipe installed)
 # ---------------------------------------------------------------------------
+
+
+def _pose_visible_landmark_count(
+    pose_landmarks: Any,
+    min_visibility: float = POSE_MIN_VISIBILITY,
+) -> int:
+    """Count landmarks whose visibility is good enough for geometry use."""
+    if not pose_landmarks:
+        return 0
+    return sum(
+        1 for landmark in pose_landmarks
+        if float(getattr(landmark, "visibility", 0.0)) >= min_visibility
+    )
+
+
+def _classify_desktop_zone(
+    face_present: bool,
+    pose_landmarks: Any,
+) -> Optional[str]:
+    """Return ``desk`` / ``bed`` only when bedroom geometry is trustworthy."""
+    if face_present:
+        return "desk"
+    if not pose_landmarks:
+        return None
+    try:
+        left = pose_landmarks[POSE_LEFT_SHOULDER]
+        right = pose_landmarks[POSE_RIGHT_SHOULDER]
+    except (IndexError, TypeError):
+        return None
+    if (
+        float(getattr(left, "visibility", 0.0)) < POSE_MIN_VISIBILITY
+        or float(getattr(right, "visibility", 0.0)) < POSE_MIN_VISIBILITY
+    ):
+        return None
+    if _pose_visible_landmark_count(pose_landmarks) < DESKTOP_BED_MIN_VISIBLE_LANDMARKS:
+        return None
+    span = abs(float(right.x) - float(left.x))
+    center_x = (float(left.x) + float(right.x)) / 2.0
+    if span <= DESKTOP_BED_MAX_SHOULDER_SPAN and center_x <= DESKTOP_BED_MAX_CENTER_X:
+        return "bed"
+    return None
 
 
 def search_exposure(
@@ -179,6 +234,20 @@ def search_exposure(
         exposure += -2.0 if measured > hi else 2.0
         exposure = max(exp_min, min(exp_max, exposure))
     return exposure, measured
+
+
+def _lux_auto_recovery_needs_reopen(
+    before_mean: Optional[float], after_mean: Optional[float], restore_ok: bool,
+) -> bool:
+    """Recycle only when auto-exposure recovery is clearly broken."""
+    if not restore_ok or after_mean is None:
+        return True
+    if before_mean is None or before_mean < LUX_AUTO_RECOVERY_REFERENCE_MIN:
+        return False
+    return (
+        after_mean < LUX_AUTO_RECOVERY_BLACK_FLOOR
+        and after_mean < before_mean * LUX_AUTO_RECOVERY_MIN_RATIO
+    )
 
 
 def _compute_head_drop_ratio(
@@ -494,6 +563,12 @@ class EmotionCapture:
         self._posture_candidate_streak: int = 0
         self._posture_confidence: Optional[float] = None
 
+        # Bedroom-zone hysteresis: close-face Desk is immediate; pose-only Bed
+        # must hold for DESKTOP_ZONE_HYSTERESIS_FRAMES.
+        self._zone_committed: Optional[str] = None
+        self._zone_candidate: Optional[str] = None
+        self._zone_candidate_streak: int = 0
+
         # Webcam-unavailable transition tracking. Mirrors the LoL
         # _note_lol_failure pattern in activity_detector.py — log a
         # single WARN on transition rather than flooding the log when
@@ -550,6 +625,9 @@ class EmotionCapture:
         self._posture_candidate = None
         self._posture_candidate_streak = 0
         self._posture_confidence = None
+        self._zone_committed = None
+        self._zone_candidate = None
+        self._zone_candidate_streak = 0
         self._pose_init_failed = False
 
     # ── enable flags ────────────────────────────────────────────────
@@ -764,26 +842,40 @@ class EmotionCapture:
                 cv2=cv2,
             )
 
-            # Pose classification — only when presence is enabled and
-            # we have a face (no point classifying posture for an empty
-            # chair). The pose detector + classifier are pure additions
-            # to the existing capture cycle; FaceLandmarker remains the
-            # primary gate.
+            # Run pose for presence even when the close-range face detector
+            # does not fire. This is how the wide desktop FoV can localize Bed.
             posture: Optional[str] = None
             posture_confidence: Optional[float] = None
-            if self.is_presence_enabled() and face_present:
-                posture, posture_confidence = self._classify_pose(mp_image)
-
-            # Presence is independent of emotion — POST even when face is
-            # below the emotion floor, so the backend has an unambiguous
-            # absent signal. Skip only when the toggle is off.
+            zone: Optional[str] = None
+            detection_source: Optional[str] = None
+            pose_visible_landmarks: Optional[int] = None
             if self.is_presence_enabled():
+                pose_landmarks = self._detect_pose_landmarks(mp_image)
+                pose_visible_landmarks = _pose_visible_landmark_count(pose_landmarks)
+                candidate = _classify_desktop_zone(face_present, pose_landmarks)
+                zone = self._update_zone_candidate(
+                    candidate, immediate=face_present and candidate == "desk",
+                )
+                if face_present and pose_landmarks is not None:
+                    posture, posture_confidence = self._classify_pose_landmarks(
+                        pose_landmarks,
+                    )
+                else:
+                    self._update_posture_candidate(None, None)
+                if face_present and zone == "desk":
+                    detection_source = "face"
+                elif zone == "bed":
+                    detection_source = "pose"
+
                 self._post_observation(
                     face_present=face_present,
                     face_confidence=face_confidence,
                     captured_at=captured_at,
+                    detection_source=detection_source,
+                    zone=zone,
                     posture=posture,
                     posture_confidence=posture_confidence,
+                    pose_visible_landmarks=pose_visible_landmarks,
                 )
 
             if not face_present:
@@ -799,65 +891,67 @@ class EmotionCapture:
             frame = None
             rgb = None
 
-    def _classify_pose(self, mp_image: Any) -> tuple[Optional[str], Optional[float]]:
-        """Run pose inference + classify + apply frame-streak hysteresis.
-
-        Returns the committed posture + confidence (None on either if
-        the pose model isn't healthy, landmarks aren't visible, or the
-        candidate hasn't held long enough). Lazy-initializes the pose
-        landmarker on the first eligible call; failure stays sticky
-        (per ``_pose_init_failed``) until presence is toggled off-then-on.
-        """
+    def _detect_pose_landmarks(self, mp_image: Any) -> Optional[Any]:
+        """Run one PoseLandmarker inference and return the first pose."""
         if self._pose_init_failed:
-            return None, None
+            return None
         if self._pose_landmarker is None:
             self._pose_landmarker = _init_pose_landmarker()
             if self._pose_landmarker is None:
-                # Init failed — set the sticky flag so subsequent ticks
-                # don't pay the mediapipe-import + model-path-stat cost
-                # again. Cleared on the next disable/enable cycle.
                 self._pose_init_failed = True
-                return None, None
-
+                return None
         try:
-            pose_result = self._pose_landmarker.detect(mp_image)
+            result = self._pose_landmarker.detect(mp_image)
         except Exception:
             logger.debug("PoseLandmarker.detect failed", exc_info=True)
-            return None, None
+            return None
+        poses = getattr(result, "pose_landmarks", None) or []
+        return poses[0] if poses else None
 
-        pose_landmarks_list = getattr(pose_result, "pose_landmarks", None) or []
-        if not pose_landmarks_list:
-            # No torso detected this frame. Don't decay the committed
-            # value here — a single missed frame during a stable session
-            # shouldn't erase posture. The streak logic below will
-            # eventually transition to None if absences sustain.
-            self._update_posture_candidate(None, None)
-            return self._posture_committed, self._posture_confidence
-
-        # Primary classifier: hip-anchored head-drop ratio. When hips
-        # are visible this is the most distance-invariant signal. The
-        # Latitude's mounting + framing typically clears the hip
-        # visibility floor; the desktop's frontal-close-range view
-        # frequently doesn't (desk lip / camera-above-monitor geometry).
-        head_drop = _compute_head_drop_ratio(pose_landmarks_list[0])
+    def _classify_pose_landmarks(
+        self, pose_landmarks: Any,
+    ) -> tuple[Optional[str], Optional[float]]:
+        """Classify desk posture from already-detected pose landmarks."""
+        head_drop = _compute_head_drop_ratio(pose_landmarks)
         if head_drop is not None:
             candidate, confidence = _classify_posture(
                 head_drop, prior=self._posture_committed,
             )
         else:
-            # Fallback: shoulder-anchored ratio for setups where hips
-            # aren't visible. Uses only nose + both shoulders, both of
-            # which the desktop frontal view captures at ceiling
-            # confidence (validated 2026-05-18 via the temporary
-            # pose-diag log path; thresholds calibrated from that pass).
-            ratio = _compute_head_above_shoulders_ratio(
-                pose_landmarks_list[0],
-            )
+            ratio = _compute_head_above_shoulders_ratio(pose_landmarks)
             candidate, confidence = _classify_posture_from_shoulders(
                 ratio, prior=self._posture_committed,
             )
         self._update_posture_candidate(candidate, confidence)
         return self._posture_committed, self._posture_confidence
+
+    def _update_zone_candidate(
+        self, candidate: Optional[str], *, immediate: bool = False,
+    ) -> Optional[str]:
+        """Apply frame-streak hysteresis to Desk/Bed localization."""
+        if immediate:
+            self._zone_committed = candidate
+            self._zone_candidate = None
+            self._zone_candidate_streak = 0
+            return self._zone_committed
+        if candidate == self._zone_committed:
+            self._zone_candidate = None
+            self._zone_candidate_streak = 0
+            return self._zone_committed
+        if candidate == self._zone_candidate:
+            self._zone_candidate_streak += 1
+        else:
+            self._zone_candidate = candidate
+            self._zone_candidate_streak = 1
+        if self._zone_candidate_streak >= DESKTOP_ZONE_HYSTERESIS_FRAMES:
+            logger.debug(
+                "Desktop zone commit: %s -> %s (streak=%d)",
+                self._zone_committed, candidate, self._zone_candidate_streak,
+            )
+            self._zone_committed = candidate
+            self._zone_candidate = None
+            self._zone_candidate_streak = 0
+        return self._zone_committed
 
     def _update_posture_candidate(
         self,
@@ -927,8 +1021,11 @@ class EmotionCapture:
         face_present: bool,
         face_confidence: float,
         captured_at: datetime,
+        detection_source: Optional[str] = None,
+        zone: Optional[str] = None,
         posture: Optional[str] = None,
         posture_confidence: Optional[float] = None,
+        pose_visible_landmarks: Optional[int] = None,
     ) -> None:
         """POST one PresenceReading to the backend.
 
@@ -945,16 +1042,13 @@ class EmotionCapture:
             "captured_at": captured_at.isoformat(),
             "face_present": face_present,
             "face_confidence": face_confidence,
-            "detection_source": "face",
         }
-        # Explicit desk-zone assertion. The frontal FaceLandmarker only fires
-        # on a close-range face at the monitor, so a positive face_present
-        # localizes the user to the desk. Emitting zone="desk" (rather than
-        # leaving PresenceFusion to infer it from face_present) makes the
-        # desktop a first-class desk-zone source — load-bearing once the
-        # Latitude relocates to the living room and stops reporting desk/bed.
-        if face_present:
-            payload["zone"] = "desk"
+        if detection_source is not None:
+            payload["detection_source"] = detection_source
+        if zone is not None:
+            payload["zone"] = zone
+        if pose_visible_landmarks is not None:
+            payload["pose_visible_landmarks"] = pose_visible_landmarks
         if posture is not None:
             payload["posture"] = posture
         if posture_confidence is not None:
@@ -1179,6 +1273,13 @@ class EmotionCapture:
         if cap is None or not cap.isOpened() or exposure is None:
             return
         lux: Optional[float] = None
+        before_mean: Optional[float] = None
+        before_ok, before_frame = cap.read()
+        if before_ok and before_frame is not None:
+            before_mean = float(
+                cv2.cvtColor(before_frame, cv2.COLOR_BGR2GRAY).mean()
+            )
+        restore_ok = False
         try:
             cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_MANUAL)
             cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
@@ -1195,9 +1296,31 @@ class EmotionCapture:
                 lux = sum(vals) / len(vals)
         finally:
             try:
-                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
+                restore_ok = bool(
+                    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
+                )
             except Exception:
-                pass
+                restore_ok = False
+            time.sleep(LUX_AUTO_RECOVERY_SETTLE_S)
+            recovery_vals: list[float] = []
+            for _ in range(LUX_AUTO_RECOVERY_FRAMES):
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    recovery_vals.append(
+                        float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
+                    )
+            after_mean = (
+                sum(recovery_vals) / len(recovery_vals)
+                if recovery_vals else None
+            )
+            if _lux_auto_recovery_needs_reopen(
+                before_mean, after_mean, restore_ok,
+            ):
+                logger.warning(
+                    "Brio auto-exposure recovery failed (before=%s after=%s); reopening",
+                    before_mean, after_mean,
+                )
+                self._release_cap()
         if lux is None:
             logger.debug("Lux sample skipped — no frame read")
             return

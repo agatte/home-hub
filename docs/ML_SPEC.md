@@ -442,6 +442,46 @@ future threshold tuning, collect a longer raw-ratio normal-posture window around
 any false transition; do not infer a safe replacement threshold from the failed
 candidate. Bed-zone posture remains out of scope for #56.
 
+**Accepted #198 promotion candidate (2026-08-30; not yet deployed):**
+The validated YOLO26n-pose/OpenVINO challenger is promoted in candidate code
+from shadow-only measurement to the Latitude **person-authority gate**. This is
+not a general replacement of `CameraService`: the service remains the sole
+owner of `/dev/video0`, ambient-lux sampling, lifecycle/watchdog handling, and
+MediaPipe-derived supporting posture/emotion diagnostics.
+
+Promotion boundary:
+- YOLO decides whether the Latitude has trustworthy evidence of a real person.
+- A person-confidence threshold of `0.25` is paired with a three-frame positive
+  dwell. The existing approximately 30-second CameraService absence debounce
+  remains the final exit protection.
+- Extremely low confidence (`<=0.01`) is treated as **unknown/blinded**, not
+  absent. The 2026-08-28 near-closed-lid run produced 59/59 abstentions with
+  maximum confidence 0.00413, so a blinded Latitude must not claim an empty room.
+- MediaPipe face/pose may add diagnostics after YOLO authority is granted, but
+  cannot independently manufacture physical presence from furniture.
+- Latitude zone is intentionally `None` in the promoted YOLO lane. The #198
+  evidence validates person-vs-furniture separation, not a Couch spatial ROI;
+  kitchen/non-couch movement included real high-confidence detections. Do not
+  infer `zone=couch` from "YOLO person present" alone.
+- Desktop camera is the calibrated bedroom locator (`desk` / `bed`). Strong
+  physical-source conflicts are resolved by evidence freshness in
+  `PresenceFusion`; a zone-less Latitude person cannot overwrite Desktop Bed.
+- Person counts remain diagnostic/shadow-only until explicit multi-person
+  validation is completed.
+- Authority initialization/inference failure degrades the Latitude lane to
+  non-authoritative evidence rather than silently falling back to the known
+  MediaPipe furniture false-positive path.
+
+Calibration evidence supporting that boundary is preserved from 2026-08-28:
+120 empty-room/furniture frames had zero detections >=0.10; normal couch was
+88/88 detected (0.308-0.894); a timed sequence detected normal couch 41/41,
+natural lean 58/58, and both lying/repositioning halves 29/29. At two exact
+MediaPipe furniture-pose failures (confidence 0.99), YOLO confidence was only
+0.134 and 0.169. Timed Latitude inference was roughly 38.9 ms median / 49.1 ms
+p95. The 0.25 threshold is therefore a bounded person-authority gate, not a
+Couch-classification or multi-person-count threshold.
+
+
 | Attribute | Value |
 |-----------|-------|
 | **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Captured at 640×480 for inference (bumped from 320×240 on 2026-04-19 after observing marginal face-detection gains and better future-feature headroom — requires lux recalibration on any change). |

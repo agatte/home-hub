@@ -2074,6 +2074,11 @@ class AutomationEngine:
         if hasattr(camera, "healthy") and not camera.healthy:
             return False, "latitude_unhealthy"
         if (
+            hasattr(camera, "presence_authority_ready")
+            and not camera.presence_authority_ready
+        ):
+            return False, "latitude_presence_authority_unknown"
+        if (
             not hasattr(camera, "healthy")
             and hasattr(camera, "_cap")
             and camera._cap is None
@@ -2203,6 +2208,14 @@ class AutomationEngine:
                     trigger,
                 )
                 await self.clear_override(source="physical_context_relax")
+                return
+            if not camera_ready:
+                self._physical_context_presence_lost_at = None
+                self._log_physical_context_decision(
+                    "held_camera_unknown",
+                    f"{camera_reason}; waiting for authoritative physical evidence",
+                    trigger,
+                )
                 return
             lost_at = self._physical_context_presence_lost_at
             if lost_at is None:

@@ -1485,3 +1485,20 @@ class TestGamingCompositionResolver:
         assert first.state["1"] is not second.state["1"]
         first.state["1"]["bri"] = 1
         assert resolve_gaming_lighting(context).state == GAMING_DAYTIME_FUNCTIONAL_ENVELOPES["weekday"]
+def test_morning_ramp_uses_ct_and_never_hsb_green_path() -> None:
+    from backend.services.light_state_calculator import morning_ramp
+
+    start = morning_ramp(0, 120)
+    middle = morning_ramp(60, 120)
+    end = morning_ramp(120, 120)
+
+    for state in (start, middle, end):
+        assert "ct" in state
+        assert "hue" not in state
+        assert "sat" not in state
+
+    assert start["ct"] == 400
+    assert middle["ct"] == 325
+    assert end["ct"] == 250
+    assert start["bri"] == 80
+    assert end["bri"] == 254

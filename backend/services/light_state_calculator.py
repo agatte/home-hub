@@ -752,10 +752,12 @@ def morning_ramp(
     progress = min(1.0, max(0.0, minute_in_window / window_minutes))
 
     bri = int(80 + (254 - 80) * progress)
-    hue = int(8000 + (34000 - 8000) * progress)
-    sat = int(180 + (50 - 180) * progress)
+    # Use color temperature rather than interpolating Hue around the HSB
+    # wheel. The old 8000 -> 34000 hue path crossed green/cyan mid-ramp.
+    # CT 400 is warm (~2500K); CT 250 matches the daytime neutral handoff.
+    ct = int(400 + (250 - 400) * progress)
 
-    return {"on": True, "bri": bri, "hue": hue, "sat": sat}
+    return {"on": True, "bri": bri, "ct": ct}
 
 
 def lerp_light_state(

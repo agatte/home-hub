@@ -106,6 +106,25 @@ class Settings(BaseSettings):
     # compatibility; it does not indicate an active bed-zone capability.
     ZONE_POSTURE_RULE_APPLY: bool = True
 
+    # #198 shadow-only camera challenger harness. Disabled by default.
+    CAMERA_SHADOW_BAKEOFF_ENABLED: bool = False
+    CAMERA_SHADOW_YOLO_ENABLED: bool = False
+    CAMERA_SHADOW_YOLO_MODEL_PATH: str = ""
+    CAMERA_SHADOW_YOLO_PERSON_CONFIDENCE: float = 0.05
+    CAMERA_SHADOW_YOLO_KEYPOINT_CONFIDENCE: float = 0.25
+    CAMERA_SHADOW_CAPTURE_LABEL: str = ""
+    CAMERA_SHADOW_CAPTURE_DIR: str = "/tmp/homehub-camera-shadow"
+    CAMERA_SHADOW_CAPTURE_MAX_RECORDS: int = 1000
+
+
+    # Promoted #198 Latitude person-authority path. Disabled until an explicit
+    # production rollout supplies the validated OpenVINO model artifact.
+    CAMERA_YOLO_AUTHORITY_ENABLED: bool = False
+    CAMERA_YOLO_AUTHORITY_MODEL_PATH: str = ""
+    CAMERA_YOLO_AUTHORITY_PERSON_CONFIDENCE: float = 0.25
+    CAMERA_YOLO_AUTHORITY_BLINDED_CONFIDENCE: float = 0.01
+    CAMERA_YOLO_AUTHORITY_PRESENT_DWELL_FRAMES: int = 3
+
     # First #129/#130 living-room atmosphere slice. Default false keeps the
     # accepted implementation observable but does not change production Hue
     # behavior until the palette has been reviewed and rollout is explicit.

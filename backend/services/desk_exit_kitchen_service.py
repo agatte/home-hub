@@ -320,6 +320,10 @@ class DeskExitKitchenService:
             if period not in TRIGGER_PERIODS:
                 await self._deactivate(f"period left trigger set ({period})")
                 return
+            strong_zone = self._strong_presence_elsewhere(cam_status)
+            if strong_zone is not None:
+                await self._deactivate(f"strong presence elsewhere (zone={strong_zone})")
+                return
             if self._automation.is_at_desk_fresh():
                 # Require a SUSTAINED return before deactivating — a single
                 # recovered face_present frame must not release the kitchen
@@ -368,6 +372,14 @@ class DeskExitKitchenService:
             self._record_block("refire cooldown")
             return
 
+        # Unknown/blinded physical authority is not evidence of an empty room.
+        # Do not arm path lighting until at least one camera frame can make a
+        # trustworthy present/absent decision again.
+        if not self._presence_authority_ready(cam_status):
+            self._camera_absent_since = None
+            self._record_block("presence authority unknown")
+            return
+
         # While Anthony is still at the desk, reset the absent timer. Use the
         # sticky gate (fresh zone=desk OR a recent fusion confirmation) so a
         # per-frame face_present flicker during desk gaming doesn't restart
@@ -377,22 +389,13 @@ class DeskExitKitchenService:
             self._record_unblock()
             return
 
-        # Strong presence somewhere else (eg moved to bed) shouldn't trigger
-        # the kitchen brighten — if he's on the bed reading, he hasn't walked
-        # to the kitchen. Reset the timer when we see strong non-desk presence.
-        detection = cam_status.get("last_detection", "unknown")
-        src = cam_status.get("detection_source")
-        conf = cam_status.get("confidence", 0.0) or 0.0
-        zone = cam_status.get("zone")
-        strongly_present_elsewhere = (
-            detection == "present"
-            and zone is not None
-            and zone != "desk"
-            and (src == "pose" or (src == "face" and conf >= KITCHEN_FACE_TRUST_THRESHOLD))
-        )
-        if strongly_present_elsewhere:
+        # Strong fused presence somewhere else (Bed/Couch) means this was
+        # not a kitchen trip. Desktop Bed can now suppress this path even when
+        # the Latitude is absent or emitting a weak furniture-like face.
+        strong_zone = self._strong_presence_elsewhere(cam_status)
+        if strong_zone is not None:
             self._camera_absent_since = None
-            self._record_block(f"strong presence elsewhere (zone={zone})")
+            self._record_block(f"strong presence elsewhere (zone={strong_zone})")
             return
 
         # Eligible — desk freshness expired and no strong elsewhere presence.
@@ -426,28 +429,26 @@ class DeskExitKitchenService:
             return
 
         # Arming phase — same shape as the kitchen-only path but with
-        # the corridor-specific dwell threshold. Sticky gate (see
-        # _at_desk_or_recent) so desk-gaming flicker doesn't arm the corridor.
+        # the corridor-specific dwell threshold. Unknown/blinded physical
+        # authority is not evidence of an empty room.
+        if not self._presence_authority_ready(cam_status):
+            self._camera_absent_since = None
+            self._record_block("corridor: presence authority unknown")
+            return
+
+        # Sticky gate (see _at_desk_or_recent) so desk-gaming flicker
+        # doesn't arm the corridor.
         if self._at_desk_or_recent():
             self._camera_absent_since = None
             self._record_unblock()
             return
 
-        # Strong presence elsewhere (couch, hypothetical future zones)
-        # means Anthony didn't head to the kitchen/bathroom — defer.
-        detection = cam_status.get("last_detection", "unknown")
-        src = cam_status.get("detection_source")
-        conf = cam_status.get("confidence", 0.0) or 0.0
-        zone = cam_status.get("zone")
-        strongly_present_elsewhere = (
-            detection == "present"
-            and zone is not None
-            and zone != "desk"
-            and (src == "pose" or (src == "face" and conf >= KITCHEN_FACE_TRUST_THRESHOLD))
-        )
-        if strongly_present_elsewhere:
+        # Strong fused presence elsewhere means the user settled in another
+        # physical zone rather than entering the unseen hallway.
+        strong_zone = self._strong_presence_elsewhere(cam_status)
+        if strong_zone is not None:
             self._camera_absent_since = None
-            self._record_block(f"corridor: strong presence elsewhere (zone={zone})")
+            self._record_block(f"corridor: strong presence elsewhere (zone={strong_zone})")
             return
 
         self._record_unblock()
@@ -473,6 +474,16 @@ class DeskExitKitchenService:
         ):
             if self._corridor_substate != CORRIDOR_WINDDOWN_KITCHEN:
                 await self._corridor_start_winddown("hard timeout")
+            else:
+                await self._corridor_tick_winddown(now)
+            return
+
+        strong_zone = self._strong_presence_elsewhere(cam_status)
+        if strong_zone is not None:
+            if self._corridor_substate != CORRIDOR_WINDDOWN_KITCHEN:
+                await self._corridor_start_winddown(
+                    f"strong presence elsewhere (zone={strong_zone})",
+                )
             else:
                 await self._corridor_tick_winddown(now)
             return
@@ -607,6 +618,41 @@ class DeskExitKitchenService:
         if self._last_block_reason is not None:
             logger.info("DeskExit: unblocked (was %s)", self._last_block_reason)
             self._last_block_reason = None
+
+    @staticmethod
+    def _presence_authority_ready(cam_status: dict) -> bool:
+        """Whether camera absence can be treated as real evidence."""
+        explicit = cam_status.get("presence_authority_ready")
+        if explicit is not None:
+            return bool(explicit)
+        return cam_status.get("last_detection") in {"present", "absent"}
+
+    def _strong_presence_elsewhere(self, cam_status: dict) -> Optional[str]:
+        """Return a fresh strong non-desk physical zone, if any.
+
+        Prefer PresenceFusion so desktop Bed and Latitude Couch obey the same
+        source-strength rules. The raw-camera fallback preserves boot/tests
+        where fusion is not wired.
+        """
+        if self._presence_fusion is not None:
+            zone = self._presence_fusion.latest_strong_zone()
+            return zone if zone is not None and zone != "desk" else None
+
+        detection = cam_status.get("last_detection", "unknown")
+        source = cam_status.get("detection_source")
+        confidence = cam_status.get("confidence", 0.0) or 0.0
+        zone = cam_status.get("zone")
+        if (
+            detection == "present"
+            and zone is not None
+            and zone != "desk"
+            and (
+                source == "pose"
+                or (source == "face" and confidence >= KITCHEN_FACE_TRUST_THRESHOLD)
+            )
+        ):
+            return zone
+        return None
 
     def _at_desk_or_recent(self) -> bool:
         """Flicker-robust 'is Anthony at the desk?' for the arming paths.

@@ -30,6 +30,7 @@ from backend.services.pc_agent.emotion_capture import (
     POSTURE_HYSTERESIS_FRAMES,
     POSTURE_SLOUCHED,
     POSTURE_UPRIGHT,
+    _classify_desktop_zone,
     _classify_posture,
     _classify_posture_from_shoulders,
     _compute_head_above_shoulders_ratio,
@@ -326,3 +327,75 @@ def test_fallback_sign_flipped_from_primary() -> None:
     # Fallback: high ratio → upright
     posture, _ = _classify_posture_from_shoulders(ratio=0.65, prior=None)
     assert posture == POSTURE_UPRIGHT
+
+
+# ---------------------------------------------------------------------------
+# Desktop bedroom-zone localization
+# ---------------------------------------------------------------------------
+
+
+def _make_zone_pose(
+    *, left_x: float, right_x: float, visible: int = 17,
+) -> list[_Landmark]:
+    landmarks = [_Landmark(x=0.5, y=0.7, visibility=0.0) for _ in range(33)]
+    for i in range(min(visible, len(landmarks))):
+        landmarks[i].visibility = 0.95
+    landmarks[POSE_LEFT_SHOULDER] = _Landmark(
+        x=left_x, y=0.63, visibility=0.95,
+    )
+    landmarks[POSE_RIGHT_SHOULDER] = _Landmark(
+        x=right_x, y=0.63, visibility=0.95,
+    )
+    return landmarks
+
+
+def test_desktop_zone_close_face_is_desk() -> None:
+    assert _classify_desktop_zone(True, None) == "desk"
+
+
+def test_desktop_zone_truth_table_bed_geometry() -> None:
+    # Preserved 2026-05-21 Bed capture: span≈0.068, center_x≈0.132.
+    pose = _make_zone_pose(left_x=0.098, right_x=0.166)
+    assert _classify_desktop_zone(False, pose) == "bed"
+
+
+def test_desktop_zone_truth_table_desk_geometry_abstains_without_face() -> None:
+    # Preserved Desk capture: span≈0.471, center_x≈0.487.
+    pose = _make_zone_pose(left_x=0.251, right_x=0.722)
+    assert _classify_desktop_zone(False, pose) is None
+
+
+def test_desktop_zone_small_body_wrong_side_abstains() -> None:
+    pose = _make_zone_pose(left_x=0.66, right_x=0.73)
+    assert _classify_desktop_zone(False, pose) is None
+
+
+def test_desktop_zone_requires_enough_visible_landmarks() -> None:
+    pose = _make_zone_pose(left_x=0.098, right_x=0.166, visible=4)
+    assert _classify_desktop_zone(False, pose) is None
+
+
+def test_desktop_zone_hysteresis_bed_then_immediate_desk() -> None:
+    from backend.services.pc_agent.emotion_capture import EmotionCapture
+
+    agent = EmotionCapture("http://test:8000")
+    try:
+        assert agent._update_zone_candidate("bed") is None
+        assert agent._update_zone_candidate("bed") is None
+        assert agent._update_zone_candidate("bed") == "bed"
+        assert agent._update_zone_candidate("desk", immediate=True) == "desk"
+    finally:
+        agent.close()
+
+
+def test_desktop_zone_hysteresis_clears_after_sustained_absence() -> None:
+    from backend.services.pc_agent.emotion_capture import EmotionCapture
+
+    agent = EmotionCapture("http://test:8000")
+    try:
+        agent._update_zone_candidate("desk", immediate=True)
+        assert agent._update_zone_candidate(None) == "desk"
+        assert agent._update_zone_candidate(None) == "desk"
+        assert agent._update_zone_candidate(None) is None
+    finally:
+        agent.close()

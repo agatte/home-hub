@@ -1785,3 +1785,94 @@ async def test_watchdog_successful_respawn_resets_counter(monkeypatch):
 
     assert len(spawn_calls) >= 5
     assert escalation_calls == []
+
+
+class TestYoloAuthorityPromotion:
+    """Promoted #198 YOLO gates Latitude physical presence."""
+
+    @staticmethod
+    def _service(scores):
+        from types import SimpleNamespace
+        import numpy as np
+        from backend.services.camera_yolo_authority import YoloPresenceAuthority
+
+        class Adapter:
+            def __init__(self, values):
+                self._values = iter(values)
+
+            def infer_frame(self, _frame):
+                return SimpleNamespace(max_person_confidence=next(self._values))
+
+        authority = YoloPresenceAuthority(
+            person_confidence_threshold=0.25,
+            blinded_confidence_ceiling=0.01,
+            present_dwell_frames=3,
+        )
+        service = CameraService(
+            ws_manager=AsyncMock(),
+            automation_engine=AsyncMock(),
+            ml_logger=AsyncMock(),
+            yolo_authority_adapter=Adapter(scores),
+            yolo_presence_authority=authority,
+        )
+        service._cap = MagicMock()
+        service._cap.isOpened.return_value = True
+        service._cap.read.return_value = (
+            True,
+            np.full((240, 320, 3), 120, dtype=np.uint8),
+        )
+        service._face_detector = MagicMock()
+        service._face_detector.detect.return_value = MagicMock(detections=[])
+        service._pose_landmarker = None
+        return service
+
+    def test_furniture_score_blocks_even_strong_mediapipe(self):
+        service = self._service([0.20])
+        result = service._process_frame()
+        assert result is not None
+        assert result["status"] == "absent"
+        assert result["source"] == "yolo"
+        assert result["zone"] is None
+        service._face_detector.detect.assert_not_called()
+
+    def test_near_closed_lid_abstains_instead_of_absent(self):
+        service = self._service([0.004])
+        result = service._process_frame()
+        assert result is not None
+        assert result["status"] == "unknown"
+        assert result["authority_reason"] == "blinded"
+        assert result["zone"] is None
+
+    def test_person_requires_three_frames_and_does_not_invent_couch(self):
+        service = self._service([0.80, 0.81, 0.82])
+        first = service._process_frame()
+        second = service._process_frame()
+        third = service._process_frame()
+
+        assert first is not None and first["status"] == "unknown"
+        assert first["authority_reason"] == "present_dwell"
+        assert second is not None and second["status"] == "unknown"
+        assert third is not None and third["status"] == "present"
+        assert third["source"] == "yolo"
+        assert third["confidence"] == pytest.approx(0.82)
+        assert third["zone"] is None
+        assert third["posture"] is None
+
+
+class TestYoloAuthoritySupportingLocalization:
+    def test_yolo_person_keeps_strong_face_couch_support(self):
+        service = TestYoloAuthorityPromotion._service([0.80, 0.81, 0.82])
+        service._face_detector.detect.return_value = MagicMock(
+            detections=[_mock_detection(0.92)]
+        )
+
+        first = service._process_frame()
+        second = service._process_frame()
+        third = service._process_frame()
+
+        assert first is not None and first["status"] == "unknown"
+        assert second is not None and second["status"] == "unknown"
+        assert third is not None and third["status"] == "present"
+        assert third["source"] == "yolo"
+        assert third["zone"] == "couch"
+        assert third["authority_reason"] == "yolo_present"

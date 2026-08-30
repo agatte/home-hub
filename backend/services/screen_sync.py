@@ -155,12 +155,11 @@ MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
 # Lookup prefers the most specific match: (mode, zone, posture, light_id) →
 # (mode, zone, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)] → default.
 #
-# DORMANT NOTE (2026-05-27 Latitude→living-room move): the bed-zone entries
-# below (("watching","bed","reclined",…) and ("watching","bed","upright",…))
-# are unreachable now — no camera produces zone="bed". The watching-at-desk
-# entry (("watching","desk","2")) still fires via the desktop pc_agent's
-# zone="desk" emission (Phase 1). The bed entries are kept (not deleted) for
-# revival if bed-zone detection is later added via the desktop's wide FoV.
+# Bedroom localization candidate (2026-08-30): the desktop wide-FoV camera may
+# now produce zone="bed" from calibrated distant-pose geometry. These entries
+# remain posture-specific, however: merely being in Bed does not imply
+# reclined/upright, so they activate only when a trustworthy posture is also
+# available. Desk entries continue to use the close-face desktop signal.
 MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
     ("watching", "desk", "day",        "2"): 180,
     ("watching", "desk", "evening",    "2"): 140,

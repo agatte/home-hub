@@ -420,8 +420,8 @@ class TransitLightingService:
         # transit. Exception: if we've had BED_EXIT_ABSENT_FRAMES consecutive
         # polls without strong presence, that's a real exit (flicker always
         # includes some strong frames; chair-back false positives don't count
-        # toward the streak). Couch/bed use the Latitude committed zone, which
-        # already carries 15s hysteresis in camera_service.
+        # toward the streak). Couch/Bed come from the fused physical zone: the
+        # Latitude owns qualified Couch and the desktop bedroom camera owns Bed.
         if zone in STATIONARY_ZONES:
             if self._strong_absent_streak < BED_EXIT_ABSENT_FRAMES:
                 self._record_block(f"zone={zone} (user stationary)")
