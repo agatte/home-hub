@@ -769,6 +769,23 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             "authority_reason": source_authority["reason"],
         }
 
+    # Watching mode intentionally has long dwell at night, but screen color
+    # ownership should not inherit that stickiness. When the desktop reports
+    # explicit non-media foreground content (for example ChatGPT after pausing
+    # YouTube), hold the last valid media color until media returns or the mode
+    # itself transitions. None remains fail-open for older/indeterminate agents.
+    if (
+        engine.current_mode == "watching"
+        and report.source == "desktop"
+        and report.foreground_media is False
+    ):
+        return {
+            "status": "ok",
+            "applied": False,
+            "reason": "watching_foreground_not_media",
+            "reported_source": report.source,
+        }
+
     # Pull zone + posture so the sync cap can differ between watching-at-desk
     # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source
     # from PresenceFusion, NOT the raw Latitude camera: since the 2026-05-27

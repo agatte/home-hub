@@ -166,6 +166,78 @@ async def test_manual_override_on_one_light_skips_only_that_one():
 
 
 @pytest.mark.asyncio
+async def test_desktop_watching_holds_last_media_color_on_non_media_foreground():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = _make_request(_owned_watching_engine("desktop"), sync)
+
+    applied = await receive_screen_color(
+        ScreenColorReport(
+            r=1, g=1, b=100, source="desktop", foreground_media=True,
+        ),
+        req,
+    )  # type: ignore[arg-type]
+    calls_after_media = list(hue.calls)
+    last_color_after_media = sync.last_color_at
+
+    held = await receive_screen_color(
+        ScreenColorReport(
+            r=43, g=24, b=49, source="desktop", foreground_media=False,
+        ),
+        req,
+    )  # type: ignore[arg-type]
+
+    assert applied["applied"] is True
+    assert held == {
+        "status": "ok",
+        "applied": False,
+        "reason": "watching_foreground_not_media",
+        "reported_source": "desktop",
+    }
+    assert hue.calls == calls_after_media
+    assert sync.last_color_at == last_color_after_media
+
+    resumed = await receive_screen_color(
+        ScreenColorReport(
+            r=1, g=1, b=100, source="desktop", foreground_media=True,
+        ),
+        req,
+    )  # type: ignore[arg-type]
+    assert resumed["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_watching_report_without_foreground_media_still_applies():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = _make_request(_owned_watching_engine("desktop"), sync)
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=1, g=1, b=100, source="desktop"), req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is True
+    assert set(hue.lights_touched()) == {"2", "5"}
+
+
+@pytest.mark.asyncio
+async def test_gaming_ignores_non_media_foreground_flag():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = _make_request(_fake_engine("gaming"), sync)
+
+    result = await receive_screen_color(
+        ScreenColorReport(
+            r=1, g=1, b=100, source="desktop", foreground_media=False,
+        ),
+        req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is True
+    assert set(hue.lights_touched()) == {"2", "5"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["working", "sleeping"])
 async def test_off_mode_drops_silently(mode):
     """Off modes, including sleeping, drop samples without Hue writes."""

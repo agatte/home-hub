@@ -4,7 +4,8 @@ Screen Sync Agent — standalone desktop process.
 Runs on the user's desktop. Captures the dominant color of the primary
 screen every 2.5 seconds and POSTs it to the Home Hub backend on the laptop.
 The backend gates application by current automation mode (only gaming /
-watching modes apply); this agent stays dumb and always sends.
+watching modes apply). The agent also reports immediate foreground-media
+evidence so sticky Watching can hold the last media color after a tab switch.
 
 Mirror mode: a single color sampled from the whole-screen center crop is
 POSTed and the backend mirrors it to every screen-sync target lamp (L2 +
@@ -24,6 +25,8 @@ Autostart on Windows:
 """
 import argparse
 import colorsys
+import ctypes
+import ctypes.wintypes
 import logging
 import os
 import sys
@@ -35,6 +38,13 @@ from typing import Any, Callable, Optional
 import httpx
 import mss
 import numpy as np
+import psutil
+
+from backend.services.pc_agent.game_list import (
+    BROWSER_PROCESSES,
+    MEDIA_PROCESSES,
+    WATCHING_TITLE_KEYWORDS,
+)
 
 try:
     from sklearn.cluster import MiniBatchKMeans
@@ -206,6 +216,60 @@ def _acquire_singleton_lock() -> bool:
             _mutex_handle.close()
             _mutex_handle = None
         return False
+
+
+def _foreground_snapshot_is_media(
+    process_name: Optional[str], window_title: Optional[str],
+) -> bool:
+    """Return whether a captured foreground window is explicit media intent."""
+    if process_name in MEDIA_PROCESSES:
+        return True
+    if process_name in BROWSER_PROCESSES and window_title:
+        title_lower = window_title.lower()
+        return any(keyword in title_lower for keyword in WATCHING_TITLE_KEYWORDS)
+    return False
+
+
+def _foreground_media_active() -> Optional[bool]:
+    """Read foreground media intent without inheriting activity-mode dwell.
+
+    ``None`` means the foreground identity could not be determined, allowing
+    the backend to preserve compatibility/fail open rather than freezing sync
+    because of a transient Win32/process-inspection failure.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value or ""
+
+        pid = ctypes.wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        try:
+            process_name = psutil.Process(pid.value).name().lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return None
+        return _foreground_snapshot_is_media(process_name, title)
+    except Exception:
+        return None
+
+
+def _build_color_payload(
+    rgb: tuple[int, int, int], luma: int,
+) -> dict[str, Any]:
+    """Build a desktop color report with immediate foreground-media evidence."""
+    return {
+        "source": "desktop",
+        "r": rgb[0], "g": rgb[1], "b": rgb[2],
+        "luma": luma,
+        "foreground_media": _foreground_media_active(),
+    }
 
 
 def _grab_array(sct: "mss.mss") -> Optional["np.ndarray"]:
@@ -382,11 +446,9 @@ def run_agent(
                         if cl is not None:
                             rgb, luma = cl
                             try:
-                                resp = client.post(color_endpoint, json={
-                                    "source": "desktop",
-                                    "r": rgb[0], "g": rgb[1], "b": rgb[2],
-                                    "luma": luma,
-                                })
+                                resp = client.post(
+                                    color_endpoint, json=_build_color_payload(rgb, luma)
+                                )
                                 resp.raise_for_status()
                                 backoff = 1
                                 try:
