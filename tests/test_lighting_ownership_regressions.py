@@ -1,6 +1,6 @@
 # Aug 17 regressions for Transit attendance and screen-sync ownership.
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -141,6 +141,59 @@ async def test_newer_other_light_does_not_refresh_stale_authoritative_target(
     assert "1" not in sync.fresh_owned_light_ids()
     assert sync.fresh_authoritative_state("1") is None
     assert sync.fresh_authoritative_state("2") is not None
+
+
+@pytest.mark.asyncio
+async def test_transit_clear_cannot_repaint_held_watching_lamps_after_frame_stales(
+    mock_hue, mock_hue_v2, mock_ws, monkeypatch,
+):
+    engine = _engine(mock_hue, mock_hue_v2, mock_ws)
+    monkeypatch.setattr(engine, "_get_time_period", lambda now=None: "night")
+    engine._current_mode = "watching"
+
+    desired = engine._get_desired_effect("watching")
+    desired_name, desired_lights = engine._effect_manager._normalize_desired(desired)
+    engine._effect_manager._active_name = desired_name
+    engine._effect_manager._active_lights = desired_lights
+    engine._effect_manager._tracker_known = True
+    mock_hue.set_light = AsyncMock(return_value=True)
+
+    sync = ScreenSyncService(
+        mock_hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+        transition_boundary=engine._transition_boundary,
+    )
+    engine._screen_sync = sync
+    for light_id in ("2", "5"):
+        await sync.apply_color(
+            light_id, 1, 1, 100,
+            mode="watching", source="desktop", period="night",
+        )
+    sync.refresh_watching_hold("desktop", ["2", "5"])
+
+    stale_at = datetime.now(timezone.utc) - timedelta(
+        seconds=SCREEN_SYNC_FRESH_SECONDS + 1,
+    )
+    sync._last_color_at = stale_at
+    sync._last_color_at_by_light["2"] = stale_at
+    sync._last_color_at_by_light["5"] = stale_at
+    assert engine._protected_light_ids() == {"2", "5"}
+
+    await engine.apply_transit_override(
+        {"1": {"on": True, "bri": 55, "ct": 360}},
+        duration_seconds=600,
+        transition_time=5,
+    )
+    mock_hue.set_light.reset_mock()
+    await engine.clear_transit_override(light_ids=["1"])
+
+    writes = {
+        call.args[0]: call.args[1]
+        for call in mock_hue.set_light.await_args_list
+    }
+    assert "2" not in writes
+    assert "5" not in writes
+    assert engine._protected_light_ids() == {"2", "5"}
 
 
 @pytest.mark.asyncio

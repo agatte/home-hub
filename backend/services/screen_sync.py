@@ -270,6 +270,13 @@ class ScreenSyncService:
         self._last_source: Optional[str] = None
         self._last_color_at_by_source: dict[str, datetime] = {}
         self._last_color_at_by_light: dict[str, datetime] = {}
+        # Rejected non-media foreground frames refresh a short ownership hold.
+        # This lets sticky Watching preserve the last valid media color without
+        # pretending a rejected webpage frame was an accepted screen color.
+        # Source+light keys keep desktop bedroom ownership isolated from laptop
+        # living-room sync. The same freshness window provides agent-failure
+        # recovery: if hold refreshes stop, normal automation reclaims the lamp.
+        self._hold_refreshed_at: dict[tuple[str, str], datetime] = {}
 
         # Runtime overrides for specific (mode, zone, posture, light_id) caps —
         # settings page writes through this dict, persisted in app_settings.
@@ -515,25 +522,61 @@ class ScreenSyncService:
         """All Hue light ids this service can write to."""
         return list(self._targets)
 
-    def fresh_owned_light_ids(self) -> set[str]:
-        """Lights with a screen-sync frame inside the ownership grace window."""
-        now = datetime.now(timezone.utc)
+    def refresh_watching_hold(self, source: str, light_ids: list[str]) -> None:
+        """Keep last valid media targets authoritative during sticky Watching.
 
-        # Preserve the legacy service-wide liveness gate, then refine
-        # ownership per light. A fresh desktop L2/L5 frame must not
+        Only lights with an acknowledged screen-sync target can be held. The
+        caller refreshes this stamp on each rejected non-media foreground frame;
+        if the desktop agent disappears, the ordinary freshness timeout releases
+        ownership automatically.
+        """
+        now = datetime.now(timezone.utc)
+        for light_id in light_ids:
+            if light_id in self._targets and light_id in self._last_sent_state:
+                self._hold_refreshed_at[(source, light_id)] = now
+
+    def clear_watching_hold(
+        self, source: str, light_ids: Optional[list[str]] = None,
+    ) -> None:
+        """Release source-scoped sticky-Watching ownership holds."""
+        selected = set(light_ids) if light_ids is not None else None
+        for key in list(self._hold_refreshed_at):
+            held_source, light_id = key
+            if held_source == source and (selected is None or light_id in selected):
+                self._hold_refreshed_at.pop(key, None)
+
+    def held_owned_light_ids(self) -> set[str]:
+        """Lights whose non-media hold has been refreshed recently."""
+        now = datetime.now(timezone.utc)
+        owned: set[str] = set()
+        for key, refreshed_at in list(self._hold_refreshed_at.items()):
+            age = (now - refreshed_at).total_seconds()
+            if age < -2.0 or age >= SCREEN_SYNC_FRESH_SECONDS:
+                self._hold_refreshed_at.pop(key, None)
+                continue
+            _source, light_id = key
+            if light_id in self._last_sent_state:
+                owned.add(light_id)
+        return owned
+
+    def fresh_owned_light_ids(self) -> set[str]:
+        """Lights actively owned by fresh frames or refreshed media holds."""
+        now = datetime.now(timezone.utc)
+        fresh: set[str] = set()
+
+        # Preserve per-light freshness without letting a desktop L2/L5 frame
         # refresh laptop-capable L1/L3/L4 ownership.
         last_global = self._last_color_at
-        if last_global is None:
-            return set()
-        global_age = (now - last_global).total_seconds()
-        if global_age < -2.0 or global_age >= SCREEN_SYNC_FRESH_SECONDS:
-            return set()
+        if last_global is not None:
+            global_age = (now - last_global).total_seconds()
+            if -2.0 <= global_age < SCREEN_SYNC_FRESH_SECONDS:
+                fresh = {
+                    light_id
+                    for light_id, observed_at in self._last_color_at_by_light.items()
+                    if -2.0 <= (now - observed_at).total_seconds() < SCREEN_SYNC_FRESH_SECONDS
+                }
 
-        return {
-            light_id
-            for light_id, observed_at in self._last_color_at_by_light.items()
-            if -2.0 <= (now - observed_at).total_seconds() < SCREEN_SYNC_FRESH_SECONDS
-        }
+        return fresh | self.held_owned_light_ids()
 
     def invalidate_sent_state(self, light_ids: list[str]) -> None:
         """Forget cached bridge state for the selected managed lights.
@@ -562,19 +605,7 @@ class ScreenSyncService:
         gate before an old, still-fresh screen-sync target has been safely
         re-established and its effect released.
         """
-        now = datetime.now(timezone.utc)
-        last_global = self._last_color_at
-        if last_global is None:
-            return None
-        global_age = (now - last_global).total_seconds()
-        if global_age < -2.0 or global_age >= SCREEN_SYNC_FRESH_SECONDS:
-            return None
-
-        last_color_at = self._last_color_at_by_light.get(light_id)
-        if last_color_at is None:
-            return None
-        age = (now - last_color_at).total_seconds()
-        if age < -2.0 or age >= SCREEN_SYNC_FRESH_SECONDS:
+        if light_id not in self.fresh_owned_light_ids():
             return None
         return self.authoritative_state(light_id)
 
@@ -622,7 +653,7 @@ class ScreenSyncService:
     @staticmethod
     def _smoothing_alpha_for(mode: str, period: Optional[str]) -> float:
         if mode == "watching" and period in {"night", "late_night"}:
-            return 0.18
+            return 0.35
         if mode == "gaming" and period == "late_night":
             return 0.25
         return 0.4
@@ -630,7 +661,7 @@ class ScreenSyncService:
     @staticmethod
     def _transitiontime_for(mode: str, period: Optional[str]) -> int:
         if mode == "watching" and period in {"night", "late_night"}:
-            return 40
+            return 15
         if mode == "gaming" and period == "late_night":
             return 30
         return 20

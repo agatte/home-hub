@@ -232,6 +232,14 @@ class ScreenColorReport(BaseModel):
         default="desktop",
         description="Reporting source — 'desktop' or 'laptop'",
     )
+    foreground_media: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Desktop-only immediate foreground media evidence. False lets "
+            "Watching hold the last valid media color while mode dwell is active; "
+            "None preserves compatibility with older/indeterminate sources."
+        ),
+    )
 
 
 class LaptopLoopbackToggle(BaseModel):

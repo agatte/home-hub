@@ -111,8 +111,9 @@ class LightApplicator:
         so without this guard the periodic mode-reapply — and every
         ``notify_camera_commit`` force-resend — re-writes them to their
         static state, fighting sync and producing the visible L2/L5 flicker
-        (audit 2026-05-30, syncfight-1). When sync goes quiet the freshness
-        gate lapses and the engine reclaims the lamps on the next tick.
+        (audit 2026-05-30, syncfight-1). When accepted frames and any active
+        hold refreshes both go quiet, the freshness gate lapses and the engine
+        reclaims the lamps on the next tick.
         """
         protected = set(self._st.manual_light_overrides) | set(self._st.transit_light_overrides)
         sync = self._screen_sync_getter()

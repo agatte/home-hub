@@ -49,3 +49,28 @@ def test_standalone_backoff_uses_original_single_interruptible_wait() -> None:
 
     assert interrupted is False
     assert stop.waits == [60.0]
+
+
+def test_foreground_snapshot_media_matches_activity_detector_rule() -> None:
+    assert screen_sync_agent._foreground_snapshot_is_media(
+        "firefox.exe", "Blue Planet - YouTube - Mozilla Firefox"
+    ) is True
+    assert screen_sync_agent._foreground_snapshot_is_media(
+        "firefox.exe", "ChatGPT - homehub - Mozilla Firefox"
+    ) is False
+    assert screen_sync_agent._foreground_snapshot_is_media(
+        "stremio.exe", "Stremio"
+    ) is True
+
+
+def test_color_payload_carries_immediate_foreground_media(monkeypatch) -> None:
+    monkeypatch.setattr(screen_sync_agent, "_foreground_media_active", lambda: False)
+
+    payload = screen_sync_agent._build_color_payload((1, 2, 3), 17)
+
+    assert payload == {
+        "source": "desktop",
+        "r": 1, "g": 2, "b": 3,
+        "luma": 17,
+        "foreground_media": False,
+    }
