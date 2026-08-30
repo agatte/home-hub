@@ -25,7 +25,7 @@ The two primary visual scene families are:
 - **`connor_color`** — coral/peach architectural wash, teal/blue-violet vertical accents, restrained magenta/cyan details, and one warm anchor.
 - **`listening_bar`** — dark amber, burgundy, bronze, muted olive, warm picture/console light, and intentional negative space.
 
-The first purchases should be the living-room plant wash and the kitchen cabinet cove. They correct the apartment's two largest nighttime imbalances: the dark right end of the sofa wall and the kitchen's two bright pendants floating in a dark volume.
+The living-room plant wash is complete as L6 / `Plant Wash` and has been calibrated in the real room. The next audited architectural addition is the kitchen cabinet cove (#148). High-CRI task lights, physical scene control, path-light hardware, and the later bedroom layer remain separate evidence/fit-gated additions rather than an automatic shopping sequence.
 
 ---
 

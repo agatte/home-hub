@@ -1,9 +1,11 @@
 # Dashboard Apartment Canvas Spec
 
-Status: **accepted geometry + projection authority for the #157 Apartment Canvas exploration**  
+Status: **historical projection/visual baseline under current #192 physical-world authority**
 Owner: Dashboard UI workstream  
 Parent vision: `docs/DASHBOARD_REDESIGN_VISION.md`  
 Established: 2026-08-19
+
+**Authority update — 2026-08-30:** GitHub #192 supersedes any pre-#192 assumption that an accepted GeometryScene/blocker footprint is immutable physical truth. Camera v2, cutaway, projection, Director Board, and useful visual-production work remain presentation evidence where compatible, but physical size, placement, anchors, and provenance now follow #192's evidence hierarchy and room-reconstruction workflow. `DASHBOARD_REDESIGN_VISION.md` remains the Dashboard product/UX authority under `PROJECT_SPEC.md`.
 
 ## Purpose
 

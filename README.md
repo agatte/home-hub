@@ -12,21 +12,17 @@ an example of a small, local-first automation system.
 
 The current always-on host/server is a Dell Latitude running Ubuntu. It runs the
 FastAPI backend, scheduling and automation services, Hue and Sonos connections,
-and the SvelteKit dashboard in a Firefox kiosk. Its camera can contribute
-living-room/couch presence context; it is not a bedroom or bed-zone sensor.
+and the SvelteKit dashboard in a Firefox kiosk. Its camera uses a YOLO/OpenVINO real-person authority gate with MediaPipe supporting living-room/Couch localization; it is not a bedroom or Bed-zone sensor.
 
-A Windows desktop can run optional companion agents for desk presence, process
-activity, screen colour, ambient audio, and monitor or peripheral integration.
+A Windows desktop can run companion agents for calibrated Desk/Bed presence, process
+activity, screen colour, the active Blue Yeti ambient-audio path, and monitor or peripheral integration.
 Those signals enrich the system but are not required for the server, dashboard,
 or core Hue and Sonos controls to run. When a source is absent or stale, its
 authority should degrade explicitly rather than being treated as current truth.
 They report observations to the HomeHub backend over HTTP; they are not imported
 into or run inside the server process.
 
-HomeHub has ordinary activity modes such as Working, Gaming, Watching, Relax,
-Cooking, Social, Sleeping, and Game Day. Travel is different: it is a
-persistent HOME/TRAVEL host-lifecycle state above activity modes, not another
-activity classification. That lifecycle design is tracked separately from the
+HomeHub separates **House State** (Away, Home, Winding Down, Sleeping) from **Activity** (General plus stronger contexts such as Working, Gaming, Watching, Relax, Cooking, Social, and Game Day). Legacy idle is detector/internal evidence rather than a target user-facing state. Travel is different again: it is a persistent HOME/TRAVEL host-lifecycle state above ordinary activity, not another activity classification. That lifecycle design is tracked separately from the
 open work to remove the portable Latitude and apartment DNS as single points of
 failure.
 
@@ -67,8 +63,7 @@ time, weather, history -------/               |
 - Backend: Python, FastAPI, async services, WebSockets, SQLAlchemy, and SQLite.
 - Frontend: SvelteKit 2, Svelte 4, Vite, Three.js, and Threlte.
 - Device integrations: Philips Hue v1/v2 APIs and Sonos through SoCo.
-- Optional context: MediaPipe camera observations, desktop process and screen
-  agents, audio classification, weather, geofence events, and local routines.
+- Optional/contextual sensing: Latitude YOLO-gated person evidence with MediaPipe supporting localization, source-qualified Desktop Desk/Bed observations, desktop process/screen agents, Blue Yeti audio classification, weather, geofence events, and local routines.
 - Production: Ubuntu on the Latitude, with systemd user services and a locally
   served static frontend on port 8000.
 

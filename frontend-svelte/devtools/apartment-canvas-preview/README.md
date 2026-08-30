@@ -1,5 +1,7 @@
 # Apartment Canvas production preview
 
+> **Authority update — 2026-08-30:** this harness preserves the pre-#192 static-render/projection baseline for visual comparison. GitHub #192 is now authoritative for physical-world size, placement, anchors, provenance, and evidence-backed corrections. The old GeometryScene fingerprint/XY guardrails below apply only to this preserved baseline; they must not veto an accepted #192 physical-model correction.
+
 This isolated Vite harness is the visual-development surface for #182. It renders the accepted `GeometrySceneV1` and Camera v2 as a production-intent Apartment Canvas without wiring the renderer into the Home route.
 
 ## Current milestone
@@ -39,7 +41,7 @@ npm run build:apartment-canvas
 
 ## Guardrails
 
-- GeometryScene fingerprint must remain `ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43`.
-- Do not change plan-space XY, openings, Camera v2 policy, accepted presentation reflection, or accepted cutaway selectors to improve styling.
+- For the preserved pre-#192 baseline, the GeometryScene fingerprint remains `ba9270ddd772aa859dca2e155e14a54c8d1eccb3daeb869e6301780bbdd4cf43`; an accepted #192 physical-model correction may intentionally regenerate a different fingerprint.
+- Do not hand-edit generated plan-space XY/openings to improve styling. Physical corrections belong in the #192 evidence-backed source model; Camera v2, presentation reflection, and cutaway remain presentation concerns where compatible.
 - Neutral studio illumination is presentation-only and must not imply live HomeHub/Hue lighting state.
-- Static Apartment v1 is the accepted visible-apartment baseline; subsequent work should add bounded live-state rendering without reopening accepted geometry merely for styling.
+- Static Apartment v1 remains the accepted **visual comparison baseline**; #192 may supersede its physical geometry when stronger evidence is reconciled.

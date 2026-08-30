@@ -1,5 +1,7 @@
 # Apartment Canvas whitebox inspector
 
+> **Authority update — 2026-08-30:** this inspector is a consumer/debug surface, not physical-world authority. GitHub #192 owns evidence-backed architecture/object size, placement, anchors, provenance, and accepted physical corrections. Statements below about accepted XY/GeometryScene describe the preserved pre-#192 inspection baseline unless regenerated from the #192 physical model.
+
 This is an isolated Vite/Three.js inspection tool, not a Dashboard route. Its
 only spatial input is `generated/geometry-scene.json`, generated immediately
 before startup by `scripts/compile_apartment_canvas_geometry_scene.py`.

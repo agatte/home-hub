@@ -6,7 +6,7 @@
 >
 > **Shipped:** April 15, 2026
 > **Implementation:** `backend/services/ml/confidence_fusion.py`
-> **Last updated:** 2026-08-25 (shadow-only authority contract)
+> **Last updated:** 2026-08-30 (shadow-only mode authority; physical-presence distinction)
 
 ## Current Authority Contract (2026-08-25)
 
@@ -18,6 +18,8 @@ eligibility is retained as `factors.shadow_candidate` telemetry, and existing
 attendance vetoes remain visible through `factors.vetoed_by`. Any future mode
 authority requires a separate, explicitly approved gate and implementation
 change. The changelogs below retain the historical evolution of the subsystem.
+
+This service is **not** `PresenceFusion`. Physical room/occupancy truth is handled by `backend/services/presence_fusion.py`; as of 2026-08-30 its Latitude lane can be YOLO-gated and its Desktop lane can localize Desk/Bed. Camera votes inside `ConfidenceFusion` remain mode-ensemble telemetry and must not be interpreted as direct physical-room authority.
 
 ## v4 Changelog (2026-05-26)
 

@@ -110,40 +110,37 @@ silent.
 
 ### Sensor and room authority
 
-**SHIPPED/CURRENT.** `PresenceFusion` combines Latitude, desktop, and Latitude
-streaming observations. The Latitude supplies living-room/couch evidence; the
-desktop supplies desk evidence; iOS geofences own explicit apartment
-home/away state. Some consumers and diagnostics still need audit for consistent
-use of the fused result. See [PRESENCE_LIGHTING_SCENARIOS.md](PRESENCE_LIGHTING_SCENARIOS.md).
+**SHIPPED/CURRENT — reconciled 2026-08-30.** Physical room authority is
+source-qualified. The Latitude `CameraService` uses YOLO26n-pose/OpenVINO as
+the real-person authority gate. MediaPipe cannot create presence by itself;
+after YOLO confirms a person, a strong face or recently face-anchored pose may
+supply supporting `couch` localization. Latitude Couch posture is currently
+suppressed upstream because there is no approved Couch-posture consumer. YOLO confidence `<=0.01`, model
+unavailability, or inference failure is **unknown**, not absence. Present
+promotion uses the validated `0.25` threshold with a three-frame positive dwell.
 
-**DECIDED TARGET.** Physical room presence outranks software activity. A
-confident spatially qualified Latitude couch observation owns living-room
-context; the desktop bedroom camera may localize either desk or bed. Running
-processes are supporting evidence, never proof of physical presence. If neither
-room source has trustworthy physical evidence, do not infer a room from a stale
-process. Record and surface conflicts, the chosen authority, and the reason.
-Future room sensors provide occupancy evidence; they must not be used to invent
-PC-specific activity.
+The Windows Desktop camera is the bedroom locator. A close accepted face is
+calibrated immediate `desk` evidence; distant pose geometry may commit `bed`
+after three frames when shoulder scale/location and landmark visibility agree.
+Ambiguous geometry abstains. Bed is a physical zone only; it does not infer
+Sleeping, Watching, Working, or bed posture.
 
-**ACCEPTED IMPLEMENTATION CANDIDATE (2026-08-30; deployment pending).** The
-desktop camera keeps close frontal face evidence as immediate ``desk`` and may
-commit ``bed`` only after calibrated distant-pose geometry holds for three
-frames; ambiguous geometry abstains. Latitude ``couch`` authority requires
-strong, spatially couch-qualified evidence, so weak furniture-like faces cannot
-outvote a trustworthy bedroom observation. Strong physical conflicts resolve
-by freshness. Transit and desk-exit/corridor consumers use the fused physical
-result. This candidate restores a Bed *zone* only; it does not infer Bed posture.
+`PresenceFusion` resolves trustworthy physical-source conflicts by freshness.
+Transit/DeskExit consume strong physical zones; unknown Latitude authority may
+hold existing physical context and blocks new path-light arming rather than
+manufacturing an empty-room transition. The post-deploy real-room Couch and Bed
+acceptance checks remain tracked in #198 and #201.
 
-**CODED/SHADOW-ONLY — DEPLOYMENT PENDING (2026-08-01).** The living-room
-CapabilitySnapshot -> DecisionContext gate implements that authority before
-Scene Curator work begins. Latitude is the sole living-room/couch physical
-authority, and eligibility requires evidence within the existing eight-second
-strong-presence freshness window plus a committed couch zone. Desktop evidence
-owns desk context; process activity and latitude_streaming cannot establish
-occupancy. Conflicts, optional stale context, policy vetoes, and current light
-owners are exposed with stable reason codes. Eligible grants no write
-permission: the gate does not select a scene, change a mode, or call Hue,
-Sonos, TTS, notification, or other apartment writers.
+**KNOWN CURRENT DEFECT.** `latitude_streaming` still injects synthetic couch
+presence after accepted Latitude Watching. That contradicts the product
+contract that media/process evidence is not physical occupancy and is tracked
+by #200. Do not treat that implementation leak as an approved authority rule.
+
+**SHADOW-ONLY.** The living-room `CapabilitySnapshot -> DecisionContext` gate
+remains computation/observability only. It evaluates physical/source evidence,
+policy vetoes, and current light owners with stable reason codes, but grants no
+write permission and does not select scenes, change Activity, or call apartment
+writers. Future Scene Curator/autonomy must graduate separately.
 
 ### Arrival
 
@@ -534,7 +531,7 @@ appropriate—not to maximize automation for its own sake.
 - Ambient/audio monitoring from the Blue Yeti, including YAMNet shadow
   classifications. The former audio-triggered Social gate was abandoned on
   May 9, 2026; Social is manually startable in current code.
-- Camera-based presence (MediaPipe face + pose) is the primary "is the user here" signal in-app, fused with the desktop pc_agent's presence observations via `PresenceFusion` (shipped 2026-05-18). The Latitude camera sees the couch zone (since the 2026-05-27 living-room relocation); the desktop pc_agent owns the desk zone. Apartment-empty state is owned by `AwayManager`, fed by iOS Shortcut geofence webhooks through the Cloudflare tunnel; LEAVE suppresses autonomous actuation and ARRIVE force-reapplies lights, optional welcome behavior, and any `pending_arrival_vibe` staged through Siri.
+- Camera-based physical presence is source-qualified. Latitude real-person authority is YOLO26n-pose/OpenVINO-gated; MediaPipe may add supporting Couch localization only after YOLO confirms a person. The desktop pc_agent independently provides calibrated Desk/Bed/abstain observations to `PresenceFusion`. Apartment-empty state is owned by `AwayManager`, fed by iOS Shortcut geofence webhooks through the Cloudflare tunnel; LEAVE suppresses autonomous actuation and ARRIVE force-reapplies lights, optional welcome behavior, and any `pending_arrival_vibe` staged through Siri.
 - Mode priority system: pregameday (6) = gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
@@ -550,7 +547,7 @@ The ML layer has landed in code (`backend/services/ml/`, ~2,092 LOC across 8 ser
 deployed and healthy; production status requires live verification):
 - `LightingPreferenceLearner` — EMA-based (α=0.3) per-light preference overlay on `ACTIVITY_LIGHT_STATES`. Overlay applications are logged as `ml_decisions` rows with `decision_source="lighting_learner"` so the Analytics dashboard can audit when the learner is actually changing a value
 - `MusicBandit` — Thompson sampling for mode → Sonos favorite selection
-- `CameraService` — MediaPipe FaceDetector on the Latitude webcam: 15 consecutive absent frames at an approximately two-second cadence yield approximately 30 seconds of sustained absence before reporting `idle`, versus the 10-min PC-idle timer. It also captures a calibrated ambient-lux signal (fixed exposure, EMA-smoothed) for the standard adaptive brightness multiplier in `relax` only. Gaming and watching use a distinct bedroom-lux screen-sync envelope where supported; working has no standard camera-lux multiplier.
+- `CameraService` — Latitude webcam owner and YOLO26n-pose/OpenVINO person-authority gate, with MediaPipe supporting localization/diagnostics. Present promotion uses the validated 0.25 threshold with three-frame positive dwell; `<=0.01`, model unavailability, or inference failure is unknown/blinded rather than absence. Explicit absence retains downstream debounce. The service also captures calibrated ambient lux for the standard `relax` multiplier; gaming/watching use the distinct bedroom-lux screen-sync envelope where supported.
 - `ScreenSyncService` K-means — 5-cluster dominant color extraction (saturation-weighted 0.7 + luminance balance 0.3)
 - `MLDecisionLogger` — every mode decision logged to `ml_decisions` with source + factors. Live `decision_source` values: `fusion`, `ml`, `rule_engine`, `process`, `camera`, `audio_ml`, `lighting_learner`, `zone_posture_rule`, `manual`. Each fusion voter writes its own per-arrival shadow row (`applied=False, broadcast=False`); `compute_per_source_metrics` and the analytics constellation read from those rows directly. **Truth-tagging** (`on_mode_change` callback): two-pass backfill — non-predictor rows tagged with the *leaving* mode (the mode that was active during the just-ended window); `decision_source='ml'` predictor rows tagged with the *entering* mode on idle → predictable-mode transitions (since predictor logs only during idle and forecasts the next non-idle mode). Both backfills cap at 2h to avoid mislabeling overnight gaps
 - **Nightly fusion weight tuning** — `fusion_weight_tuning` ScheduledTask runs daily at 3:30 AM (30 min before `ml_nightly_training` at 4:00 AM). `MLDecisionLogger.compute_accuracy_by_source(days=14)` walks fusion decisions where `factors.signal_details` is present and computes per-source accuracy; `ConfidenceFusion.update_weights_from_accuracy()` normalizes those values into new weights. Sources without usable samples fall back to `DEFAULT_WEIGHTS`. Manual trigger via `POST /api/learning/retune-weights` returns before/after weights for validation
@@ -685,7 +682,7 @@ Browser / Phone (PWA)
    │   ├── ConfidenceFusion ───────> 4-lane weighted ensemble (process/camera/audio_ml/rule_engine)
    │   ├── BehavioralPredictor ────> LightGBM mode prediction (shadow mode, 7-class)
    │   ├── AudioClassifier ────────> YAMNet audio scene classification (shadow mode)
-   │   ├── CameraService ──────────> MediaPipe face + pose + zone + posture + lux
+   │   ├── CameraService ──────────> YOLO person authority + MediaPipe Couch localization + lux
    │   ├── LightingPreferenceLearner > EMA-based adaptive per-light prefs
    │   ├── MusicBandit ────────────> Thompson-sampling playlist selection
    │   ├── FeatureBuilder ─────────> temporal + behavioral feature extraction (training + runtime)
@@ -741,9 +738,9 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    │                            (FaceLandmarker blendshapes → EmotionService mood vector + presence observation.
    │                             Opt-in via desktop_emotion_enabled / desktop_presence_enabled. EmotionService
    │                             prefers desktop reading within 30s freshness. Shipped 2026-05-18.
-   │                             Also: flip-sample-flip bedroom lux sampler (D4). Every ~25s, flips from
-   │                             auto-exposure to a calibrated fixed exposure (from desktop_lux_calibration_config),
-   │                             reads gray.mean() over a few frames, restores auto-exposure, and POSTs to
+   │                             Also: bedroom lux sampler (D4). Every ~25s, briefly switches from
+   │                             auto-exposure to the calibrated fixed exposure (from desktop_lux_calibration_config),
+   │                             reads gray.mean(), restores auto, verifies recovery on the same handle, and POSTs to
    │                             POST http://192.168.86.210:8000/api/camera/desktop/lux. Self-calibration via
    │                             search_exposure + _run_lux_calibration runs when desktop_lux_calibrate_requested
    │                             is set. Uses CAP_DSHOW per project_desktop_webcam_dshow.md.)
@@ -765,9 +762,9 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
 
 **Deployment note:** As of 2026-04-11 the "dedicated laptop" from the
 Target Architecture is real — a Dell Latitude 7420 running Ubuntu
-24.04 LTS at 192.168.86.210. The FastAPI backend, ambient monitor, and
-Firefox kiosk all run there as systemd user services + GNOME
-autostart. The Windows dev machine (192.168.86.30) stays as a
+24.04 LTS at 192.168.86.210. The FastAPI backend and Firefox kiosk run there as systemd user services +
+GNOME autostart. The former Latitude microphone ambient-monitor path is
+disabled; the Windows Blue Yeti agent is the active audio source. The Windows dev machine (192.168.86.30) stays as a
 workstation for code editing + `git push`, and runs the PC activity
 detector pointed at the Latitude. See the Deployment section below
 and `CLAUDE.md` for operational details.
@@ -895,7 +892,7 @@ Additional keys:
 - `rust_lighting_config` — runtime tuning for the **Rust** per-game lighting profile (the bedroom lamps' luma-driven brightness). Shape: `{"envelope": {light_id: {period: [floor, cap]}}, "ember": {hue, sat}, "luma": {dark, bright}}`. Live-editable via `GET`/`PUT /api/automation/rust-lighting` (partial-merge + validate/clamp; applies on the next screen-color frame ~2.5s, **no redeploy**) and restored at boot into `ScreenSyncService`. Defaults live in `screen_sync.py` (`RUST_BRI_ENVELOPE` etc.). This is the no-deploy "a tad dimmer/brighter" tuning loop; from the desktop, `curl -X PUT http://192.168.86.210:8000/api/automation/rust-lighting -H 'Content-Type: application/json' -d '{"envelope":{"2":{"night":[50,170]}}}'` (RFC1918 LAN auto-bypasses the API key).
 - `rust_event_config` — runtime feel knobs for the **Rust Phase 2** damage reactions (L2/L5 flinch + under-fire glow). The desktop agent detects Rust's red edge-vignette (`compute_vignette_score` in `screen_sync_agent.py`) and POSTs `/api/automation/rust-event {type:"damage", score}`; `RustEventService` fires a cooldown-gated red flinch + holds a danger-red tint while damage continues. Shape: `{enabled, damage_threshold, flinch_cooldown_s, release_s, flinch_hue/sat/dip_factor/hold_s, tint_hue/sat/bri_factor}`. Live-editable via `GET`/`PUT /api/automation/rust-event-config` (partial-merge + clamp, **no redeploy**), restored at boot. `damage_threshold` is the main live-tune (Rust's vignette intensity vs the gate).
 - `camera_wedge_last_restart` — `{at, detail}`; last camera-watchdog process-restart escalation, rate-limited to ≤1/hr so an orphaned `/dev/video0` fd surviving in-process respawn can't boot-loop the service. Written by `camera_service._escalate_camera_wedge_restart`.
-- `desktop_lux_calibration_config` — `{exposure, baseline_lux, target_lux, calibrated_at}`; bedroom webcam calibration result from the desktop Brio (D4). Written by `POST /api/camera/desktop/lux/calibration`; read at boot by `bootstrap.py` to seed `app.state.bedroom_lux` (`LuxChannel`). The `exposure` value is pinned by `emotion_capture.py` for every subsequent flip-sample-flip lux read. Empty dict until the bedroom webcam is calibrated.
+- `desktop_lux_calibration_config` — `{exposure, baseline_lux, target_lux, calibrated_at}`; bedroom webcam calibration result from the desktop Brio (D4). Written by `POST /api/camera/desktop/lux/calibration`; read at boot by `bootstrap.py` to seed `app.state.bedroom_lux` (`LuxChannel`). The `exposure` value is used by `emotion_capture.py` for each brief fixed-exposure lux read; normal presence capture stays on auto exposure, and the handle is recycled only when recovery is unreadable or collapses toward black. Empty dict until the bedroom webcam is calibrated.
 - `desktop_lux_calibrate_requested` — `{requested: bool}`; flag set by `POST /api/camera/desktop/lux/calibrate/request` and cleared when the agent POSTs its calibration result. Polled every 30s by `emotion_capture.py` so calibration can be triggered server-side without a separate UI flow.
 - Personality bundle (`personality_enabled`, `emotion_enabled`, `desktop_emotion_enabled`, `desktop_presence_enabled`, `mood_ring_enabled`, `mood_ring_light_id`, `mood_calibration_bias`, `vibe_daily_cost_cap_usd`, `pending_arrival_vibe`) — master kill switch + sub-toggles for the AI Personality Layer, plus VibeRouter daily cost cap and one-shot staged arrival command (spec: `docs/PERSONALITY_LAYER.md`).
 - `mood_calibration_nudge_state` — `{last_nudge_at_utc, last_nudge_bucket}`; `CalibrationNudgeService` cross-bucket rate-limit (≥4h between nudges), survives restart so a deploy mid-day doesn't reset the gate.
@@ -1001,8 +998,8 @@ deployment. This code has not yet been deployed.
 | previous_mode | String(50) | Mode before transition |
 | source | String(30) | What triggered: time, process, ambient, manual, alexa, learned |
 | duration_seconds | Integer | Filled in when the *next* event arrives |
-| zone | String(20) | Camera-derived zone at the moment of the transition (`desk`/`couch`/null since 2026-05-27 Latitude→living-room move; rows before that date may show `bed`). Populated by `EventLogger` from `camera_service`; backfilled historically from nearby `ml_decisions` camera rows. |
-| posture | String(20) | Camera-derived posture (`upright`/`reclined`/null). Same source as zone. Effectively null since 2026-05-27 — couch posture is suppressed (no consumer) and no camera produces `reclined` anymore; historical rows still retain values. |
+| zone | String(20) | **Latitude CameraService enrichment only** at the moment of the transition: current live values are `couch`/null. `EventLogger._snapshot_camera_state()` reads `camera_service.zone` directly, not `PresenceFusion`, so current Desktop `desk`/`bed` localization is **not** written into this column. Historical rows from the former Latitude bedroom placement may show `desk`/`bed`; older backfills may also reflect nearby camera decision history. |
+| posture | String(20) | **Latitude CameraService enrichment only.** Couch posture is currently suppressed upstream because there is no approved Couch-posture consumer, so new live rows are normally null. The current Desktop Bed classifier intentionally does not infer Bed posture and is not read by this EventLogger field. Historical rows may retain `upright`/`reclined`. |
 | audio_class | String(40) | YAMNet top class from the most recent `audio_ml` `ml_decisions` row within ±60s (`silence`/`speech_single`/`speech_multiple`/`music`/`mechanical_noise`/`doorbell`/`game_audio`/null). |
 | lux | Float | Camera EMA lux at the moment of the transition. Backfill source = `ambient_lux` from the same camera frame; live writes use `camera_service.ema_lux`. |
 
@@ -1407,16 +1404,16 @@ Bounded auto-remediation for the source-trust watchdog (camera lux decoupling et
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/camera/status` | Enabled flag, last detection, `detection_source` (face/pose/None), confidence, `pose_available`, `zone` (`desk`/`couch`/None — committed after 15s hysteresis; `bed` retired with the 2026-05-27 Latitude→living-room move) + `candidate_zone` (pending commit), `posture` (`upright`/`reclined`/None — same 15s hysteresis; effectively None now, couch posture is suppressed) + `candidate_posture`, EMA lux, baseline, current multiplier, exposure value |
+| GET | `/api/camera/status` | Latitude camera status: enabled/paused, last detection, `detection_source` (`yolo` when promoted; legacy `face`/`pose` when authority is disabled), confidence, `presence_authority_ready`, YOLO enabled/init diagnostics, Latitude `zone` (`couch`/None), posture/candidate state, EMA lux/baseline/multiplier/exposure; plus nested `presence` from `PresenceFusion`, including source-qualified Desktop `desk`/`bed` observations and the effective fused zone |
 | GET | `/api/camera/snapshot?annotate=<bool>` | Returns a single JPEG frame from the webcam. When `annotate=true`, overlays the face bounding box, torso pose skeleton, and current lux/multiplier readout. Opt-in (requires camera enabled); never persists frames to disk |
 | POST | `/api/camera/enable` | Toggle camera on/off (`{enabled: bool}`); persists to `camera_enabled` setting |
 | POST | `/api/camera/calibrate` | Iteratively pick a fixed exposure in [-12, 0], record steady-state `baseline_lux`; persists to `lux_calibration_config` |
 | POST | `/api/camera/observation` | Ingest one `PresenceReading` from an off-host source (desktop pc_agent, ~2s cadence) → `PresenceFusion.on_observation`. Validates `source` against `KNOWN_SOURCES`; best-effort (drops silently pre-init). Client `captured_at` is **clamped to server now** when >2s in the future (`clamp_client_timestamp`, added 2026-06-07 after a fast desktop CMOS clock wedged the lane) — journal warning `clamped future timestamp` means the agent's clock is skewed |
-| POST | `/api/camera/desktop/lux` | Ingest one ambient-lux sample (`{ambient_lux, captured_at?}`) from the desktop bedroom webcam (D4). Best-effort; drops silently if the channel isn't initialized. Called ~every 25s by `emotion_capture.py` after its flip-sample-flip read. `captured_at` server-clamped like `/observation` |
+| POST | `/api/camera/desktop/lux` | Ingest one ambient-lux sample (`{ambient_lux, captured_at?}`) from the desktop bedroom webcam (D4). Best-effort; drops silently if the channel isn't initialized. Called ~every 25s by `emotion_capture.py` after a brief fixed-exposure sample; auto exposure is restored and verified on the same handle, with reopen only on recovery failure. `captured_at` server-clamped like `/observation` |
 | GET | `/api/camera/desktop/lux` | Bedroom lux channel snapshot — `{ema_lux, baseline_lux, calibrated, last_update}` from `app.state.bedroom_lux` |
 | POST | `/api/camera/desktop/lux/calibrate/request` | Flag a bedroom-lux calibration run for the desktop agent (persists `desktop_lux_calibrate_requested`). Agent picks it up on its next 30s settings poll and runs the exposure search |
 | GET | `/api/camera/desktop/lux/calibrate/pending` | Polled by the desktop agent — `{pending: bool}` so it knows when to run calibration |
-| GET | `/api/camera/desktop/lux/calibration` | Return persisted `desktop_lux_calibration_config` `{exposure, baseline_lux, target_lux, calibrated_at}` — agent loads `exposure` to pin every future sample |
+| GET | `/api/camera/desktop/lux/calibration` | Return persisted `desktop_lux_calibration_config` `{exposure, baseline_lux, target_lux, calibrated_at}` — agent loads `exposure` for each brief fixed-exposure sample |
 | POST | `/api/camera/desktop/lux/calibration` | Persist a calibration result (`{exposure, baseline_lux, target_lux?}`); applies baseline immediately to the live `LuxChannel` and clears the pending flag |
 
 #### Guest — `/api/guest/`
@@ -1606,7 +1603,7 @@ Manages Alexa virtual device registration and command handling. 7 virtual WeMo d
 **Virtual devices:** "gaming mode", "relax mode", "cooking mode", "bedtime", "music play", "music pause"
 
 #### EmotionService (Phase A live 2026-05-18)
-Subscribes to MediaPipe FaceLandmarker blendshape callbacks from `camera_service` when `emotion_enabled` is true (the FaceLandmarker pass is a parallel conditional detector — does **not** replace the BlazeFace presence path). Projects 52 ARKit blendshapes (`mouthSmileLeft/Right`, `browDownLeft/Right`, `cheekSquintLeft/Right`, `eyeBlinkLeft/Right`, `eyeSquintLeft/Right`, `eyeLookInLeft/Right`, `browInnerUp`, `browOuterUpLeft/Right`, `jawOpen`, `mouthPressLeft/Right`, `mouthFrownLeft/Right`, `noseSneerLeft/Right`) to a continuous `(valence, arousal, focus)` triple via the hand-tuned `_BLENDSHAPE_COEFFS` table — interpretable, not a black box. Smooths the result with α=0.3 EMA (matches `LightingPreferenceLearner`). Persists every 10s to `mood_samples`.
+Subscribes to MediaPipe FaceLandmarker blendshape callbacks from `camera_service` when `emotion_enabled` is true (the FaceLandmarker pass is a parallel conditional detector — does **not** replace the YOLO real-person authority gate). Projects 52 ARKit blendshapes (`mouthSmileLeft/Right`, `browDownLeft/Right`, `cheekSquintLeft/Right`, `eyeBlinkLeft/Right`, `eyeSquintLeft/Right`, `eyeLookInLeft/Right`, `browInnerUp`, `browOuterUpLeft/Right`, `jawOpen`, `mouthPressLeft/Right`, `mouthFrownLeft/Right`, `noseSneerLeft/Right`) to a continuous `(valence, arousal, focus)` triple via the hand-tuned `_BLENDSHAPE_COEFFS` table — interpretable, not a black box. Smooths the result with α=0.3 EMA (matches `LightingPreferenceLearner`). Persists every 10s to `mood_samples`.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -2041,7 +2038,7 @@ The dashboard has been redesigned as a living, data-reactive interface:
 
 ### Lighting Improvements (Mostly Complete)
 
-- ✓ **Gradual transitions** — 30-minute evening→night lerp, morning ramp
+- ✓ **Gradual transitions** — 30-minute evening→night lerp plus morning brightness/CT ramp. `f41bcda` keeps the morning path in CT space (`ct=400→250`) instead of interpolating HSB hue through green/cyan.
 - ✓ **Activity-aware evening** — Wind-down delays and retries if gaming/watching/social/working
 - ✓ **CT (color temperature) support** — mirek values (153=6500K → 500=2000K) as first-class parameter
 - ✓ **20 curated scenes** — per-light color harmony (analogous, complementary, triadic), paired effects
@@ -2410,15 +2407,16 @@ ML capabilities to replace hardcoded rules with learned behavior and add new
 sensing (camera, audio classification). Full specification in **`docs/ML_SPEC.md`**.
 
 - ✓ **ML Phase 1 (Code complete):** Behavioral mode prediction (LightGBM, **shadow mode — not yet promoted, pending ~500 activity events**), adaptive lighting preferences (EMA — **active**), ML decision logger, model manager (nightly retraining at 4 AM), feature builder, full `/api/learning/` REST API, `ml_decisions` + `ml_metrics` DB tables. Original Phase 1 exit criteria ("audio classifier active, behavioral outperforming rules") are not yet met — both predictors sit in shadow mode
-- ✓ **ML Phase 2 (Code complete):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode** — promotion gated on ML > RMS + 10pp accuracy), MediaPipe camera presence detection (**active**: 15 consecutive absent frames at an approximately two-second cadence yield approximately 30 seconds of sustained absence before reporting `idle`) with pose fallback, desk-zone mapping (expose-only), and posture classification (upright/reclined, expose-only — shipped April 19). The former bed mapping is historical/dormant, not current authoritative sensing; #80 owns removal of its automation consumers. The standard camera-lux multiplier is active for `relax` only; gaming/watching have a distinct bedroom-lux screen-sync envelope where supported, and working has no standard camera-lux multiplier.
+- ✓ **ML Phase 2 (Code complete; sensing authority updated 2026-08-30):** Smart screen sync K-means (**active**), music selection bandit Thompson sampling (**active**), YAMNet audio scene classification (**shadow mode**), Latitude YOLO26n-pose/OpenVINO person authority (**active when enabled**) with MediaPipe supporting Couch localization, and source-qualified Desktop Desk/Bed localization. The old Latitude bedroom Bed+posture assumptions are historical/dormant; #80 owns their cleanup, while current Desktop Bed remains legitimate location evidence under #201. The standard camera-lux multiplier is active for `relax` only; gaming/watching have a distinct bedroom-lux screen-sync envelope where supported, and working has no standard camera-lux multiplier.
 - **Zone+posture → relax actuation rule (historical):** this April–May
   `zone=bed + posture=reclined` path was tied to the former bedroom-camera
   placement. It is no longer current product behavior: the Latitude is the
-  living-room/couch physical sensor, and #80 owns deletion of dormant bed-zone
-  automation assumptions. Do not treat this record as a live rule or a sleep
+  living-room/couch physical sensor, and #80 owns cleanup/reconciliation of the
+  dormant Latitude-era bed+posture assumptions while preserving current Desktop
+  Bed location evidence. Do not treat this record as a live rule or a sleep
   inference design.
 - **ML Phase 3 (historical April–May snapshot):** ✓ Confidence fusion — **4-signal** weighted ensemble (`ConfidenceFusion`) combining process detection, camera, audio classifier, and rule engine. Behavioral predictor lane stripped 2026-04-27 after a single-class collapse audit; presence lane removed 2026-04-28 with the original home/away retirement. Weights renormalized to `process 0.438 / camera 0.250 / audio_ml 0.187 / rule_engine 0.125`. Auto-apply at 95%+ when idle and stale-process override at high agreement were historical actuation paths; the current authority contract is shadow-only as documented above. ✓ Live pipeline dashboard with SVG confidence ring and per-signal gauge cards. ✓ **Nightly accuracy-driven weight-learning shipped** — `fusion_weight_tuning` ScheduledTask at 3:30 AM derives per-source accuracy from `MLDecision.factors.signal_details` over 14 days, calls `update_weights_from_accuracy()`, and persists per-source rows to `ml_metrics` (`561d4f1`, 2026-04-28). Manual trigger at `POST /api/learning/retune-weights`. ✓ **Override rate + A/B comparison endpoints shipped** — `/api/learning/override-rate` (7d + 30d windows) was treated as the primary autonomy gate metric; `/api/learning/compare` runs fusion vs rule-engine-only vs priority-only on the same backfilled rows. ✓ **Predictor calibration shipped 2026-04-28** (`82c72ed`) — train/serve feature parity (4 features no longer default to 0 at inference), `SUGGEST_THRESHOLD` 0.70→0.30, full-class softmax distribution logged into `MLDecision.factors.distribution`, stale-encoder gate refuses to load models whose `label_encoder` references retired modes. ✓ **Rule-engine fusion vote stays fresh during manual overrides** (`b8c285a`, 2026-04-29). ✓ **Rule-engine fusion lane verified end-to-end and bootstrap guardrail added** (`7282b11`, 2026-05-03) — after the 4/29 fix, prod still showed `never_reported=["rule_engine"]` on the old PID. A test rule inserted into the live slot fired correctly on the new PID (DIAG entry → MATCH → `report_signal ok` → `log_decision ok`), confirming the wiring is sound; the silence on the older process remains unexplained but is no longer reproducible. The DIAG logs were replaced with a single WARN at the MATCH point that fires only if `_fusion is None or _ml_logger is None`, so any future bootstrap wiring drift surfaces immediately in journalctl instead of silently parking the lane in `never_reported`. ✓ **Predictor class-balanced training shipped 2026-05-06** (`d3e1c7f`) — inverse-frequency sample weights in `_train_sync` so minority classes (watching/relax/gaming) aren't starved by working-class dominance; per-class val accuracy logged to journalctl per retrain. ✓ **Predictor truth-tagging architectural fix shipped 2026-05-06** (`80e8db7`) — predictor is idle-gated, so the prior "tag with leaving mode" semantic produced `actual_mode='idle'` for every predictor row, making the standard accuracy query report 0% on a 72%-accurate model. New predictor-specific path in `MLDecisionLogger.on_mode_change` tags ml-source rows with the entering mode on idle → predictable-mode transitions; historical backlog re-tagged via one-shot SQL migration. Its former remaining-work and threshold-lowering claims are superseded by the August 1 roadmap snapshot; the August 14, 2026 Product Experience Contract and Roadmap are current.
-- All inference local (CPU-only on Latitude), privacy-first, every ML feature has a non-ML fallback
+- All inference remains local to HomeHub-controlled hosts (Latitude and/or Windows desktop as appropriate), privacy-first, with no cloud inference requirement; fallbacks and authority degradation are subsystem-specific rather than a blanket silent fallback.
 
 ### Superseded Phase 5 planning band
 

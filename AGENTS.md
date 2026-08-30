@@ -157,16 +157,18 @@ text only when that write is in scope.
 
 - `AutomationEngine` is the central activity-mode policy coordinator. Travel is
   a HOME/TRAVEL host state above activity modes, not another mode priority.
-- Physical room evidence outranks process/activity guesses. Latitude owns
-  living-room/couch context only from fresh spatially qualified strong evidence;
-  the desktop bedroom camera may localize ``desk`` or ``bed``. Ambiguous camera
-  evidence must abstain, and software/process activity must never invent a room.
+- Physical room evidence outranks process/activity guesses. Latitude person
+  authority is YOLO-gated; `couch` is supporting MediaPipe localization only
+  after YOLO confirms a real person. Blinded/unknown Latitude evidence abstains.
+  The desktop bedroom camera may localize `desk` or `bed`; ambiguous evidence
+  abstains. Software/process activity must never invent a physical room.
 - Optional desktop signals may be absent. Consumers must honor freshness and
   degrade authority rather than retain stale context.
 - Do not bypass automation apply chokepoints unless the feature explicitly owns
   bridge writes, such as screen sync or celebration sequences.
 - Respect manual, transit, scene, away/external-off, and screen-sync ownership.
-  Preserve protected lights and fresh screen-sync ownership of L2/L5.
+  Preserve protected lights and the fresh source-qualified ScreenSync target set;
+  do not assume ScreenSync always owns only L2/L5.
 - Kitchen lights L3/L4 match in functional modes and guest party scenes.
 - Never mix CT and HSB fields in a Hue bridge payload.
 - Preserve in-flight transition/event-stream reconciliation to avoid stale
@@ -199,9 +201,9 @@ database compatibility, and Hue/Sonos ownership. Frontend review should check
 store dispatch, loading/error states, accessibility, responsive layout, kiosk
 behavior, and subscription cleanup.
 
-Master has a known unrelated red backend CI baseline tracked by GitHub issue
-#151. Do not hide, reinterpret, or repair it as part of unrelated work. Report
-targeted results separately from inherited baseline failures.
+GitHub #151 is historical and resolved; do not assume an inherited red backend
+baseline. If a broad current suite is red, reproduce and report the actual
+failure rather than dismissing it as the old #151 baseline.
 
 ## Live and operational safety
 
