@@ -730,6 +730,14 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     if not engine or not sync:
         raise HTTPException(status_code=503, detail="Screen sync not initialized")
 
+    clear_watching_hold = getattr(sync, "clear_watching_hold", None)
+    if (
+        report.source == "desktop"
+        and engine.current_mode != "watching"
+        and callable(clear_watching_hold)
+    ):
+        clear_watching_hold(report.source)
+
     if engine.current_mode not in SCREEN_SYNC_MODES:
         return {"status": "ok", "applied": False}
 
@@ -760,6 +768,8 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
         source_authority["enforced"]
         and report.source != authoritative_source
     ):
+        if report.source == "desktop" and callable(clear_watching_hold):
+            clear_watching_hold(report.source)
         return {
             "status": "ok",
             "applied": False,
@@ -774,17 +784,20 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # explicit non-media foreground content (for example ChatGPT after pausing
     # YouTube), hold the last valid media color until media returns or the mode
     # itself transitions. None remains fail-open for older/indeterminate agents.
-    if (
-        engine.current_mode == "watching"
-        and report.source == "desktop"
-        and report.foreground_media is False
-    ):
-        return {
-            "status": "ok",
-            "applied": False,
-            "reason": "watching_foreground_not_media",
-            "reported_source": report.source,
-        }
+    if engine.current_mode == "watching" and report.source == "desktop":
+        targets = _screen_sync_target_lights(report, sync)
+        if report.foreground_media is False:
+            refresh_hold = getattr(sync, "refresh_watching_hold", None)
+            if callable(refresh_hold):
+                refresh_hold(report.source, targets)
+            return {
+                "status": "ok",
+                "applied": False,
+                "reason": "watching_foreground_not_media",
+                "reported_source": report.source,
+            }
+        if report.foreground_media is True and callable(clear_watching_hold):
+            clear_watching_hold(report.source, targets)
 
     # Pull zone + posture so the sync cap can differ between watching-at-desk
     # (brighter bias, L2 cap 180) and the dim couch/reclined variants. Source

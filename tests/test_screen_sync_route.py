@@ -196,6 +196,7 @@ async def test_desktop_watching_holds_last_media_color_on_non_media_foreground()
     }
     assert hue.calls == calls_after_media
     assert sync.last_color_at == last_color_after_media
+    assert sync.held_owned_light_ids() == {"2", "5"}
 
     resumed = await receive_screen_color(
         ScreenColorReport(
@@ -204,6 +205,7 @@ async def test_desktop_watching_holds_last_media_color_on_non_media_foreground()
         req,
     )  # type: ignore[arg-type]
     assert resumed["applied"] is True
+    assert sync.held_owned_light_ids() == set()
 
 
 @pytest.mark.asyncio

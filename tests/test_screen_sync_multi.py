@@ -9,6 +9,8 @@ that independence real:
   - per-(mode, light_id) brightness caps (gaming L2=240, gaming L5=60)
   - unknown light ids are silently dropped (defense for typo'd payloads)
 """
+from datetime import timedelta
+
 import pytest
 
 from backend.services import screen_sync as ss
@@ -332,15 +334,15 @@ async def test_watching_l2_no_luma_comp():
 
 
 @pytest.mark.asyncio
-async def test_watching_night_uses_slow_transition_and_deadband():
-    """Night watching should glide and skip sub-perceptual repeat frames."""
+async def test_watching_night_uses_responsive_transition_and_deadband():
+    """Night watching should react promptly while skipping sub-perceptual repeats."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
 
     for _ in range(30):
         await sync.apply_color("2", 0, 0, 0, mode="watching", period="night")
     first = hue.last_for("2")
-    assert first["transitiontime"] == 40
+    assert first["transitiontime"] == 15
 
     call_count = len(hue.calls)
     await sync.apply_color("2", 0, 0, 0, mode="watching", period="night")
@@ -362,9 +364,44 @@ async def test_watching_night_prime_limits_first_bright_frame():
     await sync.apply_color("2", 255, 255, 255, mode="watching", period="night")
     state = hue.last_for("2")
 
-    assert 30 <= state["bri"] <= 34
-    assert state["transitiontime"] == 40
+    assert 34 <= state["bri"] <= 36
+    assert state["transitiontime"] == 15
     assert sync._last_bri["2"] == pytest.approx(state["bri"], abs=1.0)
+
+
+def test_watching_night_response_tuning_is_faster_than_legacy_glide():
+    assert ss.ScreenSyncService._smoothing_alpha_for("watching", "night") == 0.35
+    assert ss.ScreenSyncService._smoothing_alpha_for("watching", "late_night") == 0.35
+    assert ss.ScreenSyncService._transitiontime_for("watching", "night") == 15
+
+
+@pytest.mark.asyncio
+async def test_watching_hold_extends_ownership_without_faking_color_freshness():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    await sync.apply_color(
+        "2", 1, 1, 100, mode="watching", source="desktop", period="night",
+    )
+    accepted_at = sync.last_color_at
+    sync.refresh_watching_hold("desktop", ["2", "5"])
+
+    # Only L2 has an acknowledged screen-sync state, so L5 cannot be invented
+    # as held ownership just because it is present in the capability list.
+    assert sync.held_owned_light_ids() == {"2"}
+
+    stale_at = accepted_at - timedelta(seconds=ss.SCREEN_SYNC_FRESH_SECONDS + 1)
+    sync._last_color_at = stale_at
+    sync._last_color_at_by_light["2"] = stale_at
+
+    assert sync.last_color_at == stale_at
+    assert sync.fresh_owned_light_ids() == {"2"}
+    assert sync.fresh_authoritative_state("2") == sync.authoritative_state("2")
+
+    sync.clear_watching_hold("desktop")
+    assert sync.held_owned_light_ids() == set()
+    assert sync.fresh_owned_light_ids() == set()
+    assert sync.fresh_authoritative_state("2") is None
 
 
 def test_prime_from_mode_state_seeds_hsb_when_available():
