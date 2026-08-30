@@ -116,7 +116,7 @@ class TestShouldSampleLux:
 
 
 class TestLuxAutoExposureRecovery:
-    def test_sample_releases_handle_after_restoring_auto(self, monkeypatch):
+    def test_sample_keeps_handle_when_auto_recovers(self, monkeypatch):
         from backend.services.pc_agent import emotion_capture as ec
 
         class Cap:
@@ -161,7 +161,25 @@ class TestLuxAutoExposureRecovery:
         try:
             agent._sample_lux(CV2)
             assert posted == [42.0]
-            assert cap.released is True
-            assert agent._cap is None
+            assert cap.released is False
+            assert agent._cap is cap
         finally:
             agent.close()
+
+
+class TestLuxRecoveryDecision:
+    def test_black_collapse_reopens(self):
+        from backend.services.pc_agent.emotion_capture import _lux_auto_recovery_needs_reopen
+        assert _lux_auto_recovery_needs_reopen(90.0, 0.1, True) is True
+
+    def test_normal_recovery_keeps_handle(self):
+        from backend.services.pc_agent.emotion_capture import _lux_auto_recovery_needs_reopen
+        assert _lux_auto_recovery_needs_reopen(90.0, 35.0, True) is False
+
+    def test_failed_restore_reopens(self):
+        from backend.services.pc_agent.emotion_capture import _lux_auto_recovery_needs_reopen
+        assert _lux_auto_recovery_needs_reopen(90.0, 35.0, False) is True
+
+    def test_very_dark_reference_does_not_churn(self):
+        from backend.services.pc_agent.emotion_capture import _lux_auto_recovery_needs_reopen
+        assert _lux_auto_recovery_needs_reopen(4.0, 0.2, True) is False

@@ -148,6 +148,11 @@ LUX_EXPOSURE_MAX = 0.0
 LUX_SAMPLE_INTERVAL_S = 25.0
 LUX_SAMPLE_SETTLE_S = 0.4   # AGC settle after switching to the fixed exposure
 LUX_SAMPLE_FRAMES = 3       # frames averaged for one lux reading
+LUX_AUTO_RECOVERY_SETTLE_S = 0.4
+LUX_AUTO_RECOVERY_FRAMES = 3
+LUX_AUTO_RECOVERY_REFERENCE_MIN = 8.0
+LUX_AUTO_RECOVERY_BLACK_FLOOR = 5.0
+LUX_AUTO_RECOVERY_MIN_RATIO = 0.20
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +234,20 @@ def search_exposure(
         exposure += -2.0 if measured > hi else 2.0
         exposure = max(exp_min, min(exp_max, exposure))
     return exposure, measured
+
+
+def _lux_auto_recovery_needs_reopen(
+    before_mean: Optional[float], after_mean: Optional[float], restore_ok: bool,
+) -> bool:
+    """Recycle only when auto-exposure recovery is clearly broken."""
+    if not restore_ok or after_mean is None:
+        return True
+    if before_mean is None or before_mean < LUX_AUTO_RECOVERY_REFERENCE_MIN:
+        return False
+    return (
+        after_mean < LUX_AUTO_RECOVERY_BLACK_FLOOR
+        and after_mean < before_mean * LUX_AUTO_RECOVERY_MIN_RATIO
+    )
 
 
 def _compute_head_drop_ratio(
@@ -1254,6 +1273,13 @@ class EmotionCapture:
         if cap is None or not cap.isOpened() or exposure is None:
             return
         lux: Optional[float] = None
+        before_mean: Optional[float] = None
+        before_ok, before_frame = cap.read()
+        if before_ok and before_frame is not None:
+            before_mean = float(
+                cv2.cvtColor(before_frame, cv2.COLOR_BGR2GRAY).mean()
+            )
+        restore_ok = False
         try:
             cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_MANUAL)
             cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
@@ -1270,12 +1296,31 @@ class EmotionCapture:
                 lux = sum(vals) / len(vals)
         finally:
             try:
-                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
+                restore_ok = bool(
+                    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, EXPOSURE_AUTO)
+                )
             except Exception:
-                pass
-            # DirectShow/Brio can remain manual-dark on the same handle. A
-            # fresh handle makes _ensure_cap() reassert auto exposure reliably.
-            self._release_cap()
+                restore_ok = False
+            time.sleep(LUX_AUTO_RECOVERY_SETTLE_S)
+            recovery_vals: list[float] = []
+            for _ in range(LUX_AUTO_RECOVERY_FRAMES):
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    recovery_vals.append(
+                        float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
+                    )
+            after_mean = (
+                sum(recovery_vals) / len(recovery_vals)
+                if recovery_vals else None
+            )
+            if _lux_auto_recovery_needs_reopen(
+                before_mean, after_mean, restore_ok,
+            ):
+                logger.warning(
+                    "Brio auto-exposure recovery failed (before=%s after=%s); reopening",
+                    before_mean, after_mean,
+                )
+                self._release_cap()
         if lux is None:
             logger.debug("Lux sample skipped — no frame read")
             return
