@@ -4,6 +4,7 @@ import { adaptGeometryScene } from '../apartment-whitebox/adapter.js'
 import { addApartmentStaticPolishV1 } from './polish-v1.js'
 import { addBedroomDesignPassV1 } from './bedroom-v1.js'
 import { addLivingRoomSofaV1 } from './living-room-sofa-v1.js'
+import { addLivingRoomFurnitureV1 } from './living-room-furniture-v1.js'
 
 // Transitional preview compositor: capture the shell's accepted world group,
 // then layer production-intent furniture/details into the exact same Three.js
@@ -47,6 +48,7 @@ import('./main-v2.js')
     addApartmentStaticPolishV1(apartmentWorld, data)
     addBedroomDesignPassV1(apartmentWorld, data)
     addLivingRoomSofaV1(apartmentWorld)
+    addLivingRoomFurnitureV1(apartmentWorld, data)
     patchPreviewTitle('Bedroom + measured Living Room sofa baseline · static production preview')
     patchDebugTitle()
     window.addEventListener('resize', () => requestAnimationFrame(patchDebugTitle))

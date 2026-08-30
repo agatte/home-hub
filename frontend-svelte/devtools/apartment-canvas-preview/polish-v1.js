@@ -185,7 +185,6 @@ function addServicePolish(world, data) {
 export function addApartmentStaticPolishV1(world, data) {
   addApartmentDetailsV1(world, data)
   // bedroom-v1.js owns the Braya frame and bedding replacement.
-  addWhiteChairPolish(world, data)
   addMediaPolish(world, data)
   addKitchenPolish(world, data)
   addServicePolish(world, data)

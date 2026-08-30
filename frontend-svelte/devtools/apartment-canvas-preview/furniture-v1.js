@@ -259,7 +259,15 @@ export function addApartmentFurnitureIdentity(world, data) {
     // The accepted blocker footprints remain data anchors, but rendering their
     // generic primitives here would leave duplicate desk, chair, and monitor
     // geometry underneath the faithful replacements.
-    if (['bedroom.bed', 'bedroom.desk_main', 'bedroom.desk_return', 'bedroom.chair', 'bedroom.monitor', 'bedroom.pc', 'bedroom.projector', 'living.couch'].includes(blocker.id)) continue
+    if ([
+      'bedroom.bed', 'bedroom.desk_main', 'bedroom.desk_return', 'bedroom.chair',
+      'bedroom.monitor', 'bedroom.pc', 'bedroom.projector', 'living.couch',
+      // These Living Room objects retain their GeometryScene compatibility
+      // anchors, but their visual identity is owned by
+      // living-room-furniture-v1.js. Do not draw generic primitives beneath
+      // their bounded replacements.
+      'living.coffee_table', 'living.white_chair',
+    ].includes(blocker.id)) continue
 
     // End table becomes an open cluster rather than a solid whitebox mass.
     if (blocker.id === 'living.end_table_cluster') {
