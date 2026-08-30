@@ -109,7 +109,12 @@ class StickyClusterPicker:
         # 8 clusters preserves small saturated regions inside a mostly-gray
         # frame — at 5 clusters a small accent gets merged into the dominant
         # gray centroid and the picker has no saturated candidate to score.
-        kmeans = MiniBatchKMeans(n_clusters=8, batch_size=100, n_init=1)  # type: ignore[arg-type]
+        # Deterministic initialization is part of the stability contract: the same
+        # captured frame must not select a different color merely because k-means
+        # started from different random centroids on the next 2.5s sample.
+        kmeans = MiniBatchKMeans(
+            n_clusters=8, batch_size=100, n_init=1, random_state=0
+        )  # type: ignore[arg-type]
         kmeans.fit(pixels)
 
         scored: list[tuple[float, Any]] = []
