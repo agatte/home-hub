@@ -5542,3 +5542,33 @@ class TestPhysicalContextRelax:
 
         assert engine.current_mode == "working"
         assert engine.override_source == "api:test"
+
+
+@pytest.mark.asyncio
+async def test_physical_context_relax_holds_when_latitude_authority_unknown(
+    mock_hue, mock_hue_v2, mock_ws,
+):
+    presence = PresenceFusion()
+    engine = AutomationEngine(
+        hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        presence_fusion=presence,
+    )
+    camera = _PhysicalContextCamera()
+    camera.presence_authority_ready = True
+    engine.set_camera_service(camera)
+    now = datetime.now(timezone.utc)
+    reading = PresenceReading(
+        source="latitude", captured_at=now, face_present=True,
+        face_confidence=0.9, detection_source="face", zone="couch",
+    )
+    presence.on_observation(reading)
+    await engine.notify_presence_observation(reading)
+    assert engine.current_mode == "relax"
+
+    camera.presence_authority_ready = False
+    await engine._evaluate_physical_context_relax(
+        now=now + timedelta(seconds=60), trigger="authority_unknown",
+    )
+    assert engine.current_mode == "relax"
+    assert engine.override_source == "physical_context_relax"
+    assert engine._physical_context_presence_lost_at is None

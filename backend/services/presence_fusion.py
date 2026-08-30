@@ -81,10 +81,10 @@ class PresenceReading:
     captured_at: datetime  # UTC
     face_present: Optional[bool] = None
     face_confidence: Optional[float] = None
-    # ``detection_source`` is Latitude-specific: "face" | "pose" | None.
-    # Desktop only runs FaceLandmarker; left None there.
+    # ``detection_source`` records physical-evidence provenance: face/pose/yolo/None.
+    # Desktop uses face for Desk and calibrated pose geometry for Bed.
     detection_source: Optional[str] = None
-    zone: Optional[str] = None  # "desk" (desktop) | "couch" (Latitude) | None
+    zone: Optional[str] = None  # "desk"/"bed" (desktop) | "couch" (Latitude) | None
     # Latitude reports "upright" | "reclined". Desktop adds
     # "slouched" / "upright" (frontal-only). New sources may extend
     # the vocabulary; consumers should treat unknown values as opaque.
@@ -169,25 +169,26 @@ class PresenceFusion:
     # Attendance queries
     # ------------------------------------------------------------------
 
-    def _latitude_says_bed(self, max_age_s: int) -> bool:
-        """Helper: is Latitude actively localizing the user to bed?
+    def _physical_says_bed(self, max_age_s: int) -> bool:
+        """Whether a fresh physical source positively localizes Bed.
 
-        Single-arity rule: the cross-source veto fires only when Latitude
-        has a fresh reading with ``zone=='bed'`` AND ``face_present=True``.
-        ``zone=None`` is "I don't know," not "off-desk" — never veto on it.
-        Extracted so ``is_at_desk_fresh`` and ``get_at_desk_attribution``
-        stay consistent (a desktop attribution shouldn't survive a veto
-        that returned False from the at-desk query).
+        Desktop Bed is calibrated pose-only evidence. The historical Latitude
+        Bed form is retained for backward compatibility with old recordings and
+        tests, even though the relocated Latitude no longer emits Bed.
         """
         now = datetime.now(timezone.utc)
         for reading in self._readings.values():
             if (now - reading.captured_at).total_seconds() > max_age_s:
                 continue
-            if (
-                reading.source == "latitude"
-                and reading.zone == "bed"
-                and reading.face_present
-            ):
+            if reading.zone != "bed":
+                continue
+            if reading.source == "desktop":
+                if reading.detection_source == "pose":
+                    return True
+            elif reading.source == "latitude":
+                if reading.face_present:
+                    return True
+            elif self._is_strongly_present(reading):
                 return True
         return False
 
@@ -205,8 +206,8 @@ class PresenceFusion:
         webcam actually has a wide field of view that includes the bed in
         the background; reliability comes from the model's detection profile.
 
-        Cross-source veto: see ``_latitude_says_bed`` — when Latitude
-        positively localizes user to bed, desktop face_present is vetoed.
+        Cross-source veto: see ``_physical_says_bed`` — when a physical source
+        positively localizes the user to Bed, desktop face_present is vetoed.
         """
         now = datetime.now(timezone.utc)
         any_at_desk = False
@@ -215,9 +216,9 @@ class PresenceFusion:
                 continue
             if self._is_at_desk(reading):
                 any_at_desk = True
-        if any_at_desk and self._latitude_says_bed(max_age_s):
-            # Geometric impossibility: Latitude sees user in bed AND desktop
-            # face says at-desk. Trust the wider-angle view.
+        if any_at_desk and self._physical_says_bed(max_age_s):
+            # Geometric impossibility: a physical source says Bed while another
+            # reading says Desk. Bed localization vetoes at-desk.
             return False
         return any_at_desk
 
@@ -277,9 +278,9 @@ class PresenceFusion:
         still releasing within seconds of a genuine exit.
 
         Unlike ``get_at_desk_attribution`` this does NOT apply the
-        ``_latitude_says_bed`` veto — callers want the raw "was recently at
-        the desk" recency for a stationary-zone gate, and the bed veto is
-        dormant post-relocation (no camera produces ``zone=bed``).
+        ``_physical_says_bed`` veto — callers want the raw "was recently at
+        the desk" recency for a stationary-zone gate, and the Bed veto is intentionally omitted here because callers need raw
+        recency; current-zone consumers separately see Desktop Bed.
         """
         if self._last_at_desk_at is None:
             return None
@@ -303,7 +304,7 @@ class PresenceFusion:
         ).total_seconds()
         if age > DEFAULT_FRESHNESS_S:
             return None
-        if self._latitude_says_bed(DEFAULT_FRESHNESS_S):
+        if self._physical_says_bed(DEFAULT_FRESHNESS_S):
             return None
         return self._last_at_desk_source
 
@@ -314,17 +315,38 @@ class PresenceFusion:
     def latest_zone(
         self, max_age_s: int = DEFAULT_FRESHNESS_S,
     ) -> Optional[str]:
-        """Best zone reading.
+        """Best trustworthy physical zone reading.
 
-        Latitude is authoritative for its own zone (``couch`` since the
-        2026-05-27 living-room move; ``bed``/``desk`` historically). When it
-        has no fresh zone (capture failure, no one in the living room) but the
-        desktop sees a fresh face, fall back to ``"desk"`` — the desktop is
-        the at-desk authority.
+        Weak Latitude face detections remain diagnostic evidence but cannot
+        establish ``couch`` authority. Desktop close-face ``desk`` and
+        calibrated pose-only ``bed`` are peer physical observations. If both
+        are simultaneously strong, the fresher capture wins.
         """
+        candidates: list[tuple[datetime, str]] = []
         lat = self._readings.get("latitude")
-        if lat is not None and lat.zone is not None and self._fresh(lat, max_age_s):
-            return lat.zone
+        if (
+            lat is not None
+            and lat.zone is not None
+            and self._fresh(lat, max_age_s)
+            and self._is_strongly_present(lat)
+        ):
+            candidates.append((lat.captured_at, lat.zone))
+
+        desktop = self._readings.get("desktop")
+        if desktop is not None and self._fresh(desktop, max_age_s):
+            if desktop.zone == "bed" and desktop.detection_source == "pose":
+                candidates.append((desktop.captured_at, "bed"))
+            elif desktop.zone == "desk" and desktop.face_present:
+                candidates.append((desktop.captured_at, "desk"))
+            elif desktop.zone is None and desktop.face_present:
+                # Backward compatibility with pre-zone desktop agents.
+                candidates.append((desktop.captured_at, "desk"))
+
+        if candidates:
+            return max(candidates, key=lambda item: item[0])[1]
+
+        # Legacy streaming remains a last-resort hint only when neither
+        # physical camera currently has trustworthy localization.
         streaming = self._readings.get("latitude_streaming")
         if (
             streaming is not None
@@ -332,9 +354,26 @@ class PresenceFusion:
             and self._fresh(streaming, max_age_s)
         ):
             return streaming.zone
-        if self._desktop_at_desk_fresh(max_age_s):
-            return "desk"
         return None
+
+    def latest_strong_zone(
+        self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
+    ) -> Optional[str]:
+        """Fresh strong physical zone, excluding legacy streaming hints."""
+        candidates: list[tuple[datetime, str]] = []
+        for source in ("latitude", "desktop"):
+            reading = self._readings.get(source)
+            if (
+                reading is None
+                or reading.zone is None
+                or not self._fresh(reading, max_age_s)
+                or not self._is_strongly_present(reading)
+            ):
+                continue
+            candidates.append((reading.captured_at, reading.zone))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
 
     def latest_posture(
         self, max_age_s: int = DEFAULT_FRESHNESS_S,
@@ -470,9 +509,11 @@ class PresenceFusion:
 
     def _desktop_at_desk_fresh(self, max_age_s: int) -> bool:
         desk = self._readings.get("desktop")
-        if desk is None or not desk.face_present:
+        if desk is None or not self._fresh(desk, max_age_s):
             return False
-        return self._fresh(desk, max_age_s)
+        if desk.zone == "bed":
+            return False
+        return desk.zone == "desk" or bool(desk.face_present)
 
     @staticmethod
     def _is_at_desk(reading: PresenceReading) -> bool:
@@ -480,7 +521,9 @@ class PresenceFusion:
         if reading.source == "latitude":
             return reading.zone == "desk"
         if reading.source == "desktop":
-            return bool(reading.face_present)
+            if reading.zone == "bed":
+                return False
+            return reading.zone == "desk" or bool(reading.face_present)
         # Unknown future source — be conservative; require zone=desk.
         return reading.zone == "desk"
 
@@ -501,8 +544,11 @@ class PresenceFusion:
         commit actually fired.
         """
         if reading.source == "latitude":
+            if reading.detection_source == "yolo":
+                # Promoted #198 path already passed consecutive-frame authority.
+                return bool(reading.face_present)
             if reading.detection_source == "pose":
-                # Trust upstream's face-anchor gate (camera_service.py).
+                # Legacy MediaPipe path: trust the upstream face-anchor gate.
                 return bool(reading.face_present)
             if reading.detection_source == "face":
                 return (
@@ -510,6 +556,8 @@ class PresenceFusion:
                 ) >= LATITUDE_STRONG_FACE_THRESHOLD
             return False
         if reading.source == "desktop":
+            if reading.detection_source == "pose":
+                return reading.zone == "bed"
             return bool(reading.face_present)
         # Unknown source — accept face_present at face value.
         return bool(reading.face_present)

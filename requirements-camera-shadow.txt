@@ -1,0 +1,4 @@
+# Optional #198 shadow camera challenger runtime.
+# Do NOT add this to the normal HomeHub install until a shadow calibration is authorized.
+# OpenVINO telemetry must be disabled after install with: opt_in_out --opt_out
+openvino==2026.3.0

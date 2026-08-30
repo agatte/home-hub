@@ -157,9 +157,10 @@ text only when that write is in scope.
 
 - `AutomationEngine` is the central activity-mode policy coordinator. Travel is
   a HOME/TRAVEL host state above activity modes, not another mode priority.
-- Physical room evidence outranks process/activity guesses. Latitude evidence
-  is living-room/couch context; desktop evidence owns desk context. Do not
-  revive dormant bed-zone assumptions.
+- Physical room evidence outranks process/activity guesses. Latitude owns
+  living-room/couch context only from fresh spatially qualified strong evidence;
+  the desktop bedroom camera may localize ``desk`` or ``bed``. Ambiguous camera
+  evidence must abstain, and software/process activity must never invent a room.
 - Optional desktop signals may be absent. Consumers must honor freshness and
   degrade authority rather than retain stale context.
 - Do not bypass automation apply chokepoints unless the feature explicitly owns

@@ -19,6 +19,9 @@ from zoneinfo import ZoneInfo
 
 from backend.services.desk_exit_kitchen_service import (
     ABSENT_TRIGGER_SECONDS,
+    CORRIDOR_ABSENT_TRIGGER_SECONDS,
+    CORRIDOR_HOLDING,
+    CORRIDOR_WINDDOWN_KITCHEN,
     DESK_STICKY_SECONDS,
     HARD_TIMEOUT_SECONDS,
     REFIRE_COOLDOWN_SECONDS,
@@ -44,6 +47,8 @@ class _FakeAutomation:
         self.lux_read_calls = 0
         self.apply_calls: list[dict] = []
         self.clear_calls: list[dict] = []
+        self.corridor_apply_calls: list[dict] = []
+        self.corridor_clear_calls: list[dict] = []
 
     def _read_fresh_camera_lux(self):
         """Mirror the engine's (ema_lux, baseline_lux) freshness getter.
@@ -71,6 +76,19 @@ class _FakeAutomation:
 
     async def clear_desk_exit_override(self, transition_time=20):
         self.clear_calls.append({"transition": transition_time})
+
+    async def apply_corridor_override(
+        self, states, duration_seconds, transition_time,
+    ):
+        self.corridor_apply_calls.append({
+            "states": states, "duration": duration_seconds,
+            "transition": transition_time,
+        })
+
+    async def clear_corridor_override(self, light_ids, transition_time=30):
+        self.corridor_clear_calls.append({
+            "light_ids": list(light_ids), "transition": transition_time,
+        })
 
 
 class _FakeCamera:
@@ -386,3 +404,125 @@ class TestLuxAdaptiveBrightness:
         await svc._deactivate("test")
         assert svc._held_lux is None
         assert svc._held_baseline is None
+
+
+# ---------------------------------------------------------------------------
+# Fused bedroom/couch authority regression
+# ---------------------------------------------------------------------------
+
+
+def _fusion_desktop_bed() -> PresenceFusion:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=datetime.now(timezone.utc),
+        face_present=False, detection_source="pose", zone="bed",
+        pose_visible_landmarks=17,
+    ))
+    return fusion
+
+
+def _fusion_weak_latitude_couch() -> PresenceFusion:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=datetime.now(timezone.utc),
+        face_present=True, face_confidence=0.55,
+        detection_source="face", zone="couch",
+    ))
+    return fusion
+
+
+class TestFusedStrongPresence:
+    async def test_desktop_bed_blocks_kitchen_only_arming(self):
+        auto = _FakeAutomation(mode="watching", period="night", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(
+            auto, cam, presence_fusion=_fusion_desktop_bed(),
+        )
+        await _drive_absent_window(svc)
+        assert svc.active is False
+        assert auto.apply_calls == []
+
+    async def test_active_kitchen_releases_when_bed_appears(self):
+        fusion = PresenceFusion()
+        auto = _FakeAutomation(mode="watching", period="night", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(auto, cam, presence_fusion=fusion)
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        fusion.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            detection_source="pose", zone="bed", face_present=False,
+        ))
+        await svc._check()
+        assert svc.active is False
+        assert len(auto.clear_calls) == 1
+
+    async def test_desktop_bed_blocks_late_night_corridor(self):
+        auto = _FakeAutomation(mode="watching", period="late_night", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(
+            auto, cam, presence_fusion=_fusion_desktop_bed(),
+        )
+        await svc._check()
+        assert svc._camera_absent_since is None
+        await svc._check()
+        assert svc._corridor_active is False
+        assert auto.corridor_apply_calls == []
+
+    async def test_weak_latitude_couch_does_not_block_corridor(self):
+        auto = _FakeAutomation(mode="watching", period="late_night", at_desk=False)
+        cam = _FakeCamera(last_detection="present", detection_source="face",
+                          confidence=0.55, zone="couch")
+        svc = DeskExitKitchenService(
+            auto, cam, presence_fusion=_fusion_weak_latitude_couch(),
+        )
+        await svc._check()
+        assert svc._camera_absent_since is not None
+        svc._camera_absent_since -= timedelta(
+            seconds=CORRIDOR_ABSENT_TRIGGER_SECONDS + 1,
+        )
+        await svc._check()
+        assert svc._corridor_active is True
+
+    async def test_active_corridor_winds_down_when_bed_appears(self):
+        fusion = PresenceFusion()
+        auto = _FakeAutomation(mode="watching", period="late_night", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(auto, cam, presence_fusion=fusion)
+        await svc._check()
+        svc._camera_absent_since -= timedelta(
+            seconds=CORRIDOR_ABSENT_TRIGGER_SECONDS + 1,
+        )
+        await svc._check()
+        assert svc._corridor_active is True
+        await svc._corridor_ramp_kitchen(datetime.now(tz=TZ))
+        assert svc._corridor_substate == CORRIDOR_HOLDING
+        fusion.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            detection_source="pose", zone="bed", face_present=False,
+        ))
+        await svc._check()
+        assert svc._corridor_substate == CORRIDOR_WINDDOWN_KITCHEN
+        assert auto.corridor_clear_calls[-1]["light_ids"] == ["3", "4"]
+
+
+class TestUnknownPresenceAuthority:
+    async def test_unknown_camera_authority_blocks_kitchen_arming(self):
+        svc, auto, _ = _make_service(
+            mode="watching", period="night", cam_detection="unknown",
+        )
+        await _drive_absent_window(svc)
+
+        assert svc.active is False
+        assert svc._camera_absent_since is None
+        assert auto.apply_calls == []
+
+    async def test_unknown_camera_authority_blocks_corridor_arming(self):
+        svc, auto, _ = _make_service(
+            mode="watching", period="late_night", cam_detection="unknown",
+        )
+        await _drive_absent_window(svc)
+
+        assert svc._corridor_active is False
+        assert svc._camera_absent_since is None
+        assert auto.corridor_apply_calls == []

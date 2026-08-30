@@ -427,22 +427,19 @@ def test_desktop_strong_overrides_latitude_weak() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_latest_zone_prefers_latitude() -> None:
-    """Latitude is authoritative — it's the only source that sees the bed."""
+def test_latest_zone_strong_latitude_couch_beats_older_desktop_desk() -> None:
     fusion = PresenceFusion()
     fusion.on_observation(PresenceReading(
-        source="latitude", captured_at=_now(),
-        zone="bed", posture="reclined",
+        source="desktop", captured_at=_ago(2),
+        face_present=True, face_confidence=0.70,
+        detection_source="face", zone="desk",
     ))
     fusion.on_observation(PresenceReading(
-        source="desktop", captured_at=_now(),
-        face_present=True, face_confidence=0.70,
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.80,
+        detection_source="face", zone="couch",
     ))
-    # Desktop says "face present at desk" but Latitude says bed —
-    # Latitude wins because the desktop only confirms desk by
-    # implication and Latitude has the better information.
-    assert fusion.latest_zone() == "bed"
-
+    assert fusion.latest_zone() == "couch"
 
 def test_latest_zone_falls_back_to_desktop_when_latitude_silent() -> None:
     """Sleeping-mode pause: Latitude stops reporting; desktop is the
@@ -681,3 +678,133 @@ def test_invalidate_source_removes_only_named_live_reading() -> None:
 
     assert fusion.get_source_reading("latitude") is None
     assert fusion.get_source_reading("desktop") is desktop
+
+
+# ---------------------------------------------------------------------------
+# Bedroom-vs-Latitude physical authority regression (2026-08-30)
+# ---------------------------------------------------------------------------
+
+
+def test_latest_zone_ignores_weak_latitude_couch_face() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.60,
+        detection_source="face", zone="couch",
+    ))
+    assert fusion.latest_zone() is None
+    assert fusion.is_strongly_present_any() is False
+
+
+def test_desktop_bed_pose_beats_weak_latitude_couch() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.60,
+        detection_source="face", zone="couch",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=False, face_confidence=0.0,
+        detection_source="pose", zone="bed",
+        pose_visible_landmarks=17,
+    ))
+    assert fusion.latest_zone() == "bed"
+    assert fusion.is_strongly_present_any() is True
+    assert fusion.is_at_desk_fresh() is False
+
+
+def test_latest_zone_keeps_strong_latitude_couch_authority() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.75,
+        detection_source="face", zone="couch",
+    ))
+    assert fusion.latest_zone() == "couch"
+    assert fusion.is_strongly_present_any() is True
+
+
+def test_latest_zone_fresher_strong_desktop_bed_wins_conflict() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_ago(2),
+        face_present=True, face_confidence=0.80,
+        detection_source="face", zone="couch",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=False, face_confidence=0.0,
+        detection_source="pose", zone="bed",
+    ))
+    assert fusion.latest_zone() == "bed"
+
+
+def test_latest_strong_zone_excludes_weak_latitude_couch() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(), face_present=True,
+        face_confidence=0.55, detection_source="face", zone="couch",
+    ))
+    assert fusion.latest_strong_zone() is None
+
+
+def test_latest_strong_zone_accepts_desktop_bed_pose() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(), face_present=False,
+        detection_source="pose", zone="bed", pose_visible_landmarks=17,
+    ))
+    assert fusion.latest_strong_zone() == "bed"
+
+
+def test_desktop_bed_vetoes_stale_at_desk_attribution() -> None:
+    fusion = PresenceFusion()
+    now = _now()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=now - timedelta(seconds=4),
+        face_present=True, face_confidence=0.82, zone="desk",
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=now,
+        face_present=False, detection_source="pose", zone="bed",
+        pose_visible_landmarks=17,
+    ))
+    assert fusion.is_at_desk_fresh() is False
+    assert fusion.get_at_desk_attribution() is None
+    assert fusion.seconds_since_at_desk() is not None
+
+
+def test_yolo_latitude_is_strong_presence_without_inventing_zone() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude",
+        captured_at=_now(),
+        face_present=True,
+        face_confidence=0.82,
+        detection_source="yolo",
+        zone=None,
+    ))
+    assert fusion.is_strongly_present_any() is True
+    assert fusion.latest_zone() is None
+
+
+def test_desktop_bed_localization_survives_yolo_presence_without_zone() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude",
+        captured_at=_now(),
+        face_present=True,
+        face_confidence=0.82,
+        detection_source="yolo",
+        zone=None,
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=_now(),
+        face_present=True,
+        detection_source="pose",
+        zone="bed",
+    ))
+    assert fusion.is_strongly_present_any() is True
+    assert fusion.latest_zone() == "bed"

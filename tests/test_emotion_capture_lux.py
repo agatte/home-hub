@@ -113,3 +113,55 @@ class TestShouldSampleLux:
             assert a._should_sample_lux(1000.0 + LUX_SAMPLE_INTERVAL_S) is True
         finally:
             a.close()
+
+
+class TestLuxAutoExposureRecovery:
+    def test_sample_releases_handle_after_restoring_auto(self, monkeypatch):
+        from backend.services.pc_agent import emotion_capture as ec
+
+        class Cap:
+            def __init__(self):
+                self.released = False
+                self.set_calls = []
+
+            def isOpened(self):
+                return True
+
+            def set(self, prop, value):
+                self.set_calls.append((prop, value))
+                return True
+
+            def read(self):
+                return True, object()
+
+            def release(self):
+                self.released = True
+
+        class Gray:
+            @staticmethod
+            def mean():
+                return 42.0
+
+        class CV2:
+            CAP_PROP_AUTO_EXPOSURE = 1
+            CAP_PROP_EXPOSURE = 2
+            COLOR_BGR2GRAY = 3
+
+            @staticmethod
+            def cvtColor(frame, code):
+                return Gray()
+
+        monkeypatch.setattr(ec.time, "sleep", lambda _: None)
+        agent = ec.EmotionCapture("http://test:8000")
+        cap = Cap()
+        posted = []
+        agent._cap = cap
+        agent._lux_exposure = -6.0
+        monkeypatch.setattr(agent, "_post_lux", posted.append)
+        try:
+            agent._sample_lux(CV2)
+            assert posted == [42.0]
+            assert cap.released is True
+            assert agent._cap is None
+        finally:
+            agent.close()

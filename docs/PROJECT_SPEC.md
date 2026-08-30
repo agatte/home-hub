@@ -117,13 +117,22 @@ home/away state. Some consumers and diagnostics still need audit for consistent
 use of the fused result. See [PRESENCE_LIGHTING_SCENARIOS.md](PRESENCE_LIGHTING_SCENARIOS.md).
 
 **DECIDED TARGET.** Physical room presence outranks software activity. A
-confident Latitude couch observation owns living-room context; a confident
-desktop-camera desk observation owns desk/bedroom context. Running processes
-are supporting evidence, never proof of physical presence. If neither room
-source sees Anthony, do not infer a room from a stale process. Record and
-surface conflicts, the chosen authority, and the reason. Future room sensors
-provide occupancy evidence; they must not be used to invent PC-specific
-activity.
+confident spatially qualified Latitude couch observation owns living-room
+context; the desktop bedroom camera may localize either desk or bed. Running
+processes are supporting evidence, never proof of physical presence. If neither
+room source has trustworthy physical evidence, do not infer a room from a stale
+process. Record and surface conflicts, the chosen authority, and the reason.
+Future room sensors provide occupancy evidence; they must not be used to invent
+PC-specific activity.
+
+**ACCEPTED IMPLEMENTATION CANDIDATE (2026-08-30; deployment pending).** The
+desktop camera keeps close frontal face evidence as immediate ``desk`` and may
+commit ``bed`` only after calibrated distant-pose geometry holds for three
+frames; ambiguous geometry abstains. Latitude ``couch`` authority requires
+strong, spatially couch-qualified evidence, so weak furniture-like faces cannot
+outvote a trustworthy bedroom observation. Strong physical conflicts resolve
+by freshness. Transit and desk-exit/corridor consumers use the fused physical
+result. This candidate restores a Bed *zone* only; it does not infer Bed posture.
 
 **CODED/SHADOW-ONLY — DEPLOYMENT PENDING (2026-08-01).** The living-room
 CapabilitySnapshot -> DecisionContext gate implements that authority before
