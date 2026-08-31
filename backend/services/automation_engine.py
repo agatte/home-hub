@@ -4081,7 +4081,7 @@ class AutomationEngine:
             # weather-specific bucket when one exists, otherwise falls back
             # to the "any" baseline.
             lighting_learner = getattr(self, "_lighting_learner", None)
-            if lighting_learner:
+            if lighting_learner and mode != "gaming":
                 weather_for_overlay = (
                     self._get_current_weather_condition() or "any"
                 )
@@ -4516,7 +4516,7 @@ class AutomationEngine:
         condition = self._get_current_weather_condition()
         learner = getattr(self, "_lighting_learner", None)
         learned: set[str] = set()
-        if learner and condition:
+        if learner and condition and mode != "gaming":
             try:
                 learned = learner.has_weather_pref(mode, period, condition)
             except Exception:

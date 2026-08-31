@@ -2032,32 +2032,22 @@ class TestApplyModeDedup:
         assert states["5"]["bri"] == 14
         clock.assert_called_once_with()
 
-    async def test_learner_overlay_does_not_change_generic_screen_sync_source(
-        self, mock_hue, mock_hue_v2, mock_ws,
+    async def test_gaming_resolver_ignores_generic_lighting_learner(
+        self, monkeypatch, mock_hue, mock_hue_v2, mock_ws,
     ):
-        """The final composed target, including overlays, reaches ScreenSync."""
+        """Gaming Director owns its palette; generic ML cannot rewrite it."""
 
         class _Learner:
             def get_overlay(self, mode, period, weather, *, zone=None):
-                assert (mode, period, weather) == ("gaming", "day", "clouds")
-                return {"2": {"bri": 189}}
+                raise AssertionError("Gaming must not consult generic learner overlays")
 
             def has_weather_pref(self, mode, period, weather):
-                return set()
+                raise AssertionError("Gaming must not consult generic learner weather prefs")
 
         class _Weather:
             def get_cached(self):
                 return {"description": "clouds"}
 
-        mock_hue._lights["5"] = {
-            "id": "5",
-            "name": "Bedroom Right",
-            "on": True,
-            "bri": 90,
-            "hue": 8000,
-            "sat": 140,
-            "reachable": True,
-        }
         sync = ScreenSyncService(
             hue_service=mock_hue, target_light_ids=["2", "5"],
         )
@@ -2069,19 +2059,24 @@ class TestApplyModeDedup:
             lighting_learner=_Learner(),
             screen_sync=sync,
         )
+        engine._current_mode = "gaming"
         engine._get_time_period = lambda now=None: "day"
+        monkeypatch.setattr(
+            AutomationEngine, "_gaming_schedule_type",
+            staticmethod(lambda now: "weekday"),
+        )
 
         await engine._apply_mode("gaming", force_resend=True)
 
-        assert mock_hue._lights["2"]["bri"] == 207
-        assert ACTIVITY_LIGHT_STATES["gaming"]["day"]["2"]["bri"] == 240
-        assert resolve_activity_state("gaming", "day")["2"]["bri"] == 240
-
-        await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
-        await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
-
-        assert mock_hue._lights["2"]["bri"] == 207
-        assert mock_hue._lights["5"]["bri"] == sync._accepted_gaming_targets["5"]["bri"]
+        diagnostics = engine.get_gaming_diagnostics()
+        assert diagnostics["schedule_type"] == "weekday"
+        assert diagnostics["period"] == "day"
+        assert set(sync._accepted_gaming_targets) == {"2", "5"}
+        for light_id in ("2", "5"):
+            assert sync._accepted_gaming_targets[light_id]["ct"] == 250
+        assert mock_hue._lights["1"]["ct"] == 250
+        assert mock_hue._lights["3"]["ct"] == 250
+        assert mock_hue._lights["4"]["ct"] == 250
 
 
 # ---------------------------------------------------------------------------
