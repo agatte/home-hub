@@ -267,6 +267,10 @@ export function addApartmentFurnitureIdentity(world, data) {
       // living-room-furniture-v1.js. Do not draw generic primitives beneath
       // their bounded replacements.
       'living.coffee_table', 'living.white_chair',
+      // The TV, console, and subwoofer retain their approved compatibility
+      // footprints, while living-room-media-v1.js owns their renderer-only
+      // identity. Skipping the generic primitives prevents dark-box doubles.
+      'living.tv', 'living.tv_stand', 'living.subwoofer',
     ].includes(blocker.id)) continue
 
     // End table becomes an open cluster rather than a solid whitebox mass.

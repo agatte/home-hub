@@ -11,8 +11,6 @@ const materials = Object.freeze({
   deskTop: new THREE.MeshStandardMaterial({ color: 0x423f3a, roughness: 0.82 }),
   deskMetal: new THREE.MeshStandardMaterial({ color: 0x2c2f2e, roughness: 0.72, metalness: 0.08 }),
   coffeeTop: new THREE.MeshStandardMaterial({ color: 0x8a7158, roughness: 0.9 }),
-  mediaInset: new THREE.MeshStandardMaterial({ color: 0x242726, roughness: 0.76 }),
-  speakerGrille: new THREE.MeshStandardMaterial({ color: 0x1e2221, roughness: 0.96 }),
   cabinetShadow: new THREE.MeshStandardMaterial({ color: 0xc9c5bc, roughness: 0.92 }),
   cabinetRail: new THREE.MeshStandardMaterial({ color: 0xd6d2c9, roughness: 0.9 }),
   backsplash: new THREE.MeshStandardMaterial({ color: 0xb5b0a7, roughness: 0.88 }),
@@ -212,41 +210,6 @@ function addCoffeeTableIdentity(world, data) {
   ), materials.coffeeTop)
 }
 
-function addMediaIdentity(world, data) {
-  const stand = byId(data, 'living.tv_stand')
-  if (stand) {
-    const f = footprint(stand)
-    add(world, boxGeometry(f.x, f.y, f.w, f.h, 135.6, 139.8), materials.mediaInset)
-
-    // Two shallow front divisions give the low black console a readable
-    // cabinet rhythm from the hero angle without guessing internal hardware.
-    const division = Math.max(2, f.h * 0.018)
-    for (const offset of [0.34, 0.67]) {
-      add(world, boxGeometry(
-        f.x,
-        f.y + f.h * offset - division / 2,
-        Math.min(4, f.w * 0.08),
-        division,
-        18,
-        118,
-      ), materials.mediaInset)
-    }
-  }
-
-  const sub = byId(data, 'living.subwoofer')
-  if (sub) {
-    const f = footprint(sub)
-    add(world, boxGeometry(
-      f.x + f.w * 0.06,
-      f.y + f.h * 0.06,
-      f.w * 0.88,
-      f.h * 0.88,
-      51.9,
-      53.3,
-    ), materials.speakerGrille)
-  }
-}
-
 function addKitchenIdentity(world, data) {
   // The upper boxes in v1 are deliberately simple; these rails/backing cues
   // visually tie them into one wall-mounted kitchen composition.
@@ -301,7 +264,7 @@ export function addApartmentFurnitureIdentityV2(world, data) {
   // living-room-sofa-v1.js owns the measured sofa baseline.
   // bedroom-v1.js owns the complete Burgener workstation replacement. Keep
   // this broader apartment layer from recreating its old generic top/monitor.
-  addMediaIdentity(world, data)
+  // living-room-media-v1.js owns the TV, console, and subwoofer replacement.
   addKitchenIdentity(world, data)
   addServiceIdentity(world, data)
 }

@@ -6,7 +6,6 @@ const materials = Object.freeze({
   headboardFace: new THREE.MeshStandardMaterial({ color: 0x66594f, roughness: 0.96 }),
   chairInset: new THREE.MeshStandardMaterial({ color: 0xbeb5a8, roughness: 0.99 }),
   chairEdge: new THREE.MeshStandardMaterial({ color: 0xd8d1c6, roughness: 0.99 }),
-  mediaFace: new THREE.MeshStandardMaterial({ color: 0x181b1a, roughness: 0.72 }),
   cabinetKick: new THREE.MeshStandardMaterial({ color: 0xb9b5ad, roughness: 0.94 }),
   cabinetSeam: new THREE.MeshStandardMaterial({ color: 0xc8c4bc, roughness: 0.92 }),
   serviceFace: new THREE.MeshStandardMaterial({ color: 0xc5c8c5, roughness: 0.9 }),
@@ -113,32 +112,6 @@ function addWhiteChairPolish(world, data) {
   ), materials.chairEdge)
 }
 
-function addMediaPolish(world, data) {
-  const tv = footprint(data, 'living.tv')
-  if (tv) {
-    add(world, boxGeometry(
-      tv.x + tv.w * 0.28,
-      tv.y + tv.h * 0.06,
-      tv.w * 0.44,
-      tv.h * 0.88,
-      146,
-      228.5,
-    ), materials.mediaFace)
-  }
-
-  const stand = footprint(data, 'living.tv_stand')
-  if (stand) {
-    add(world, boxGeometry(
-      stand.x + stand.w * 0.025,
-      stand.y + stand.h * 0.035,
-      Math.max(3, stand.w * 0.075),
-      stand.h * 0.93,
-      24,
-      119,
-    ), materials.mediaFace)
-  }
-}
-
 function addKitchenPolish(world, data) {
   const island = footprint(data, 'kitchen.island')
   if (island) {
@@ -185,7 +158,6 @@ function addServicePolish(world, data) {
 export function addApartmentStaticPolishV1(world, data) {
   addApartmentDetailsV1(world, data)
   // bedroom-v1.js owns the Braya frame and bedding replacement.
-  addMediaPolish(world, data)
   addKitchenPolish(world, data)
   addServicePolish(world, data)
 }

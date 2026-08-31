@@ -16,7 +16,6 @@ const materials = Object.freeze({
   zzStem: new THREE.MeshStandardMaterial({ color: 0x435d42, roughness: 0.98 }),
   zzLeaf: new THREE.MeshStandardMaterial({ color: 0x5c7657, roughness: 0.98 }),
   deskEdge: new THREE.MeshStandardMaterial({ color: 0x272a29, roughness: 0.75, metalness: 0.04 }),
-  mediaAccent: new THREE.MeshStandardMaterial({ color: 0x1f2221, roughness: 0.72 }),
 })
 
 function add(world, geometry, material, { castShadow = true, receiveShadow = true } = {}) {
@@ -221,20 +220,6 @@ function addZZPlant(world, data) {
   }
 }
 
-function addMediaContrast(world, data) {
-  const tv = blockerFootprint(data, 'living.tv')
-  if (tv) {
-    add(world, boxGeometry(
-      tv.x + tv.w * 0.22,
-      tv.y + tv.h * 0.035,
-      tv.w * 0.56,
-      tv.h * 0.93,
-      143,
-      229,
-    ), materials.mediaAccent)
-  }
-}
-
 export function addApartmentDetailsV1(world, data) {
   addApartmentFurnitureIdentityV2(world, data)
   // The workstation's desk edge, lamps, and microphone are faithfully owned
@@ -242,5 +227,5 @@ export function addApartmentDetailsV1(world, data) {
   // so do not retain the old generic ring or loose cylinder underneath.
   addSnakePlant(world, data)
   addZZPlant(world, data)
-  addMediaContrast(world, data)
+  // living-room-media-v1.js owns the TV, console, and subwoofer replacement.
 }
