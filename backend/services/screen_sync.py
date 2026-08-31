@@ -51,6 +51,11 @@ logger = logging.getLogger("home_hub.screen_sync")
 # doesn't flood the table — ~720 rows/hr/light at 5s, negligible vs retention.
 SCREEN_SYNC_LOG_INTERVAL_S = 5.0
 
+# Laptop loopback posts at roughly this cadence. Keep persistent delivery
+# failures visible without turning a localhost/API outage into a warning every
+# frame.
+LOOPBACK_DELIVERY_LOG_INTERVAL_S = 60.0
+
 
 # Per-(mode, light_id) max brightness clamps for the synced lamps.
 # Gaming caps bound the canonical base for fixture safety; watching stays
@@ -1153,10 +1158,31 @@ class LaptopLoopbackCapture:
         self._task: Optional[asyncio.Task] = None
         self._running: bool = False
         self._capture_interval: float = 2.5
+        self._last_delivery_success_at: Optional[datetime] = None
+        self._last_delivery_error_at: Optional[datetime] = None
+        self._last_delivery_error: Optional[str] = None
+        self._consecutive_delivery_failures: int = 0
+        self._last_delivery_error_logged_at: Optional[datetime] = None
 
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def delivery_health(self) -> dict[str, object]:
+        """Bounded loopback delivery state for ScreenSync status."""
+        return {
+            "last_success_at": (
+                self._last_delivery_success_at.isoformat()
+                if self._last_delivery_success_at else None
+            ),
+            "last_error_at": (
+                self._last_delivery_error_at.isoformat()
+                if self._last_delivery_error_at else None
+            ),
+            "last_error": self._last_delivery_error,
+            "consecutive_failures": self._consecutive_delivery_failures,
+        }
 
     async def start(self) -> None:
         if self._running:
@@ -1181,20 +1207,59 @@ class LaptopLoopbackCapture:
     async def _loop(self) -> None:
         while self._running:
             try:
-                regions = await asyncio.to_thread(_capture_dominant_colors)
-                if regions:
-                    body: dict[str, object] = {"source": "laptop"}
-                    region_payload: dict[str, dict[str, int]] = {}
-                    for name, rgb in regions.items():
-                        region_payload[name] = {"r": rgb[0], "g": rgb[1], "b": rgb[2]}
-                    body["regions"] = region_payload
-                    async with httpx.AsyncClient(timeout=5.0) as client:
-                        await client.post(self._url, json=body)
+                rgb = await asyncio.to_thread(_capture_dominant_color)
+                if rgb is not None:
+                    await self._deliver_color(rgb)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.debug(f"Laptop loopback error: {e}")
             await asyncio.sleep(self._capture_interval)
+
+    @staticmethod
+    def _report_body(rgb: tuple[int, int, int]) -> dict[str, int | str]:
+        """Build the current single-color ScreenColorReport wire shape."""
+        return {"r": rgb[0], "g": rgb[1], "b": rgb[2], "source": "laptop"}
+
+    async def _deliver_color(self, rgb: tuple[int, int, int]) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(self._url, json=self._report_body(rgb))
+                response.raise_for_status()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._record_delivery_failure(error)
+        else:
+            self._record_delivery_success()
+
+    def _record_delivery_success(self) -> None:
+        recovered_failures = self._consecutive_delivery_failures
+        self._last_delivery_success_at = datetime.now(timezone.utc)
+        self._last_delivery_error = None
+        self._consecutive_delivery_failures = 0
+        if recovered_failures:
+            logger.info(
+                "Laptop loopback delivery recovered after %d failed frame(s)",
+                recovered_failures,
+            )
+
+    def _record_delivery_failure(self, error: Exception) -> None:
+        now = datetime.now(timezone.utc)
+        self._last_delivery_error_at = now
+        self._last_delivery_error = str(error)
+        self._consecutive_delivery_failures += 1
+        if (
+            self._last_delivery_error_logged_at is None
+            or (now - self._last_delivery_error_logged_at).total_seconds()
+            >= LOOPBACK_DELIVERY_LOG_INTERVAL_S
+        ):
+            logger.warning(
+                "Laptop loopback delivery failed (%d consecutive frame(s)): %s",
+                self._consecutive_delivery_failures,
+                error,
+            )
+            self._last_delivery_error_logged_at = now
 
 
 try:
@@ -1205,16 +1270,15 @@ except ImportError:
     _HAS_KMEANS = False
 
 
-# Sticky-cluster state for the laptop-loopback picker — per region, so left
-# and right halves bias toward their own previous winners independently.
-# Same rationale as the desktop agent.
+# Sticky-cluster state for the laptop-loopback picker. The single picker keeps
+# a stable whole-frame color across adjacent captures.
 _STICKY_DISTANCE: float = 60.0
 _STICKY_SCORE_MARGIN: float = 0.08
 _STICKY_STALENESS_SEC: float = 10.0  # dropped from 30s — fresher resets after scene cuts
 
 
 class _LoopbackPicker:
-    """Per-region sticky-cluster state for the laptop loopback."""
+    """Sticky-cluster state for the laptop loopback."""
 
     def __init__(self) -> None:
         # np.ndarray when populated; None before the first frame. Typed Any
@@ -1223,14 +1287,13 @@ class _LoopbackPicker:
         self.last_picked_at: float = 0.0
 
 
-_LOOPBACK_PICKERS: dict[str, _LoopbackPicker] = {}
+_LOOPBACK_PICKER = _LoopbackPicker()
 
 
 def _pick_dominant(pixels, picker: "_LoopbackPicker") -> Optional[tuple[int, int, int]]:
-    """K-means dominant-color pick with per-region sticky bias.
+    """K-means dominant-color pick with sticky bias.
 
-    `picker` holds the prior winner so each region (left/right) keeps its
-    own temporal stability instead of contending for one global slot.
+    ``picker`` holds the prior whole-frame winner for temporal stability.
     """
     if not _HAS_KMEANS or len(pixels) < 5:
         if not pixels:
@@ -1245,7 +1308,9 @@ def _pick_dominant(pixels, picker: "_LoopbackPicker") -> Optional[tuple[int, int
     import time as _time
 
     pixel_array = np.array(pixels, dtype=np.float32)
-    kmeans = MiniBatchKMeans(n_clusters=5, batch_size=100, n_init=1)  # type: ignore[arg-type]
+    kmeans = MiniBatchKMeans(
+        n_clusters=5, batch_size=100, n_init=1, random_state=0,
+    )  # type: ignore[arg-type]
     kmeans.fit(pixel_array)
 
     now = _time.time()
@@ -1295,22 +1360,21 @@ def _pick_dominant(pixels, picker: "_LoopbackPicker") -> Optional[tuple[int, int
     return (int(chosen[0]), int(chosen[1]), int(chosen[2]))
 
 
-def _capture_dominant_colors() -> dict[str, tuple[int, int, int]]:
+def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
     """
-    Capture the primary screen and extract dominant colors for left and right halves.
+    Capture the primary screen and extract one deterministic dominant color.
 
     Used by `LaptopLoopbackCapture`. The desktop agent has its own copy of
     this logic in `pc_agent/screen_sync_agent.py` — they're intentionally
     duplicated so the agent has zero backend dependencies.
 
-    Returns a dict with "left" and "right" RGB triples. Skips entries where
-    sampling failed (empty region).
+    Returns one RGB triple, or ``None`` when sampling fails.
     """
     try:
         import mss
     except ImportError:
         logger.error("mss not installed — cannot run laptop loopback")
-        return {}
+        return None
 
     try:
         with mss.mss() as sct:
@@ -1321,39 +1385,24 @@ def _capture_dominant_colors() -> dict[str, tuple[int, int, int]]:
             height = screenshot.height
             raw = screenshot.rgb
 
-            # Downsample to ~50x30 grid per region — enough for K-means.
+            # Downsample to ~50x30 grid — enough for K-means.
             step_x = max(1, width // 50)
             step_y = max(1, height // 30)
 
-            # 4% dead zone down the middle so centered UI chrome (taskbars,
-            # HUDs) doesn't pull both lamps to the same color.
-            x_left_start  = int(width * 0.20)
-            x_left_end    = int(width * 0.48)
-            x_right_start = int(width * 0.52)
-            x_right_end   = int(width * 0.80)
+            # Ignore the outer edges and centered UI chrome/taskbar region.
+            x_start = int(width * 0.20)
+            x_end = int(width * 0.80)
             y_start = int(height * 0.20)
             y_end   = int(height * 0.80)
 
-            def _collect(x_start: int, x_end: int) -> list[tuple[int, int, int]]:
-                out: list[tuple[int, int, int]] = []
-                for y in range(y_start, y_end, step_y):
-                    for x in range(x_start, x_end, step_x):
-                        idx = (y * width + x) * 3
-                        if idx + 2 < len(raw):
-                            out.append((raw[idx], raw[idx + 1], raw[idx + 2]))
-                return out
-
-            left_pixels  = _collect(x_left_start,  x_left_end)
-            right_pixels = _collect(x_right_start, x_right_end)
-
-            regions: dict[str, tuple[int, int, int]] = {}
-            for name, pixels in (("left", left_pixels), ("right", right_pixels)):
-                picker = _LOOPBACK_PICKERS.setdefault(name, _LoopbackPicker())
-                pick = _pick_dominant(pixels, picker)
-                if pick is not None:
-                    regions[name] = pick
-            return regions
+            pixels: list[tuple[int, int, int]] = []
+            for y in range(y_start, y_end, step_y):
+                for x in range(x_start, x_end, step_x):
+                    idx = (y * width + x) * 3
+                    if idx + 2 < len(raw):
+                        pixels.append((raw[idx], raw[idx + 1], raw[idx + 2]))
+            return _pick_dominant(pixels, _LOOPBACK_PICKER)
 
     except Exception as e:
         logger.error(f"Screen capture error: {e}")
-        return {}
+        return None

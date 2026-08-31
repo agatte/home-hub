@@ -6,9 +6,11 @@ Mirror semantics: a single ``{r, g, b}`` payload writes to every lamp in
 this test file covers the dispatch surface only.
 """
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from backend.api.routes.automation import (
@@ -20,7 +22,7 @@ from backend.api.schemas.automation import ActivityReport, ScreenColorReport
 from backend.services.automation_engine import AutomationEngine
 from backend.services.light_state_calculator import resolve_activity_state
 from backend.services.presence_fusion import PresenceFusion, PresenceReading
-from backend.services.screen_sync import ScreenSyncService
+from backend.services.screen_sync import LaptopLoopbackCapture, ScreenSyncService
 
 
 class _FakeHue:
@@ -542,7 +544,7 @@ class _FakeLoopback:
 
 
 @pytest.mark.asyncio
-async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopback():
+async def test_latitude_streaming_activity_owns_loopback_without_physical_presence():
     engine = _FakeActivityEngine()
     presence = PresenceFusion()
     loopback = _FakeLoopback()
@@ -567,8 +569,10 @@ async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopbac
     await report_activity(active, req)  # type: ignore[arg-type]
     await asyncio.sleep(0)
 
-    assert presence.latest_zone() == "couch"
-    assert presence.is_strongly_present_any() is True
+    assert presence.get_source_reading("latitude_streaming") is None
+    assert presence.latest_zone() is None
+    assert presence.is_strongly_present_any() is False
+    assert presence.is_present_within_seconds(8) is False
     assert loopback.running is True
     assert loopback.starts == 1
 
@@ -599,6 +603,36 @@ async def test_latitude_streaming_activity_marks_couch_presence_and_owns_loopbac
     assert presence.latest_zone() is None
     assert loopback.running is False
     assert loopback.stops == 1
+
+
+def test_legacy_media_reading_cannot_establish_physical_presence():
+    presence = PresenceFusion()
+    now = datetime.now(timezone.utc)
+
+    presence.on_observation(PresenceReading(
+        source="latitude_streaming",
+        captured_at=now,
+        face_present=True,
+        face_confidence=1.0,
+        zone="couch",
+    ))
+
+    assert presence.get_source_reading("latitude_streaming") is None
+    assert presence.latest_zone() is None
+    assert presence.is_strongly_present_any() is False
+    assert presence.is_present_within_seconds(8) is False
+
+    presence.on_observation(PresenceReading(
+        source="latitude",
+        captured_at=now,
+        face_present=True,
+        detection_source="yolo",
+        zone="couch",
+    ))
+
+    assert presence.latest_zone() == "couch"
+    assert presence.is_strongly_present_any() is True
+    assert presence.is_present_within_seconds(8) is True
 
 
 @pytest.mark.asyncio
@@ -830,6 +864,88 @@ async def test_laptop_watching_screen_color_targets_living_room_and_kitchen():
     assert result["applied"] is True
     assert set(result["lights"]) == {"1", "3", "4"}
     assert set(hue.lights_touched()) == {"1", "3", "4"}
+
+
+@pytest.mark.asyncio
+async def test_laptop_loopback_body_validates_and_drives_living_room_targets():
+    loopback = LaptopLoopbackCapture()
+    body = loopback._report_body((40, 80, 220))
+    report = ScreenColorReport.model_validate(body)
+    hue = _FakeHue()
+    sync = ScreenSyncService(
+        hue_service=hue,
+        target_light_ids=["2", "5", "1", "3", "4"],
+    )
+    req = _make_request(_owned_watching_engine("latitude"), sync)
+
+    result = await receive_screen_color(report, req)  # type: ignore[arg-type]
+
+    assert body == {"r": 40, "g": 80, "b": 220, "source": "laptop"}
+    assert result["applied"] is True
+    assert set(hue.lights_touched()) == {"1", "3", "4"}
+
+
+@pytest.mark.asyncio
+async def test_laptop_loopback_rejection_is_throttled_and_exposed_in_status(
+    monkeypatch, caplog,
+):
+    class _RejectedResponse:
+        def __init__(self) -> None:
+            self.raise_calls = 0
+
+        def raise_for_status(self) -> None:
+            self.raise_calls += 1
+            httpx.Response(
+                503,
+                request=httpx.Request("POST", "http://localhost/screen-color"),
+            ).raise_for_status()
+
+    class _RejectedClient:
+        def __init__(self) -> None:
+            self.requests = []
+            self.response = _RejectedResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+        async def post(self, url, json):
+            self.requests.append((url, json))
+            return self.response
+
+    client = _RejectedClient()
+    monkeypatch.setattr(
+        "backend.services.screen_sync.httpx.AsyncClient", lambda **_kwargs: client,
+    )
+    caplog.set_level(logging.WARNING, logger="home_hub.screen_sync")
+    loopback = LaptopLoopbackCapture()
+
+    await loopback._deliver_color((1, 2, 3))
+    await loopback._deliver_color((1, 2, 3))
+
+    health = loopback.delivery_health
+    assert client.requests == [
+        (loopback._url, {"r": 1, "g": 2, "b": 3, "source": "laptop"}),
+        (loopback._url, {"r": 1, "g": 2, "b": 3, "source": "laptop"}),
+    ]
+    assert client.response.raise_calls == 2
+    assert health["consecutive_failures"] == 2
+    assert "503 Service Unavailable" in health["last_error"]
+    assert len([
+        record for record in caplog.records
+        if "Laptop loopback delivery failed" in record.getMessage()
+    ]) == 1
+
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = _make_request(_owned_watching_engine("latitude"), sync)
+    req.app.state.laptop_loopback = loopback
+
+    status = await get_screen_sync_status(req)  # type: ignore[arg-type]
+
+    assert status["laptop_loopback_delivery"] == health
 
 
 @pytest.mark.asyncio

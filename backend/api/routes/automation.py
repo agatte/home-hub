@@ -98,21 +98,6 @@ async def _handle_latitude_streaming_side_effects(
     engine = getattr(request.app.state, "automation", None)
     streaming_present = _latitude_owns_watching_context(report, result, engine)
 
-    presence = getattr(request.app.state, "presence", None)
-    if presence is not None:
-        if streaming_present:
-            # This synthetic reading is a consequence of accepted Latitude
-            # ownership, never an input to its own authority decision.
-            presence.on_observation(PresenceReading(
-                source="latitude_streaming",
-                captured_at=datetime.now(timezone.utc),
-                face_present=True,
-                face_confidence=1.0,
-                zone="couch",
-            ))
-        else:
-            presence.invalidate_source("latitude_streaming")
-
     loopback = getattr(request.app.state, "laptop_loopback", None)
     if loopback is None:
         return
@@ -171,9 +156,8 @@ def _latitude_owns_watching_context(
     """True only for an accepted, fresh Latitude-owned Watching context.
 
     The raw detector report is deliberately insufficient: it may have lost
-    engine arbitration to an active desktop session.  Do not use the synthetic
-    ``latitude_streaming`` presence reading here; it is emitted only after this
-    proof succeeds.
+    engine arbitration to an active desktop session. Physical presence is not
+    part of this media/source-ownership decision.
     """
     if not (
         report.mode == "watching"
@@ -306,18 +290,6 @@ def _watching_screen_sync_authority(engine, presence) -> dict:
                     "source": "laptop",
                     "reason": "fresh_latitude_couch_presence",
                 }
-            streaming = presence.get_source_reading("latitude_streaming")
-            if (
-                _reading_is_fresh(streaming, 8.0)
-                and streaming.face_present is True
-                and streaming.zone == "couch"
-            ):
-                return {
-                    "enforced": True,
-                    "source": "laptop",
-                    "reason": "fresh_latitude_streaming_presence",
-                }
-
     return {
         "enforced": True,
         "source": None,
@@ -978,6 +950,9 @@ async def get_screen_sync_status(request: Request) -> dict:
         "last_color_at": last_color_at,
         "last_source": last_source,
         "laptop_loopback_enabled": laptop_loopback_running,
+        "laptop_loopback_delivery": (
+            loopback.delivery_health if loopback is not None else None
+        ),
         "source_authority_enforced": source_authority["enforced"],
         "authoritative_source": authoritative_source,
         "authority_reason": source_authority["reason"],

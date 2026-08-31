@@ -131,10 +131,11 @@ hold existing physical context and blocks new path-light arming rather than
 manufacturing an empty-room transition. The post-deploy real-room Couch and Bed
 acceptance checks remain tracked in #198 and #201.
 
-**KNOWN CURRENT DEFECT.** `latitude_streaming` still injects synthetic couch
-presence after accepted Latitude Watching. That contradicts the product
-contract that media/process evidence is not physical occupancy and is tracked
-by #200. Do not treat that implementation leak as an approved authority rule.
+**SHIPPED/CURRENT — reconciled 2026-08-31.** Accepted Latitude Watching can
+own the laptop ScreenSync source through fresh process/activity context, but
+it does not create physical presence. Media/process evidence is never Couch,
+face, posture, or strong-presence authority; physical Couch authority remains
+with the YOLO-gated Latitude camera path.
 
 **SHADOW-ONLY.** The living-room `CapabilitySnapshot -> DecisionContext` gate
 remains computation/observability only. It evaluates physical/source evidence,

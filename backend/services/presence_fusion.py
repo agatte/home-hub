@@ -64,7 +64,7 @@ LATITUDE_STRONG_FACE_THRESHOLD = 0.70
 # Canonical source names. New sources don't need to be enumerated here
 # (the merge is dict-keyed by string), but the route layer validates
 # inbound payloads against this set.
-KNOWN_SOURCES = frozenset({"latitude", "desktop", "latitude_streaming"})
+KNOWN_SOURCES = frozenset({"latitude", "desktop"})
 
 # Forward skew beyond which a STORED reading is considered invalid by
 # construction (no honest capture happens in the future). Mirrors the
@@ -119,6 +119,11 @@ class PresenceFusion:
         """Record one observation. Last-write-wins per source."""
         if not isinstance(reading, PresenceReading):
             logger.debug("on_observation called with non-PresenceReading: %r", reading)
+            return
+        if reading.source == "latitude_streaming":
+            # Media intent is ScreenSync ownership context, never a physical
+            # camera observation. Ignore delayed legacy packets defensively.
+            logger.debug("ignoring non-physical legacy media reading")
             return
         prior = self._readings.get(reading.source)
         if prior is not None and reading.captured_at < prior.captured_at:
@@ -344,16 +349,6 @@ class PresenceFusion:
 
         if candidates:
             return max(candidates, key=lambda item: item[0])[1]
-
-        # Legacy streaming remains a last-resort hint only when neither
-        # physical camera currently has trustworthy localization.
-        streaming = self._readings.get("latitude_streaming")
-        if (
-            streaming is not None
-            and streaming.zone is not None
-            and self._fresh(streaming, max_age_s)
-        ):
-            return streaming.zone
         return None
 
     def latest_strong_zone(

@@ -44,7 +44,7 @@ class PresenceObservation(BaseModel):
     from this body and hands it to ``app.state.presence``.
     """
 
-    source: Literal["desktop", "latitude_streaming"] = "desktop"
+    source: Literal["desktop"] = "desktop"
     captured_at: Optional[datetime] = None
     face_present: Optional[bool] = None
     face_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
