@@ -251,7 +251,10 @@ async def refresh_playoff_state(
     today = today or datetime.now(timezone.utc)
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            resp = await client.get(_SCHEDULE_URL)
+            resp = await client.get(
+                _SCHEDULE_URL,
+                params={"season": nfl_season_year(today), "seasontype": 2},
+            )
             resp.raise_for_status()
             payload = resp.json()
         events = payload.get("events") or []

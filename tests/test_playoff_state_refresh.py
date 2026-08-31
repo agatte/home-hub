@@ -12,6 +12,7 @@ import pytest
 
 from backend.services.playoff_state_refresh import (
     _AFC_SOUTH_GROUP_ID,
+    _SCHEDULE_URL,
     _STANDINGS_URL,
     PLAYOFF_STATE_KEY,
     REFRESH_HOUR_ET,
@@ -353,6 +354,7 @@ class TestRefreshPlayoffState:
         class _FakeClient:
             init_kwargs: dict = {}
             get_kwargs: dict = {}
+            get_calls: list[tuple[str, dict]] = []
 
             def __init__(self, *args, **kwargs):
                 self.__class__.init_kwargs = kwargs
@@ -361,6 +363,7 @@ class TestRefreshPlayoffState:
             async def __aexit__(self, *a): return False
             async def get(self, url, **kwargs):
                 self.__class__.get_kwargs = kwargs
+                self.__class__.get_calls.append((url, kwargs))
                 if url == _STANDINGS_URL:
                     return _FakeResponse(_standings_payload_colts_lead_1_0())
                 return _FakeResponse(self._schedule_payload)
@@ -381,11 +384,19 @@ class TestRefreshPlayoffState:
         assert captured["value"]["division_gap_games"] == 0
         assert result["record"] == [1, 0, 0]
         assert "headers" not in _FakeClient.init_kwargs
-        assert _FakeClient.get_kwargs["params"] == {
-            "season": 2026,
-            "seasontype": 2,
-            "group": _AFC_SOUTH_GROUP_ID,
-        }
+        assert _FakeClient.get_calls == [
+            (_SCHEDULE_URL, {"params": {"season": 2026, "seasontype": 2}}),
+            (
+                _STANDINGS_URL,
+                {
+                    "params": {
+                        "season": 2026,
+                        "seasontype": 2,
+                        "group": _AFC_SOUTH_GROUP_ID,
+                    }
+                },
+            ),
+        ]
 
     @pytest.mark.asyncio
     async def test_mismatched_standings_record_is_ignored(self, monkeypatch):
