@@ -2079,6 +2079,48 @@ class TestApplyModeDedup:
         assert mock_hue._lights["4"]["ct"] == 250
 
 
+    async def test_non_gaming_weather_learner_remains_active(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        """Non-Gaming modes still use learned overlays and weather fade-out."""
+
+        class _Learner:
+            def __init__(self):
+                self.overlay_calls = []
+                self.weather_pref_calls = []
+
+            def get_overlay(self, mode, period, weather, *, zone=None):
+                self.overlay_calls.append((mode, period, weather, zone))
+                return {"1": {"bri": 150}}
+
+            def has_weather_pref(self, mode, period, weather):
+                self.weather_pref_calls.append((mode, period, weather))
+                return {"1"}
+
+        class _Weather:
+            def get_cached(self):
+                return {"description": "clouds"}
+
+        learner = _Learner()
+        engine = AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+            weather_service=_Weather(),
+            lighting_learner=learner,
+        )
+        engine._current_mode = "working"
+        engine._get_time_period = lambda now=None: "day"
+
+        await engine._apply_mode("working", force_resend=True)
+
+        assert learner.overlay_calls == [("working", "day", "clouds", None)]
+        assert learner.weather_pref_calls == [("working", "day", "clouds")]
+        assert mock_hue._lights["1"]["bri"] == 150
+        assert mock_hue._lights["3"]["bri"] == 151
+        assert mock_hue._lights["4"]["bri"] == 151
+
+
 # ---------------------------------------------------------------------------
 # notify_camera_commit — re-apply lights when zone/posture transitions
 # ---------------------------------------------------------------------------
