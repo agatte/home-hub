@@ -145,7 +145,7 @@ def _wpa_modifier(wpa_colts: float) -> int:
         return 10
     if mag >= _WPA_STANDARD:
         return 0
-    return -10
+    return 0
 
 
 def _margin_clock_modifier(state: GameDayState) -> int:

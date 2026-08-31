@@ -63,6 +63,7 @@ def _make_orchestrator(
     quarter: int = 2,
     clock: str = "5:32",
     automation_mode: str = "gameday",
+    house_state: str | None = None,
     dnd_active: bool = False,
     camera_present: bool = True,
     with_apartment_context: bool = True,
@@ -100,6 +101,7 @@ def _make_orchestrator(
     if with_apartment_context:
         automation = MagicMock()
         automation.current_mode = automation_mode
+        automation.house_state = house_state
         automation.is_dnd_active = MagicMock(return_value=dnd_active)
 
         camera = MagicMock()
@@ -599,6 +601,15 @@ class TestVolumePolicy:
         tts.speak.assert_awaited_once()
         # base 30 + 0 from WPA - 10 from camera_absent = 20
         assert tts.speak.await_args.kwargs.get("volume") == 20
+
+    async def test_home_state_ignores_camera_false_negative(self):
+        """Confirmed Home is stronger than a weak camera absence signal."""
+        orch, _, tts, _, _ = _make_orchestrator(
+            house_state="home", camera_present=False,
+        )
+        await orch.on_play_event(_fg_event(wpa=0.02))
+        tts.speak.assert_awaited_once()
+        assert tts.speak.await_args.kwargs.get("volume") == 28
 
     async def test_loss_state_transition_no_tts(self):
         """Loss is silent regardless of policy — empty tts_lines pool."""

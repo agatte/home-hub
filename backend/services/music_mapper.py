@@ -19,6 +19,11 @@ from backend.models import ModePlaylist
 
 logger = logging.getLogger("home_hub.music")
 
+# Real 2026 preseason evidence showed the global TTS default (10) was too quiet
+# for the T-30 room announcement. Keep this local to Game Day.
+PREGAME_TTS_VOLUME = 24
+PREGAME_TTS_LATE_NIGHT_CAP = 18
+
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
 SUPPORTED_MODES = (
@@ -59,6 +64,14 @@ def _time_period(hour: int) -> str:
     if 18 <= hour < 22:
         return "evening"
     return "night"
+
+
+def _pregame_tts_volume(now: Optional[datetime] = None) -> int:
+    """Game Day T-30 speech volume with the spec's 22:00-06:00 cap."""
+    local_now = now.astimezone(TZ) if now is not None else datetime.now(tz=TZ)
+    if local_now.hour >= 22 or local_now.hour < 6:
+        return min(PREGAME_TTS_VOLUME, PREGAME_TTS_LATE_NIGHT_CAP)
+    return PREGAME_TTS_VOLUME
 
 
 class MusicMapper:
@@ -470,10 +483,12 @@ class MusicMapper:
 
         if decision.tts_line and self._tts_service:
             try:
-                # ModeVolumeService handles per-mode volume curves; we don't
-                # double-tune here. Default speak() volume is fine — bridge
-                # cap + late-night cap apply via the volume curves separately.
-                await self._tts_service.speak(decision.tts_line)
+                # Preseason room evidence showed the global TTS default was
+                # inaudible. Game Day owns a bounded T-30 speech level while
+                # preserving the spec's 22:00-06:00 apartment cap.
+                await self._tts_service.speak(
+                    decision.tts_line, volume=_pregame_tts_volume(),
+                )
                 result["tts_fired"] = True
             except Exception:
                 logger.exception("pregame TTS dispatch failed")

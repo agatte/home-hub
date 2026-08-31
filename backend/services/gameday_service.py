@@ -142,6 +142,25 @@ class GameDayState:
     last_play: Optional[PlayEvent]
 
 
+
+
+def _play_event_payload(play: PlayEvent) -> dict[str, Any]:
+    """Return the public WebSocket shape with JSON-safe timestamps."""
+    payload = asdict(play)
+    payload["timestamp"] = play.timestamp.isoformat()
+    return payload
+
+
+def _gameday_state_payload(state: GameDayState) -> dict[str, Any]:
+    """Return the public WebSocket shape with JSON-safe datetimes."""
+    payload = asdict(state)
+    payload["kickoff_utc"] = (
+        state.kickoff_utc.isoformat() if state.kickoff_utc is not None else None
+    )
+    if state.last_play is not None:
+        payload["last_play"] = _play_event_payload(state.last_play)
+    return payload
+
 @dataclass
 class GameDayStateTransition:
     """Status transition event (e.g. pregame → in-progress)."""
@@ -425,7 +444,7 @@ class GameDayService:
         for play in new_plays:
             await self._fire_play_event(play)
             try:
-                await self._ws_manager.broadcast("gameday_play", asdict(play))
+                await self._ws_manager.broadcast("gameday_play", _play_event_payload(play))
             except Exception:
                 logger.exception("ws broadcast gameday_play failed")
 
@@ -434,7 +453,7 @@ class GameDayService:
         for play in new_momentum_plays:
             await self._fire_play_event(play)
             try:
-                await self._ws_manager.broadcast("gameday_play", asdict(play))
+                await self._ws_manager.broadcast("gameday_play", _play_event_payload(play))
             except Exception:
                 logger.exception("ws broadcast gameday_play failed")
 
@@ -445,7 +464,7 @@ class GameDayService:
         if new_state is None:
             return
         try:
-            await self._ws_manager.broadcast("gameday_state", asdict(new_state))
+            await self._ws_manager.broadcast("gameday_state", _gameday_state_payload(new_state))
         except Exception:
             logger.exception("ws broadcast gameday_state failed")
 

@@ -33,7 +33,9 @@ from backend.services.gameday_service import (
     GameDayStateTransition,
     PlayEvent,
     _parse_espn_datetime,
+    _play_event_payload,
 )
+from backend.services.websocket_manager import WebSocketManager
 
 
 FIXTURE_PATH = (
@@ -997,6 +999,41 @@ class TestStateTransitions:
         args, _ = ws.broadcast.call_args
         assert args[0] == "gameday_state"
         assert args[1]["score_colts"] == 14
+
+    async def test_game_day_payloads_cross_real_json_boundary(self):
+        class _Socket:
+            def __init__(self):
+                self.sent: list[str] = []
+
+            async def send_text(self, payload: str) -> None:
+                self.sent.append(payload)
+
+        manager = WebSocketManager()
+        socket = _Socket()
+        manager._connections.add(socket)
+        svc = _make_service(ws=manager)
+        play = PlayEvent(
+            timestamp=datetime(2026, 9, 13, 17, 5, tzinfo=timezone.utc),
+            play_type="touchdown",
+            description="Jonathan Taylor 5 Yd Rush",
+            player="Jonathan Taylor", kicker=None, yards=5,
+            scoring_team="colts", wpa=0.12,
+        )
+        state = GameDayState(
+            status="in-progress", opponent="Houston Texans",
+            kickoff_utc=datetime(2026, 9, 13, 17, 0, tzinfo=timezone.utc),
+            score_colts=7, score_opp=0, quarter=1, clock="12:34",
+            possession="colts", last_play=play,
+        )
+
+        await svc._update_state(state)
+        await manager.broadcast("gameday_play", _play_event_payload(play))
+
+        state_payload = json.loads(socket.sent[0])
+        play_payload = json.loads(socket.sent[1])
+        assert state_payload["data"]["kickoff_utc"] == "2026-09-13T17:00:00+00:00"
+        assert state_payload["data"]["last_play"]["timestamp"] == "2026-09-13T17:05:00+00:00"
+        assert play_payload["data"]["timestamp"] == "2026-09-13T17:05:00+00:00"
 
 
 # ---------------------------------------------------------------------------
