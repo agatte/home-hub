@@ -22,7 +22,7 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@sveltejs/adapter-static": "^3.0.1",
-    "@sveltejs/kit": "~2.15.3",
+    "@sveltejs/kit": "2.70.3",
     "@sveltejs/vite-plugin-svelte": "^3.1.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.3.1",
@@ -45,10 +45,9 @@
     "three": "^0.170.0"
   },
   "overrides": {
-    "undici": "^7.28.0"
+    "undici": "7.29.0"
   },
   "allowScripts": {
-    "@sveltejs/kit@2.15.3": true,
     "esbuild@0.21.5": true,
     "svelte-preprocess@5.1.4": true
   }
