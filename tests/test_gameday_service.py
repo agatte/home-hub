@@ -261,6 +261,7 @@ class TestSchedule:
 
     async def test_espn_requests_use_httpx_default_user_agent(self):
         svc = _make_service()
+        svc._now_override = datetime(2026, 8, 31, tzinfo=timezone.utc)
         schedule_client = _mock_client([{"events": []}])
         summary_client = _mock_client([_summary_payload()])
 
@@ -277,7 +278,17 @@ class TestSchedule:
             for client_call in client_factory.call_args_list
         )
         assert "headers" not in schedule_client.get.await_args.kwargs
+        assert schedule_client.get.await_args.kwargs["params"] == {
+            "season": 2026,
+            "seasontype": 2,
+        }
         assert "headers" not in summary_client.get.await_args.kwargs
+
+    def test_schedule_query_uses_previous_nfl_season_in_january_and_february(self):
+        svc = _make_service()
+        for month in (1, 2):
+            svc._now_override = datetime(2027, month, 15, tzinfo=timezone.utc)
+            assert svc._schedule_query_params() == {"season": 2026, "seasontype": 2}
 
     async def test_no_game_returns_none(self):
         svc = _make_service()
