@@ -74,6 +74,11 @@ def _owned_watching_engine(device: str):
 
 def _make_request(engine, sync, camera=None):
     """Build the minimal request shape the handler reads."""
+    if engine.current_mode == "gaming":
+        period = engine._get_time_period()
+        sync.publish_accepted_gaming_state(
+            resolve_activity_state("gaming", period),
+        )
     state = SimpleNamespace(
         automation=engine,
         screen_sync=sync,
@@ -104,6 +109,29 @@ async def test_generic_gaming_report_applies_canonical_target_states():
     assert l5["ct"] == expected["5"]["ct"] == 286
     assert "hue" not in l2 and "sat" not in l2
     assert "hue" not in l5 and "sat" not in l5
+
+
+@pytest.mark.asyncio
+async def test_unpublished_gaming_plan_reports_no_application():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                automation=_fake_engine("gaming"),
+                screen_sync=sync,
+            ),
+        ),
+    )
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=220, g=40, b=40), req,
+    )  # type: ignore[arg-type]
+
+    assert result["applied"] is False
+    assert result["lights"] == []
+    assert hue.calls == []
+    assert sync.fresh_owned_light_ids() == set()
 
 
 @pytest.mark.asyncio
@@ -736,6 +764,34 @@ async def test_activity_route_returns_truthful_semantic_disposition():
     assert response["reason"] == "recent_desk_presence"
     assert response["authoritative_mode"] == "working"
     assert response["included_in_fusion"] is False
+
+
+@pytest.mark.asyncio
+async def test_activity_route_passes_semantic_disposition_to_league_service():
+    class LeagueSpy:
+        def __init__(self):
+            self.calls = []
+
+        async def on_activity_report(self, report, disposition):
+            self.calls.append((report, disposition))
+
+    league = LeagueSpy()
+    engine = _DispositionActivityEngine()
+    req = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                automation=engine,
+                lol_champion_service=league,
+            ),
+        ),
+    )
+    report = ActivityReport(mode="gaming", source="process", factors=None)
+
+    await report_activity(report, req)  # type: ignore[arg-type]
+
+    assert league.calls[0][0] == report
+    assert league.calls[0][1]["semantic_disposition"] == "rejected"
+    assert league.calls[0][1]["reason"] == "recent_desk_presence"
 
 
 @pytest.mark.asyncio
