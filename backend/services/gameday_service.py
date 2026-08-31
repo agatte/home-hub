@@ -222,6 +222,12 @@ class GameDayService:
         """Real wall clock, or the test override when set."""
         return self._now_override or datetime.now(timezone.utc)
 
+    def _schedule_query_params(self) -> dict[str, int]:
+        """Return the current NFL regular-season schedule query."""
+        now = self._now_utc()
+        season_year = now.year - 1 if now.month in (1, 2) else now.year
+        return {"season": season_year, "seasontype": 2}
+
     # ------------------------------------------------------------------ Lifecycle
 
     @property
@@ -485,7 +491,7 @@ class GameDayService:
     async def _refresh_schedule(self) -> None:
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-                resp = await client.get(SCHEDULE_URL)
+                resp = await client.get(SCHEDULE_URL, params=self._schedule_query_params())
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:
