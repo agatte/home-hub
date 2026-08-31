@@ -585,9 +585,27 @@ class GameDayService:
         if active["status"] == STATUS_IN_PROGRESS:
             return True
         if active["status"] == STATUS_SCHEDULED:
+            if self._is_known_final_for_game(active):
+                return False
             age = (self._now_utc() - active["kickoff_utc"]).total_seconds()
             return 0 <= age <= 4 * 3600
         return False
+
+    def _is_known_final_for_game(self, game: dict[str, Any]) -> bool:
+        """Whether ``game`` is the game represented by the current final state.
+
+        Schedule metadata can remain stale while its provider is unavailable.
+        Match the final state by the game context it retains, rather than
+        treating every final state as proof that a different scheduled game is
+        not live.
+        """
+        state = self._current_state
+        if state is None or state.status != "final":
+            return False
+        if state.kickoff_utc != game.get("kickoff_utc"):
+            return False
+
+        return state.opponent == game.get("opponent")
 
     @staticmethod
     def _provider_lane_snapshot(lane: ProviderLaneHealth) -> dict[str, Any]:

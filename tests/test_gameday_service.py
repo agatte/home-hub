@@ -436,6 +436,61 @@ class TestProviderHealth:
         assert svc._summary_provider.consecutive_failures == 1
         assert svc._summary_provider.next_eligible_retry - time.time() <= SUMMARY_RETRY_BACKOFFS[0]
 
+    async def test_stale_scheduled_cache_stops_live_cadence_after_same_game_final(self):
+        """A final summary wins over stale schedule metadata for its own game."""
+        svc = _make_service()
+        kickoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        svc._schedule_cache = [{
+            "id": "401001", "kickoff_utc": kickoff, "opponent": "Miami Dolphins",
+            "colts_are_home": True, "status": "STATUS_SCHEDULED",
+        }]
+        svc._schedule_cache_time = time.time() - SCHEDULE_CACHE_TTL - 1
+
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            side_effect=[
+                _mock_client(httpx.ConnectError("schedule down")),
+                _mock_client([_summary_payload(status_name="STATUS_FINAL")]),
+            ],
+        ):
+            await svc._tick()
+
+        assert svc.current_state() is not None
+        assert svc.current_state().status == "final"
+        assert svc._post_game_clear_task is not None
+        assert svc._in_live_window() is False
+        health = svc.provider_health()
+        assert health["live_summary_required"] is False
+        assert health["schedule"]["status"] == "unhealthy"
+
+        svc._summary_provider.next_eligible_retry = 0.0
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=_mock_client(httpx.ConnectError("summary down")),
+        ):
+            await svc._tick()
+
+        assert svc.current_state().status == "final"
+        assert svc._summary_provider.status == "unhealthy"
+        assert svc.provider_health()["live_summary_required"] is False
+        await svc.close()
+
+    def test_final_for_an_old_game_does_not_suppress_a_new_live_window(self):
+        svc = _make_service()
+        old_kickoff = datetime.now(timezone.utc) - timedelta(days=7)
+        new_kickoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        svc._current_state = GameDayState(
+            status="final", opponent="Houston Texans", kickoff_utc=old_kickoff,
+            score_colts=24, score_opp=17, quarter=4, clock="", possession=None,
+            last_play=None,
+        )
+        svc._schedule_cache = [{
+            "id": "401002", "kickoff_utc": new_kickoff, "opponent": "Miami Dolphins",
+            "colts_are_home": True, "status": "STATUS_SCHEDULED",
+        }]
+
+        assert svc._in_live_window() is True
+
     async def test_live_summary_failures_back_off_cap_and_recover(self):
         svc = _make_service()
         with patch("backend.services.gameday_service.time.time", return_value=1000.0):
