@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import inspect
+import sys
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -22,6 +24,14 @@ from backend.services.camera_shadow import (
 
 def _frame() -> np.ndarray:
     return np.zeros((24, 32, 3), dtype=np.uint8)
+
+def _stub_mediapipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide only the MediaPipe image wrapper these shadow-isolation tests need."""
+    fake_mp = SimpleNamespace(
+        Image=lambda **kwargs: kwargs["data"],
+        ImageFormat=SimpleNamespace(SRGB="srgb"),
+    )
+    monkeypatch.setitem(sys.modules, "mediapipe", fake_mp)
 
 
 def _submit(coordinator: ShadowCoordinator) -> bool:
@@ -137,6 +147,7 @@ def test_sleep_clears_queued_drop_metadata_before_resume():
 
 def test_slow_shadow_submit_cannot_delay_authoritative_camera_result(monkeypatch):
     """The CameraService handoff returns before a slow worker finishes."""
+    _stub_mediapipe(monkeypatch)
     sink = InMemoryShadowResultSink()
     coordinator = ShadowCoordinator([SlowFakeAdapter(1.0)], sink, adapter_timeout_s=0.2)
 
@@ -175,7 +186,8 @@ def test_failing_and_malformed_adapters_are_deterministic_shadow_errors(run):
     coordinator.stop()
 
 
-def test_failing_adapter_cannot_change_authoritative_camera_result():
+def test_failing_adapter_cannot_change_authoritative_camera_result(monkeypatch):
+    _stub_mediapipe(monkeypatch)
     sink = InMemoryShadowResultSink()
     coordinator = ShadowCoordinator([FailingFakeAdapter()], sink)
     service = CameraService(object(), object(), shadow_coordinator=coordinator)
