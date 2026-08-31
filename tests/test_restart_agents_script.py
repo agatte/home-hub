@@ -12,6 +12,7 @@ from backend.services.pc_agent.supervisor_recovery import WindowsRecoveryOperati
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restart-agents.ps1"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
+POWERSHELL_TIMEOUT_SECONDS = 30
 
 
 def _run(command: str) -> subprocess.CompletedProcess[str]:
@@ -22,7 +23,10 @@ def _run(command: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
         text=True,
-        timeout=15,
+        # PowerShell startup and script dot-sourcing are normally quick, but can
+        # exceed 15 seconds on a loaded Linux CI runner. This test only asserts
+        # an isolated matcher result; it does not exercise restart operations.
+        timeout=POWERSHELL_TIMEOUT_SECONDS,
     )
 
 
