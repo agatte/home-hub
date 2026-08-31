@@ -38,6 +38,7 @@ _FUSION_WARN, _FUSION_ERROR = 0.6, 0.3    # confidence (lower = worse)
 _PIHOLE_TIMEOUT_SECONDS = 1.5
 _PIHOLE_CACHE_TTL_SECONDS = 10.0
 _pihole_cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_pihole_cache_lock = asyncio.Lock()
 
 
 def _classify_high(value: float, warn: float, error: float) -> str:
@@ -177,31 +178,41 @@ async def get_vitals(request: Request) -> dict[str, Any]:
         if cached is not None and now_ts - _pihole_cache["ts"] < _PIHOLE_CACHE_TTL_SECONDS:
             metrics["pihole"] = cached
         else:
-            try:
-                summary = await asyncio.wait_for(
-                    pihole.get_summary(), timeout=_PIHOLE_TIMEOUT_SECONDS
-                )
-                if summary:
-                    metrics["pihole"] = {
-                        "blocked": int(summary.get("blocked", 0)),
-                        "percent_blocked": float(
-                            summary.get("percent_blocked", 0.0)
-                        ),
-                        "active_clients": int(summary.get("active_clients", 0)),
-                        "status": "ok",
-                    }
-                    _pihole_cache["data"] = metrics["pihole"]
-                    _pihole_cache["ts"] = now_ts
+            async with _pihole_cache_lock:
+                now_ts = time.monotonic()
+                cached = _pihole_cache["data"]
+                if (
+                    cached is not None
+                    and now_ts - _pihole_cache["ts"] < _PIHOLE_CACHE_TTL_SECONDS
+                ):
+                    metrics["pihole"] = cached
                 else:
-                    metrics["pihole"] = {"status": "error"}
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "vitals: pihole summary timed out after %.1fs", _PIHOLE_TIMEOUT_SECONDS
-                )
-                metrics["pihole"] = {"status": "warn"}
-            except Exception as e:
-                logger.warning("vitals: pihole summary failed: %s", e)
-                metrics["pihole"] = {"status": "error"}
+                    try:
+                        summary = await asyncio.wait_for(
+                            pihole.get_summary(), timeout=_PIHOLE_TIMEOUT_SECONDS
+                        )
+                        if summary:
+                            metrics["pihole"] = {
+                                "blocked": int(summary.get("blocked", 0)),
+                                "percent_blocked": float(
+                                    summary.get("percent_blocked", 0.0)
+                                ),
+                                "active_clients": int(summary.get("active_clients", 0)),
+                                "status": "ok",
+                            }
+                            _pihole_cache["data"] = metrics["pihole"]
+                            _pihole_cache["ts"] = now_ts
+                        else:
+                            metrics["pihole"] = {"status": "error"}
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "vitals: pihole summary timed out after %.1fs",
+                            _PIHOLE_TIMEOUT_SECONDS,
+                        )
+                        metrics["pihole"] = {"status": "warn"}
+                    except Exception as e:
+                        logger.warning("vitals: pihole summary failed: %s", e)
+                        metrics["pihole"] = {"status": "error"}
 
     # Source trust — sanity of each tracked input source. A live-but-garbage
     # source (camera lux frozen, classifier output flat) reads `warn` here so
