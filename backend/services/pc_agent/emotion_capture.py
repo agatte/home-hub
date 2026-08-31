@@ -49,6 +49,14 @@ SETTINGS_POLL_INTERVAL = 30.0
 # two sources gate on the same floor.
 FACE_CONFIDENCE_FLOOR = 0.30
 
+# A FaceLandmarker can keep returning successful-but-empty inference results
+# after a desktop capture lifecycle disruption.  Treat only a bounded streak
+# of completed, unusable results as semantic-health evidence: ordinary framing
+# misses remain harmless, while a poisoned long-lived instance is recycled.
+# At the two-second capture cadence this is roughly ten seconds of evidence.
+FACE_SEMANTIC_DEAD_STREAK_LIMIT = 5
+FACE_SEMANTIC_RECOVERY_COOLDOWN_S = 60.0
+
 # FaceLandmarker model — fetched on first run into local data/models/.
 # Same URL the Latitude uses; each host downloads its own ~3MB copy.
 MODEL_DIR = Path("data/models")
@@ -547,6 +555,12 @@ class EmotionCapture:
         self._cap = None
         self._landmarker = None
         self._pose_landmarker = None
+        # A successful FaceLandmarker call that yields no usable confidence is
+        # distinct from an exception: only the former contributes semantic
+        # health evidence.  The cooldown prevents model churn during a real
+        # no-face interval or an unrecoverable model/runtime fault.
+        self._face_semantic_dead_streak: int = 0
+        self._last_face_semantic_recovery_at: Optional[float] = None
         # Sticky flag — once pose init has failed in this process, don't
         # retry every 2s tick (the mediapipe import + path.exists check
         # is wasted work). Reset only when presence is toggled off-then-
@@ -597,12 +611,7 @@ class EmotionCapture:
             except Exception:
                 pass
             self._cap = None
-        if self._landmarker is not None:
-            try:
-                self._landmarker.close()
-            except Exception:
-                pass
-            self._landmarker = None
+        self._dispose_face_landmarker(reason="shutdown")
         if self._pose_landmarker is not None:
             try:
                 self._pose_landmarker.close()
@@ -723,6 +732,67 @@ class EmotionCapture:
                 pass
             self._cap = None
 
+    def _dispose_face_landmarker(self, *, reason: str) -> bool:
+        """Close only FaceLandmarker state so the next active tick recreates it.
+
+        Capture, pose, and HTTP/supervisor state deliberately remain intact.
+        This is the recovery seam for a FaceLandmarker that stays responsive
+        but becomes semantically stale across a capture lifecycle boundary.
+        """
+        landmarker = self._landmarker
+        self._landmarker = None
+        self._face_semantic_dead_streak = 0
+        if landmarker is None:
+            return False
+        try:
+            landmarker.close()
+        except Exception:
+            logger.debug("FaceLandmarker close failed (%s)", reason, exc_info=True)
+        logger.info("FaceLandmarker disposed (%s); will recreate lazily", reason)
+        return True
+
+    def _note_face_semantic_result(self, *, usable: bool, now: float) -> None:
+        """Track completed FaceLandmarker results and recycle bounded failures.
+
+        Call this only after ``detect`` returns.  Exceptions are inference
+        failures, not credible evidence that a live frame contains no usable
+        face, so they intentionally never advance this streak.
+        """
+        if usable:
+            if self._face_semantic_dead_streak:
+                logger.debug(
+                    "FaceLandmarker semantic-health streak reset after usable face "
+                    "(streak=%d)", self._face_semantic_dead_streak,
+                )
+            self._face_semantic_dead_streak = 0
+            return
+
+        self._face_semantic_dead_streak += 1
+        if self._face_semantic_dead_streak < FACE_SEMANTIC_DEAD_STREAK_LIMIT:
+            return
+
+        last_recovery = self._last_face_semantic_recovery_at
+        if (
+            last_recovery is not None
+            and now - last_recovery < FACE_SEMANTIC_RECOVERY_COOLDOWN_S
+        ):
+            if self._face_semantic_dead_streak == FACE_SEMANTIC_DEAD_STREAK_LIMIT:
+                logger.warning(
+                    "FaceLandmarker semantic-health recovery cooldown active "
+                    "(streak=%d, remaining=%.1fs)",
+                    self._face_semantic_dead_streak,
+                    FACE_SEMANTIC_RECOVERY_COOLDOWN_S - (now - last_recovery),
+                )
+            return
+
+        logger.warning(
+            "FaceLandmarker produced no usable face confidence for %d completed "
+            "inferences; recycling model state",
+            self._face_semantic_dead_streak,
+        )
+        self._last_face_semantic_recovery_at = now
+        self._dispose_face_landmarker(reason="semantic_zero_face_streak")
+
     def _note_webcam_unavailable(self, reason: str) -> None:
         """Log a single WARN per failure-mode transition."""
         if reason == self._last_unavailable_reason:
@@ -736,7 +806,10 @@ class EmotionCapture:
         """Run one capture cycle. Silent on the happy path; logs only anomalies."""
         if not self.is_capture_needed():
             # Release the webcam so other apps (Zoom, Discord) can grab it
-            # while we're disabled. Inexpensive — cv2 reopens on next enable.
+            # while we're disabled.  This is a real capture lifecycle boundary:
+            # a FaceLandmarker that survived a privacy/sleep release must not
+            # be reused when capture becomes active again.
+            self._dispose_face_landmarker(reason="capture_inactive")
             self._release_cap()
             return
 
@@ -788,7 +861,10 @@ class EmotionCapture:
             if not ret or frame is None:
                 self._note_webcam_unavailable("read_returned_false")
                 # Drop the handle so the next tick reopens — handles the
-                # exclusive-lock release case after Zoom/Discord closes.
+                # exclusive-lock release case after Zoom/Discord closes. A
+                # successful reacquisition after this interruption also gets
+                # a fresh FaceLandmarker rather than retaining stale state.
+                self._dispose_face_landmarker(reason="capture_read_failed")
                 self._release_cap()
                 return
 
@@ -827,6 +903,10 @@ class EmotionCapture:
                 face_confidence = 0.0
 
             face_present = face_confidence >= FACE_CONFIDENCE_FLOOR
+            self._note_face_semantic_result(
+                usable=face_present,
+                now=time.monotonic(),
+            )
             captured_at = datetime.now(timezone.utc)
 
             # Diagnostic snapshot — opt-in, backend-initiated. Fires
