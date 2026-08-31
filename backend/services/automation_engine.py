@@ -421,6 +421,8 @@ class AutomationEngine:
         self._last_gaming_transition_reason: Optional[str] = None
         self._gaming_plan_changed: bool = False
         self._gaming_scene_override: Optional[dict[str, Any]] = None
+        # Blocks direct Gaming writers during explicit-scene authority transfer.
+        self._gaming_scene_transition_pending: bool = False
         self._mode_source: str = "time"
         self._mode_source_key: str = "time"
         self._manual_override: bool = False
@@ -3828,7 +3830,23 @@ class AutomationEngine:
             source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
             override_applied = False
             failure_reason: str | None = None
-            if mode == "gaming" and not await self._release_external_owners_for_scene():
+            if mode == "gaming":
+                self._gaming_scene_transition_pending = True
+            try:
+                owners_released = (
+                    mode != "gaming"
+                    or await self._release_external_owners_for_scene()
+                )
+            except asyncio.CancelledError:
+                if mode == "gaming":
+                    self._gaming_scene_transition_pending = False
+                raise
+            except Exception:
+                if mode == "gaming":
+                    self._gaming_scene_transition_pending = False
+                raise
+            if not owners_released:
+                self._gaming_scene_transition_pending = False
                 logger.warning(
                     "Gaming scene activation deferred: external owner release failed",
                 )
@@ -3880,6 +3898,10 @@ class AutomationEngine:
                         )
                     else:
                         failure_reason = f"preset '{override_scene}' not in SCENE_PRESETS"
+            except asyncio.CancelledError:
+                if mode == "gaming":
+                    self._gaming_scene_transition_pending = False
+                raise
             except Exception as e:
                 failure_reason = f"{type(e).__name__}: {e}"
                 logger.error(
@@ -3887,6 +3909,13 @@ class AutomationEngine:
                     mode, period, override_scene, e,
                     exc_info=True,
                 )
+
+            # No await occurs between clearing this latch and recording a
+            # successful scene marker below, so another coroutine cannot enter
+            # the release -> accepted-scene gap.  Failures intentionally reopen
+            # ordinary Gaming ownership before the fallback composition awaits.
+            if mode == "gaming":
+                self._gaming_scene_transition_pending = False
 
             if override_applied:
                 if mode == "gaming":

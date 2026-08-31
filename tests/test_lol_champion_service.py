@@ -155,6 +155,61 @@ async def test_brightness_scales_by_period(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_inflight_champion_lookup_cannot_write_after_gaming_exit(monkeypatch):
+    hue = _FakeHue()
+    engine = _FakeEngine(mode="gaming")
+    svc = LoLChampionService(hue_service=hue, automation_engine=engine)
+    lookup_started = asyncio.Event()
+    allow_lookup = asyncio.Event()
+
+    async def delayed_mapping(_key):
+        lookup_started.set()
+        await allow_lookup.wait()
+        return {"Ahri": {"r": 255, "g": 105, "b": 180}}
+
+    monkeypatch.setattr("backend.api.routes.routines.load_setting", delayed_mapping)
+    task = asyncio.create_task(svc.on_activity_report(_report(champion="Ahri")))
+    await lookup_started.wait()
+
+    engine.current_mode = "working"
+    await svc.on_mode_change("working")
+    allow_lookup.set()
+    await task
+
+    assert hue.calls == []
+    assert svc.active_lights() == set()
+
+
+@pytest.mark.asyncio
+async def test_inflight_hue_write_cannot_reclaim_after_gaming_exit(monkeypatch):
+    write_started = asyncio.Event()
+    allow_write = asyncio.Event()
+
+    class DelayedHue(_FakeHue):
+        async def set_light(self, light_id: str, state: dict) -> bool:
+            write_started.set()
+            await allow_write.wait()
+            return await super().set_light(light_id, state)
+
+    hue = DelayedHue()
+    engine = _FakeEngine(mode="gaming")
+    svc = LoLChampionService(hue_service=hue, automation_engine=engine)
+    _patch_setting(monkeypatch, {"Ahri": {"r": 255, "g": 105, "b": 180}})
+
+    task = asyncio.create_task(svc.on_activity_report(_report(champion="Ahri")))
+    await write_started.wait()
+    engine.current_mode = "working"
+    await svc.on_mode_change("working")
+    allow_write.set()
+    await task
+
+    # The stale bridge request may have physically completed, but it cannot
+    # resurrect League ownership after the stronger mode transition invalidated it.
+    assert svc.active_lights() == set()
+    assert svc.owned_light_targets() == {}
+
+
+@pytest.mark.asyncio
 async def test_partial_champion_write_owns_only_acknowledged_lamps(monkeypatch):
     class PartiallyFailingHue(_FakeHue):
         async def set_light(self, light_id: str, state: dict) -> bool:

@@ -362,6 +362,47 @@ async def test_native_gaming_scene_releases_league_and_screen_authority(
 
 
 @pytest.mark.asyncio
+async def test_gaming_scene_takeover_blocks_league_reacquire_gap(
+    mock_hue, mock_hue_v2, mock_ws, monkeypatch,
+):
+    engine = _engine(mock_hue, mock_hue_v2, mock_ws)
+    monkeypatch.setattr(engine, "_get_time_period", lambda now=None: "evening")
+    sync = ScreenSyncService(
+        mock_hue,
+        target_light_ids=["2", "5"],
+        transition_boundary=engine._transition_boundary,
+    )
+    engine._screen_sync = sync
+    league = LoLChampionService(mock_hue, engine, mock_ws)
+    engine.register_external_light_owner(league)
+    monkeypatch.setattr(
+        "backend.api.routes.routines.load_setting",
+        AsyncMock(return_value={"Ahri": {"r": 255, "g": 105, "b": 180}}),
+    )
+    await engine.report_activity("gaming", source="pc_agent")
+    await league.apply("Ahri")
+    engine._scene_overrides = {"gaming": {"evening": "native-scene"}}
+
+    original_release = engine._release_external_owners_for_scene
+
+    async def release_then_reacquire():
+        accepted = await original_release()
+        await league.apply("Ahri")
+        return accepted
+
+    monkeypatch.setattr(
+        engine, "_release_external_owners_for_scene", release_then_reacquire,
+    )
+    await engine._apply_mode("gaming")
+
+    assert engine.get_gaming_diagnostics()["transition_reason"] == "scene_override"
+    assert engine._gaming_scene_transition_pending is False
+    assert league.active_lights() == set()
+    assert sync._accepted_gaming_targets == {}
+    assert engine._protected_light_ids() == set()
+
+
+@pytest.mark.asyncio
 async def test_league_to_another_game_restores_new_accepted_composition(
     mock_hue, mock_hue_v2, mock_ws, monkeypatch,
 ):

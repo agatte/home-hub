@@ -199,12 +199,9 @@ class LoLChampionService:
     # ------------------------------------------------------------------
 
     async def apply(self, champion_name: str) -> None:
-        """Look up champion color, write it to both bedroom lamps."""
-        if getattr(self._engine, "_gaming_scene_override", None) is not None:
-            self.invalidate_ownership("gaming_scene")
-            return
-        if getattr(self._engine, "_external_off_detected", False):
-            self.invalidate_ownership("external_off")
+        """Look up champion color and write it only while Gaming still owns it."""
+        expected_game = getattr(self._engine, "current_game", None)
+        if not self._gaming_authority_allows(expected_game):
             return
         self._release_stronger_owner_lights()
         rgb, seeded = await self._resolve_color(champion_name)
@@ -241,23 +238,44 @@ class LoLChampionService:
         }
 
         boundary = getattr(self._engine, "_transition_boundary", None)
+
         async def write_targets() -> None:
+            # Color lookup and boundary acquisition are both await points.  Re-check
+            # authority here so an older League heartbeat cannot write after Gaming
+            # exited, the game changed, Away armed, or an explicit scene takeover
+            # started while this coroutine was suspended.
+            if not self._gaming_authority_allows(expected_game):
+                return
+            self._release_stronger_owner_lights()
+            stronger = self._stronger_owner_light_ids()
+            write_pending = {
+                light_id: target
+                for light_id, target in pending.items()
+                if light_id not in stronger
+            }
             results = await asyncio.gather(
                 *(
                     self._hue.set_light(light_id, target)
-                    for light_id, target in pending.items()
+                    for light_id, target in write_pending.items()
                 ),
                 return_exceptions=True,
             )
+            # Engine/game/scene state can change while the bridge request itself
+            # is awaiting.  A successful physical write does not grant ownership
+            # if the authority that authorized it has since expired; the stronger
+            # transition waiting on this boundary will reconcile the bridge next.
+            if not self._gaming_authority_allows(expected_game):
+                return
+            stronger_after_write = self._stronger_owner_light_ids()
             supersede = getattr(
                 getattr(self._engine, "_screen_sync", None),
                 "supersede_light",
                 None,
             )
-            for light_id, result in zip(pending, results):
-                if result is True:
+            for light_id, result in zip(write_pending, results):
+                if result is True and light_id not in stronger_after_write:
                     self._owned.add(light_id)
-                    self._owned_targets[light_id] = pending[light_id].copy()
+                    self._owned_targets[light_id] = write_pending[light_id].copy()
                     if callable(supersede):
                         supersede(light_id)
 
@@ -337,6 +355,20 @@ class LoLChampionService:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _gaming_authority_allows(self, expected_game: Optional[str]) -> bool:
+        """Whether this in-flight League write still has Gaming authority."""
+        if self._engine is None or self._engine.current_mode != "gaming":
+            return False
+        if getattr(self._engine, "current_game", None) != expected_game:
+            return False
+        if getattr(self._engine, "_gaming_scene_override", None) is not None:
+            return False
+        if getattr(self._engine, "_gaming_scene_transition_pending", False):
+            return False
+        if getattr(self._engine, "_external_off_detected", False):
+            return False
+        return True
 
     def _stronger_owner_light_ids(self) -> set[str]:
         """Manual and transit intent outrank this external color writer."""
