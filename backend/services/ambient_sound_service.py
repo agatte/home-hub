@@ -208,6 +208,12 @@ class AmbientSoundService:
         # off the hot path by the weather-watch loop; _pick_healthy_stream
         # reads this synchronously so mode-change callbacks stay fast.
         self._stream_health: dict[str, tuple[bool, float]] = {}
+        # Consecutive Sonos-side playback failures for the active stream URL.
+        # This remains separate from the TTL cache above: the cache decides
+        # whether a stream is selectable; this short-lived state decides when
+        # a transient transport blip becomes a behavioral failure.
+        self._stream_failure_url: Optional[str] = None
+        self._stream_failure_streak: int = 0
 
     # ------------------------------------------------------------------
     # Initialization
@@ -480,6 +486,7 @@ class AmbientSoundService:
 
         self._current_sound = filename
         self._playing = True
+        self._reset_stream_failure_streak()
         self._source = source
         self._weather_override_active = source == "weather"
         # Set pending BEFORE the first broadcast so the UI shows that Sonos is
@@ -512,6 +519,7 @@ class AmbientSoundService:
         if learn:
             await self._learn_manual_suppression("pause")
         self._playing = False
+        self._reset_stream_failure_streak()
         self._sonos_ambient_pending = False
         await self._broadcast_state()
         await self._save_config()
@@ -545,6 +553,7 @@ class AmbientSoundService:
             await self._learn_manual_suppression("stop")
         self._current_sound = None
         self._playing = False
+        self._reset_stream_failure_streak()
         self._source = "manual"
         self._weather_override_active = False
         await self._broadcast_state()
@@ -857,6 +866,61 @@ class AmbientSoundService:
                 continue
             await self._probe_stream_health(url)
 
+    def _reset_stream_failure_streak(self) -> None:
+        """Forget in-progress Sonos transport failures for a stream."""
+        self._stream_failure_url = None
+        self._stream_failure_streak = 0
+
+    async def _observe_stream_playback_health(self, sonos_state: str) -> bool:
+        """Record an active stream's Sonos transport behavior.
+
+        Returns ``True`` when a weather-owned stream became unhealthy and the
+        weather evaluator was re-entered to select its existing fallback.
+        Non-streams intentionally return ``False`` so the caller preserves its
+        finite-file replay behavior.
+        """
+        stream_url = self._url_for(self._current_sound or "", absolute=True)
+        if (
+            not self._sonos_ambient_active
+            or not self._playing
+            or not self._sonos_ambient_is_stream
+            or not stream_url
+            or self._sonos_ambient_uri != stream_url
+        ):
+            self._reset_stream_failure_streak()
+            return False
+
+        if sonos_state == "PLAYING":
+            self._reset_stream_failure_streak()
+            return False
+
+        if sonos_state not in ("STOPPED", "TRANSITIONING", "ZPSTR_BUFFERING"):
+            # PAUSED_PLAYBACK is expected around TTS duck/resume; any other
+            # state outside the defined failures also breaks consecutiveness.
+            self._reset_stream_failure_streak()
+            return False
+
+        if self._stream_failure_url != stream_url:
+            self._stream_failure_url = stream_url
+            self._stream_failure_streak = 0
+        self._stream_failure_streak += 1
+        if self._stream_failure_streak < 2:
+            return False
+
+        prior_health = self._stream_health.get(stream_url)
+        became_unhealthy = prior_health is None or prior_health[0]
+        if became_unhealthy:
+            self._stream_health[stream_url] = (False, time.monotonic())
+            logger.warning(
+                "Ambient stream unhealthy after %d Sonos transport failures: %s",
+                self._stream_failure_streak, stream_url,
+            )
+
+        if became_unhealthy and self._source == "weather":
+            await self._evaluate()
+            return True
+        return False
+
     async def weather_watch_loop(self) -> None:
         """Background poll: re-evaluate ambient when weather class changes.
 
@@ -1107,6 +1171,7 @@ class AmbientSoundService:
         self._sonos_ambient_pending = False
         self._sonos_ambient_uri = None
         self._sonos_ambient_is_stream = False
+        self._reset_stream_failure_streak()
         self._sonos_absent_since = None
         self._sonos_present_since = None
         if self._sonos and getattr(self._sonos, "connected", False):
@@ -1191,6 +1256,11 @@ class AmbientSoundService:
                     continue
 
                 sonos_state = status.get("state", "")
+
+                if await self._observe_stream_playback_health(sonos_state):
+                    # A weather stream crossed the failure threshold and
+                    # _evaluate() selected the existing local-file fallback.
+                    continue
 
                 mode = self._current_mode()
                 present_volume = self._resolve_sonos_volume(mode)

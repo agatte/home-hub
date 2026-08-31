@@ -48,6 +48,19 @@ def _touch_mp3(directory: Path, name: str) -> Path:
     return p
 
 
+def _activate_stream(service, *, stream_id="rain-stream", url="https://example.test/rain", source="weather"):
+    """Set up an already-owned Sonos ambient stream for transport tests."""
+    service._sound_index[stream_id] = {
+        "kind": "stream", "url": url, "label": "Rain stream",
+    }
+    service._current_sound = stream_id
+    service._playing = True
+    service._source = source
+    service._sonos_ambient_active = True
+    service._sonos_ambient_is_stream = True
+    service._sonos_ambient_uri = url
+
+
 def test_empty_long_dir_falls_back_to_short(monkeypatch, tmp_path):
     """data/ambient/ empty → service serves only the short fallbacks."""
     service = _make_service(monkeypatch, tmp_path)
@@ -319,3 +332,128 @@ async def test_load_from_db_respects_post_migration_sonos_disabled(monkeypatch, 
     assert service._sonos_enabled is False
     assert service._sonos_only_migrated is True
     assert saved == []
+
+
+async def test_stream_health_tolerates_one_bad_transport_sample(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _activate_stream(service)
+
+    handled = await service._observe_stream_playback_health("STOPPED")
+
+    assert handled is False
+    assert service._stream_health == {}
+    assert service._stream_failure_streak == 1
+
+
+async def test_two_bad_stream_samples_mark_current_url_unhealthy(monkeypatch, tmp_path, caplog):
+    service = _make_service(monkeypatch, tmp_path)
+    _activate_stream(service, source="manual")
+
+    with caplog.at_level("WARNING", logger="home_hub.ambient"):
+        await service._observe_stream_playback_health("TRANSITIONING")
+        await service._observe_stream_playback_health("ZPSTR_BUFFERING")
+        await service._observe_stream_playback_health("STOPPED")
+
+    assert service._stream_health["https://example.test/rain"][0] is False
+    unhealthy_logs = [r for r in caplog.records if "stream unhealthy" in r.message]
+    assert len(unhealthy_logs) == 1
+
+
+async def test_playing_resets_stream_failure_streak(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _activate_stream(service)
+
+    await service._observe_stream_playback_health("STOPPED")
+    await service._observe_stream_playback_health("PLAYING")
+    await service._observe_stream_playback_health("STOPPED")
+
+    assert service._stream_health == {}
+    assert service._stream_failure_streak == 1
+
+
+async def test_weather_stream_failure_reaches_local_file_fallback(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    service._stream_library = {
+        "rain": [{"id": "rain-stream", "url": "https://example.test/rain"}]
+    }
+    service.scan_sounds()
+    service._weather_service.get_cached = MagicMock(
+        return_value={"description": "steady rain"}
+    )
+    _activate_stream(service)
+    service.play = AsyncMock()
+
+    await service._observe_stream_playback_health("STOPPED")
+    handled = await service._observe_stream_playback_health("ZPSTR_BUFFERING")
+
+    assert handled is True
+    assert service._check_weather() == "rain.mp3"
+    service.play.assert_awaited_once_with("rain.mp3", source="weather")
+
+
+async def test_finite_file_stopped_replay_is_preserved(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _touch_mp3(svc.SHORT_AMBIENT_DIR, "rain.mp3")
+    service.scan_sounds()
+    service._sonos.connected = True
+    service._sonos.get_status = AsyncMock(return_value={"state": "STOPPED", "volume": 20})
+    service._sonos.play_uri = AsyncMock(return_value=True)
+    service._sonos.pause = AsyncMock()
+    service._current_sound = "rain.mp3"
+    service._playing = True
+    service._sonos_ambient_active = True
+    service._sonos_ambient_uri = service._url_for("rain.mp3", absolute=True)
+
+    ticks = 0
+
+    async def one_iteration_then_stop(_):
+        nonlocal ticks
+        ticks += 1
+        if ticks == 2:
+            service._sonos_ambient_active = False
+
+    monkeypatch.setattr(svc.asyncio, "sleep", one_iteration_then_stop)
+    await service._sonos_ambient_loop()
+
+    service._sonos.play_uri.assert_awaited_once_with(
+        service._url_for("rain.mp3", absolute=True), volume=20, force_radio=False
+    )
+
+
+async def test_paused_playback_does_not_poison_stream_health(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _activate_stream(service)
+
+    await service._observe_stream_playback_health("STOPPED")
+    await service._observe_stream_playback_health("PAUSED_PLAYBACK")
+
+    assert service._stream_health == {}
+    assert service._stream_failure_streak == 0
+
+
+async def test_unhealthy_manual_stream_is_not_replaced_by_weather(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _activate_stream(service, source="manual")
+    service._evaluate = AsyncMock()
+
+    await service._observe_stream_playback_health("STOPPED")
+    handled = await service._observe_stream_playback_health("STOPPED")
+
+    assert handled is False
+    assert service._stream_health["https://example.test/rain"][0] is False
+    service._evaluate.assert_not_awaited()
+
+
+async def test_stream_and_ownership_changes_reset_failure_streak(monkeypatch, tmp_path):
+    service = _make_service(monkeypatch, tmp_path)
+    _activate_stream(service)
+
+    await service._observe_stream_playback_health("STOPPED")
+    _activate_stream(service, stream_id="wind-stream", url="https://example.test/wind")
+    await service._observe_stream_playback_health("STOPPED")
+
+    assert service._stream_failure_streak == 1
+    service._sonos_ambient_active = False
+    await service._observe_stream_playback_health("STOPPED")
+    assert service._stream_failure_streak == 0
