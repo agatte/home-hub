@@ -1,15 +1,14 @@
 # Lean subset of requirements.txt for the CI `test` job.
 #
 # Why a separate file: full requirements.txt pulls lightgbm, mediapipe,
-# opencv-python-headless, ai-edge-litert, scikit-learn, etc. — none of which
-# the pytest suite imports — and adds 2-3 minutes to every CI run. This file
+# ai-edge-litert, scikit-learn, etc. — none of which the pytest suite
+# currently exercises — and adds 2-3 minutes to every CI run. This file
 # is the minimum set needed for `backend.main:app` to import cleanly so
 # tests/ can be collected.
 #
-# Keep in sync: when a new top-level `import X` is added under backend/ and
-# X is not already covered here, add it here too. The CI failure mode is
-# "ModuleNotFoundError at test collection" — easy to spot but blocks the
-# whole test job.
+# Keep in sync: when CI tests collect or execute a backend path that requires
+# an optional dependency, include that dependency here. Missing lazy/runtime
+# imports may fail only when the affected test executes, not at collection.
 
 fastapi>=0.135.0
 uvicorn[standard]>=0.30.0
@@ -33,3 +32,4 @@ python-multipart>=0.0.9
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 numpy>=1.20.0
+opencv-python-headless==4.13.0.92
