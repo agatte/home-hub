@@ -462,7 +462,7 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
     # reports are a cheap no-op.
     lol_service = getattr(request.app.state, "lol_champion_service", None)
     if lol_service is not None:
-        await lol_service.on_activity_report(report)
+        await lol_service.on_activity_report(report, result)
 
     return {
         "status": "ok",
@@ -497,6 +497,7 @@ async def get_activity(request: Request) -> dict:
         "process_observations_by_device": (
             context["process_observations_by_device"]
         ),
+        "gaming": context["gaming"],
     }
 
 
@@ -900,7 +901,7 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             skipped.append(light_id)
             skip_reasons[light_id] = "lol_champion"
             continue
-        await sync.apply_color(
+        accepted = await sync.apply_color(
             light_id,
             report.r,
             report.g,
@@ -913,7 +914,8 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             lux_multiplier=lux_mult,
             weather_condition=weather_condition,
         )
-        applied.append(light_id)
+        if accepted is not False:
+            applied.append(light_id)
 
     response: dict = {
         "status": "ok",

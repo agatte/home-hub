@@ -14,6 +14,7 @@ from datetime import timedelta
 import pytest
 
 from backend.services import screen_sync as ss
+from backend.services.light_state_calculator import resolve_activity_state
 
 
 class _FakeHue:
@@ -33,11 +34,19 @@ class _FakeHue:
         raise KeyError(f"no call for {light_id}")
 
 
+def _prime_gaming(sync, period: str = "day", state: dict | None = None) -> dict:
+    """Model AutomationEngine supplying its accepted composed plan."""
+    state = state or resolve_activity_state("gaming", period)
+    sync.publish_accepted_gaming_state(state)
+    return state
+
+
 @pytest.mark.asyncio
 async def test_per_light_ema_state_independent():
     """L2's smoothing must not leak into L5's smoothing state."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync)
 
     # L2 sees a pure red sequence.
     for _ in range(5):
@@ -65,6 +74,7 @@ async def test_generic_gaming_uses_base_brightness_and_fixture_caps():
     """Canonical L2 stays bright while L5 respects its clear-housing cap."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync)
 
     # Sample color is irrelevant; repeated frames should keep the same output.
     for _ in range(20):
@@ -74,10 +84,9 @@ async def test_generic_gaming_uses_base_brightness_and_fixture_caps():
     l2_bri = hue.last_for("2")["bri"]
     l5_bri = hue.last_for("5")["bri"]
 
-    assert l2_bri > l5_bri, f"L2 should outshine capped L5 (L2={l2_bri}, L5={l5_bri})"
-    # L2 clamps to 240, L5 clamps to 75 (per MODE_MAX_BRIGHTNESS; 60→75 curator 6/02).
-    assert l2_bri <= 240
-    assert l5_bri <= 75
+    assert l2_bri > l5_bri, f"L2 should outshine L5 (L2={l2_bri}, L5={l5_bri})"
+    assert l2_bri == resolve_activity_state("gaming", "day")["2"]["bri"]
+    assert l5_bri == resolve_activity_state("gaming", "day")["5"]["bri"]
 
 
 @pytest.mark.asyncio
@@ -85,17 +94,18 @@ async def test_generic_gaming_reconciles_invalidated_targets_once_per_light():
     """A stale sent-state assumption is repaired once without losing freshness."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync, "day")
 
     await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
     await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
     assert sync._last_sent_state["2"]["bri"] == 240
-    assert sync._last_sent_state["5"]["bri"] == 75
+    assert sync._last_sent_state["5"]["bri"] == 90
 
     # Simulate a normal-automation bridge write invalidating only L2. L5's
     # cached physical-state assumption remains independently valid.
     sync.invalidate_sent_state(["2"])
     assert "2" not in sync._last_sent_state
-    assert sync._last_sent_state["5"]["bri"] == 75
+    assert sync._last_sent_state["5"]["bri"] == 90
 
     calls_before_reconcile = len(hue.calls)
     await sync.apply_color("2", 255, 0, 0, mode="gaming", period="day")
@@ -231,6 +241,7 @@ async def test_watching_l5_luma_comp_dampens_yellow_more_than_blue():
     # Same channel intensity, low-luma blue receives less compensation.
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
+    _prime_gaming(sync2, "evening")
     for _ in range(20):
         await sync2.apply_color("5", 0, 0, 160, mode="watching")
     blue_bri = hue2.last_for("5")["bri"]
@@ -247,6 +258,7 @@ async def test_generic_gaming_l5_base_stays_within_period_caps():
     """L5 holds each canonical base at or below the existing period cap."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync, "day")
 
     # Different periods resolve different bases; the sample cannot add dynamics.
     for _ in range(20):
@@ -256,17 +268,14 @@ async def test_generic_gaming_l5_base_stays_within_period_caps():
     # Evening base is also 75, below its period-specific cap.
     hue2 = _FakeHue()
     sync2 = ss.ScreenSyncService(hue_service=hue2, target_light_ids=["2", "5"])
+    _prime_gaming(sync2, "evening")
     for _ in range(20):
         await sync2.apply_color("5", 0, 0, 255, mode="gaming", period="evening")
     evening_bri = hue2.last_for("5")["bri"]
 
-    # Both periods hold the canonical base and remain within their caps.
-    assert evening_bri == day_bri, (
-        f"canonical L5 base should be stable across day/evening here "
-        f"(day={day_bri} evening={evening_bri})"
-    )
-    assert day_bri <= 75
-    assert evening_bri <= 95
+    # The composed schedule may change the authored L5 role by period.
+    assert day_bri == resolve_activity_state("gaming", "day")["5"]["bri"]
+    assert evening_bri == resolve_activity_state("gaming", "evening")["5"]["bri"]
 
 
 
@@ -276,7 +285,6 @@ async def test_watching_desk_night_dark_frame_gets_small_floor_lift():
     """Desk watching should not let dark frames drag L2 to projector-dim levels."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-
     for _ in range(30):
         await sync.apply_color("2", 0, 0, 0, mode="watching", period="night")
     non_desk = hue.last_for("2")["bri"]
@@ -298,6 +306,8 @@ async def test_late_night_gaming_holds_canonical_l2_base():
     """A black frame cannot drag L2 from base brightness to the old floor."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync, "evening")
+    _prime_gaming(sync, "late_night")
 
     # Pure black input must not affect the canonical output.
     for _ in range(30):
@@ -315,6 +325,7 @@ async def test_watching_l2_no_luma_comp():
     primaries at max channel = 255)."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync, "evening")
 
     for _ in range(20):
         await sync.apply_color("2", 255, 255, 0, mode="watching")
@@ -404,12 +415,44 @@ async def test_watching_hold_extends_ownership_without_faking_color_freshness():
     assert sync.fresh_authoritative_state("2") is None
 
 
-def test_prime_from_mode_state_seeds_hsb_when_available():
+@pytest.mark.asyncio
+async def test_direct_writer_supersession_clears_cache_freshness_and_all_holds():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    await sync.apply_color(
+        "2", 1, 1, 100, mode="watching", source="desktop", period="night",
+    )
+    sync.refresh_watching_hold("desktop", ["2"])
+    sync.refresh_watching_hold("laptop", ["2"])
+    assert sync.fresh_authoritative_state("2") is not None
+
+    sync.supersede_light("2")
+
+    assert "2" not in sync._last_sent_state
+    assert "2" not in sync.last_color_at_by_light
+    assert all(light_id != "2" for _source, light_id in sync._hold_refreshed_at)
+    assert "2" not in sync.fresh_owned_light_ids()
+    assert sync.fresh_authoritative_state("2") is None
+
+
+def test_failed_direct_write_can_leave_existing_screen_authority_untouched():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    sync._last_sent_state["2"] = {"hue": 1, "sat": 2, "bri": 3}
+    sync._record_source_write("desktop", "2")
+
+    # Supersession is acknowledgement-driven; a failed writer must not call it.
+    assert sync.fresh_authoritative_state("2") == {
+        "on": True, "hue": 1, "sat": 2, "bri": 3,
+    }
+
+
+def test_watching_prime_from_mode_state_seeds_hsb_when_available():
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
 
     sync.prime_from_mode_state(
-        "gaming",
+        "watching",
         "late_night",
         {"2": {"on": True, "bri": 110, "hue": 46920, "sat": 170}},
     )
@@ -587,6 +630,7 @@ async def test_screen_sync_no_event_logger_is_safe():
     the bridge and not error — keeps the laptop-loopback + unit-test paths working."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    _prime_gaming(sync, "evening")
     # No set_event_logger call.
     await sync.apply_color("2", 0, 0, 255, mode="gaming", period="evening")
     assert hue.last_for("2")["bri"] > 0  # the bridge write still happened
@@ -687,12 +731,13 @@ async def test_rust_config_partial_merge_and_validation():
 @pytest.mark.asyncio
 async def test_generic_gaming_full_spectrum_samples_keep_canonical_state_and_bri():
     """Dark/red/green/blue samples cannot sweep generic gaming output."""
-    expected = ss.resolve_activity_state("gaming", "day")
+    expected = resolve_activity_state("gaming", "day")
     samples = ((0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255))
 
     for sample in samples:
         hue = _FakeHue()
         sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        _prime_gaming(sync, "day", expected)
         await sync.apply_color("2", *sample, mode="gaming", period="day")
         await sync.apply_color("5", *sample, mode="gaming", period="day")
 
@@ -702,30 +747,54 @@ async def test_generic_gaming_full_spectrum_samples_keep_canonical_state_and_bri
         assert l2["bri"] == expected["2"]["bri"]
         assert "hue" not in l2 and "sat" not in l2
         assert l5["ct"] == expected["5"]["ct"] == 286
-        assert l5["bri"] == min(
-            expected["5"]["bri"], ss.MODE_MAX_BRIGHTNESS[("gaming", "5")]
-        )
+        assert l5["bri"] == expected["5"]["bri"]
         assert "hue" not in l5 and "sat" not in l5
 
 
 @pytest.mark.asyncio
-async def test_generic_gaming_policy_resolves_canonical_state(monkeypatch):
-    """The policy consumes the canonical resolver instead of copied constants."""
-    calls = []
-
-    def fake_resolve(mode, period):
-        calls.append((mode, period))
-        return {"5": {"on": True, "bri": 200, "hue": 12345, "sat": 111}}
-
-    monkeypatch.setattr(ss, "resolve_activity_state", fake_resolve)
+async def test_generic_gaming_consumes_primed_composed_state():
+    """ScreenSync never resolves a Gaming policy on a frame."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["5"])
+    _prime_gaming(sync, "day", {"5": {"on": True, "bri": 200, "hue": 12345, "sat": 111}})
     await sync.apply_color("5", 0, 255, 0, mode="gaming", period="day")
 
-    assert calls == [("gaming", "day")]
     state = hue.last_for("5")
     assert (state["hue"], state["sat"]) == (12345, 111)
-    assert state["bri"] == ss.MODE_MAX_BRIGHTNESS[("gaming", "5")] == 75
+    assert state["bri"] == 200
+
+
+@pytest.mark.asyncio
+async def test_gaming_profile_and_schedule_reprime_replace_the_next_frame_target():
+    """No frame may flash back to the prior generic/profile target."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    weekday = {"2": {"on": True, "bri": 205, "ct": 250}}
+    weekend = {"2": {"on": True, "bri": 185, "hue": 5500, "sat": 145}}
+    game_b = {"2": {"on": True, "bri": 155, "hue": 42000, "sat": 120}}
+
+    _prime_gaming(sync, "day", weekday)
+    await sync.apply_color("2", 1, 2, 3, mode="gaming", period="day")
+    _prime_gaming(sync, "day", weekend)
+    await sync.apply_color("2", 4, 5, 6, mode="gaming", period="day")
+    _prime_gaming(sync, "night", game_b)
+    await sync.apply_color("2", 7, 8, 9, mode="gaming", period="night")
+
+    writes = [state for light_id, state in hue.calls if light_id == "2"]
+    assert writes[-2]["hue"] == 5500
+    assert writes[-1]["hue"] == 42000
+    assert all(write.get("bri") != 240 for write in writes[1:])
+
+
+@pytest.mark.asyncio
+async def test_unprimed_gaming_frame_fails_safe_without_claiming_ownership():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+
+    await sync.apply_color("2", 255, 0, 0, mode="gaming", period="day")
+
+    assert hue.calls == []
+    assert sync.fresh_owned_light_ids() == set()
 
 
 @pytest.mark.asyncio
@@ -733,6 +802,7 @@ async def test_generic_gaming_repeated_samples_dedupe_but_refresh_ownership():
     """Different frames do not rewrite Hue, but each report keeps sync fresh."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
+    _prime_gaming(sync, "day")
 
     await sync.apply_color("2", 255, 0, 0, mode="gaming", source="desktop", period="day")
     first_stamp = sync.last_color_at
@@ -751,15 +821,13 @@ async def test_generic_gaming_brightness_matches_base_bounded_by_cap(period):
     """Every period holds canonical brightness unless the fixture cap is lower."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    base = ss.resolve_activity_state("gaming", period)
+    base = resolve_activity_state("gaming", period)
+    _prime_gaming(sync, period, base)
 
     for light_id in ("2", "5"):
         await sync.apply_color(
             light_id, 0, 0, 0, mode="gaming", period=period
         )
         state = hue.last_for(light_id)
-        cap = sync.get_cap(
-            "gaming", light_id, None, None, period, 1.0, None
-        )
-        assert state["bri"] == min(base[light_id]["bri"], cap)
+        assert state["bri"] == base[light_id]["bri"]
         assert state["bri"] > 0

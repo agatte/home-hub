@@ -41,7 +41,6 @@ from backend.services.color_utils import (
 from backend.services.light_state_calculator import (
     get_functional_weather_multiplier,
     lux_to_multiplier,
-    resolve_activity_state,
 )
 
 logger = logging.getLogger("home_hub.screen_sync")
@@ -260,6 +259,10 @@ class ScreenSyncService:
         self._last_sat: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_bri: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_sent_state: dict[str, dict[str, int]] = {}
+        # AutomationEngine is the sole Gaming composer.  Keep detached target
+        # copies so a later screen frame cannot reconstruct an old generic
+        # profile after a schedule or game change.
+        self._accepted_gaming_targets: dict[str, dict[str, Any]] = {}
 
         # Status tracking — retain the legacy global most-recent write plus
         # per-source and per-light timestamps. The target list is a capability
@@ -592,6 +595,51 @@ class ScreenSyncService:
             if light_id in self._targets:
                 self._last_sent_state.pop(light_id, None)
 
+    def supersede_light(self, light_id: str) -> None:
+        """Forget every physical-authority claim after another writer succeeds.
+
+        Unlike ``invalidate_sent_state``, this is an explicit authority transfer:
+        a direct writer has acknowledged replacing the lamp on the bridge.  A
+        prior accepted frame or Watching hold can therefore no longer protect
+        or deduplicate the superseded target.
+        """
+        light_id = str(light_id)
+        if light_id not in self._targets:
+            return
+        self._last_sent_state.pop(light_id, None)
+        self._last_color_at_by_light.pop(light_id, None)
+        for key in list(self._hold_refreshed_at):
+            if key[1] == light_id:
+                self._hold_refreshed_at.pop(key, None)
+
+    def synchronize_physical_state(
+        self, light_id: str, state: dict[str, Any],
+    ) -> None:
+        """Record a known bridge target without claiming frame ownership."""
+        light_id = str(light_id)
+        if light_id not in self._targets:
+            return
+        stable = self._stable_target(state)
+        if stable is None:
+            self._last_sent_state.pop(light_id, None)
+            return
+        self._last_sent_state[light_id] = stable
+
+    @staticmethod
+    def _stable_target(state: dict[str, Any]) -> Optional[dict[str, int]]:
+        """Normalize one composed target to ScreenSync's dedup shape."""
+        if state.get("on") is False or "bri" not in state:
+            return None
+        if "ct" in state:
+            return {"ct": int(state["ct"]), "bri": int(state["bri"])}
+        if "hue" in state and "sat" in state:
+            return {
+                "hue": int(state["hue"]),
+                "sat": int(state["sat"]),
+                "bri": int(state["bri"]),
+            }
+        return None
+
     def authoritative_state(self, light_id: str) -> Optional[dict[str, Any]]:
         """Return the last screen-sync target currently owning a lamp."""
         state = self._last_sent_state.get(light_id)
@@ -631,7 +679,7 @@ class ScreenSyncService:
         screen frame from easing out of stale prior-mode values, which reads as
         a random brightness jump before settling back.
         """
-        if mode not in {"gaming", "watching"}:
+        if mode != "watching":
             return
         if period not in {"evening", "night", "late_night"}:
             return
@@ -648,6 +696,21 @@ class ScreenSyncService:
                 self._last_hue[light_id] = float(target["hue"])
             if "sat" in target:
                 self._last_sat[light_id] = float(target["sat"])
+
+    def publish_accepted_gaming_state(
+        self, states: dict[str, dict[str, Any]],
+    ) -> None:
+        """Publish a detached, successfully applied Gaming composition."""
+        accepted: dict[str, dict[str, Any]] = {}
+        for light_id in self._targets:
+            target = states.get(light_id)
+            if isinstance(target, dict):
+                accepted[light_id] = target.copy()
+        self._accepted_gaming_targets = accepted
+
+    def clear_accepted_gaming_state(self) -> None:
+        """Suspend composed Gaming authority outside an accepted static plan."""
+        self._accepted_gaming_targets.clear()
 
     @staticmethod
     def _smoothing_alpha_for(mode: str, period: Optional[str]) -> float:
@@ -707,7 +770,7 @@ class ScreenSyncService:
         period: Optional[str] = None,
         lux_multiplier: float = 1.0,
         weather_condition: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         """
         Apply a screen sample to one of the managed bedroom lamps.
 
@@ -735,16 +798,15 @@ class ScreenSyncService:
                 the envelope on overcast conditions.
         """
         if light_id not in self._targets:
-            return
+            return False
         if mode == "gaming":
-            await self._apply_generic_gaming_state(
+            return await self._apply_accepted_gaming_state(
                 light_id,
                 source=source,
                 zone=zone,
                 posture=posture,
                 period=period,
             )
-            return
         max_bri = self.get_cap(
             mode, light_id, zone, posture, period,
             lux_multiplier, weather_condition,
@@ -774,7 +836,7 @@ class ScreenSyncService:
             and self._within_deadband(last_sent, ih, isat, ibri, mode, period)
         ):
             self._record_source_write(source, light_id)
-            return
+            return True
         success = await self._set_light_serialized(light_id, {
             "on": True,
             "hue": ih,
@@ -783,12 +845,13 @@ class ScreenSyncService:
             "transitiontime": self._transitiontime_for(mode, period),
         })
         if success is not True:
-            return
+            return False
         self._last_sent_state[light_id] = {"hue": ih, "sat": isat, "bri": ibri}
         self._record_source_write(source, light_id)
         await self._maybe_log_adjustment(light_id, ih, isat, ibri, mode)
+        return True
 
-    async def _apply_generic_gaming_state(
+    async def _apply_accepted_gaming_state(
         self,
         light_id: str,
         *,
@@ -796,44 +859,40 @@ class ScreenSyncService:
         zone: Optional[str],
         posture: Optional[str],
         period: Optional[str],
-    ) -> None:
-        """Hold generic gaming on its canonical CT/HSB state and safe cap."""
-        mode_state = resolve_activity_state("gaming", period)
-        base = mode_state.get(light_id)
+    ) -> bool:
+        """Refresh ownership from the accepted composed Gaming target.
+
+        An unpublished Gaming frame is a safe no-op. Falling back to the legacy
+        generic table would silently invent a stale game identity.
+        """
+        base = self._accepted_gaming_targets.get(light_id)
         if not isinstance(base, dict):
-            return
+            logger.debug("Gaming screen frame ignored: no composed target for %s", light_id)
+            return False
+        if base.get("on") is False:
+            return False
 
         hue = base.get("hue")
         sat = base.get("sat")
         ct = base.get("ct")
         bri = base.get("bri")
         if bri is None:
-            return
+            return False
 
-        cap = self.get_cap(
-            "gaming",
-            light_id,
-            zone,
-            posture,
-            period,
-            1.0,
-            None,
-        )
         if ct is not None:
-            # Generic Gaming/day uses neutral CT. Keep the bridge payload
-            # in one color space; evening/night remain canonical HSB.
+            # Preserve the composed role and one bridge color space.
             stable = {
                 "ct": int(ct),
-                "bri": min(int(bri), cap),
+                "bri": int(bri),
             }
         elif hue is not None and sat is not None:
             stable = {
                 "hue": int(hue),
                 "sat": int(sat),
-                "bri": min(int(bri), cap),
+                "bri": int(bri),
             }
         else:
-            return
+            return False
 
         if "hue" in stable:
             self._last_hue[light_id] = float(stable["hue"])
@@ -842,7 +901,7 @@ class ScreenSyncService:
         self._last_bri[light_id] = float(stable["bri"])
         if self._last_sent_state.get(light_id) == stable:
             self._record_source_write(source, light_id)
-            return
+            return True
 
         success = await self._set_light_serialized(
             light_id,
@@ -853,7 +912,7 @@ class ScreenSyncService:
             },
         )
         if success is not True:
-            return
+            return False
         self._last_sent_state[light_id] = stable
         self._record_source_write(source, light_id)
         await self._maybe_log_adjustment(
@@ -864,6 +923,7 @@ class ScreenSyncService:
             "gaming",
             ct=stable.get("ct"),
         )
+        return True
 
     def _smooth(
         self, light_id: str, h: float, s: float, b: float,

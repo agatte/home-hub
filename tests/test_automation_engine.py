@@ -28,12 +28,18 @@ from backend.services.ml.confidence_fusion import ConfidenceFusion
 from backend.services.light_state_calculator import (
     ACTIVITY_LIGHT_STATES,
     ALL_LIGHT_IDS,
+    GAMING_LIGHTING_PROFILES,
+    GameLightingProfile,
     get_time_period_static as _get_time_period_static,
     resolve_activity_state,
 )
 from backend.services.screen_sync import ScreenSyncService
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
+
+
+def _prime_gaming_sync(sync: ScreenSyncService, period: str = "day") -> None:
+    sync.publish_accepted_gaming_state(resolve_activity_state("gaming", period))
 
 
 # ---------------------------------------------------------------------------
@@ -2029,7 +2035,7 @@ class TestApplyModeDedup:
     async def test_learner_overlay_does_not_change_generic_screen_sync_source(
         self, mock_hue, mock_hue_v2, mock_ws,
     ):
-        """Learner 189 -> clouds 207 stays local; sync still resolves 240."""
+        """The final composed target, including overlays, reaches ScreenSync."""
 
         class _Learner:
             def get_overlay(self, mode, period, weather, *, zone=None):
@@ -2074,8 +2080,8 @@ class TestApplyModeDedup:
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
 
-        assert mock_hue._lights["2"]["bri"] == 240
-        assert mock_hue._lights["5"]["bri"] == 75
+        assert mock_hue._lights["2"]["bri"] == 207
+        assert mock_hue._lights["5"]["bri"] == sync._accepted_gaming_targets["5"]["bri"]
 
 
 # ---------------------------------------------------------------------------
@@ -2412,6 +2418,7 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
         assert set(sync._last_sent_state) == {"2", "5"}
@@ -2435,6 +2442,7 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
         cached = {lid: state.copy() for lid, state in sync._last_sent_state.items()}
@@ -2463,6 +2471,7 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
 
@@ -2477,7 +2486,7 @@ class TestScreenSyncTargetProtection:
         })
 
         assert "2" not in sync._last_sent_state
-        assert sync._last_sent_state["5"]["bri"] == 75
+        assert sync._last_sent_state["5"]["bri"] == 90
 
     async def test_failed_per_light_l2_write_preserves_l2_cache(self, engine):
         """A failed L2 automation write does not dirty L2's sync cache."""
@@ -2488,6 +2497,7 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
         cached_l2 = sync._last_sent_state["2"].copy()
@@ -2505,7 +2515,7 @@ class TestScreenSyncTargetProtection:
         })
 
         assert sync._last_sent_state["2"] == cached_l2
-        assert sync._last_sent_state["5"]["bri"] == 75
+        assert sync._last_sent_state["5"]["bri"] == 90
 
     async def test_mixed_per_light_results_invalidate_only_successful_target(self, engine):
         """Failed L2 and successful L5 writes reconcile independently."""
@@ -2516,6 +2526,7 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
         cached_l2 = sync._last_sent_state["2"].copy()
@@ -2545,10 +2556,11 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
         assert sync._last_sent_state["2"]["bri"] == 240
-        assert sync._last_sent_state["5"]["bri"] == 75
+        assert sync._last_sent_state["5"]["bri"] == 90
 
         engine._screen_sync = sync
         engine._current_mode = "gaming"
@@ -2579,6 +2591,7 @@ class TestScreenSyncTargetProtection:
         sync = ScreenSyncService(
             hue_service=engine._hue, target_light_ids=["2", "5"],
         )
+        _prime_gaming_sync(sync)
         await sync.apply_color("2", 0, 0, 0, mode="gaming", period="day")
         await sync.apply_color("5", 0, 0, 0, mode="gaming", period="day")
         sync._last_color_at = datetime.now(timezone.utc) - timedelta(seconds=30)
@@ -2600,8 +2613,8 @@ class TestScreenSyncTargetProtection:
         repair_calls = engine._hue.set_light.await_args_list
         assert len(repair_calls) == 2
         repaired = {call.args[0]: call.args[1] for call in repair_calls}
-        assert repaired["2"]["bri"] == 240
-        assert repaired["5"]["bri"] == 75
+        assert repaired["2"]["bri"] == sync._accepted_gaming_targets["2"]["bri"]
+        assert repaired["5"]["bri"] == sync._accepted_gaming_targets["5"]["bri"]
         assert engine._protected_light_ids() == {"2", "5"}
 
         repaired_at = sync.last_color_at
@@ -5544,6 +5557,545 @@ class TestPhysicalContextRelax:
         assert engine.override_source == "api:test"
 
 
+# ---------------------------------------------------------------------------
+# Gaming resolver integration — GH#203 commit 2
+# ---------------------------------------------------------------------------
+
+
+class TestGamingResolutionIntegration:
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue,
+            hue_v2=mock_hue_v2,
+            ws_manager=mock_ws,
+        )
+
+    @staticmethod
+    def _record_writes(mock_hue):
+        calls: list[tuple[str, dict]] = []
+        original = mock_hue.set_light
+
+        async def record(light_id, state):
+            calls.append((str(light_id), state.copy()))
+            return await original(light_id, state)
+
+        mock_hue.set_light = record
+        return calls
+
+    async def test_generic_weekday_gaming_uses_resolver_and_diagnostics(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        gaming = engine.get_gaming_diagnostics()
+        assert gaming["requested_game"] is None
+        assert gaming["selected_profile"] is None
+        assert gaming["schedule_type"] == "weekday"
+        assert gaming["period"] == "day"
+        assert gaming["transition_reason"] == "activity_entry"
+        assert mock_hue._lights["3"]["bri"] >= 160
+        assert engine._last_applied_per_light["3"] == engine._last_applied_per_light["4"]
+
+    async def test_weekend_daytime_resolves_separately(self, engine):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 18, 13, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        gaming = engine.get_gaming_diagnostics()
+        assert gaming["schedule_type"] == "weekend"
+        assert gaming["selected_variant"]["schedule_type"] == "weekend"
+
+    async def test_profile_acquire_and_release_are_direct_compositions(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+        calls = self._record_writes(mock_hue)
+        await engine.report_activity("gaming", source="pc_agent")
+        calls.clear()
+
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "rust"}],
+        )
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "profile_acquire"
+        assert engine.get_gaming_diagnostics()["selected_profile"] == "rust"
+        assert calls
+
+        calls.clear()
+        await engine.report_activity("gaming", source="pc_agent")
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "profile_release"
+        assert engine.get_gaming_diagnostics()["selected_profile"] is None
+        assert calls
+
+    async def test_failed_profile_acquisition_retains_accepted_screen_sync_plan(
+        self, engine, mock_hue,
+    ):
+        sync = ScreenSyncService(
+            mock_hue,
+            target_light_ids=["2", "5"],
+            transition_boundary=engine._transition_boundary,
+        )
+        engine._screen_sync = sync
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+        await engine.report_activity("gaming", source="pc_agent")
+        accepted = {
+            light_id: target.copy()
+            for light_id, target in sync._accepted_gaming_targets.items()
+        }
+        original = mock_hue.set_light
+
+        async def fail_rust_handoff(light_id, state):
+            if str(light_id) == "2" and state.get("ct") == accepted["2"].get("ct"):
+                return False
+            return await original(light_id, state)
+
+        mock_hue.set_light = fail_rust_handoff
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "rust"}],
+        )
+
+        assert sync._accepted_gaming_targets == accepted
+
+    async def test_leaving_gaming_clears_screen_sync_plan(self, engine, mock_hue):
+        sync = ScreenSyncService(
+            mock_hue,
+            target_light_ids=["2", "5"],
+            transition_boundary=engine._transition_boundary,
+        )
+        engine._screen_sync = sync
+        await engine.report_activity("gaming", source="pc_agent")
+        assert sync._accepted_gaming_targets
+
+        await engine.report_activity("working", source="pc_agent")
+
+        assert sync._accepted_gaming_targets == {}
+
+    async def test_recognized_profiles_switch_without_generic_resolution(
+        self, engine, monkeypatch,
+    ):
+        base = GAMING_LIGHTING_PROFILES["rust"]
+        alpha = GameLightingProfile(
+            game_slug="alpha",
+            variants=base.variants,
+            fixture_roles=base.fixture_roles,
+            preserve_legacy_output=base.preserve_legacy_output,
+        )
+        beta_variants = {
+            key: {lid: light.copy() for lid, light in value.items()}
+            for key, value in base.variants.items()
+        }
+        beta_variants[(None, "day")]["1"]["bri"] = 201
+        beta = GameLightingProfile(
+            game_slug="beta",
+            variants=beta_variants,
+            fixture_roles=base.fixture_roles,
+            preserve_legacy_output=base.preserve_legacy_output,
+        )
+        monkeypatch.setitem(GAMING_LIGHTING_PROFILES, "alpha", alpha)
+        monkeypatch.setitem(GAMING_LIGHTING_PROFILES, "beta", beta)
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "alpha"}],
+        )
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "beta"}],
+        )
+
+        assert engine.get_gaming_diagnostics()["selected_profile"] == "beta"
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "game_switch"
+
+    async def test_identical_heartbeats_and_unknown_game_switch_do_not_write(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+        calls = self._record_writes(mock_hue)
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "unknown-a"}],
+        )
+        calls.clear()
+
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "unknown-a"}],
+        )
+        assert calls == []
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "steady"
+
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "unknown-b"}],
+        )
+        assert calls == []
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "steady"
+
+    async def test_after_dark_schedule_rollover_with_shared_variant_is_a_noop(
+        self, engine, mock_hue,
+    ):
+        calls = self._record_writes(mock_hue)
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 17, 20, 0, tzinfo=TZ),
+        )
+        await engine.report_activity("gaming", source="pc_agent")
+        calls.clear()
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 18, 20, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert calls == []
+        gaming = engine.get_gaming_diagnostics()
+        assert gaming["transition_reason"] == "steady"
+        assert gaming["current_plan_differs_from_previous"] is False
+
+    async def test_scheduled_period_change_and_ct_hsb_handoff_are_safe(
+        self, engine, mock_hue,
+    ):
+        calls = self._record_writes(mock_hue)
+        engine._transition_boundary.wait_for_settle = AsyncMock()
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+        await engine.report_activity("gaming", source="pc_agent")
+        calls.clear()
+        engine._transition_boundary.wait_for_settle.reset_mock()
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "scheduled_evolution"
+        # B (L2/L5/L6) masks and reaches its target before the functional
+        # A group (L1/L3/L4) masks, so no whole-room low-brightness phase.
+        assert engine._transition_boundary.wait_for_settle.await_count == 4
+        assert calls
+        assert all(not ("ct" in state and "hue" in state) for _, state in calls)
+        low = [
+            (index, light_id)
+            for index, (light_id, state) in enumerate(calls)
+            if state.get("bri", 255) <= 20
+        ]
+        bedroom_accent_low = [index for index, light_id in low if light_id in {"2", "5", "6"}]
+        functional_low = [index for index, light_id in low if light_id in {"1", "3", "4"}]
+        assert {light_id for _, light_id in low} == set(ALL_LIGHT_IDS)
+        assert max(bedroom_accent_low) < min(functional_low)
+        first_functional_mask = min(functional_low)
+        assert {
+            light_id for light_id, state in calls[:first_functional_mask]
+            if light_id in {"2", "5", "6"} and "hue" in state
+        } == {"2", "5", "6"}
+
+    async def test_night_to_late_night_same_space_evolution_stays_deduplicable(
+        self, engine, mock_hue,
+    ):
+        calls = self._record_writes(mock_hue)
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 22, 0, tzinfo=TZ),
+        )
+        await engine.report_activity("gaming", source="pc_agent")
+        calls.clear()
+        engine._transition_boundary.wait_for_settle = AsyncMock()
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 23, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "scheduled_evolution"
+        assert engine._transition_boundary.wait_for_settle.await_count == 0
+        assert calls
+        assert all("ct" not in state for _, state in calls)
+
+        calls.clear()
+        await engine.report_activity("gaming", source="pc_agent")
+        assert calls == []
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "steady"
+
+    async def test_handoff_holds_shared_boundary_across_every_phase(
+        self, engine,
+    ):
+        previous = {
+            light_id: {"on": True, "bri": 100, "ct": 250}
+            for light_id in ALL_LIGHT_IDS
+        }
+        target = {
+            light_id: {"on": True, "bri": 100, "hue": 40000, "sat": 180}
+            for light_id in ALL_LIGHT_IDS
+        }
+        first_settle = asyncio.Event()
+        release_settle = asyncio.Event()
+        calls = 0
+
+        async def wait_for_settle(_light_ids):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_settle.set()
+                await release_settle.wait()
+
+        engine._transition_boundary.wait_for_settle = wait_for_settle
+        handoff = asyncio.create_task(
+            engine._apply_gaming_color_space_handoff(target, 20, previous)
+        )
+        await first_settle.wait()
+        competing_entered = asyncio.Event()
+
+        async def competing_writer():
+            async with engine._transition_boundary.serialized():
+                competing_entered.set()
+
+        competitor = asyncio.create_task(competing_writer())
+        await asyncio.sleep(0)
+        assert not competing_entered.is_set()
+        release_settle.set()
+        await handoff
+        await competitor
+        assert competing_entered.is_set()
+
+    async def test_failed_masking_write_blocks_final_recolor_and_retries(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        engine._effect_manager._tracker_known = True
+        engine._current_mode = "working"
+        engine._last_applied_per_light = {
+            light_id: {"on": True, "bri": 150, "ct": 250}
+            for light_id in ALL_LIGHT_IDS
+        }
+        calls = self._record_writes(mock_hue)
+        original = mock_hue.set_light
+        failed_once = False
+
+        async def fail_bedroom_mask(light_id, state):
+            nonlocal failed_once
+            if str(light_id) == "2" and state.get("ct") == 250 and not failed_once:
+                failed_once = True
+                return False
+            return await original(light_id, state)
+
+        mock_hue.set_light = fail_bedroom_mask
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert engine._current_gaming_resolution is None
+        assert not any(light_id == "2" and "hue" in state for light_id, state in calls)
+        assert "2" in engine._gaming_handoff_retry_baseline
+
+        calls.clear()
+        await engine.report_activity("gaming", source="pc_agent")
+        assert any(light_id == "2" and state.get("ct") == 250 for light_id, state in calls)
+        assert any(light_id == "2" and "hue" in state for light_id, state in calls)
+        assert engine._current_gaming_resolution is not None
+
+    async def test_forced_gaming_entry_uses_pre_resend_ct_baseline(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        engine._effect_manager._tracker_known = True
+        engine._current_mode = "working"
+        engine._last_applied_per_light = {
+            light_id: {"on": True, "bri": 150, "ct": 250}
+            for light_id in ALL_LIGHT_IDS
+        }
+        calls = self._record_writes(mock_hue)
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert any(state.get("ct") == 250 and state.get("bri") <= 20 for _, state in calls)
+        assert all(not ("ct" in state and "hue" in state) for _, state in calls)
+
+    async def test_effect_reconcile_uses_staged_gaming_safety(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        engine._current_mode = "working"
+        engine._last_applied_per_light = {
+            light_id: {"on": True, "bri": 150, "ct": 250}
+            for light_id in ALL_LIGHT_IDS
+        }
+        engine._effect_manager._tracker_known = False
+        calls = self._record_writes(mock_hue)
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert any(state.get("ct") == 250 and state.get("bri") <= 20 for _, state in calls)
+        assert all(not ("ct" in state and "hue" in state) for _, state in calls)
+        assert engine._current_gaming_resolution is not None
+
+    async def test_effect_handoff_safety_failure_does_not_accept_plan(
+        self, engine, mock_hue,
+    ):
+        sync = ScreenSyncService(
+            mock_hue,
+            target_light_ids=["2", "5"],
+            transition_boundary=engine._transition_boundary,
+        )
+        engine._screen_sync = sync
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        engine._current_mode = "working"
+        engine._last_applied_per_light = {
+            light_id: {"on": True, "bri": 150, "ct": 250}
+            for light_id in ALL_LIGHT_IDS
+        }
+        engine._effect_manager._tracker_known = False
+        original = mock_hue.set_light
+
+        async def fail_mask(light_id, state):
+            if str(light_id) == "2" and state.get("ct") == 250:
+                return False
+            return await original(light_id, state)
+
+        mock_hue.set_light = fail_mask
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert engine._current_gaming_resolution is None
+        assert engine._effect_manager._tracker_known is False
+        assert sync._accepted_gaming_targets == {}
+
+    async def test_native_gaming_scene_release_forces_composed_reconciliation(
+        self, engine, mock_hue, mock_hue_v2,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        await engine.report_activity("gaming", source="pc_agent")
+        engine._scene_overrides = {"gaming": {"evening": "native-scene"}}
+
+        async def activate_scene(_scene_id):
+            for light in mock_hue._lights.values():
+                light.update({"bri": 15, "hue": 1000, "sat": 254})
+                light.pop("ct", None)
+            return True
+
+        mock_hue_v2.activate_scene = activate_scene
+        await engine.report_activity("gaming", source="pc_agent")
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "scene_override"
+
+        engine._scene_overrides["gaming"].pop("evening")
+        calls = self._record_writes(mock_hue)
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert calls
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "scene_release"
+        assert mock_hue._lights["1"]["bri"] == 65
+
+    async def test_native_gaming_scene_release_retries_until_composition_is_accepted(
+        self, engine, mock_hue, mock_hue_v2,
+    ):
+        sync = ScreenSyncService(
+            mock_hue,
+            target_light_ids=["2", "5"],
+            transition_boundary=engine._transition_boundary,
+        )
+        engine._screen_sync = sync
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        await engine.report_activity("gaming", source="pc_agent")
+        engine._scene_overrides = {"gaming": {"evening": "native-scene"}}
+
+        async def activate_scene(_scene_id):
+            for light in mock_hue._lights.values():
+                light.update({"bri": 15, "hue": 1000, "sat": 254})
+                light.pop("ct", None)
+            return True
+
+        mock_hue_v2.activate_scene = activate_scene
+        await engine.report_activity("gaming", source="pc_agent")
+        scene_marker = engine._gaming_scene_override.copy()
+        assert sync._accepted_gaming_targets == {}
+        engine._scene_overrides["gaming"].pop("evening")
+
+        original = mock_hue.set_light
+
+        async def fail_composed_release(light_id, state):
+            if str(light_id) == "1":
+                return False
+            return await original(light_id, state)
+
+        mock_hue.set_light = fail_composed_release
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert engine._gaming_scene_override == scene_marker
+        diagnostics = engine.get_gaming_diagnostics()
+        assert diagnostics["transition_reason"] == "scene_override"
+        assert diagnostics["fallback_reason"] == "explicit_scene_override"
+        assert engine._current_gaming_resolution is None
+        assert sync._accepted_gaming_targets == {}
+
+        mock_hue.set_light = original
+        calls = self._record_writes(mock_hue)
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert calls
+        assert engine._gaming_scene_override is None
+        assert engine.get_gaming_diagnostics()["transition_reason"] == "scene_release"
+        assert sync._accepted_gaming_targets == {
+            light_id: engine._last_gaming_target[light_id]
+            for light_id in sync.target_lights
+        }
+        calls.clear()
+        await engine.report_activity("gaming", source="pc_agent")
+        assert calls == []
+
+    async def test_diagnostics_are_active_and_accepted_state_only(
+        self, engine, mock_hue,
+    ):
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 19, 0, tzinfo=TZ),
+        )
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "rust"}],
+        )
+        await engine.report_activity("working", source="pc_agent")
+        assert engine.get_gaming_diagnostics()["active"] is False
+        assert engine.get_gaming_diagnostics()["selected_profile"] is None
+
+        await engine.report_activity(
+            "gaming", source="pc_agent", factors=[{"key": "game", "value": "rust"}],
+        )
+        engine._persist_override_state = AsyncMock()
+        await engine.set_manual_override("relax", source="api:test")
+        assert engine.get_gaming_diagnostics()["active"] is False
+        assert engine.get_gaming_diagnostics()["selected_profile"] is None
+
+        await engine.clear_override(source="api:test")
+        original = mock_hue.set_light
+        failed_once = False
+
+        async def fail_profile_release(light_id, state):
+            nonlocal failed_once
+            if str(light_id) == "1" and not failed_once:
+                failed_once = True
+                return False
+            return await original(light_id, state)
+
+        mock_hue.set_light = fail_profile_release
+        await engine.report_activity("gaming", source="pc_agent")
+        diagnostics = engine.get_gaming_diagnostics()
+        assert diagnostics["selected_profile"] == "rust"
+        assert diagnostics["transition_reason"] == "steady"
 @pytest.mark.asyncio
 async def test_physical_context_relax_holds_when_latitude_authority_unknown(
     mock_hue, mock_hue_v2, mock_ws,

@@ -93,6 +93,8 @@ from backend.services.light_state_calculator import (  # noqa: E402
     LUX_STALE_SECONDS,
     LEGACY_TIME_BASED_LIGHT_IDS,
     MODE_TRANSITION_TIME,
+    GamingContext,
+    GamingResolution,
     RELAX_DRIFT_LIGHT_IDS,
     WINDDOWN_RAMP_MINUTES,
     ZONE_POSTURE_FRESHNESS_SECONDS,
@@ -106,15 +108,87 @@ from backend.services.light_state_calculator import (  # noqa: E402
     classify_weather as _classify_weather_pure,
     get_mode_state_table as _get_mode_state_table,
     get_time_period as _calc_get_time_period,
+    interpolate_gaming_state,
     lerp_light_state as _lerp_light_state,
     lux_to_multiplier,
     morning_ramp as _morning_ramp,
     resolve_activity_state as _resolve_activity_state,
+    resolve_gaming_lighting,
 )
 from backend.services.effect_manager import (  # noqa: E402
     EffectManager,
     WEATHER_SKIP_MODES,
 )
+
+
+# Gaming changes are semantic compositions, not a single short mode snap.
+# Values are Hue deciseconds. Scheduled evolution stays slower than
+# entry/profile changes; the existing 30-minute evening ramp supplies the
+# small intermediate targets.
+GAMING_TRANSITION_TIME: dict[str, int | None] = {
+    "activity_entry": 20,
+    "profile_acquire": 20,
+    "game_switch": 25,
+    "profile_release": 20,
+    "scheduled_evolution": 100,
+    "context_adjustment": 15,
+    "scene_release": 20,
+    "steady": None,
+}
+
+# A color-space handoff must leave useful room light established.  L1 plus the
+# paired kitchen pendants are the functional anchor; L2/L5/L6 can change while
+# that group remains visible.  The kitchen is deliberately never split.
+_GAMING_HANDOFF_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("2", "5", "6"),
+    ("1", "3", "4"),
+)
+
+
+@dataclass(frozen=True)
+class _GamingPlanSnapshot:
+    """Detached stable Gaming resolution retained for comparison/diagnostics."""
+
+    requested_game: Optional[str]
+    selected_profile: Optional[str]
+    schedule_type: Optional[str]
+    period: Optional[str]
+    selected_variant: Optional[tuple[Optional[str], str]]
+    fallback_reason: Optional[str]
+    legacy_daytime_exception: bool
+    state: dict[str, dict[str, Any]]
+
+    @classmethod
+    def from_resolution(cls, resolution: GamingResolution) -> "_GamingPlanSnapshot":
+        return cls(
+            requested_game=resolution.context.game_slug,
+            selected_profile=resolution.selected_profile.game_slug,
+            schedule_type=resolution.context.schedule_type,
+            period=resolution.context.period,
+            selected_variant=tuple(resolution.selected_variant),
+            fallback_reason=resolution.fallback_reason,
+            legacy_daytime_exception=resolution.legacy_daytime_exception,
+            state={light_id: light.copy() for light_id, light in resolution.state.items()},
+        )
+
+    def diagnostics(self, transition_reason: Optional[str]) -> dict[str, Any]:
+        return {
+            "requested_game": self.requested_game,
+            "selected_profile": self.selected_profile,
+            "schedule_type": self.schedule_type,
+            "period": self.period,
+            "selected_variant": (
+                {
+                    "schedule_type": self.selected_variant[0],
+                    "period": self.selected_variant[1],
+                }
+                if self.selected_variant is not None
+                else None
+            ),
+            "fallback_reason": self.fallback_reason,
+            "legacy_daytime_exception": self.legacy_daytime_exception,
+            "transition_reason": transition_reason,
+        }
 
 
 def _extract_game_factor(factors: Optional[list[dict]]) -> Optional[str]:
@@ -335,6 +409,20 @@ class AutomationEngine:
         # Drives GAME_LIGHT_PROFILES (e.g. Rust "Rusted Ember"). Kept in lockstep
         # with _current_mode — set/cleared alongside it in report_activity.
         self._current_game: Optional[str] = None
+        # Gaming resolver state is deliberately detached from the mutable
+        # per-light working state. It is both the semantic comparison baseline
+        # and the compact diagnostics surface for the active Gaming session.
+        self._current_gaming_resolution: Optional[_GamingPlanSnapshot] = None
+        self._last_gaming_resolution: Optional[_GamingPlanSnapshot] = None
+        self._last_gaming_target: Optional[dict[str, dict[str, Any]]] = None
+        # A failed CT↔HSB masking write must retain its trusted old-space
+        # baseline even when a force resend deliberately clears normal dedup.
+        self._gaming_handoff_retry_baseline: dict[str, dict[str, Any]] = {}
+        self._last_gaming_transition_reason: Optional[str] = None
+        self._gaming_plan_changed: bool = False
+        self._gaming_scene_override: Optional[dict[str, Any]] = None
+        # Blocks direct Gaming writers during explicit-scene authority transfer.
+        self._gaming_scene_transition_pending: bool = False
         self._mode_source: str = "time"
         self._mode_source_key: str = "time"
         self._manual_override: bool = False
@@ -392,6 +480,8 @@ class AutomationEngine:
         # deadline. Reconciliation skips these lights the same way
         # _manual_light_overrides does.
         self._state = EngineState()
+        self._external_light_owners: list[Any] = []
+        self._suspended_external_owner_ids: set[int] = set()
 
         # Per-light override verbs (manual stamps, dedup discipline,
         # transit/desk-exit/corridor lifecycle) — GH#87 step 4. Getters
@@ -431,6 +521,7 @@ class AutomationEngine:
             # detector's internal Idle evidence.
             current_mode_getter=lambda: self.effective_mode,
             screen_sync_getter=lambda: self._screen_sync,
+            external_owners_getter=self._active_external_light_owners,
             suppressed_getter=lambda: self._external_off_detected,
             # Cross-dispatch routes back through the engine's _apply_* delegates
             # so spies that patch engine._apply_per_light / _apply_uniform are
@@ -762,6 +853,7 @@ class AutomationEngine:
             "physical_context_process_arbitration": (
                 process_arbitration.as_context(now)
             ),
+            "gaming": self.get_gaming_diagnostics(),
         }
 
     def get_light_ownership_context(self) -> dict[str, Any]:
@@ -784,6 +876,13 @@ class AutomationEngine:
             }
             for source, stamp in source_stamps.items()
         }
+        external_owners = []
+        for owner in self._external_light_owners:
+            targets = getattr(owner, "owned_light_targets", lambda: {})()
+            external_owners.append({
+                "name": getattr(owner, "owner_name", type(owner).__name__),
+                "light_ids": sorted(targets),
+            })
         return {
             "manual": {
                 "light_ids": sorted(self._manual_light_overrides),
@@ -807,6 +906,7 @@ class AutomationEngine:
             },
             "protected_light_ids": sorted(self._protected_light_ids()),
             "transit_light_ids": sorted(self._transit_light_overrides),
+            "external_owners": external_owners,
         }
 
     def get_pipeline_status(self) -> dict[str, Any]:
@@ -985,6 +1085,307 @@ class AutomationEngine:
         monitor_brightness pc_agent and the /api/automation/status route.
         """
         return self._get_time_period()
+
+    @staticmethod
+    def _gaming_schedule_type(now: datetime) -> str:
+        return "weekday" if now.weekday() < 5 else "weekend"
+
+    def get_gaming_diagnostics(self) -> dict[str, Any]:
+        """Return a detached summary of the effective, accepted Gaming plan."""
+        active = self.current_mode == "gaming"
+        if active and self._gaming_scene_override is not None:
+            return {"active": True, **self._gaming_scene_override.copy()}
+        plan = self._current_gaming_resolution if active else None
+        if plan is None:
+            return {
+                "active": active,
+                "requested_game": None,
+                "selected_profile": None,
+                "schedule_type": None,
+                "period": None,
+                "selected_variant": None,
+                "fallback_reason": None,
+                "legacy_daytime_exception": False,
+                "transition_reason": (
+                    self._last_gaming_transition_reason if active else None
+                ),
+                "current_plan_differs_from_previous": False,
+            }
+        result = plan.diagnostics(self._last_gaming_transition_reason)
+        result["active"] = True
+        result["current_plan_differs_from_previous"] = self._gaming_plan_changed
+        return result
+
+    @staticmethod
+    def _gaming_color_space(light: dict[str, Any]) -> str:
+        if "ct" in light:
+            return "ct"
+        if "hue" in light and "sat" in light:
+            return "hsb"
+        return "none"
+
+    def _classify_gaming_transition(
+        self,
+        next_plan: _GamingPlanSnapshot,
+        target_state: dict[str, dict[str, Any]],
+        *,
+        scheduled_interpolation: bool,
+        scene_released: bool = False,
+    ) -> str:
+        previous = self._current_gaming_resolution
+        if scene_released:
+            return "scene_release"
+        if previous is None:
+            return "activity_entry"
+        if previous.selected_profile is None and next_plan.selected_profile is not None:
+            return "profile_acquire"
+        if previous.selected_profile is not None and next_plan.selected_profile is None:
+            return "profile_release"
+        if (
+            previous.selected_profile is not None
+            and next_plan.selected_profile is not None
+            and previous.selected_profile != next_plan.selected_profile
+        ):
+            return "game_switch"
+        if (
+            previous.selected_variant != next_plan.selected_variant
+            or previous.period != next_plan.period
+        ):
+            return "scheduled_evolution"
+        if (
+            previous.schedule_type != next_plan.schedule_type
+            and previous.state != next_plan.state
+        ):
+            return "scheduled_evolution"
+        if scheduled_interpolation and target_state != self._last_gaming_target:
+            return "scheduled_evolution"
+        if target_state != self._last_gaming_target:
+            return "context_adjustment"
+        return "steady"
+
+    @staticmethod
+    def _merge_light_apply_results(*results: LightApplyResult) -> LightApplyResult:
+        """Combine a staged write outcome without losing retry information."""
+        merged = LightApplyResult()
+        for result in results:
+            merged.successful.update(result.successful)
+            merged.failed.update(result.failed)
+            merged.skipped.update(result.skipped)
+            merged.deduplicated.update(result.deduplicated)
+        return merged
+
+    def _gaming_crossing_light_ids(
+        self,
+        target_state: dict[str, dict[str, Any]],
+        previous_states: dict[str, dict[str, Any]],
+    ) -> set[str]:
+        return {
+            light_id
+            for light_id, target in target_state.items()
+            if (previous := previous_states.get(light_id)) is not None
+            and self._gaming_color_space(previous) != "none"
+            and self._gaming_color_space(target) != "none"
+            and self._gaming_color_space(previous) != self._gaming_color_space(target)
+        }
+
+    @staticmethod
+    def _gaming_mask_state(previous: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+        """Retain the old color space at a conservative masking brightness."""
+        old_color = {
+            key: value for key, value in previous.items()
+            if key in {"ct", "hue", "sat"}
+        }
+        return {
+            "on": True,
+            "bri": max(
+                1,
+                min(int(previous.get("bri", 1)), int(target.get("bri", 1)), 20),
+            ),
+            **old_color,
+        }
+
+    async def _apply_gaming_color_space_handoff(
+        self,
+        target_state: dict[str, dict[str, Any]],
+        transitiontime: int,
+        previous_states: dict[str, dict[str, Any]],
+    ) -> LightApplyResult:
+        """Apply a role-staged CT↔HSB handoff under one shared boundary.
+
+        The bedroom/accent group changes first while L1/L3/L4 remain useful;
+        then the functional group changes while the first group is established.
+        A failed masking write never receives its incompatible final recolor.
+        """
+        crossings = self._gaming_crossing_light_ids(target_state, previous_states)
+        if not crossings:
+            return await self._apply_state(target_state, transitiontime=transitiontime)
+
+        async with self._transition_boundary.serialized():
+            outcomes: list[LightApplyResult] = []
+            non_crossing = {
+                light_id: target
+                for light_id, target in target_state.items()
+                if light_id not in crossings
+            }
+            if non_crossing:
+                outcomes.append(
+                    await self._apply_state(non_crossing, transitiontime=transitiontime)
+                )
+
+            for group in _GAMING_HANDOFF_GROUPS:
+                group_crossings = [light_id for light_id in group if light_id in crossings]
+                if not group_crossings:
+                    continue
+                masking = {
+                    light_id: self._gaming_mask_state(
+                        previous_states[light_id], target_state[light_id],
+                    )
+                    for light_id in group_crossings
+                }
+                masked = await self._apply_state(masking, transitiontime=10)
+                outcomes.append(masked)
+                await self._transition_boundary.wait_for_settle(masked.successful)
+                for light_id in masked.failed:
+                    self._gaming_handoff_retry_baseline[light_id] = (
+                        previous_states[light_id].copy()
+                    )
+
+                # A protected light is deliberately passed through the normal
+                # final apply, where ownership skips it. A failed masking light
+                # is excluded so it cannot jump directly across color spaces.
+                final_group = {
+                    light_id: target_state[light_id]
+                    for light_id in group_crossings
+                    if light_id not in masked.failed
+                }
+                if final_group:
+                    final = await self._apply_state(
+                        final_group, transitiontime=transitiontime,
+                    )
+                    outcomes.append(final)
+                    await self._transition_boundary.wait_for_settle(final.successful)
+                    for light_id in final.successful:
+                        self._gaming_handoff_retry_baseline.pop(light_id, None)
+            return self._merge_light_apply_results(*outcomes)
+
+    async def _establish_gaming_handoff_effect_safety(
+        self,
+        target_state: dict[str, dict[str, Any]],
+        previous_states: dict[str, dict[str, Any]],
+        transitiontime: int,
+        release_light_ids: set[str],
+    ) -> LightApplyResult:
+        """Establish role-staged static Gaming targets inside effect release."""
+        if not self._transition_boundary.held_by_current_task:
+            raise RuntimeError("Gaming effect safety requires the transition boundary")
+
+        crossings = self._gaming_crossing_light_ids(target_state, previous_states)
+        if not crossings:
+            return await self.establish_effect_release(
+                target_state, transitiontime, release_light_ids,
+            )
+
+        # All released lights need a safe static command at every effect stage.
+        # Cross-space fixtures not yet due to move retain their observed old
+        # color-space state; protected lights remain owned by the applicator.
+        working = {
+            light_id: target_state.get(light_id, previous_states.get(light_id, {})).copy()
+            for light_id in release_light_ids
+        }
+        for light_id in crossings:
+            if light_id in working:
+                working[light_id] = previous_states[light_id].copy()
+
+        outcomes: list[LightApplyResult] = []
+        for group in _GAMING_HANDOFF_GROUPS:
+            group_crossings = [light_id for light_id in group if light_id in crossings]
+            if not group_crossings:
+                continue
+            for light_id in group_crossings:
+                working[light_id] = self._gaming_mask_state(
+                    previous_states[light_id], target_state[light_id],
+                )
+            masked = await self.establish_effect_release(
+                working, 10, release_light_ids,
+            )
+            outcomes.append(masked)
+            await self._transition_boundary.wait_for_settle(masked.successful)
+            if masked.failed:
+                for light_id in masked.failed & crossings:
+                    self._gaming_handoff_retry_baseline[light_id] = (
+                        previous_states[light_id].copy()
+                    )
+                return self._merge_light_apply_results(*outcomes)
+
+            for light_id in group_crossings:
+                working[light_id] = target_state[light_id].copy()
+            final = await self.establish_effect_release(
+                working, transitiontime, release_light_ids,
+            )
+            outcomes.append(final)
+            await self._transition_boundary.wait_for_settle(final.successful)
+            if final.failed:
+                for light_id in final.failed & crossings:
+                    self._gaming_handoff_retry_baseline[light_id] = (
+                        working[light_id].copy()
+                    )
+                return self._merge_light_apply_results(*outcomes)
+            for light_id in group_crossings:
+                self._gaming_handoff_retry_baseline.pop(light_id, None)
+        return self._merge_light_apply_results(*outcomes)
+
+    async def _reconcile_gaming_effect_handoff(
+        self,
+        desired: Optional[str | dict[str, Any]],
+        target_state: dict[str, dict[str, Any]],
+        previous_states: dict[str, dict[str, Any]],
+        transitiontime: int,
+    ) -> bool:
+        """Keep the Gaming handoff inside EffectManager's existing boundary."""
+        async def establish_safety(release_light_ids: set[str]) -> LightApplyResult | bool:
+            result = await self._establish_gaming_handoff_effect_safety(
+                target_state,
+                previous_states,
+                transitiontime,
+                release_light_ids,
+            )
+            return result if not result.failed else False
+
+        async def staged_static_ready() -> bool:
+            return True
+
+        return await self._effect_manager.replace_with_action(
+            staged_static_ready,
+            establish_safety=establish_safety,
+            desired=desired,
+        )
+
+    async def _read_scene_release_baseline(self) -> dict[str, dict[str, Any]]:
+        """Read Hue once when native scene ownership returns to composition."""
+        if self._hue is None or not self._hue.connected:
+            return {}
+        try:
+            lights = await self._hue.get_all_lights()
+        except Exception:
+            logger.warning("Could not read Hue baseline for Gaming scene release", exc_info=True)
+            return {}
+
+        baseline: dict[str, dict[str, Any]] = {}
+        for light in lights:
+            light_id = light.get("light_id", light.get("id"))
+            if light_id is None:
+                continue
+            state: dict[str, Any] = {
+                "on": bool(light.get("on", True)),
+                "bri": int(light.get("bri", 1)),
+            }
+            if light.get("colormode") == "ct" and light.get("ct") is not None:
+                state["ct"] = int(light["ct"])
+            elif light.get("hue") is not None and light.get("sat") is not None:
+                state["hue"] = int(light["hue"])
+                state["sat"] = int(light["sat"])
+            baseline[str(light_id)] = state
+        return baseline
 
     async def _sonos_is_playing(self) -> bool:
         """Check if Sonos is actively playing. Used by the late-night rescue
@@ -1310,6 +1711,7 @@ class AutomationEngine:
         self._away_hold = True
         self._home_awake_confirmed = False
         self._invalidate_dedup_cache()
+        self._invalidate_external_light_owners("away")
         if not already_armed:
             logger.info(
                 "Away suppression armed by %s (hard hold) — run_loop will "
@@ -2336,7 +2738,6 @@ class AutomationEngine:
             self._last_process_working_at = now
 
         old_mode = self._current_mode
-        old_game = self._current_game
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
@@ -2345,6 +2746,11 @@ class AutomationEngine:
         # Set in lockstep with _current_mode so the next _apply_mode resolves the
         # right palette on the same report that first carries the `game` factor.
         self._current_game = _extract_game_factor(factors) if mode == "gaming" else None
+        if mode != "gaming":
+            self._current_gaming_resolution = None
+            self._last_gaming_target = None
+            self._gaming_handoff_retry_baseline.clear()
+            self._gaming_scene_override = None
         self._mode_source = source
         self._mode_source_key = source_key
         self._last_activity = mode
@@ -2508,12 +2914,13 @@ class AutomationEngine:
         # 05-06 audit found this branch was unconditionally clearing the
         # cache on every report, producing ~3.5 no-op bridge writes per
         # minute on L2 with bri_before=null in the log timeline.
-        # force_resend on a game change too (e.g. launching/quitting Rust while
-        # staying in gaming mode) so the GAME_LIGHT_PROFILES swap repaints
-        # immediately instead of riding the per-light dedup cache.
+        # Gaming plan changes are classified inside _apply_mode from the
+        # previous/next resolved plans. A raw game-factor change does not by
+        # itself invalidate the cache: two unknown games can share the exact
+        # generic target, while real plan deltas naturally reach the applicator.
         await self._apply_mode(
             mode,
-            force_resend=(old_mode != mode or old_game != self._current_game),
+            force_resend=(old_mode != mode),
         )
 
         # Fire mode change callbacks (e.g., music auto-play)
@@ -3290,6 +3697,13 @@ class AutomationEngine:
                 of sync with the cache). Leave False on periodic reapply
                 ticks so dedup can no-op when nothing changed.
         """
+        if mode != "gaming" and self._screen_sync is not None:
+            clear_gaming = getattr(
+                self._screen_sync, "clear_accepted_gaming_state", None,
+            )
+            if callable(clear_gaming):
+                clear_gaming()
+
         # Away/external-off CHOKEPOINT: while the apartment is suppressed,
         # NO path may actuate lights — not just run_loop (gated upstream)
         # but the side doors live testing found 2026-06-10: the transit/
@@ -3416,6 +3830,27 @@ class AutomationEngine:
             source = self._scene_override_sources.get(mode, {}).get(period, "bridge")
             override_applied = False
             failure_reason: str | None = None
+            if mode == "gaming":
+                self._gaming_scene_transition_pending = True
+            try:
+                owners_released = (
+                    mode != "gaming"
+                    or await self._release_external_owners_for_scene()
+                )
+            except asyncio.CancelledError:
+                if mode == "gaming":
+                    self._gaming_scene_transition_pending = False
+                raise
+            except Exception:
+                if mode == "gaming":
+                    self._gaming_scene_transition_pending = False
+                raise
+            if not owners_released:
+                self._gaming_scene_transition_pending = False
+                logger.warning(
+                    "Gaming scene activation deferred: external owner release failed",
+                )
+                return
             try:
                 if source == "bridge":
                     async def activate_native_override() -> bool:
@@ -3463,6 +3898,10 @@ class AutomationEngine:
                         )
                     else:
                         failure_reason = f"preset '{override_scene}' not in SCENE_PRESETS"
+            except asyncio.CancelledError:
+                if mode == "gaming":
+                    self._gaming_scene_transition_pending = False
+                raise
             except Exception as e:
                 failure_reason = f"{type(e).__name__}: {e}"
                 logger.error(
@@ -3471,7 +3910,41 @@ class AutomationEngine:
                     exc_info=True,
                 )
 
+            # No await occurs between clearing this latch and recording a
+            # successful scene marker below, so another coroutine cannot enter
+            # the release -> accepted-scene gap.  Failures intentionally reopen
+            # ordinary Gaming ownership before the fallback composition awaits.
+            if mode == "gaming":
+                self._gaming_scene_transition_pending = False
+
             if override_applied:
+                if mode == "gaming":
+                    if self._screen_sync is not None:
+                        supersede = getattr(
+                            self._screen_sync, "supersede_light", None,
+                        )
+                        if callable(supersede):
+                            for light_id in self._screen_sync.target_lights:
+                                supersede(light_id)
+                        clear_gaming = getattr(
+                            self._screen_sync, "clear_accepted_gaming_state", None,
+                        )
+                        if callable(clear_gaming):
+                            clear_gaming()
+                    self._current_gaming_resolution = None
+                    self._gaming_plan_changed = False
+                    self._last_gaming_transition_reason = "scene_override"
+                    self._gaming_scene_override = {
+                        "requested_game": self._current_game,
+                        "selected_profile": None,
+                        "schedule_type": self._gaming_schedule_type(now),
+                        "period": period,
+                        "selected_variant": None,
+                        "fallback_reason": "explicit_scene_override",
+                        "legacy_daytime_exception": False,
+                        "transition_reason": "scene_override",
+                        "current_plan_differs_from_previous": False,
+                    }
                 return
 
             # Both paths failed — notify the frontend and fall through to the
@@ -3489,14 +3962,84 @@ class AutomationEngine:
                 mode, period,
             )
 
-        # A per-game profile (GAME_LIGHT_PROFILES, e.g. Rust) overrides the
-        # generic gaming palette when self._current_game is set — resolved
-        # through the same table helper the resolver uses, so the lerp /
-        # overlay / multiplier pipeline below is identical.
+        # A native scene changes bridge state without making the ordinary
+        # per-light cache authoritative.  When its mapping disappears, take
+        # one bounded bridge snapshot for a safe composed release, then force
+        # a real reconcile rather than deduplicating against pre-scene state.
+        gaming_scene_released = bool(
+            mode == "gaming"
+            and override_scene is None
+            and self._gaming_scene_override is not None
+        )
+        scene_release_baseline: dict[str, dict[str, Any]] = {}
+        if gaming_scene_released:
+            scene_release_baseline = await self._read_scene_release_baseline()
+            self._invalidate_dedup_cache()
+
+        # Gaming has one production composition path. The pure resolver owns
+        # generic/profile selection; the established engine pipeline below
+        # still owns context overlays, protected lights, effects and dedup.
+        gaming_resolution: Optional[GamingResolution] = None
+        gaming_scheduled_interpolation = False
         game = self._current_game
-        mode_states = _get_mode_state_table(mode, game)
+        mode_states = {"day": {}} if mode == "gaming" else _get_mode_state_table(mode, game)
         if mode_states is not None:
-            if "day" in mode_states:
+            if mode == "gaming":
+                gaming_context = GamingContext(
+                    game_slug=game,
+                    schedule_type=self._gaming_schedule_type(now),
+                    period=period,
+                )
+                gaming_resolution = resolve_gaming_lighting(gaming_context)
+                state = {
+                    light_id: light.copy()
+                    for light_id, light in gaming_resolution.state.items()
+                }
+                # Preserve the existing gradual evening→night evolution. The
+                # helper refuses CT↔HSB intermediate targets, so a future
+                # incompatible profile simply takes the explicit phased path
+                # below rather than issuing an invalid mixed-color command.
+                schedule = (
+                    self._schedule_config.weekday
+                    if now.weekday() < 5
+                    else self._schedule_config.weekend
+                )
+                winddown_total = schedule.winddown_start_hour * 60
+                current_total = now.hour * 60 + now.minute
+                minutes_until_winddown = winddown_total - current_total
+                if (
+                    period == "evening"
+                    and 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES
+                ):
+                    progress = (
+                        WINDDOWN_RAMP_MINUTES - minutes_until_winddown
+                    ) / WINDDOWN_RAMP_MINUTES
+                    night_resolution = resolve_gaming_lighting(
+                        GamingContext(
+                            game_slug=game,
+                            schedule_type=gaming_context.schedule_type,
+                            period="night",
+                        )
+                    )
+                    if gaming_resolution.legacy_daytime_exception:
+                        # Rust remains exact legacy output in this commit,
+                        # including its established after-dark ramp.
+                        state = _lerp_light_state(
+                            state, night_resolution.state, progress,
+                        )
+                        gaming_scheduled_interpolation = True
+                    else:
+                        try:
+                            state = interpolate_gaming_state(
+                                state, night_resolution.state, progress,
+                            )
+                            gaming_scheduled_interpolation = True
+                        except ValueError:
+                            # The phase handler below performs color-space
+                            # changes only after an acknowledged dim/settle
+                            # boundary.
+                            pass
+            elif "day" in mode_states:
                 # Time-aware mode: blend evening → night during the 30-min ramp window
                 schedule = (
                     self._schedule_config.weekday
@@ -3609,24 +4152,90 @@ class AutomationEngine:
                 prime = getattr(self._screen_sync, "prime_from_mode_state", None)
                 if prime is not None:
                     prime(mode, period, state)
+            gaming_plan: Optional[_GamingPlanSnapshot] = None
+            gaming_transition_reason: Optional[str] = None
+            accepted_plan_changed = False
+            handoff_baseline = {
+                **pre_transition_targets,
+                **self._gaming_handoff_retry_baseline,
+                **scene_release_baseline,
+            }
+            if gaming_resolution is not None:
+                gaming_plan = _GamingPlanSnapshot.from_resolution(gaming_resolution)
+                gaming_transition_reason = self._classify_gaming_transition(
+                    gaming_plan,
+                    state,
+                    scheduled_interpolation=gaming_scheduled_interpolation,
+                    scene_released=gaming_scene_released,
+                )
+                accepted_plan_changed = (
+                    self._last_gaming_target is None
+                    or state != self._last_gaming_target
+                )
             tt = (
-                ATMOSPHERE_TRANSITION_TIME
+                GAMING_TRANSITION_TIME[gaming_transition_reason]
+                if gaming_transition_reason is not None
+                else ATMOSPHERE_TRANSITION_TIME
                 if atmosphere_plan is not None
                 and atmosphere_plan.should_apply
                 else MODE_TRANSITION_TIME.get(mode)
+            )
+            crosses_color_space = bool(
+                gaming_transition_reason is not None
+                and self._gaming_crossing_light_ids(state, handoff_baseline)
             )
             if self._effect_manager.needs_reconcile(desired_effect):
                 # One serialized sequence: force safe targets (including
                 # protected held targets), wait the commanded transition,
                 # then release/start the effect.
-                applied = await self._reconcile_effect(
-                    desired_effect,
-                    intended_states=state,
-                    transitiontime=tt,
-                )
+                if crosses_color_space and tt is not None:
+                    applied = await self._reconcile_gaming_effect_handoff(
+                        desired_effect,
+                        state,
+                        handoff_baseline,
+                        tt,
+                    )
+                else:
+                    applied = await self._reconcile_effect(
+                        desired_effect,
+                        intended_states=state,
+                        transitiontime=tt,
+                    )
             else:
-                # Steady-state reapply: normal dedup path, no settle barrier.
-                applied = await self._apply_state(state, transitiontime=tt)
+                # Steady plans ride the normal dedup path. CT↔HSB target
+                # changes use the small acknowledged two-phase handoff instead
+                # of asking Hue to interpolate incompatible command spaces.
+                if crosses_color_space and tt is not None:
+                    applied = await self._apply_gaming_color_space_handoff(
+                        state,
+                        tt,
+                        handoff_baseline,
+                    )
+                else:
+                    applied = await self._apply_state(state, transitiontime=tt)
+            if gaming_plan is not None and (
+                applied is True
+                or isinstance(applied, LightApplyResult) and not applied.failed
+            ):
+                # A scene release becomes authoritative only after its
+                # composed replacement is accepted.  Until then the native
+                # scene marker remains both the retry trigger and the only
+                # honest diagnostics authority.
+                if gaming_scene_released:
+                    self._gaming_scene_override = None
+                self._current_gaming_resolution = gaming_plan
+                self._last_gaming_resolution = gaming_plan
+                self._last_gaming_target = {
+                    light_id: light.copy() for light_id, light in state.items()
+                }
+                if self._screen_sync is not None:
+                    publish = getattr(
+                        self._screen_sync, "publish_accepted_gaming_state", None,
+                    )
+                    if callable(publish):
+                        publish(state)
+                self._last_gaming_transition_reason = gaming_transition_reason
+                self._gaming_plan_changed = accepted_plan_changed
             if atmosphere_plan is not None and atmosphere_plan.should_apply:
                 await self._living_room_atmosphere_curator.observe_application(
                     atmosphere_plan,
@@ -3734,6 +4343,70 @@ class AutomationEngine:
         overrides, plus fresh screen-sync-owned lights while sync is fresh.)
         """
         return self._applicator.protected_light_ids()
+
+    def register_external_light_owner(self, owner: Any) -> None:
+        """Register a direct bridge writer for final-apply protection."""
+        if owner not in self._external_light_owners:
+            self._external_light_owners.append(owner)
+
+    def _active_external_light_owners(self) -> list[Any]:
+        return [
+            owner for owner in self._external_light_owners
+            if id(owner) not in self._suspended_external_owner_ids
+        ]
+
+    def _invalidate_external_light_owners(self, reason: str) -> None:
+        """Drop direct-writer stamps after authoritative dark/suppressed state."""
+        for owner in self._external_light_owners:
+            invalidate = getattr(owner, "invalidate_ownership", None)
+            if callable(invalidate):
+                invalidate(reason)
+
+    async def _release_external_owners_for_scene(self) -> bool:
+        """Reclaim direct-writer lamps before an explicit Gaming scene."""
+        for owner in self._external_light_owners:
+            release = getattr(owner, "release_for_scene", None)
+            if callable(release) and await release() is not True:
+                return False
+        return True
+
+    async def reclaim_external_light_release(
+        self, owner: Any, light_ids: set[str],
+    ) -> LightApplyResult:
+        """Synchronously replace one writer with the accepted Gaming plan."""
+        targets = {
+            light_id: self._last_gaming_target[light_id].copy()
+            for light_id in light_ids
+            if self._last_gaming_target is not None
+            and light_id in self._last_gaming_target
+        }
+        unresolved = set(light_ids) - set(targets)
+        if unresolved or self.current_mode != "gaming" or self._gaming_scene_override:
+            return LightApplyResult(failed=set(light_ids))
+        if self._external_off_detected:
+            return LightApplyResult(skipped=set(light_ids))
+
+        async with self._transition_boundary.serialized():
+            sync = self._screen_sync
+            supersede = getattr(sync, "supersede_light", None)
+            for light_id in light_ids:
+                if callable(supersede):
+                    supersede(light_id)
+                self._last_applied_per_light.pop(light_id, None)
+
+            self._suspended_external_owner_ids.add(id(owner))
+            try:
+                result = await self._apply_per_light(
+                    targets, MODE_TRANSITION_TIME.get("gaming"),
+                )
+            finally:
+                self._suspended_external_owner_ids.discard(id(owner))
+
+            synchronize = getattr(sync, "synchronize_physical_state", None)
+            if callable(synchronize):
+                for light_id in result.successful:
+                    synchronize(light_id, targets[light_id])
+            return result
 
     async def _apply_uniform(
         self, state: dict[str, Any], transitiontime: int | None = None,
@@ -4876,6 +5549,7 @@ class AutomationEngine:
 
         if all_off and not self._external_off_detected:
             self._external_off_detected = True
+            self._invalidate_external_light_owners("external_off")
             logger.info("All lights off (external) — suppressing auto-control")
             return True
 

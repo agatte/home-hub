@@ -28,6 +28,7 @@ to scope the effect off L2 + L5 (see
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -87,6 +88,8 @@ class LoLChampionService:
     and the ``AutomationEngine`` whose ``current_mode`` it reads.
     """
 
+    owner_name = "league_champion"
+
     def __init__(
         self,
         hue_service: "HueService",
@@ -101,7 +104,10 @@ class LoLChampionService:
         self._ws_manager = ws_manager
         self._current_champion: Optional[str] = None
         self._current_rgb: Optional[tuple[int, int, int]] = None
+        self._desired_champion: Optional[str] = None
+        self._desired_rgb: Optional[tuple[int, int, int]] = None
         self._owned: set[str] = set()
+        self._owned_targets: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Public query API — consulted by the screen-sync route handler
@@ -109,11 +115,21 @@ class LoLChampionService:
 
     def is_owning(self, light_id: str) -> bool:
         """True if this service currently drives ``light_id``."""
+        self._release_stronger_owner_lights()
         return light_id in self._owned
 
     def active_lights(self) -> set[str]:
         """All light ids currently driven by this service."""
+        self._release_stronger_owner_lights()
         return set(self._owned)
+
+    def owned_light_targets(self) -> dict[str, dict]:
+        """Detached targets for final-applicator/effect-release safety."""
+        self._release_stronger_owner_lights()
+        return {
+            light_id: target.copy()
+            for light_id, target in self._owned_targets.items()
+        }
 
     @property
     def current_champion(self) -> Optional[str]:
@@ -127,41 +143,75 @@ class LoLChampionService:
     # Activity / mode hooks
     # ------------------------------------------------------------------
 
-    async def on_activity_report(self, report: "ActivityReport") -> None:
+    async def on_activity_report(
+        self, report: "ActivityReport", disposition: Optional[dict[str, Any]] = None,
+    ) -> None:
         """Handle an inbound ``ActivityReport``.
 
         No-op unless the engine is in gaming mode and the report carries
         a ``champion`` factor. Picks the RGB from the persisted map and
         delegates to ``apply``.
         """
+        if disposition is not None and disposition.get("semantic_disposition") != "accepted":
+            return
+        if getattr(report, "source", None) != "process":
+            return
         if self._engine is None or self._engine.current_mode != "gaming":
             return
+        if getattr(self._engine, "_gaming_scene_override", None) is not None:
+            self.invalidate_ownership("gaming_scene")
+            return
+        if getattr(self._engine, "_external_off_detected", False):
+            self.invalidate_ownership("external_off")
+            return
+
+        self._release_stronger_owner_lights()
 
         champion = _extract_champion(report)
         if not champion:
+            observed_source = (
+                disposition.get("observed_source")
+                if disposition is not None
+                else None
+            )
+            if observed_source not in {None, "process:desktop"}:
+                return
+            await self.clear()
             return
-
-        if champion == self._current_champion and self._owned:
-            return  # Idempotent — same champion already on the lamps.
 
         await self.apply(champion)
 
     async def on_mode_change(self, mode: str) -> None:
         """Clear champion state when the engine leaves gaming."""
         if mode != "gaming":
-            await self.clear()
+            released = set(self._owned)
+            self.invalidate_ownership("mode_exit")
+            if (
+                released
+                and not getattr(self._engine, "_external_off_detected", False)
+            ):
+                for light_id in released:
+                    self._engine._last_applied_per_light.pop(light_id, None)
+                await self._engine.reapply_current_mode(force_resend=True)
 
     # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
 
     async def apply(self, champion_name: str) -> None:
-        """Look up champion color, write it to both bedroom lamps."""
+        """Look up champion color and write it only while Gaming still owns it."""
+        expected_game = getattr(self._engine, "current_game", None)
+        if not self._gaming_authority_allows(expected_game):
+            return
+        self._release_stronger_owner_lights()
         rgb, seeded = await self._resolve_color(champion_name)
         period = self._resolve_period()
         max_bri = LOL_BRIGHTNESS_CAPS.get(period, LOL_BRIGHTNESS_CAPS["night"])
 
+        targets: dict[str, dict] = {}
         for light_id in TARGET_LIGHT_IDS:
+            if light_id in self._stronger_owner_light_ids():
+                continue
             sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
             luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)
             h, s, br = rgb_to_hue_hsb(
@@ -171,40 +221,176 @@ class LoLChampionService:
                 sat_boost=sat_boost,
                 luma_comp=luma_comp,
             )
-            await self._hue.set_light(light_id, {
+            targets[light_id] = {
                 "on": True,
                 "hue": int(h),
                 "sat": int(s),
                 "bri": int(br),
                 "transitiontime": LOL_TRANSITIONTIME,
-            })
-            self._owned.add(light_id)
+            }
 
-        self._current_champion = champion_name
-        self._current_rgb = rgb
-        logger.info(
-            "Applied champion color: %s -> rgb=%s, period=%s, lights=%s",
-            champion_name, rgb, period, sorted(self._owned),
+        self._desired_champion = champion_name
+        self._desired_rgb = rgb
+        pending = {
+            light_id: target
+            for light_id, target in targets.items()
+            if self._owned_targets.get(light_id) != target
+        }
+
+        boundary = getattr(self._engine, "_transition_boundary", None)
+
+        async def write_targets() -> None:
+            # Color lookup and boundary acquisition are both await points.  Re-check
+            # authority here so an older League heartbeat cannot write after Gaming
+            # exited, the game changed, Away armed, or an explicit scene takeover
+            # started while this coroutine was suspended.
+            if not self._gaming_authority_allows(expected_game):
+                return
+            self._release_stronger_owner_lights()
+            stronger = self._stronger_owner_light_ids()
+            write_pending = {
+                light_id: target
+                for light_id, target in pending.items()
+                if light_id not in stronger
+            }
+            results = await asyncio.gather(
+                *(
+                    self._hue.set_light(light_id, target)
+                    for light_id, target in write_pending.items()
+                ),
+                return_exceptions=True,
+            )
+            # Engine/game/scene state can change while the bridge request itself
+            # is awaiting.  A successful physical write does not grant ownership
+            # if the authority that authorized it has since expired; the stronger
+            # transition waiting on this boundary will reconcile the bridge next.
+            if not self._gaming_authority_allows(expected_game):
+                return
+            stronger_after_write = self._stronger_owner_light_ids()
+            supersede = getattr(
+                getattr(self._engine, "_screen_sync", None),
+                "supersede_light",
+                None,
+            )
+            for light_id, result in zip(write_pending, results):
+                if result is True and light_id not in stronger_after_write:
+                    self._owned.add(light_id)
+                    self._owned_targets[light_id] = write_pending[light_id].copy()
+                    if callable(supersede):
+                        supersede(light_id)
+
+        if boundary is None or boundary.held_by_current_task:
+            await write_targets()
+        else:
+            async with boundary.serialized():
+                await write_targets()
+
+        fully_established = bool(targets) and (
+            set(self._owned_targets) == set(targets)
+            and all(self._owned_targets[light_id] == target for light_id, target in targets.items())
         )
-        await self._broadcast_champion(champion_name, rgb, seeded)
+        accepted_changed = fully_established and (
+            self._current_champion != champion_name or self._current_rgb != rgb
+        )
+        if fully_established:
+            self._current_champion = champion_name
+            self._current_rgb = rgb
+        logger.info(
+            "Champion target: %s rgb=%s period=%s owned=%s pending=%s accepted=%s",
+            champion_name, rgb, period, sorted(self._owned), sorted(pending),
+            fully_established,
+        )
+        if accepted_changed:
+            await self._broadcast_champion(champion_name, rgb, seeded)
 
-    async def clear(self) -> None:
-        """Drop ownership stamps so screen-sync resumes on next color post."""
-        if not self._owned and self._current_champion is None:
-            return
+    async def clear(self, *, reapply: bool = True) -> bool:
+        """Release ownership and immediately restore the current composed plan."""
+        if not self._owned and self._current_champion is None and self._desired_champion is None:
+            return True
+        if getattr(self._engine, "_external_off_detected", False):
+            self.invalidate_ownership("external_off")
+            return True
         prior_champion = self._current_champion
+        self._release_stronger_owner_lights()
+        released = set(self._owned)
+        if reapply and released and self._engine.current_mode == "gaming":
+            result = await self._engine.reclaim_external_light_release(self, released)
+            for light_id in result.successful:
+                self._owned.discard(light_id)
+                self._owned_targets.pop(light_id, None)
+        elif not reapply or self._engine.current_mode != "gaming":
+            self.invalidate_ownership("context_release")
+
+        if self._owned:
+            logger.warning(
+                "Champion release incomplete (was %s); retained=%s",
+                prior_champion, sorted(self._owned),
+            )
+            return False
+
+        self._finish_clear(prior_champion)
+        await self._broadcast_champion(None, None, False)
+        return True
+
+    async def release_for_scene(self) -> bool:
+        """Restore the accepted static plan before native scene activation."""
+        return await self.clear()
+
+    def invalidate_ownership(self, reason: str) -> None:
+        """Drop stamps without writes after a stronger physical lifecycle event."""
+        sync = getattr(self._engine, "_screen_sync", None)
+        supersede = getattr(sync, "supersede_light", None)
+        if callable(supersede):
+            for light_id in self._owned:
+                supersede(light_id)
+        prior = self._current_champion or self._desired_champion
         self._owned.clear()
+        self._owned_targets.clear()
         self._current_champion = None
         self._current_rgb = None
-        logger.info(
-            "Cleared champion color (was %s); screen-sync will resume",
-            prior_champion,
-        )
-        await self._broadcast_champion(None, None, False)
+        self._desired_champion = None
+        self._desired_rgb = None
+        logger.info("Invalidated champion ownership (%s, was %s)", reason, prior)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _gaming_authority_allows(self, expected_game: Optional[str]) -> bool:
+        """Whether this in-flight League write still has Gaming authority."""
+        if self._engine is None or self._engine.current_mode != "gaming":
+            return False
+        if getattr(self._engine, "current_game", None) != expected_game:
+            return False
+        if getattr(self._engine, "_gaming_scene_override", None) is not None:
+            return False
+        if getattr(self._engine, "_gaming_scene_transition_pending", False):
+            return False
+        if getattr(self._engine, "_external_off_detected", False):
+            return False
+        return True
+
+    def _stronger_owner_light_ids(self) -> set[str]:
+        """Manual and transit intent outrank this external color writer."""
+        return set(getattr(self._engine, "manual_light_overrides", {})) | set(
+            getattr(self._engine, "_transit_light_overrides", {}),
+        )
+
+    def _release_stronger_owner_lights(self) -> None:
+        protected = self._stronger_owner_light_ids()
+        self._owned -= protected
+        for light_id in protected:
+            self._owned_targets.pop(light_id, None)
+
+    def _finish_clear(self, prior_champion: Optional[str]) -> None:
+        self._current_champion = None
+        self._current_rgb = None
+        self._desired_champion = None
+        self._desired_rgb = None
+        logger.info(
+            "Cleared champion color (was %s); composed Gaming restored",
+            prior_champion,
+        )
 
     async def _resolve_color(
         self, champion_name: str,

@@ -73,11 +73,15 @@ def test_cloudy_day_surround_lifts_brightness_without_leaving_ct_space():
 
 
 @pytest.mark.asyncio
-async def test_generic_screen_sync_day_reasserts_ct_and_tracks_ownership():
+async def test_accepted_gaming_day_target_reasserts_ct_and_tracks_ownership():
     hue = _FakeHue()
     event_logger = _FakeEventLogger()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
     sync.set_event_logger(event_logger)
+    sync.publish_accepted_gaming_state({
+        "2": {"on": True, "ct": 286, "bri": 240},
+        "5": {"on": True, "ct": 286, "bri": 75},
+    })
 
     await sync.apply_color(
         "2", 255, 0, 0, mode="gaming", source="desktop", period="day",
@@ -101,9 +105,13 @@ async def test_generic_screen_sync_day_reasserts_ct_and_tracks_ownership():
 
 
 @pytest.mark.asyncio
-async def test_generic_screen_sync_evening_remains_hsb():
+async def test_accepted_gaming_evening_target_remains_hsb():
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    sync.publish_accepted_gaming_state({
+        "2": {"on": True, "hue": 46920, "sat": 190, "bri": 150},
+        "5": {"on": True, "hue": 48000, "sat": 170, "bri": 75},
+    })
 
     await sync.apply_color(
         "2", 255, 255, 255, mode="gaming", source="desktop", period="evening",
@@ -121,9 +129,13 @@ async def test_generic_screen_sync_evening_remains_hsb():
 
 
 @pytest.mark.asyncio
-async def test_newer_day_frame_does_not_revive_stale_other_light():
+async def test_accepted_newer_day_frame_does_not_revive_stale_other_light():
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    sync.publish_accepted_gaming_state({
+        "2": {"on": True, "ct": 286, "bri": 240},
+        "5": {"on": True, "ct": 286, "bri": 75},
+    })
 
     await sync.apply_color(
         "5", 0, 0, 0, mode="gaming", source="desktop", period="day",
@@ -139,3 +151,17 @@ async def test_newer_day_frame_does_not_revive_stale_other_light():
     assert sync.fresh_owned_light_ids() == {"2"}
     assert sync.fresh_authoritative_state("5") is None
     assert sync.fresh_authoritative_state("2") is not None
+
+
+@pytest.mark.asyncio
+async def test_unaccepted_gaming_frame_is_a_noop():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    accepted = await sync.apply_color(
+        "2", 255, 0, 0, mode="gaming", source="desktop", period="day",
+    )
+
+    assert accepted is False
+    assert hue.calls == []
+    assert sync.fresh_owned_light_ids() == set()
