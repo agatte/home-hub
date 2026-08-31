@@ -38,7 +38,24 @@ _FUSION_WARN, _FUSION_ERROR = 0.6, 0.3    # confidence (lower = worse)
 _PIHOLE_TIMEOUT_SECONDS = 1.5
 _PIHOLE_CACHE_TTL_SECONDS = 10.0
 _pihole_cache: dict[str, Any] = {"data": None, "ts": 0.0}
-_pihole_cache_lock = asyncio.Lock()
+_pihole_cache_lock: asyncio.Lock | None = None
+_pihole_cache_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_pihole_cache_lock() -> asyncio.Lock:
+    """Return the cache lock for the currently running event loop.
+
+    Route modules can outlive an ASGI event loop in tests or during app
+    lifecycle recreation. asyncio locks bind on contended use, so keep the
+    lock loop-local instead of reusing one bound to a closed loop.
+    """
+    global _pihole_cache_lock, _pihole_cache_lock_loop
+
+    loop = asyncio.get_running_loop()
+    if _pihole_cache_lock is None or _pihole_cache_lock_loop is not loop:
+        _pihole_cache_lock = asyncio.Lock()
+        _pihole_cache_lock_loop = loop
+    return _pihole_cache_lock
 
 
 def _classify_high(value: float, warn: float, error: float) -> str:
@@ -178,7 +195,7 @@ async def get_vitals(request: Request) -> dict[str, Any]:
         if cached is not None and now_ts - _pihole_cache["ts"] < _PIHOLE_CACHE_TTL_SECONDS:
             metrics["pihole"] = cached
         else:
-            async with _pihole_cache_lock:
+            async with _get_pihole_cache_lock():
                 now_ts = time.monotonic()
                 cached = _pihole_cache["data"]
                 if (
