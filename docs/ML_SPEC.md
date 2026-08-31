@@ -6,8 +6,8 @@
 > audio classification), and evolve toward autonomous operation.
 >
 > **Parent document:** `docs/PROJECT_SPEC.md` (system architecture, schema, API)
-> **Status:** Phase 1 complete, Phase 2 complete, Phase 3 started (confidence fusion shipped)
-> **Last updated:** August 14, 2026 (policy reconciliation; implementation history retained)
+> **Status:** Phase 1 complete, Phase 2 complete, Phase 3 started (ConfidenceFusion shipped as shadow-only observability)
+> **Last updated:** August 30, 2026 (YOLO/Desktop authority + Brio runtime reconciliation; implementation history retained)
 >
 > **Canonical policy note:** This document owns ML subsystem design and implementation history. The [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-14-2026) owns cross-system product policy. Fixed 95% auto-apply, 70% suggestion, and related thresholds below describe the committed confidence-fusion mechanism; they are not a universal target autonomy policy and do not prove that production is healthy. The decided target graduates each action according to consequence, evidence quality, accepted/dismissed suggestions, reversals, overrides, and operational health. Product-facing “Personality” direction is now temporary **Mood Context**; the older subsystem/code names remain for traceability.
 
@@ -58,7 +58,7 @@ rare.
 | Phase | Timeline | Focus | Success Metric |
 |-------|----------|-------|----------------|
 | **Phase 1: Lightweight Classifiers** | ✓ Complete (April 2026) | Behavioral prediction (LightGBM, shadow mode), adaptive lighting (EMA), ML decision logging, model manager + nightly retraining, feature builder, full REST API | Collecting data; predictor needs 500+ events to train |
-| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026) | ✓ Smart screen sync (K-means), ✓ music selection bandit (Thompson sampling), ✓ audio scene classification (YAMNet, shadow mode on Blue Yeti), ✓ camera presence detection (MediaPipe FaceDetector on Latitude webcam), ✓ posture classification (BlazePose lite, shipped 2026-04-19). | Camera presence: 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle` (vs 10-min PC idle timer); it does not report `away`. Explicit away/home state belongs to `AwayManager`. Post 2026-05-27 Latitude→living-room relocation: camera emits only `ZONE_COUCH`; original desk/bed zone split retired; `zone=desk` now sourced exclusively from the desktop pc_agent. Audio: social-gate abandoned 2026-05-09 (structurally unreachable); audio_ml lane feeds fusion only. |
+| **Phase 2: Computer Vision & Learning** | ✓ Complete (April 2026; sensing authority promoted 2026-08-30) | ✓ Smart screen sync (K-means), ✓ music bandit, ✓ YAMNet audio classification on the Windows Blue Yeti, ✓ Latitude YOLO26n-pose/OpenVINO real-person authority with MediaPipe supporting localization, ✓ Desktop Desk/Bed localization. | Latitude presence is tri-state (`present`/`absent`/`unknown`); YOLO blocks furniture-only authority and Bed comes only from calibrated Desktop evidence. Away/Home remains `AwayManager`-owned. Post-deploy real Couch/Bed acceptance remains tracked by #198/#201. |
 | **Phase 3: Confidence fusion** (historical name: Autonomous Operation) | In progress (April 2026+) | ✓ Confidence fusion (4-signal weighted ensemble in v3 — process / camera / audio_ml / rule_engine; `auto_apply` and `can_override` remain diagnostic outputs, but fusion is strictly shadow-only and cannot actuate modes). ✓ Live analytics constellation (force-directed SVG with voter inner ring + context outer ring). ✓ Accuracy-driven weight learning (nightly `fusion_weight_tuning` cron). ✓ Shadow-logged fusion decisions + windowed `actual_mode` backfill. ✓ Override-rate metric (`/api/learning/override-rate`) + A/B comparison (`/api/learning/compare`). Remaining: production/autonomy evidence audit and action-specific graduation | Evidence quality and intervention outcomes by action; aggregate override rate remains supporting evidence |
 | **Phase 4 (sibling track): AI Personality Layer** | Phase A and VibeRouter C v1 committed; Phase B gated; passive suggestions/Alexa and D remain | Mood-vector inference (V/A/F) from face blendshapes (Phase A shadow log), proposed mood-ring accent light (Phase B, gated on Spearman ρ > 0.4), constrained VibeRouter (Phase C v1), and remaining suggestion/Alexa/cost hardening | The detector’s Spearman gate applies only to its proposed experiment. Full subsystem history: `docs/PERSONALITY_LAYER.md`; current product policy: temporary Mood Context in `docs/PROJECT_SPEC.md`. No fusion-math contribution in v1. |
 
@@ -68,8 +68,7 @@ rare.
    either improves on the baseline or stays silent. The fallback is always the
    current production behavior.
 
-2. **Local-only processing.** No cloud ML services, no telemetry, no external
-   API calls for inference. All models run on the Latitude 7420's CPU.
+2. **Local-only processing.** No cloud ML service is required for inference. Models run on HomeHub-controlled local hosts: Latitude for backend camera authority and applicable backend ML, Windows desktop for desktop camera/audio/screen agents.
 
 3. **Current shadow authority; target consequence-based autonomy.** Committed
    confidence-fusion code computes `auto_apply` at 95%+ and `can_override` at
@@ -126,15 +125,17 @@ backend/services/ml/
 ### Model Storage
 
 ```
-data/models/                           # gitignored, persists on each machine
+data/models/                           # gitignored learned/legacy model store
     yamnet.tflite                      # YAMNet audio classifier (16MB, auto-downloaded)
     yamnet_class_map.csv               # YAMNet 521 class names (auto-downloaded)
-    blaze_face_short_range.tflite      # MediaPipe face detection (230KB, auto-downloaded)
+    blaze_face_short_range.tflite      # MediaPipe face detection asset
     mode_predictor.lgb                 # LightGBM trained from activity_events
     lighting_prefs.json                # Learned per-light brightness/color preferences
     music_bandit.json                  # Thompson sampling Beta parameters
     model_meta.json                    # Version, last trained, accuracy metrics
 ```
+
+The promoted Latitude YOLO/OpenVINO IR is **not** assumed to live in `data/models/`; its external artifact path is configured through `CAMERA_YOLO_AUTHORITY_MODEL_PATH` so deployment/runtime ownership is explicit.
 
 ### Fallback Chain
 
@@ -180,7 +181,7 @@ PC Agent ─────────┐
   (psutil, 5s)    │
                   ├──> /api/automation/activity
 Camera Service ───┤        │
-  (MediaPipe, 5s) │        ├──> AutomationEngine
+  (YOLO + MediaPipe, ~2s) │        ├──> AutomationEngine
                   │        │       │
 Ambient Monitor ──┤        │       ├──> MLService.predict_mode()
   (PyAudio, 1s)   │        │       │       │ features from FeatureBuilder
@@ -426,8 +427,7 @@ an approximately two-second cadence yield approximately 30 seconds of sustained
 absence before the camera reports `idle`. Explicit away/home state is owned by
 `AwayManager` and the current presence/away-management path, not camera absence.
 
-**Solution:** Use MediaPipe BlazePose for real-time presence and posture
-detection from the Latitude's 720p webcam.
+**Current solution:** Latitude person authority is YOLO26n-pose/OpenVINO. MediaPipe remains supporting face/pose localization and emotion evidence after YOLO grants person authority; Latitude Couch posture is currently suppressed upstream.
 
 **Current Desktop desk-posture status (2026-08-27):** The Latitude path below is
 not the current desk-posture authority. `zone=desk` and desk posture come from
@@ -442,57 +442,36 @@ future threshold tuning, collect a longer raw-ratio normal-posture window around
 any false transition; do not infer a safe replacement threshold from the failed
 candidate. Bed-zone posture remains out of scope for #56.
 
-**Accepted #198 promotion candidate (2026-08-30; not yet deployed):**
-The validated YOLO26n-pose/OpenVINO challenger is promoted in candidate code
-from shadow-only measurement to the Latitude **person-authority gate**. This is
-not a general replacement of `CameraService`: the service remains the sole
-owner of `/dev/video0`, ambient-lux sampling, lifecycle/watchdog handling, and
-MediaPipe-derived supporting posture/emotion diagnostics.
+**Deployed #198 authority promotion (2026-08-30; `b49c687`).**
+The validated YOLO26n-pose/OpenVINO challenger is live as the Latitude
+**person-authority gate**. `CameraService` still owns the webcam, lux,
+lifecycle/watchdog, and MediaPipe supporting diagnostics.
 
-Promotion boundary:
-- YOLO decides whether the Latitude has trustworthy evidence of a real person.
-- A person-confidence threshold of `0.25` is paired with a three-frame positive
-  dwell. The existing approximately 30-second CameraService absence debounce
-  remains the final exit protection.
-- Extremely low confidence (`<=0.01`) is treated as **unknown/blinded**, not
-  absent. The 2026-08-28 near-closed-lid run produced 59/59 abstentions with
-  maximum confidence 0.00413, so a blinded Latitude must not claim an empty room.
-- MediaPipe face/pose may add diagnostics after YOLO authority is granted, but
-  cannot independently manufacture physical presence from furniture.
-- Latitude zone is intentionally `None` in the promoted YOLO lane. The #198
-  evidence validates person-vs-furniture separation, not a Couch spatial ROI;
-  kitchen/non-couch movement included real high-confidence detections. Do not
-  infer `zone=couch` from "YOLO person present" alone.
-- Desktop camera is the calibrated bedroom locator (`desk` / `bed`). Strong
-  physical-source conflicts are resolved by evidence freshness in
-  `PresenceFusion`; a zone-less Latitude person cannot overwrite Desktop Bed.
-- Person counts remain diagnostic/shadow-only until explicit multi-person
-  validation is completed.
-- Authority initialization/inference failure degrades the Latitude lane to
-  non-authoritative evidence rather than silently falling back to the known
-  MediaPipe furniture false-positive path.
+- YOLO decides whether a real person is authoritative: threshold `0.25` with a three-frame positive dwell.
+- Confidence `<=0.01`, model unavailability, or inference failure is **unknown/blinded**, never explicit absence and never silent MediaPipe fallback.
+- YOLO absence blocks furniture-only MediaPipe face/pose from manufacturing physical presence.
+- After YOLO confirms a person, strong/recently anchored MediaPipe evidence may add conservative `couch` localization. If supporting localization is unavailable, the person remains present with `zone=None`; YOLO presence alone never means Couch.
+- Latitude Couch posture remains suppressed because there is no approved consumer.
+- Desktop is the separate bedroom locator: accepted close face -> Desk; calibrated distant-pose geometry -> Bed after three frames; ambiguity abstains. Bed localization does not infer Bed posture or Sleeping.
+- Strong physical-source conflicts resolve by freshness in `PresenceFusion`.
+- Person count remains diagnostic until explicit multi-person validation.
 
-Calibration evidence supporting that boundary is preserved from 2026-08-28:
-120 empty-room/furniture frames had zero detections >=0.10; normal couch was
-88/88 detected (0.308-0.894); a timed sequence detected normal couch 41/41,
-natural lean 58/58, and both lying/repositioning halves 29/29. At two exact
-MediaPipe furniture-pose failures (confidence 0.99), YOLO confidence was only
-0.134 and 0.169. Timed Latitude inference was roughly 38.9 ms median / 49.1 ms
-p95. The 0.25 threshold is therefore a bounded person-authority gate, not a
-Couch-classification or multi-person-count threshold.
+Calibration evidence from 2026-08-28 remains the promotion basis: 120 empty/furniture frames had zero detections >=0.10; normal couch was 88/88 detected (0.308-0.894); natural couch/lean and lying sequences were fully detected; at two exact MediaPipe furniture-pose 0.99 failures, YOLO was only 0.134/0.169. Near-closed-lid testing produced 59/59 abstentions, max 0.00413. Timed inference was ~38.9 ms median / 49.1 ms p95. Post-deploy real Couch acceptance is tracked in #198; post-deploy real Bed acceptance is tracked in #201.
+
+The Ultralytics checkpoint/export metadata records AGPL-3.0. Keep that licensing constraint explicit in any future distribution/commercialization review even though HomeHub's current use is local runtime inference.
 
 
 | Attribute | Value |
 |-----------|-------|
 | **Input** | 720p webcam frames from Dell Latitude built-in camera via OpenCV `VideoCapture`. Captured at 640×480 for inference (bumped from 320×240 on 2026-04-19 after observing marginal face-detection gains and better future-feature headroom — requires lux recalibration on any change). |
 | **Preprocessing** | Capture one frame every 2 seconds (not continuous video). `cv2.resize()` downsample is a safety no-op when the webcam honors the capture-resolution hint. No image enhancement. |
-| **Model** | MediaPipe BlazePose (lite variant, shipped 2026-04-19 as a fallback signal). Runs alongside full-range BlazeFace: face first (~15ms at 640×480), pose as fallback on face-miss (~60ms). Presence declared if either detector hits. |
-| **Output classes** | Presence: `present` / `absent`. Zone (shipped 2026-04-19): post 2026-05-27 Latitude→living-room relocation, Latitude camera emits only `couch` / `None` — the original `desk` / `bed` bedroom split is retired. `zone=desk` is now sourced exclusively from the desktop pc_agent via PresenceFusion. Posture (shipped 2026-04-19, expose-only): `upright` / `reclined` / `None`, computed from `mean(hip_y) - mean(shoulder_y)` vs `POSTURE_UPRIGHT_MIN_DELTA=0.12`, same 15s hysteresis; couch posture is currently suppressed (no consumer). `None` when hips aren't visible (face-path hits, pose misses) — hysteresis preserves the committed value through those blanks. |
-| **Inference frequency** | Approximately every 2 seconds (one frame capture + inference). 15 consecutive absent frames yield approximately 30 seconds of sustained absence before reporting `idle`. |
-| **Integration point** | New `CameraService` reports to `AutomationEngine.report_activity(source="camera")`. |
-| **CPU cost** | Face detection is ~15ms and pose fallback ~60ms per inference at an approximately two-second cadence; actual runtime health requires live verification. |
-| **RAM** | 50-100MB (MediaPipe + OpenCV) |
-| **Cold start** | MediaPipe is pretrained. Works immediately. Posture thresholds may need one-time calibration (30-second "sit normally, then recline" flow in Settings). |
+| **Model** | YOLO26n-pose OpenVINO IR (FP32, 640 input) gates real-person presence. MediaPipe BlazeFace/BlazePose remain supporting localization/emotion evidence after authority. |
+| **Output classes** | Latitude presence: `present` / `absent` / `unknown`, with `detection_source=yolo` when authority is enabled. Supporting Latitude zone is `couch` / `None`; Couch requires YOLO person authority plus trusted MediaPipe localization. Latitude Couch posture is suppressed. Desktop observations independently provide `desk` / `bed` / `None`; Bed is pose-localized and does not imply posture. |
+| **Inference frequency** | Latitude approximately every 2 seconds. YOLO present requires 3 consecutive qualifying frames; explicit absence retains CameraService downstream debounce/consumer safeguards. Unknown authority does not advance absence. |
+| **Integration point** | `CameraService` publishes Latitude observations to `PresenceFusion`; Desktop `emotion_capture.py` posts source-qualified observations through `/api/camera/observation`. Physical consumers should use fused strong-zone/freshness APIs, not raw process guesses. |
+| **CPU cost** | Latitude YOLO calibration measured ~38.9 ms median / 49.1 ms p95; MediaPipe supporting passes remain inside the two-second poll budget. |
+| **RAM** | OpenVINO/YOLO + MediaPipe/OpenCV; verify live RSS rather than relying on the old MediaPipe-only estimate. |
+| **Cold start** | YOLO and MediaPipe use pretrained artifacts. Authority initialization failure abstains rather than silently falling back to MediaPipe person authority. |
 
 **Posture classification logic (shipped 2026-04-19, commit `1afb41a` + `4ad373a`):**
 
@@ -600,13 +579,13 @@ default curve center of 90, preserving old behavior until recalibration.
 
 #### 3.4.1 Shipped: bedroom lux channel (D4, 2026-06-01/02)
 
-**Status:** Shipped — `LuxChannel` (`backend/services/lux_channel.py`) + desktop lux API routes + `emotion_capture.py` flip-sample-flip lux sampler. The pre-ship design described below ("fuse at `_read_fresh_camera_lux`") was revised during implementation; the actual shipping architecture differs in several key ways but the original rationale (two baselines required, zone-weighting stays Latitude-only, no cross-room contamination) still holds and is documented in `screen_sync.py`.
+**Status:** Shipped — `LuxChannel` (`backend/services/lux_channel.py`) + desktop lux API routes + `emotion_capture.py` fixed-exposure lux sampler with bounded auto-exposure recovery. The pre-ship design described below ("fuse at `_read_fresh_camera_lux`") was revised during implementation; the actual shipping architecture differs in several key ways but the original rationale (two baselines required, zone-weighting stays Latitude-only, no cross-room contamination) still holds and is documented in `screen_sync.py`.
 
 **What shipped.**
 - New `backend/services/lux_channel.py` — `LuxChannel` class: `ema_lux` / `baseline_lux` / `last_lux_update`, `update()` (EMA + stale-reset semantics matching `CameraService`), `is_fresh()`, `set_baseline()`, `status()`. Property names are duck-typed against `CameraService` so a consumer can read either source identically.
 - `app.state.bedroom_lux` wired in `backend/bootstrap.py` as `LuxChannel("bedroom")`, seeded from `desktop_lux_calibration_config` at boot.
 - `backend/api/routes/camera.py` — 5 new `/api/camera/desktop/lux*` endpoints: `POST /desktop/lux` (ingest sample), `GET /desktop/lux` (snapshot), `POST /desktop/lux/calibrate/request` (flag calibration for agent), `GET /desktop/lux/calibrate/pending` (agent poll), `GET/POST /desktop/lux/calibration` (load/persist `{exposure, baseline_lux, target_lux, calibrated_at}`). App_settings keys: `desktop_lux_calibration_config` + `desktop_lux_calibrate_requested`.
-- `backend/services/pc_agent/emotion_capture.py` — flip-sample-flip lux sampler: every ~25s flips from auto-exposure to the calibrated fixed `exposure`, averages `gray.mean()` over a few frames, restores auto-exposure on the same handle (CAP_DSHOW — per `project_desktop_webcam_dshow.md`), POSTs to `/api/camera/desktop/lux`. Self-calibration via `search_exposure` + `_run_lux_calibration` runs when the agent sees the pending flag on its 30s settings poll.
+- `backend/services/pc_agent/emotion_capture.py` — every ~25s briefly switches from auto to the calibrated fixed exposure, averages `gray.mean()`, restores auto on the same CAP_DSHOW handle, probes recovery frames, and keeps the handle open when recovery is healthy. Commit `7107bda` recycles the handle only when auto restore fails or the post-auto image collapses toward black, preventing Brio LED/reopen churn while retaining recovery from the real manual-dark failure. Samples POST to `/api/camera/desktop/lux`; self-calibration still uses `search_exposure` + `_run_lux_calibration`.
 - `backend/services/screen_sync.py` — the bedroom channel is consumed HERE (NOT fused at `_read_fresh_camera_lux`). The screen-sync route (`receive_screen_color` in `automation.py`) reads `app.state.bedroom_lux` directly and passes the multiplier into `ScreenSyncService.get_cap` / `get_floor` via `_scale_for_ambient`. Gaming + watching across all time periods; L5 excluded (glare source). `_AMBIENT_LIFT_MODES = frozenset({"gaming", "watching"})`, `_AMBIENT_LIFT_EXCLUDE_LIGHTS = frozenset({"5"})`, ceiling 1.40×.
 - Zone / posture for the watching-desk L2 cap is now sourced from `app.state.presence` (PresenceFusion) in the screen-color route, not the raw Latitude camera — fixes the silent regression where the watching-at-desk L2 cap (180) stopped firing for screen-sync after the 2026-05-27 camera relocation.
 
@@ -804,7 +783,7 @@ augmentation is weather conditions from the cached OpenWeatherMap response
 | Audio classification | YAMNet (TFLite/ONNX) | 50-200MB | 15-30ms | Pretrained on AudioSet (2M+ clips, 521 classes). Covers all needed audio types. No user data needed for cold start. | Whisper: 1.5GB+, 1-2s inference, designed for speech-to-text not classification. Custom CNN: needs labeled training data we don't have. |
 | Mode prediction | LightGBM | <1MB | <1ms | Handles tabular data with mixed types (categorical + numeric). Trains in seconds. Natively handles missing features. | Neural nets: overfit on small tabular data (<10K rows). Random forest: works but slower training and larger model. |
 | Lighting preferences | EMA (not ML) | <1KB | <1ms | The signal is simple: "user keeps setting this light to X." A weighted average is the mathematically correct estimator for a slowly-drifting preference. | Any ML model is overkill. Linear regression works but EMA adapts to drift naturally. |
-| Presence detection | MediaPipe BlazePose | ~30MB | 30-50ms | Google's production on-device pose estimation. Runs on CPU. Pretrained, no user data needed. Outputs 33 body landmarks for posture analysis. | YOLO: 100MB+, heavier, designed for multi-object detection (overkill for single-room). Custom model: needs thousands of labeled images. |
+| Presence / localization | YOLO26n-pose OpenVINO + MediaPipe | YOLO IR ~12MB + MediaPipe assets | YOLO ~39ms median on Latitude calibration | YOLO is empirically robust against the apartment furniture false-positive that defeated MediaPipe-only authority; MediaPipe remains useful for supporting localization after person authority. | YOLO alone does not establish Couch location or multi-person semantics; MediaPipe alone is not trustworthy person authority in the Latitude view. |
 | Screen sync | MiniBatchKMeans | <1MB | <10ms | Finds color clusters in pixel data. Picks the most visually dominant saturated color. Algorithmic, not statistical. | Deep saliency models: 100MB+, need GPU for real-time. Histogram peak detection: simpler but misses multi-modal distributions. |
 | Music selection | Thompson sampling | <1KB | <1ms | Natural exploration/exploitation balance for single-user preference learning. Converges quickly with ~20 plays per arm. No training step needed. | Collaborative filtering: impossible (single user). Content-based: needs audio features we don't have. |
 
@@ -813,7 +792,7 @@ augmentation is weather conditions from the cached OpenWeatherMap response
 | Resource | Budget | Breakdown |
 |----------|--------|-----------|
 | CPU (sustained) | <10% | Audio 5% + Camera 2% + others <1% each |
-| RAM (peak) | ~200-400MB | Audio model 50-200MB + MediaPipe 50-100MB + rest <10MB |
+| RAM (peak) | ~200-500MB working estimate | Audio model + OpenVINO/YOLO + MediaPipe/OpenCV + other ML services; verify live RSS before tightening the budget. |
 | Disk | <250MB | Model files + metadata |
 
 ---
@@ -1079,15 +1058,15 @@ degrade gracefully without NWS API access).
 
 | Component | CPU Budget | RAM Budget | Frequency | Notes |
 |-----------|-----------|-----------|-----------|-------|
-| Audio classifier | <30ms, ~5% sustained | 50-200MB (model) | Every 2-3s | Runs on Latitude (ambient monitor) |
+| Audio classifier | <30ms, ~5% sustained | 50-200MB (model) | Every 2-3s | Runs on Windows Blue Yeti agent; Latitude microphone path is disabled |
 | Behavioral predictor | <5ms, negligible | <10MB | Every 60s | Piggybacks automation loop |
 | Lighting learner | <1ms | <1MB | On mode change | Simple dict lookup |
-| Camera service | <80ms, ~2% sustained | 50-100MB (MediaPipe) | Approximately every 2 seconds | Only when enabled |
+| Camera service | <80ms target per poll | OpenVINO/YOLO + MediaPipe/OpenCV | Approximately every 2 seconds | Latitude YOLO calibration: ~38.9ms median / 49.1ms p95; only when enabled |
 | Screen sync (K-means) | <10ms | <1MB | Every 2.5s | Runs on Windows dev machine |
 | Music bandit | <1ms | <1KB | On mode change | Beta sampling |
 | ML logger | <5ms | <1MB | On every decision | Async DB write |
 | Feature builder | <2s burst | <50MB | Nightly at 4 AM | Pandas DataFrame ops |
-| **Total ML overhead** | **<10% sustained** | **~200-400MB** | | |
+| **Total ML overhead** | **<10% sustained target** | **~200-500MB working estimate** | | Verify live RSS before tightening the budget |
 
 ### System Total with ML
 
@@ -1097,8 +1076,7 @@ degrade gracefully without NWS API access).
 | FastAPI backend + services | ~100-200MB |
 | Firefox kiosk (full dashboard) | ~400-600MB |
 | Pi-hole Docker container | ~100MB |
-| ML services (Phase 1 only) | ~100-250MB |
-| ML services (Phase 1+2) | ~200-400MB |
+| ML / sensing services | ~200-500MB working estimate |
 | **Total** | **~2-3.5GB of 8-16GB** |
 
 ### Latency Targets
@@ -1118,7 +1096,10 @@ degrade gracefully without NWS API access).
 The system must work perfectly on Day 1 with zero training data. ML features
 activate gradually as data accumulates.
 
-### Timeline
+### Timeline (historical original rollout plan)
+
+The camera entries below describe the original Phase 2 rollout plan. Current Latitude authority was promoted later under #198; current Desktop Desk/Bed localization is tracked by #201.
+
 
 | Week | Audio Classifier | Behavioral Predictor | Lighting Learner | Camera | Music Bandit |
 |------|-----------------|---------------------|------------------|--------|-------------|
@@ -1132,7 +1113,7 @@ activate gradually as data accumulates.
 ### Bootstrapping Principles
 
 1. **Pretrained models work immediately.** Audio classifier (YAMNet) and camera
-   (MediaPipe) ship with pretrained weights. No user data needed.
+   models (YOLO/OpenVINO + MediaPipe) use pretrained artifacts. No user training data is required; the YOLO authority path still abstains if its configured runtime/model artifact is unavailable.
 
 2. **Learned models need data first.** Behavioral predictor needs 500+ events
    (~1 week). Lighting learner needs 5+ adjustments per combo (~2-3 weeks for
@@ -1159,7 +1140,7 @@ activate gradually as data accumulates.
 | Behavioral predictor | Nightly at 4 AM | 60-day rolling | <5 seconds | `AsyncScheduler` task |
 | Lighting preferences | Daily at 4 AM | 90-day decay-weighted | <1 second | `AsyncScheduler` task |
 | Music bandit | Online (continuous) | All history | N/A | Updated on each play/skip event via callback |
-| Camera (MediaPipe) | Not retrained | N/A | N/A | Pretrained weights |
+| Camera (YOLO/OpenVINO + MediaPipe) | Not retrained | N/A | N/A | Pretrained artifacts; authority/runtime availability is health-gated |
 
 ### Concept Drift Detection
 
@@ -1407,11 +1388,11 @@ opencv-python-headless>=4.9 # Camera capture (headless = no GUI deps)
 scikit-learn>=1.4.0         # MiniBatchKMeans for screen sync
 ```
 
+The promoted Latitude authority additionally uses the pinned OpenVINO runtime in `requirements-camera-shadow.txt`. The filename is historical from the bakeoff phase; on the Latitude it now supplies the production YOLO authority runtime, while the base requirements remain lean for hosts that do not run that path.
+
 ### Deployment Workflow
 
-Same `scripts/deploy.sh` workflow. ML models are NOT in git — they persist on
-the Latitude in `data/models/`. Code changes deploy via git; models regenerate
-on the machine via scheduled training tasks.
+Same `scripts/deploy.sh` workflow for code. Learned models remain outside git under `data/models/`. The promoted YOLO/OpenVINO artifact is also outside git but is configured by explicit model path rather than regenerated by scheduled training. Deployment must verify the runtime dependency/model artifact before enabling authority; failure degrades to unknown rather than MediaPipe fallback.
 
 ```bash
 # Standard deploy (code changes)
@@ -1496,7 +1477,7 @@ except ImportError:
 - ✓ `ml_decisions` + `ml_metrics` database tables with indexes.
 - ✓ Automation engine integration — lighting learner overlay applied during mode transitions, predictor consulted during idle, ML logger registered as mode-change callback. Explicit away/home state is managed separately by `AwayManager`.
 
-**Current state (as of 2026-05-04):**
+**Historical checkpoint (captured 2026-05-04; retained for rollout history):**
 - **Behavioral predictor — shadow mode, stripped from fusion.** `lightgbm` installed on the Latitude, model trains nightly at 04:00. The April 27 audit removed the predictor lane from `ConfidenceFusion` after the first model collapsed to single-class output (898/898 → `away`); the predictor still writes shadow rows to `ml_decisions` so future retrains can be evaluated. Step 4 (May 4) extended `FEATURE_COLUMNS` from 10 → 14 columns to include `zone_enc` / `posture_enc` / `audio_class_enc` / `lux`. Step 5 (2026-05-26, commit `7bbd885`) added `previous_zone_enc` as the 15th feature. Promotion is gated by `compute_prediction_diversity`; auto-demote is the symmetric counterpart shipped May 4 — see Phase 3 changelog entry and `project_step5_predictor_validation.md` for current promotion gate status.
 - **Lighting learner**: active on production. Overlay applications are now logged to `ml_decisions` with `decision_source="lighting_learner"`.
 - **Audio classifier (YAMNet)**: shadow mode on Windows desktop (Blue Yeti mic). 17,922 predictions logged to date. Of the 81 rows with `actual_mode` backfilled, only **2 are correct (2.5%)** — the classifier is predicting "idle" for "silence" almost every cycle and missing mode transitions. The 521→9 → user-mode mapping needs rework before promotion is meaningful. Kept in shadow.
@@ -1513,7 +1494,7 @@ down 30% from baseline.
 - ✓ **Smart Screen Sync** — K-means color clustering (`MiniBatchKMeans(n_clusters=5)`) replaces naive pixel averaging in `screen_sync_agent.py` and `screen_sync.py`. Scores clusters by saturation (0.7 weight) and luminance balance (0.3 weight) to pick the most visually dominant color. ~50x30 pixel grid, ~80ms per capture at 2.5s intervals. Falls back to averaging if scikit-learn not installed. Screen sync agent added to Windows Task Scheduler for auto-start.
 - ✓ **Music Bandit** — Thompson sampling playlist selection (`backend/services/ml/music_bandit.py`). Each (mode, time_period, weather_class, favorite_title) arm has Beta(α, β) parameters. 10% forced uniform exploration. Cold start: Beta(3,1) for preferred vibes, Beta(1,1) for others; weather-specific arms warm-start from the matching `any` arm's priors. Rewards from play/skip behavior in `sonos_playback_events` (with `weather_class` column captured at log time). Nightly retrain at 4 AM. API: `GET /api/learning/bandit`, `DELETE /api/learning/bandit/reset`, `GET /api/music/bandit-status` (Phase B, top arms grouped by mode × weather). Integrated into `MusicMapper.pick_playlist()` — falls back to time-of-day heuristic when bandit has no data or only one candidate. Phase B (2026-05-12): weather_class added; legacy 3-tuple arms auto-migrate.
 - ✓ **Audio Scene Classification (YAMNet)** — TFLite-based YAMNet classifier (`backend/services/ml/audio_classifier.py`) maps 521 AudioSet classes to 9 Home Hub scene classes (silence, speech_single, speech_multiple, music, tv_dialog, game_audio, doorbell, cooking, mechanical_noise). Runs in shadow mode on the Windows desktop alongside the existing RMS detector, using the Blue Yeti mic via `ambient_monitor.py --classifier --shadow`. Auto-downloads model (~16MB) from Google's audioset GCS bucket. 521→9 class mapping built dynamically from `yamnet_class_map.csv` at load time. Temporal smoothing (10-frame EMA). Sustained-detection gating: `silence` ≥70% for 60s → exit social/quiet, `game_audio` ≥75% → watching. The `speech_multiple` ≥80% for 30s → social gate was abandoned 2026-05-09 (structurally unreachable in production; the score is still emitted into `all_scores` for analytics — see §3.1). Shadow logs throttled to class changes or every 30s. API: `POST /api/learning/audio-decision`. Registered as Task Scheduler job on desktop (`pythonw.exe`, auto-start on logon).
-- ✓ **Camera Presence Detection (MediaPipe)** — `CameraService` (`backend/services/camera_service.py`) uses MediaPipe Tasks API `FaceDetector` (blaze_face_short_range.tflite, ~230KB) on the Latitude's built-in 720p webcam. It captures 640×480 frames approximately every 2 seconds. Fifteen consecutive absent frames yield approximately 30 seconds of sustained absence before reporting `idle`; the camera path does not report `away`. Opt-in via `camera_enabled` in app_settings (toggle in Settings UI). Pauses during sleeping mode (camera LED off). Camera `idle` reports do not downgrade higher-priority process-detected gaming/working/watching. API: `GET /api/camera/status`, `POST /api/camera/enable`. WebSocket broadcasts `camera_update` events.
+- ✓ **Camera person authority + supporting localization** — `CameraService` captures the Latitude frame approximately every 2 seconds. As of `b49c687`, YOLO26n-pose/OpenVINO gates real-person authority; MediaPipe may add conservative Couch localization only after YOLO confirms a person. Authority can be `unknown/blinded`; furniture-only MediaPipe detections cannot create presence. The camera remains opt-in, pauses during Sleeping, and exposes `/api/camera/status` plus `camera_update` diagnostics.
 - ✓ **Adaptive Lux Brightness (shipped April 18, 2026)** — Same camera frames feed a per-poll grayscale mean (`ambient_lux`), EMA-smoothed (α=0.3, 2s poll → ~20s to 95% response), that drives a piecewise-linear standard camera-lux multiplier for `relax` only. `POST /api/camera/calibrate` picks a fixed exposure in `[-12, 0]` and records steady-state `baseline_lux` (typical value 80–150). The multiplier curve is anchored at the calibrated baseline: `(baseline−50 → 1.15×, baseline → 1.00×, baseline+90 → 0.85×)`, clamped outside. The separate bedroom-lux screen-sync envelope handles gaming/watching where supported; working has no standard camera-lux multiplier. Kitchen-pair and post-sunset CT rules remain distinct.
 
 **Remaining (Phase 2b, deferred):**
@@ -1525,15 +1506,16 @@ Audio classifier promotion from shadow to active
     current shadow stream
 
 Posture as a separate fusion lane
-  - BlazePose detection itself shipped; posture WAS consumed by
-    AutomationEngine._evaluate_zone_posture_rule (live 2026-04-27;
-    extended 2026-05-03 to supersede stale social override;
-    DORMANT since 2026-05-27 — no camera produces zone=bed after the
-    Latitude→living-room move; couch posture is suppressed upstream)
-    and by ScreenSyncService MODE_ZONE_MAX_BRIGHTNESS keying
-  - This historical bed-zone lane is not a promotion path: #80 owns removal
-    of dormant `zone=bed` automation assumptions. Predictor work remains
-    evidence-gated/shadow-oriented under #116/#117.
+  - BlazePose posture detection shipped historically, but current Latitude
+    Couch posture is suppressed because there is no approved Couch-posture
+    consumer.
+  - Desktop can now emit source-qualified `zone=bed`, but the deployed Bed
+    classifier intentionally does not infer Bed posture. Therefore the old
+    bed+reclined zone/posture automation remains dormant even though Bed
+    location itself is current.
+  - #80 owns reconciliation/removal of those Latitude-era bed+posture
+    assumptions; #56 owns Desktop Desk posture calibration. Predictor work
+    remains evidence-gated/shadow-oriented under #116/#117.
 
 Zone+posture rule — social-supersede extension (shipped 2026-05-03)
   - Original rule (2026-04-27) ELIGIBLE_MODES = {idle, working};
@@ -1549,7 +1531,7 @@ Zone+posture rule — social-supersede extension (shipped 2026-05-03)
     fires that came via the social path are visible in ml_decisions
 ```
 
-**Phase 2 exit criteria:** ✓ Camera presence working reliably (opt-in). ✓ 15 consecutive absent frames at an approximately two-second cadence, yielding approximately 30 seconds of sustained absence before reporting `idle`. ✓ Posture detection shipped and consumed by the zone+posture rule. Audio promotion + posture-as-fusion-lane deferred to Phase 2b.
+**Phase 2 exit criteria (historical framing):** camera sensing is opt-in and current Latitude person authority is YOLO-gated; explicit absence retains downstream debounce while unknown/blinded evidence does not advance absence. The old zone+posture rule remains dormant under the source-qualified Bed contract. Audio promotion and any future posture-fusion authority remain separately evidence-gated.
 
 ### Phase 3: Confidence Fusion (Historical Name: Autonomous Operation; In Progress — April 2026+)
 
@@ -1690,9 +1672,9 @@ ML Health
 Audio Classifier:      Shadow   (YAMNet, gating on label balance)
 Behavioral Predictor:  Shadow   (LightGBM, gated by diversity check)
 Lighting Learner:      Active   (3 lights learned)
-Camera:                Active   (face + pose, MediaPipe)
+Camera:                Active   (YOLO person authority + MediaPipe support)
 Music Bandit:          Active   (exploring 10%)
-Confidence Fusion:     Active   (4-lane: process / camera / audio_ml / rule_engine)
+Confidence Fusion:     Shadow   (4-lane observability; no production mode actuation)
 
 Overrides this week: 8  (baseline: 14, ↓43%)
 ```

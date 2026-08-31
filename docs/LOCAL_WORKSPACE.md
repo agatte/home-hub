@@ -63,6 +63,15 @@ The long-lived supervisor is a detached `C:\Python313\pythonw.exe` child. The
 Scheduled Task may therefore show `Ready` while the supervisor process is
 healthy and running.
 
+Do not recycle the Windows supervisor casually. When a restart is explicitly
+authorized, prefer `scripts/restart-agents.ps1`, which snapshots native process
+identities and verifies the replacement health report. On 2026-08-30 a
+non-elevated shell hit `Access is denied` while that script attempted to manage
+the Scheduled Task ACL; the task remained enabled/`Ready` and the old supervisor
+remained live. Treat that as a permission boundary: re-inspect task/process
+state and use an authorized/elevated recovery path rather than assuming the task
+changed or falling back to an unverified PID-only kill. During the same 2026-08-30 deployment, a later exact-identity recycle succeeded without modifying the Scheduled Task; success was accepted only after backend agent health reported the replacement supervisor identity.
+
 When reading UTF-8 logs from Windows PowerShell 5.1, use `-Encoding UTF8`, for
 example:
 

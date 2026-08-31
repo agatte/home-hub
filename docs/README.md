@@ -2,6 +2,8 @@
 
 Use this page as the entry point for repository documentation.
 
+**Last repository/GitHub truth reconciliation:** August 30, 2026. See [`DOCS_GH_RECONCILIATION_2026_08_30.md`](DOCS_GH_RECONCILIATION_2026_08_30.md) for the reviewed evidence and remaining known gaps.
+
 ## Document ownership
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md) is the single authoritative source for
@@ -35,9 +37,8 @@ Use this page as the entry point for repository documentation.
 - [`CONFIDENCE_FUSION.md`](CONFIDENCE_FUSION.md) — multi-source confidence and activity fusion
 - [`PRESENCE_LIGHTING_SCENARIOS.md`](PRESENCE_LIGHTING_SCENARIOS.md) —
   historical presence/lighting decisions and subsystem implementation detail
-- [`LIGHTING_EXPANSION.md`](LIGHTING_EXPANSION.md) — future lighting hardware and room coverage
-- [`HomeHub_Travel_Mode_Design.docx`](HomeHub_Travel_Mode_Design.docx) — accepted
-  HOME/TRAVEL host-lifecycle design for the portable Latitude, tracked by #149
+- [`LIGHTING_EXPANSION.md`](LIGHTING_EXPANSION.md) — current expansion plan and installed L6/Plant Wash record; later hardware remains planned
+- [`HomeHub_Travel_Mode_Design.docx`](HomeHub_Travel_Mode_Design.docx) - accepted design proposal for the portable-Latitude HOME/TRAVEL host lifecycle, tracked by #149; not implemented runtime behavior yet
 - [`AGENT_STRATEGY.md`](AGENT_STRATEGY.md) — operational-agent strategy and retired monitoring loops
 - [`Future_Development.md`](Future_Development.md) — non-authoritative issue
   and idea index

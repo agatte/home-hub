@@ -1,7 +1,7 @@
 # Home Hub Future Development Index
 
 > **Status:** Non-authoritative idea and GitHub-issue index.
-> **Last reviewed:** August 14, 2026.
+> **Last reviewed:** August 30, 2026.
 
 Cross-system product policy and product direction live in the
 [Product Experience Contract](PROJECT_SPEC.md#product-experience-contract--august-14-2026).
@@ -21,11 +21,12 @@ priority semantics are historical only.
 |---|---|---|
 | Production and autonomy | [#131](https://github.com/agatte/home-hub/issues/131), [#116](https://github.com/agatte/home-hub/issues/116), [#117](https://github.com/agatte/home-hub/issues/117) | #131 owns action-specific autonomy and feedback; #116/#117 are focused camera-metric and predictor evidence work. |
 | Everyday living room | [#129](https://github.com/agatte/home-hub/issues/129), [#130](https://github.com/agatte/home-hub/issues/130), [#131](https://github.com/agatte/home-hub/issues/131), [#134](https://github.com/agatte/home-hub/issues/134), [#135](https://github.com/agatte/home-hub/issues/135) | #129 is the vertical slice; Scene Curator and feedback are #130/#131, with weather and music support under #134/#135. |
-| Winding Down and Morning | [#138](https://github.com/agatte/home-hub/issues/138), [#139](https://github.com/agatte/home-hub/issues/139), [#25](https://github.com/agatte/home-hub/issues/25), [#80](https://github.com/agatte/home-hub/issues/80) | #138 is deliberate Winding Down, #139 is conservative wake confirmation, #25 is automation/session observability, and #80 removes dormant bed paths. |
+| Winding Down and Morning | [#138](https://github.com/agatte/home-hub/issues/138), [#139](https://github.com/agatte/home-hub/issues/139), [#25](https://github.com/agatte/home-hub/issues/25), [#80](https://github.com/agatte/home-hub/issues/80) | #138 is deliberate Winding Down, #139 conservative wake confirmation, #25 observability, and #80 now reconciles dormant **Latitude-era bed+posture** automation with the deployed source-qualified Desktop Bed capability. |
 | Music and ambience | [#135](https://github.com/agatte/home-hub/issues/135), [#39](https://github.com/agatte/home-hub/issues/39), [#40](https://github.com/agatte/home-hub/issues/40), [#79](https://github.com/agatte/home-hub/issues/79) | Music Curator is #135; #39 diagnoses the current contextual bandit, #40 researches dependable long-form ambience delivery without preselecting a YouTube/proxy architecture, and #79 owns stream-health recovery. |
 | Social and events | [#35](https://github.com/agatte/home-hub/issues/35), [#107](https://github.com/agatte/home-hub/issues/107), [#140](https://github.com/agatte/home-hub/issues/140), [#141](https://github.com/agatte/home-hub/issues/141) | Social/privacy, arrival, event orchestration, and per-event guest experience have distinct owners. |
+| Sensing / physical context | [#198](https://github.com/agatte/home-hub/issues/198), [#201](https://github.com/agatte/home-hub/issues/201), [#200](https://github.com/agatte/home-hub/issues/200), [#154](https://github.com/agatte/home-hub/issues/154), [#202](https://github.com/agatte/home-hub/issues/202) | #198/#201 are deployed sensing promotions with bounded real-room Couch/Bed acceptance still open; #200 is the current Latitude media→synthetic-occupancy defect; #154 retains unresolved nighttime projector/ScreenSync policy after path-light safety improvements; #202 is bed comfort policy and remains calibration-gated. |
 | Reliability and lifecycle | [#142](https://github.com/agatte/home-hub/issues/142), [#143](https://github.com/agatte/home-hub/issues/143), [#144](https://github.com/agatte/home-hub/issues/144), [#145](https://github.com/agatte/home-hub/issues/145), [#146](https://github.com/agatte/home-hub/issues/146), [#149](https://github.com/agatte/home-hub/issues/149) | #142 is the portfolio index. #143 requires credible current playback intent for Watching; #145 owns portable-host/DNS architecture; #149 owns persistent HOME/TRAVEL lifecycle; #146 is FaceLandmarker suspend/resume recovery. RustDesk is completed administration convenience, not availability architecture. |
-| Physical lighting | [#147](https://github.com/agatte/home-hub/issues/147), [#148](https://github.com/agatte/home-hub/issues/148), [#137](https://github.com/agatte/home-hub/issues/137), [#13](https://github.com/agatte/home-hub/issues/13) | First add the Play Light Bar plant/wall wash (#147), then the Flux cabinet cove (#148). #13 is a motion-sensor fallback only if #137's bounded inference evidence warrants it; high-CRI under-cabinet task lighting is later and separate. |
+| Physical lighting | [#147](https://github.com/agatte/home-hub/issues/147), [#148](https://github.com/agatte/home-hub/issues/148), [#137](https://github.com/agatte/home-hub/issues/137), [#13](https://github.com/agatte/home-hub/issues/13) | #147 is completed: L6 / Plant Wash is installed and calibrated. #148 is the next audited cabinet-cove addition. #13 remains a motion-sensor fallback only if #137 evidence warrants hardware; high-CRI task lighting is separate. |
 
 ## Reframed open work
 
@@ -57,6 +58,7 @@ priority semantics are historical only.
 - [#56](https://github.com/agatte/home-hub/issues/56) is desktop-only desk
   posture calibration. [#68](https://github.com/agatte/home-hub/issues/68) is
   a microphone fallback experiment only if physical-context gaps justify it.
+- [#198](https://github.com/agatte/home-hub/issues/198) has deployed YOLO-gated Latitude person authority; keep it open for the bounded post-deploy real-Couch acceptance check. [#201](https://github.com/agatte/home-hub/issues/201) has deployed Desktop Desk/Bed localization; keep it open until real Bed acceptance is observed. [#200](https://github.com/agatte/home-hub/issues/200) remains a real current defect: Latitude media intent still leaks synthetic couch occupancy into PresenceFusion.
 - [#74](https://github.com/agatte/home-hub/issues/74) is durable recovered-
   outage observability, not an external hourly watcher. [#105](https://github.com/agatte/home-hub/issues/105)
   is the current Gaming color/screen-tracking design pass, separate from the
@@ -64,9 +66,7 @@ priority semantics are historical only.
 
 ## Current product boundaries
 
-- Physical room evidence outranks software activity guesses. The Latitude is
-  a living-room/couch sensor, not an authoritative bed sensor; #80 removes
-  dormant `zone=bed` assumptions. Watching requires credible current media
+- Physical room evidence outranks software activity guesses. Latitude person authority is YOLO-gated; Couch requires supporting trusted localization after a real person is confirmed. Desktop may source current `zone=desk` or `zone=bed`; #80 reconciles only dormant Latitude-era bed+posture assumptions. Watching requires credible current media
   playback/viewing intent, not an open browser, streaming site, or media
   process alone.
 - Travel Mode (#149) is a persistent HOME/TRAVEL **host state** above ordinary
