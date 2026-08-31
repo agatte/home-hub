@@ -88,7 +88,7 @@ class TestWpaScaling:
         (-0.30, 15),   # |WPA| — sign doesn't matter, magnitude does
         (0.18, 10),    # big swing
         (0.08, 0),     # standard
-        (0.02, -10),   # decided game / golf clap
+        (0.02, 0),     # small WPA keeps the authored event base audible
     ])
     def test_wpa_band_modifiers(self, wpa, expected_delta):
         # base 30, no other modifiers
@@ -122,15 +122,15 @@ class TestWpaScaling:
 
     def test_wpa_signal_takes_precedence_over_fallback(self):
         """When WPA is present, margin+clock heuristic should NOT also fire.
-        A close-game state with a tiny WPA = 0.02 should yield -10, not the
-        fallback's +5 for one-score game."""
+        A close-game state with a tiny WPA = 0.02 should keep the authored
+        event base, not borrow the fallback's +5 one-score-game bump."""
         vol = compute_celebration_volume(
             _play(wpa=0.02),
             _state(score_colts=14, score_opp=11),  # 3-point game
             base_volume=30,
             now=_afternoon(),
         )
-        assert vol == 20  # 30 - 10 from WPA, fallback NOT applied
+        assert vol == 30  # base preserved, fallback NOT applied
 
 
 # ---------------------------------------------------------------------------
@@ -273,15 +273,15 @@ class TestApartmentModifiers:
         )
         assert vol == 18
 
-    def test_late_night_does_not_raise_low_volume(self):
-        """Cap is min(vol, 18) — if vol was already 15 it stays 15, not 18."""
+    def test_late_night_caps_small_wpa_base_at_18(self):
+        """Small WPA keeps the event base; late-night still caps it at 18."""
         vol = compute_celebration_volume(
-            _play(wpa=0.02),  # -10 from base 30 → 20
+            _play(wpa=0.02),
             _state(),
-            base_volume=20,  # 20 - 10 = 10
+            base_volume=20,
             now=_late_night(),
         )
-        assert vol == 10  # min(10, 18) = 10
+        assert vol == 18
 
     def test_camera_absent_subtracts_10(self):
         vol = compute_celebration_volume(

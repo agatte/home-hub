@@ -4,11 +4,18 @@ Tests for the music mapper — playlist selection, time-of-day heuristic, auto-p
 Uses mock Sonos/WebSocket services from conftest. Cache is set directly
 to avoid database round-trips.
 """
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
-from backend.services.music_mapper import MusicMapper, _time_period
+from backend.services.music_mapper import (
+    PREGAME_TTS_LATE_NIGHT_CAP,
+    PREGAME_TTS_VOLUME,
+    MusicMapper,
+    _pregame_tts_volume,
+    _time_period,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,9 +208,11 @@ class TestOnModeChange:
 class _MockTTS:
     def __init__(self):
         self.spoken: list[str] = []
+        self.volumes: list[int | None] = []
 
-    async def speak(self, line: str, **_kwargs) -> None:
+    async def speak(self, line: str, *, volume: int | None = None, **_kwargs) -> None:
         self.spoken.append(line)
+        self.volumes.append(volume)
 
 
 def _decision(
@@ -223,6 +232,10 @@ def _decision(
 
 class TestDispatchPregameAudio:
 
+    def test_pregame_tts_volume_preserves_late_night_cap(self):
+        late_night_utc = datetime(2026, 9, 14, 3, 30, tzinfo=timezone.utc)
+        assert _pregame_tts_volume(late_night_utc) == PREGAME_TTS_LATE_NIGHT_CAP
+
     @pytest.fixture
     def mapper(self, mock_sonos, mock_ws):
         tts = _MockTTS()
@@ -241,6 +254,7 @@ class TestDispatchPregameAudio:
         assert mapper._tts_mock.spoken == [
             "Game day. Colts and Houston Texans in 30."
         ]
+        assert mapper._tts_mock.volumes == [PREGAME_TTS_VOLUME]
 
     async def test_silent_decision_fires_nothing(self, mapper):
         d = _decision(tts_line=None, sonos_hype_play=False)

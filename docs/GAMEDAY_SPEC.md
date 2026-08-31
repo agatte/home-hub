@@ -50,7 +50,7 @@ mode on      celebration     (TD/FG)              (wind-down)
 
 - **Trigger**: ESPN play event with `scoringPlay=true` AND `scoringType.abbreviation='TD'` for the Colts side.
 - **Lights**: 5–8 second custom sequence. Specifics TBD; placeholder pattern: blue/white pulse rotation across L1→L2/L5→L3+L4 (350ms each, L5 mirrors L2 on the same beat as a Phase A placeholder), then 3s sustained sparkle-style multi-pulse across all five lights, then fade to gameday baseline. L5 (Bedroom Lamp Right, installed 2026-05-11) is currently mirrored — Phase C curator review will differentiate it from L2 once the clear-housing visual character is exercised. Free choice per event (Decision 1.3b) — final values land in `CelebrationOrchestrator.SEQUENCES["touchdown"]`.
-- **TTS**: One randomized line from the TD pool (3–5 variations). ESPN play description parsed for player name where format permits ("Jonathan Taylor 5 yard run for a TOUCHDOWN" → line variant: `"{player} in for six!"`). Duck Sonos to ~10 vol, play TTS, restore to prior volume.
+- **TTS**: One randomized line from the TD pool (3-5 variations). ESPN play description is parsed for player name where format permits. `TTSService` plays the line on Sonos using the dynamic section 9 volume policy, then restores prior Sonos playback/volume. Alexa remains a manual Game Day control surface, not the live announcement speaker.
 - **Cooldown**: 8 seconds between any two celebration sequences (prevents stomping).
 
 #### Field goal
@@ -110,7 +110,7 @@ ESPN API ─────► GameDayService ────► WebSocketManager ─�
 2. **Pre-game flip**: 30 min before kickoff, GameDayService calls `automation.set_manual_override("gameday", source="gameday:auto")`. AutomationEngine fires mode-change callbacks.
 3. **In-game polling**: every 10s during `in-progress`, GameDayService polls ESPN play-by-play. Diffs against last known state; emits `play_event` for new plays.
 4. **Celebration dispatch**: CelebrationOrchestrator subscribes to `play_event`. On TD/FG/kickoff, runs the sequence. Cooldown enforced inside the orchestrator.
-5. **Frontend sync**: WebSocketManager broadcasts `gameday_state` (score, clock, possession) on every poll cycle and `gameday_play` (description, type) on each new play.
+5. **Frontend sync**: WebSocketManager broadcasts `gameday_state` (score, clock, possession) on every poll cycle and `gameday_play` (description, type) on each new play. Datetime fields cross this public JSON boundary as ISO-8601 strings.
 6. **Game end**: GameDayService observes `final` state; emits `state_transition` event; CelebrationOrchestrator runs end-of-game sequence; 30 min later, GameDayService clears the override (unless `source!="gameday:auto"` — i.e. user manually overrode).
 
 ---
@@ -408,7 +408,7 @@ def compute_celebration_volume(
 - `|WPA| >= 0.25` → +15 (huge swing — game-changing)
 - `|WPA| >= 0.15` → +10 (big swing)
 - `|WPA| >= 0.05` → 0 (standard)
-- `|WPA| < 0.05` → -10 (decided game / polite)
+- `|WPA| < 0.05` -> 0 (keep the authored event base; real 2026 preseason evidence showed subtracting here made ordinary scoring TTS inaudible)
 
 **Fallback: margin + time** (when WPA not yet available — ESPN's WP model lags ~30-60s):
 - Q4/OT, `|margin| <= 7`, `time_left < 120s` → +15 (clutch / 2-min drill)
@@ -418,13 +418,15 @@ def compute_celebration_volume(
 
 **Apartment-context modifiers**:
 - Local hour ∈ [22, 06) → cap at 18 (late-night)
-- `camera_absent` (no detection within 5 min) → vol − 10
+- `camera_absent` (no detection within 5 min) -> vol - 10 **only when decided House State is not Home**; Home outranks this weak absence signal
 
 Final clamp `[5, 50]`.
 
 **Per-sequence base volumes**: TD 30, FG 28, kickoff 22, end_of_game_win 35, end_of_game_loss 0 (silent — `tts_lines=[]`).
 
 **WPA plumbing**: GameDayService extracts per-play win probability from ESPN's `summary.winprobability[]` array and attaches Colts-perspective WPA to each emitted PlayEvent. Sign-flips when Colts are away. Returns `None` gracefully when ESPN's WP model hasn't yet indexed the play (10s polling cadence vs ESPN's WP-lag).
+
+**2026 preseason calibration**: Aug. 22/Aug. 29 production evidence showed successful Sonos TTS could land at volume 8 after a small-WPA cut stacked with a camera-absence cut. Small WPA therefore no longer lowers a scoring event below its authored base, and confirmed House=Home prevents the weak camera-absence modifier. Big WPA can still raise the moment; Sleeping/DND/losing-blowout/late-night behavior is unchanged.
 
 **Late-night gotcha**: at 22:00–05:59 Indy local, even big plays cap at vol 18. Synthetic test endpoint hits the all-fallback path (no WPA, no game state) so an after-hours smoke test will get vol 18 — that's the policy working correctly, not a bug. Volume constant calibration against real-game feedback is tracked in [#7](https://github.com/agatte/home-hub/issues/7).
 
@@ -499,7 +501,8 @@ def compute_pregame_audio(
 
 **Apartment-context modifiers (mirror celebration volume policy):**
 - `sleeping_mode` or `dnd_active` → both `tts_line=None` AND `sonos_hype_play=False` (lights still flip).
-- Local hour ∈ [22, 06) → if TTS would fire, gate volume to ≤18 (same late-night cap).
+- T-30 TTS uses a Game-Day-specific Sonos base volume of 24 (the global default 10 was inaudible in 2026 preseason room evidence).
+- Local hour in [22, 06) -> if TTS would fire, gate that volume to <=18 (same late-night cap).
 
 **Fire timing:**
 - T-60: pre-game lighting palette activates (pregameday mode).

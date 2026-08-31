@@ -846,11 +846,16 @@ class CelebrationOrchestrator:
 
         sleeping = False
         dnd = False
+        house_state = None
         if self._automation is not None:
             try:
                 sleeping = (getattr(self._automation, "current_mode", None) == "sleeping")
             except Exception:
                 logger.debug("celebration volume: current_mode read failed", exc_info=True)
+            try:
+                house_state = getattr(self._automation, "house_state", None)
+            except Exception:
+                logger.debug("celebration volume: house_state read failed", exc_info=True)
             try:
                 if hasattr(self._automation, "is_dnd_active"):
                     dnd = bool(self._automation.is_dnd_active())
@@ -858,7 +863,7 @@ class CelebrationOrchestrator:
                 logger.debug("celebration volume: is_dnd_active read failed", exc_info=True)
 
         camera_absent = False
-        if self._camera is not None:
+        if house_state != "home" and self._camera is not None:
             try:
                 if hasattr(self._camera, "is_present_within_seconds"):
                     camera_absent = not bool(self._camera.is_present_within_seconds(300))
@@ -881,8 +886,8 @@ class CelebrationOrchestrator:
             logger.info("celebration TTS suppressed: %s", reason)
         else:
             logger.info(
-                "celebration TTS volume=%d (base=%d wpa=%s sleeping=%s dnd=%s camera_absent=%s)",
-                target, sequence.base_volume, play.wpa, sleeping, dnd, camera_absent,
+                "celebration TTS volume=%d (base=%d wpa=%s sleeping=%s dnd=%s house_state=%s camera_absent=%s)",
+                target, sequence.base_volume, play.wpa, sleeping, dnd, house_state, camera_absent,
             )
         return target
 
