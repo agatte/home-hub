@@ -15,9 +15,10 @@ Why this lives as a separate module + ScheduledTask:
 
 Phase 4 scope (this commit):
   - Pull team schedule from ESPN (the endpoint gameday_service already uses).
-  - Derive record (wins/losses/ties from FINAL games), season_week, is_preseason.
-  - Set playoff_probability=None + division_gap_games=None + is_eliminated=False
-    until a robust source is wired (next iteration).
+  - Enrich the schedule-derived record and division gap from ESPN's explicit
+    AFC South regular-season standings when that response is trustworthy.
+  - Set playoff_probability=None + is_eliminated=False until a robust source
+    exposes those values.
   - Write to app_settings; downstream policy gracefully falls back to "standard"
     tier when playoff_probability is None.
 """
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from math import isfinite
 from typing import Any, Optional
 
 import httpx
@@ -33,6 +35,9 @@ logger = logging.getLogger("home_hub.playoff_state")
 
 _ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
 _SCHEDULE_URL = f"{_ESPN_BASE}/teams/11/schedule"  # COLTS = team id 11
+_STANDINGS_URL = "https://site.api.espn.com/apis/v2/sports/football/nfl/standings"
+_AFC_SOUTH_GROUP_ID = 13
+_AFC_SOUTH_TEAM_IDS = {"10", "11", "30", "34"}
 
 _HTTP_TIMEOUT = 10.0
 
@@ -89,8 +94,8 @@ def compute_playoff_state(
 
         season_type = (event.get("season") or {}).get("type")
         # ESPN season types: 1=preseason, 2=regular, 3=postseason.
-        # Skip preseason for record (preseason wins/losses don't count).
-        if season_type == 1:
+        # The stakes trust anchor is regular-season record only.
+        if season_type != 2:
             continue
 
         # Find the Colts among the competitors.
@@ -146,7 +151,93 @@ def _is_preseason(today: datetime) -> bool:
     return today.month in (7, 8)
 
 
-async def refresh_playoff_state(save_setting_fn) -> dict[str, Any]:
+def nfl_season_year(today: datetime) -> int:
+    """Return the NFL season year, accounting for its January/February tail."""
+    return today.year - 1 if today.month in (1, 2) else today.year
+
+
+def parse_colts_division_standings(
+    standings_payload: dict[str, Any],
+) -> tuple[list[int], float | int] | None:
+    """Extract trustworthy Colts regular-season record + AFC South games-behind.
+
+    ESPN's scoped response must identify AFC South at the root. All division
+    rows are parsed so the provider's ``gamesBehind`` values can be checked
+    for internal consistency; HomeHub never substitutes a derived value.
+    """
+    if str(standings_payload.get("id")) != str(_AFC_SOUTH_GROUP_ID):
+        return None
+    standings = standings_payload.get("standings")
+    if not isinstance(standings, dict):
+        return None
+    entries = standings.get("entries")
+    if not isinstance(entries, list) or not entries:
+        return None
+
+    def numeric_stat(stats: list[Any], name: str) -> float | int | None:
+        for stat in stats:
+            if not isinstance(stat, dict) or stat.get("name") != name:
+                continue
+            value = stat.get("value")
+            if isinstance(value, bool):
+                return None
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not isfinite(number):
+                return None
+            if name == "gamesBehind":
+                if number < 0 or not (number * 2).is_integer():
+                    return None
+            elif number < 0 or not number.is_integer():
+                return None
+            return int(number) if number.is_integer() else number
+        return None
+
+    parsed: list[tuple[str, int, int, int, float | int]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        team_id = str((entry.get("team") or {}).get("id") or "")
+        stats = entry.get("stats")
+        if not team_id or not isinstance(stats, list):
+            return None
+        wins = numeric_stat(stats, "wins")
+        losses = numeric_stat(stats, "losses")
+        ties = numeric_stat(stats, "ties")
+        games_behind = numeric_stat(stats, "gamesBehind")
+        if None in (wins, losses, ties, games_behind):
+            return None
+        parsed.append(
+            (team_id, int(wins), int(losses), int(ties), games_behind)
+        )
+
+    if len(parsed) != len(_AFC_SOUTH_TEAM_IDS):
+        return None
+    if {team_id for team_id, *_ in parsed} != _AFC_SOUTH_TEAM_IDS:
+        return None
+
+    # NFL games-behind is half the difference in games-above-.500. Validate
+    # ESPN's own reported values against all division rows; reject the whole
+    # enrichment if the payload contradicts itself rather than deriving a
+    # replacement value. Ties contribute half a win and half a loss, so they
+    # cancel in the games-above-.500 term (wins - losses).
+    leader_score = max(wins - losses for _, wins, losses, _, _ in parsed)
+    for _, wins, losses, _, reported_gap in parsed:
+        expected_gap = (leader_score - (wins - losses)) / 2
+        if float(reported_gap) != expected_gap:
+            return None
+
+    for team_id, wins, losses, ties, games_behind in parsed:
+        if team_id == "11":
+            return [wins, losses, ties], games_behind
+    return None
+
+
+async def refresh_playoff_state(
+    save_setting_fn, *, today: Optional[datetime] = None,
+) -> dict[str, Any]:
     """Fetch ESPN, compute the state dict, persist to app_settings.
 
     Args:
@@ -157,6 +248,7 @@ async def refresh_playoff_state(save_setting_fn) -> dict[str, Any]:
     Returns:
         The computed state dict (also persisted).
     """
+    today = today or datetime.now(timezone.utc)
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(_SCHEDULE_URL)
@@ -167,7 +259,32 @@ async def refresh_playoff_state(save_setting_fn) -> dict[str, Any]:
         logger.exception("playoff_state_refresh: ESPN fetch failed")
         return {}
 
-    state = compute_playoff_state(events)
+    state = compute_playoff_state(events, today=today)
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get(
+                _STANDINGS_URL,
+                params={
+                    "season": nfl_season_year(today),
+                    "seasontype": 2,
+                    "group": _AFC_SOUTH_GROUP_ID,
+                },
+            )
+            resp.raise_for_status()
+            standings = parse_colts_division_standings(resp.json())
+        if standings is not None:
+            standings_record, division_gap = standings
+            if standings_record == state["record"]:
+                state["division_gap_games"] = division_gap
+            else:
+                logger.warning(
+                    "playoff_state_refresh: standings record %s disagrees with schedule %s; ignoring standings enrichment",
+                    standings_record,
+                    state["record"],
+                )
+    except Exception:
+        # Standings are enrichment only: schedule-derived state must persist.
+        logger.exception("playoff_state_refresh: ESPN standings fetch failed")
     try:
         await save_setting_fn(PLAYOFF_STATE_KEY, state)
         logger.info(
