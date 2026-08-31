@@ -65,6 +65,7 @@ RESTART_AMBIENT=0
 RESTART_LATITUDE_STREAMING=0
 RESTART_TUNNEL=0
 INSTALL_KIOSK_RECYCLE=0
+INSTALL_AMBIENT_UNIT=0
 REBUILD_FRONTEND=0
 
 if [[ -z "$LAST_DEPLOYED" ]]; then
@@ -82,6 +83,7 @@ if [[ -z "$LAST_DEPLOYED" ]]; then
     RESTART_LATITUDE_STREAMING=1
     RESTART_TUNNEL=1
     INSTALL_KIOSK_RECYCLE=1
+    INSTALL_AMBIENT_UNIT=1
 else
     echo "Deploying ${LAST_DEPLOYED:0:7} → ${NEW_HEAD:0:7}"
     echo
@@ -109,6 +111,10 @@ else
 
     if echo "$CHANGED" | grep -qE "^(scripts/recycle-kiosk\.sh|deployment/home-hub-kiosk-recycle\.(service|timer))$"; then
         INSTALL_KIOSK_RECYCLE=1
+    fi
+
+    if echo "$CHANGED" | grep -q "^deployment/home-hub-ambient\.service$"; then
+        INSTALL_AMBIENT_UNIT=1
     fi
 
     if echo "$CHANGED" | grep -qE "^(backend/|run\.py$)"; then
@@ -169,6 +175,13 @@ rollback() {
     if ! git reset --hard "$target"; then
         echo "✗ git reset --hard failed during rollback"
         return 1
+    fi
+
+    if echo "$CHANGED" | grep -q "^deployment/home-hub-ambient\.service$"; then
+        if ! install_ambient_unit; then
+            echo "ambient unit sync failed during rollback"
+            return 1
+        fi
     fi
 
     # Re-run the same install / rebuild gates. CHANGED is the same diff
@@ -238,6 +251,18 @@ restart_latitude_streaming() {
     fi
 }
 
+install_ambient_unit() {
+    if [[ ! -f deployment/home-hub-ambient.service ]]; then
+        echo "  (ambient unit not present in this checkout; skipping)"
+        return 0
+    fi
+
+    echo "Syncing home-hub-ambient.service unit (no service restart)..."
+    mkdir -p "$HOME/.config/systemd/user"
+    cp deployment/home-hub-ambient.service "$HOME/.config/systemd/user/"
+    systemctl --user daemon-reload
+}
+
 install_kiosk_recycle_timer() {
     if [[ ! -f deployment/home-hub-kiosk-recycle.service || ! -f deployment/home-hub-kiosk-recycle.timer ]]; then
         echo "  (kiosk recycle units not present in this checkout; skipping)"
@@ -253,6 +278,9 @@ install_kiosk_recycle_timer() {
     systemctl --user enable --now home-hub-kiosk-recycle.timer
 }
 
+if [[ "$INSTALL_AMBIENT_UNIT" == "1" ]]; then
+    install_ambient_unit
+fi
 if [[ "$INSTALL_KIOSK_RECYCLE" == "1" ]]; then
     install_kiosk_recycle_timer
 fi
