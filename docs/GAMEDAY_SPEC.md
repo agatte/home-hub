@@ -466,7 +466,7 @@ def compute_pregame_audio(
     is_preseason: bool,
     playoff_probability: float | None,  # ESPN's playoff odds, 0.0-1.0 or None
     is_eliminated: bool,     # mathematically out of contention
-    division_gap_games: int | None,  # games behind division leader (None pre-week-3)
+    division_gap_games: float | int | None,  # trusted AFC South games-behind, else None
     record: tuple[int, int, int],    # (wins, losses, ties)
     sleeping_mode: bool = False,
     dnd_active: bool = False,
@@ -526,14 +526,19 @@ PRE_KICKOFF_FLIP_MINUTES = 30          # existing — gameday flip
 PRE_GAME_AMBIENT_FLIP_MINUTES = 60     # new — pregameday flip
 ```
 
-### 10.5 Playoff-odds sourcing
+### 10.5 Stakes-data sourcing
 
-ESPN provides playoff probability via `summary.predictor.homeTeam.playoffProbability` and `awayTeam.playoffProbability` on game pages, but only after week 4-5. For weeks 1-3, the stakes function falls back to record + division-gap heuristics. For preseason (week 0 / `is_preseason=True`), the function returns the preseason-override TTS line and skips the playoff-tier branching.
+Stakes enrichment must fail closed. Core Game Day schedule/live operation never depends on this data, and a missing or ambiguous enrichment value falls back to the **standard** pre-game tier.
 
-**Sourcing implementation:**
-- Cache playoff probability in `app_settings` under `gameday_playoff_state` after each game's poll. Refresh weekly on Tuesday after the Monday Night Football final (when ESPN's playoff model recomputes).
-- Background `ScheduledTask` in scheduler.py: `playoff_state_refresh` at Tue 06:00 ET, fetches ESPN standings + playoff page for COLTS, extracts `playoffProbability`, writes to `app_settings`.
-- gameday_service reads from `app_settings` at T-60 to feed the audio policy.
+**Current trusted inputs:**
+- `record`: derived from Colts schedule events whose ESPN `season.type == 2` and status is final. Preseason and postseason results are excluded from this regular-season trust anchor.
+- `division_gap_games`: read from ESPN's regular-season standings endpoint only when the response root is explicitly AFC South (`group=13`), contains exactly the four AFC South teams, every W/L/T and `gamesBehind` value is valid, ESPN's reported half-game gaps are internally consistent across the division, and the Colts standings W/L/T exactly matches the schedule-derived record.
+- `playoff_probability`: **currently `None`**. No current source is trusted enough to drive `big_stakes` or `victory_lap` automatically.
+- `is_eliminated`: **currently `False`/unknown for enrichment purposes**. HomeHub does not infer mathematical elimination from incomplete standings data.
+
+The weekly `playoff_state_refresh` task runs Tuesday at 06:00 ET and writes the accepted snapshot to `app_settings["gameday_playoff_state"]`. January/February refreshes query the preceding NFL season year. A standings fetch failure, malformed payload, wrong group, incomplete/duplicate division table, impossible gap, cross-row inconsistency, or record mismatch preserves the schedule-derived state with `division_gap_games=None`.
+
+This means the current automatic stakes behavior is intentionally conservative: early/mid-season games normally use the standard tier; the late-season `clutch` tier may activate only from a validated AFC South gap; probability-based tiers remain dormant until a separately verified source is added.
 
 ### 10.6 Verification
 

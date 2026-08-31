@@ -11,11 +11,15 @@ from datetime import datetime, timezone
 import pytest
 
 from backend.services.playoff_state_refresh import (
+    _AFC_SOUTH_GROUP_ID,
+    _STANDINGS_URL,
     PLAYOFF_STATE_KEY,
     REFRESH_HOUR_ET,
     REFRESH_MINUTE_ET,
     REFRESH_WEEKDAY,
     compute_playoff_state,
+    nfl_season_year,
+    parse_colts_division_standings,
     refresh_playoff_state,
 )
 
@@ -51,6 +55,72 @@ def _scheduled_game(season_type: int = 2) -> dict:
     }
 
 
+def _standings_payload(*, wins=3, losses=2, ties=1, games_behind=0.5) -> dict:
+    return {
+        "id": str(_AFC_SOUTH_GROUP_ID),
+        "name": "AFC South",
+        "standings": {"entries": [
+            {
+                "team": {"id": "10", "displayName": "Tennessee Titans"},
+                "stats": [
+                    {"name": "wins", "value": 4},
+                    {"name": "losses", "value": 2},
+                    {"name": "ties", "value": 0},
+                    {"name": "gamesBehind", "value": 0},
+                ],
+            },
+            {
+                "team": {"id": "11", "displayName": "Indianapolis Colts"},
+                "stats": [
+                    {"name": "wins", "value": wins},
+                    {"name": "losses", "value": losses},
+                    {"name": "ties", "value": ties},
+                    {"name": "gamesBehind", "value": games_behind},
+                ],
+            },
+            {
+                "team": {"id": "30", "displayName": "Jacksonville Jaguars"},
+                "stats": [
+                    {"name": "wins", "value": 2},
+                    {"name": "losses", "value": 3},
+                    {"name": "ties", "value": 0},
+                    {"name": "gamesBehind", "value": 1.5},
+                ],
+            },
+            {
+                "team": {"id": "34", "displayName": "Houston Texans"},
+                "stats": [
+                    {"name": "wins", "value": 1},
+                    {"name": "losses", "value": 4},
+                    {"name": "ties", "value": 0},
+                    {"name": "gamesBehind", "value": 2.5},
+                ],
+            },
+        ]},
+    }
+
+
+def _standings_payload_colts_lead_1_0() -> dict:
+    payload = _standings_payload(wins=1, losses=0, ties=0, games_behind=0)
+    rows = payload["standings"]["entries"]
+    replacements = {
+        "10": (0, 0, 0, 0.5),
+        "30": (0, 0, 0, 0.5),
+        "34": (0, 0, 0, 0.5),
+    }
+    for row in rows:
+        team_id = row["team"]["id"]
+        if team_id not in replacements:
+            continue
+        wins, losses, ties, gap = replacements[team_id]
+        values = {stat["name"]: stat for stat in row["stats"]}
+        values["wins"]["value"] = wins
+        values["losses"]["value"] = losses
+        values["ties"]["value"] = ties
+        values["gamesBehind"]["value"] = gap
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Schedule constants
 # ---------------------------------------------------------------------------
@@ -77,6 +147,76 @@ class TestComputePlayoffState:
         assert state["record"] == [0, 0, 0]
         assert state["is_preseason"] is False
         assert state["season_week"] == 1
+
+
+class TestDivisionStandingsParser:
+
+    def test_uses_verified_site_api_standings_endpoint(self):
+        assert _STANDINGS_URL == (
+            "https://site.api.espn.com/apis/v2/sports/football/nfl/standings"
+        )
+
+    def test_extracts_colts_record_and_division_gap(self):
+        assert parse_colts_division_standings(_standings_payload()) == ([3, 2, 1], 0.5)
+
+    def test_missing_colts_degrades_to_none(self):
+        payload = _standings_payload()
+        payload["standings"]["entries"][1]["team"]["id"] = "30"
+        assert parse_colts_division_standings(payload) is None
+
+    def test_malformed_numeric_fields_degrade_to_none(self):
+        assert parse_colts_division_standings(_standings_payload(wins="not-a-number")) is None
+
+    def test_wrong_group_provenance_degrades_to_none(self):
+        payload = _standings_payload()
+        payload["id"] = "8"
+        payload["name"] = "AFC"
+        assert parse_colts_division_standings(payload) is None
+
+    def test_incomplete_division_degrades_to_none(self):
+        payload = _standings_payload()
+        payload["standings"]["entries"].pop()
+        assert parse_colts_division_standings(payload) is None
+
+    def test_duplicate_division_row_degrades_to_none(self):
+        payload = _standings_payload()
+        payload["standings"]["entries"].append(
+            payload["standings"]["entries"][1].copy()
+        )
+        assert parse_colts_division_standings(payload) is None
+
+    def test_negative_games_behind_degrades_to_none(self):
+        assert parse_colts_division_standings(
+            _standings_payload(games_behind=-0.5)
+        ) is None
+
+    def test_non_half_game_games_behind_degrades_to_none(self):
+        assert parse_colts_division_standings(
+            _standings_payload(games_behind=0.1)
+        ) is None
+
+    def test_cross_entry_inconsistent_gap_degrades_to_none(self):
+        payload = _standings_payload(wins=3, losses=2, ties=0, games_behind=0)
+        assert parse_colts_division_standings(payload) is None
+
+    def test_january_and_february_use_previous_nfl_season(self):
+        assert nfl_season_year(datetime(2027, 1, 15, tzinfo=timezone.utc)) == 2026
+        assert nfl_season_year(datetime(2027, 2, 15, tzinfo=timezone.utc)) == 2026
+        assert nfl_season_year(datetime(2026, 9, 1, tzinfo=timezone.utc)) == 2026
+
+
+class TestComputePlayoffStateContinued:
+
+    def test_postseason_final_does_not_change_regular_season_record(self):
+        events = [
+            _final_game(colts_score=24, opp_score=17, season_type=2),
+            _final_game(colts_score=14, opp_score=21, season_type=3),
+        ]
+        state = compute_playoff_state(
+            events, today=datetime(2027, 1, 15, tzinfo=timezone.utc),
+        )
+        assert state["record"] == [1, 0, 0]
+        assert state["season_week"] == 2
 
     def test_three_wins_two_losses(self):
         events = [
@@ -216,14 +356,14 @@ class TestRefreshPlayoffState:
 
             def __init__(self, *args, **kwargs):
                 self.__class__.init_kwargs = kwargs
-                self._payload = {
-                    "events": [_final_game(colts_score=24, opp_score=10)],
-                }
+                self._schedule_payload = {"events": [_final_game(colts_score=24, opp_score=10)]}
             async def __aenter__(self): return self
             async def __aexit__(self, *a): return False
             async def get(self, url, **kwargs):
                 self.__class__.get_kwargs = kwargs
-                return _FakeResponse(self._payload)
+                if url == _STANDINGS_URL:
+                    return _FakeResponse(_standings_payload_colts_lead_1_0())
+                return _FakeResponse(self._schedule_payload)
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
@@ -232,13 +372,104 @@ class TestRefreshPlayoffState:
             captured["key"] = key
             captured["value"] = value
 
-        result = await refresh_playoff_state(fake_save)
+        result = await refresh_playoff_state(
+            fake_save, today=datetime(2027, 1, 15, tzinfo=timezone.utc),
+        )
 
         assert captured["key"] == PLAYOFF_STATE_KEY
         assert captured["value"]["record"] == [1, 0, 0]
+        assert captured["value"]["division_gap_games"] == 0
         assert result["record"] == [1, 0, 0]
         assert "headers" not in _FakeClient.init_kwargs
-        assert "headers" not in _FakeClient.get_kwargs
+        assert _FakeClient.get_kwargs["params"] == {
+            "season": 2026,
+            "seasontype": 2,
+            "group": _AFC_SOUTH_GROUP_ID,
+        }
+
+    @pytest.mark.asyncio
+    async def test_mismatched_standings_record_is_ignored(self, monkeypatch):
+        import httpx
+
+        class _FakeResponse:
+            def __init__(self, payload): self.payload = payload
+            def raise_for_status(self): pass
+            def json(self): return self.payload
+
+        class _FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url, **kwargs):
+                if url == _STANDINGS_URL:
+                    return _FakeResponse(
+                        _standings_payload(wins=0, losses=2, ties=1, games_behind=2.5)
+                    )
+                return _FakeResponse(
+                    {"events": [_final_game(colts_score=24, opp_score=10)]}
+                )
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        captured = {}
+        async def fake_save(key, value): captured["value"] = value
+
+        result = await refresh_playoff_state(fake_save)
+        assert result["record"] == [1, 0, 0]
+        assert result["division_gap_games"] is None
+        assert captured["value"] == result
+
+    @pytest.mark.asyncio
+    async def test_standings_failure_persists_schedule_fallback(self, monkeypatch):
+        import httpx
+
+        class _FakeResponse:
+            def raise_for_status(self): pass
+            def json(self): return {"events": [_final_game(colts_score=24, opp_score=10)]}
+
+        class _FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url, **kwargs):
+                if url == _STANDINGS_URL:
+                    raise httpx.HTTPError("standings boom")
+                return _FakeResponse()
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        captured = {}
+        async def fake_save(key, value): captured["value"] = value
+
+        result = await refresh_playoff_state(fake_save)
+        assert result["record"] == [1, 0, 0]
+        assert result["division_gap_games"] is None
+        assert captured["value"] == result
+
+    @pytest.mark.asyncio
+    async def test_malformed_standings_persists_schedule_fallback(self, monkeypatch):
+        import httpx
+
+        class _FakeResponse:
+            def __init__(self, payload): self.payload = payload
+            def raise_for_status(self): pass
+            def json(self): return self.payload
+
+        class _FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url, **kwargs):
+                if url == _STANDINGS_URL:
+                    return _FakeResponse(_standings_payload(losses="bad"))
+                return _FakeResponse({"events": [_final_game(colts_score=24, opp_score=10)]})
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        captured = {}
+        async def fake_save(key, value): captured["value"] = value
+
+        result = await refresh_playoff_state(fake_save)
+        assert result["record"] == [1, 0, 0]
+        assert result["division_gap_games"] is None
+        assert captured["value"] == result
 
     @pytest.mark.asyncio
     async def test_http_failure_returns_empty_no_write(self, monkeypatch):
