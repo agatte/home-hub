@@ -239,6 +239,19 @@ async def health_check(request: Request) -> dict:
                 "shadow evaluator or recorder malfunction"
             )
 
+    gameday_provider: dict = {}
+    gameday = getattr(app.state, "gameday", None)
+    if gameday is not None and hasattr(gameday, "provider_health"):
+        try:
+            gameday_provider = gameday.provider_health()
+            if gameday_provider.get("degraded", False):
+                status = "degraded"
+                details["gameday_provider"] = "ESPN provider feed is unhealthy"
+        except Exception as exc:
+            gameday_provider = {"status": "unhealthy", "error": repr(exc)[:200]}
+            status = "degraded"
+            details["gameday_provider"] = "provider health snapshot failed"
+
     return {
         "status": status,
         "service": "Home Hub",
@@ -265,6 +278,7 @@ async def health_check(request: Request) -> dict:
         "ml": ml,
         "automation": automation_block,
         "living_room_decision_gate": living_room_gate_summary,
+        "gameday_provider": gameday_provider,
         "sources": sources,
         "sources_untrusted": sources_untrusted,
         "details": details,

@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 
 from backend.services.gameday_service import (
     COLTS_TEAM_ID,
@@ -25,6 +26,8 @@ from backend.services.gameday_service import (
     PRE_KICKOFF_FLIP_MINUTES,
     PREGAMEDAY_AUTO_SOURCE,
     SCHEDULE_CACHE_TTL,
+    SCHEDULE_RETRY_BACKOFFS,
+    SUMMARY_RETRY_BACKOFFS,
     GameDayService,
     GameDayState,
     GameDayStateTransition,
@@ -327,6 +330,161 @@ class TestSchedule:
         ) as cm3:
             await svc._refresh_schedule_if_stale()
             assert cm3.called
+
+
+class TestProviderHealth:
+
+    async def test_initial_schedule_failure_is_visible_without_blocking_connect(self):
+        svc = _make_service()
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=_mock_client(httpx.ConnectError("ESPN unavailable")),
+        ):
+            await svc.connect()
+
+        health = svc.provider_health()
+        assert svc.connected is True
+        assert health["status"] == "healthy"
+        assert health["degraded"] is False
+        assert health["schedule"]["status"] == "unhealthy"
+        assert health["schedule"]["consecutive_failures"] == 1
+        assert health["schedule"]["last_error"] == "ESPN unavailable"
+        assert svc._schedule_cache == []
+
+    async def test_schedule_failures_back_off_and_cap_without_replacing_cache(self):
+        svc = _make_service()
+        cached = {"id": "cached"}
+        svc._schedule_cache = [cached]
+        svc._schedule_cache_time = 123.0
+        failing_client = _mock_client(httpx.ConnectError("down"))
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=failing_client,
+        ), patch("backend.services.gameday_service.time.time", return_value=1000.0):
+            for _ in range(4):
+                with pytest.raises(httpx.ConnectError):
+                    await svc._refresh_schedule()
+
+        assert svc._schedule_cache == [cached]
+        assert svc._schedule_cache_time == 123.0
+        assert svc._schedule_provider.consecutive_failures == 4
+        assert svc._schedule_provider.next_eligible_retry == 1000.0 + SCHEDULE_RETRY_BACKOFFS[-1]
+
+    async def test_schedule_retry_waits_until_its_backoff_expires(self):
+        svc = _make_service()
+        svc._schedule_cache_time = 0.0
+        svc._schedule_provider.next_eligible_retry = time.time() + 60
+        with patch("backend.services.gameday_service.httpx.AsyncClient") as client_factory:
+            await svc._refresh_schedule_if_stale()
+        client_factory.assert_not_called()
+
+    async def test_schedule_recovery_resets_provider_failure_state(self):
+        svc = _make_service()
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%MZ")
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            side_effect=[
+                _mock_client(httpx.ConnectError("down")),
+                _mock_client([{"events": [_schedule_event("401001", future)]}]),
+            ],
+        ):
+            with pytest.raises(httpx.ConnectError):
+                await svc._refresh_schedule()
+            await svc._refresh_schedule()
+
+        lane = svc.provider_health()["schedule"]
+        assert lane["status"] == "healthy"
+        assert lane["consecutive_failures"] == 0
+        assert lane["last_error"] is None
+        assert lane["next_eligible_retry"] is None
+
+        assert svc.provider_health()["status"] == "healthy"
+
+    async def test_stale_scheduled_game_remains_live_selectable_after_kickoff(self):
+        svc = _make_service()
+        kickoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        svc._schedule_cache = [{
+            "id": "401001", "kickoff_utc": kickoff, "opponent": "Miami Dolphins",
+            "colts_are_home": True, "status": "STATUS_SCHEDULED",
+        }]
+        svc._schedule_cache_time = time.time()
+        summary_client = _mock_client([_summary_payload()])
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient", return_value=summary_client,
+        ):
+            await svc._tick()
+
+        assert svc.current_state() is not None
+        assert svc.current_state().status == "in-progress"
+        assert summary_client.get.await_count == 1
+
+    async def test_first_live_summary_failure_keeps_fast_recovery_cadence(self):
+        svc = _make_service()
+        svc._schedule_cache = [{
+            "id": "401001", "kickoff_utc": datetime.now(timezone.utc) - timedelta(minutes=1),
+            "opponent": "Miami Dolphins", "colts_are_home": True,
+            "status": "STATUS_SCHEDULED",
+        }]
+        svc._schedule_cache_time = time.time()
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=_mock_client(httpx.ConnectError("summary down")),
+        ):
+            await svc._tick()
+
+        assert svc._in_live_window() is True
+        assert svc._summary_provider.consecutive_failures == 1
+        assert svc._summary_provider.next_eligible_retry - time.time() <= SUMMARY_RETRY_BACKOFFS[0]
+
+    async def test_live_summary_failures_back_off_cap_and_recover(self):
+        svc = _make_service()
+        with patch("backend.services.gameday_service.time.time", return_value=1000.0):
+            for _ in range(4):
+                with patch(
+                    "backend.services.gameday_service.httpx.AsyncClient",
+                    return_value=_mock_client(httpx.ConnectError("down")),
+                ):
+                    assert await svc._fetch_summary("401001") is None
+        assert svc._summary_provider.consecutive_failures == 4
+        assert svc._summary_provider.next_eligible_retry == 1000.0 + SUMMARY_RETRY_BACKOFFS[-1]
+
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=_mock_client([_summary_payload()]),
+        ):
+            assert await svc._fetch_summary("401001") is not None
+        lane = svc.provider_health()["live_summary"]
+        assert lane["status"] == "healthy"
+        assert lane["consecutive_failures"] == 0
+        assert lane["next_eligible_retry"] is None
+
+    def test_cached_schedule_failure_degrades_provider_health(self):
+        svc = _make_service()
+        svc._schedule_cache = [{
+            "id": "cached", "status": "STATUS_SCHEDULED",
+            "kickoff_utc": datetime.now(timezone.utc) + timedelta(days=2),
+        }]
+        svc._record_provider_failure(
+            svc._schedule_provider, RuntimeError("down"),
+            SCHEDULE_RETRY_BACKOFFS, "schedule",
+        )
+        assert svc.provider_health()["status"] == "unhealthy"
+
+    def test_provider_failure_logging_is_transition_and_escalation_only(self, caplog):
+        svc = _make_service()
+        caplog.set_level("WARNING", logger="home_hub.gameday")
+        with patch("backend.services.gameday_service.time.time", return_value=1000.0):
+            for _ in range(4):
+                svc._record_provider_failure(
+                    svc._schedule_provider, RuntimeError("down"),
+                    SCHEDULE_RETRY_BACKOFFS, "schedule",
+                )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert len(messages) == 3
+        assert "failed" in messages[0]
+        assert "escalated" in messages[1]
+        assert "escalated" in messages[2]
 
 
 # ---------------------------------------------------------------------------

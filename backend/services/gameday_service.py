@@ -36,6 +36,8 @@ COLTS_TEAM_ID = "11"
 SCHEDULE_CACHE_TTL = 900       # 15 min — spec §4.1 polling cadence
 POLL_INTERVAL_LIVE = 10        # 10s during in-progress
 POLL_INTERVAL_IDLE = 60        # 60s during pregame/final/no-game
+SCHEDULE_RETRY_BACKOFFS = (60, 120, 300)
+SUMMARY_RETRY_BACKOFFS = (10, 20, 30)
 PRE_KICKOFF_FLIP_MINUTES = 30
 PRE_GAME_AMBIENT_FLIP_MINUTES = 60  # T-60 silent visual build (GAMEDAY_SPEC §10.1)
 POST_GAME_CLEAR_MINUTES = 30
@@ -148,6 +150,17 @@ class GameDayStateTransition:
     timestamp: datetime
 
 
+@dataclass
+class ProviderLaneHealth:
+    """Failure and retry state for one ESPN request lane."""
+    status: Literal["unknown", "healthy", "unhealthy", "idle"] = "unknown"
+    last_success: Optional[datetime] = None
+    last_failure: Optional[datetime] = None
+    consecutive_failures: int = 0
+    last_error: Optional[str] = None
+    next_eligible_retry: float = 0.0
+
+
 PlayCallback = Callable[[PlayEvent], Awaitable[None]]
 TransitionCallback = Callable[[GameDayStateTransition], Awaitable[None]]
 
@@ -168,6 +181,8 @@ class GameDayService:
         # Schedule cache — list of normalized game dicts.
         self._schedule_cache: list[dict[str, Any]] = []
         self._schedule_cache_time: float = 0.0
+        self._schedule_provider = ProviderLaneHealth()
+        self._summary_provider = ProviderLaneHealth(status="idle")
 
         # Current game tracking.
         self._current_state: Optional[GameDayState] = None
@@ -192,8 +207,30 @@ class GameDayService:
 
     @property
     def connected(self) -> bool:
-        """True after the first successful schedule fetch."""
+        """True after Game Day has completed its non-blocking startup."""
         return self._connected
+
+    def provider_health(self) -> dict[str, Any]:
+        """Structured, read-only ESPN health snapshot for diagnostics."""
+        schedule = self._provider_lane_snapshot(self._schedule_provider)
+        summary = self._provider_lane_snapshot(self._summary_provider)
+        live_required = self._in_live_window()
+        schedule_required = (
+            bool(self._schedule_cache) or self._schedule_provider.last_success is not None
+        )
+        degraded = (
+            schedule_required and schedule["status"] == "unhealthy"
+        ) or (
+            live_required and summary["status"] == "unhealthy"
+        )
+        return {
+            "status": "unhealthy" if degraded else "healthy",
+            "degraded": degraded,
+            "schedule_required": schedule_required,
+            "live_summary_required": live_required,
+            "schedule": schedule,
+            "live_summary": summary,
+        }
 
     async def connect(self) -> None:
         """Warm the schedule cache. Tolerates failure — service still starts
@@ -205,8 +242,7 @@ class GameDayService:
                 "GameDayService connected — %d games cached",
                 len(self._schedule_cache),
             )
-        except Exception as exc:
-            logger.warning("GameDayService initial schedule fetch failed: %s", exc)
+        except Exception:
             # Mark connected anyway so the rest of the app boots; the poll
             # loop will keep retrying. Match weather_service's resilience.
             self._connected = True
@@ -318,14 +354,7 @@ class GameDayService:
             except Exception:
                 logger.exception("GameDayService tick failed")
 
-            interval = (
-                POLL_INTERVAL_LIVE
-                if (
-                    self._current_state is not None
-                    and self._current_state.status == "in-progress"
-                )
-                else POLL_INTERVAL_IDLE
-            )
+            interval = POLL_INTERVAL_LIVE if self._in_live_window() else POLL_INTERVAL_IDLE
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
@@ -347,7 +376,7 @@ class GameDayService:
         # _maybe_flip_gameday() takes priority — checked second so its
         # set_manual_override displaces the pregameday override within the
         # narrower window. Both are idempotent.
-        if active["status"] == STATUS_SCHEDULED:
+        if active["status"] == STATUS_SCHEDULED and active["kickoff_utc"] > now_utc:
             minutes_to_kickoff = (
                 active["kickoff_utc"] - now_utc
             ).total_seconds() / 60.0
@@ -362,6 +391,8 @@ class GameDayService:
             return
 
         # In-progress or final — fetch live data.
+        if time.time() < self._summary_provider.next_eligible_retry:
+            return
         summary = await self._fetch_summary(active["id"])
         if summary is None:
             return
@@ -421,17 +452,28 @@ class GameDayService:
     # ------------------------------------------------------------------ Schedule
 
     async def _refresh_schedule_if_stale(self) -> None:
-        if (time.time() - self._schedule_cache_time) >= SCHEDULE_CACHE_TTL:
+        now = time.time()
+        if (
+            (now - self._schedule_cache_time) >= SCHEDULE_CACHE_TTL
+            and now >= self._schedule_provider.next_eligible_retry
+        ):
             try:
                 await self._refresh_schedule()
-            except Exception as exc:
-                logger.warning("schedule refresh failed: %s", exc)
+            except Exception:
+                # _refresh_schedule already records and edge-logs the failure.
+                pass
 
     async def _refresh_schedule(self) -> None:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            resp = await client.get(SCHEDULE_URL)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                resp = await client.get(SCHEDULE_URL)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            self._record_provider_failure(
+                self._schedule_provider, exc, SCHEDULE_RETRY_BACKOFFS, "schedule"
+            )
+            raise
 
         events = data.get("events", []) or []
         normalized: list[dict[str, Any]] = []
@@ -442,6 +484,7 @@ class GameDayService:
 
         self._schedule_cache = normalized
         self._schedule_cache_time = time.time()
+        self._record_provider_success(self._schedule_provider, "schedule")
         logger.debug("schedule cache refreshed: %d games", len(normalized))
 
     @staticmethod
@@ -489,7 +532,7 @@ class GameDayService:
     def _find_active_game(self) -> Optional[dict[str, Any]]:
         """Return the most relevant Colts game right now: a live game if one
         exists, else the next scheduled game within 24h, else None."""
-        now_utc = datetime.now(timezone.utc)
+        now_utc = self._now_utc()
 
         # In-progress wins.
         for game in self._schedule_cache:
@@ -500,7 +543,7 @@ class GameDayService:
         upcoming = [
             g for g in self._schedule_cache
             if g["status"] == STATUS_SCHEDULED
-            and 0 <= (g["kickoff_utc"] - now_utc).total_seconds() <= 86400
+            and -4 * 3600 <= (g["kickoff_utc"] - now_utc).total_seconds() <= 86400
         ]
         if upcoming:
             upcoming.sort(key=lambda g: g["kickoff_utc"])
@@ -523,10 +566,79 @@ class GameDayService:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
                 resp = await client.get(SUMMARY_URL, params={"event": game_id})
                 resp.raise_for_status()
-                return resp.json()
+                summary = resp.json()
         except Exception as exc:
-            logger.warning("summary fetch %s failed: %s", game_id, exc)
+            self._record_provider_failure(
+                self._summary_provider, exc, SUMMARY_RETRY_BACKOFFS, "live summary"
+            )
             return None
+        self._record_provider_success(self._summary_provider, "live summary")
+        return summary
+
+    def _in_live_window(self) -> bool:
+        """Whether the loop must retain the fast live-summary recovery cadence."""
+        if self._current_state is not None and self._current_state.status == "in-progress":
+            return True
+        active = self._find_active_game()
+        if active is None:
+            return False
+        if active["status"] == STATUS_IN_PROGRESS:
+            return True
+        if active["status"] == STATUS_SCHEDULED:
+            age = (self._now_utc() - active["kickoff_utc"]).total_seconds()
+            return 0 <= age <= 4 * 3600
+        return False
+
+    @staticmethod
+    def _provider_lane_snapshot(lane: ProviderLaneHealth) -> dict[str, Any]:
+        return {
+            "status": lane.status,
+            "last_success": lane.last_success.isoformat() if lane.last_success else None,
+            "last_failure": lane.last_failure.isoformat() if lane.last_failure else None,
+            "consecutive_failures": lane.consecutive_failures,
+            "last_error": lane.last_error,
+            "next_eligible_retry": (
+                datetime.fromtimestamp(lane.next_eligible_retry, timezone.utc).isoformat()
+                if lane.next_eligible_retry else None
+            ),
+        }
+
+    def _record_provider_failure(
+        self,
+        lane: ProviderLaneHealth,
+        exc: Exception,
+        backoffs: tuple[int, ...],
+        lane_name: str,
+    ) -> None:
+        previous_failures = lane.consecutive_failures
+        previous_delay = (
+            backoffs[min(previous_failures - 1, len(backoffs) - 1)]
+            if previous_failures else None
+        )
+        lane.consecutive_failures += 1
+        delay = backoffs[min(lane.consecutive_failures - 1, len(backoffs) - 1)]
+        lane.status = "unhealthy"
+        lane.last_failure = datetime.now(timezone.utc)
+        lane.last_error = str(exc)[:200]
+        lane.next_eligible_retry = time.time() + delay
+        if previous_failures == 0:
+            logger.warning("ESPN %s provider failed; retrying in %ss: %s", lane_name, delay, exc)
+        elif delay != previous_delay:
+            logger.warning(
+                "ESPN %s provider failure escalated (%d consecutive); retrying in %ss",
+                lane_name, lane.consecutive_failures, delay,
+            )
+
+    @staticmethod
+    def _record_provider_success(lane: ProviderLaneHealth, lane_name: str) -> None:
+        recovered = lane.consecutive_failures > 0
+        lane.status = "healthy"
+        lane.last_success = datetime.now(timezone.utc)
+        lane.consecutive_failures = 0
+        lane.last_error = None
+        lane.next_eligible_retry = 0.0
+        if recovered:
+            logger.info("ESPN %s provider recovered", lane_name)
 
     def _build_state(
         self, summary: dict, schedule_meta: dict

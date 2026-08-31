@@ -6,6 +6,7 @@ on the dev machine. Tests verify response structure rather than exact values.
 """
 import pytest
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 from backend.main import app
 
@@ -45,6 +46,25 @@ class TestHealthEndpoint:
         assert fauxmo["status"] in {"disabled", "healthy", "unhealthy"}
         if not fauxmo["enabled"]:
             assert fauxmo["status"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_gameday_provider_health_is_reported_and_degrades(self):
+        from backend.api.routes.health import health_check
+
+        gameday = SimpleNamespace(provider_health=lambda: {
+            "status": "unhealthy",
+            "degraded": True,
+            "schedule": {"status": "unhealthy"},
+            "live_summary": {"status": "idle"},
+        })
+        request = SimpleNamespace(app=SimpleNamespace(
+            state=SimpleNamespace(gameday=gameday),
+        ))
+
+        response = await health_check(request)
+        assert response["status"] == "degraded"
+        assert response["gameday_provider"]["status"] == "unhealthy"
+        assert response["details"]["gameday_provider"] == "ESPN provider feed is unhealthy"
 
 
 class TestApiPing:
