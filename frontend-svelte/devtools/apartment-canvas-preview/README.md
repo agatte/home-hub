@@ -1,4 +1,6 @@
-# Apartment Canvas production preview
+#> **Visual-target update ? 2026-09-01:** #217 owns the premium cinematic Home renderer. This harness is a validation/comparison scaffold and must not be treated as the product aesthetic or quality ceiling.
+
+ Apartment Canvas validation/scaffold preview
 
 > **Authority update — 2026-08-30:** this harness preserves the pre-#192 static-render/projection baseline for visual comparison. GitHub #192 is now authoritative for physical-world size, placement, anchors, provenance, and evidence-backed corrections. The old GeometryScene fingerprint/XY guardrails below apply only to this preserved baseline; they must not veto an accepted #192 physical-model correction.
 

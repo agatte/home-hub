@@ -133,7 +133,9 @@ What matters:
 
 HomeHub adaptation:
 
-The apartment canvas can become HomeHub's living miniature world: a clean architectural or 2.5D/isometric diorama whose lights, occupied areas, devices, environment, and context subtly respond to real state.
+The apartment canvas becomes HomeHub's living miniature world: a premium cinematic digital twin whose lights, occupied areas, devices, environment, and context subtly respond to real state.
+
+**Accepted visual-target update ? 2026-09-01:** the living/cinematic apartment is now the Home direction, not merely an experiment. Architectural/whitebox/schematic renderers remain inspection and validation tools, not the Home quality target. #217 owns the first premium static Hero frame before broad Story/live-state polish.
 
 ### Relationship between the two references
 
@@ -172,9 +174,7 @@ Three treatments remain legitimate design explorations:
 2. **Living isometric/2.5D apartment diorama** — miniature spatial world with restrained depth and animation.
 3. **Technical systems/cutaway map** — more abstract node-and-system presentation.
 
-Current preference is to explore **the living isometric/2.5D diorama for Home** while retaining the architectural schematic as a serious alternative. The technical systems treatment is currently more compelling for Analytics than for Home.
-
-This is a preference, not yet a locked implementation requirement.
+The accepted Home direction is the **living cinematic apartment/digital twin**. Architectural schematic and whitebox views remain development/diagnostic surfaces rather than competing product aesthetics. The technical systems treatment remains more appropriate for Analytics than for Home.
 
 #### At-rest behavior
 

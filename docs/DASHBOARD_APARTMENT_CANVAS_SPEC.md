@@ -260,7 +260,7 @@ Alexa devices should be subtle ambient-system nodes rather than detailed miniatu
 
 ## Rendering density
 
-The canvas is an **architectural instrument**, not a Sims-like reconstruction.
+The canvas is an **architectural instrument**, not a generic Sims/CAD product. This is not a low-fidelity rendering requirement: the user-facing target is the premium cinematic digital twin defined by the design language and #217. Whitebox/scaffold rendering is validation infrastructure only.
 
 Model for recognition/state/interaction, not completeness:
 - furniture silhouettes should resemble the real anchors;
@@ -293,7 +293,7 @@ The current gate is **deterministic visual-model refinement under the accepted c
 
 Reject a candidate if wall treatment, z-height, extrusion, or occlusion makes the apartment spatially misleading even though the underlying x/y coordinates are correct.
 
-Only after the projected physical-world model is visually accepted should live lights, device state, ambient events, causality, or surrounding Home UI be layered in.
+After the projected physical-world model is accepted, #217 owns the next presentation gate: build and visually accept a cinematic Premium Hero renderer **before** broad Story/live-state polish. The beige/static preview remains a geometry/state validation scaffold. Only after Premium Hero acceptance should Director Board, live lights, device state, ambient events, causality, or surrounding Home UI be layered in.
 
 ## Still-open visual questions
 
