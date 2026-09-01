@@ -15,6 +15,8 @@ The Apartment Canvas is not intended to be a surveillance view or a device statu
 
 It is a cinematic representation of the home's current story.
 
+**Premium-render handoff ? 2026-09-01:** Director Board owns composition/story framing, not renderer quality. Whitebox/static previews may validate rigs, but production-facing camera acceptance must be rechecked on #217 Premium Render v1.
+
 The camera system should:
 
 - communicate how the home is being used

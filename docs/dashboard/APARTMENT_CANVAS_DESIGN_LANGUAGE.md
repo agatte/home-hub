@@ -24,6 +24,16 @@ Apartment Canvas should not feel like:
 - a sci-fi command center
 - an over-designed smart-home gimmick
 
+## Accepted Rendering Target ? 2026-09-01
+
+The accepted Home visual target is the **premium cinematic digital twin**, not the current beige/whitebox/static preview. That preview is development scaffolding for geometry, placement, camera, and state-contract validation.
+
+The production-facing apartment should read like a high-end architectural/product visualization of the actual home: dark or restrained surrounding world, materially rich recognizable rooms and furniture, warm practical lighting, soft shadows/contact depth, believable screens/glass/metal/fabric/wood, and cinematic composition. The apartment itself must be visually compelling before HomeHub context is layered around it.
+
+This is not a requirement for literal photorealism or generic asset-library excess. It **does** allow and encourage photoreal-quality materials, lighting, shadows, and renderer-only detail where they improve the believable cinematic twin.
+
+#217 owns Premium Render v1. Director Board and Story Layer semantics should be reattached/tuned on that renderer rather than treating the validation scaffold as their visual quality ceiling.
+
 ## Core Design Statement
 
 HomeHub presents the apartment as a living architectural experience: a faithful digital twin enhanced with cinematic materials, intentional lighting, and contextual intelligence. The experience should feel less like controlling a house and more like the house naturally adapting around its occupant.
@@ -128,7 +138,7 @@ This means:
 - slightly elevated decor/styling
 - more beautiful rendering than a literal raw copy of reality
 
-The final target is premium, cinematic, clean, warm, believable, and recognizable. It should feel closer to a premium architectural visualization or Apple product-demo environment than a rough 3D planner, while avoiding both sterile photorealism and overt stylization.
+The final target is premium, cinematic, clean, warm, believable, and recognizable. It should feel closer to a premium architectural visualization or Apple product-demo environment than a rough 3D planner. Avoid sterile literalism and overt stylization, but do **not** interpret that as a ban on photoreal-quality materials, lighting, shadows, or object detail when those improve the cinematic digital twin.
 
 ## Material Philosophy
 
