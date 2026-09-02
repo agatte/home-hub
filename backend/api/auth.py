@@ -127,6 +127,23 @@ async def require_api_key(
             )
 
 
+def is_direct_localhost(request: Request) -> bool:
+    """True only for a direct loopback caller, never tunnel-origin traffic."""
+    client_host = request.client.host if request.client else ""
+    is_tunnel = (
+        request.headers.get(TUNNEL_ORIGIN_HEADER, "").strip().lower()
+        == TUNNEL_ORIGIN_VALUE
+    )
+    return not is_tunnel and client_host in TRUSTED_LOCAL
+
+
+async def require_localhost(request: Request) -> None:
+    """Allow only a direct loopback caller; tunnel-origin loopback is rejected."""
+    if is_direct_localhost(request):
+        return
+    raise HTTPException(status_code=403, detail="Localhost only")
+
+
 async def require_api_key_strict(
     request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=HomeHub Return Home
+Comment=Restore HomeHub after taking the Latitude away
+Exec=/bin/bash -lc "$HOME/home-hub/scripts/homehub-hostctl.sh home"
+Icon=go-home
+Terminal=false
+Categories=Utility;
+StartupNotify=true

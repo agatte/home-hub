@@ -38,6 +38,13 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 # Move to repo root regardless of where this script was invoked from.
 cd "$(dirname "$0")/.."
 
+TRAVEL_MARKER="$HOME/.local/state/home-hub/travel-mode"
+if [[ -f "$TRAVEL_MARKER" ]]; then
+    echo "Travel Mode is active; refusing deploy/restart while this host is away." >&2
+    echo "Use HomeHub Return Home first." >&2
+    exit 3
+fi
+
 MARKER=".last-deployed-sha"
 
 # Read the last-deployed SHA from the marker file. Empty if missing or
@@ -66,6 +73,7 @@ RESTART_LATITUDE_STREAMING=0
 RESTART_TUNNEL=0
 INSTALL_KIOSK_RECYCLE=0
 INSTALL_AMBIENT_UNIT=0
+INSTALL_HOST_CONTROL=0
 REBUILD_FRONTEND=0
 
 if [[ -z "$LAST_DEPLOYED" ]]; then
@@ -84,6 +92,7 @@ if [[ -z "$LAST_DEPLOYED" ]]; then
     RESTART_TUNNEL=1
     INSTALL_KIOSK_RECYCLE=1
     INSTALL_AMBIENT_UNIT=1
+    INSTALL_HOST_CONTROL=1
 else
     echo "Deploying ${LAST_DEPLOYED:0:7} → ${NEW_HEAD:0:7}"
     echo
@@ -115,6 +124,10 @@ else
 
     if echo "$CHANGED" | grep -q "^deployment/home-hub-ambient\.service$"; then
         INSTALL_AMBIENT_UNIT=1
+    fi
+
+    if echo "$CHANGED" | grep -qE "^(scripts/homehub-hostctl\.sh|deployment/home-hub(-return\.desktop|\.service|-tunnel\.service|-latitude-streaming\.service|-ambient\.service|-kiosk-recycle\.(service|timer)))$"; then
+        INSTALL_HOST_CONTROL=1
     fi
 
     if echo "$CHANGED" | grep -qE "^(backend/|run\.py$)"; then
@@ -175,6 +188,13 @@ rollback() {
     if ! git reset --hard "$target"; then
         echo "✗ git reset --hard failed during rollback"
         return 1
+    fi
+
+    if [[ "$INSTALL_HOST_CONTROL" == "1" ]]; then
+        if ! install_host_control; then
+            echo "host-control asset sync failed during rollback"
+            return 1
+        fi
     fi
 
     if echo "$CHANGED" | grep -q "^deployment/home-hub-ambient\.service$"; then
@@ -251,6 +271,22 @@ restart_latitude_streaming() {
     fi
 }
 
+install_host_control() {
+    echo "→ Syncing HomeHub host-control assets..."
+    mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/share/applications"
+    for unit in home-hub.service home-hub-tunnel.service home-hub-latitude-streaming.service home-hub-ambient.service home-hub-kiosk-recycle.service home-hub-kiosk-recycle.timer; do
+        if [[ -f "deployment/$unit" ]]; then
+            cp "deployment/$unit" "$HOME/.config/systemd/user/$unit"
+        fi
+    done
+    if [[ -f deployment/home-hub-return.desktop ]]; then
+        cp deployment/home-hub-return.desktop "$HOME/.local/share/applications/home-hub-return.desktop"
+        chmod 0644 "$HOME/.local/share/applications/home-hub-return.desktop"
+    fi
+    chmod +x scripts/homehub-hostctl.sh
+    systemctl --user daemon-reload
+}
+
 install_ambient_unit() {
     if [[ ! -f deployment/home-hub-ambient.service ]]; then
         echo "  (ambient unit not present in this checkout; skipping)"
@@ -278,6 +314,9 @@ install_kiosk_recycle_timer() {
     systemctl --user enable --now home-hub-kiosk-recycle.timer
 }
 
+if [[ "$INSTALL_HOST_CONTROL" == "1" ]]; then
+    install_host_control
+fi
 if [[ "$INSTALL_AMBIENT_UNIT" == "1" ]]; then
     install_ambient_unit
 fi

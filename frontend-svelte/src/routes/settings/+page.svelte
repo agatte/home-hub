@@ -4,6 +4,7 @@
   import { goto } from '$app/navigation'
   import {
     Activity,
+    Laptop,
     Sliders,
     Moon,
     Calendar,
@@ -17,6 +18,7 @@
 
   import SettingsLayout from '$lib/components/settings/SettingsLayout.svelte'
   import OverviewSection from './sections/OverviewSection.svelte'
+  import HostSection from './sections/HostSection.svelte'
   import AutomationSection from './sections/AutomationSection.svelte'
   import DndSection from './sections/DndSection.svelte'
   import ScheduleSection from './sections/ScheduleSection.svelte'
@@ -29,6 +31,7 @@
 
   const SECTIONS = [
     { id: 'overview',   label: 'Overview',          icon: Activity },
+    { id: 'host',       label: 'Host / Travel',     icon: Laptop   },
     { id: 'automation', label: 'Automation',        icon: Sliders  },
     { id: 'dnd',        label: 'Do Not Disturb',    icon: Moon     },
     { id: 'schedule',   label: 'Schedule',          icon: Calendar },
@@ -81,6 +84,8 @@
 <SettingsLayout sections={SECTIONS} {activeId} onSelect={select}>
   {#if activeId === 'overview'}
     <OverviewSection />
+  {:else if activeId === 'host'}
+    <HostSection />
   {:else if activeId === 'automation'}
     <AutomationSection />
   {:else if activeId === 'dnd'}

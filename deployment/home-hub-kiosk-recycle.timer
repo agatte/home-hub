@@ -4,6 +4,7 @@
 # 04:00 ML nightly, and 04:00 loop relaunch window.
 
 [Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
 Description=Weekly Home Hub Firefox kiosk recycle
 
 [Timer]

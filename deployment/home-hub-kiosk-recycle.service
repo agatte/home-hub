@@ -13,6 +13,7 @@
 #   journalctl --user -u home-hub-kiosk-recycle.service
 
 [Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
 Description=Recycle Home Hub Firefox kiosk
 After=graphical-session.target
 

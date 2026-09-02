@@ -10,6 +10,7 @@
 #   journalctl --user -u home-hub.service -f
 
 [Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
 Description=Home Hub FastAPI Backend
 After=network-online.target
 Wants=network-online.target

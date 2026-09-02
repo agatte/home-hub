@@ -9,6 +9,7 @@
 #   systemctl --user enable home-hub-ambient.service
 
 [Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
 Description=Home Hub Ambient Noise Monitor
 After=home-hub.service
 Wants=home-hub.service

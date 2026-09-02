@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 
 from backend.api.routes.automation import router as automation_router
 from backend.api.routes.health import router as health_router
+from backend.api.routes.host import router as host_router
 from backend.api.routes.lights import router as lights_router
 from backend.api.routes.music import router as music_router
 from backend.api.routes.routines import router as routines_router
@@ -268,6 +269,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Routes
 app.include_router(health_router)
+app.include_router(host_router)
 app.include_router(lights_router)
 app.include_router(scenes_router)
 app.include_router(sonos_router)

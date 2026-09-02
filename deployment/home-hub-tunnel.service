@@ -19,6 +19,7 @@
 #   journalctl --user -u home-hub-tunnel.service -f
 
 [Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
 Description=Home Hub Cloudflare Tunnel Proxy
 # Wait until the main backend is ready — proxy returns 502 if upstream
 # isn't listening, but starting in order avoids a startup-race blip.

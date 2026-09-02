@@ -10,6 +10,7 @@
 #   systemctl --user start home-hub-latitude-streaming.service
 
 [Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
 Description=Home Hub Latitude Streaming Detector
 After=home-hub.service
 Wants=home-hub.service

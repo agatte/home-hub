@@ -15,6 +15,7 @@ import pytest
 from backend.services.pc_agent.supervisor import (
     HEARTBEAT_TIMEOUTS,
     AgentState,
+    AgentSupervisor,
     _accepts_kwarg,
     _agent_hung,
     _agent_status,
@@ -162,3 +163,32 @@ class TestWiredAgentsAcceptHeartbeat:
     def test_every_timeout_has_a_known_agent(self):
         # Guard against a timeout key with no corresponding agent mapping.
         assert set(HEARTBEAT_TIMEOUTS).issubset(self.AGENTS)
+
+
+def test_backend_health_outage_is_not_a_supervisor_hang(monkeypatch):
+    import httpx
+
+    now = 1000.0
+    state = _wired_state(last_progress_at=now - 2.0, timeout=60.0)
+    state.last_start = now - 120.0
+    supervisor = object.__new__(AgentSupervisor)
+    supervisor._server_url = "http://unreachable.invalid"
+    supervisor._agents = {"emotion_capture": state}
+    supervisor._start_time = now - 300.0
+    supervisor._process_identity = None
+    supervisor._active_now = lambda: now
+
+
+    class FailingClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+        def post(self, *_args, **_kwargs):
+            raise httpx.ConnectError("planned backend absence")
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: FailingClient())
+    supervisor._report_health()
+    assert state.restarts == 0
+    assert state.last_error is None
+    assert _agent_hung(state, now) is False
