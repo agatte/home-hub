@@ -13,6 +13,8 @@ from backend.services.away_manager import (
     AWAY_STATE_KEY,
     LEAVE_FADE_TRANSITIONTIME,
     AwayManager,
+    HomeReconciliationIndeterminate,
+    HomeReconciliationRejected,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -27,6 +29,8 @@ class FakeEngine:
 
     def __init__(self, *, mode="working", dnd=False, period="evening"):
         self._external_off_detected = False
+        self._away_hold = False
+        self._host_return_hold = False
         self._mode = mode
         self._dnd = dnd
         self._period = period
@@ -35,10 +39,29 @@ class FakeEngine:
         self.armed_by: list[str] = []
 
     async def _clear(self, source):
+        if self._host_return_hold:
+            return
         self._external_off_detected = False
+        self._away_hold = False
+
+    @property
+    def host_return_hold_active(self):
+        return self._host_return_hold
+
+    def arm_host_return_suppression(self, source: str) -> None:
+        self._host_return_hold = True
+        self._external_off_detected = True
+        self._away_hold = True
+
+    async def complete_host_return(self, source: str, *, release_away: bool):
+        self._host_return_hold = False
+        if release_away:
+            self._external_off_detected = False
+            self._away_hold = False
 
     def arm_away_suppression(self, source: str) -> None:
         self._external_off_detected = True
+        self._away_hold = True
         self.armed_by.append(source)
 
     @property
@@ -264,6 +287,118 @@ class TestRestore:
 
 
 # ---------------------------------------------------------------------------
+# Strict Latitude Return Home reconciliation
+# ---------------------------------------------------------------------------
+
+class TestHomeReconciliation:
+    async def test_prepare_holds_suppression_until_activation(self):
+        mgr, engine, settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "travel:kiosk")
+        engine.arm_host_return_suppression("host:returning-home")
+        prepared = await mgr.reconcile_home(
+            source="return_home:hostctl", reconciliation_id="return-1"
+        )
+        assert prepared["committed"] is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is False
+        assert engine._external_off_detected is True
+        assert engine._host_return_hold is True
+        activated = await mgr.activate_home_reconciliation(
+            source="return_home:hostctl", reconciliation_id="return-1"
+        )
+        assert activated["activated"] is True
+        assert activated["effects_required"] is True
+        assert engine._external_off_detected is False
+        assert engine._host_return_hold is False
+
+    async def test_same_id_retry_after_newer_leave_is_superseded(self):
+        mgr, engine, settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "travel:kiosk")
+        engine.arm_host_return_suppression("host:returning-home")
+        await mgr.reconcile_home(
+            source="return_home:hostctl", reconciliation_id="return-race"
+        )
+        await mgr.handle_event("leave", "ios_shortcut:newer-leave")
+        retry = await mgr.reconcile_home(
+            source="return_home:hostctl", reconciliation_id="return-race"
+        )
+        assert retry["superseded_by_away"] is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        activated = await mgr.activate_home_reconciliation(
+            source="return_home:hostctl", reconciliation_id="return-race"
+        )
+        assert activated["away"] is True
+        assert engine._away_hold is True
+        assert engine._host_return_hold is False
+
+    async def test_host_hold_defers_geofence_arrive(self):
+        mgr, engine, settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "travel:kiosk")
+        engine.arm_host_return_suppression("host:returning-home")
+        result = await mgr.handle_event("arrive", "ios_shortcut")
+        assert result["status"] == "deferred_returning_home"
+        assert mgr.away is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        assert engine._host_return_hold is True
+
+    async def test_write_exception_with_matching_readback_is_prepared(self):
+        mgr, engine, settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "travel:kiosk")
+        engine.arm_host_return_suppression("host:returning-home")
+        original_save = settings.save
+        async def commit_then_raise(key, value):
+            await original_save(key, value)
+            if value.get("away") is False:
+                raise RuntimeError("connection lost after commit")
+        mgr._save_setting = commit_then_raise
+        result = await mgr.reconcile_home(
+            source="return_home:hostctl", reconciliation_id="return-lost"
+        )
+        assert result["committed"] is True
+        assert engine._host_return_hold is True
+        assert engine._external_off_detected is True
+
+    async def test_persistence_failure_is_definitive(self):
+        mgr, engine, settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "travel:kiosk")
+        original_save = settings.save
+        async def fail_home(key, value):
+            if value.get("away") is False:
+                raise RuntimeError("sqlite commit failed")
+            await original_save(key, value)
+        mgr._save_setting = fail_home
+        with pytest.raises(HomeReconciliationRejected):
+            await mgr.reconcile_home(
+                source="return_home:hostctl", reconciliation_id="return-fail"
+            )
+        assert mgr.away is True
+        assert engine._away_hold is True
+
+    async def test_slow_arrival_effect_is_cancelled_by_newer_leave(self):
+        vibe = MagicMock()
+        vibe.apply_pending_arrival = AsyncMock(return_value=True)
+        mgr, engine, _settings, _hue, _sonos, tts, _notifier = _make_manager(
+            vibe_router=vibe,
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+        async def slow_reapply(*args, **kwargs):
+            started.set()
+            await release.wait()
+        engine.reapply_current_mode = AsyncMock(side_effect=slow_reapply)
+        effects = asyncio.create_task(
+            mgr.run_arrival_effects(source="return_home:hostctl", away_minutes=1)
+        )
+        await started.wait()
+        leave = asyncio.create_task(mgr.handle_event("leave", "ios_shortcut:newer"))
+        result = await asyncio.wait_for(leave, timeout=1)
+        assert result["away"] is True
+        await effects
+        vibe.apply_pending_arrival.assert_not_awaited()
+        tts.speak.assert_not_awaited()
+        release.set()
+
+
+# ---------------------------------------------------------------------------
 # Real engine hooks
 # ---------------------------------------------------------------------------
 
@@ -289,6 +424,18 @@ class TestEngineHooks:
         assert engine._external_off_detected is True
 
         await engine.signal_presence("geofence:test")
+        assert engine._external_off_detected is False
+        assert engine._away_hold is False
+
+    async def test_host_return_hold_ignores_generic_presence_until_host_release(self, engine):
+        engine.arm_host_return_suppression("host:returning-home")
+        await engine.signal_presence("camera:latitude")
+        assert engine.host_return_hold_active is True
+        assert engine._external_off_detected is True
+        assert engine._away_hold is True
+
+        await engine.complete_host_return("return_home:test", release_away=True)
+        assert engine.host_return_hold_active is False
         assert engine._external_off_detected is False
         assert engine._away_hold is False
 

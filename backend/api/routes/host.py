@@ -21,6 +21,9 @@ logger = logging.getLogger("home_hub.api.host")
 router = APIRouter(prefix="/api/host", tags=["host"])
 
 STATE_FILE = Path.home() / ".local" / "state" / "home-hub" / "travel-mode"
+RETURNING_HOME_STATE_FILE = (
+    Path.home() / ".local" / "state" / "home-hub" / "returning-home"
+)
 HOSTCTL = PROJECT_ROOT / "scripts" / "homehub-hostctl.sh"
 DNS_WARNING = (
     "Apartment DNS may still depend on the Latitude while #145 is open. "
@@ -29,16 +32,25 @@ DNS_WARNING = (
 
 
 def _status_payload(*, can_control: bool = False) -> dict:
-    marker = STATE_FILE.exists()
+    travel_marker = STATE_FILE.exists()
+    returning_home_marker = RETURNING_HOME_STATE_FILE.exists()
+    active_marker = RETURNING_HOME_STATE_FILE if returning_home_marker else STATE_FILE
     entered_at = None
-    if marker:
+    if returning_home_marker or travel_marker:
         try:
-            entered_at = STATE_FILE.read_text(encoding="utf-8").strip() or None
+            entered_at = active_marker.read_text(encoding="utf-8").strip() or None
         except OSError:
             entered_at = None
+    if returning_home_marker:
+        mode = "RETURNING_HOME"
+    elif travel_marker:
+        mode = "TRAVEL"
+    else:
+        mode = "HOME"
     return {
-        "mode": "TRAVEL" if marker else "HOME",
-        "travel_marker": marker,
+        "mode": mode,
+        "travel_marker": travel_marker,
+        "returning_home_marker": returning_home_marker,
         "entered_at": entered_at,
         "dns_warning": DNS_WARNING,
         "return_launcher": "HomeHub Return Home",
@@ -66,6 +78,11 @@ async def host_status(request: Request) -> dict:
 @router.post("/travel", dependencies=[Depends(require_localhost)])
 async def enter_travel(request: Request) -> dict:
     """Acknowledge Travel, then detach the actual host shutdown from FastAPI."""
+    if RETURNING_HOME_STATE_FILE.exists():
+        return {
+            "status": "already_returning_home",
+            **_status_payload(can_control=True),
+        }
     if STATE_FILE.exists():
         return {"status": "already_travel", **_status_payload(can_control=True)}
 

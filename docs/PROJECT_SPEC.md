@@ -64,6 +64,39 @@ user-facing state is `Home` with `General` activity and a deliberate
 general-home response. Initial, stale, or otherwise untrusted `idle` evidence
 must retain conservative behavior and must not relight the apartment overnight.
 
+### Portable host lifecycle
+
+**SHIPPED/CURRENT — hardened 2026-09-02.** Latitude portability is a host
+lifecycle authority above House State and Activity. Host state is `HOME`,
+`TRAVEL`, or the transitional `RETURNING_HOME`. `TRAVEL` persists via
+`~/.local/state/home-hub/travel-mode`; beginning Return Home atomically moves
+that authority to `returning-home` so the core backend may boot without ever
+advertising HOME prematurely.
+
+Return Home is a local two-phase transaction. Apartment-network presence is
+required unless explicitly forced. While `RETURNING_HOME`, backend bootstrap
+arms a host-owned suppression that generic camera, geofence, process, or manual
+presence cannot release. A localhost-only prepare endpoint durably writes a
+transaction-tagged Home while that hold remains armed. Same-transaction retries
+are fenced: a newer LEAVE is preserved as the winning occupancy event rather
+than being overwritten by an old Return Home retry.
+
+The durable `returning-home` marker carries the reconciliation identity, so an
+interrupted Return Home always retries the same transaction. After hostctl proves
+that transaction durably resolved, a localhost-only activation step releases the
+host hold while `RETURNING_HOME` is still published. If Home is still current it
+also releases Away suppression and may run best-effort arrival effects; if a
+newer LEAVE won, ordinary Away suppression remains authoritative. Only successful
+activation removes the marker and publishes `HOME`; dependent services are then
+restored. A definitive prepare failure restores `TRAVEL`; ambiguous prepare or
+activation remains `RETURNING_HOME` for retry. Post-publication service failures
+are degraded HOME and never roll the host back to TRAVEL. Tunnel, Latitude
+streaming, kiosk recycle, and kiosk restoration happen only after activation.
+Pre-travel Latitude fusion context is not resurrected;
+Latitude physical authority must be earned again from genuinely fresh post-return
+observations. `home-hub-ambient.service` remains parked, and deploy/restart
+tooling refuses both `TRAVEL` and `RETURNING_HOME`.
+
 ### Autonomy, trust, and interaction
 
 **SHIPPED/CURRENT.** Committed code contains confidence fusion, fixed

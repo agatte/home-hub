@@ -17,6 +17,8 @@ done
 
 STATE_DIR="$HOME/.local/state/home-hub"
 MARKER="$STATE_DIR/travel-mode"
+RETURNING_MARKER="$STATE_DIR/returning-home"
+RECONCILIATION_ID=""
 REPO="${HOME_HUB_ROOT:-$HOME/home-hub}"
 AUTOSTART="$HOME/.config/autostart/home-hub-kiosk.desktop"
 AUTOSTART_DISABLED="${AUTOSTART}.disabled"
@@ -93,6 +95,50 @@ write_marker() {
     mv "$tmp" "$MARKER"
 }
 
+begin_return_home() {
+    mkdir -p "$STATE_DIR"
+    if [[ -f "$RETURNING_MARKER" ]]; then
+        # Resume an interrupted transaction. A stale Travel marker would keep
+        # the core blocked, while RETURNING_HOME already preserves safe status.
+        rm -f "$MARKER"
+        return
+    fi
+    if [[ -f "$MARKER" ]]; then
+        # Same-filesystem rename: there is no crash-persistent markerless state.
+        mv "$MARKER" "$RETURNING_MARKER"
+        return
+    fi
+    local tmp="$RETURNING_MARKER.tmp.$$"
+    printf '%s source=local-hostctl\n' "$(date --iso-8601=seconds)" > "$tmp"
+    mv "$tmp" "$RETURNING_MARKER"
+}
+
+ensure_reconciliation_id() {
+    RECONCILIATION_ID="$(sed -n 's/.*reconciliation_id=\([A-Za-z0-9._:-]*\).*/\1/p' "$RETURNING_MARKER" | head -n 1)"
+    if [[ -n "$RECONCILIATION_ID" ]]; then
+        return 0
+    fi
+    RECONCILIATION_ID="return-$(date +%s)-$$"
+    local tmp="$RETURNING_MARKER.id.$$"
+    awk -v id="$RECONCILIATION_ID" '
+        NR == 1 { print $0 " reconciliation_id=" id; next }
+        { print }
+    ' "$RETURNING_MARKER" > "$tmp"
+    mv "$tmp" "$RETURNING_MARKER"
+}
+
+rollback_return_home() {
+    if [[ -f "$RETURNING_MARKER" ]]; then
+        local tmp="$RETURNING_MARKER.rollback.$$"
+        sed -E 's/[[:space:]]+reconciliation_id=[^[:space:]]+//' "$RETURNING_MARKER" > "$tmp"
+        mv "$tmp" "$RETURNING_MARKER"
+        mv "$RETURNING_MARKER" "$MARKER"
+    elif [[ ! -f "$MARKER" ]]; then
+        write_marker
+    fi
+    stop_disable_if_known "$CORE_SERVICE" || true
+}
+
 wait_for_backend() {
     for _ in $(seq 1 30); do
         if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
@@ -103,11 +149,72 @@ wait_for_backend() {
     return 1
 }
 
+reconcile_home_authority() {
+    local response_file
+    response_file="$(mktemp "${TMPDIR:-/tmp}/home-hub-reconcile.XXXXXX")" || return 11
+    local payload="{\"reconciliation_id\":\"$RECONCILIATION_ID\"}"
+    local http_code=""
+
+    for _ in $(seq 1 3); do
+        http_code=""
+        if http_code="$(curl -sS -o "$response_file" -w '%{http_code}' \
+            --connect-timeout 2 --max-time 5 \
+            -H 'Content-Type: application/json' \
+            -H 'X-Source: return_home:hostctl' \
+            -X POST http://localhost:8000/api/presence/reconcile-home \
+            --data "$payload")"; then
+            if [[ "$http_code" == "200" ]]; then
+                rm -f "$response_file"
+                return 0
+            fi
+            if [[ "$http_code" == "409" ]]; then
+                rm -f "$response_file"
+                return 10
+            fi
+        fi
+        sleep 1
+    done
+
+    # A disconnect may happen after SQLite committed. Resolve only positive,
+    # transaction-tagged proof; every other result remains indeterminate.
+    http_code=""
+    if http_code="$(curl -sS -o "$response_file" -w '%{http_code}' \
+        --connect-timeout 2 --max-time 5 \
+        "http://localhost:8000/api/presence/reconcile-home/$RECONCILIATION_ID")" \
+        && [[ "$http_code" == "200" ]]; then
+        rm -f "$response_file"
+        return 0
+    fi
+    rm -f "$response_file"
+    return 11
+}
+
+activate_home_authority() {
+    local response_file
+    response_file="$(mktemp "${TMPDIR:-/tmp}/home-hub-activate.XXXXXX")" || return 1
+    local http_code=""
+    for _ in $(seq 1 3); do
+        http_code=""
+        if http_code="$(curl -sS -o "$response_file" -w '%{http_code}' \
+            --connect-timeout 2 --max-time 5 \
+            -H 'X-Source: return_home:hostctl' \
+            -X POST "http://localhost:8000/api/presence/reconcile-home/$RECONCILIATION_ID/activate")" \
+            && [[ "$http_code" == "200" ]]; then
+            rm -f "$response_file"
+            return 0
+        fi
+        sleep 1
+    done
+    rm -f "$response_file"
+    return 1
+}
+
 enter_travel() {
     if [[ "$DELAY_SECONDS" != "0" ]]; then
         sleep "$DELAY_SECONDS"
     fi
     write_marker
+    rm -f "$RETURNING_MARKER"
     install_return_launcher
 
     local degraded=()
@@ -136,21 +243,44 @@ return_home() {
         exit 3
     fi
 
-    local prior_marker=""
-    prior_marker="$(cat "$MARKER" 2>/dev/null || true)"
-    rm -f "$MARKER"
+    begin_return_home
+    ensure_reconciliation_id
     if ! enable_start_if_known "$CORE_SERVICE" || ! wait_for_backend; then
-        mkdir -p "$STATE_DIR"
-        if [[ -n "$prior_marker" ]]; then
-            printf '%s\n' "$prior_marker" > "$MARKER"
-        else
-            write_marker
-        fi
-        stop_disable_if_known "$CORE_SERVICE"
+        rollback_return_home
         notify "Return Home failed; Travel Mode remains armed."
         echo "Backend failed to become healthy; Travel Mode remains armed." >&2
         exit 1
     fi
+
+    local reconcile_rc=0
+    if reconcile_home_authority; then
+        reconcile_rc=0
+    else
+        reconcile_rc=$?
+    fi
+    if [[ "$reconcile_rc" == "10" ]]; then
+        rollback_return_home
+        notify "Return Home rejected; Travel Mode remains armed."
+        echo "Home occupancy did not commit; Travel Mode remains armed." >&2
+        exit 1
+    fi
+    if [[ "$reconcile_rc" != "0" ]]; then
+        notify "Return Home is indeterminate; retry while at home."
+        echo "Home occupancy outcome is indeterminate; mode remains RETURNING_HOME." >&2
+        exit 2
+    fi
+
+    # Activate while RETURNING_HOME is still durable. Any interruption before
+    # marker removal therefore remains conservative and is safely retryable.
+    if ! activate_home_authority; then
+        notify "Return Home activation is indeterminate; retry while at home."
+        echo "Occupancy activation is indeterminate; mode remains RETURNING_HOME." >&2
+        exit 2
+    fi
+
+    # Activation succeeded for the same durable transaction. Publishing HOME is
+    # now a single marker removal; dependent units remain held until after it.
+    rm -f "$RETURNING_MARKER"
 
     local degraded=()
     for unit in "${RETURN_UNITS[@]}"; do
@@ -170,7 +300,10 @@ return_home() {
 }
 
 show_status() {
-    if [[ -f "$MARKER" ]]; then
+    if [[ -f "$RETURNING_MARKER" ]]; then
+        echo "HomeHub host mode: RETURNING_HOME"
+        cat "$RETURNING_MARKER"
+    elif [[ -f "$MARKER" ]]; then
         echo "HomeHub host mode: TRAVEL"
         cat "$MARKER"
     else

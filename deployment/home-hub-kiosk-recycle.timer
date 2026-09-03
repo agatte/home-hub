@@ -5,6 +5,7 @@
 
 [Unit]
 ConditionPathExists=!%h/.local/state/home-hub/travel-mode
+ConditionPathExists=!%h/.local/state/home-hub/returning-home
 Description=Weekly Home Hub Firefox kiosk recycle
 
 [Timer]

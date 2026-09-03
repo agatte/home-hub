@@ -11,6 +11,7 @@
 
 [Unit]
 ConditionPathExists=!%h/.local/state/home-hub/travel-mode
+ConditionPathExists=!%h/.local/state/home-hub/returning-home
 Description=Home Hub Latitude Streaming Detector
 After=home-hub.service
 Wants=home-hub.service

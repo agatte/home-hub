@@ -39,9 +39,15 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 cd "$(dirname "$0")/.."
 
 TRAVEL_MARKER="$HOME/.local/state/home-hub/travel-mode"
+RETURNING_HOME_MARKER="$HOME/.local/state/home-hub/returning-home"
 if [[ -f "$TRAVEL_MARKER" ]]; then
     echo "Travel Mode is active; refusing deploy/restart while this host is away." >&2
     echo "Use HomeHub Return Home first." >&2
+    exit 3
+fi
+if [[ -f "$RETURNING_HOME_MARKER" ]]; then
+    echo "Return Home is still reconciling; refusing deploy/restart in RETURNING_HOME." >&2
+    echo "Finish or retry HomeHub Return Home first." >&2
     exit 3
 fi
 

@@ -69,10 +69,16 @@ priority semantics are historical only.
 - Physical room evidence outranks software activity guesses. Latitude person authority is YOLO-gated; Couch requires supporting trusted localization after a real person is confirmed. Desktop may source current `zone=desk` or `zone=bed`; #80 reconciles only dormant Latitude-era bed+posture assumptions. Watching requires credible current media
   playback/viewing intent, not an open browser, streaming site, or media
   process alone.
-- Travel Mode (#149) is a persistent HOME/TRAVEL **host state** above ordinary
-  activity modes. It survives reboot/login, requires fresh post-return physical
-  evidence, and coordinates planned backend absence with the Windows desktop-
-  agent lifecycle. It does not replace #145's always-home-host/DNS work.
+- Travel Mode (#149) is a persistent HOME/TRAVEL/RETURNING_HOME **host
+  lifecycle** above ordinary activity modes. `RETURNING_HOME` is durable
+  transitional authority: Home is exposed only after durable occupancy preparation
+  is resolved; a host-only hold then releases during activation, while a newer LEAVE
+  remains authoritative. Ambiguous prepare outcomes stay transitional and retryable.
+  The lifecycle survives reboot/login, uses apartment-network presence only as a
+  sanity check with explicit local override, and requires genuinely fresh
+  post-return physical evidence before Latitude authority is regained. It also
+  coordinates planned backend absence with the Windows desktop-agent lifecycle
+  and does not replace #145's always-home-host/DNS work.
 - Winding Down (#138) is not proof of sleep; Sleeping remains separate. Mood
   Context (#133) is temporary and explicit-first, superseding broad automatic
   multi-day personality/mood drift.

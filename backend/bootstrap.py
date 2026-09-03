@@ -18,6 +18,7 @@ import logging
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -968,6 +969,17 @@ async def lifespan(app: FastAPI):
         vibe_router_getter=lambda: getattr(app.state, "vibe_router", None),
     )
     await away_manager.load_state()
+    returning_home_marker = (
+        Path.home() / ".local" / "state" / "home-hub" / "returning-home"
+    )
+    if returning_home_marker.exists():
+        # The host layer is intentionally transitional. Even if persisted
+        # occupancy was stale Home, core startup must not actuate until the
+        # strict Return Home reconciliation proves durable/runtime agreement.
+        automation.arm_host_return_suppression("host:returning-home")
+        app_logger.info(
+            "RETURNING_HOME marker present at boot — automation suppression held"
+        )
     app.state.away_manager = away_manager
 
     # VibeRouter — GH#107 NL layer. iOS Shortcut/Alexa text commands are

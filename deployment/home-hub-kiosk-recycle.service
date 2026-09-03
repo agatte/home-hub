@@ -14,6 +14,7 @@
 
 [Unit]
 ConditionPathExists=!%h/.local/state/home-hub/travel-mode
+ConditionPathExists=!%h/.local/state/home-hub/returning-home
 Description=Recycle Home Hub Firefox kiosk
 After=graphical-session.target
 

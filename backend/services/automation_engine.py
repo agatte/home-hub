@@ -542,6 +542,10 @@ class AutomationEngine:
         # detecting the Hue app's all-off) never sets this, preserving
         # its original "any non-idle activity resumes" semantics.
         self._away_hold: bool = False
+        # Host-owned suppression used only while the portable Latitude is
+        # RETURNING_HOME. Generic camera/geofence/manual presence must not
+        # release this; only the strict host reconciliation handoff may.
+        self._host_return_hold: bool = False
         # Compatibility latch for the decided Home + General model. False at
         # boot so stale/initial idle remains conservative overnight. Explicit
         # Sleeping → Auto confirms a human wake and sets this until a real
@@ -1677,6 +1681,12 @@ class AutomationEngine:
                 "geofence:<src>"; "audio" if/when the parked
                 Latitude-mic path ships).
         """
+        if self._host_return_hold:
+            logger.info(
+                "Presence signal from %s ignored while host RETURNING_HOME hold is active",
+                source,
+            )
+            return
         if not self._external_off_detected and not self._away_hold:
             return
         self._away_hold = False
@@ -1685,6 +1695,31 @@ class AutomationEngine:
             "Presence signal from %s — clearing external-off suppression "
             "so automation can resume",
             source,
+        )
+
+    @property
+    def host_return_hold_active(self) -> bool:
+        return self._host_return_hold
+
+    def arm_host_return_suppression(self, source: str) -> None:
+        """Hold automation until the host Return Home transaction publishes HOME."""
+        self._host_return_hold = True
+        self._external_off_detected = True
+        self._away_hold = True
+        self._home_awake_confirmed = False
+        self._invalidate_dedup_cache()
+        self._invalidate_external_light_owners("host_return")
+        logger.info("Host RETURNING_HOME suppression armed by %s", source)
+
+    async def complete_host_return(self, source: str, *, release_away: bool) -> None:
+        """Release host ownership; optionally release ordinary Away suppression too."""
+        self._host_return_hold = False
+        if release_away:
+            self._away_hold = False
+            self._external_off_detected = False
+        logger.info(
+            "Host RETURNING_HOME suppression released by %s (release_away=%s)",
+            source, release_away,
         )
 
     def arm_away_suppression(self, source: str) -> None:

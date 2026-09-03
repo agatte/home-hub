@@ -53,7 +53,11 @@
 >
   <div class="host-card">
     <div class="host-status">
-      <span class="status-dot" class:travel={status?.mode === 'TRAVEL'}></span>
+      <span
+        class="status-dot"
+        class:travel={status?.mode === 'TRAVEL'}
+        class:returning={status?.mode === 'RETURNING_HOME'}
+      ></span>
       <div class="status-meta">
         <span class="status-headline">
           {loading ? 'Checking host…' : `Host mode: ${status?.mode ?? 'UNKNOWN'}`}
@@ -61,7 +65,9 @@
         <span class="status-sub">
           {status?.mode === 'TRAVEL'
             ? 'Apartment-specific Latitude services are intentionally suppressed.'
-            : 'HomeHub is running as the apartment host.'}
+            : status?.mode === 'RETURNING_HOME'
+              ? 'Core HomeHub is reconciling occupancy; tunnel, streaming, and kiosk remain held.'
+              : 'HomeHub is running as the apartment host.'}
         </span>
       </div>
     </div>
@@ -73,7 +79,7 @@
 
     {#if armedMessage}
       <div class="armed-message">{armedMessage}</div>
-    {:else if status?.mode !== 'TRAVEL'}
+    {:else if status?.mode === 'HOME'}
       <div class="action-row">
         <SettingButton variant="danger" loading={arming} disabled={status?.can_control === false} on:click={enterTravel}>
           {arming ? 'Arming Travel…' : 'Enter Travel Mode'}
@@ -86,6 +92,11 @@
           The button acknowledges first, then stops HomeHub and the kiosk. Return with the Ubuntu app
           <strong>HomeHub Return Home</strong> after reconnecting to the apartment Wi-Fi.
         {/if}
+      </p>
+    {:else if status?.mode === 'RETURNING_HOME'}
+      <p class="hint">
+        Return Home has not committed yet. Re-run <strong>HomeHub Return Home</strong> from Ubuntu;
+        apartment services stay held until occupancy reconciliation succeeds.
       </p>
     {/if}
 
@@ -110,6 +121,9 @@
   }
   .status-dot.travel {
     background: #f59e0b; box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
+  }
+  .status-dot.returning {
+    background: #38bdf8; box-shadow: 0 0 10px rgba(56, 189, 248, 0.42);
   }
   .status-meta { display: flex; flex-direction: column; gap: 3px; }
   .status-headline { color: var(--text-primary); font-size: 14px; font-weight: 600; }

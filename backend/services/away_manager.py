@@ -31,6 +31,7 @@ silently resume autonomous control of an empty apartment.
 Idempotent in both directions: iOS geofence automations can re-fire on
 region jitter; a duplicate leave/arrive is a no-op (changed=False).
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -51,6 +52,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Pause Sonos on leave when something is actually playing.
     "pause_music_on_leave": True,
 }
+
+
+class HomeReconciliationError(RuntimeError):
+    """Base error for the strict Return Home reconciliation contract."""
+
+
+class HomeReconciliationRejected(HomeReconciliationError):
+    """The Home write definitely did not commit and Travel can be restored."""
+
+
+class HomeReconciliationIndeterminate(HomeReconciliationError):
+    """The Home outcome is mixed or cannot be proved; keep RETURNING_HOME."""
 
 
 class AwayManager:
@@ -80,6 +93,10 @@ class AwayManager:
         self._away: bool = False
         self._since: Optional[datetime] = None
         self._last_event_source: Optional[str] = None
+        self._last_home_reconciliation_id: Optional[str] = None
+        self._pending_home_effects: dict[str, tuple[bool, Optional[int]]] = {}
+        self._arrival_effect_tasks: set[asyncio.Task] = set()
+        self._event_lock = asyncio.Lock()
 
     # ── State surface ───────────────────────────────────────────────────
 
@@ -104,6 +121,9 @@ class AwayManager:
             "suppression_hold": bool(
                 getattr(self._engine, "_away_hold", False)
             ),
+            "host_return_hold": bool(
+                getattr(self._engine, "host_return_hold_active", False)
+            ),
         }
 
     async def load_state(self) -> None:
@@ -118,7 +138,10 @@ class AwayManager:
         except Exception as e:
             logger.error("Failed to load away state: %s", e, exc_info=True)
             return
-        if not saved or not saved.get("away"):
+        if not saved:
+            return
+        self._last_home_reconciliation_id = saved.get("home_reconciliation_id")
+        if not saved.get("away"):
             return
         self._away = True
         self._last_event_source = saved.get("source")
@@ -134,19 +157,206 @@ class AwayManager:
             "suppression re-armed", since_str,
         )
 
-    async def _persist(self) -> None:
+    def _state_payload(
+        self,
+        *,
+        away: Optional[bool] = None,
+        source: Optional[str] = None,
+        reconciliation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        effective_away = self._away if away is None else away
+        effective_since = self._since if effective_away else None
+        effective_source = self._last_event_source if source is None else source
+        effective_reconciliation_id = (
+            self._last_home_reconciliation_id
+            if reconciliation_id is None else reconciliation_id
+        )
         payload = {
-            "away": self._away,
+            "away": effective_away,
             "since_utc": (
-                self._since.astimezone(timezone.utc).isoformat()
-                if self._since else None
+                effective_since.astimezone(timezone.utc).isoformat()
+                if effective_since else None
             ),
-            "source": self._last_event_source,
+            "source": effective_source,
         }
+        if effective_reconciliation_id is not None:
+            payload["home_reconciliation_id"] = effective_reconciliation_id
+        return payload
+
+    async def _persist(self) -> None:
+        payload = self._state_payload()
         try:
             await self._save_setting(AWAY_STATE_KEY, payload)
         except Exception as e:
             logger.error("Failed to persist away state: %s", e, exc_info=True)
+
+    async def _persist_home_strict(
+        self, *, source: str, reconciliation_id: str,
+    ) -> None:
+        payload = self._state_payload(
+            away=False, source=source, reconciliation_id=reconciliation_id,
+        )
+        save_error: Optional[Exception] = None
+        try:
+            await self._save_setting(AWAY_STATE_KEY, payload)
+            return
+        except Exception as exc:
+            save_error = exc
+            logger.error(
+                "Strict Home persistence raised for reconciliation %s: %s",
+                reconciliation_id, exc, exc_info=True,
+            )
+        try:
+            saved = await self._load_setting(AWAY_STATE_KEY)
+        except Exception as load_exc:
+            raise HomeReconciliationIndeterminate(
+                "Home write failed and persisted state could not be read back"
+            ) from load_exc
+        if (
+            isinstance(saved, dict)
+            and saved.get("away") is False
+            and saved.get("home_reconciliation_id") == reconciliation_id
+        ):
+            logger.warning(
+                "Home reconciliation %s committed despite a write-path exception",
+                reconciliation_id,
+            )
+            return
+        if not saved or (isinstance(saved, dict) and saved.get("away") is True):
+            raise HomeReconciliationRejected(
+                "Home state did not persist; Away remains authoritative"
+            ) from save_error
+        raise HomeReconciliationIndeterminate(
+            "Home write failed and read-back did not match this reconciliation"
+        ) from save_error
+
+    async def reconciliation_status(self, reconciliation_id: str) -> dict[str, Any]:
+        try:
+            saved = await self._load_setting(AWAY_STATE_KEY)
+        except Exception as exc:
+            raise HomeReconciliationIndeterminate(
+                "Persisted away state could not be read"
+            ) from exc
+        same_transaction = (
+            isinstance(saved, dict)
+            and saved.get("home_reconciliation_id") == reconciliation_id
+        )
+        persisted_home = same_transaction and saved.get("away") is False
+        superseded_by_away = same_transaction and saved.get("away") is True
+        resolved = bool(persisted_home or superseded_by_away)
+        runtime = self.status()
+        return {
+            "outcome": (
+                "prepared_home" if persisted_home
+                else "superseded_by_away" if superseded_by_away
+                else "unresolved"
+            ),
+            "resolved": resolved,
+            "committed": persisted_home,
+            "superseded_by_away": superseded_by_away,
+            "reconciliation_id": reconciliation_id,
+            "persisted_home": persisted_home,
+            "away": runtime["away"],
+            "suppression_armed": runtime["suppression_armed"],
+            "suppression_hold": runtime["suppression_hold"],
+            "host_return_hold": runtime["host_return_hold"],
+        }
+
+    async def reconcile_home(
+        self, *, source: str, reconciliation_id: str,
+    ) -> dict[str, Any]:
+        """Prepare durable Home while the host-owned RETURNING_HOME hold remains."""
+        async with self._event_lock:
+            try:
+                saved = await self._load_setting(AWAY_STATE_KEY)
+            except Exception as exc:
+                raise HomeReconciliationIndeterminate(
+                    "Persisted away state could not be read before reconciliation"
+                ) from exc
+            if (
+                isinstance(saved, dict)
+                and saved.get("home_reconciliation_id") == reconciliation_id
+            ):
+                if saved.get("away") is True:
+                    return await self.reconciliation_status(reconciliation_id)
+                self._away = False
+                self._since = None
+                self._last_event_source = saved.get("source") or source
+                self._last_home_reconciliation_id = reconciliation_id
+                return await self.reconciliation_status(reconciliation_id)
+            was_away = self._away
+            away_minutes = None
+            if self._since is not None:
+                away_minutes = int(
+                    (datetime.now(timezone.utc) - self._since).total_seconds() // 60
+                )
+            try:
+                await self._persist_home_strict(
+                    source=source, reconciliation_id=reconciliation_id,
+                )
+            except HomeReconciliationRejected:
+                self._away = True
+                self._engine.arm_away_suppression(
+                    f"home_reconciliation_failed:{source}"
+                )
+                raise
+            self._away = False
+            self._since = None
+            self._last_event_source = source
+            self._last_home_reconciliation_id = reconciliation_id
+            self._pending_home_effects[reconciliation_id] = (was_away, away_minutes)
+            proof = await self.reconciliation_status(reconciliation_id)
+            if not proof["resolved"]:
+                raise HomeReconciliationIndeterminate(
+                    "Home reconciliation could not prove durable preparation"
+                )
+            logger.info(
+                "HOME prepared (source=%s, transaction=%s)", source, reconciliation_id,
+            )
+            return proof
+
+    async def activate_home_reconciliation(
+        self, *, source: str, reconciliation_id: str,
+    ) -> dict[str, Any]:
+        """Release only the host-owned hold after hostctl has published HOME."""
+        async with self._event_lock:
+            proof = await self.reconciliation_status(reconciliation_id)
+            if not proof["resolved"]:
+                raise HomeReconciliationRejected(
+                    "Home reconciliation is not durably resolved"
+                )
+            superseded = bool(proof["superseded_by_away"] or self._away)
+            await self._engine.complete_host_return(
+                f"home_reconciliation:{source}",
+                release_away=not superseded,
+            )
+            changed, away_minutes = self._pending_home_effects.pop(
+                reconciliation_id, (False, None)
+            )
+            runtime = self.status()
+            if runtime["host_return_hold"]:
+                raise HomeReconciliationIndeterminate(
+                    "Host Return Home hold did not release"
+                )
+            if not superseded and (
+                runtime["away"]
+                or runtime["suppression_armed"]
+                or runtime["suppression_hold"]
+            ):
+                raise HomeReconciliationIndeterminate(
+                    "Prepared Home could not release Away suppression"
+                )
+            return {
+                **proof,
+                "activated": True,
+                "changed": changed and not superseded,
+                "effects_required": changed and not superseded,
+                "away_minutes": away_minutes,
+                "away": runtime["away"],
+                "suppression_armed": runtime["suppression_armed"],
+                "suppression_hold": runtime["suppression_hold"],
+                "host_return_hold": runtime["host_return_hold"],
+            }
 
     async def _config(self) -> dict[str, Any]:
         try:
@@ -161,33 +371,42 @@ class AwayManager:
     # ── Event entry point ───────────────────────────────────────────────
 
     async def handle_event(self, event: str, source: str) -> dict[str, Any]:
-        """Process a geofence event. ``event`` ∈ {"leave", "arrive"}.
-
-        Idempotent: a repeat of the current state returns changed=False
-        and performs no actuation (iOS automations re-fire on region
-        jitter; the apartment shouldn't strobe on a GPS wobble).
-        """
-        if event == "leave":
-            if self._away:
-                logger.info("Geofence leave (source=%s) — already away, no-op", source)
-                return {"status": "ok", "away": True, "changed": False}
-            await self._on_leave(source)
-            return {"status": "ok", "away": True, "changed": True}
-        if event == "arrive":
-            # Always release suppression (idempotent) — even if state was
-            # lost, an arrive must never leave the apartment suppressed.
-            await self._engine.signal_presence(f"geofence:{source}")
-            if not self._away:
-                logger.info("Geofence arrive (source=%s) — already home, no-op", source)
-                return {"status": "ok", "away": False, "changed": False}
-            await self._on_arrive(source)
-            return {"status": "ok", "away": False, "changed": True}
-        return {"status": "error", "detail": f"unknown event: {event!r}"}
+        """Process a geofence event. ``event`` ∈ {"leave", "arrive"}."""
+        arrival_minutes: Optional[int] = None
+        async with self._event_lock:
+            if event == "leave":
+                if self._away:
+                    return {"status": "ok", "away": True, "changed": False}
+                await self._on_leave(source)
+                return {"status": "ok", "away": True, "changed": True}
+            if event == "arrive":
+                if getattr(self._engine, "host_return_hold_active", False):
+                    logger.info(
+                        "Geofence arrive deferred while host is RETURNING_HOME (source=%s)",
+                        source,
+                    )
+                    return {
+                        "status": "deferred_returning_home",
+                        "away": self._away,
+                        "changed": False,
+                    }
+                await self._engine.signal_presence(f"geofence:{source}")
+                if not self._away:
+                    return {"status": "ok", "away": False, "changed": False}
+                arrival_minutes = await self._on_arrive(source)
+            else:
+                return {"status": "error", "detail": f"unknown event: {event!r}"}
+        await self.run_arrival_effects(source=source, away_minutes=arrival_minutes)
+        return {"status": "ok", "away": False, "changed": True}
 
     # ── Leave ───────────────────────────────────────────────────────────
 
     async def _on_leave(self, source: str) -> None:
         self._away = True
+        current = asyncio.current_task()
+        for task in list(self._arrival_effect_tasks):
+            if task is not current and not task.done():
+                task.cancel()
         self._since = datetime.now(timezone.utc)
         self._last_event_source = source
         await self._persist()
@@ -235,7 +454,7 @@ class AwayManager:
 
     # ── Arrive ──────────────────────────────────────────────────────────
 
-    async def _on_arrive(self, source: str) -> None:
+    async def _on_arrive(self, source: str) -> Optional[int]:
         away_minutes = None
         if self._since is not None:
             away_minutes = int(
@@ -249,16 +468,52 @@ class AwayManager:
             "ARRIVE (source=%s, away %s min) — welcome-home sequence",
             source, away_minutes if away_minutes is not None else "?",
         )
+        return away_minutes
 
-        # Suppression was already released in handle_event (idempotent
-        # signal_presence). Re-apply the current effective mode with a
-        # forced resend: the dedup cache still holds pre-departure values
-        # while the bridge is actually dark, so an un-forced apply would
-        # dedup-skip and leave the lights off.
+    async def run_arrival_effects(
+        self,
+        *,
+        source: str,
+        away_minutes: Optional[int],
+    ) -> None:
+        """Run best-effort welcome effects; a newer LEAVE cancels this task."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._arrival_effect_tasks.add(task)
+        try:
+            if self._away:
+                logger.info(
+                    "ARRIVE effects skipped (source=%s) — apartment is Away again",
+                    source,
+                )
+                return
+            await self._run_arrival_effects_unlocked(
+                source=source,
+                away_minutes=away_minutes,
+            )
+        except asyncio.CancelledError:
+            logger.info(
+                "ARRIVE effects cancelled by newer occupancy event (source=%s)",
+                source,
+            )
+            return
+        finally:
+            if task is not None:
+                self._arrival_effect_tasks.discard(task)
+
+    async def _run_arrival_effects_unlocked(
+        self,
+        *,
+        source: str,
+        away_minutes: Optional[int],
+    ) -> None:
+        """Run welcome effects without owning the occupancy event lock."""
         try:
             await self._engine.reapply_current_mode(force_resend=True)
         except Exception as e:
             logger.error("ARRIVE — light reapply failed: %s", e, exc_info=True)
+        if self._away:
+            return
 
         pending_vibe_applied = False
         try:
@@ -270,8 +525,12 @@ class AwayManager:
                 pending_vibe_applied = bool(result)
         except Exception as e:
             logger.error("ARRIVE — pending vibe apply failed: %s", e, exc_info=True)
+        if self._away:
+            return
 
         cfg = await self._config()
+        if self._away:
+            return
         if cfg.get("welcome_tts", True) and self._welcome_tts_allowed():
             try:
                 tts = self._tts_getter()
@@ -281,6 +540,8 @@ class AwayManager:
                     )))
             except Exception as e:
                 logger.warning("ARRIVE — welcome TTS failed: %s", e)
+        if self._away:
+            return
 
         body = "Geofence arrive: lighting restored."
         if pending_vibe_applied:
@@ -289,6 +550,8 @@ class AwayManager:
             body = f"Geofence arrive after {away_minutes} min away: lighting restored."
             if pending_vibe_applied:
                 body = f"Geofence arrive after {away_minutes} min away: staged vibe applied."
+        if self._away:
+            return
         await self._notify(
             title="Welcome home", body=body, kind="welcome_home",
         )
