@@ -4032,6 +4032,111 @@ class TestRecentDeskAttendanceVeto:
         assert call["applied"] is False
         assert call["factors"]["vetoed_by"] == "recent_desk_attendance"
 
+    async def test_active_ambient_relax_releases_on_recent_desk_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        await engine.set_manual_override("relax", source="ambient_relax")
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        assert engine.override_source is None
+        assert engine.current_mode == "idle"
+
+    async def test_active_ambient_relax_releases_on_recent_process_working(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
+        )
+        engine._current_mode = "idle"
+        engine._last_process_working_at = datetime.now(tz=TZ) - timedelta(seconds=30)
+        await engine.set_manual_override("relax", source="ambient_relax")
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "idle"
+
+    async def test_active_ambient_relax_stays_without_fresh_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            601, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        await engine.set_manual_override("relax", source="ambient_relax")
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is True
+        assert engine.override_source == "ambient_relax"
+        assert engine.current_mode == "relax"
+
+    async def test_dnd_blocks_ambient_relax_attendance_release(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        await engine.set_manual_override("relax", source="ambient_relax")
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is True
+        assert engine.override_source == "ambient_relax"
+
+    async def test_user_relax_is_not_released_by_attendance(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        await engine.set_manual_override("relax", source="api:test")
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is True
+        assert engine.override_source == "api:test"
+
+    async def test_ambient_relax_attendance_release_preserves_per_light_stamp(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "evening",
+        )
+        engine._presence_fusion = _StickyDeskPresence(
+            120, at_desk_fresh=False,
+        )
+        engine._current_mode = "idle"
+        await engine.set_manual_override("relax", source="ambient_relax")
+        engine.mark_light_manual("3")
+
+        await _drive_one_tick(engine)
+
+        assert engine.manual_override is False
+        assert "3" in engine.manual_light_overrides
+
     async def test_fusion_auto_apply_vetoes_recent_desk_attendance(
         self, monkeypatch, engine,
     ):
