@@ -45,11 +45,13 @@ class PiholeService:
         # Reset on the next successful request so a real outage→recovery
         # still leaves a clear pair of log lines.
         self._unreachable_logged: bool = False
+        # Live/last-attempt reachability is separate from stale display cache.
+        self._reachable: bool = False
 
     @property
     def connected(self) -> bool:
-        """True if we have successfully fetched data at least once."""
-        return self._summary_cache is not None
+        """Whether the most recent Pi-hole request path is reachable."""
+        return self._reachable
 
     async def _authenticate(self) -> bool:
         """Authenticate with Pi-hole and store session ID."""
@@ -93,6 +95,7 @@ class PiholeService:
         until the next successful request flips ``_unreachable_logged``
         back to False.
         """
+        self._reachable = False
         if not self._unreachable_logged:
             logger.error(
                 "Pi-hole unreachable: %s%s",
@@ -165,6 +168,7 @@ class PiholeService:
                         )
 
                 resp.raise_for_status()
+                self._reachable = True
                 # Success — reset the rate-limit flag so the next outage
                 # gets a fresh ERROR log instead of being swallowed.
                 self._unreachable_logged = False

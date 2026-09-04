@@ -48,6 +48,22 @@ class TestHealthEndpoint:
             assert fauxmo["status"] == "disabled"
 
     @pytest.mark.asyncio
+    async def test_pihole_device_health_uses_live_connected_state(self):
+        from backend.api.routes.health import health_check
+
+        pihole = SimpleNamespace(connected=False)
+        request = SimpleNamespace(app=SimpleNamespace(
+            state=SimpleNamespace(pihole_service=pihole),
+        ))
+
+        response = await health_check(request)
+        assert response["devices"]["pihole"] is False
+
+        pihole.connected = True
+        recovered = await health_check(request)
+        assert recovered["devices"]["pihole"] is True
+
+    @pytest.mark.asyncio
     async def test_gameday_provider_health_is_reported_and_degrades(self):
         from backend.api.routes.health import health_check
 
