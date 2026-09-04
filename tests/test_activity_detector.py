@@ -42,6 +42,7 @@ def _make_detector(
     fg_proc: str | None,
     fg_title: str = "",
     idle_seconds: int = 0,
+    browser_playback_status: str = "unavailable",
 ) -> ActivityDetector:
     """Build a detector with environment fakes patched in."""
     d = ActivityDetector()
@@ -54,6 +55,9 @@ def _make_detector(
     )
     d._get_idle_seconds = lambda: idle_seconds  # type: ignore[method-assign]
     d._is_sleep_window = lambda: False  # type: ignore[method-assign]
+    d._browser_playback_status = (  # type: ignore[method-assign]
+        lambda _proc, _title: browser_playback_status
+    )
     return d
 
 
@@ -104,9 +108,21 @@ class TestSleepAutoPauseGate:
             fg_proc="firefox.exe",
             fg_title="Lo-fi video - YouTube - Mozilla Firefox",
         )
+        d._browser_playback_status = lambda _proc, _title: "playing"  # type: ignore[method-assign]
 
         assert d._classify() == "sleeping"
         assert calls["pause"] == 1
+
+    def test_paused_firefox_youtube_does_not_toggle_media(self):
+        d, calls = self._sleep_window_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Lo-fi video - YouTube - Mozilla Firefox",
+        )
+        d._browser_playback_status = lambda _proc, _title: "paused"  # type: ignore[method-assign]
+
+        assert d._classify() == "idle"
+        assert calls["pause"] == 0
 
     def test_background_media_player_does_not_pause(self):
         d, calls = self._sleep_window_detector(
@@ -131,6 +147,82 @@ class TestSleepAutoPauseGate:
 # ---------------------------------------------------------------------------
 # Working intent — foreground work only, except existing late-night browser
 # ---------------------------------------------------------------------------
+
+
+class TestBrowserPlaybackIntent:
+    def test_matching_playing_session_establishes_and_graces_pause(self):
+        d = ActivityDetector()
+        status = ["playing"]
+        d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
+            lambda _proc, _title: status[0]
+        )
+
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=100.0,
+        ):
+            assert d._browser_playback_status(
+                "firefox.exe",
+                "A video - YouTube - Mozilla Firefox",
+            ) == "playing"
+
+        status[0] = "paused"
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=150.0,
+        ):
+            assert d._browser_playback_status(
+                "firefox.exe",
+                "A video - YouTube - Mozilla Firefox",
+            ) == "pause_grace"
+
+    def test_pause_grace_does_not_transfer_to_a_different_video_title(self):
+        d = ActivityDetector()
+        status = ["playing"]
+        d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
+            lambda _proc, _title: status[0]
+        )
+
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=100.0,
+        ):
+            assert d._browser_playback_status(
+                "firefox.exe",
+                "Video A - YouTube - Mozilla Firefox",
+            ) == "playing"
+
+        status[0] = "paused"
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=120.0,
+        ):
+            assert d._browser_playback_status(
+                "firefox.exe",
+                "Video B - YouTube - Mozilla Firefox",
+            ) == "paused"
+
+    def test_cold_paused_session_does_not_establish_watching(self):
+        d = ActivityDetector()
+        d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
+            lambda _proc, _title: "paused"
+        )
+
+        assert d._browser_playback_status(
+            "firefox.exe",
+            "A video - YouTube - Mozilla Firefox",
+        ) == "paused"
+
+    def test_probe_abstention_does_not_establish_watching(self):
+        d = ActivityDetector()
+        d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
+            lambda _proc, _title: "unmatched"
+        )
+
+        assert d._browser_playback_status(
+            "firefox.exe",
+            "Current video - YouTube - Mozilla Firefox",
+        ) == "unmatched"
 
 
 class TestForegroundWorkIntent:
@@ -173,11 +265,78 @@ class TestForegroundWorkIntent:
             processes={"firefox.exe", "windowsterminal.exe"},
             fg_proc="firefox.exe",
             fg_title="A video - YouTube - Mozilla Firefox",
+            browser_playback_status="playing",
         )
 
         assert d._classify() == "watching"
         assert d._last_classification is not None
-        assert d._last_classification.candidate_reason == "foreground_browser_media"
+        assert d._last_classification.candidate_reason == "foreground_browser_playing"
+
+    def test_established_browser_pause_grace_remains_watching(self):
+        d = _make_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="A video - YouTube - Mozilla Firefox",
+            browser_playback_status="pause_grace",
+        )
+
+        assert d._classify() == "watching"
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "foreground_browser_pause_grace"
+
+    def test_playing_browser_survives_global_input_idle(self):
+        d = _make_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="A video - YouTube - Mozilla Firefox",
+            idle_seconds=601,
+            browser_playback_status="playing",
+        )
+
+        assert d._classify() == "watching"
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "foreground_browser_playing"
+
+    def test_stopped_foreground_youtube_is_not_watching(self):
+        d = _make_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="A video - YouTube - Mozilla Firefox",
+            browser_playback_status="paused",
+        )
+
+        with self._at_hour(15) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 4, 15, 0)
+            assert d._classify() == "idle"
+
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "fallback_idle"
+        assert d._last_classification.browser_playback_status == "paused"
+
+    def test_youtube_music_playing_is_not_video_watching(self):
+        d = _make_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Track - YouTube Music - Mozilla Firefox",
+            browser_playback_status="playing",
+        )
+
+        with self._at_hour(15) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 4, 15, 0)
+            assert d._classify() == "idle"
+
+    def test_background_stremio_process_does_not_assert_watching(self):
+        d = _make_detector(
+            processes={"stremio service.exe", "explorer.exe"},
+            fg_proc="explorer.exe",
+        )
+
+        with self._at_hour(15) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 4, 15, 0)
+            assert d._classify() == "idle"
+
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "fallback_idle"
 
     def test_late_night_browser_remains_working(self):
         d = _make_detector(processes={"firefox.exe"}, fg_proc="firefox.exe")
@@ -719,6 +878,22 @@ def test_classifier_factors_capture_candidate_and_pending_dwell():
     assert factors["idle"] == 12
     assert factors["pending_mode"] == "idle"
     assert factors["pending_dwell_age"] == 0.0
+
+
+def test_watching_factors_expose_playback_reason_without_page_title():
+    d = _make_detector(
+        processes={"firefox.exe"},
+        fg_proc="firefox.exe",
+        fg_title="Blue Planet - YouTube - Mozilla Firefox",
+        browser_playback_status="playing",
+    )
+
+    assert d._classify() == "watching"
+    factors = {factor["key"]: factor["value"] for factor in d.build_factors()}
+
+    assert factors["candidate_reason"] == "foreground_browser_playing"
+    assert factors["browser_playback"] == "playing"
+    assert "foreground_title" not in factors
 
 
 def test_classifier_factors_capture_foreground_game_qualification():

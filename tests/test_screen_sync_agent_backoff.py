@@ -53,10 +53,22 @@ def test_standalone_backoff_uses_original_single_interruptible_wait() -> None:
 
 def test_foreground_snapshot_media_matches_activity_detector_rule() -> None:
     assert screen_sync_agent._foreground_snapshot_is_media(
-        "firefox.exe", "Blue Planet - YouTube - Mozilla Firefox"
+        "firefox.exe",
+        "Blue Planet - YouTube - Mozilla Firefox",
+        "playing",
     ) is True
     assert screen_sync_agent._foreground_snapshot_is_media(
-        "firefox.exe", "ChatGPT - homehub - Mozilla Firefox"
+        "firefox.exe",
+        "Blue Planet - YouTube - Mozilla Firefox",
+        "paused",
+    ) is False
+    assert screen_sync_agent._foreground_snapshot_is_media(
+        "firefox.exe",
+        "Blue Planet - YouTube - Mozilla Firefox",
+        "unavailable",
+    ) is None
+    assert screen_sync_agent._foreground_snapshot_is_media(
+        "firefox.exe", "ChatGPT - homehub - Mozilla Firefox", "playing"
     ) is False
     assert screen_sync_agent._foreground_snapshot_is_media(
         "stremio.exe", "Stremio"

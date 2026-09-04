@@ -12,3 +12,10 @@
 # already pulled in by requirements.txt; the .sync.client submodule
 # powers the WS subscription off the main Qt thread.
 PyQt6>=6.7,<7
+
+# Windows Global System Media Transport Controls playback truth for browser
+# Watching detection. Keep the modular projection packages on one exact ABI
+# version; the broad [all] extra pulls in unrelated Windows namespaces.
+winrt-Windows.Media.Control==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
