@@ -53,8 +53,12 @@ or pull requests.
 - Frontend: SvelteKit 2, Svelte 4, Vite 5, Threlte/Three.js, WebSocket stores.
 - Devices/services: Philips Hue v1/v2, Sonos via SoCo, optional camera,
   microphone, desktop activity, screen-sync, and peripheral agents.
-- Current always-on host/server role: Latitude at `192.168.86.210`; Windows is
-  the development machine and can provide optional desktop context.
+- Current primary host/server role: Latitude at `192.168.86.210`, now designated
+  as always-home infrastructure under #145. Routine laptop travel should use
+  the older MacBook instead of removing the Latitude. Shipped `TRAVEL` remains
+  a contingency/maintenance lifecycle, not the normal availability model.
+  Windows remains the development machine and can provide optional desktop
+  context.
 - The backend serves `frontend-svelte/build/` on port 8000. Vite normally runs
   on port 3001 and proxies the API/WebSocket to port 8000.
 

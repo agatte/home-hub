@@ -97,6 +97,42 @@ Latitude physical authority must be earned again from genuinely fresh post-retur
 observations. `home-hub-ambient.service` remains parked, and deploy/restart
 tooling refuses both `TRAVEL` and `RETURNING_HOME`.
 
+**ACCEPTED #145 host-role direction (2026-09-04).** Solve the portability
+problem with current hardware by treating the Latitude as dedicated always-home
+HomeHub infrastructure. Routine laptop travel uses the older MacBook instead;
+no central-backend migration is currently planned under #145. Shipped Travel V1
+remains available as a contingency/maintenance path, not the normal daily host
+lifecycle.
+
+Travel V1 gates the HomeHub systemd-user service set and kiosk lifecycle but does
+**not** stop the host-local Docker stacks. Pi-hole/Unbound and Uptime Kuma have
+restart policies independent of the Travel marker. With the Latitude now an
+always-home host this is no longer a normal travel exposure path, but it remains
+an explicit lifecycle fact and must not be changed casually.
+
+Basic apartment internet should still fail safely if the Latitude or its Docker
+stack is unavailable. The Windows desktop currently receives Google Wifi
+`192.168.86.1` as DNS and resolved normally during the 2026-09-02 real
+Latitude-away window. A controlled 2026-09-04 outage then stopped only the
+`pihole` container: direct DNS to `192.168.86.210` timed out while Google Wifi
+resolved four unique cache-miss wildcard names, ordinary system DNS resolved
+after a client-cache flush, and HTTPS returned 200. Pi-hole was restored
+immediately and direct DNS recovered. A second controlled outage then verified
+the same contract from Anthony's iPhone on Project Mercury with cellular data
+and iCloud Private Relay disabled: fresh `wikipedia.org` and `python.org` loads
+both succeeded while Pi-hole was confirmed down. Pi-hole was restored
+immediately afterward and direct DNS recovered. This is sufficient
+representative-client evidence that ordinary apartment DNS is not dependent on
+Pi-hole availability. The first controlled test also exposed #224: HomeHub
+`/health` can retain `devices.pihole=true` from stale cached state after current
+Pi-hole reachability is lost.
+
+A future decision to move the core off the Latitude would still have a real
+sensing seam: `CameraService` currently runs in-process with the backend and
+feeds `PresenceFusion` directly, while the off-host camera observation API is
+scoped to the Windows `desktop` source. That migration work is now deferred,
+not part of the accepted current-hardware solution.
+
 ### Autonomy, trust, and interaction
 
 **SHIPPED/CURRENT.** Committed code contains confidence fusion, fixed
@@ -625,6 +661,7 @@ production freshness requires live verification):
 - Dashboard Network widget showing real-time stats (block percentage, total queries, blocklist size, active clients)
 - Settings page management for local DNS records, blocklists (add/remove, one-click bulk add), and **allowlist** (exact-domain exceptions — add/remove false-positive domains)
 - Network-wide DNS via the personal Google Wifi router (post-2026-06 migration; no per-device config needed). Google Wifi proxies DNS, so clients see `.86.1` and per-device Pi-hole attribution is lost.
+- **Always-home reliability checkpoint (#145, 2026-09-04):** the Windows desktop currently receives only `192.168.86.1` as Wi-Fi DNS. The 2026-09-02 real-away test showed that this desktop still resolved through Google Wifi while the Latitude/backend was physically absent. A controlled 2026-09-04 Pi-hole outage then proved the same path with direct evidence: `.210` timed out while `192.168.86.1` resolved four unique cache-miss names, ordinary system DNS still resolved after a client-cache flush, and HTTPS returned 200. This disproves the old assumption that Latitude/Pi-hole removal necessarily kills DNS for this client, but it does **not** prove router-wide behavior for every apartment device. A second controlled stop used Anthony's iPhone on Project Mercury with cellular data and iCloud Private Relay disabled; fresh Wikipedia and Python.org loads both succeeded while Pi-hole was confirmed down. Pi-hole was restored immediately. The ordinary apartment DNS fail-safe acceptance is therefore satisfied; #145 remains open only for the #224 Pi-hole-health observability fix and documentation/publishing closeout.
 - Pi-hole admin UI at `http://localhost:8080/admin` (loopback-only since 2026-06-01; reach from another machine via SSH tunnel: `ssh -L 8080:localhost:8080 homehub`)
 
 ### Known Issues & Pain Points
@@ -2178,9 +2215,11 @@ Registers as a mode-change callback + runs its own ESPN polling loop.
 
 **Primary host:** Dell Latitude 7420 (service tag 81FPDB3), running
 **Ubuntu 24.04 LTS Desktop**, hostname `homehub-dashboard`, static LAN
-IP `192.168.86.210`. Always-on 24/7, lid-close configured to ignore
-via `/etc/systemd/logind.conf`, display never sleeps via `gsettings`.
-Auto-login enabled so power-on → desktop with no keystrokes.
+IP `192.168.86.210`. As of 2026-09-04 it is the accepted always-home HomeHub
+core under #145; routine laptop travel uses the older MacBook instead. Lid-close
+is configured to ignore via `/etc/systemd/logind.conf`, the display never sleeps
+via `gsettings`, and auto-login supports unattended startup. Shipped Travel Mode
+remains a contingency/maintenance capability rather than the normal host model.
 
 **Running services** on the Latitude:
 
@@ -2210,9 +2249,11 @@ Auto-login enabled so power-on → desktop with no keystrokes.
   Ubuntu snap (snap Firefox + Wayland + `--kiosk` produces a black
   screen)
 
-**Parallel-forever architecture.** The Windows gaming/dev machine
-(192.168.86.30) stays as Anthony's workstation — code editing, tests,
-`git push`. It's not a production host. It runs:
+**Current split-host architecture.** The Windows gaming/dev machine
+(192.168.86.30) stays Anthony's workstation for code editing, tests, `git push`,
+and production desktop sensing/agents. It is not the HomeHub backend host, and
+#145 does not plan to promote it while the Latitude is the accepted always-home
+core. It runs:
 
 - **PC Agent Supervisor** via Windows Task Scheduler (`"Home Hub Agent
   Supervisor"`, hidden `pythonw.exe`, **two triggers**: at-logon with
@@ -2467,12 +2508,12 @@ this document.
 - **SoCo Apple Music support** — Can play individual tracks and queue cloud favorites via `add_to_queue` (v0.26.0+). Apple Music *shortcut* favorites (artist/station containers) have no static URI and cannot be queued via SoCo — those are flagged in the mode→playlist mapper UI. Cannot browse the Apple Music catalog; that requires the $99/year Apple Music API. Now Playing metadata for plain HTTP streams (iTunes previews, TTS MP3s) is populated via DIDL-Lite envelope (shipped Phase A, 2026-05-12).
 - **Fauxmo device limits** — Each virtual device is simple on/off. Complex commands (set brightness to 50%) require the custom Alexa skill.
 - **SQLite concurrency** — Single-writer. Fine for one user, but event logging at high frequency (every light poll) may need batching or a write queue.
-- **Screen sync requires mss** — Only works on Windows. If the server moves to a headless Linux device, screen sync breaks.
+- **Screen capture for ScreenSync requires `mss` on the Windows desktop agent.** The central backend may remain headless Linux (as it already is); the desktop capture agent posts color/luma to the backend over HTTP. A future central-host move would therefore need endpoint/reconnect compatibility, not Windows screen capture on the new server.
 - **Edge-tts requires internet** — TTS falls back to gTTS (also internet). No offline TTS option currently.
 - **1080p landscape primary** — Animated backgrounds and layout designed for this resolution. Must degrade gracefully on mobile.
 - **Indiana timezone** — America/Indiana/Indianapolis has unique DST rules. All scheduling must use this timezone explicitly.
 - **Google Wifi DNS model (post-2026-06 migration)** — the apartment now runs behind a self-owned Google Wifi (`192.168.86.0/24`, double-NAT). Network-wide Pi-hole DNS is set on the router (no per-device config), but Google Wifi **proxies** DNS: clients see `.86.1`, per-device Pi-hole attribution is lost, and the router answers `.lan` with an authoritative NXDOMAIN (never forwarding it upstream) — so `.lan` names resolve only for devices pointed directly at Pi-hole (`192.168.86.210`). The working zero-config hostname is **mDNS** (`homehub-dashboard.local:8000`, avahi on the Latitude); never put `.local` records in Pi-hole. Hue Bridge and Sonos use DHCP DNS and can't be reconfigured. (Pre-migration this read "UISP Fiber router locked — DNS per-device.")
-- **Pi-hole on same machine** — Pi-hole Docker runs on the Latitude alongside Home Hub. If Docker or the container goes down, DNS resolution fails for devices using Pi-hole. Fallback DNS (1.1.1.1) configured on desktop and phone.
+- **Pi-hole on same machine** ? Pi-hole Docker runs on the Latitude alongside Home Hub. Direct Pi-hole clients therefore lose that resolver when the Latitude/Docker stack is absent. The Windows desktop currently uses the Google Wifi router (`192.168.86.1`) rather than a configured `1.1.1.1` fallback; both the 2026-09-02 real-away event and the 2026-09-04 controlled Pi-hole-stop test showed that desktop path continuing to resolve. Router-wide behavior remains evidence-gated under #145 until a second representative client is observed.
 
 ## Non-Goals
 

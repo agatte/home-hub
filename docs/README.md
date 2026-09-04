@@ -38,7 +38,7 @@ Use this page as the entry point for repository documentation.
 - [`PRESENCE_LIGHTING_SCENARIOS.md`](PRESENCE_LIGHTING_SCENARIOS.md) —
   historical presence/lighting decisions and subsystem implementation detail
 - [`LIGHTING_EXPANSION.md`](LIGHTING_EXPANSION.md) — current expansion plan and installed L6/Plant Wash record; later hardware remains planned
-- [`HomeHub_Travel_Mode_Design.docx`](HomeHub_Travel_Mode_Design.docx) - accepted design proposal for the portable-Latitude HOME/TRAVEL host lifecycle, tracked by #149; not implemented runtime behavior yet
+- [`HomeHub_Travel_Mode_Design.docx`](HomeHub_Travel_Mode_Design.docx) - historical accepted proposal/reference for the Latitude HOME/TRAVEL contingency lifecycle tracked by #149; V1 HOME/TRAVEL/RETURNING_HOME behavior is shipped, while #145 now designates the Latitude as the always-home core and current runtime truth lives in `PROJECT_SPEC.md` plus the host-control code
 - [`AGENT_STRATEGY.md`](AGENT_STRATEGY.md) — operational-agent strategy and retired monitoring loops
 - [`Future_Development.md`](Future_Development.md) — non-authoritative issue
   and idea index
