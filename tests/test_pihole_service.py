@@ -172,12 +172,14 @@ class TestSummary:
         assert result["blocked"] == 150
         assert result["percent_blocked"] == 15.0
         assert result["domains_on_blocklist"] == 2000000
+        assert svc.connected is True
 
     async def test_stale_cache_on_failure(self):
         svc = _make_service()
         svc._summary_cache = {"total_queries": 500, "stale": True}
         svc._summary_cache_time = time.time() - SUMMARY_CACHE_TTL - 1
         svc._sid = "test-sid"
+        svc._reachable = True
 
         fail_client = AsyncMock()
         fail_client.request = AsyncMock(side_effect=Exception("timeout"))
@@ -186,6 +188,7 @@ class TestSummary:
         with patch("backend.services.pihole_service.httpx.AsyncClient", return_value=fail_client):
             result = await svc.get_summary()
         assert result["stale"] is True
+        assert svc.connected is False
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +233,10 @@ class TestConnected:
         svc = _make_service()
         assert svc.connected is False
 
-    def test_connected_after_cache(self):
+    def test_stale_cache_alone_does_not_claim_connected(self):
         svc = _make_service()
         svc._summary_cache = {"total_queries": 100}
-        assert svc.connected is True
+        assert svc.connected is False
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +381,7 @@ class TestUnreachableError:
         ):
             await svc._request("GET", "/api/stats/summary")
         assert svc._unreachable_logged is False
+        assert svc.connected is True
 
     async def test_get_summary_falls_back_to_stale_cache(self):
         """The cache fallback survives the typed-error refactor — kiosk
