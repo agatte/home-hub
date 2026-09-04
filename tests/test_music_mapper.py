@@ -236,6 +236,10 @@ class TestDispatchPregameAudio:
         late_night_utc = datetime(2026, 9, 14, 3, 30, tzinfo=timezone.utc)
         assert _pregame_tts_volume(late_night_utc) == PREGAME_TTS_LATE_NIGHT_CAP
 
+    def test_pregame_tts_volume_uses_default_outside_late_night(self):
+        daytime_utc = datetime(2026, 9, 13, 18, 0, tzinfo=timezone.utc)
+        assert _pregame_tts_volume(daytime_utc) == PREGAME_TTS_VOLUME
+
     @pytest.fixture
     def mapper(self, mock_sonos, mock_ws):
         tts = _MockTTS()
@@ -247,7 +251,13 @@ class TestDispatchPregameAudio:
         # Patch sleep to avoid waiting in the test.
         async def _async_noop(*_a, **_k):
             return None
-        with patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop):
+        with (
+            patch("backend.services.music_mapper.asyncio.sleep", new=_async_noop),
+            patch(
+                "backend.services.music_mapper._pregame_tts_volume",
+                return_value=PREGAME_TTS_VOLUME,
+            ),
+        ):
             result = await mapper.dispatch_pregame_audio(_decision())
         assert result["tts_fired"] is True
         assert result["sonos_fired"] is False
