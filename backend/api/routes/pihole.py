@@ -151,6 +151,17 @@ async def delete_blocklist(address: str, request: Request) -> dict:
     return {"status": "ok"}
 
 
+@router.post("/gravity", dependencies=[Depends(require_api_key)])
+async def refresh_gravity(request: Request) -> dict:
+    """Refresh all configured Pi-hole lists and rebuild gravity."""
+    service = _get_service(request)
+    try:
+        await service.refresh_gravity()
+    except PiholeUnreachableError as e:
+        raise _unreachable(e) from e
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Allowlist (exact-domain exceptions)
 # ---------------------------------------------------------------------------

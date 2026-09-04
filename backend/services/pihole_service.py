@@ -117,6 +117,8 @@ class PiholeService:
         path: str,
         params: Optional[dict] = None,
         json_body: Optional[dict] = None,
+        parse_json: bool = True,
+        request_timeout: float = 10.0,
     ) -> dict:
         """Make an authenticated request with 401 retry.
 
@@ -133,7 +135,7 @@ class PiholeService:
                 )
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=request_timeout) as client:
                 resp = await client.request(
                     method,
                     f"{self._api_url}{path}",
@@ -175,6 +177,8 @@ class PiholeService:
                 # Some endpoints return empty body (204).
                 if resp.status_code == 204 or not resp.content:
                     return {}
+                if not parse_json:
+                    return {"text": resp.text}
                 return resp.json()
 
         except PiholeUnreachableError:
@@ -369,6 +373,22 @@ class PiholeService:
         encoded = address.replace("/", "%2F").replace(":", "%3A")
         await self._request("DELETE", f"/api/lists/{encoded}")
         logger.info("Pi-hole blocklist removed: %s", address)
+        return True
+
+    async def refresh_gravity(self) -> bool:
+        """Fetch configured lists and atomically rebuild Pi-hole gravity.
+
+        Pi-hole v6 returns a text progress stream for this action, so this
+        intentionally bypasses JSON decoding while retaining the normal
+        authentication/retry/error handling in :meth:`_request`.
+        """
+        await self._request(
+            "POST",
+            "/api/action/gravity",
+            parse_json=False,
+            request_timeout=300.0,
+        )
+        logger.info("Pi-hole gravity refresh completed")
         return True
 
     # -----------------------------------------------------------------
