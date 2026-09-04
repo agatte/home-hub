@@ -9,15 +9,15 @@
   import BlocklistRow from '$lib/components/settings/BlocklistRow.svelte'
 
   const RECOMMENDED_LISTS = [
-    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/multi.txt', label: 'Hagezi Multi' },
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt', label: 'Hagezi Multi' },
     { url: 'https://big.oisd.nl/', label: 'OISD Full' },
     { url: 'https://v.firebog.net/hosts/AdguardDNS.txt', label: 'AdGuard DNS' },
     { url: 'https://v.firebog.net/hosts/Easyprivacy.txt', label: 'EasyPrivacy' },
     { url: 'https://v.firebog.net/hosts/Easylist.txt', label: 'EasyList' },
-    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/tif.txt', label: 'Hagezi TIF (Threats)' },
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.txt', label: 'Hagezi TIF (Threats)' },
     { url: 'https://phishing.army/download/phishing_army_blocklist.txt', label: 'Phishing Army' },
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/fake.txt', label: 'Hagezi Fake/Scam' },
-    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/native.winoffice.txt', label: 'Windows Telemetry' },
+    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/native.winoffice.txt', label: 'Windows Telemetry' },
   ]
 
   // Pi-hole local-DNS records are maintenance-only for clients configured to
@@ -98,6 +98,16 @@
     try {
       await apiDelete(`/api/pihole/lists/${encodeURIComponent(address)}`)
       blocklists = (blocklists || []).filter((/** @type {any} */ l) => l.address !== address)
+    } catch {}
+    saving = null
+  }
+
+  async function refreshGravity() {
+    saving = 'gravity'
+    try {
+      await apiPost('/api/pihole/gravity', {})
+      const resp = /** @type {any} */ (await apiGet('/api/pihole/lists'))
+      blocklists = resp.lists || []
     } catch {}
     saving = null
   }
@@ -202,7 +212,7 @@
       </div>
     </SettingGroup>
 
-    <SettingGroup title="Blocklists" hint="Ad / tracker / malware DNS filters. Pi-hole refreshes its blocklist gravity once per day.">
+    <SettingGroup title="Blocklists" hint="Ad / tracker / malware DNS filters. Changes take effect after a gravity refresh; Pi-hole also refreshes subscribed lists on its own schedule.">
       {#if blocklists && blocklists.length > 0}
         <div class="rows">
           {#each blocklists as list (list.address)}
@@ -234,6 +244,9 @@
       <div class="defaults-row">
         <SettingButton variant="accent" loading={saving === 'lists-recommended'} on:click={addAllRecommendedLists}>
           {saving === 'lists-recommended' ? 'Adding…' : 'Seed curated lists'}
+        </SettingButton>
+        <SettingButton variant="ghost" loading={saving === 'gravity'} on:click={refreshGravity}>
+          {saving === 'gravity' ? 'Refreshing…' : 'Refresh gravity'}
         </SettingButton>
         <span class="muted-mini">{RECOMMENDED_LISTS.length} lists · ads, malware, tracking, phishing</span>
       </div>
