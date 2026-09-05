@@ -7,8 +7,10 @@ and serves the React frontend.
 Startup / shutdown logic lives in ``backend.bootstrap`` — this module
 focuses on app construction, middleware, and routing only.
 """
+import ipaddress
 import json
 import logging
+import re
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -208,6 +210,7 @@ _CSP = (
     "font-src 'self' data:; "
     "media-src 'self'; "
     "worker-src 'self' blob:; "
+    "frame-src 'self'; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -215,6 +218,34 @@ _CSP = (
 )
 
 _PIHOLE_EMBED_CSP = _CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
+
+
+_BAR_CSP_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
+
+
+def _bar_csp_host(host: str) -> Optional[str]:
+    """Return a CSP-safe host literal, or None for malformed Host input."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        normalized = host.rstrip(".").lower()
+        return normalized if normalized and _BAR_CSP_HOST_RE.fullmatch(normalized) else None
+    # Scoped IPv6 zone identifiers are unnecessary for HomeHub and Python's
+    # ipaddress accepts arbitrary zone text. Never reflect them into CSP.
+    if address.version == 6 and "%" in host:
+        return None
+    return f"[{address.compressed}]" if address.version == 6 else address.compressed
+
+
+def _home_csp_for_request(request) -> str:
+    """Allow the Home Bar iframe only from this HomeHub host on port 8001."""
+    host = _bar_csp_host(request.url.hostname or "")
+    if not host:
+        return _CSP
+    return _CSP.replace(
+        "frame-src 'self';",
+        f"frame-src 'self' http://{host}:8001;",
+    )
 
 
 @app.middleware("http")
@@ -246,7 +277,9 @@ async def security_headers_middleware(request, call_next):
     )
     response.headers.setdefault(
         "Content-Security-Policy",
-        _PIHOLE_EMBED_CSP if is_pihole_admin else _CSP,
+        _PIHOLE_EMBED_CSP
+        if is_pihole_admin
+        else _home_csp_for_request(request),
     )
     is_tunnel = (
         request.headers.get("X-Tunnel-Origin", "").strip().lower()

@@ -47,6 +47,31 @@ def test_security_headers_present_on_health(client):
     csp = resp.headers["Content-Security-Policy"]
     assert "default-src 'self'" in csp
     assert "frame-ancestors 'none'" in csp
+    assert "frame-src 'self' http://testserver:8001" in csp
+
+
+def test_bar_frame_source_tracks_requested_homehub_host(client):
+    resp = client.get("/health", headers={"Host": "192.168.86.210:8000"})
+    csp = resp.headers["Content-Security-Policy"]
+    assert "frame-src 'self' http://192.168.86.210:8001" in csp
+    assert "http://localhost:8001" not in csp
+
+
+def test_bar_frame_source_rejects_malformed_host(client):
+    resp = client.get("/health", headers={"Host": "bad;frame-src:8000"})
+    csp = resp.headers["Content-Security-Policy"]
+    assert "frame-src 'self';" in csp
+    assert "bad;frame-src" not in csp
+
+
+def test_bar_frame_source_rejects_scoped_ipv6_host(client):
+    resp = client.get(
+        "/health",
+        headers={"Host": "[fe80::1%x;frame-src *]:8000"},
+    )
+    csp = resp.headers["Content-Security-Policy"]
+    assert "frame-src 'self';" in csp
+    assert "frame-src *" not in csp
 
 
 def test_security_headers_present_on_api_route(client):
