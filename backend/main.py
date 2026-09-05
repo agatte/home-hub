@@ -214,6 +214,8 @@ _CSP = (
     "frame-ancestors 'none'"
 )
 
+_PIHOLE_EMBED_CSP = _CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
+
 
 @app.middleware("http")
 async def security_headers_middleware(request, call_next):
@@ -230,7 +232,11 @@ async def security_headers_middleware(request, call_next):
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
+    is_pihole_admin = request.url.path == "/admin" or request.url.path.startswith("/admin/")
+    if is_pihole_admin:
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    else:
+        response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault(
         "Referrer-Policy", "strict-origin-when-cross-origin"
     )
@@ -238,7 +244,10 @@ async def security_headers_middleware(request, call_next):
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()",
     )
-    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        _PIHOLE_EMBED_CSP if is_pihole_admin else _CSP,
+    )
     is_tunnel = (
         request.headers.get("X-Tunnel-Origin", "").strip().lower()
         == "cloudflare"
