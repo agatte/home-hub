@@ -6,9 +6,7 @@
     Music2, Pause, Play, SkipForward, Volume2, VolumeX, Home as HomeIcon,
     Sliders, Mic,
   } from 'lucide-svelte'
-  import { lights } from '$lib/stores/lights.js'
-  import { sonos } from '$lib/stores/sonos.js'
-  import { automation } from '$lib/stores/automation.js'
+  import { guestState, initGuestState, refreshGuestState } from '$lib/stores/guest.js'
   import { modeLabel, modeColor } from '$lib/theme.js'
   import { lightStateToCSS } from '$lib/utils/lightColor.js'
 
@@ -19,10 +17,11 @@
     gaming: Gamepad2, working: Monitor, watching: Tv, social: PartyPopper,
     relax: Flame, cooking: ChefHat, sleeping: Moon, idle: Sparkles, auto: Bot,
   }
-  $: modeIcon = MODE_ICONS[$automation.mode] ?? Sparkles
+  $: modeIcon = MODE_ICONS[$guestState.mode] ?? Sparkles
 
   // Stable order matching the apartment's L1..L5 layout.
-  $: orderedLights = ['1', '2', '5', '3', '4'].map((id) => $lights[id]).filter(Boolean)
+  $: guestLightMap = Object.fromEntries(($guestState.lights ?? []).map((light) => [String(light.light_id), light]))
+  $: orderedLights = ['1', '2', '5', '3', '4'].map((id) => guestLightMap[id]).filter(Boolean)
 
   /** @type {Array<{name: string, display_name: string, lights: Record<string, any>}>} */
   let scenes = []
@@ -100,11 +99,11 @@
   let toastTicker = null
   $: toastCooldownRemaining = Math.max(0, Math.ceil((toastCooldownUntil - toastNow) / 1000))
 
-  $: isPlaying = $sonos.state === 'PLAYING'
+  $: isPlaying = $guestState.sonos?.state === 'PLAYING'
 
   // Drop tuning state when the override goes away (hand-back, host kiosk
   // override-clear, or 4h timeout). Survives reload otherwise.
-  $: if (browser && !$automation.manual_override && activeScene !== null) {
+  $: if (browser && !$guestState.manual_override && activeScene !== null) {
     activeScene = null
     activeEffectOverlay = null
     kitchenDropped = false
@@ -216,12 +215,13 @@
     }
   }
 
-  async function postSonos(path) {
+  async function postSonos(action) {
     if (transportBusy) return
     transportBusy = true
     try {
-      const res = await fetch(path, { method: 'POST' })
+      const res = await fetch(`/api/guest/sonos/${action}`, { method: 'POST' })
       if (!res.ok) showToast(`Couldn't reach the speaker (${res.status})`)
+      else await refreshGuestState()
     } catch {
       showToast(`Couldn't reach the server`)
     } finally {
@@ -229,25 +229,22 @@
     }
   }
 
-  const togglePlayPause = () =>
-    postSonos(isPlaying ? '/api/sonos/pause' : '/api/sonos/play')
-
-  const skipNext = () => postSonos('/api/sonos/next')
+  const togglePlayPause = () => postSonos(isPlaying ? 'pause' : 'play')
+  const skipNext = () => postSonos('next')
 
   async function bumpVolume(delta) {
     const now = Date.now()
     if (now - lastVolAt < VOL_THROTTLE_MS) return
     lastVolAt = now
-    const current = $sonos.volume ?? 10
+    const current = $guestState.sonos?.volume ?? 10
     const next = Math.max(VOL_FLOOR, Math.min(VOL_CEILING, current + delta))
     if (next === current) return
     volBusy = true
     try {
-      await fetch('/api/sonos/volume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ volume: next }),
-      })
+      const direction = delta > 0 ? 'up' : 'down'
+      const res = await fetch(`/api/guest/sonos/volume/${direction}`, { method: 'POST' })
+      if (!res.ok) showToast(`Couldn't change the volume (${res.status})`)
+      else await refreshGuestState()
     } catch {
       showToast(`Couldn't reach the server`)
     } finally {
@@ -379,33 +376,19 @@
     if (tuningBusy || !activeScene) return
     tuningBusy = true
     try {
-      if (kitchenDropped) {
-        // Restore the kitchen pair from the active scene's preset baseline.
-        // We re-PUT the original L3/L4 states (not just `on:true`) so colors
-        // / brightness match the rest of the palette, not whatever the bridge
-        // remembered before "off".
-        const preset = scenes.find((s) => s.name === activeScene)
-        for (const id of ['3', '4']) {
-          const ls = preset?.lights?.[id]
-          if (!ls) continue
-          await fetch(`/api/lights/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(ls),
-          })
-        }
-        kitchenDropped = false
-      } else {
-        for (const id of ['3', '4']) {
-          await fetch(`/api/lights/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ on: false }),
-          })
-        }
-        kitchenDropped = true
+      const enabled = kitchenDropped
+      const res = await fetch('/api/guest/kitchen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled, scene: activeScene }),
+      })
+      if (!res.ok) {
+        showToast(`Couldn't change the kitchen lights (${res.status})`)
+        return
       }
+      kitchenDropped = !enabled
       persistTuningState()
+      await refreshGuestState()
     } catch {
       showToast(`Couldn't reach the server`)
     } finally {
@@ -524,23 +507,20 @@
     }
   }
 
-  onMount(async () => {
-    // Restore any in-flight tuning state from before the page reloaded.
+  let stopGuestState = () => {}
+
+  onMount(() => {
     loadTuningState()
-    // Fetch scenes + vibes in parallel — both are read-only GETs and
-    // can race independently.
-    const [sceneRes, vibeRes] = await Promise.allSettled([
+    stopGuestState = initGuestState()
+    Promise.allSettled([
       fetch('/api/guest/scenes').then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/guest/vibes').then((r) => r.ok ? r.json() : null).catch(() => null),
-    ])
-    if (sceneRes.status === 'fulfilled' && sceneRes.value) {
-      scenes = sceneRes.value.scenes ?? []
-    }
-    scenesLoaded = true
-    if (vibeRes.status === 'fulfilled' && vibeRes.value) {
-      vibes = vibeRes.value.vibes ?? []
-    }
-    vibesLoaded = true
+    ]).then(([sceneRes, vibeRes]) => {
+      if (sceneRes.status === 'fulfilled' && sceneRes.value) scenes = sceneRes.value.scenes ?? []
+      scenesLoaded = true
+      if (vibeRes.status === 'fulfilled' && vibeRes.value) vibes = vibeRes.value.vibes ?? []
+      vibesLoaded = true
+    })
   })
 
   onDestroy(() => {
@@ -548,6 +528,7 @@
     if (sceneCooldownTimer) clearTimeout(sceneCooldownTimer)
     if (vibeCooldownTimer) clearTimeout(vibeCooldownTimer)
     if (toastTicker) clearInterval(toastTicker)
+    stopGuestState()
   })
 </script>
 
@@ -556,7 +537,7 @@
 </svelte:head>
 
 <main class="guest-page">
-  {#if $automation.manual_override}
+  {#if $guestState.manual_override && $guestState.source === 'guest'}
     <button
       type="button"
       class="handback-btn"
@@ -579,14 +560,14 @@
         this={modeIcon}
         size={20}
         strokeWidth={1.5}
-        color={modeColor($automation.mode)}
+        color={modeColor($guestState.mode)}
       />
       <h2>Right now</h2>
     </div>
     <div class="mode-line">
-      <span class="mode-name">{modeLabel($automation.mode)}</span>
-      {#if $automation.manual_override}
-        {#if $automation.source === 'guest'}
+      <span class="mode-name">{modeLabel($guestState.mode)}</span>
+      {#if $guestState.manual_override}
+        {#if $guestState.source === 'guest'}
           <span class="src-chip src-chip-guest">🏠 Set by a guest</span>
         {:else}
           <span class="src-chip src-chip-manual">Manual override</span>
@@ -603,15 +584,15 @@
         ></div>
       {/each}
     </div>
-    {#if $sonos.state === 'PLAYING' && ($sonos.track || $sonos.artist)}
+    {#if $guestState.sonos?.state === 'PLAYING' && ($guestState.sonos?.track || $guestState.sonos?.artist)}
       <div class="now-playing">
-        {#if $sonos.art_url}
-          <img class="np-art" src={$sonos.art_url} alt="Album artwork" />
+        {#if $guestState.sonos?.has_art}
+          <img class="np-art" src={`/api/guest/art?track=${encodeURIComponent($guestState.sonos?.track || '')}`} alt="Album artwork" />
         {/if}
         <div class="np-text">
-          <div class="np-title">{$sonos.track || '—'}</div>
-          {#if $sonos.artist}
-            <div class="np-artist">{$sonos.artist}</div>
+          <div class="np-title">{$guestState.sonos?.track || '—'}</div>
+          {#if $guestState.sonos?.artist}
+            <div class="np-artist">{$guestState.sonos?.artist}</div>
           {/if}
         </div>
       </div>
@@ -649,17 +630,17 @@
           type="button"
           class="vol-btn"
           on:click={() => bumpVolume(-VOL_STEP)}
-          disabled={volBusy || ($sonos.volume ?? 0) <= VOL_FLOOR}
+          disabled={volBusy || ($guestState.sonos?.volume ?? 0) <= VOL_FLOOR}
           aria-label="Volume down"
         >
           <VolumeX size={18} strokeWidth={1.6} />
         </button>
-        <span class="vol-readout">{$sonos.volume ?? '—'}</span>
+        <span class="vol-readout">{$guestState.sonos?.volume ?? '—'}</span>
         <button
           type="button"
           class="vol-btn"
           on:click={() => bumpVolume(VOL_STEP)}
-          disabled={volBusy || ($sonos.volume ?? 0) >= VOL_CEILING}
+          disabled={volBusy || ($guestState.sonos?.volume ?? 0) >= VOL_CEILING}
           aria-label="Volume up"
         >
           <Volume2 size={18} strokeWidth={1.6} />

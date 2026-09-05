@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     GUEST_WIFI_SSID: str = ""
     GUEST_WIFI_PASSWORD: str = ""
     GUEST_WIFI_SECURITY: str = "WPA"  # WPA | WEP | nopass
+    # Public guest gateway. Cloudflare terminates HTTPS at GUEST_PUBLIC_URL,
+    # while the gateway itself binds loopback-only on GUEST_GATEWAY_INTERNAL_URL.
+    GUEST_PUBLIC_URL: str = ""
+    GUEST_GATEWAY_INTERNAL_URL: str = "http://127.0.0.1:8003"
+    GUEST_INVITE_TTL_SECONDS: int = 600
+    GUEST_SESSION_TTL_SECONDS: int = 43200
 
     # Pi-hole DNS ad blocker (optional — enables network stats widget)
     PIHOLE_API_URL: Optional[str] = None

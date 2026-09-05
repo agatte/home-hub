@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   import { onMount } from 'svelte'
   import { Wine, ExternalLink, Sparkles } from 'lucide-svelte'
 
@@ -11,7 +11,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch('/api/bar/status')
+      const res = await fetch('/api/guest/bar')
       if (res.status === 503 || res.status === 502) {
         unavailable = true
         return
@@ -32,7 +32,7 @@
 </script>
 
 <svelte:head>
-  <title>Bar — Home Hub</title>
+  <title>Bar â€” Home Hub</title>
 </svelte:head>
 
 <main class="guest-page">
@@ -43,7 +43,7 @@
 
   {#if !loaded}
     <section class="guest-card">
-      <p class="muted">Loading…</p>
+      <p class="muted">Loadingâ€¦</p>
     </section>
   {:else if unavailable || !summary}
     <section class="guest-card">
@@ -61,11 +61,11 @@
       </div>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">{summary.total_bottles ?? '—'}</div>
+          <div class="stat-value">{summary.total_bottles ?? 'â€”'}</div>
           <div class="stat-label">Bottles</div>
         </div>
         <div class="stat">
-          <div class="stat-value">{summary.makeable_count ?? '—'}</div>
+          <div class="stat-value">{summary.makeable_count ?? 'â€”'}</div>
           <div class="stat-label">Drinks pourable</div>
         </div>
       </div>
@@ -199,7 +199,7 @@
     position: relative;
   }
   .ingredients li::before {
-    content: '·';
+    content: 'Â·';
     position: absolute;
     left: 4px;
     color: rgba(245, 243, 238, 0.45);

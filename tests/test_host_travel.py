@@ -44,7 +44,8 @@ def _run_hostctl(tmp_path: Path, scenario: str) -> tuple[subprocess.CompletedPro
     fake_bin.mkdir()
     (fake_repo / "scripts").mkdir(parents=True)
     (fake_repo / "deployment").mkdir()
-    (state_dir / "travel-mode").write_text("travel-start\n", encoding="utf-8")
+    marker_text = "travel-start guest_gateway_active=1\n" if scenario == "success_guest_active" else "travel-start\n"
+    (state_dir / "travel-mode").write_text(marker_text, encoding="utf-8")
     event_log = tmp_path / "events.log"
 
     fake_systemctl = fake_bin / "systemctl"
@@ -89,7 +90,7 @@ if [[ "$url" == "http://localhost:8000/health" ]]; then
 fi
 if [[ "$method" == "POST" ]]; then
   case "$HOSTCTL_SCENARIO" in
-    success) printf '200' ; exit 0 ;;
+    success|success_guest_active) printf '200' ; exit 0 ;;
     reject) printf '409' ; exit 0 ;;
     timeout_then_committed) exit 28 ;;
     ambiguous) printf '503' ; exit 0 ;;
@@ -260,6 +261,7 @@ def test_hostctl_contract_keeps_ambient_parked_and_dns_out_of_scope():
     assert "disable --now" in script
     assert "home-hub-latitude-streaming.service" in script
     assert "home-hub-tunnel.service" in script
+    assert "home-hub-guest-gateway.service" in script
     assert "home-hub-kiosk-recycle.timer" in script
     assert "home-hub-ambient.service" in script
     assert "SUPPRESSED_UNITS" in script
@@ -267,6 +269,11 @@ def test_hostctl_contract_keeps_ambient_parked_and_dns_out_of_scope():
     assert "RETURN_UNITS=(" in script
     return_units = script.split("RETURN_UNITS=(", 1)[1].split(")", 1)[0]
     assert "home-hub-ambient.service" not in return_units
+    assert "home-hub-guest-gateway.service" not in return_units
+    suppressed_units = script.split("SUPPRESSED_UNITS=(", 1)[1].split(")", 1)[0]
+    assert "home-hub-guest-gateway.service" in suppressed_units
+    assert "guest_gateway_active=1" in script
+    assert 'if [[ "$restore_guest_gateway" == "1" ]]' in script
     assert 'mv "$MARKER" "$RETURNING_MARKER"' in script
     assert "ensure_reconciliation_id" in script
     assert "reconciliation_id=" in script
@@ -283,6 +290,7 @@ def test_systemd_home_units_respect_travel_marker():
     returning_condition = "ConditionPathExists=!%h/.local/state/home-hub/returning-home"
     units = [
         "home-hub.service", "home-hub-tunnel.service",
+        "home-hub-guest-gateway.service",
         "home-hub-latitude-streaming.service", "home-hub-ambient.service",
         "home-hub-kiosk-recycle.service", "home-hub-kiosk-recycle.timer",
     ]
@@ -299,6 +307,9 @@ def test_deploy_respects_host_lifecycle_markers():
     assert 'RETURNING_HOME_MARKER="$HOME/.local/state/home-hub/returning-home"' in script
     assert "Travel Mode is active" in script
     assert "refusing deploy/restart in RETURNING_HOME" in script
+    assert "RESTART_GUEST_GATEWAY" in script
+    assert "home-hub-guest-gateway.service" in script
+    assert "restart_guest_gateway" in script
 
 
 def test_returning_home_bootstrap_holds_automation_until_reconciled():
@@ -330,6 +341,16 @@ def test_travel_helper_is_armed_before_graceful_departure(monkeypatch, tmp_path:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Git Bash teardown is nondeterministic on Windows; run on Linux runtime/CI")
+def test_return_home_restores_guest_gateway_only_when_previously_active(tmp_path: Path):
+    result, _, events = _run_hostctl(tmp_path / "inactive", "success")
+    assert result.returncode == 0, result.stderr
+    assert "enable --now home-hub-guest-gateway.service" not in events
+
+    result, _, events = _run_hostctl(tmp_path / "active", "success_guest_active")
+    assert result.returncode == 0, result.stderr
+    assert "enable --now home-hub-guest-gateway.service" in events
+
+
 def test_return_home_success_orders_commit_before_units_and_kiosk(tmp_path: Path):
     result, state_dir, events = _run_hostctl(tmp_path, "success")
 

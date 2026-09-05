@@ -1,0 +1,27 @@
+# HomeHub isolated guest gateway (#232).
+#
+# Cloudflared may route guest.home-hub... to this loopback-only service.
+# The gateway itself exposes only the visitor frontend and /api/guest surface.
+#
+# Install only after GUEST_PUBLIC_URL and the Cloudflare ingress are ready:
+#   cp deployment/home-hub-guest-gateway.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now home-hub-guest-gateway.service
+
+[Unit]
+ConditionPathExists=!%h/.local/state/home-hub/travel-mode
+ConditionPathExists=!%h/.local/state/home-hub/returning-home
+Description=Home Hub Isolated Guest Gateway
+After=network-online.target home-hub.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/home-hub
+ExecStart=%h/home-hub/venv/bin/python -m uvicorn backend.api.guest_gateway:app --host 127.0.0.1 --port 8003 --log-level info
+Restart=always
+RestartSec=5
+Environment="PATH=%h/home-hub/venv/bin:/usr/bin"
+
+[Install]
+WantedBy=default.target

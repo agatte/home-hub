@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   import { onMount } from 'svelte'
   import { Sprout, Droplets } from 'lucide-svelte'
 
@@ -9,7 +9,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch('/api/plants/status')
+      const res = await fetch('/api/guest/plants')
       if (!res.ok) {
         unavailable = true
         return
@@ -28,7 +28,7 @@
     if (!nextWatering) return null
     if (typeof nextWatering === 'string') return nextWatering
     if (nextWatering.name && nextWatering.due_in) {
-      return `${nextWatering.name} — ${nextWatering.due_in}`
+      return `${nextWatering.name} â€” ${nextWatering.due_in}`
     }
     if (nextWatering.name) return nextWatering.name
     return null
@@ -36,7 +36,7 @@
 </script>
 
 <svelte:head>
-  <title>Plants — Home Hub</title>
+  <title>Plants â€” Home Hub</title>
 </svelte:head>
 
 <main class="guest-page">
@@ -47,7 +47,7 @@
 
   {#if !loaded}
     <section class="guest-card">
-      <p class="muted">Loading…</p>
+      <p class="muted">Loadingâ€¦</p>
     </section>
   {:else if unavailable || !summary}
     <section class="guest-card">
@@ -67,7 +67,7 @@
       </div>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">{summary.total ?? '—'}</div>
+          <div class="stat-value">{summary.total ?? 'â€”'}</div>
           <div class="stat-label">Total</div>
         </div>
         <div class="stat">

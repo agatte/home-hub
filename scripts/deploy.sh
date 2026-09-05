@@ -77,6 +77,7 @@ RESTART_BACKEND=0
 RESTART_AMBIENT=0
 RESTART_LATITUDE_STREAMING=0
 RESTART_TUNNEL=0
+RESTART_GUEST_GATEWAY=0
 INSTALL_KIOSK_RECYCLE=0
 INSTALL_AMBIENT_UNIT=0
 INSTALL_HOST_CONTROL=0
@@ -96,6 +97,7 @@ if [[ -z "$LAST_DEPLOYED" ]]; then
     RESTART_AMBIENT=1
     RESTART_LATITUDE_STREAMING=1
     RESTART_TUNNEL=1
+    RESTART_GUEST_GATEWAY=1
     INSTALL_KIOSK_RECYCLE=1
     INSTALL_AMBIENT_UNIT=1
     INSTALL_HOST_CONTROL=1
@@ -132,7 +134,7 @@ else
         INSTALL_AMBIENT_UNIT=1
     fi
 
-    if echo "$CHANGED" | grep -qE "^(scripts/homehub-hostctl\.sh|deployment/home-hub(-return\.desktop|\.service|-tunnel\.service|-latitude-streaming\.service|-ambient\.service|-kiosk-recycle\.(service|timer)))$"; then
+    if echo "$CHANGED" | grep -qE "^(scripts/homehub-hostctl\.sh|deployment/home-hub(-return\.desktop|\.service|-tunnel\.service|-guest-gateway\.service|-latitude-streaming\.service|-ambient\.service|-kiosk-recycle\.(service|timer)))$"; then
         INSTALL_HOST_CONTROL=1
     fi
 
@@ -152,6 +154,12 @@ else
     # or the auth gate it relies on change.
     if echo "$CHANGED" | grep -qE "^backend/api/(tunnel_proxy|auth)\.py$"; then
         RESTART_TUNNEL=1
+    fi
+
+    # Guest gateway is a separate loopback uvicorn process. Once installed,
+    # keep it on the same deployed source/config as the main backend.
+    if echo "$CHANGED" | grep -qE "^(backend/api/guest_gateway\.py|backend/config\.py|deployment/home-hub-guest-gateway\.service)$"; then
+        RESTART_GUEST_GATEWAY=1
     fi
 fi
 
@@ -253,6 +261,9 @@ rollback() {
         if [[ "$RESTART_LATITUDE_STREAMING" == "1" ]]; then
             restart_latitude_streaming "rollback"
         fi
+        if [[ "$RESTART_GUEST_GATEWAY" == "1" ]]; then
+            restart_guest_gateway "rollback"
+        fi
         return 0
     fi
 
@@ -277,10 +288,32 @@ restart_latitude_streaming() {
     fi
 }
 
+restart_guest_gateway() {
+    local suffix="${1:-}"
+    if ! systemctl --user list-unit-files home-hub-guest-gateway.service \
+            --no-pager | grep -q "home-hub-guest-gateway.service"; then
+        echo "  (home-hub-guest-gateway.service not installed ? see deployment/home-hub-guest-gateway.service)"
+        return 0
+    fi
+    # Installation and activation are separate gates. Do not implicitly expose
+    # the guest service before its public ingress is explicitly authorized.
+    if ! systemctl --user is-active --quiet home-hub-guest-gateway.service; then
+        echo "  (home-hub-guest-gateway.service installed but inactive; not starting it automatically)"
+        return 0
+    fi
+    if [[ -n "$suffix" ]]; then
+        echo "? Restarting home-hub-guest-gateway.service (${suffix})..."
+    else
+        echo "? Restarting home-hub-guest-gateway.service..."
+    fi
+    systemctl --user restart home-hub-guest-gateway.service || \
+        echo "  (guest gateway restart failed; main backend is unaffected)"
+}
+
 install_host_control() {
     echo "→ Syncing HomeHub host-control assets..."
     mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/share/applications"
-    for unit in home-hub.service home-hub-tunnel.service home-hub-latitude-streaming.service home-hub-ambient.service home-hub-kiosk-recycle.service home-hub-kiosk-recycle.timer; do
+    for unit in home-hub.service home-hub-tunnel.service home-hub-guest-gateway.service home-hub-latitude-streaming.service home-hub-ambient.service home-hub-kiosk-recycle.service home-hub-kiosk-recycle.timer; do
         if [[ -f "deployment/$unit" ]]; then
             cp "deployment/$unit" "$HOME/.config/systemd/user/$unit"
         fi
@@ -366,6 +399,10 @@ fi
 
 if [[ "$RESTART_LATITUDE_STREAMING" == "1" ]]; then
     restart_latitude_streaming
+fi
+
+if [[ "$RESTART_GUEST_GATEWAY" == "1" ]]; then
+    restart_guest_gateway
 fi
 
 if [[ "$RESTART_TUNNEL" == "1" ]]; then
