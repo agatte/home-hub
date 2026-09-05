@@ -1,6 +1,10 @@
 """Security-boundary tests for the isolated public guest gateway."""
 import httpx
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+from backend.api.auth import require_api_key
 
 from backend.api.guest_gateway import create_app
 
@@ -77,3 +81,40 @@ def test_forwarding_prefixes_reject_encoded_dot_segment_escape() -> None:
         _join(client)
         assert client.get("/guest/%2e%2e/api/debug/query?sql=SELECT%201").status_code == 404
         assert client.get("/_app/%252e%252e/api/camera/snapshot").status_code == 404
+
+
+def test_gateway_terminates_forwarded_client_identity_before_write_auth(monkeypatch) -> None:
+    """Cloudflare client-IP headers must not leak into the trusted loopback hop."""
+    monkeypatch.setattr("backend.api.auth.settings.HOME_HUB_API_KEY", "test-api-key")
+
+    upstream = FastAPI()
+
+    @upstream.post("/api/guest/sonos/play", dependencies=[Depends(require_api_key)])
+    async def protected_guest_write() -> dict:
+        return {"status": "ok"}
+
+    proxied_upstream = ProxyHeadersMiddleware(upstream, trusted_hosts="*")
+    transport = httpx.ASGITransport(
+        app=proxied_upstream,
+        client=("127.0.0.1", 12345),
+    )
+    app = create_app(
+        public_url="https://guest.example.test",
+        invite_ttl=60,
+        session_ttl=600,
+        client_transport=transport,
+    )
+
+    with TestClient(app, base_url="https://guest.example.test") as client:
+        _join(client)
+        response = client.post(
+            "/api/guest/sonos/play",
+            headers={
+                "X-Forwarded-For": "8.8.8.8",
+                "X-Forwarded-Proto": "https",
+                "CF-Connecting-IP": "8.8.8.8",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

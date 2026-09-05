@@ -52,6 +52,12 @@ _DROP_REQUEST_HEADERS = frozenset({
     "connection", "cookie", "host", "keep-alive", "proxy-authenticate",
     "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
     "content-length", "x-api-key", "x-skill-token", "x-tunnel-origin",
+    # The public gateway terminates client identity.  Never relay proxy/client-IP
+    # headers into the loopback HomeHub hop: uvicorn trusts X-Forwarded-For from
+    # loopback and would otherwise reclassify a session-authenticated guest as
+    # the public internet client, causing the main write gate to reject it.
+    "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-port",
+    "x-forwarded-proto", "x-real-ip", "cf-connecting-ip", "cf-visitor",
 })
 
 _DROP_RESPONSE_HEADERS = frozenset({
