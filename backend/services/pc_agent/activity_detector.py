@@ -301,6 +301,10 @@ class ActivityDetector:
         # (root cause of the 2026-05-29 "awake while away" incident).
         self._real_last_input_tick: Optional[int] = None
         self._synthetic_last_input_tick: Optional[int] = None
+        # True only when the latest Win32 idle probe succeeded. Idle=0 is
+        # otherwise ambiguous with an unavailable probe and must never prove
+        # contemporaneous human interaction to the backend.
+        self._input_idle_valid: bool = False
         # Hysteresis state — the candidate mode we'd report once the dwell expires.
         self._pending_mode: Optional[str] = None
         self._pending_since: Optional[float] = None
@@ -372,11 +376,14 @@ class ActivityDetector:
         returning and flaps working<->idle all night when the apartment is
         empty (root cause of the 2026-05-29 "awake while away" incident).
 
-        Returns 0 on non-Windows or on error.
+        Returns 0 on non-Windows or on error for legacy classifier behavior;
+        ``_input_idle_valid`` separately records whether that value is trustworthy.
         """
         reading = self._read_last_input()
         if reading is None:
+            self._input_idle_valid = False
             return 0
+        self._input_idle_valid = True
         now_tick, last_input_tick = reading
         if (
             self._synthetic_last_input_tick is not None
@@ -1009,6 +1016,13 @@ class ActivityDetector:
                 "value": classification.idle_seconds,
                 "display": idle_display,
                 "impact": idle_impact,
+            },
+            {
+                "key": "input_idle_valid",
+                "label": "Input telemetry",
+                "value": self._input_idle_valid,
+                "display": "valid" if self._input_idle_valid else "unavailable",
+                "impact": 1.0 if self._input_idle_valid else 0.0,
             },
             {
                 "key": "foreground_kind",

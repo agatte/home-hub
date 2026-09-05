@@ -666,6 +666,17 @@ class TestDetectHysteresis:
 # ---------------------------------------------------------------------------
 
 
+def test_input_idle_validity_tracks_win32_probe_success(monkeypatch):
+    d = ActivityDetector()
+    monkeypatch.setattr(d, "_read_last_input", lambda: None)
+    assert d._get_idle_seconds() == 0
+    assert d._input_idle_valid is False
+
+    monkeypatch.setattr(d, "_read_last_input", lambda: (10_000, 9_000))
+    assert d._get_idle_seconds() == 1
+    assert d._input_idle_valid is True
+
+
 def test_build_factors_includes_configured_device_role(monkeypatch):
     monkeypatch.setenv("HOME_HUB_AGENT_DEVICE", "latitude")
     d = _make_detector(
@@ -678,6 +689,8 @@ def test_build_factors_includes_configured_device_role(monkeypatch):
 
     assert factors[0]["key"] == "device"
     assert factors[0]["value"] == "latitude"
+    factor_values = {factor["key"]: factor["value"] for factor in factors}
+    assert factor_values["input_idle_valid"] is False
     assert len(factors) <= 15
     assert "foreground_title" not in {factor["key"] for factor in factors}
 

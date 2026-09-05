@@ -121,6 +121,12 @@ PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS = 30
 PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS = 30
 PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT = 8
 
+# Sleeping wake authority: a process semantic can prove a human wake only when
+# the trusted Desktop lane also shows very recent real keyboard/mouse input.
+# Keep this aligned with the existing 15s recent-desktop-interaction boundary.
+SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS = 15
+SLEEPING_WAKE_INTERACTIVE_MODES = frozenset({"working", "gaming", "watching"})
+
 # Source labels that get blocked by the cooldown above. These are the
 # sensor-driven autonomous pushes — they should defer to a recent user
 # choice. User-API actions (api:*) and rule-suggestion accepts

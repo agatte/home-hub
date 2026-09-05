@@ -38,6 +38,7 @@ class FakeEngine:
         self._period = period
         self.signal_presence = AsyncMock(side_effect=self._clear)
         self.reapply_current_mode = AsyncMock()
+        self.prepare_home_occupancy_transition = AsyncMock()
         self.armed_by: list[str] = []
 
     async def _clear(self, source):
@@ -208,6 +209,23 @@ class TestArrive:
         assert engine._external_off_detected is False
         engine.signal_presence.assert_awaited_with("geofence:ios_shortcut")
         engine.reapply_current_mode.assert_awaited_once_with(force_resend=True)
+
+    async def test_arrive_prepares_awake_lifecycle_before_persisting_home(self):
+        mgr, engine, _settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "ios_shortcut")
+        original_save = mgr._save_setting
+
+        async def ordered_save(key, value):
+            if key == AWAY_STATE_KEY and value.get("away") is False:
+                assert engine.prepare_home_occupancy_transition.await_count == 1
+            await original_save(key, value)
+
+        mgr._save_setting = ordered_save
+        await mgr.handle_event("arrive", "ios_shortcut")
+
+        engine.prepare_home_occupancy_transition.assert_awaited_once_with(
+            "ios_shortcut"
+        )
 
     async def test_arrive_speaks_welcome_when_allowed(self):
         mgr, _engine, _settings, _hue, _sonos, tts, _n = _make_manager()
@@ -476,6 +494,23 @@ class TestHomeReconciliation:
         assert activated["effects_required"] is True
         assert engine._external_off_detected is False
         assert engine._host_return_hold is False
+
+    async def test_prepare_awake_failure_keeps_return_home_indeterminate(self):
+        mgr, engine, settings, *_ = _make_manager()
+        await mgr.handle_event("leave", "travel:kiosk")
+        engine.arm_host_return_suppression("host:returning-home")
+        engine.prepare_home_occupancy_transition.side_effect = RuntimeError(
+            "override state unavailable"
+        )
+
+        with pytest.raises(HomeReconciliationIndeterminate):
+            await mgr.reconcile_home(
+                source="return_home:hostctl", reconciliation_id="return-awake-fail"
+            )
+
+        assert mgr.away is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        assert engine._host_return_hold is True
 
     async def test_same_id_retry_after_newer_leave_is_superseded(self):
         mgr, engine, settings, *_ = _make_manager()

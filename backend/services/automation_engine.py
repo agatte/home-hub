@@ -35,6 +35,8 @@ from backend.services.automation_constants import (
     PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS as PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS,
     PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS as PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS,
     PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT as PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT,
+    SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS as SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS,
+    SLEEPING_WAKE_INTERACTIVE_MODES as SLEEPING_WAKE_INTERACTIVE_MODES,
     PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS as PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS,
     PRESERVE_PER_LIGHT_OVERRIDE_SOURCES as PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
     RECENT_PROCESS_WORKING_SECONDS as RECENT_PROCESS_WORKING_SECONDS,
@@ -237,6 +239,11 @@ def _number_factor(factors: Optional[list[dict]], key: str) -> Optional[float]:
     return float(value)
 
 
+def _bool_factor(factors: Optional[list[dict]], key: str) -> Optional[bool]:
+    value = _factor_value(factors, key)
+    return value if isinstance(value, bool) else None
+
+
 def _activity_device(factors: Optional[list[dict]]) -> Optional[str]:
     """Best-effort device role for a process report, e.g. desktop/latitude."""
     value = _factor_value(factors, "device")
@@ -262,6 +269,7 @@ class ProcessObservation:
     candidate_mode: Optional[str]
     candidate_reason: Optional[str]
     idle_seconds: Optional[float]
+    input_idle_valid: Optional[bool]
     pending_mode: Optional[str]
     pending_dwell_age: Optional[float]
     gaming_qualification: Optional[str]
@@ -280,6 +288,7 @@ class ProcessObservation:
             "candidate_mode": self.candidate_mode,
             "candidate_reason": self.candidate_reason,
             "idle_seconds": self.idle_seconds,
+            "input_idle_valid": self.input_idle_valid,
             "pending_mode": self.pending_mode,
             "pending_dwell_age": self.pending_dwell_age,
             "gaming_qualification": self.gaming_qualification,
@@ -1696,7 +1705,6 @@ class AutomationEngine:
             "so automation can resume",
             source,
         )
-
     @property
     def host_return_hold_active(self) -> bool:
         return self._host_return_hold
@@ -1721,6 +1729,17 @@ class AutomationEngine:
             "Host RETURNING_HOME suppression released by %s (release_away=%s)",
             source, release_away,
         )
+
+    async def prepare_home_occupancy_transition(self, source: str) -> None:
+        """Durably clear stale awake authority before Away can become Home.
+
+        AwayManager calls this while hard Away/host suppression is still held,
+        before it persists Home. If persistence fails, the occupancy transition
+        must fail closed instead of publishing Home with an old awake latch.
+        """
+        self._home_awake_confirmed = False
+        await self._persist_override_state(raise_on_error=True)
+        logger.info("Prepared Home occupancy lifecycle by %s", source)
 
     def arm_away_suppression(self, source: str) -> None:
         """Arm the external-off run_loop suppression with a HARD hold.
@@ -1813,6 +1832,28 @@ class AutomationEngine:
             and 0.0 <= evidence.idle_seconds < max_idle_seconds
         )
 
+    @staticmethod
+    def _qualifies_interactive_sleep_wake(
+        observation: Optional[ProcessObservation],
+    ) -> bool:
+        """Whether a process report proves contemporaneous human wake.
+
+        Only the Desktop lane may earn this authority, and only when the
+        activity semantic is awake/interactively meaningful *and* the raw
+        input-idle evidence is inside the established 15-second boundary.
+        Latitude playback and reports with missing/stale input evidence abstain.
+        """
+        if observation is None or observation.device != "desktop":
+            return False
+        if observation.observed_mode not in SLEEPING_WAKE_INTERACTIVE_MODES:
+            return False
+        if observation.idle_seconds is None or observation.input_idle_valid is not True:
+            return False
+        return bool(
+            0.0 <= observation.idle_seconds
+            < SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS
+        )
+
     def _record_process_observation(
         self,
         mode: str,
@@ -1826,6 +1867,7 @@ class AutomationEngine:
             candidate_mode=_string_factor(factors, "candidate_mode"),
             candidate_reason=_string_factor(factors, "candidate_reason"),
             idle_seconds=_number_factor(factors, "idle"),
+            input_idle_valid=_bool_factor(factors, "input_idle_valid"),
             pending_mode=_string_factor(factors, "pending_mode"),
             pending_dwell_age=_number_factor(factors, "pending_dwell_age"),
             gaming_qualification=_string_factor(
@@ -2615,6 +2657,33 @@ class AutomationEngine:
                 "included_in_fusion": False,
             }
 
+        wake_previous_mode: Optional[str] = None
+        interactive_sleep_wake = bool(
+            self.current_mode == "sleeping"
+            and not self._away_hold
+            and not self._host_return_hold
+            and self._qualifies_interactive_sleep_wake(observation)
+        )
+        if interactive_sleep_wake:
+            wake_previous_mode = "sleeping"
+            # An accepted human-interaction wake may release even an explicit
+            # Sleeping override. Preserve independent per-light ownership; this
+            # is sensor-proven wake, not the user pressing the Auto control.
+            if self._manual_override and self._override_mode == "sleeping":
+                self._manual_override = False
+                self._override_mode = None
+                self._override_source = None
+                self._override_time = None
+                self._override_expiry_deferred = False
+            self._home_awake_confirmed = True
+            if self._sleep_fade_task and not self._sleep_fade_task.done():
+                self._sleep_fade_task.cancel()
+                self._sleep_fade_task = None
+            await self._persist_override_state()
+            logger.info(
+                "Sleeping wake accepted from fresh interactive Desktop %s", mode,
+            )
+
         # Priority guard — a lower-priority mode can't displace a higher-priority
         # current mode unless the report comes from the source that owns it
         # (sources can always update themselves) or the owning source has gone
@@ -2623,7 +2692,11 @@ class AutomationEngine:
         now = report_now
         current_priority = MODE_PRIORITY.get(self._current_mode, 0)
         new_priority = MODE_PRIORITY.get(mode, 0)
-        if new_priority < current_priority and source_key != self._mode_source_key:
+        if (
+            not interactive_sleep_wake
+            and new_priority < current_priority
+            and source_key != self._mode_source_key
+        ):
             last_report = self._last_mode_source_report_at.get(
                 self._mode_source_key,
                 self._last_mode_source_report_at.get(self._mode_source),
@@ -2667,23 +2740,22 @@ class AutomationEngine:
         # sleeping survives only as a *detected* `_current_mode` — re-asserted by
         # the PC sleep-watcher via source=process — nothing guarded it. This bit
         # twice on 2026-06-03: audio_ml `idle` displaced a non-override sleeping
-        # at 08:20 and again at 12:28 UTC (flag b064a0). Mirror the
-        # RESCUE_OVERRIDE_SOURCES floor: while sleeping is held without a manual
-        # override, only a foreground *process* report of a real activity mode
-        # (anything above idle — working / watching / gaming) may wake the
-        # apartment. Idle/sleeping reports and non-process sources (audio_ml,
-        # camera, ambient) cannot. User actions take the set_manual_override /
-        # clear_override paths and are unaffected. Deliberately NOT subject to
-        # SOURCE_STALE_SECONDS — sleep must persist even if the owning process
+        # at 08:20 and again at 12:28 UTC (flag b064a0). The 2026-09-05
+        # hardening makes wake authority source-qualified: only Desktop
+        # Working/Gaming/Watching paired with <15s real input may wake
+        # automatically. Latitude playback, missing/stale input evidence,
+        # idle/sleeping reports, and non-process sources abstain. Explicit
+        # user actions use the set/clear-override paths. Deliberately NOT
+        # subject to SOURCE_STALE_SECONDS — sleep must persist even if the owning process
         # source goes quiet (e.g. the PC itself suspends).
         if (
             self._current_mode == "sleeping"
             and not self._manual_override
-            and not (source == "process" and new_priority > MODE_PRIORITY["idle"])
+            and not interactive_sleep_wake
         ):
             logger.debug(
                 "Sleeping floor: ignored %s %s (p=%d) — non-override sleeping "
-                "only wakes on a foreground process activity report",
+                "only wakes on qualified interactive Desktop activity",
                 source, mode, new_priority,
             )
             self._last_mode_source_report_at[source_key] = now
@@ -2772,7 +2844,7 @@ class AutomationEngine:
         if source == "process" and mode == "working":
             self._last_process_working_at = now
 
-        old_mode = self._current_mode
+        old_mode = wake_previous_mode or self._current_mode
 
         # Accept the new detected mode (tracks what the PC is actually doing)
         self._current_mode = mode
@@ -3181,6 +3253,13 @@ class AutomationEngine:
             "(source=%s, prior_override=%s, was_overridden=%s)",
             source, old_effective, was_overridden,
         )
+        if (
+            old_effective == "sleeping"
+            and user_requested_auto
+            and not self._away_hold
+        ):
+            self._home_awake_confirmed = True
+
         await self._persist_override_state()
 
         if old_effective == "sleeping":
@@ -3227,7 +3306,6 @@ class AutomationEngine:
                     await self._broadcast_mode()
                     return
 
-                self._home_awake_confirmed = True
 
                 if self._external_off_detected:
                     # Sleeping/off can leave the soft all-lights-off latch set.
@@ -3308,10 +3386,11 @@ class AutomationEngine:
         """Clear DND immediately."""
         return await self._dnd.clear(source=source)
 
-    async def _persist_override_state(self) -> None:
+    async def _persist_override_state(self, *, raise_on_error: bool = False) -> None:
         """Write current manual-override state to app_settings.
 
         Persists `_manual_override`, `_override_mode`, `_override_time`,
+        the restart-durable `_home_awake_confirmed` lifecycle latch,
         and both autonomous-rule refractory stamps
         (`_zone_posture_last_fired_at`, `_watching_sleep_guard_last_fired_at`)
         so a backend restart (deploys, crashes) doesn't drop the user's
@@ -3326,6 +3405,7 @@ class AutomationEngine:
 
         payload: dict[str, Any] = {
             "manual_override": self._manual_override,
+            "home_awake_confirmed": self._home_awake_confirmed,
             "override_mode": self._override_mode,
             "override_source": self._override_source,
             "override_time_utc": (
@@ -3358,10 +3438,13 @@ class AutomationEngine:
             await save_setting(OVERRIDE_STATE_KEY, payload)
         except Exception as e:
             logger.error("Failed to persist override state: %s", e, exc_info=True)
+            if raise_on_error:
+                raise
 
     async def load_override_state(self) -> None:
         """Restore manual-override state from app_settings on startup.
 
+        Restores the independent confirmed-awake lifecycle latch first.
         Expired autonomous overrides are dropped. Expired user-owned
         overrides are restored until a fresh semantic mode can safely replace
         them; `sleeping` remains exempt because it has no timeout by design.
@@ -3436,6 +3519,12 @@ class AutomationEngine:
                 logger.warning(
                     "Invalid asleep stamp on load: %r", asleep_str,
                 )
+
+        # Awake-home authority is independent of whether a mode override is
+        # active, so restore it before the override-specific early return.
+        self._home_awake_confirmed = bool(
+            saved.get("home_awake_confirmed", False)
+        )
 
         if not saved.get("manual_override"):
             return

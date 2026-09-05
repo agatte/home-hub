@@ -240,6 +240,10 @@ class AwayManager:
             )
 
         if was_away:
+            # Cross-store ordering: clear/persist stale awake authority while
+            # Away is still authoritative, then publish durable Home. A crash
+            # after the Home write can no longer resurrect a pre-Away wake.
+            await self._engine.prepare_home_occupancy_transition(state_source)
             payload = {
                 "away": False,
                 "since_utc": None,
@@ -363,6 +367,12 @@ class AwayManager:
                     (datetime.now(timezone.utc) - self._since).total_seconds() // 60
                 )
             try:
+                try:
+                    await self._engine.prepare_home_occupancy_transition(source)
+                except Exception as exc:
+                    raise HomeReconciliationIndeterminate(
+                        "Awake lifecycle could not be durably prepared for Home"
+                    ) from exc
                 await self._persist_home_strict(
                     source=source, reconciliation_id=reconciliation_id,
                 )

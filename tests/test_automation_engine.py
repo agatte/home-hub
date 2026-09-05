@@ -311,6 +311,77 @@ class TestAutomationEngine:
         engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
         engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
 
+    async def test_explicit_sleeping_auto_persists_confirmed_awake(
+        self, engine, monkeypatch,
+    ):
+        saved_payloads: list[dict] = []
+
+        async def fake_save_setting(_key, value):
+            saved_payloads.append(dict(value))
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.save_setting", fake_save_setting,
+        )
+        engine._manual_override = True
+        engine._override_mode = "sleeping"
+        engine._override_source = "api:test"
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+
+        await engine.clear_override(
+            source="api:test", user_requested_auto=True,
+        )
+
+        assert saved_payloads[-1]["manual_override"] is False
+        assert saved_payloads[-1]["home_awake_confirmed"] is True
+
+    async def test_restart_restores_confirmed_awake_without_override(
+        self, engine, monkeypatch,
+    ):
+        async def fake_load_setting(_key):
+            return {
+                "manual_override": False,
+                "home_awake_confirmed": True,
+            }
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", fake_load_setting,
+        )
+        await engine.load_override_state()
+
+        assert engine._home_awake_confirmed is True
+        result = await engine.report_activity(
+            "sleeping", source="process",
+            factors=[
+                {"key": "device", "value": "desktop"},
+                {"key": "idle", "value": 1000},
+            ],
+        )
+        assert result["reason"] == "home_awake_confirmed"
+        assert engine.house_state == "home"
+
+    async def test_prepare_home_from_away_persists_cleared_awake_before_release(
+        self, engine, monkeypatch,
+    ):
+        saved_payloads: list[dict] = []
+
+        async def fake_save_setting(_key, value):
+            saved_payloads.append(dict(value))
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.save_setting", fake_save_setting,
+        )
+        engine._away_hold = True
+        engine._external_off_detected = True
+        engine._home_awake_confirmed = True
+
+        await engine.prepare_home_occupancy_transition("geofence:arrive")
+
+        assert engine._home_awake_confirmed is False
+        assert engine._away_hold is True
+        assert engine._external_off_detected is True
+        assert saved_payloads[-1]["home_awake_confirmed"] is False
+
     async def test_explicit_sleeping_auto_keeps_hard_away_dark(self, engine):
         engine._current_mode = "working"
         engine._manual_override = True
@@ -862,6 +933,16 @@ class TestSleepingFloor:
         assert engine.current_mode == "sleeping"
         assert engine.manual_override is False
 
+    @staticmethod
+    def _interactive_factors(
+        *, device: str = "desktop", idle_seconds: float = 0.0,
+    ) -> list[dict]:
+        return [
+            {"key": "device", "value": device},
+            {"key": "idle", "value": idle_seconds},
+            {"key": "input_idle_valid", "value": True},
+        ]
+
     async def test_audio_ml_idle_does_not_break_detected_sleeping(self, engine):
         # The exact 2026-06-03 repro: audio_ml idle@1 vs non-override sleeping.
         await self._enter_detected_sleeping(engine)
@@ -888,18 +969,88 @@ class TestSleepingFloor:
 
     async def test_process_working_wakes_detected_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
-        await engine.report_activity("working", source="process")
+        await engine.report_activity(
+            "working", source="process", factors=self._interactive_factors(),
+        )
         assert engine.current_mode == "working"
+        assert engine._home_awake_confirmed is True
+
+    async def test_interactive_desktop_wake_persists_confirmation(
+        self, engine, monkeypatch,
+    ):
+        saved_payloads: list[dict] = []
+
+        async def fake_save_setting(_key, value):
+            saved_payloads.append(dict(value))
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.save_setting", fake_save_setting,
+        )
+        await self._enter_detected_sleeping(engine)
+        await engine.report_activity(
+            "working", source="process", factors=self._interactive_factors(),
+        )
+
+        assert saved_payloads[-1]["home_awake_confirmed"] is True
+        assert saved_payloads[-1]["manual_override"] is False
 
     async def test_process_gaming_wakes_detected_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
-        await engine.report_activity("gaming", source="process")
+        await engine.report_activity(
+            "gaming", source="process", factors=self._interactive_factors(),
+        )
         assert engine.current_mode == "gaming"
+        assert engine._home_awake_confirmed is True
 
     async def test_process_watching_wakes_detected_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
-        await engine.report_activity("watching", source="process")
+        await engine.report_activity(
+            "watching", source="process", factors=self._interactive_factors(),
+        )
         assert engine.current_mode == "watching"
+        assert engine._home_awake_confirmed is True
+
+    async def test_latitude_watching_cannot_wake_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        result = await engine.report_activity(
+            "watching", source="process",
+            factors=self._interactive_factors(device="latitude"),
+        )
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+        assert engine._home_awake_confirmed is False
+
+    async def test_desktop_missing_input_evidence_cannot_wake_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        result = await engine.report_activity(
+            "working", source="process",
+            factors=[{"key": "device", "value": "desktop"}],
+        )
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+
+    async def test_desktop_invalid_input_probe_cannot_wake_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        result = await engine.report_activity(
+            "watching", source="process",
+            factors=[
+                {"key": "device", "value": "desktop"},
+                {"key": "idle", "value": 0.0},
+                {"key": "input_idle_valid", "value": False},
+            ],
+        )
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+        assert engine._home_awake_confirmed is False
+
+    async def test_desktop_input_at_boundary_cannot_wake_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        result = await engine.report_activity(
+            "gaming", source="process",
+            factors=self._interactive_factors(idle_seconds=15.0),
+        )
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
 
     async def test_floor_persists_across_stale_owning_source(self, engine):
         # Sleep must stick even if the process source that set it goes stale —
@@ -919,6 +1070,63 @@ class TestSleepingFloor:
         await engine.report_activity("idle", source="audio_ml")
         assert engine.manual_override is True
         assert engine.override_mode == "sleeping"
+
+    async def test_interactive_desktop_wake_releases_manual_sleeping(self, engine):
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        await engine.set_manual_override("sleeping", source="api:test")
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks.reset_mock()
+
+        result = await engine.report_activity(
+            "working", source="process", factors=self._interactive_factors(),
+        )
+
+        assert result["semantic_disposition"] == "accepted"
+        assert engine.manual_override is False
+        assert engine.current_mode == "working"
+        assert engine.house_state == "home"
+        assert engine._home_awake_confirmed is True
+        engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
+
+    async def test_latitude_watching_does_not_release_manual_sleeping(self, engine):
+        engine._apply_mode = AsyncMock()
+        await engine.set_manual_override("sleeping", source="api:test")
+
+        await engine.report_activity(
+            "watching", source="process",
+            factors=self._interactive_factors(device="latitude"),
+        )
+
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
+        assert engine._home_awake_confirmed is False
+
+    async def test_dnd_blocks_interactive_desktop_wake(self, engine):
+        await self._enter_detected_sleeping(engine)
+        engine._dnd._enabled = True
+        engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
+
+        result = await engine.report_activity(
+            "gaming", source="process", factors=self._interactive_factors(),
+        )
+
+        assert result["reason"] == "dnd_active"
+        assert engine.current_mode == "sleeping"
+        assert engine._home_awake_confirmed is False
+
+    async def test_away_hold_blocks_interactive_desktop_wake(self, engine):
+        await self._enter_detected_sleeping(engine)
+        engine.arm_away_suppression("test")
+
+        await engine.report_activity(
+            "working", source="process", factors=self._interactive_factors(),
+        )
+
+        assert engine.house_state == "away"
+        assert engine._home_awake_confirmed is False
+        assert engine._away_hold is True
 
 
 # ---------------------------------------------------------------------------
