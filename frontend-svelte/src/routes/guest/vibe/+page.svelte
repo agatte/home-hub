@@ -795,7 +795,7 @@
             class:loading={activatingVibe === vibe.name}
             on:click={() => activateVibe(vibe.name)}
             disabled={!vibe.available || vibeCooldownActive || !!activatingVibe}
-            title={vibe.available ? `Play ${vibe.playlist_title}` : `Save ${vibe.playlist_title} as a Sonos Playlist to enable this`}
+            title={vibe.available ? `Play ${vibe.playlist_title}` : `${vibe.playlist_title} is not queueable from HomeHub`}
           >
             <span class="vibe-label">{vibe.label}</span>
             <span class="vibe-playlist">{vibe.available ? vibe.playlist_title : `${vibe.playlist_title} - unavailable`}</span>

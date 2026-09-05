@@ -62,13 +62,11 @@ GUEST_VIBE_LABELS: dict[str, str] = {
     "hype":       "Hype",
     "singalong":  "Sing-along",
     "throwback":  "Throwback",
-    "chill":      "Chill",
 }
 GUEST_VIBE_DEFAULTS: dict[str, str] = {
     "hype":       "It's Lit!",
     "singalong":  "2000s Hits Essentials",
     "throwback":  "Replay-all-time",
-    "chill":      "Chill 2",
 }
 GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
 GUEST_VIBE_COOLDOWN_SECONDS = 15
@@ -543,6 +541,7 @@ async def list_guest_vibes(request: Request) -> dict:
             str(item.get("title", "")).casefold()
             for item in favorites
             if item.get("source") == "playlist"
+            or (item.get("source") == "favorite" and item.get("uri"))
         }
     return {
         "vibes": [
@@ -604,13 +603,14 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
         str(item.get("title", "")).casefold()
         for item in favorites
         if item.get("source") == "playlist"
+        or (item.get("source") == "favorite" and item.get("uri"))
     }
     if favorite_title.casefold() not in playable_titles:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"{favorite_title} is an Apple Music favorite, not a Sonos saved playlist. "
-                "Save it as a Sonos Playlist to make it guest-playable."
+                f"{favorite_title} does not expose a queueable Sonos resource. "
+                "Choose a playlist/album favorite or a Sonos saved playlist instead."
             ),
         )
 
