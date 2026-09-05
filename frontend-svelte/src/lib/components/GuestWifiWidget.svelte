@@ -4,12 +4,14 @@
   import { Wifi } from 'lucide-svelte'
   import { apiGet } from '$lib/api.js'
 
+  export let cardClickable = false
   /** @type {{ configured: boolean, ssid?: string, password?: string, security?: string, qr_payload?: string, guest_app_configured?: boolean } | null} */
   let info = null
   let error = false
   let modalOpen = false
   let qrDataUrl = ''
   let urlQrDataUrl = ''
+  let opening = false
   /** @type {HTMLButtonElement | undefined} */
   let closeBtn
 
@@ -32,42 +34,55 @@
       const resp = await apiGet('/api/guest/wifi')
       info = resp
       error = false
+      return resp
     } catch {
+      info = null
       error = true
+      return null
     }
   }
 
-  async function openModal() {
-    if (!info?.configured || !info.qr_payload) return
+  export async function openModal() {
+    if (opening) return
+    opening = true
     try {
-      qrDataUrl = await QRCode.toDataURL(info.qr_payload, {
-        width: 360,
-        margin: 1,
-        color: { dark: '#000000', light: '#ffffff' },
-      })
-    } catch {
-      qrDataUrl = ''
-    }
-    urlQrDataUrl = ''
-    const isGuestApp = window.location.pathname.startsWith('/guest')
-    if (!isGuestApp && info.guest_app_configured) {
+      // Refresh on every open so a long-lived kiosk/browser can never reuse
+      // stale SSID credentials or a stale WIFI: QR payload.
+      const currentInfo = await fetchInfo()
+      if (!currentInfo?.configured || !currentInfo.qr_payload) return
+
       try {
-        const response = await fetch('/api/guest/invite', { method: 'POST' })
-        const invite = response.ok ? await response.json() : null
-        if (invite?.join_url) {
-          urlQrDataUrl = await QRCode.toDataURL(invite.join_url, {
-            width: 200,
-            margin: 1,
-            color: { dark: '#000000', light: '#ffffff' },
-          })
-        }
+        qrDataUrl = await QRCode.toDataURL(currentInfo.qr_payload, {
+          width: 360,
+          margin: 1,
+          color: { dark: '#000000', light: '#ffffff' },
+        })
       } catch {
-        urlQrDataUrl = ''
+        qrDataUrl = ''
       }
+      urlQrDataUrl = ''
+      const isGuestApp = window.location.pathname.startsWith('/guest')
+      if (!isGuestApp && currentInfo.guest_app_configured) {
+        try {
+          const response = await fetch('/api/guest/invite', { method: 'POST' })
+          const invite = response.ok ? await response.json() : null
+          if (invite?.join_url) {
+            urlQrDataUrl = await QRCode.toDataURL(invite.join_url, {
+              width: 200,
+              margin: 1,
+              color: { dark: '#000000', light: '#ffffff' },
+            })
+          }
+        } catch {
+          urlQrDataUrl = ''
+        }
+      }
+      modalOpen = true
+      await tick()
+      closeBtn?.focus()
+    } finally {
+      opening = false
     }
-    modalOpen = true
-    await tick()
-    closeBtn?.focus()
   }
 
   onMount(() => {
@@ -95,9 +110,13 @@
   </div>
 
   {#if info?.configured}
-    <button type="button" class="wifi-link" on:click={openModal}>
-      Show QR &rarr;
-    </button>
+    {#if cardClickable}
+      <span class="wifi-link">Show QR &rarr;</span>
+    {:else}
+      <button type="button" class="wifi-link" on:click={openModal}>
+        Show QR &rarr;
+      </button>
+    {/if}
   {:else if info && !info.configured}
     <div class="wifi-hint">Set GUEST_WIFI_SSID + GUEST_WIFI_PASSWORD in .env</div>
   {/if}

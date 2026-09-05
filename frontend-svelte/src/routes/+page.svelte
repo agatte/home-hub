@@ -19,6 +19,9 @@
   /** @type {any} */
   export let params = undefined
   data; params;
+
+  let barWidget
+  let guestWifiWidget
 </script>
 
 <main class="home-page">
@@ -53,15 +56,39 @@
       <PlantWidget />
     </section>
 
-    <section class="widget widget-bar">
+    <div
+      class="widget widget-bar widget-actionable"
+      role="button"
+      tabindex="0"
+      aria-label="Open Home Bar"
+      on:click={() => barWidget?.openModal()}
+      on:keydown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault()
+          barWidget?.openModal()
+        }
+      }}
+    >
       <h2 class="widget-title">Home Bar</h2>
-      <BarWidget />
-    </section>
+      <BarWidget cardClickable bind:this={barWidget} />
+    </div>
 
-    <section class="widget widget-guest-wifi">
+    <div
+      class="widget widget-guest-wifi widget-actionable"
+      role="button"
+      tabindex="0"
+      aria-label="Open Guest WiFi QR"
+      on:click={() => guestWifiWidget?.openModal()}
+      on:keydown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault()
+          guestWifiWidget?.openModal()
+        }
+      }}
+    >
       <h2 class="widget-title">Guests</h2>
-      <GuestWifiWidget />
-    </section>
+      <GuestWifiWidget cardClickable bind:this={guestWifiWidget} />
+    </div>
 
     <section class="widget widget-pihole">
       <h2 class="widget-title">Network</h2>
@@ -83,6 +110,15 @@
 </main>
 
 <style>
+  .widget-actionable {
+    cursor: pointer;
+  }
+
+  .widget-actionable:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .widget-sonos-strip {
     margin-bottom: 8px;
     padding: 8px 12px;

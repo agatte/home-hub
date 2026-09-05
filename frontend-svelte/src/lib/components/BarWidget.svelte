@@ -4,6 +4,7 @@
   import { Wine, PartyPopper, AlertTriangle } from 'lucide-svelte'
 
   // Bar app URL for iframe modal — read from the status response
+  export let cardClickable = false
   let barAppUrl = ''
 
   function portal(node) {
@@ -28,7 +29,9 @@
     if (e.key === 'Escape' && modalOpen) modalOpen = false
   }
 
-  async function openModal() {
+  export async function openModal() {
+    if (!barAppUrl) await fetchStatus()
+    if (!barAppUrl) return
     modalOpen = true
     await tick()
     closeBtn?.focus()
@@ -94,9 +97,13 @@
       </div>
     {/if}
 
-    <button type="button" class="bar-link" on:click={openModal}>
-      View Bar &rarr;
-    </button>
+    {#if cardClickable}
+      <span class="bar-link">View Bar &rarr;</span>
+    {:else}
+      <button type="button" class="bar-link" on:click={openModal}>
+        View Bar &rarr;
+      </button>
+    {/if}
   </div>
 {:else if error}
   <div class="bar-empty">Bar app unavailable</div>
