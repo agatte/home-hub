@@ -3,6 +3,7 @@
   import { apiGet } from '$lib/api.js'
   import { Sprout, Droplets, AlertTriangle } from 'lucide-svelte'
 
+  export let cardClickable = false
   const PLANT_APP_URL = 'https://plant-care-app-gamma.vercel.app'
 
   // Portal action — moves the node to document.body so position:fixed escapes
@@ -30,7 +31,9 @@
     if (e.key === 'Escape' && modalOpen) modalOpen = false
   }
 
-  async function openModal() {
+  export async function openModal() {
+    if (!summary) await fetchStatus()
+    if (!summary) return
     modalOpen = true
     // Focus the close button so ESC works before the iframe steals focus.
     // After the user clicks into the iframe, ESC keystrokes go to the iframe
@@ -96,9 +99,13 @@
       </div>
     {/if}
 
-    <button type="button" class="plant-link" on:click={openModal}>
-      View Plants &rarr;
-    </button>
+    {#if cardClickable}
+      <span class="plant-link">View Plants &rarr;</span>
+    {:else}
+      <button type="button" class="plant-link" on:click={openModal}>
+        View Plants &rarr;
+      </button>
+    {/if}
   </div>
 {:else if error}
   <div class="plant-empty">Plant app unavailable</div>

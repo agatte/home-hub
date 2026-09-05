@@ -2,6 +2,8 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { apiGet } from '$lib/api.js'
 
+  export let cardClickable = false
+
   /** @param {HTMLElement} node */
   function portal(node) {
     document.body.appendChild(node)
@@ -25,7 +27,9 @@
     if (e.key === 'Escape' && modalOpen) modalOpen = false
   }
 
-  async function openModal() {
+  export async function openModal() {
+    if (!stats) await fetchStats()
+    if (!stats) return
     modalOpen = true
     await tick()
     closeBtn?.focus()
@@ -91,14 +95,25 @@
       </div>
     </div>
 
-    <button type="button" class="pihole-admin" on:click={openModal}>
-      Open Admin
-      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-        <polyline points="15 3 21 3 21 9" />
-        <line x1="10" y1="14" x2="21" y2="3" />
-      </svg>
-    </button>
+    {#if cardClickable}
+      <span class="pihole-admin">
+        Open Admin
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
+        </svg>
+      </span>
+    {:else}
+      <button type="button" class="pihole-admin" on:click={openModal}>
+        Open Admin
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
+        </svg>
+      </button>
+    {/if}
   </div>
 {:else if error}
   <div class="pihole-empty">Pi-hole unavailable</div>

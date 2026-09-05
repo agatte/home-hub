@@ -10,6 +10,7 @@
   import PlantWidget from '$lib/components/PlantWidget.svelte'
   import BarWidget from '$lib/components/BarWidget.svelte'
   import GuestWifiWidget from '$lib/components/GuestWifiWidget.svelte'
+  import ActionableWidget from '$lib/components/ActionableWidget.svelte'
   import MusicSuggestionToast from '$lib/components/MusicSuggestionToast.svelte'
   import ModeSuggestionCard from '$lib/components/ModeSuggestionCard.svelte'
   import BrightnessSuggestionCard from '$lib/components/BrightnessSuggestionCard.svelte'
@@ -20,8 +21,10 @@
   export let params = undefined
   data; params;
 
+  let plantWidget
   let barWidget
   let guestWifiWidget
+  let piholeCard
 </script>
 
 <main class="home-page">
@@ -51,49 +54,25 @@
       <AmbientSoundWidget />
     </section>
 
-    <section class="widget widget-plants">
+    <ActionableWidget className="widget-plants" ariaLabel="Open Plants" onActivate={() => plantWidget?.openModal()}>
       <h2 class="widget-title">Plants</h2>
-      <PlantWidget />
-    </section>
+      <PlantWidget cardClickable bind:this={plantWidget} />
+    </ActionableWidget>
 
-    <div
-      class="widget widget-bar widget-actionable"
-      role="button"
-      tabindex="0"
-      aria-label="Open Home Bar"
-      on:click={() => barWidget?.openModal()}
-      on:keydown={(event) => {
-        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-          event.preventDefault()
-          barWidget?.openModal()
-        }
-      }}
-    >
+    <ActionableWidget className="widget-bar" ariaLabel="Open Home Bar" onActivate={() => barWidget?.openModal()}>
       <h2 class="widget-title">Home Bar</h2>
       <BarWidget cardClickable bind:this={barWidget} />
-    </div>
+    </ActionableWidget>
 
-    <div
-      class="widget widget-guest-wifi widget-actionable"
-      role="button"
-      tabindex="0"
-      aria-label="Open Guest WiFi QR"
-      on:click={() => guestWifiWidget?.openModal()}
-      on:keydown={(event) => {
-        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-          event.preventDefault()
-          guestWifiWidget?.openModal()
-        }
-      }}
-    >
+    <ActionableWidget className="widget-guest-wifi" ariaLabel="Open Guest WiFi QR" onActivate={() => guestWifiWidget?.openModal()}>
       <h2 class="widget-title">Guests</h2>
       <GuestWifiWidget cardClickable bind:this={guestWifiWidget} />
-    </div>
+    </ActionableWidget>
 
-    <section class="widget widget-pihole">
+    <ActionableWidget className="widget-pihole" ariaLabel="Open Network Admin" onActivate={() => piholeCard?.openModal()}>
       <h2 class="widget-title">Network</h2>
-      <PiholeCard />
-    </section>
+      <PiholeCard cardClickable bind:this={piholeCard} />
+    </ActionableWidget>
 
     <section class="widget widget-apartment widget-routines-full">
       <h2 class="widget-title">Apartment</h2>
@@ -110,15 +89,6 @@
 </main>
 
 <style>
-  .widget-actionable {
-    cursor: pointer;
-  }
-
-  .widget-actionable:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
   .widget-sonos-strip {
     margin-bottom: 8px;
     padding: 8px 12px;
