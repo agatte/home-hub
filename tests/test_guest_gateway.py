@@ -118,3 +118,31 @@ def test_gateway_terminates_forwarded_client_identity_before_write_auth(monkeypa
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_guest_toast_gets_longer_upstream_timeout_without_relaxing_other_routes() -> None:
+    observed: dict[str, dict] = {}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        observed[request.url.path] = request.extensions.get("timeout", {})
+        return httpx.Response(200, json={"status": "ok"})
+
+    app = create_app(
+        public_url="https://guest.example.test",
+        invite_ttl=60,
+        session_ttl=600,
+        client_transport=httpx.MockTransport(upstream),
+    )
+
+    with TestClient(app, base_url="https://guest.example.test") as client:
+        _join(client)
+        toast = client.post(
+            "/api/guest/toast",
+            json={"message": "cheers", "name": "guest"},
+        )
+        state = client.get("/api/guest/state")
+
+    assert toast.status_code == 200
+    assert state.status_code == 200
+    assert observed["/api/guest/toast"]["read"] == 45.0
+    assert observed["/api/guest/state"]["read"] == 6.0

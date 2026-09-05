@@ -27,6 +27,10 @@ COOKIE_NAME = "homehub_guest_session"
 MAX_BODY_BYTES = 8 * 1024
 API_RATE_LIMIT = 60
 API_RATE_WINDOW_SECONDS = 60.0
+DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 6.0
+# Guest toast waits for TTS playback to finish before returning; keep its
+# public-gateway budget separate so ordinary guest API calls stay fail-fast.
+GUEST_TOAST_UPSTREAM_TIMEOUT_SECONDS = 45.0
 
 _ALLOWED_API: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(r"^/api/guest/wifi$")),
@@ -150,7 +154,7 @@ def create_app(
     async def _startup() -> None:
         app.state.client = httpx.AsyncClient(
             base_url=upstream,
-            timeout=6.0,
+            timeout=DEFAULT_UPSTREAM_TIMEOUT_SECONDS,
             transport=client_transport,
         )
         logger.info("Guest gateway started for %s", public or "<unconfigured>")
@@ -240,12 +244,18 @@ def create_app(
         url = path
         if request.url.query:
             url = f"{url}?{request.url.query}"
+        timeout = (
+            GUEST_TOAST_UPSTREAM_TIMEOUT_SECONDS
+            if path == "/api/guest/toast"
+            else DEFAULT_UPSTREAM_TIMEOUT_SECONDS
+        )
         try:
             upstream_response = await request.app.state.client.request(
                 request.method,
                 url,
                 headers=headers,
                 content=body,
+                timeout=timeout,
             )
         except httpx.TimeoutException:
             return Response(status_code=504, content=b"guest upstream timeout")
