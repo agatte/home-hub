@@ -389,17 +389,36 @@ lighting, arms projector shutdown, and makes the later Sleeping transition
 smooth. Sleeping is the final overnight state.
 
 **DECIDED TARGET.** Sleeping is a human/house state, not a PC-activity
-classification. Once Sleeping is established, background media playback,
-desktop process classifications, unexplained PC wakes, or other weak software
-activity must not by themselves end it. Sleeping remains authoritative until
-there is credible evidence that Anthony has actually awakened or he explicitly
+classification. Once Sleeping is established, passive/background media,
+unexplained PC/device wakes, stale processes, open applications, or other weak
+software activity must not by themselves end it. Sleeping remains authoritative
+until there is credible evidence that Anthony has awakened or he explicitly
 ends Sleeping.
 
-**DECIDED TARGET.** Future sleep confirmation uses sustained multi-signal
-evidence rather than any single weak signal. Candidate evidence includes manual
-Sleeping intent, local inactivity, physical presence/movement, and Apple Watch
-sleep evidence. The exact weighting, freshness requirements, and required
-combination of signals remain subject to research.
+**DECIDED TARGET - 2026-09-05.** Sleeping -> Home uses source-qualified wake
+authority. Explicit human wake intent (for example Sleeping -> Auto or an
+intentional Good Morning action) establishes Home immediately. Fresh Apple
+Watch / Apple Health evidence that strongly indicates wake may establish Home
+immediately once its real-world freshness/reliability is validated. Fresh
+trustworthy semantic activity may also establish Home immediately only when its
+evidence implies contemporaneous human interaction, such as active desktop
+Working/Gaming or genuinely interactive Watching. Passive Latitude playback,
+PC/device wake, network/device heartbeats, stale semantics, and similar residue
+abstain. The resulting awake baseline is Home + General unless a stronger fresh
+activity has already earned authority.
+
+**DECIDED TARGET - 2026-09-05.** Manual Sleeping remains the normal/primary
+entry path. Apple Watch / Apple Health is the intended overnight physiological
+sleep/wake evidence lane and begins in observation/confirmation mode. After
+several representative nights establish real delivery latency, false-positive
+behavior, brief-wake behavior, and sleep/wake freshness, sustained Watch sleep
+evidence plus compatible inactive/bedtime context may graduate to automatic
+Sleeping as a fallback for nights when Anthony falls asleep without manually
+selecting Sleeping. Strong current human interaction vetoes a pending automatic
+sleep transition; passive media does not. Higher-consequence actions such as PC
+or projector shutdown require separate validated policy rather than inheriting
+sleep-stage authority automatically. Cameras remain off during established
+Sleeping for privacy.
 
 The first projector behavior is a visible default timer (for example, 60
 minutes) when Winding Down starts, adjustable/cancelable through Alexa or the
@@ -424,17 +443,23 @@ long report.
 **DECIDED TARGET.** Explicitly leaving Sleeping for Auto is itself a strong
 wake signal. Home Hub must immediately transition the house to `Home` and
 restore the `General` awake baseline rather than leaving the apartment dark
-while desktop activity classification settles. A fresh stronger activity such
-as Working, Gaming, Watching, or Cooking may replace `General` immediately when
-its evidence is trustworthy; otherwise it takes over once its normal evidence
-commits. Conversely, a PC/device wake during an established Sleeping session
-without corresponding human-wake evidence is not a morning transition and must
-not change the house state out of Sleeping.
+while activity classification settles. A fresh trustworthy interactive
+activity may replace `General` immediately; otherwise stronger activity takes
+over through its normal evidence/dwell rules. The confirmed-awake authority
+must survive ordinary backend restarts until an authoritative Sleeping or Away
+transition clears it.
 
-**RESEARCH NEEDED.** Apple Watch / Apple Health sleep integration, including
-delivery architecture, freshness, privacy, sleep-onset latency, confidence
-requirements, and how much evidence is required before Home Hub may trigger
-higher-consequence actions such as PC or projector shutdown.
+**DECIDED TARGET - 2026-09-05.** House=`Home` after a wake and a confirmed
+Morning are separate decisions. A brief 03:00 wake may legitimately become Home
+with subdued time-appropriate General/Working/Watching behavior and later return
+to Sleeping; it must not automatically launch the full Morning experience.
+Issue #139 owns sustained/confirmed Morning behavior after wake.
+
+**RESEARCH / CALIBRATION NEEDED.** Implement the Apple Watch / Apple Health
+sleep evidence delivery path and observe several representative nights before
+granting automatic Sleeping authority. Measure delivery latency, sample
+freshness, false sleep/wake transitions, brief overnight wake behavior, and
+privacy. Keep high-consequence shutdown actions separately gated.
 
 ### Social, guests, and privacy
 
@@ -610,7 +635,8 @@ appropriate—not to maximize automation for its own sake.
 - Ambient/audio monitoring from the Blue Yeti, including YAMNet shadow
   classifications. The former audio-triggered Social gate was abandoned on
   May 9, 2026; Social is manually startable in current code.
-- Camera-based physical presence is source-qualified. Latitude real-person authority is YOLO26n-pose/OpenVINO-gated; MediaPipe may add supporting Couch localization only after YOLO confirms a person. The desktop pc_agent independently provides calibrated Desk/Bed/abstain observations to `PresenceFusion`. Apartment-empty state is owned by `AwayManager`, fed by iOS Shortcut geofence webhooks through the Cloudflare tunnel; LEAVE suppresses autonomous actuation and ARRIVE force-reapplies lights, optional welcome behavior, and any `pending_arrival_vibe` staged through Siri.
+- Camera-based physical presence is source-qualified. Latitude real-person authority is YOLO26n-pose/OpenVINO-gated; MediaPipe may add supporting Couch localization only after YOLO confirms a person. The desktop pc_agent independently provides calibrated Desk/Bed/abstain observations to `PresenceFusion`.
+- **DECIDED TARGET - 2026-09-05.** `AwayManager` is the sole Away/Home occupancy lifecycle owner. Strong fresh physical person evidence from either trusted camera establishes/retains Home through `AwayManager` regardless of whether the person is Anthony or a guest; `Away` means the apartment is unoccupied, not merely that Anthony's phone left. A valid ARRIVE establishes Home immediately even before camera confirmation. A LEAVE is strong departure evidence, but only fresh physical person evidence generated after that departure event may contradict/reverse it; stale pre-LEAVE camera evidence does not. Weak software/device activity (process modes, Latitude playback, PC wake, Sonos, screen/network heartbeats) has no occupancy authority, and camera/device absence alone never establishes Away. Every accepted Away/Home transition must update persisted occupancy and AutomationEngine suppression together so runtime and restart state cannot diverge. Arrival/welcome effects remain downstream of that lifecycle decision.
 - Mode priority system: pregameday (6) = gameday (6) > gaming (5) > social (4) > watching (3) = cooking (3) > working (2) > idle (1) > sleeping (0)
 - Morning routine: weather (NWS API) + commute (Google Maps) TTS at configurable time
 - Evening wind-down: dims lights, activates candlelight, lowers volume, TTS announcement
