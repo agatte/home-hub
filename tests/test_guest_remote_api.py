@@ -155,3 +155,65 @@ async def test_guest_status_distinguishes_loopback_from_public_readiness(monkeyp
     assert body["public_reachable"] is False
     assert body["guest_app_ready"] is False
     assert body["active_sessions"] == 2
+
+
+@pytest.mark.asyncio
+async def test_guest_vibes_mark_only_sonos_saved_playlists_available(monkeypatch) -> None:
+    monkeypatch.setattr(guest, "_resolve_vibe_mapping", AsyncMock(return_value={
+        "hype": "It's Lit!",
+        "singalong": "2000s Hits Essentials",
+        "throwback": "Replay-all-time",
+        "chill": "Chill 2",
+    }))
+    sonos = SimpleNamespace(
+        connected=True,
+        get_favorites=AsyncMock(return_value=[
+            {"title": "It's Lit!", "source": "favorite"},
+            {"title": "Chill 2", "source": "playlist"},
+        ]),
+    )
+    body = await guest.list_guest_vibes(_request(sonos=sonos))
+    by_name = {item["name"]: item for item in body["vibes"]}
+    assert by_name["hype"]["available"] is False
+    assert by_name["chill"]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_guest_vibe_rejects_cloud_favorite_before_play(monkeypatch) -> None:
+    monkeypatch.setattr(guest, "_last_guest_vibe_at", 0.0)
+    monkeypatch.setattr(guest, "_resolve_vibe_mapping", AsyncMock(return_value={
+        "hype": "It's Lit!",
+        "singalong": "2000s Hits Essentials",
+        "throwback": "Replay-all-time",
+        "chill": "Chill 2",
+    }))
+    sonos = SimpleNamespace(
+        connected=True,
+        get_favorites=AsyncMock(return_value=[{"title": "It's Lit!", "source": "favorite"}]),
+        play_favorite=AsyncMock(return_value=True),
+    )
+    with pytest.raises(Exception) as exc:
+        await guest.activate_guest_vibe("hype", _request(sonos=sonos))
+    assert getattr(exc.value, "status_code", None) == 409
+    sonos.play_favorite.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_guest_vibe_plays_saved_sonos_playlist(monkeypatch) -> None:
+    monkeypatch.setattr(guest, "_last_guest_vibe_at", 0.0)
+    monkeypatch.setattr(guest, "_resolve_vibe_mapping", AsyncMock(return_value={
+        "hype": "It's Lit!",
+        "singalong": "2000s Hits Essentials",
+        "throwback": "Replay-all-time",
+        "chill": "Chill 2",
+    }))
+    sonos = SimpleNamespace(
+        connected=True,
+        get_favorites=AsyncMock(return_value=[{"title": "Chill 2", "source": "playlist"}]),
+        play_favorite=AsyncMock(return_value=True),
+    )
+    automation = SimpleNamespace(set_manual_override=AsyncMock())
+    body = await guest.activate_guest_vibe("chill", _request(sonos=sonos, automation=automation))
+    assert body["playlist"] == "Chill 2"
+    sonos.play_favorite.assert_awaited_once_with("Chill 2")
+    automation.set_manual_override.assert_awaited_once_with("social", source="guest")

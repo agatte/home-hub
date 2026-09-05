@@ -62,11 +62,13 @@ GUEST_VIBE_LABELS: dict[str, str] = {
     "hype":       "Hype",
     "singalong":  "Sing-along",
     "throwback":  "Throwback",
+    "chill":      "Chill",
 }
 GUEST_VIBE_DEFAULTS: dict[str, str] = {
     "hype":       "It's Lit!",
     "singalong":  "2000s Hits Essentials",
     "throwback":  "Replay-all-time",
+    "chill":      "Chill 2",
 }
 GUEST_VIBE_SETTINGS_KEY = "guest_vibe_playlists"
 GUEST_VIBE_COOLDOWN_SECONDS = 15
@@ -524,7 +526,7 @@ async def reset_guest_scene(name: str, request: Request) -> dict:
 
 
 @router.get("/vibes")
-async def list_guest_vibes() -> dict:
+async def list_guest_vibes(request: Request) -> dict:
     """Return the guest music vibes with their current playlist mapping.
 
     The frontend renders one tile per vibe with the friendly label and a
@@ -533,12 +535,22 @@ async def list_guest_vibes() -> dict:
     no UI for that yet, hand-edit the table.
     """
     mapping = await _resolve_vibe_mapping()
+    sonos = getattr(request.app.state, "sonos", None)
+    playable_titles: set[str] = set()
+    if sonos and sonos.connected:
+        favorites = await sonos.get_favorites()
+        playable_titles = {
+            str(item.get("title", "")).casefold()
+            for item in favorites
+            if item.get("source") == "playlist"
+        }
     return {
         "vibes": [
             {
                 "name": name,
                 "label": GUEST_VIBE_LABELS[name],
                 "playlist_title": mapping[name],
+                "available": mapping[name].casefold() in playable_titles,
             }
             for name in GUEST_VIBE_LABELS
         ]
@@ -587,6 +599,20 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
 
     mapping = await _resolve_vibe_mapping()
     favorite_title = mapping[name]
+    favorites = await sonos.get_favorites()
+    playable_titles = {
+        str(item.get("title", "")).casefold()
+        for item in favorites
+        if item.get("source") == "playlist"
+    }
+    if favorite_title.casefold() not in playable_titles:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{favorite_title} is an Apple Music favorite, not a Sonos saved playlist. "
+                "Save it as a Sonos Playlist to make it guest-playable."
+            ),
+        )
 
     started = await sonos.play_favorite(favorite_title)
     if not started:

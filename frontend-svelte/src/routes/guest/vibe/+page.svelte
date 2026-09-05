@@ -27,7 +27,7 @@
   let scenes = []
   let scenesLoaded = false
 
-  /** @type {Array<{name: string, label: string, playlist_title: string}>} */
+  /** @type {Array<{name: string, label: string, playlist_title: string, available: boolean}>} */
   let vibes = []
   let vibesLoaded = false
 
@@ -197,8 +197,13 @@
         showToast(body.detail || `Cooling down — try again in ${retryAfter}s`)
         return
       }
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}))
+        showToast(body.detail || `That music source isn't available from HomeHub`)
+        return
+      }
       if (res.status === 502) {
-        showToast(`That playlist isn't on the speaker right now`)
+        showToast(`The speaker couldn't start that playlist`)
         return
       }
       if (!res.ok) {
@@ -789,10 +794,11 @@
             class="vibe-btn"
             class:loading={activatingVibe === vibe.name}
             on:click={() => activateVibe(vibe.name)}
-            disabled={vibeCooldownActive || !!activatingVibe}
+            disabled={!vibe.available || vibeCooldownActive || !!activatingVibe}
+            title={vibe.available ? `Play ${vibe.playlist_title}` : `Save ${vibe.playlist_title} as a Sonos Playlist to enable this`}
           >
             <span class="vibe-label">{vibe.label}</span>
-            <span class="vibe-playlist">{vibe.playlist_title}</span>
+            <span class="vibe-playlist">{vibe.available ? vibe.playlist_title : `${vibe.playlist_title} - unavailable`}</span>
           </button>
         {/each}
       </div>
