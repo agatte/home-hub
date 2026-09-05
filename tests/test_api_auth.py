@@ -335,6 +335,21 @@ class TestSmokeWiring:
         finally:
             app.dependency_overrides.pop(require_api_key, None)
 
+    def test_sleep_evidence_ingest_rejects_when_auth_dependency_rejects(self, client):
+        app.dependency_overrides[require_api_key] = self._stub_reject()
+        try:
+            resp = client.post(
+                "/api/sleep/evidence",
+                json={
+                    "client_kind": "manual_test",
+                    "client_observed_at": "2026-09-05T20:00:00Z",
+                    "deleted_sample_uuids": ["test-auth-boundary"],
+                },
+            )
+            assert resp.status_code == 401
+        finally:
+            app.dependency_overrides.pop(require_api_key, None)
+
     def test_reads_unaffected_by_dependency(self, client):
         # Reads stay open: even with a forced-reject auth dep, GETs must not
         # be rejected by it. The endpoint may still return 503 if the

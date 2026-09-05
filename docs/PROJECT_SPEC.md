@@ -455,11 +455,24 @@ with subdued time-appropriate General/Working/Watching behavior and later return
 to Sleeping; it must not automatically launch the full Morning experience.
 Issue #139 owns sustained/confirmed Morning behavior after wake.
 
-**RESEARCH / CALIBRATION NEEDED.** Implement the Apple Watch / Apple Health
-sleep evidence delivery path and observe several representative nights before
-granting automatic Sleeping authority. Measure delivery latency, sample
-freshness, false sleep/wake transitions, brief overnight wake behavior, and
-privacy. Keep high-consequence shutdown actions separately gated.
+**DECIDED PHASE-1 ARCHITECTURE - 2026-09-05.** Apple Watch sleep evidence is
+bridged from the iPhone HealthKit store by a small read-only native iOS client.
+The client reads only `sleepAnalysis`, uses HealthKit observer/background
+delivery plus an anchored query for changed/deleted samples, and POSTs evidence
+(not house-state commands) to `/api/sleep/evidence`. HomeHub stores bounded
+stage/timing/source-revision provenance in a 30-day shadow-calibration table;
+raw review remains localhost-only. Calibration remains source-qualified so Apple
+Sleep and third-party HealthKit writers such as AutoSleep can be compared rather
+than pre-whitelisted. iOS Shortcuts `Find Health Samples` is useful
+for bootstrap/backfill experiments but is not the delivery-latency authority,
+because Sleep automations are schedule/alarm lifecycle triggers rather than a
+per-HealthKit-sample observer. Full contract: `docs/APPLE_HEALTH_SLEEP.md`.
+
+**CALIBRATION STILL REQUIRED.** Observe several representative nights before
+granting Apple Health automatic Sleeping or wake authority. Measure native
+observer latency, sample freshness/gaps, false sleep while interactive, brief
+overnight wake/return behavior, and agreement with manual Sleeping/explicit
+wake. Higher-consequence shutdown actions remain separately gated.
 
 ### Social, guests, and privacy
 
@@ -1563,6 +1576,15 @@ WS broadcasts: `gameday_state` (every poll cycle when there's an active game), `
 | POST | `/api/personality/vibe` | Natural-language vibe request `{transcript, timing}`. `timing="arrival_if_away"` applies immediately when home or stages to `app_settings.pending_arrival_vibe` while away; after a geofence-arrive event, `AwayManager._on_arrive()` applies and clears the staged vibe. Camera presence only reports presence through `AutomationEngine.signal_presence("camera")`. Deterministic rules map common phrases to existing modes/curated scenes first; optional Anthropic fallback is validated against known modes/scenes. Tunnel callers require both `X-API-Key` and `X-Skill-Token`; iOS Shortcut source is `X-Source: ios_shortcut:vibe` |
 
 Backs the hidden `/personality` SvelteKit page (same hidden-from-FloatingNav pattern as `/journal`) and the Siri/iOS Shortcut `home hub vibe` text workflow. Full spec: `docs/PERSONALITY_LAYER.md`.
+
+#### Apple Health sleep evidence - `/api/sleep/` **(Phase 1 shadow/calibration)**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/sleep/evidence` | Authenticated batch ingest of bounded Apple Health `sleepAnalysis` stage/timing/source-revision evidence plus HealthKit deletion UUIDs. This is the only sleep-evidence path allowlisted through the public Cloudflare tunnel; tunnel callers still require `X-API-Key` + `X-Skill-Token`. Retries are UUID-idempotent. **Shadow only:** this route never changes House state or activity. |
+| GET | `/api/sleep/evidence/recent?hours=N&limit=N` | Localhost-only raw calibration review with stage counts and diagnostic native-observer/network latency/freshness buckets. Deliberately absent from the public tunnel allowlist. |
+
+Raw Apple Health calibration rows retain for 30 days from first HomeHub receipt, so retries cannot extend the privacy window. `first_client_kind` preserves whether a sample first arrived via native observer or Shortcut/manual backfill; native observer timing is tracked separately so a backfill cannot contaminate the delivery-latency measurement. Implausibly future native client clocks are flagged and excluded from latency aggregates. Full client/privacy contract: `docs/APPLE_HEALTH_SLEEP.md`.
 
 #### Widgets — `/api/widgets/` **(future)**
 

@@ -176,6 +176,38 @@ class ActivityEvent(Base):
     lux: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
+class AppleHealthSleepEvidence(Base):
+    """Shadow-only Apple Health sleep sample plus delivery/provenance timing."""
+
+    __tablename__ = "apple_health_sleep_evidence"
+    __table_args__ = (
+        UniqueConstraint("sample_uuid", name="uq_apple_health_sleep_sample_uuid"),
+        Index("ix_apple_health_sleep_last_received", "last_received_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sample_uuid: Mapped[str] = mapped_column(String(128), nullable=False)
+    stage: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    sample_start_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sample_end_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_bundle_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    source_product_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_client_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    native_observer_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    native_observer_received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    client_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    ingest_source: Mapped[str] = mapped_column(String(100), nullable=False)
+    house_state_at_first_receive: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    activity_at_first_receive: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+
 class LightAdjustment(Base):
     """Records every manual light change issued from the dashboard."""
 

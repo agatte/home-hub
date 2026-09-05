@@ -21,7 +21,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.tunnel_proxy import create_app
+from backend.api.tunnel_proxy import SLEEP_EVIDENCE_MAX_BODY_BYTES, create_app
 
 # An endpoint guaranteed to be in the allowlist — used as the "happy path"
 # fixture for the invariants below. If this ever needs to change, pick
@@ -216,6 +216,7 @@ ALLOWED_PATHS_FROM_LAMBDA = [
     # iOS Shortcut geofence webhook (D2, GH#107) — not a Lambda caller,
     # but rides the same tunnel with the same strict auth pair.
     ("POST", "/api/presence/geofence"),
+    ("POST", "/api/sleep/evidence"),
     ("POST", "/api/personality/vibe"),
 ]
 
@@ -257,6 +258,7 @@ DISALLOWED_PATHS = [
     ("POST", "/api/automation/clear"),     # not the dnd endpoint
     ("GET", "/api/debug/query"),           # SELECT-only but still gated
     ("GET", "/api/presence/status"),       # away-state read stays LAN-only
+    ("GET", "/api/sleep/evidence/recent"),  # raw health evidence stays localhost-only
     ("GET", "/api/personality/settings"),  # personality reads stay LAN-only
 ]
 
@@ -274,6 +276,16 @@ def test_allowlist_rejects_non_lambda_paths(
         pytest.fail(f"unhandled method: {method}")
     assert resp.status_code == 404, f"{method} {path} got {resp.status_code}"
     assert len(captured) == 0, f"{method} {path} was unexpectedly forwarded"
+
+
+def test_sleep_evidence_public_body_is_bounded_before_forwarding(proxy_with_capture):
+    client, captured = proxy_with_capture
+    response = client.post(
+        "/api/sleep/evidence",
+        content=b"x" * (SLEEP_EVIDENCE_MAX_BODY_BYTES + 1),
+    )
+    assert response.status_code == 413
+    assert captured == []
 
 
 def test_allowlist_wrong_method_is_404(proxy_with_capture):

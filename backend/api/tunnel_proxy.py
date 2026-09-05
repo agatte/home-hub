@@ -34,10 +34,10 @@ through the tunnel. The constant values (mode/scene/effect literals) are
 duplicated from the Lambda by design — the proxy is a separate process
 and shouldn't import Lambda code or backend internals.
 
-A second tunnel client exists since D2 (GH#107): the iOS Shortcut
-geofence automations POST /api/presence/geofence with the same
-X-API-Key + X-Skill-Token pair the Lambda carries (the phone is on
-cellular when geofences fire, so the webhook always rides the tunnel).
+Additional narrow iOS clients use the same strict tunnel-auth boundary:
+the D2 geofence Shortcut POSTs `/api/presence/geofence`, and GH#236's
+read-only HealthKit bridge POSTs shadow sleep evidence to
+`/api/sleep/evidence`. Neither gets a wildcard tunnel surface.
 """
 from __future__ import annotations
 
@@ -79,6 +79,8 @@ _SCENE_IDS = "(house_party|neon_tokyo|miami_vice|arcade|northern_lights|sunset_s
 _EFFECTS = "(candle|fire|sparkle|prism|glisten|opal)"
 _DIR = "(up|down)"
 
+SLEEP_EVIDENCE_MAX_BODY_BYTES = 128 * 1024
+
 _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
     # public liveness probe — minimal {"ok": true}, no internal state
     # leak. /health stays unallowlisted on purpose.
@@ -96,6 +98,8 @@ _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/scenes/effects/stop$")),
     # presence — iOS Shortcut geofence webhook (D2, GH#107)
     ("POST", re.compile(r"^/api/presence/geofence$")),
+    # Apple Health sleep evidence - GH#236 shadow-only ingest
+    ("POST", re.compile(r"^/api/sleep/evidence$")),
     # personality/vibe — iOS Shortcut staged-arrival NL lighting command
     ("POST", re.compile(r"^/api/personality/vibe$")),
     # sonos
@@ -165,7 +169,19 @@ def create_app() -> FastAPI:
         }
         forwarded_headers[TUNNEL_ORIGIN_HEADER] = TUNNEL_ORIGIN_VALUE
 
-        body = await request.body()
+        if full_path == "/api/sleep/evidence":
+            body_buffer = bytearray()
+            async for chunk in request.stream():
+                if len(body_buffer) + len(chunk) > SLEEP_EVIDENCE_MAX_BODY_BYTES:
+                    logger.info(
+                        "tunnel REJECT %s %s (body exceeds %d bytes)",
+                        request.method, full_path, SLEEP_EVIDENCE_MAX_BODY_BYTES,
+                    )
+                    return Response(status_code=413, content=b"request too large")
+                body_buffer.extend(chunk)
+            body = bytes(body_buffer)
+        else:
+            body = await request.body()
         url = full_path
         if request.url.query:
             url = f"{url}?{request.url.query}"

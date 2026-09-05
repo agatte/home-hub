@@ -758,7 +758,7 @@ async def lifespan(app: FastAPI):
         enabled=True,
     ))
 
-    # 90-day event-table retention sweep. CLAUDE.md documents the policy
+    # Event/calibration-table retention sweep. CLAUDE.md documents the policy
     # but nothing was deleting old rows — activity_events, light_adjustments,
     # sonos_playback_events, scene_activations, and ml_decisions all grew
     # unbounded. Weekly aggregation into summaries (per spec) is deferred;
@@ -771,7 +771,8 @@ async def lifespan(app: FastAPI):
         # Per-table retention (days). ml_decisions logs ~75k rows/day (one row
         # per fusion lane, every poll) and would plateau ~4.6 GB at 90 days, so
         # it gets a tighter 21-day window — still safely above the 14-day span
-        # the 03:30 fusion weight-tune reads. Everything else stays 90 days.
+        # the 03:30 fusion weight-tune reads. Apple Health shadow data is 30d;
+    # the remaining targets stay at 90 days.
         targets = (
             ("activity_events", "timestamp", 90),
             ("light_adjustments", "timestamp", 90),
@@ -779,6 +780,8 @@ async def lifespan(app: FastAPI):
             ("scene_activations", "timestamp", 90),
             ("ml_decisions", "timestamp", 21),
             ("living_room_decision_records", "evaluated_at", 90),
+            # Health data is calibration-only and intentionally short-lived.
+            ("apple_health_sleep_evidence", "first_received_at", 30),
         )
         deleted_total = 0
         async with async_session() as session:
@@ -798,7 +801,8 @@ async def lifespan(app: FastAPI):
                     )
             await session.commit()
         app_logger.info(
-            "retention_sweep: pruned %d rows (ml_decisions 21d, others 90d)",
+            "retention_sweep: pruned %d rows "
+            "(ml_decisions 21d, Apple Health shadow 30d, other targets 90d)",
             deleted_total,
         )
 
