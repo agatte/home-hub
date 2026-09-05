@@ -2,12 +2,27 @@
 Bar app integration endpoints — status summary from Home Bar app.
 """
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Request
 
 logger = logging.getLogger("home_hub.bar")
 
 router = APIRouter(prefix="/api/bar", tags=["bar"])
+
+
+def _browser_bar_url(request: Request, app_url: str) -> str:
+    """Translate a loopback-only configured URL into the browser's HomeHub host."""
+    parsed = urlsplit(app_url)
+    if (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}:
+        return app_url
+
+    browser_host = request.url.hostname
+    if not browser_host:
+        return app_url
+    host = f"[{browser_host}]" if ":" in browser_host else browser_host
+    netloc = f"{host}:{parsed.port}" if parsed.port else host
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 @router.get("/status")
@@ -32,5 +47,5 @@ async def get_bar_status(request: Request) -> dict:
     return {
         "status": "ok",
         "bar_summary": data,
-        "bar_app_url": service.app_url,
+        "bar_app_url": _browser_bar_url(request, service.app_url),
     }
