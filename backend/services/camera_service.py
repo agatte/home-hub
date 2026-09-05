@@ -26,6 +26,7 @@ Privacy guarantees:
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import signal
@@ -410,6 +411,10 @@ class CameraService:
         # Fired after each poll-loop frame with a complete PresenceReading
         # so the fusion layer can merge Latitude + desktop observations.
         self._observation_callbacks: list = []
+        # Async-capable callbacks that consume settled physical observations
+        # for occupancy reconciliation. Kept separate from PresenceFusion's
+        # synchronous ingest so lifecycle I/O never runs inside that callback.
+        self._occupancy_observation_callbacks: list = []
         self._observation_invalidation_callbacks: list = []
 
         # Detection state
@@ -527,6 +532,19 @@ class CameraService:
         """
         if callback not in self._observation_callbacks:
             self._observation_callbacks.append(callback)
+
+    def register_occupancy_observation_callback(
+        self, callback: "Callable[[PresenceReading], Any]",
+    ) -> None:
+        """Subscribe an occupancy owner to settled physical observations.
+
+        Callbacks may be async. They are awaited after the camera's own
+        activity edge handling so an Away hold remains in force while a
+        return ``idle`` observation is processed; the occupancy owner then
+        releases suppression and restores output coherently.
+        """
+        if callback not in self._occupancy_observation_callbacks:
+            self._occupancy_observation_callbacks.append(callback)
 
     def register_observation_invalidation_callback(self, callback) -> None:
         """Subscribe to lifecycle invalidation of Latitude live authority."""
@@ -1588,7 +1606,8 @@ class CameraService:
                 # the reading carries committed zone/posture, not candidates.
                 # Sync-only callbacks; intentionally simple — fusion's
                 # on_observation is just a dict assignment.
-                if self._observation_callbacks:
+                reading = None
+                if self._observation_callbacks or self._occupancy_observation_callbacks:
                     try:
                         from backend.services.presence_fusion import (
                             PresenceReading,
@@ -1702,18 +1721,9 @@ class CameraService:
                         await self._automation.report_activity(
                             mode="idle", source="camera", factors=camera_factors,
                         )
-                        # Also clear the external-off suppression flag if it's
-                        # set. report_activity above does NOT clear the flag
-                        # for mode=idle reports, so without this call the
-                        # engine stays suppressed indefinitely when the Hue
-                        # iOS app's "Leaving home" automation turned lights
-                        # off and the user returns without touching the PC.
-                        # No-op when the flag is already clear (idempotent).
-                        signal_presence = getattr(
-                            self._automation, "signal_presence", None,
-                        )
-                        if signal_presence is not None:
-                            await signal_presence("camera")
+                        # Occupancy reconciliation happens below through
+                        # AwayManager after this activity edge is processed.
+                        # Cameras never clear engine Away suppression directly.
                         logger.info(
                             "Presence detected via %s — reported idle "
                             "(confidence: %.2f, landmarks: %d, lux: %.0f)",
@@ -1722,6 +1732,17 @@ class CameraService:
                             pose_landmark_count,
                             ambient_lux,
                         )
+                    if reading is not None and self._occupancy_observation_callbacks:
+                        for cb in list(self._occupancy_observation_callbacks):
+                            try:
+                                result = cb(reading)
+                                if inspect.isawaitable(result):
+                                    await result
+                            except Exception:
+                                logger.exception(
+                                    "occupancy observation callback raised - ignoring"
+                                )
+
                 elif status == "absent":
                     self._consecutive_absent += 1
 
@@ -2814,6 +2835,11 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
         camera.register_observation_callback(presence.on_observation)
         camera.register_observation_invalidation_callback(
             presence.invalidate_source
+        )
+    away_manager = getattr(app.state, "away_manager", None)
+    if away_manager is not None:
+        camera.register_occupancy_observation_callback(
+            away_manager.handle_presence_observation
         )
     # Stamp the poll task on the service so close() / next respawn can
     # cancel + await it. Without this, a respawn races the old task.

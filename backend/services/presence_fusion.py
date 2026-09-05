@@ -227,6 +227,28 @@ class PresenceFusion:
             return False
         return any_at_desk
 
+    def freshest_strong_presence(
+        self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
+    ) -> Optional[PresenceReading]:
+        """Return the freshest current strong physical reading, if any.
+
+        This is the source-qualified occupancy evidence surface. It reuses the
+        same strong-person rules as ``is_strongly_present_any`` and excludes
+        stale/weak observations. Consumers that need event ordering (for
+        example LEAVE followed by a camera-confirmed guest still inside) can
+        compare the returned ``captured_at`` with their lifecycle timestamp.
+        """
+        now = datetime.now(timezone.utc)
+        candidates = [
+            reading
+            for reading in self._readings.values()
+            if (now - reading.captured_at).total_seconds() <= max_age_s
+            and self._is_strongly_present(reading)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda reading: reading.captured_at)
+
     def is_strongly_present_any(
         self, max_age_s: int = STRONG_PRESENCE_FRESHNESS_S,
     ) -> bool:
@@ -235,19 +257,13 @@ class PresenceFusion:
         "Strong" excludes the weak-face-only Latitude case (chair-back FPs
         that clear ``MIN_FACE_CONFIDENCE`` but aren't actually Anthony).
         Desktop face-present already gates client-side on
-        ``FACE_CONFIDENCE_FLOOR=0.30`` — anything that reaches us with
+        ``FACE_CONFIDENCE_FLOOR=0.30`` - anything that reaches us with
         ``face_present=True`` is a frontal close-up which is inherently
         strong. Used by ``transit_lighting`` + ``desk_exit_kitchen`` to
         suppress absent-dwell timers when another source confirms someone
         is actually here.
         """
-        now = datetime.now(timezone.utc)
-        for reading in self._readings.values():
-            if (now - reading.captured_at).total_seconds() > max_age_s:
-                continue
-            if self._is_strongly_present(reading):
-                return True
-        return False
+        return self.freshest_strong_presence(max_age_s) is not None
 
     def is_present_within_seconds(self, window_s: int) -> bool:
         """True iff any source had a present reading inside ``window_s``.

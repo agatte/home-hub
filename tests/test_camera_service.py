@@ -8,6 +8,7 @@ absent countdown, graceful degradation, and automation engine priority.
 
 import asyncio
 from collections import namedtuple
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +17,7 @@ from backend.services.camera_service import (
     ABSENT_THRESHOLD,
     POLL_INTERVAL,
     CameraService,
+    spawn_camera_service,
 )
 
 
@@ -63,6 +65,48 @@ def _stub_cv2_and_mediapipe():
     with patch.dict("sys.modules", {"cv2": mock_cv2, "mediapipe": mock_mp}):
         yield
 
+
+
+
+@pytest.mark.asyncio
+async def test_spawn_registers_away_manager_occupancy_callback():
+    automation = MagicMock()
+    automation.deregister_on_mode_change = MagicMock()
+    automation.register_on_mode_change = MagicMock()
+    automation.set_camera_service = MagicMock()
+    presence = MagicMock()
+    presence.on_observation = MagicMock()
+    presence.invalidate_source = MagicMock()
+    away_manager = MagicMock()
+    away_manager.handle_presence_observation = AsyncMock()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            automation=automation,
+            ws_manager=MagicMock(),
+            presence=presence,
+            away_manager=away_manager,
+            camera_service=None,
+        )
+    )
+
+    async def start_camera(camera):
+        camera._enabled = True
+        camera._cap = MagicMock()
+
+    with (
+        patch.object(CameraService, "start", start_camera),
+        patch.object(CameraService, "poll_loop", new_callable=AsyncMock),
+    ):
+        result = await spawn_camera_service(app, reason="test")
+        await asyncio.sleep(0)
+
+    assert result["status"] == "ok"
+    camera = app.state.camera_service
+    assert presence.on_observation in camera._observation_callbacks
+    assert (
+        away_manager.handle_presence_observation
+        in camera._occupancy_observation_callbacks
+    )
 
 # ---------------------------------------------------------------------------
 # Initialization

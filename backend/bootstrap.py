@@ -967,6 +967,7 @@ async def lifespan(app: FastAPI):
         save_setting=_away_save_setting,
         load_setting=_away_load_setting,
         vibe_router_getter=lambda: getattr(app.state, "vibe_router", None),
+        presence_getter=lambda: presence,
     )
     await away_manager.load_state()
     returning_home_marker = (
@@ -1159,6 +1160,9 @@ async def lifespan(app: FastAPI):
                 camera_service.register_observation_callback(presence.on_observation)
                 camera_service.register_observation_invalidation_callback(
                     presence.invalidate_source
+                )
+                camera_service.register_occupancy_observation_callback(
+                    away_manager.handle_presence_observation
                 )
                 # Store the poll task on the service so close()/respawn
                 # can cancel + await it cleanly. Also append to the

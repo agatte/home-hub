@@ -176,6 +176,9 @@ async def post_observation(
     automation = getattr(request.app.state, "automation", None)
     if automation is not None:
         await automation.notify_presence_observation(reading)
+    away_manager = getattr(request.app.state, "away_manager", None)
+    if away_manager is not None:
+        await away_manager.handle_presence_observation(reading)
     return {"status": "ok"}
 
 

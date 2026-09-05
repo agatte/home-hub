@@ -407,6 +407,41 @@ def test_strong_presence_window_is_tight() -> None:
     assert fusion.is_at_desk_fresh() is True
 
 
+def test_freshest_strong_presence_returns_newest_trusted_evidence() -> None:
+    fusion = PresenceFusion()
+    older = PresenceReading(
+        source="latitude", captured_at=_ago(2),
+        face_present=True, face_confidence=0.9,
+        detection_source="yolo", zone="couch",
+    )
+    newer = PresenceReading(
+        source="desktop", captured_at=_ago(1),
+        face_present=True, face_confidence=0.7,
+        detection_source="face", zone="desk",
+    )
+    fusion.on_observation(older)
+    fusion.on_observation(newer)
+
+    assert fusion.freshest_strong_presence() == newer
+
+
+def test_freshest_strong_presence_excludes_stale_and_weak_readings() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.25,
+        detection_source="face", zone=None,
+    ))
+    fusion.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=_ago(STRONG_PRESENCE_FRESHNESS_S + 1),
+        face_present=True, face_confidence=0.9,
+        detection_source="face", zone="desk",
+    ))
+
+    assert fusion.freshest_strong_presence() is None
+
+
 def test_desktop_strong_overrides_latitude_weak() -> None:
     """The defeat-chair-back-FP case for transit_lighting + desk_exit_kitchen."""
     fusion = PresenceFusion()

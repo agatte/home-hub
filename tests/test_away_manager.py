@@ -4,7 +4,7 @@ persistence restore, TTS quiet-hours gating, and the new engine hooks
 (arm_away_suppression / reapply_current_mode).
 """
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,7 +15,9 @@ from backend.services.away_manager import (
     AwayManager,
     HomeReconciliationIndeterminate,
     HomeReconciliationRejected,
+    OccupancyTransitionError,
 )
+from backend.services.presence_fusion import PresenceFusion, PresenceReading
 
 pytestmark = pytest.mark.asyncio
 
@@ -96,6 +98,7 @@ def _make_manager(
     sonos_connected=True,
     hue_connected=True,
     vibe_router=None,
+    presence=None,
 ):
     engine = engine or FakeEngine()
     settings = settings or FakeSettings()
@@ -124,6 +127,7 @@ def _make_manager(
         save_setting=settings.save,
         load_setting=settings.load,
         vibe_router_getter=lambda: vibe_router,
+        presence_getter=lambda: presence,
     )
     return mgr, engine, settings, hue, sonos, tts, notifier
 
@@ -284,6 +288,169 @@ class TestRestore:
         await mgr.load_state()
         assert mgr.away is False
         assert engine._external_off_detected is False
+
+
+# ---------------------------------------------------------------------------
+# Physical occupancy reconciliation
+# ---------------------------------------------------------------------------
+
+
+class TestPhysicalOccupancyReconciliation:
+    @staticmethod
+    def _desktop_reading(at: datetime, *, present: bool = True) -> PresenceReading:
+        return PresenceReading(
+            source="desktop",
+            captured_at=at,
+            face_present=present,
+            face_confidence=0.8 if present else 0.0,
+            detection_source="face",
+            zone="desk" if present else None,
+        )
+
+    async def test_post_leave_strong_presence_establishes_persisted_home(self):
+        presence = PresenceFusion()
+        mgr, engine, settings, _hue, _sonos, tts, notifier = _make_manager(
+            presence=presence,
+        )
+        await mgr.handle_event("leave", "ios_shortcut")
+        leave_at = mgr._since
+        assert leave_at is not None
+
+        reading = self._desktop_reading(leave_at + timedelta(seconds=1))
+        presence.on_observation(reading)
+        result = await mgr.handle_presence_observation(reading)
+
+        assert result["changed"] is True
+        assert result["source"] == "camera:desktop"
+        assert mgr.away is False
+        assert settings.store[AWAY_STATE_KEY] == {
+            "away": False,
+            "since_utc": None,
+            "source": "camera:desktop",
+        }
+        engine.signal_presence.assert_awaited_with("camera:desktop")
+        engine.reapply_current_mode.assert_awaited_once_with(force_resend=True)
+        # Physical occupancy correction may be a guest who never arrived; do
+        # not run the geofence welcome sequence.
+        tts.speak.assert_not_awaited()
+        assert notifier.emit_alert.await_count == 1  # LEAVE only
+
+    async def test_pre_leave_strong_presence_cannot_reverse_departure(self):
+        presence = PresenceFusion()
+        mgr, engine, settings, *_ = _make_manager(presence=presence)
+        await mgr.handle_event("leave", "ios_shortcut")
+        leave_at = mgr._since
+        assert leave_at is not None
+
+        reading = self._desktop_reading(leave_at - timedelta(seconds=1))
+        presence.on_observation(reading)
+        result = await mgr.handle_presence_observation(reading)
+
+        assert result["changed"] is False
+        assert result["reason"] == "pre_leave_presence"
+        assert mgr.away is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        assert engine._away_hold is True
+
+    async def test_weak_camera_reading_has_no_occupancy_authority(self):
+        presence = PresenceFusion()
+        mgr, engine, settings, *_ = _make_manager(presence=presence)
+        await mgr.handle_event("leave", "ios_shortcut")
+        leave_at = mgr._since
+        assert leave_at is not None
+
+        reading = PresenceReading(
+            source="latitude",
+            captured_at=leave_at + timedelta(seconds=1),
+            face_present=True,
+            face_confidence=0.30,
+            detection_source="face",
+            zone=None,
+        )
+        presence.on_observation(reading)
+        result = await mgr.handle_presence_observation(reading)
+
+        assert result["changed"] is False
+        assert result["reason"] == "no_strong_trusted_presence"
+        assert mgr.away is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        assert engine._away_hold is True
+
+    async def test_physical_home_survives_restart_and_next_leave_is_not_duplicate(self):
+        presence = PresenceFusion()
+        mgr, _engine, settings, *_ = _make_manager(presence=presence)
+        await mgr.handle_event("leave", "ios_shortcut")
+        leave_at = mgr._since
+        assert leave_at is not None
+        reading = self._desktop_reading(leave_at + timedelta(seconds=1))
+        presence.on_observation(reading)
+        await mgr.handle_presence_observation(reading)
+
+        mgr2, engine2, _settings2, *_ = _make_manager(
+            settings=settings, presence=presence,
+        )
+        await mgr2.load_state()
+        assert mgr2.away is False
+        assert engine2._away_hold is False
+
+        result = await mgr2.handle_event("leave", "ios_shortcut:later")
+        assert result == {"status": "ok", "away": True, "changed": True}
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+
+    async def test_host_return_hold_defers_physical_presence(self):
+        presence = PresenceFusion()
+        mgr, engine, settings, *_ = _make_manager(presence=presence)
+        await mgr.handle_event("leave", "travel:kiosk")
+        engine.arm_host_return_suppression("host:returning-home")
+        leave_at = mgr._since
+        assert leave_at is not None
+        reading = self._desktop_reading(leave_at + timedelta(seconds=1))
+        presence.on_observation(reading)
+
+        result = await mgr.handle_presence_observation(reading)
+
+        assert result["status"] == "deferred_returning_home"
+        assert mgr.away is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        assert engine._host_return_hold is True
+
+    async def test_home_persistence_failure_keeps_away_suppression(self):
+        presence = PresenceFusion()
+        mgr, engine, settings, *_ = _make_manager(presence=presence)
+        await mgr.handle_event("leave", "ios_shortcut")
+        original_save = settings.save
+
+        async def fail_home(key, value):
+            if value.get("away") is False:
+                raise RuntimeError("sqlite unavailable")
+            await original_save(key, value)
+
+        mgr._save_setting = fail_home
+        leave_at = mgr._since
+        assert leave_at is not None
+        reading = self._desktop_reading(leave_at + timedelta(seconds=1))
+        presence.on_observation(reading)
+
+        with pytest.raises(OccupancyTransitionError):
+            await mgr.handle_presence_observation(reading)
+
+        assert mgr.away is True
+        assert engine._away_hold is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+
+    async def test_leave_persistence_failure_does_not_publish_runtime_away(self):
+        mgr, engine, settings, *_ = _make_manager()
+
+        async def fail_away(key, value):
+            raise RuntimeError("sqlite unavailable")
+
+        mgr._save_setting = fail_away
+        with pytest.raises(OccupancyTransitionError):
+            await mgr.handle_event("leave", "ios_shortcut")
+
+        assert mgr.away is False
+        assert engine._away_hold is False
+        assert AWAY_STATE_KEY not in settings.store
 
 
 # ---------------------------------------------------------------------------
