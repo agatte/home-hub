@@ -1,7 +1,5 @@
 <script>
   import '$lib/styles/global.css'
-  import { onMount } from 'svelte'
-  import { initStores } from '$lib/stores/init.js'
   import GuestBottomNav from '$lib/components/GuestBottomNav.svelte'
 
   /** @type {any} */
@@ -10,10 +8,6 @@
   export let params = undefined
   data; params;
 
-  onMount(() => {
-    const cleanupStores = initStores()
-    return () => { cleanupStores() }
-  })
 </script>
 
 <div class="guest-shell">

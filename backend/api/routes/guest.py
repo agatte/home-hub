@@ -7,7 +7,9 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.api._guards import _check_hue_available
@@ -104,12 +106,27 @@ GUEST_TOAST_VOLUME = 25
 _last_guest_toast_at: float = 0.0
 _guest_toast_lock = asyncio.Lock()
 
+# Guest music transport is deliberately narrower than the generic Sonos API.
+GUEST_SONOS_VOLUME_FLOOR = 5
+GUEST_SONOS_VOLUME_CEILING = 30
+GUEST_SONOS_VOLUME_STEP = 2
+GUEST_SONOS_COOLDOWN_SECONDS = 0.35
+_last_guest_sonos_at: float = 0.0
+_guest_sonos_lock = asyncio.Lock()
+
 
 class ToastRequest(BaseModel):
     """Guest-submitted toast payload — short message, optional name."""
 
     message: str = Field(min_length=1, max_length=GUEST_TOAST_MAX_CHARS)
     name: Optional[str] = Field(default=None, max_length=GUEST_TOAST_MAX_NAME_CHARS)
+
+
+class KitchenRequest(BaseModel):
+    """Bounded guest kitchen-pair toggle; restore requires an active scene."""
+
+    enabled: bool
+    scene: Optional[str] = None
 
 
 async def _resolve_vibe_mapping() -> dict[str, str]:
@@ -149,11 +166,11 @@ def _wifi_uri(ssid: str, password: str, security: str) -> str:
 
 @router.get("/wifi")
 async def get_guest_wifi() -> dict:
-    """Return the guest WiFi QR payload + display fields.
+    """Return the configured guest-network QR payload.
 
-    Returns `{configured: false}` if SSID/password aren't set, so the
-    frontend can render a quiet "not configured" state instead of erroring.
-    Password never leaves the LAN — same trust boundary as every other GET.
+    The public guest gateway is a separate capability. This endpoint never
+    manufactures a LAN landing URL; the kiosk requests a short-lived invite
+    only when the gateway is actually available.
     """
     ssid = settings.GUEST_WIFI_SSID
     password = settings.GUEST_WIFI_PASSWORD
@@ -162,12 +179,6 @@ async def get_guest_wifi() -> dict:
     if not ssid or not password:
         return {"status": "ok", "configured": False}
 
-    # Canonical /guest landing URL built from the server's LAN IP, NOT the
-    # caller's origin — the kiosk loads the dashboard from localhost, so a
-    # client-side `window.location.origin` QR would encode localhost and be
-    # useless to a guest's phone. LOCAL_IP is the address guests can reach.
-    landing_url = f"http://{settings.LOCAL_IP}:8000/guest" if settings.LOCAL_IP else None
-
     return {
         "status": "ok",
         "configured": True,
@@ -175,8 +186,176 @@ async def get_guest_wifi() -> dict:
         "password": password,
         "security": security,
         "qr_payload": _wifi_uri(ssid, password, security),
-        "landing_url": landing_url,
+        "guest_app_configured": bool(settings.GUEST_PUBLIC_URL),
     }
+
+
+async def _guest_gateway_call(method: str, path: str) -> dict:
+    base = settings.GUEST_GATEWAY_INTERNAL_URL.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.request(method, f"{base}{path}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="Guest gateway unavailable") from exc
+    if response.status_code >= 400:
+        detail = "Guest gateway unavailable"
+        try:
+            detail = response.json().get("detail", detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    return response.json()
+
+
+async def _guest_public_reachable(public_url: str) -> bool:
+    """Prove the configured public ingress reaches the guest gateway."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=False) as client:
+            response = await client.get(f"{public_url.rstrip('/')}/guest")
+    except httpx.HTTPError:
+        return False
+    # An unauthenticated /guest request has one deliberate public signature:
+    # the guest gateway answers 401. A DNS/Cloudflare error or wrong service
+    # produces a different result and must not be advertised as ready.
+    return response.status_code == 401
+
+
+@router.post("/invite", dependencies=[Depends(require_api_key)])
+async def create_guest_invite() -> dict:
+    """Mint a one-use invite only when the public guest route is usable."""
+    if not settings.GUEST_PUBLIC_URL:
+        raise HTTPException(status_code=503, detail="Guest public URL not configured")
+    gateway = await _guest_gateway_call("GET", "/internal/status")
+    public_url = gateway.get("public_url") or settings.GUEST_PUBLIC_URL
+    if not await _guest_public_reachable(public_url):
+        raise HTTPException(status_code=503, detail="Guest public route unavailable")
+    return await _guest_gateway_call("POST", "/internal/invite")
+
+
+@router.post("/revoke", dependencies=[Depends(require_api_key)])
+async def revoke_guest_sessions() -> dict:
+    """Invalidate all outstanding guest invitations and sessions."""
+    return await _guest_gateway_call("POST", "/internal/revoke")
+
+
+@router.get("/status")
+async def get_guest_access_status() -> dict:
+    """Return non-secret guest-network/gateway readiness for Settings."""
+    gateway = None
+    gateway_reachable = False
+    public_reachable = False
+    if settings.GUEST_PUBLIC_URL:
+        try:
+            gateway = await _guest_gateway_call("GET", "/internal/status")
+            gateway_reachable = True
+            public_url = gateway.get("public_url") or settings.GUEST_PUBLIC_URL
+            public_reachable = await _guest_public_reachable(public_url)
+        except HTTPException:
+            gateway = None
+    return {
+        "status": "ok",
+        "wifi_configured": bool(settings.GUEST_WIFI_SSID and settings.GUEST_WIFI_PASSWORD),
+        "ssid": settings.GUEST_WIFI_SSID or None,
+        "security": settings.GUEST_WIFI_SECURITY or "WPA",
+        "public_url": settings.GUEST_PUBLIC_URL or None,
+        "gateway_configured": bool(settings.GUEST_PUBLIC_URL),
+        "gateway_reachable": gateway_reachable,
+        "public_reachable": public_reachable,
+        "guest_app_ready": gateway_reachable and public_reachable,
+        "active_sessions": (gateway or {}).get("active_sessions"),
+    }
+
+
+@router.get("/state")
+async def get_guest_state(request: Request) -> dict:
+    """Return the small live-state projection the guest UI is allowed to see."""
+    automation = getattr(request.app.state, "automation", None)
+    hue = getattr(request.app.state, "hue", None)
+    sonos = getattr(request.app.state, "sonos", None)
+
+    light_rows: list[dict] = []
+    if hue and hue.connected:
+        for light in await hue.get_all_lights():
+            light_rows.append({
+                key: light.get(key)
+                for key in ("light_id", "name", "on", "bri", "hue", "sat", "ct")
+                if key in light
+            })
+
+    sonos_state = {"state": "disconnected", "has_art": False}
+    if sonos and sonos.connected:
+        raw = await sonos.get_status()
+        sonos_state = {
+            "state": raw.get("state", "STOPPED"),
+            "track": raw.get("track", ""),
+            "artist": raw.get("artist", ""),
+            "album": raw.get("album", ""),
+            "volume": raw.get("volume"),
+            "mute": raw.get("mute", False),
+            "has_art": bool(raw.get("art_url")),
+        }
+
+    manual_override = bool(getattr(automation, "manual_override", None)) if automation else False
+    override_source = getattr(automation, "override_source", None) if automation else None
+    if manual_override:
+        source = "guest" if override_source == "guest" else "host"
+    else:
+        source = getattr(automation, "mode_source", None) if automation else None
+
+    return {
+        "status": "ok",
+        "mode": getattr(automation, "current_mode", "idle") if automation else "idle",
+        "source": source,
+        "manual_override": manual_override,
+        "lights": light_rows,
+        "sonos": sonos_state,
+    }
+
+
+@router.get("/art")
+async def get_guest_album_art(request: Request) -> Response:
+    """Proxy only the current Sonos album art; never accept a caller URL."""
+    sonos = getattr(request.app.state, "sonos", None)
+    if not sonos or not sonos.connected:
+        raise HTTPException(status_code=404, detail="No album art")
+    status = await sonos.get_status()
+    art_url = status.get("art_url")
+    if not art_url:
+        raise HTTPException(status_code=404, detail="No album art")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(art_url)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Album art unavailable") from exc
+    if len(response.content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=502, detail="Album art too large")
+    media_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0]
+    if not media_type.startswith("image/"):
+        raise HTTPException(status_code=502, detail="Album art response was not an image")
+    return Response(content=response.content, media_type=media_type, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/bar")
+async def get_guest_bar(request: Request) -> dict:
+    service = getattr(request.app.state, "bar_service", None)
+    if not service:
+        raise HTTPException(status_code=503, detail="Bar app not configured")
+    data = await service.get_status()
+    if not data:
+        raise HTTPException(status_code=502, detail="Bar app data unavailable")
+    return {"status": "ok", "bar_summary": data}
+
+
+@router.get("/plants")
+async def get_guest_plants(request: Request) -> dict:
+    service = getattr(request.app.state, "plant_service", None)
+    if not service:
+        raise HTTPException(status_code=503, detail="Plant app not configured")
+    data = await service.get_status()
+    if not data:
+        raise HTTPException(status_code=502, detail="Plant app data unavailable")
+    return {"status": "ok", "plant_summary": data}
 
 
 @router.get("/scenes")
@@ -434,6 +613,81 @@ async def activate_guest_vibe(name: str, request: Request) -> dict:
     }
 
 
+async def _claim_guest_sonos_slot() -> None:
+    global _last_guest_sonos_at
+    async with _guest_sonos_lock:
+        now = time.monotonic()
+        elapsed = now - _last_guest_sonos_at
+        if elapsed < GUEST_SONOS_COOLDOWN_SECONDS:
+            raise HTTPException(
+                status_code=429,
+                detail="Slow down a sec",
+                headers={"Retry-After": "1"},
+            )
+        _last_guest_sonos_at = now
+
+
+@router.post("/sonos/volume/{direction}", dependencies=[Depends(require_api_key)])
+async def guest_sonos_volume(direction: str, request: Request) -> dict:
+    """Adjust Sonos by one bounded step; guests cannot choose arbitrary volume."""
+    if direction not in {"up", "down"}:
+        raise HTTPException(status_code=400, detail="Direction must be up or down")
+    await _claim_guest_sonos_slot()
+    sonos = getattr(request.app.state, "sonos", None)
+    if not sonos or not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+    status = await sonos.get_status()
+    current = int(status.get("volume") or GUEST_SONOS_VOLUME_FLOOR)
+    delta = GUEST_SONOS_VOLUME_STEP if direction == "up" else -GUEST_SONOS_VOLUME_STEP
+    target = max(GUEST_SONOS_VOLUME_FLOOR, min(GUEST_SONOS_VOLUME_CEILING, current + delta))
+    if target != current and not await sonos.set_volume(target):
+        raise HTTPException(status_code=502, detail="Couldn't change Sonos volume")
+    return {"status": "ok", "volume": target}
+
+
+@router.post("/sonos/{action}", dependencies=[Depends(require_api_key)])
+async def guest_sonos_transport(action: str, request: Request) -> dict:
+    """Expose only play, pause, and next through the guest capability."""
+    if action not in {"play", "pause", "next"}:
+        raise HTTPException(status_code=400, detail="Unsupported guest Sonos action")
+    await _claim_guest_sonos_slot()
+    sonos = getattr(request.app.state, "sonos", None)
+    if not sonos or not sonos.connected:
+        raise HTTPException(status_code=503, detail="Sonos not connected")
+    if action == "play":
+        ok = await sonos.play()
+    elif action == "pause":
+        ok = await sonos.pause()
+    else:
+        ok = await sonos.next_track()
+    if not ok:
+        raise HTTPException(status_code=502, detail="Sonos command failed")
+    return {"status": "ok", "action": action}
+
+
+@router.post("/kitchen", dependencies=[Depends(require_api_key)])
+async def guest_kitchen(body: KitchenRequest, request: Request) -> dict:
+    """Toggle only the L3/L4 kitchen pair, restoring from a safelisted scene."""
+    hue = request.app.state.hue
+    _check_hue_available(hue)
+    states: dict[str, dict]
+    if body.enabled:
+        if not body.scene or body.scene not in GUEST_SCENE_WHITELIST:
+            raise HTTPException(status_code=400, detail="A valid active scene is required")
+        preset = SCENE_PRESETS[GUEST_SCENE_WHITELIST[body.scene]]
+        states = {light_id: preset["lights"][light_id] for light_id in ("3", "4")}
+    else:
+        states = {"3": {"on": False}, "4": {"on": False}}
+
+    automation = getattr(request.app.state, "automation", None)
+    for light_id, state in states.items():
+        if not await hue.set_light(light_id, state):
+            raise HTTPException(status_code=502, detail="Kitchen light update failed")
+        if automation:
+            automation.mark_light_manual(light_id, state)
+    return {"status": "ok", "enabled": body.enabled}
+
+
 @router.post("/handback", dependencies=[Depends(require_api_key)])
 async def guest_handback(request: Request) -> dict:
     """Clear any guest-set manual override and return to host's automation.
@@ -447,6 +701,10 @@ async def guest_handback(request: Request) -> dict:
     if not automation:
         raise HTTPException(
             status_code=503, detail="Automation engine not initialized"
+        )
+    if getattr(automation, "override_source", None) != "guest":
+        raise HTTPException(
+            status_code=409, detail="Guest no longer owns the active override"
         )
     await automation.clear_override(source="guest_handback")
     logger.info(

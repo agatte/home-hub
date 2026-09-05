@@ -38,6 +38,9 @@
   $: isGamedayRoute = $page.url.pathname === '/gameday'
 
   onMount(() => {
+    // Guest pages run behind the isolated guest gateway. Do not open the
+    // normal HomeHub websocket or initialize kiosk-only activity/ambient code.
+    if (window.location.pathname.startsWith('/guest')) return () => {}
     const cleanupStores = initStores()
     const cleanupActivity = initActivityTracking()
     const cleanupAmbient = initAmbientAudio()

@@ -31,6 +31,8 @@
   /** @type {any[] | null} */
   let allowDomains = null
   let piholeAvailable = false
+  /** @type {any | null} */
+  let guestAccess = null
   let newDnsHostname = ''
   let newDnsIp = ''
   let newBlocklistUrl = ''
@@ -39,6 +41,7 @@
   let saving = null
 
   onMount(async () => {
+    try { guestAccess = await apiGet('/api/guest/status') } catch { guestAccess = null }
     try {
       const resp = /** @type {any} */ (await apiGet('/api/pihole/dns'))
       dnsHosts = resp.dns_hosts || []
@@ -53,6 +56,15 @@
       allowDomains = resp.allow || []
     } catch { allowDomains = null }
   })
+
+  async function revokeGuestSessions() {
+    saving = 'guest-revoke'
+    try {
+      await apiPost('/api/guest/revoke')
+      guestAccess = await apiGet('/api/guest/status')
+    } catch {}
+    saving = null
+  }
 
   async function addDnsHost() {
     if (!newDnsHostname || !newDnsIp) return
@@ -163,10 +175,33 @@
 </script>
 
 <SettingsSection
-  title="Network"
-  description="Pi-hole DNS maintenance and ad/tracker blocklists. Hidden if Pi-hole isn't reachable."
+  title="Network & Guest Access"
+  description="Apartment DNS, Pi-hole filtering, and the isolated visitor access path."
   icon={Network}
 >
+  <SettingGroup title="Guest access" hint="Visitors join the isolated Google Guest Network. HomeHub guest controls use a separate HTTPS gateway rather than sharing the Latitude onto the guest LAN.">
+    {#if guestAccess}
+      <div class="guest-status-grid">
+        <div><span>Guest network</span><strong>{guestAccess.ssid || 'Not configured'}</strong></div>
+        <div><span>Wi-Fi QR</span><strong>{guestAccess.wifi_configured ? 'Ready' : 'Not ready'}</strong></div>
+        <div><span>Guest app</span><strong>{guestAccess.guest_app_ready ? 'Ready' : guestAccess.gateway_reachable ? 'Public route offline' : guestAccess.gateway_configured ? 'Gateway offline' : 'Not configured'}</strong></div>
+        <div><span>Active sessions</span><strong>{guestAccess.active_sessions ?? '?'}</strong></div>
+      </div>
+      {#if guestAccess.public_url}
+        <p class="dns-note">Guest app: <code>{guestAccess.public_url}</code>. The guest password is intentionally never shown here.</p>
+      {:else}
+        <p class="dns-note">Guest Wi-Fi can be shared by QR, but the guest app gateway is not configured yet.</p>
+      {/if}
+      {#if guestAccess.gateway_reachable}
+        <SettingButton variant="ghost" loading={saving === 'guest-revoke'} on:click={revokeGuestSessions}>
+          {saving === 'guest-revoke' ? 'Revoking?' : 'Revoke guest sessions'}
+        </SettingButton>
+      {/if}
+    {:else}
+      <p class="muted">Guest access status unavailable.</p>
+    {/if}
+  </SettingGroup>
+
   {#if !piholeAvailable && dnsHosts === null && blocklists === null}
     <p class="muted">Pi-hole not detected. Set <code>PIHOLE_API_URL</code> + <code>PIHOLE_API_KEY</code> in <code>.env</code> to enable.</p>
   {:else}
@@ -296,6 +331,34 @@
 </SettingsSection>
 
 <style>
+  .guest-status-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .guest-status-grid > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .guest-status-grid span {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .guest-status-grid strong {
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
   .muted {
     margin: 0;
     font-family: var(--font-body);

@@ -1,6 +1,7 @@
 <script>
+  import { onMount } from 'svelte'
   import { Music } from 'lucide-svelte'
-  import { sonos } from '$lib/stores/sonos.js'
+  import { guestState, initGuestState } from '$lib/stores/guest.js'
 
   // Three to six short lines, edit freely. Anything that helps a guest
   // feel oriented when Anthony's in the kitchen.
@@ -11,7 +12,9 @@
     'Cheers — let\'s get fucked up.',
   ]
 
-  $: nowPlaying = $sonos.state === 'PLAYING' && ($sonos.track || $sonos.artist)
+  $: nowPlaying = $guestState.sonos?.state === 'PLAYING' && ($guestState.sonos?.track || $guestState.sonos?.artist)
+
+  onMount(() => initGuestState())
 </script>
 
 <svelte:head>
@@ -31,13 +34,13 @@
     </div>
     {#if nowPlaying}
       <div class="guest-track">
-        {#if $sonos.art_url}
-          <img class="guest-art" src={$sonos.art_url} alt="Album artwork" />
+        {#if $guestState.sonos?.has_art}
+          <img class="guest-art" src={`/api/guest/art?track=${encodeURIComponent($guestState.sonos?.track || '')}`} alt="Album artwork" />
         {/if}
         <div class="guest-track-text">
-          <div class="guest-track-title">{$sonos.track || '—'}</div>
-          {#if $sonos.artist}
-            <div class="guest-track-artist">{$sonos.artist}</div>
+          <div class="guest-track-title">{$guestState.sonos?.track || '—'}</div>
+          {#if $guestState.sonos?.artist}
+            <div class="guest-track-artist">{$guestState.sonos?.artist}</div>
           {/if}
         </div>
       </div>

@@ -32,6 +32,7 @@ RETURN_UNITS=(
 )
 SUPPRESSED_UNITS=(
     "${RETURN_UNITS[@]}"
+    home-hub-guest-gateway.service
     home-hub-ambient.service
 )
 
@@ -91,7 +92,11 @@ notify() {
 write_marker() {
     mkdir -p "$STATE_DIR"
     local tmp="$MARKER.tmp.$$"
-    printf '%s source=local-hostctl\n' "$(date --iso-8601=seconds)" > "$tmp"
+    local guest_gateway_active=0
+    if unit_known home-hub-guest-gateway.service && systemctl --user is-active --quiet home-hub-guest-gateway.service; then
+        guest_gateway_active=1
+    fi
+    printf '%s source=local-hostctl guest_gateway_active=%s\n' "$(date --iso-8601=seconds)" "$guest_gateway_active" > "$tmp"
     mv "$tmp" "$MARKER"
 }
 
@@ -109,7 +114,11 @@ begin_return_home() {
         return
     fi
     local tmp="$RETURNING_MARKER.tmp.$$"
-    printf '%s source=local-hostctl\n' "$(date --iso-8601=seconds)" > "$tmp"
+    local guest_gateway_active=0
+    if unit_known home-hub-guest-gateway.service && systemctl --user is-active --quiet home-hub-guest-gateway.service; then
+        guest_gateway_active=1
+    fi
+    printf '%s source=local-hostctl guest_gateway_active=%s\n' "$(date --iso-8601=seconds)" "$guest_gateway_active" > "$tmp"
     mv "$tmp" "$RETURNING_MARKER"
 }
 
@@ -278,6 +287,13 @@ return_home() {
         exit 2
     fi
 
+    # Preserve whether the optional guest gateway was actually active before
+    # Travel Mode. Installed-but-stopped must stay stopped after Return Home.
+    local restore_guest_gateway=0
+    if grep -q 'guest_gateway_active=1' "$RETURNING_MARKER"; then
+        restore_guest_gateway=1
+    fi
+
     # Activation succeeded for the same durable transaction. Publishing HOME is
     # now a single marker removal; dependent units remain held until after it.
     rm -f "$RETURNING_MARKER"
@@ -288,6 +304,11 @@ return_home() {
             degraded+=("$unit")
         fi
     done
+    if [[ "$restore_guest_gateway" == "1" ]]; then
+        if ! enable_start_if_known home-hub-guest-gateway.service; then
+            degraded+=("home-hub-guest-gateway.service")
+        fi
+    fi
 
     restore_kiosk
     if [[ ${#degraded[@]} -gt 0 ]]; then
