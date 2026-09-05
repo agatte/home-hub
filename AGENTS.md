@@ -24,9 +24,16 @@ needed.
 
 ## Working model
 
-Planning and prompt design may happen in ChatGPT; Codex performs bounded
-repository inspection, implementation, testing, review, and integration from
-the terminal. This file is sufficient for normal repository work.
+ChatGPT is the lead/orchestrator. Codex performs only the bounded task it was
+dispatched for. Zero Codex workers is the normal state; use one only when the
+task genuinely benefits from delegation, and a second only for independent,
+collision-free, implementation-ready work where parallelism materially saves
+time. Do not launch subagents merely because capacity exists.
+
+Before delegated work, prefer direct evidence gathering and narrow the task to
+the smallest useful files/symbols/tests. Reuse known context instead of broad
+rediscovery. Prefer targeted validation and stop once the requested acceptance
+criteria are proven.
 
 Before editing:
 
@@ -208,6 +215,20 @@ behavior, and subscription cleanup.
 GitHub #151 is historical and resolved; do not assume an inherited red backend
 baseline. If a broad current suite is red, reproduce and report the actual
 failure rather than dismissing it as the old #151 baseline.
+
+## Model and effort policy
+
+Use the cheapest credible path: ChatGPT direct -> Luna -> Terra -> Sol -> Astra.
+Terra Medium is the normal Codex implementation/debugging choice when a worker
+is actually needed; do not default to High. Use Sol only for judgment-heavy
+ownership/lifecycle, cross-service ambiguity, difficult architecture, or
+meaningful high-risk runtime/security/data work.
+
+Astra is never automatic. Before any Astra dispatch, explain why it is
+justified, warn that it uses materially more Codex/Work allowance than Sol,
+name the cheapest credible alternative and bounded Astra task, and wait for
+Anthony's explicit approval. Requests to investigate, research, fix, review,
+continue, or use the best model are not Astra approval.
 
 ## Live and operational safety
 
