@@ -33,7 +33,6 @@
 
   export async function openModal() {
     if (!summary) await fetchStatus()
-    if (!summary) return
     modalOpen = true
     // Focus the close button so ESC works before the iframe steals focus.
     // After the user clicks into the iframe, ESC keystrokes go to the iframe

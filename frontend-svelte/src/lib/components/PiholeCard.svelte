@@ -29,7 +29,6 @@
 
   export async function openModal() {
     if (!stats) await fetchStats()
-    if (!stats) return
     modalOpen = true
     await tick()
     closeBtn?.focus()
