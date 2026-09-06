@@ -238,9 +238,38 @@ def _bar_csp_host(host: str) -> Optional[str]:
     return f"[{address.compressed}]" if address.version == 6 else address.compressed
 
 
+def _host_header_hostname(host_header: str) -> Optional[str]:
+    """Extract a hostname from the raw HTTP Host header without URL rebuilding."""
+    value = host_header.strip()
+    if not value:
+        return None
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing <= 1:
+            return None
+        hostname = value[1:closing]
+        suffix = value[closing + 1 :]
+        if suffix:
+            if not suffix.startswith(":"):
+                return None
+            port = suffix[1:]
+            if not port.isdigit() or not 0 < int(port) <= 65535:
+                return None
+        return hostname
+    if "[" in value or "]" in value or value.count(":") > 1:
+        return None
+    if ":" not in value:
+        return value
+    hostname, port = value.rsplit(":", 1)
+    if not hostname or not port.isdigit() or not 0 < int(port) <= 65535:
+        return None
+    return hostname
+
+
 def _home_csp_for_request(request) -> str:
     """Allow the Home Bar iframe only from this HomeHub host on port 8001."""
-    host = _bar_csp_host(request.url.hostname or "")
+    hostname = _host_header_hostname(request.headers.get("host", ""))
+    host = _bar_csp_host(hostname or "")
     if not host:
         return _CSP
     return _CSP.replace(

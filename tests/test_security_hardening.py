@@ -57,6 +57,12 @@ def test_bar_frame_source_tracks_requested_homehub_host(client):
     assert "http://localhost:8001" not in csp
 
 
+def test_bar_frame_source_accepts_bracketed_ipv6_host(client):
+    resp = client.get("/health", headers={"Host": "[2001:db8::1]:8000"})
+    csp = resp.headers["Content-Security-Policy"]
+    assert "frame-src 'self' http://[2001:db8::1]:8001" in csp
+
+
 def test_bar_frame_source_rejects_malformed_host(client):
     resp = client.get("/health", headers={"Host": "bad;frame-src:8000"})
     csp = resp.headers["Content-Security-Policy"]
