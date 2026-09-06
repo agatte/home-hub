@@ -276,4 +276,3 @@ def test_raw_review_route_is_direct_localhost_only():
     dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
     assert require_localhost in dependency_calls
     assert require_api_key not in dependency_calls
-
