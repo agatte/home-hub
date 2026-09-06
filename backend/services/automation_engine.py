@@ -4844,6 +4844,18 @@ class AutomationEngine:
                 await self._evaluate_physical_context_relax(
                     now=now, trigger="automation_tick",
                 )
+
+                # ambient_relax is a lifecycle-bound soft default, not durable
+                # user intent. Re-evaluate the same attendance evidence used
+                # to veto acquisition so a normal desk return can release it
+                # even while the underlying semantic mode remains Idle.
+                if (
+                    self._manual_override
+                    and self._override_source == "ambient_relax"
+                    and self._attendance_veto_reason() is not None
+                ):
+                    await self.clear_override(source="ambient_relax")
+
                 if external_off:
                     await asyncio.sleep(60)
                     continue
