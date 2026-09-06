@@ -37,8 +37,11 @@ from backend.services.pc_agent.game_list import (
     LOL_PROCESSES,
     get_game_processes,
     MEDIA_PROCESSES,
-    WATCHING_TITLE_KEYWORDS,
     WORK_PROCESSES,
+)
+from backend.services.pc_agent.windows_media_session import (
+    WindowsMediaSessionProbe,
+    browser_title_looks_like_video,
 )
 
 # Riot Games' Live Client Data API runs locally when a League match is in
@@ -120,6 +123,9 @@ DWELL_LEAVE_WORKING_NIGHT = 300.0   # Symmetric counterpart: once committed work
 # via ml_decisions factor history showing firefox ↔ windowsterminal
 # bouncing every 30–60s.
 WATCHING_STICKY_SECONDS = 90.0
+# Brief pause/seek during an established browser video session remains intent.
+# A cold Paused session never establishes Watching on its own.
+WATCHING_PAUSE_GRACE_SECONDS = 90.0
 NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
 MAX_MATCHED_WORK_PROCESSES = 3
@@ -269,6 +275,8 @@ class _Classification:
     idle_seconds: int
     browser_running: bool
     active_game: Optional[str]
+    browser_video_title: bool
+    browser_playback_status: str
     classified_mode: Optional[str] = None
     pending_mode: Optional[str] = None
     pending_dwell_age: Optional[float] = None
@@ -308,6 +316,11 @@ class ActivityDetector:
         # tolerance in detect() — brief working candidates during a YouTube
         # session (terminal alt-tab) don't reset the dwell timer.
         self._last_watching_candidate_at: Optional[float] = None
+        self._media_session_probe = WindowsMediaSessionProbe()
+        # Keep only a process-local fingerprint for pause grace; detector state
+        # never retains the page/media title text or a title history.
+        self._last_browser_playing_fingerprint: Optional[tuple[str, int]] = None
+        self._last_browser_playing_at: Optional[float] = None
         # LoL Live Client Data cache — avoids hammering the localhost API
         # every 5s when the champion doesn't change mid-match.
         self._lol_champion: Optional[str] = None
@@ -577,6 +590,14 @@ class ActivityDetector:
         if matched_game_process is None and running_runelite_java_pid is not None:
             matched_game_process = "runelite-java"
         gaming_qualification_reason: Optional[str] = None
+        browser_video_title = browser_title_looks_like_video(fg_proc, fg_title)
+        browser_playback_value = "not_evaluated"
+
+        def browser_playback_status() -> str:
+            nonlocal browser_playback_value
+            if browser_playback_value == "not_evaluated":
+                browser_playback_value = self._browser_playback_status(fg_proc, fg_title)
+            return browser_playback_value
 
         if fg_proc and fg_proc in game_processes:
             fg_kind = "game"
@@ -609,6 +630,8 @@ class ActivityDetector:
                 idle_seconds=idle_seconds,
                 browser_running=browser_running,
                 active_game=self._resolve_active_game(fg_proc, processes),
+                browser_video_title=browser_video_title,
+                browser_playback_status=browser_playback_value,
             )
             return mode
 
@@ -616,16 +639,26 @@ class ActivityDetector:
         # foreground media. Do not treat "browser is open" as media intent:
         # Firefox may route the global media key to a background YouTube tab
         # even while the selected tab is Reddit/GitHub/etc.
+        sleep_media_playing = (
+            fg_proc in MEDIA_PROCESSES
+            or (browser_video_title and browser_playback_status() == "playing")
+        )
         if (
             idle_seconds > SLEEP_IDLE_THRESHOLD
             and self._is_sleep_window()
-            and self._foreground_snapshot_is_media(fg_proc, fg_title)
+            and sleep_media_playing
         ):
             self._pause_media()
             return classified("sleeping", "sleep_foreground_media")
 
-        # Standard idle detection (input idle >10 min, no special context)
-        if idle_seconds > IDLE_THRESHOLD:
+        # Standard input-idle detection must not erase credible passive video
+        # playback. Watching is often hands-off by design; actual foreground
+        # browser playback is stronger evidence than a quiet keyboard/mouse.
+        browser_playback_active = (
+            browser_video_title
+            and browser_playback_status() in {"playing", "pause_grace"}
+        )
+        if idle_seconds > IDLE_THRESHOLD and not browser_playback_active:
             return classified("idle", "global_input_idle")
 
         # Reset media pause flag when user is active again. Real input has
@@ -669,13 +702,10 @@ class ActivityDetector:
             )
 
         # Media / work / browser disambiguation via foreground window.
-        # Media apps (especially Stremio) leave background services running
-        # after the main window closes; those services must not be classified
-        # as "watching" when a dev tool is the actual foreground. Resolution:
-        # check the foreground first, and only return "watching" when either
-        # (a) a media app is the foreground window, (b) a browser tab title
-        # looks like media playback, or (c) media is running without a
-        # foreground work window (preserves passive media-watching behavior).
+        # Media apps (especially Stremio) leave services/processes running after
+        # viewing ends. A background process is context only, never sufficient
+        # Watching authority. Existing hysteresis handles brief alt-tabs away
+        # from genuine foreground playback.
         media_running = bool(processes & MEDIA_PROCESSES)
         work_running = bool(matched_work_processes)
 
@@ -683,21 +713,15 @@ class ActivityDetector:
             if fg_proc in MEDIA_PROCESSES:
                 return classified("watching", "foreground_media")
 
-            if (
-                fg_proc in BROWSER_PROCESSES
-                and fg_title
-                and any(kw in fg_title.lower() for kw in WATCHING_TITLE_KEYWORDS)
-            ):
-                return classified("watching", "foreground_browser_media")
+            if browser_video_title:
+                playback = browser_playback_status()
+                if playback == "playing":
+                    return classified("watching", "foreground_browser_playing")
+                if playback == "pause_grace":
+                    return classified("watching", "foreground_browser_pause_grace")
 
             if fg_proc in WORK_PROCESSES:
                 return classified("working", "foreground_work")
-
-            if media_running:
-                # Media running with no foreground work window and foreground
-                # isn't otherwise recognized — likely passive watching (e.g.
-                # tray media player).
-                return classified("watching", "background_media")
 
         # Browser running late at night = working
         current_hour = datetime.now().hour
@@ -707,32 +731,50 @@ class ActivityDetector:
 
         return classified("idle", "fallback_idle")
 
-    def _foreground_is_media(self) -> bool:
-        """
-        True when the user is *explicitly* looking at a video right now.
+    def _browser_playback_status(
+        self,
+        fg_proc: Optional[str],
+        fg_title: Optional[str],
+    ) -> str:
+        """Resolve playback state plus bounded pause grace for browser video."""
+        status = self._media_session_probe.browser_playback_status(fg_proc, fg_title)
+        if not browser_title_looks_like_video(fg_proc, fg_title):
+            return status
+        assert fg_proc is not None
+        fingerprint = (fg_proc.lower(), hash((fg_title or "").lower()))
+        now = time.monotonic()
+        if status == "playing":
+            self._last_browser_playing_fingerprint = fingerprint
+            self._last_browser_playing_at = now
+            return status
+        if (
+            status == "paused"
+            and self._last_browser_playing_fingerprint == fingerprint
+            and self._last_browser_playing_at is not None
+            and now - self._last_browser_playing_at < WATCHING_PAUSE_GRACE_SECONDS
+        ):
+            return "pause_grace"
+        return status
 
-        Either the foreground process is a known media player, or the
-        foreground window is a browser whose title matches one of
-        WATCHING_TITLE_KEYWORDS (YouTube, Twitch, Netflix, …). This is an
-        unambiguous-intent signal — the user opened the video tab and put
-        it front-and-center.
-        """
+    def _foreground_is_media(self) -> bool:
+        """True only for foreground media with credible current intent."""
         fg_proc, fg_title = self._get_foreground_window()
         return self._foreground_snapshot_is_media(fg_proc, fg_title)
 
-    @staticmethod
     def _foreground_snapshot_is_media(
+        self,
         fg_proc: Optional[str],
         fg_title: Optional[str],
     ) -> bool:
         """Evaluate media intent from an already-captured foreground snapshot."""
         if fg_proc in MEDIA_PROCESSES:
             return True
-        if fg_proc in BROWSER_PROCESSES and fg_title:
-            title_lower = fg_title.lower()
-            if any(kw in title_lower for kw in WATCHING_TITLE_KEYWORDS):
-                return True
-        return False
+        if not browser_title_looks_like_video(fg_proc, fg_title):
+            return False
+        return self._browser_playback_status(fg_proc, fg_title) in {
+            "playing",
+            "pause_grace",
+        }
 
     def _dwell_threshold(self, from_mode: Optional[str], to_mode: str) -> float:
         """
@@ -1039,6 +1081,15 @@ class ActivityDetector:
                 "impact": 0.9,
             },
         ]
+
+        if classification.browser_video_title:
+            factors.append({
+                "key": "browser_playback",
+                "label": "Browser playback",
+                "value": classification.browser_playback_status,
+                "display": classification.browser_playback_status,
+                "impact": 0.9,
+            })
 
         if classification.matched_work_processes:
             matches = list(classification.matched_work_processes)

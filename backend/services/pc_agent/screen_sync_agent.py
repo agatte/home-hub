@@ -40,10 +40,10 @@ import mss
 import numpy as np
 import psutil
 
-from backend.services.pc_agent.game_list import (
-    BROWSER_PROCESSES,
-    MEDIA_PROCESSES,
-    WATCHING_TITLE_KEYWORDS,
+from backend.services.pc_agent.game_list import MEDIA_PROCESSES
+from backend.services.pc_agent.windows_media_session import (
+    WindowsMediaSessionProbe,
+    browser_title_looks_like_video,
 )
 
 try:
@@ -73,6 +73,7 @@ DAMAGE_POST_MIN_INTERVAL = 0.25  # ≤4 damage posts/sec
 LOG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "home-hub" / "logs"
 PID_FILE = LOG_DIR / "screen_sync_agent.pid"
 _BACKOFF_HEARTBEAT_INTERVAL = 10.0
+_MEDIA_SESSION_PROBE = WindowsMediaSessionProbe()
 
 # Sticky-cluster tuning. K-means reassigns cluster labels each fit, so two
 # near-tied clusters can trade the "best" slot frame-to-frame and produce
@@ -219,15 +220,23 @@ def _acquire_singleton_lock() -> bool:
 
 
 def _foreground_snapshot_is_media(
-    process_name: Optional[str], window_title: Optional[str],
-) -> bool:
-    """Return whether a captured foreground window is explicit media intent."""
+    process_name: Optional[str],
+    window_title: Optional[str],
+    browser_playback_status: str = "unavailable",
+) -> Optional[bool]:
+    """Return immediate media intent for an already-captured foreground.
+
+    ``None`` means the foreground looks like browser video but the OS playback
+    probe could not resolve it. That preserves the backend's compatibility
+    path instead of turning missing probe support into authoritative "not media".
+    """
     if process_name in MEDIA_PROCESSES:
         return True
-    if process_name in BROWSER_PROCESSES and window_title:
-        title_lower = window_title.lower()
-        return any(keyword in title_lower for keyword in WATCHING_TITLE_KEYWORDS)
-    return False
+    if not browser_title_looks_like_video(process_name, window_title):
+        return False
+    if browser_playback_status in {"unavailable", "ambiguous"}:
+        return None
+    return browser_playback_status == "playing"
 
 
 def _foreground_media_active() -> Optional[bool]:
@@ -255,7 +264,11 @@ def _foreground_media_active() -> Optional[bool]:
             process_name = psutil.Process(pid.value).name().lower()
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return None
-        return _foreground_snapshot_is_media(process_name, title)
+        playback_status = _MEDIA_SESSION_PROBE.browser_playback_status(
+            process_name,
+            title,
+        )
+        return _foreground_snapshot_is_media(process_name, title, playback_status)
     except Exception:
         return None
 
