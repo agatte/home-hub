@@ -193,11 +193,11 @@ After Phase A, the four slices are mostly file-disjoint:
 | **C** | `feature/gameday-frontend` | SvelteKit page + stores + WS subscription | `frontend-svelte/src/routes/gameday/+page.svelte`, `frontend-svelte/src/lib/stores/gameday.js` |
 | **D** | `feature/threlte-football-field` | Threlte 3D field component | `frontend-svelte/src/lib/components/FootballField.svelte` and supporting helpers |
 
-Stagger by 24-48h: spawn A first, then B once A's `register_on_play_event` interface is concrete, then C and D in parallel against the SvelteKit/Threlte boundary defined in Phase A. Each agent opens a PR; main session reviews and cherry-picks into main as they land. Run Codex `$api-audit` after the merges, then `$deploy-home` when frontend + backend are both in.
+Stagger by 24-48h: spawn A first, then B once A's `register_on_play_event` interface is concrete, then C and D in parallel against the SvelteKit/Threlte boundary defined in Phase A. Each agent opens a PR; main session reviews and cherry-picks into main as they land. Run Codex `$homehub-diagnose` for targeted API/runtime verification after the merges, then `$deploy-home` when frontend + backend are both in.
 
 ### Phase C — Integration + smoke (main session)
 
-Main session is the integrator. Run the full system end-to-end. Codex `$deploy-home` performs deploy-verifier-style structural checks. The old watcher loop is retired; use `$homehub-monitoring` or targeted `$journal-triage` for post-deploy anomalies.
+Main session is the integrator. Run the full system end-to-end. Codex `$deploy-home` performs deploy-verifier-style structural checks. The old watcher loop is retired; use `$homehub-diagnose` for targeted post-deploy anomalies.
 
 ### Token cost reality check
 
@@ -266,7 +266,7 @@ The fleet is 30 agents. Most fire automatically — the manual spawns left are d
 | `rule-engine-misfire-auditor` | runbook entry #24 | weekly Fri 08:00 ET | digest block (agent writes its own) |
 | `performance-regression-hunter` | runbook entry #25 | weekly Tue 09:00 ET | digest block; trends to `~/.claude/data/perf_trends.jsonl` |
 | `error-pattern-watcher` | runbook entry #26 | weekly Thu 09:00 ET | digest block (agent writes its own) |
-| `ci-health-watcher` | historical runbook entry #33 | disabled 2026-07-13 | use Codex `$ci-health` on demand |
+| `ci-health-watcher` | historical runbook entry #33 | disabled 2026-07-13 | use ordinary GitHub Actions inspection on demand |
 | `deploy-verifier` | historical `/deploy-home` step 7 | disabled 2026-07-13 | Codex `$deploy-home` performs equivalent checklist verification inline |
 | `lighting-curator` | PreToolUse hook on `git commit` | per-commit when staged diff matches lighting files + design identifiers | blocks commit unless `[curator-reviewed]` token in message |
 | `gameday-preflight` | runbook entry #12 (preseason T-7) + entry #13 (weekly Sun Aug-Jan) + manual T-90 game morning | once preseason + every Sunday in NFL season + ad-hoc | digest block (agent writes its own) |

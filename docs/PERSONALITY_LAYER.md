@@ -185,7 +185,7 @@ Ambiguous requests can call Anthropic if `ANTHROPIC_API_KEY` is configured; resp
 - **Phase A validation (historical plan; last checked 2026-06-09):** 2-week shadow log + once-daily calibration prompts. Phase B ships only if Spearman ρ > 0.4 on all three axes over 30+ samples. Current production data and gate health require fresh verification.
 - **Phase B:** Playwright UI audit at the four V/A corners (happy-energized, happy-calm, sad-energized, sad-calm) — confirm L1 hue matches palette. Manual L1 override → confirm mood ring stops touching it. Sleeping mode → confirm mood ring disabled.
 - **Phase C v1:** `tests/test_vibe_router.py`, `tests/test_away_manager.py`, and `tests/test_tunnel_proxy.py` cover deterministic phrase mapping, staged-arrival apply/clear, invalid outputs, tunnel allowlisting, and auth shape. Production smoke: iOS Shortcut `home hub vibe` POSTs through `https://home-hub.gatte-home.com/api/personality/vibe`; Siri result is made clean by ending the Shortcut with `Show Result`.
-- **After each phase:** Codex `$api-audit` to confirm no existing endpoint regressed. `$deploy-home` to ship.
+- **After each phase:** Codex `$homehub-diagnose` for targeted API/runtime regression checks. `$deploy-home` to ship.
 
 ---
 
