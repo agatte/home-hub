@@ -110,6 +110,15 @@ class PresenceFusion:
         # falls out of the freshness window (lazily, in the getter).
         self._last_at_desk_source: Optional[str] = None
         self._last_at_desk_at: Optional[datetime] = None
+        # Edge stamp for apartment-level physical reacquisition.  This is
+        # intentionally global across sources: a desktop face appearing while
+        # Latitude already confirms someone is present is not a return-home
+        # event and must not relight an intentionally dark apartment.
+        self._last_strong_reacquisition_source: Optional[str] = None
+        self._last_strong_reacquisition_at: Optional[datetime] = None
+        # Positive reacquisition requires an observed apartment-level absence
+        # edge first. Source startup/silence alone is not permission to relight.
+        self._last_global_absence_observed_at: Optional[datetime] = None
 
     # ------------------------------------------------------------------
     # Ingest
@@ -145,7 +154,39 @@ class PresenceFusion:
                 "server) with current observation",
                 reading.source, prior_skew_s,
             )
+        had_strong_presence = self.is_strongly_present_any()
         self._readings[reading.source] = reading
+        has_strong_presence = self.is_strongly_present_any()
+        now = datetime.now(timezone.utc)
+        reading_age_s = (now - reading.captured_at).total_seconds()
+        reading_is_fresh = (
+            -FUTURE_SKEW_TOLERANCE_S
+            <= reading_age_s
+            <= STRONG_PRESENCE_FRESHNESS_S
+        )
+        reading_is_strong = reading_is_fresh and self._is_strongly_present(reading)
+
+        if (
+            not has_strong_presence
+            and reading_is_fresh
+            and reading.face_present is False
+        ):
+            # Record only an explicit trusted negative observation. Weak or
+            # ambiguous positive evidence is abstention, not apartment absence,
+            # and must never create a later relight edge.
+            self._last_global_absence_observed_at = reading.captured_at
+        elif (
+            not had_strong_presence
+            and has_strong_presence
+            and reading_is_strong
+            and self._last_global_absence_observed_at is not None
+            and 0 <= (
+                reading.captured_at - self._last_global_absence_observed_at
+            ).total_seconds() <= STRONG_PRESENCE_FRESHNESS_S
+        ):
+            self._last_strong_reacquisition_source = reading.source
+            self._last_strong_reacquisition_at = reading.captured_at
+            self._last_global_absence_observed_at = None
 
         if self._is_at_desk(reading):
             self._last_at_desk_source = reading.source
@@ -264,6 +305,29 @@ class PresenceFusion:
         is actually here.
         """
         return self.freshest_strong_presence(max_age_s) is not None
+
+    def is_strong_presence_reacquisition(
+        self, reading: PresenceReading,
+    ) -> bool:
+        """Whether ``reading`` is the edge that restored apartment presence.
+
+        The edge is apartment-wide rather than source-local: if another trusted
+        camera already confirmed someone here, a newly positive source is not a
+        return-home signal. Consumers use this narrow edge to distinguish safe
+        lighting reacquisition from steady presence while the user may have
+        intentionally turned every light off.
+        """
+        if not isinstance(reading, PresenceReading):
+            return False
+        if (
+            self._last_strong_reacquisition_source != reading.source
+            or self._last_strong_reacquisition_at != reading.captured_at
+        ):
+            return False
+        age_s = (datetime.now(timezone.utc) - reading.captured_at).total_seconds()
+        return age_s <= STRONG_PRESENCE_FRESHNESS_S and self._is_strongly_present(
+            reading
+        )
 
     def is_present_within_seconds(self, window_s: int) -> bool:
         """True iff any source had a present reading inside ``window_s``.

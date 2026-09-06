@@ -266,6 +266,82 @@ class AwayManager:
         await self._engine.signal_presence(engine_source)
         return was_away, away_minutes
 
+    def _soft_home_reacquisition_block_reason(self) -> Optional[str]:
+        """Return why an already-Home soft suppression must stay armed."""
+        if self._away:
+            return "away"
+        if getattr(self._engine, "host_return_hold_active", False):
+            return "returning_home"
+        if getattr(self._engine, "_away_hold", False):
+            return "hard_away_hold"
+        if getattr(self._engine, "current_mode", None) == "sleeping":
+            return "sleeping"
+        if bool(getattr(self._engine, "manual_override", False)):
+            return "manual_override"
+        try:
+            if self._engine.is_dnd_active():
+                return "dnd"
+        except Exception:
+            return "dnd_unknown"
+        return None
+
+    async def _release_soft_home_suppression_locked(
+        self, *, source: str, require_presence: bool,
+    ) -> tuple[bool, str]:
+        """Release only a soft Home suppression when policy evidence permits."""
+        if not getattr(self._engine, "_external_off_detected", False):
+            return False, "already_clear"
+        blocker = self._soft_home_reacquisition_block_reason()
+        if blocker is not None:
+            return False, blocker
+        if require_presence:
+            presence = self._presence_getter()
+            freshest = getattr(presence, "freshest_strong_presence", None)
+            evidence = freshest() if callable(freshest) else None
+            if evidence is None or getattr(evidence, "source", None) not in {
+                "latitude", "desktop",
+            }:
+                return False, "no_strong_trusted_presence"
+
+        await self._engine.signal_presence(source)
+        released = bool(
+            not getattr(self._engine, "_external_off_detected", False)
+            and not getattr(self._engine, "_away_hold", False)
+        )
+        return released, "released" if released else "release_rejected"
+
+    async def _reapply_home_output(self, *, source: str) -> bool:
+        """Best-effort deterministic relight after accepted Home reacquisition."""
+        try:
+            await self._engine.reapply_current_mode(force_resend=True)
+            logger.info("HOME output reacquired (source=%s)", source)
+            return True
+        except Exception as exc:
+            logger.error(
+                "HOME output reapply failed (source=%s): %s",
+                source, exc, exc_info=True,
+            )
+            return False
+
+    async def reacquire_home_after_auto(self, *, source: str) -> dict[str, Any]:
+        """Complete an explicit Auto reacquisition when fresh presence permits."""
+        async with self._event_lock:
+            released, reason = await self._release_soft_home_suppression_locked(
+                source=f"auto:{source}", require_presence=True,
+            )
+        reapplied = False
+        if released:
+            reapplied = await self._reapply_home_output(source=f"auto:{source}")
+        logger.info(
+            "Auto Home reacquisition source=%s released=%s reapplied=%s reason=%s",
+            source, released, reapplied, reason,
+        )
+        return {
+            "released": released,
+            "reapplied": reapplied,
+            "reason": reason,
+        }
+
     async def _persist_home_strict(
         self, *, source: str, reconciliation_id: str,
     ) -> None:
@@ -477,9 +553,16 @@ class AwayManager:
                     "changed": False,
                 }
 
-            changed, arrival_minutes = await self._establish_home_locked(
-                state_source=source, engine_source=f"geofence:{source}",
-            )
+            if self._away:
+                changed, arrival_minutes = await self._establish_home_locked(
+                    state_source=source, engine_source=f"geofence:{source}",
+                )
+            else:
+                # Region jitter or a delayed duplicate ARRIVE is not a new
+                # Home lifecycle transition and cannot override intentional
+                # darkness. Explicit Auto or a bounded physical return edge
+                # owns soft-suppression reacquisition while already Home.
+                return {"status": "ok", "away": False, "changed": False}
 
         if changed:
             await self.run_arrival_effects(
@@ -517,8 +600,15 @@ class AwayManager:
                 "status": "ok", "away": self._away, "changed": False,
                 "reason": "missing_capture_time",
             }
+        reacquired = bool(
+            getattr(presence, "is_strong_presence_reacquisition", lambda _: False)(
+                reading
+            )
+        )
 
         changed = False
+        suppression_released = False
+        release_reason = "not_needed"
         away_minutes: Optional[int] = None
         state_source = f"camera:{evidence.source}"
         async with self._event_lock:
@@ -540,41 +630,53 @@ class AwayManager:
                     "reason": "pre_leave_presence",
                 }
 
-            # Fast path: steady Home + no suppression needs no engine call on
-            # every 2-second camera frame. Soft suppression still routes through
-            # AwayManager so cameras never clear engine flags directly.
-            if not self._away and not (
-                getattr(self._engine, "_external_off_detected", False)
-                or getattr(self._engine, "_away_hold", False)
-            ):
-                return {
-                    "status": "ok", "away": False, "changed": False,
-                    "reason": "already_home",
-                }
-
-            changed, away_minutes = await self._establish_home_locked(
-                state_source=state_source, engine_source=state_source,
-            )
-
-        if changed:
-            # A physical reconciliation is not necessarily an arrival (Anthony
-            # may have left while a guest stayed), so restore automatic output
-            # without welcome TTS, staged vibe, or arrival notification.
-            try:
-                await self._engine.reapply_current_mode(force_resend=True)
-            except Exception as exc:
-                logger.error(
-                    "Physical HOME reapply failed (source=%s): %s",
-                    state_source, exc, exc_info=True,
+            if self._away:
+                changed, away_minutes = await self._establish_home_locked(
+                    state_source=state_source, engine_source=state_source,
                 )
+            else:
+                suppression_active = bool(
+                    getattr(self._engine, "_external_off_detected", False)
+                    or getattr(self._engine, "_away_hold", False)
+                )
+                if not suppression_active:
+                    return {
+                        "status": "ok", "away": False, "changed": False,
+                        "reason": "already_home",
+                    }
+                if not reacquired:
+                    return {
+                        "status": "ok", "away": False, "changed": False,
+                        "reason": "steady_presence_suppression_held",
+                    }
+                suppression_released, release_reason = (
+                    await self._release_soft_home_suppression_locked(
+                        source=state_source, require_presence=False,
+                    )
+                )
+
+        output_reapplied = False
+        if changed or suppression_released:
+            # A physical reconciliation is not necessarily an arrival (Anthony
+            # may have left while a guest stayed), so restore current authority
+            # without welcome TTS, staged vibe, or arrival notification.
+            output_reapplied = await self._reapply_home_output(source=state_source)
 
         return {
             "status": "ok",
             "away": False,
             "changed": changed,
-            "reason": "physical_presence",
+            "reason": (
+                "physical_reacquisition"
+                if suppression_released and not changed
+                else release_reason
+                if not changed and release_reason != "not_needed"
+                else "physical_presence"
+            ),
             "source": state_source,
             "away_minutes": away_minutes,
+            "suppression_released": suppression_released,
+            "output_reapplied": output_reapplied,
         }
 
     # ── Leave ───────────────────────────────────────────────────────────

@@ -118,10 +118,13 @@ async def test_override_route_marks_auto_as_explicit_user_intent():
 
     engine = MagicMock()
     engine.clear_override = AsyncMock()
+    away_manager = MagicMock()
+    away_manager.reacquire_home_after_auto = AsyncMock()
 
     request = _real_request(headers={}, client_host="192.168.1.30")
     request.scope["app"] = MagicMock()
     request.scope["app"].state.automation = engine
+    request.scope["app"].state.away_manager = away_manager
     request.scope["app"].state.limiter = None
 
     await set_override(ManualOverride(mode="auto"), request)
@@ -129,6 +132,9 @@ async def test_override_route_marks_auto_as_explicit_user_intent():
     engine.clear_override.assert_awaited_once_with(
         source="api:192.168.1.30",
         user_requested_auto=True,
+    )
+    away_manager.reacquire_home_after_auto.assert_awaited_once_with(
+        source="api:192.168.1.30",
     )
 
 

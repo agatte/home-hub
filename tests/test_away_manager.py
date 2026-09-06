@@ -17,7 +17,11 @@ from backend.services.away_manager import (
     HomeReconciliationRejected,
     OccupancyTransitionError,
 )
-from backend.services.presence_fusion import PresenceFusion, PresenceReading
+from backend.services.presence_fusion import (
+    STRONG_PRESENCE_FRESHNESS_S,
+    PresenceFusion,
+    PresenceReading,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -266,15 +270,16 @@ class TestArrive:
         )
         body = notifier.emit_alert.await_args.kwargs["body"]
         assert "staged vibe applied" in body
-    async def test_arrive_while_home_still_clears_suppression(self):
-        """A lost-state arrive must never leave the apartment suppressed."""
+    async def test_duplicate_arrive_while_home_does_not_release_soft_suppression(self):
+        """Region jitter is not permission to fight intentional darkness."""
         mgr, engine, *_ = _make_manager()
-        engine._external_off_detected = True  # e.g. Hue app armed it
+        engine._external_off_detected = True  # soft Hue-app all-off latch
 
         result = await mgr.handle_event("arrive", "ios_shortcut")
 
-        assert result["changed"] is False
-        assert engine._external_off_detected is False
+        assert result == {"status": "ok", "away": False, "changed": False}
+        assert engine._external_off_detected is True
+        engine.signal_presence.assert_not_awaited()
         engine.reapply_current_mode.assert_not_awaited()
 
     async def test_unknown_event_rejected(self):
@@ -306,6 +311,106 @@ class TestRestore:
         await mgr.load_state()
         assert mgr.away is False
         assert engine._external_off_detected is False
+
+
+# ---------------------------------------------------------------------------
+# Explicit Auto reacquisition
+# ---------------------------------------------------------------------------
+
+
+class TestAutoReacquisition:
+    @staticmethod
+    def _strong_desktop() -> PresenceReading:
+        return PresenceReading(
+            source="desktop",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            face_confidence=0.8,
+            detection_source="face",
+            zone="desk",
+        )
+
+    async def test_auto_with_fresh_presence_releases_soft_latch_and_reapplies(self):
+        presence = PresenceFusion()
+        presence.on_observation(self._strong_desktop())
+        mgr, engine, *_ = _make_manager(presence=presence)
+        engine._external_off_detected = True
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        assert result == {
+            "released": True, "reapplied": True, "reason": "released",
+        }
+        assert engine._external_off_detected is False
+        engine.signal_presence.assert_awaited_once_with("auto:api:test")
+        engine.reapply_current_mode.assert_awaited_once_with(force_resend=True)
+
+    async def test_auto_without_presence_keeps_soft_latch_dark(self):
+        mgr, engine, *_ = _make_manager(presence=PresenceFusion())
+        engine._external_off_detected = True
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        assert result["released"] is False
+        assert result["reason"] == "no_strong_trusted_presence"
+        assert engine._external_off_detected is True
+        engine.signal_presence.assert_not_awaited()
+        engine.reapply_current_mode.assert_not_awaited()
+
+    @pytest.mark.parametrize("blocker", ["dnd", "sleeping", "manual", "hard_hold"])
+    async def test_auto_preserves_protected_authority(self, blocker):
+        engine = FakeEngine(
+            mode="sleeping" if blocker == "sleeping" else "idle",
+            dnd=blocker == "dnd",
+        )
+        if blocker == "manual":
+            engine.manual_override = True
+        if blocker == "hard_hold":
+            engine._away_hold = True
+        presence = PresenceFusion()
+        presence.on_observation(self._strong_desktop())
+        mgr, _engine, *_ = _make_manager(engine=engine, presence=presence)
+        engine._external_off_detected = True
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        expected = {
+            "dnd": "dnd",
+            "sleeping": "sleeping",
+            "manual": "manual_override",
+            "hard_hold": "hard_away_hold",
+        }[blocker]
+        assert result["released"] is False
+        assert result["reason"] == expected
+        assert engine._external_off_detected is True
+        engine.signal_presence.assert_not_awaited()
+        engine.reapply_current_mode.assert_not_awaited()
+
+    async def test_auto_cannot_release_real_away(self):
+        presence = PresenceFusion()
+        mgr, engine, settings, *_ = _make_manager(presence=presence)
+        await mgr.handle_event("leave", "ios_shortcut")
+        presence.on_observation(self._strong_desktop())
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        assert result["released"] is False
+        assert result["reason"] == "away"
+        assert mgr.away is True
+        assert settings.store[AWAY_STATE_KEY]["away"] is True
+        assert engine._away_hold is True
+
+    async def test_auto_already_clear_is_writer_free(self):
+        presence = PresenceFusion()
+        presence.on_observation(self._strong_desktop())
+        mgr, engine, *_ = _make_manager(presence=presence)
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        assert result["released"] is False
+        assert result["reason"] == "already_clear"
+        engine.signal_presence.assert_not_awaited()
+        engine.reapply_current_mode.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +457,106 @@ class TestPhysicalOccupancyReconciliation:
         # not run the geofence welcome sequence.
         tts.speak.assert_not_awaited()
         assert notifier.emit_alert.await_count == 1  # LEAVE only
+
+    async def test_home_reacquisition_edge_releases_soft_suppression(self):
+        presence = PresenceFusion()
+        mgr, engine, *_ = _make_manager(presence=presence)
+        now = datetime.now(timezone.utc)
+        absent = self._desktop_reading(now - timedelta(seconds=2), present=False)
+        returned = self._desktop_reading(now)
+        presence.on_observation(absent)
+        engine._external_off_detected = True
+        presence.on_observation(returned)
+
+        result = await mgr.handle_presence_observation(returned)
+
+        assert result["reason"] == "physical_reacquisition"
+        assert result["suppression_released"] is True
+        assert result["output_reapplied"] is True
+        assert engine._external_off_detected is False
+        engine.signal_presence.assert_awaited_once_with("camera:desktop")
+        engine.reapply_current_mode.assert_awaited_once_with(force_resend=True)
+
+    async def test_steady_presence_does_not_fight_intentional_soft_all_off(self):
+        presence = PresenceFusion()
+        mgr, engine, *_ = _make_manager(presence=presence)
+        now = datetime.now(timezone.utc)
+        first = self._desktop_reading(now - timedelta(seconds=2))
+        steady = self._desktop_reading(now)
+        presence.on_observation(first)
+        engine._external_off_detected = True
+        presence.on_observation(steady)
+
+        result = await mgr.handle_presence_observation(steady)
+
+        assert result["reason"] == "steady_presence_suppression_held"
+        assert engine._external_off_detected is True
+        engine.signal_presence.assert_not_awaited()
+        engine.reapply_current_mode.assert_not_awaited()
+
+    async def test_first_positive_after_fusion_start_does_not_invent_return_edge(self):
+        presence = PresenceFusion()
+        mgr, engine, *_ = _make_manager(presence=presence)
+        reading = self._desktop_reading(datetime.now(timezone.utc))
+        engine._external_off_detected = True
+        presence.on_observation(reading)
+
+        result = await mgr.handle_presence_observation(reading)
+
+        assert result["reason"] == "steady_presence_suppression_held"
+        assert engine._external_off_detected is True
+        engine.reapply_current_mode.assert_not_awaited()
+
+    async def test_weak_then_strong_home_presence_does_not_relight_soft_all_off(self):
+        presence = PresenceFusion()
+        mgr, engine, *_ = _make_manager(presence=presence)
+        now = datetime.now(timezone.utc)
+        weak = PresenceReading(
+            source="latitude",
+            captured_at=now - timedelta(seconds=1),
+            face_present=True,
+            face_confidence=0.30,
+            detection_source="face",
+            zone=None,
+        )
+        strong = PresenceReading(
+            source="latitude",
+            captured_at=now,
+            face_present=True,
+            face_confidence=0.85,
+            detection_source="face",
+            zone="couch",
+        )
+        presence.on_observation(weak)
+        engine._external_off_detected = True
+        presence.on_observation(strong)
+
+        result = await mgr.handle_presence_observation(strong)
+
+        assert result["reason"] == "steady_presence_suppression_held"
+        assert engine._external_off_detected is True
+        engine.signal_presence.assert_not_awaited()
+        engine.reapply_current_mode.assert_not_awaited()
+
+    async def test_stale_absence_marker_cannot_relight_soft_all_off(self):
+        presence = PresenceFusion()
+        mgr, engine, *_ = _make_manager(presence=presence)
+        now = datetime.now(timezone.utc)
+        absent = self._desktop_reading(now, present=False)
+        presence.on_observation(absent)
+        presence._last_global_absence_observed_at = now - timedelta(
+            seconds=STRONG_PRESENCE_FRESHNESS_S + 1,
+        )
+        engine._external_off_detected = True
+
+        returned = self._desktop_reading(now)
+        presence.on_observation(returned)
+        result = await mgr.handle_presence_observation(returned)
+
+        assert result["reason"] == "steady_presence_suppression_held"
+        assert engine._external_off_detected is True
+        engine.signal_presence.assert_not_awaited()
+        engine.reapply_current_mode.assert_not_awaited()
 
     async def test_pre_leave_strong_presence_cannot_reverse_departure(self):
         presence = PresenceFusion()
@@ -677,6 +882,52 @@ class TestEngineHooks:
 
         assert engine._external_off_detected is False
         engine._apply_mode.assert_awaited_once()
+
+    async def test_auto_reacquire_idle_projects_home_general_and_time_based(self, engine):
+        presence = PresenceFusion()
+        presence.on_observation(PresenceReading(
+            source="desktop",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            face_confidence=0.8,
+            detection_source="face",
+            zone="desk",
+        ))
+        mgr, *_ = _make_manager(engine=engine, presence=presence)
+        engine._current_mode = "idle"
+        engine._external_off_detected = True
+        engine._apply_time_based = AsyncMock()
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        assert result["released"] is True
+        assert result["reapplied"] is True
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        engine._apply_time_based.assert_awaited_once()
+
+    async def test_auto_reacquire_preserves_fresh_stronger_semantic_mode(self, engine):
+        presence = PresenceFusion()
+        presence.on_observation(PresenceReading(
+            source="desktop",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            face_confidence=0.8,
+            detection_source="face",
+            zone="desk",
+        ))
+        mgr, *_ = _make_manager(engine=engine, presence=presence)
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+        engine._external_off_detected = True
+        engine._apply_mode = AsyncMock()
+
+        result = await mgr.reacquire_home_after_auto(source="api:test")
+
+        assert result["released"] is True
+        assert engine.activity == "working"
+        engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
 
     async def test_arm_invalidates_dedup_cache(self, engine):
         """Camera-walk-in release (geofence missed) must not dedup-skip

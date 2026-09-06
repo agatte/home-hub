@@ -407,6 +407,129 @@ def test_strong_presence_window_is_tight() -> None:
     assert fusion.is_at_desk_fresh() is True
 
 
+def test_strong_presence_reacquisition_marks_first_global_edge() -> None:
+    fusion = PresenceFusion()
+    absent = PresenceReading(
+        source="desktop", captured_at=_ago(1),
+        face_present=False, face_confidence=0.0,
+        detection_source="face", zone=None,
+    )
+    returned = PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.8,
+        detection_source="face", zone="desk",
+    )
+    fusion.on_observation(absent)
+    fusion.on_observation(returned)
+
+    assert fusion.is_strong_presence_reacquisition(returned) is True
+
+
+def test_stale_absence_marker_cannot_create_reacquisition_edge() -> None:
+    fusion = PresenceFusion()
+    now = _now()
+    absent = PresenceReading(
+        source="desktop", captured_at=now,
+        face_present=False, face_confidence=0.0,
+        detection_source="face", zone=None,
+    )
+    fusion.on_observation(absent)
+    fusion._last_global_absence_observed_at = _ago(
+        STRONG_PRESENCE_FRESHNESS_S + 1,
+    )
+    returned = PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.8,
+        detection_source="face", zone="desk",
+    )
+    fusion.on_observation(returned)
+
+    assert fusion.is_strong_presence_reacquisition(returned) is False
+
+
+def test_second_strong_source_is_not_apartment_reacquisition() -> None:
+    fusion = PresenceFusion()
+    absent = PresenceReading(
+        source="desktop", captured_at=_ago(2),
+        face_present=False, face_confidence=0.0,
+        detection_source="face", zone=None,
+    )
+    desktop = PresenceReading(
+        source="desktop", captured_at=_ago(1),
+        face_present=True, face_confidence=0.8,
+        detection_source="face", zone="desk",
+    )
+    latitude = PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.9,
+        detection_source="yolo", zone="couch",
+    )
+    fusion.on_observation(absent)
+    fusion.on_observation(desktop)
+    assert fusion.is_strong_presence_reacquisition(desktop) is True
+
+    fusion.on_observation(latitude)
+    assert fusion.is_strong_presence_reacquisition(latitude) is False
+
+
+def test_stale_strong_presence_does_not_invent_reacquisition_edge() -> None:
+    fusion = PresenceFusion()
+    stale = PresenceReading(
+        source="desktop",
+        captured_at=_ago(STRONG_PRESENCE_FRESHNESS_S + 2),
+        face_present=True, face_confidence=0.8,
+        detection_source="face", zone="desk",
+    )
+    fresh = PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.8,
+        detection_source="face", zone="desk",
+    )
+    fusion.on_observation(stale)
+    assert fusion.is_strong_presence_reacquisition(stale) is False
+
+    fusion.on_observation(fresh)
+    assert fusion.is_strong_presence_reacquisition(fresh) is False
+
+
+
+def test_weak_positive_does_not_create_reacquisition_edge() -> None:
+    fusion = PresenceFusion()
+    weak = PresenceReading(
+        source="latitude", captured_at=_ago(1),
+        face_present=True, face_confidence=0.30,
+        detection_source="face", zone=None,
+    )
+    strong = PresenceReading(
+        source="latitude", captured_at=_now(),
+        face_present=True, face_confidence=0.85,
+        detection_source="face", zone="couch",
+    )
+    fusion.on_observation(weak)
+    assert fusion.is_strong_presence_reacquisition(weak) is False
+
+    fusion.on_observation(strong)
+    assert fusion.is_strong_presence_reacquisition(strong) is False
+
+
+def test_ambiguous_reading_does_not_create_reacquisition_edge() -> None:
+    fusion = PresenceFusion()
+    ambiguous = PresenceReading(
+        source="desktop", captured_at=_ago(1),
+        face_present=None, face_confidence=None,
+        detection_source=None, zone=None,
+    )
+    strong = PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.8,
+        detection_source="face", zone="desk",
+    )
+    fusion.on_observation(ambiguous)
+    assert fusion.is_strong_presence_reacquisition(ambiguous) is False
+
+    fusion.on_observation(strong)
+    assert fusion.is_strong_presence_reacquisition(strong) is False
+
 def test_freshest_strong_presence_returns_newest_trusted_evidence() -> None:
     fusion = PresenceFusion()
     older = PresenceReading(

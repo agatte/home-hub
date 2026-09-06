@@ -676,7 +676,19 @@ async def set_override(override: ManualOverride, request: Request) -> dict:
             source=caller,
             user_requested_auto=True,
         )
+        # Explicit Auto is the reacquisition boundary for a stale soft
+        # external-off latch. AwayManager remains the sole Home/Away owner and
+        # decides whether fresh physical presence makes a relight safe.
+        away_manager = getattr(request.app.state, "away_manager", None)
+        if away_manager is not None:
+            try:
+                await away_manager.reacquire_home_after_auto(source=caller)
+            except Exception:
+                logger.exception(
+                    "Auto override cleared but Home reacquisition check failed"
+                )
         return {"status": "ok", "message": "Override cleared — returning to auto"}
+
 
     await engine.set_manual_override(override.mode, source=caller)
     return {"status": "ok", "mode": override.mode, "source": "manual"}
