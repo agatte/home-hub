@@ -3571,7 +3571,9 @@ class TestRecentDeskAttendanceVeto:
 
         assert result["semantic_disposition"] == "retracted"
         assert result["semantic_mode"] == "working"
-        assert result["authoritative_mode"] == "watching"
+        assert result["authority_reconciled"] is True
+        assert result["authoritative_mode"] == "working"
+        assert engine._mode_source_key == "process:desktop"
         assert "latitude" not in engine._last_process_semantic_by_device
         assert engine._last_process_observation_by_device["latitude"].observed_mode == "idle"
         assert engine._confidence_fusion._signals["process"].mode == "working"
@@ -3596,6 +3598,248 @@ class TestRecentDeskAttendanceVeto:
         assert result["semantic_disposition"] == "retracted"
         assert result["semantic_mode"] is None
         assert "process" not in engine._confidence_fusion._signals
+
+    async def test_latitude_retraction_releases_ownerless_watching_to_general(
+        self, engine,
+    ):
+        latitude = [{"key": "device", "value": "latitude"}]
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        await engine.report_activity(
+            "watching", source="process", factors=latitude,
+        )
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks.reset_mock()
+        engine._broadcast_mode.reset_mock()
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["semantic_disposition"] == "retracted"
+        assert result["semantic_mode"] is None
+        assert result["authority_reconciled"] is True
+        assert result["authoritative_mode"] == "idle"
+        assert engine.house_state == "home"
+        assert engine.activity == "general"
+        assert engine._mode_source == "time"
+        assert engine._mode_source_key == "time"
+        assert "process:latitude" not in engine._last_mode_source_report_at
+        engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._broadcast_mode.assert_awaited_once()
+
+    async def test_latitude_retraction_hands_authority_to_fresh_desktop_semantic(
+        self, engine,
+    ):
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        await engine.report_activity("working", source="process", factors=desktop)
+        desktop_at = engine._last_process_semantic_by_device["desktop"].received_at
+        await engine.report_activity("watching", source="process", factors=latitude)
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks.reset_mock()
+        engine._broadcast_mode.reset_mock()
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["semantic_disposition"] == "retracted"
+        assert result["semantic_mode"] == "working"
+        assert result["authority_reconciled"] is True
+        assert engine.current_mode == "working"
+        assert engine._mode_source_key == "process:desktop"
+        assert engine._last_mode_source_report_at["process:desktop"] == desktop_at
+        assert "process:latitude" not in engine._last_mode_source_report_at
+        engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
+        engine._broadcast_mode.assert_awaited_once()
+
+    async def test_latitude_retraction_preserves_newer_replacement_liveness(
+        self, engine,
+    ):
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        now = datetime.now(tz=TZ)
+        semantic_at = now - timedelta(seconds=120)
+        live_at = now - timedelta(seconds=5)
+        engine._record_process_semantic("working", desktop, semantic_at)
+        engine._last_mode_source_report_at["process:desktop"] = live_at
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+
+        await engine.report_activity(
+            "watching", source="process", factors=latitude,
+        )
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["authority_reconciled"] is True
+        assert engine.current_mode == "working"
+        assert engine._mode_source_key == "process:desktop"
+        assert engine._last_mode_source_report_at["process:desktop"] == live_at
+
+    async def test_latitude_retraction_hands_same_watching_mode_to_desktop_owner(
+        self, engine,
+    ):
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        await engine.report_activity("watching", source="process", factors=desktop)
+        desktop_at = engine._last_process_semantic_by_device["desktop"].received_at
+        await engine.report_activity("watching", source="process", factors=latitude)
+        assert engine._mode_source_key == "process:latitude"
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks.reset_mock()
+        engine._broadcast_mode.reset_mock()
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["semantic_mode"] == "watching"
+        assert result["authority_reconciled"] is True
+        assert engine.current_mode == "watching"
+        assert engine._mode_source_key == "process:desktop"
+        assert engine._last_mode_source_report_at["process:desktop"] == desktop_at
+        engine._apply_mode.assert_not_awaited()
+        engine._fire_mode_change_callbacks.assert_not_awaited()
+        engine._broadcast_mode.assert_awaited_once()
+
+    async def test_latitude_retraction_ignores_stale_remaining_semantic(
+        self, engine,
+    ):
+        desktop = [{"key": "device", "value": "desktop"}]
+        latitude = [{"key": "device", "value": "latitude"}]
+        stale_at = datetime.now(tz=TZ) - timedelta(
+            seconds=SOURCE_STALE_SECONDS + 1,
+        )
+        engine._record_process_semantic("working", desktop, stale_at)
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        await engine.report_activity("watching", source="process", factors=latitude)
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks.reset_mock()
+        engine._broadcast_mode.reset_mock()
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["semantic_mode"] is None
+        assert result["authority_reconciled"] is True
+        assert engine.current_mode == "idle"
+        assert engine.activity == "general"
+        assert engine._mode_source_key == "time"
+
+    @pytest.mark.parametrize("override_mode", ["watching", "sleeping"])
+    async def test_latitude_retraction_does_not_disturb_manual_authority(
+        self, engine, override_mode,
+    ):
+        latitude = [{"key": "device", "value": "latitude"}]
+        await engine.report_activity("watching", source="process", factors=latitude)
+        engine._manual_override = True
+        engine._override_mode = override_mode
+        engine._override_source = "api:test"
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["authority_reconciled"] is True
+        assert engine.manual_override is True
+        assert engine.current_mode == override_mode
+        assert engine._current_mode == "idle"
+        assert engine._mode_source_key == "time"
+        engine._apply_mode.assert_not_awaited()
+        engine._fire_mode_change_callbacks.assert_not_awaited()
+        engine._broadcast_mode.assert_not_awaited()
+
+    @pytest.mark.parametrize("gate", ["dnd", "away"])
+    async def test_latitude_retraction_cleans_owner_without_actuation_under_gate(
+        self, engine, gate,
+    ):
+        latitude = [{"key": "device", "value": "latitude"}]
+        await engine.report_activity("watching", source="process", factors=latitude)
+        if gate == "dnd":
+            engine._dnd._enabled = True
+            engine._dnd._expiry = datetime.now(tz=TZ) + timedelta(hours=1)
+        else:
+            engine._away_hold = True
+            engine._external_off_detected = True
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+
+        result = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert result["authority_reconciled"] is True
+        assert engine._current_mode == "idle"
+        assert engine._mode_source_key == "time"
+        if gate == "dnd":
+            assert engine.is_dnd_active() is True
+        else:
+            assert engine.house_state == "away"
+        engine._apply_mode.assert_not_awaited()
+        engine._fire_mode_change_callbacks.assert_not_awaited()
+        engine._broadcast_mode.assert_not_awaited()
+
+    async def test_repeated_latitude_retraction_is_idempotent(self, engine):
+        latitude = [{"key": "device", "value": "latitude"}]
+        engine._apply_mode = AsyncMock()
+        engine._fire_mode_change_callbacks = AsyncMock()
+        engine._broadcast_mode = AsyncMock()
+        await engine.report_activity("watching", source="process", factors=latitude)
+        engine._apply_mode.reset_mock()
+        engine._fire_mode_change_callbacks.reset_mock()
+        engine._broadcast_mode.reset_mock()
+
+        first = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+        second = await engine.report_activity(
+            "idle", source="process", factors=latitude,
+        )
+
+        assert first["authority_reconciled"] is True
+        assert second["authority_reconciled"] is False
+        engine._apply_mode.assert_awaited_once_with("idle", force_resend=True)
+        engine._fire_mode_change_callbacks.assert_awaited_once_with("idle")
+        engine._broadcast_mode.assert_awaited_once()
+
+    async def test_periodic_tick_cannot_reapply_retracted_latitude_watching(
+        self, monkeypatch, engine,
+    ):
+        monkeypatch.setattr(
+            AutomationEngine, "_get_time_period", lambda self, now=None: "day",
+        )
+        latitude = [{"key": "device", "value": "latitude"}]
+        engine._apply_mode = AsyncMock()
+        await engine.report_activity("watching", source="process", factors=latitude)
+        await engine.report_activity("idle", source="process", factors=latitude)
+        assert engine._current_mode == "idle"
+        engine._apply_mode.reset_mock()
+        engine._apply_time_based = AsyncMock()
+
+        await _drive_one_tick(engine)
+
+        engine._apply_time_based.assert_awaited_once()
+        engine._apply_mode.assert_not_awaited()
 
     async def test_source_priority_rejection_keeps_one_existing_process_voter(
         self, engine,

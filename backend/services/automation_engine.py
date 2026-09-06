@@ -1984,6 +1984,100 @@ class AutomationEngine:
         )
         return semantic.committed_mode, True
 
+    async def _reconcile_retracted_process_authority(
+        self,
+        *,
+        observation: ProcessObservation,
+        retracted_semantic: Optional[ProcessSemanticEvidence],
+        replacement: Optional[ProcessSemanticEvidence],
+    ) -> bool:
+        """Release ownerless Latitude Watching after accepted media retraction.
+
+        Latitude ``idle`` is not global idle evidence. It only removes that
+        device's positive media semantic. If Latitude actually owns the raw
+        Watching activity at that moment, authority must then move to another
+        fresh accepted process semantic or to the Home + General compatibility
+        baseline (raw ``idle``). Protection gates keep actuation authority, but
+        the stale underlying process owner is still cleaned up so it cannot
+        reappear when the gate later releases.
+        """
+        if retracted_semantic is None:
+            return False
+        owner_key = f"process:{observation.device}"
+        if (
+            observation.device != "latitude"
+            or retracted_semantic.committed_mode != "watching"
+            or self._mode_source_key != owner_key
+            or self._current_mode != "watching"
+        ):
+            return False
+
+        old_mode = self._current_mode
+        now = observation.received_at
+        if replacement is None:
+            new_mode = "idle"
+            new_source = "time"
+            new_source_key = "time"
+            replacement_at = now
+        else:
+            new_mode = replacement.committed_mode
+            new_source = "process"
+            new_source_key = f"process:{replacement.device}"
+            existing_report_at = self._last_mode_source_report_at.get(
+                new_source_key,
+            )
+            replacement_at = max(
+                replacement.received_at,
+                existing_report_at or replacement.received_at,
+            )
+
+        # The retracting source no longer owns positive semantic authority.
+        # Drop its owner freshness stamp so it cannot keep another process
+        # source behind the five-minute source-priority guard.
+        self._last_mode_source_report_at.pop(owner_key, None)
+        self._current_mode = new_mode
+        self._current_game = None
+        self._mode_source = new_source
+        self._mode_source_key = new_source_key
+        self._last_activity = new_mode
+        self._last_mode_source_report_at[new_source_key] = replacement_at
+        if old_mode != new_mode:
+            self._last_activity_change = now
+            self._idle_entered_at = now if new_mode == "idle" else None
+
+        protected = bool(
+            self._manual_override
+            or self.is_dnd_active()
+            or self._away_hold
+            or self._host_return_hold
+            or self._external_off_detected
+        )
+        if protected:
+            logger.info(
+                "Latitude Watching authority retracted under protection: "
+                "raw %s -> %s owner=%s",
+                old_mode, new_mode, new_source_key,
+            )
+            return True
+
+        logger.info(
+            "Latitude Watching authority retracted: %s -> %s owner=%s",
+            old_mode, new_mode, new_source_key,
+        )
+        if old_mode != new_mode:
+            await self._apply_mode(new_mode, force_resend=True)
+            await self._fire_mode_change_callbacks(new_mode)
+            if self._event_logger:
+                await self._event_logger.log_mode_change(
+                    mode=new_mode,
+                    previous_mode=old_mode,
+                    source="process",
+                )
+        # Broadcast on a same-mode handoff too so diagnostics/pipeline ownership
+        # move from process:latitude to the replacement source immediately.
+        await self._broadcast_mode()
+        return True
+
     async def _finalize_process_report(
         self,
         *,
@@ -1994,12 +2088,20 @@ class AutomationEngine:
     ) -> dict[str, Any]:
         """Log a truthful process observation and update the semantic voter."""
         included_in_fusion = False
+        authority_reconciled = False
         if disposition == "accepted":
             self._record_process_semantic(observation)
             semantic_mode, included_in_fusion = self._sync_process_fusion()
         elif disposition == "retracted":
-            self._last_process_semantic_by_device.pop(observation.device, None)
+            retracted_semantic = self._last_process_semantic_by_device.pop(
+                observation.device, None,
+            )
             semantic_mode, included_in_fusion = self._sync_process_fusion()
+            authority_reconciled = await self._reconcile_retracted_process_authority(
+                observation=observation,
+                retracted_semantic=retracted_semantic,
+                replacement=self._derived_process_semantic(),
+            )
         else:
             semantic = self._derived_process_semantic()
             semantic_mode = semantic.committed_mode if semantic else None
@@ -2012,6 +2114,7 @@ class AutomationEngine:
             "semantic_mode": semantic_mode,
             "authoritative_mode": self.current_mode,
             "included_in_fusion": included_in_fusion,
+            "authority_reconciled": authority_reconciled,
         }
         if self._ml_logger is not None:
             await self._ml_logger.log_decision(
