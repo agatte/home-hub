@@ -3048,12 +3048,6 @@ class AutomationEngine:
                     f"Activity changed ({old_mode} → {mode}) — "
                     f"manual override active, keeping {self._override_mode}"
                 )
-                if self._event_logger:
-                    await self._event_logger.log_mode_change(
-                        mode=mode,
-                        previous_mode=old_mode,
-                        source=source,
-                    )
             await self._broadcast_mode()
             if observation is not None:
                 return await self._finalize_process_report(

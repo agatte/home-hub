@@ -278,6 +278,100 @@ class TestAutomationEngine:
         assert engine.manual_override is True
         assert engine.mode_source == "manual"
 
+    async def test_manual_override_held_process_change_has_no_authoritative_event(
+        self, engine,
+    ):
+        engine._current_mode = "working"
+        engine._mode_source = "process"
+        engine._mode_source_key = "process:desktop"
+        engine._manual_override = True
+        engine._override_mode = "working"
+        engine._override_source = "api:test"
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        engine._confidence_fusion = ConfidenceFusion()
+        desktop = [{"key": "device", "value": "desktop"}]
+
+        result = await engine.report_activity(
+            "gaming", source="process", factors=desktop,
+        )
+
+        assert result["reason"] == "manual_override_held"
+        assert result["semantic_mode"] == "gaming"
+        assert result["authoritative_mode"] == "working"
+        assert engine._current_mode == "gaming"
+        assert engine.current_mode == "working"
+        assert result["included_in_fusion"] is True
+        assert engine._last_process_observation_by_device["desktop"].observed_mode == "gaming"
+        assert engine._last_process_semantic_by_device["desktop"].committed_mode == "gaming"
+        assert engine._confidence_fusion._signals["process"].mode == "gaming"
+        engine._event_logger.log_mode_change.assert_not_awaited()
+
+    async def test_manual_override_held_repeated_changes_stay_out_of_history(
+        self, engine,
+    ):
+        engine._manual_override = True
+        engine._override_mode = "working"
+        engine._override_source = "api:test"
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        desktop = [{"key": "device", "value": "desktop"}]
+
+        first = await engine.report_activity(
+            "working", source="process", factors=desktop,
+        )
+        second = await engine.report_activity(
+            "gaming", source="process", factors=desktop,
+        )
+
+        assert first["reason"] == "manual_override_held"
+        assert second["reason"] == "manual_override_held"
+        assert engine._current_mode == "gaming"
+        assert engine.current_mode == "working"
+        engine._event_logger.log_mode_change.assert_not_awaited()
+
+    async def test_real_transition_after_override_clear_logs_once(self, engine):
+        engine._manual_override = True
+        engine._override_mode = "working"
+        engine._override_source = "api:test"
+        engine._event_logger = SimpleNamespace(
+            log_mode_change=AsyncMock(),
+            log_light_adjustment=AsyncMock(),
+        )
+        engine._persist_override_state = AsyncMock()
+        desktop = [{"key": "device", "value": "desktop"}]
+
+        await engine.report_activity("working", source="process", factors=desktop)
+        engine._event_logger.log_mode_change.assert_not_awaited()
+
+        await engine.clear_override(source="api:test")
+        engine._event_logger.log_mode_change.reset_mock()
+        await engine.report_activity("gaming", source="process", factors=desktop)
+
+        assert engine.current_mode == "gaming"
+        engine._event_logger.log_mode_change.assert_awaited_once_with(
+            mode="gaming", previous_mode="working", source="process",
+        )
+
+    async def test_autonomous_override_displacement_still_logs_transition(
+        self, engine,
+    ):
+        engine._current_mode = "idle"
+        engine._mode_source = "time"
+        engine._mode_source_key = "time"
+        engine._manual_override = True
+        engine._override_mode = "relax"
+        engine._override_source = "ambient_relax"
+        engine._override_time = datetime.now(tz=TZ)
+        engine._event_logger = SimpleNamespace(log_mode_change=AsyncMock())
+        desktop = [{"key": "device", "value": "desktop"}]
+
+        await engine.report_activity("gaming", source="process", factors=desktop)
+
+        assert engine.manual_override is False
+        assert engine.current_mode == "gaming"
+        engine._event_logger.log_mode_change.assert_awaited_once_with(
+            mode="gaming", previous_mode="idle", source="process",
+        )
+
     async def test_clear_override(self, engine):
         await engine.set_manual_override("relax")
         assert engine.manual_override is True
