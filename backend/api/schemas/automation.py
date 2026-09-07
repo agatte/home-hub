@@ -53,11 +53,19 @@ class AutomationStatus(BaseModel):
     )
     manual_override: bool = Field(
         default=False,
-        description="Whether a manual override is active",
+        description="Whether the internal override latch is active; may be autonomous",
     )
     override_mode: Optional[str] = Field(
         default=None,
-        description="The manually overridden mode (if manual_override is True)",
+        description="Mode held by the active override latch, if any",
+    )
+    override_source: Optional[str] = Field(
+        default=None,
+        description="Source that owns the active override latch, if any",
+    )
+    override_user_owned: bool = Field(
+        default=False,
+        description="Whether the active override represents explicit user intent",
     )
     last_activity_change: Optional[str] = Field(
         default=None,

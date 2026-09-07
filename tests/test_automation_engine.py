@@ -765,9 +765,57 @@ class TestAutomationEngine:
         # Should have broadcast at least one mode_update
         mode_broadcasts = [b for b in mock_ws.broadcasts if b[0] == "mode_update"]
         assert len(mode_broadcasts) >= 1
-        assert mode_broadcasts[-1][1]["mode"] == "movie"
-        assert mode_broadcasts[-1][1]["house_state"] == "home"
-        assert mode_broadcasts[-1][1]["activity"] == "movie"
+        payload = mode_broadcasts[-1][1]
+        assert payload["mode"] == "movie"
+        assert payload["house_state"] == "home"
+        assert payload["activity"] == "movie"
+        assert payload["manual_override"] is True
+        assert payload["override_source"] == "internal"
+        assert payload["override_user_owned"] is False
+
+    async def test_explicit_user_override_is_distinguished_from_autonomous_latch(
+        self, engine, mock_ws,
+    ):
+        await engine.set_manual_override("relax", source="physical_context_relax")
+
+        assert engine.manual_override is True
+        assert engine.override_source == "physical_context_relax"
+        assert engine.override_user_owned is False
+        payload = [
+            body for event, body in mock_ws.broadcasts if event == "mode_update"
+        ][-1]
+        assert payload["override_source"] == "physical_context_relax"
+        assert payload["override_user_owned"] is False
+
+        # Explicit user intent may replace an autonomous latch immediately.
+        await engine.set_manual_override("relax", source="api:test")
+
+        assert engine.manual_override is True
+        assert engine.override_source == "api:test"
+        assert engine.override_user_owned is True
+        payload = [
+            body for event, body in mock_ws.broadcasts if event == "mode_update"
+        ][-1]
+        assert payload["override_source"] == "api:test"
+        assert payload["override_user_owned"] is True
+
+    def test_override_user_owned_is_presentation_truth_not_runtime_classification(
+        self, engine,
+    ):
+        engine._manual_override = True
+        for source in (
+            "physical_context_relax", "ambient_relax", "internal",
+            "gameday:auto", "gameday:auto:pregame",
+        ):
+            engine._override_source = source
+            assert engine.override_user_owned is False
+
+        for source in (
+            "api:test", "alexa:SetModeIntent", "guest",
+            "rule_suggestion_accept:relax",
+        ):
+            engine._override_source = source
+            assert engine.override_user_owned is True
 
     def test_schedule_config_has_weekday_and_weekend(self, engine):
         config = engine.schedule_config

@@ -1,7 +1,7 @@
 <script>
   import { lights } from '$lib/stores/lights.js'
   import { sonos } from '$lib/stores/sonos.js'
-  import { automation } from '$lib/stores/automation.js'
+  import { automation, automationSourceLabel } from '$lib/stores/automation.js'
   import { modeColor, modeLabel } from '$lib/theme.js'
   import { lightStateToCSS } from '$lib/utils/lightColor.js'
 
@@ -18,7 +18,9 @@
 
   $: modeLabelText = modeLabel($automation?.mode || 'idle')
   $: modeColorCss = modeColor($automation?.mode || 'idle')
-  $: sourceText = formatSource($automation?.source)
+  $: sourceText = $automation?.override_user_owned
+    ? 'user'
+    : automationSourceLabel($automation).replace(/^Auto \(|\)$/g, '')
 
   $: nowPlaying = (() => {
     const s = $sonos
@@ -34,13 +36,6 @@
     }
   })()
 
-  /** @param {string} source */
-  function formatSource(source) {
-    if (!source) return ''
-    // Sources arrive as 'process', 'camera', 'fusion', 'manual', 'gameday:auto', 'api:192.168.86.30', etc.
-    // Show the bit before the colon for the dashboard glance — full string is in the agent narrative.
-    return source.split(':')[0]
-  }
 </script>
 
 <section class="output-card">
@@ -55,8 +50,8 @@
       {#if sourceText}
         <span class="mode-source">via {sourceText}</span>
       {/if}
-      {#if $automation?.manual_override}
-        <span class="mode-override-pill">override</span>
+      {#if $automation?.override_user_owned}
+        <span class="mode-override-pill">manual</span>
       {/if}
     </div>
   </div>

@@ -523,6 +523,8 @@ async def get_status(request: Request) -> AutomationStatus:
         activity=engine.activity,
         manual_override=engine.manual_override,
         override_mode=engine.override_mode,
+        override_source=engine.override_source,
+        override_user_owned=engine.override_user_owned,
         last_activity_change=(
             engine.last_activity_change.isoformat()
             if engine.last_activity_change

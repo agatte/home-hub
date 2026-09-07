@@ -257,14 +257,17 @@ export const sectorBoard = debounced(
     // independently surface their own votes via `sector.mode`.
     const fusedMode = $automation?.mode || output?.mode || fusion?.fused_mode || 'idle'
     const fusedConfidence = fusion?.fused_confidence ?? 0
-    const overrideActive = !!$automation?.manual_override
+    const overrideActive = !!$automation?.override_user_owned
     const dndActive = !!$automation?.dnd?.enabled
+    const modeSource = overrideActive
+      ? ($automation?.override_source || $automation?.source || 'manual')
+      : ($automation?.source || 'auto')
 
     return {
       mode: {
         current: fusedMode,
         confidence: fusedConfidence,
-        source: $automation?.source || 'auto',
+        source: modeSource,
         override: overrideActive,
         dnd: dndActive,
       },

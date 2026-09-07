@@ -1,5 +1,5 @@
 <script>
-  import { automation, activityLabel, houseStateLabel } from '$lib/stores/automation.js'
+  import { automation, activityLabel, automationSourceLabel, houseStateLabel } from '$lib/stores/automation.js'
   import { connected, deviceStatus } from '$lib/stores/connection.js'
   import { modeColor } from '$lib/theme.js'
   import StatusDot from './StatusDot.svelte'
@@ -43,9 +43,7 @@
   }
 
   $: currentActivity = activityLabel($automation.activity)
-  $: source = $automation.manual_override
-    ? 'Manual override'
-    : `Auto (${$automation.source || 'time'})`
+  $: source = automationSourceLabel($automation)
   $: context = currentActivity ? `${currentActivity} • ${source}` : source
 
   $: color = modeColor($automation.mode)

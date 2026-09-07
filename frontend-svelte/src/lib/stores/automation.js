@@ -14,7 +14,9 @@ import { writable } from 'svelte/store'
  * @property {string | null} house_state User-facing lifecycle state.
  * @property {string | null} activity User-facing semantic activity.
  * @property {string | null} time_period
- * @property {boolean} manual_override
+ * @property {boolean} manual_override Internal override latch, including autonomous owners.
+ * @property {string | null} override_source Source that owns the override latch, if any.
+ * @property {boolean} override_user_owned True only for explicit user-owned override intent.
  * @property {DNDState} dnd
  */
 
@@ -33,6 +35,20 @@ const ACTIVITY_LABELS = {
   cooking: 'Cooking',
   relax: 'Relax',
   social: 'Social',
+}
+
+const AUTO_OVERRIDE_SOURCE_LABELS = {
+  late_night_rescue: 'Late-night recovery',
+  ambient_relax: 'Ambient context',
+  physical_context_relax: 'Couch context',
+  zone_posture_rule: 'Posture context',
+  watching_sleep_guard: 'Sleep context',
+  behavioral_predictor: 'Learned context',
+  fusion_can_override: 'Sensor context',
+  fusion_auto_apply: 'Sensor context',
+  'gameday:auto': 'Game Day schedule',
+  'gameday:auto:pregame': 'Game Day schedule',
+  internal: 'Automation',
 }
 
 /**
@@ -75,6 +91,21 @@ export function activityLabel(value) {
 }
 
 /**
+ * Describe who owns the effective mode without conflating HomeHub's internal
+ * autonomous override latch with explicit user intent.
+ * @param {AutomationState} state
+ * @returns {string}
+ */
+export function automationSourceLabel(state) {
+  if (state.override_user_owned) return 'Manual override'
+  if (state.manual_override && state.override_source) {
+    const label = AUTO_OVERRIDE_SOURCE_LABELS[state.override_source] || 'Automation'
+    return `Auto (${label})`
+  }
+  return `Auto (${state.source || 'time'})`
+}
+
+/**
  * Convert the REST automation status shape into the shared frontend state.
  * @param {Record<string, any>} data
  * @returns {AutomationState}
@@ -82,13 +113,18 @@ export function activityLabel(value) {
 export function automationStateFromStatus(data) {
   const houseState = data.house_state ?? null
 
+  const manualOverride = !!data.manual_override
   return {
     mode: data.current_mode ?? 'idle',
     source: data.mode_source ?? 'time',
     house_state: houseState,
     activity: normalizeActivity(data.activity, houseState),
     time_period: data.time_period ?? null,
-    manual_override: !!data.manual_override,
+    manual_override: manualOverride,
+    override_source: data.override_source ?? null,
+    override_user_owned: typeof data.override_user_owned === 'boolean'
+      ? data.override_user_owned
+      : manualOverride,
     dnd: {
       enabled: !!data.dnd_enabled,
       expiry_utc: data.dnd_expiry_utc ?? null,
@@ -113,6 +149,9 @@ export function mergeAutomationUpdate(prev, data) {
     ? normalizeActivity(data.activity, houseState)
     : (houseState === 'away' || houseState === 'sleeping' ? null : prev.activity)
 
+  const manualOverride = typeof data.manual_override === 'boolean'
+    ? data.manual_override
+    : prev.manual_override
   return {
     ...prev,
     mode: data.mode ?? data.current_mode ?? prev.mode,
@@ -122,9 +161,13 @@ export function mergeAutomationUpdate(prev, data) {
     time_period: Object.prototype.hasOwnProperty.call(data, 'time_period')
       ? data.time_period ?? null
       : prev.time_period,
-    manual_override: typeof data.manual_override === 'boolean'
-      ? data.manual_override
-      : prev.manual_override,
+    manual_override: manualOverride,
+    override_source: Object.prototype.hasOwnProperty.call(data, 'override_source')
+      ? data.override_source ?? null
+      : prev.override_source,
+    override_user_owned: typeof data.override_user_owned === 'boolean'
+      ? data.override_user_owned
+      : prev.override_user_owned,
   }
 }
 
@@ -136,6 +179,8 @@ export const initialAutomationState = {
   activity: null,
   time_period: null,
   manual_override: false,
+  override_source: null,
+  override_user_owned: false,
   dnd: {
     enabled: false,
     expiry_utc: null,

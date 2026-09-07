@@ -18,14 +18,14 @@
   ]
 
   $: currentMode = $automation.mode
-  $: manualOverride = $automation.manual_override
+  $: userOverride = $automation.override_user_owned
 
   // Build a reactive map of which card is active — recalculates when
-  // currentMode or manualOverride change, which fixes the Svelte 4
+  // currentMode or userOverride change, which fixes the Svelte 4
   // @const reactivity issue that caused "if_block.p is not a function".
   $: activeMap = Object.fromEntries(CARDS.map(c => [
     c.id,
-    c.isAction ? false : c.id === 'auto' ? !manualOverride : manualOverride && currentMode === c.id,
+    c.isAction ? false : c.id === 'auto' ? !userOverride : userOverride && currentMode === c.id,
   ]))
 
   function cardColor(card) {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   activityLabel,
+  automationSourceLabel,
   automationStateFromStatus,
   houseStateLabel,
   initialAutomationState,
@@ -36,6 +37,62 @@ describe('automation state contract', () => {
       expiry_utc: '2026-08-19T02:00:00Z',
       minutes_remaining: 42,
     })
+  })
+
+  it('distinguishes explicit user override intent from autonomous couch context', () => {
+    const couchState = automationStateFromStatus({
+      current_mode: 'relax',
+      mode_source: 'manual',
+      house_state: 'home',
+      activity: 'relax',
+      manual_override: true,
+      override_source: 'physical_context_relax',
+      override_user_owned: false,
+    })
+    expect(couchState).toMatchObject({
+      manual_override: true,
+      override_source: 'physical_context_relax',
+      override_user_owned: false,
+    })
+    expect(automationSourceLabel(couchState)).toBe('Auto (Couch context)')
+
+    const userState = automationStateFromStatus({
+      current_mode: 'relax',
+      mode_source: 'manual',
+      house_state: 'home',
+      activity: 'relax',
+      manual_override: true,
+      override_source: 'api:127.0.0.1',
+      override_user_owned: true,
+    })
+    expect(automationSourceLabel(userState)).toBe('Manual override')
+  })
+
+  it('never presents current autonomous latch owners as manual intent', () => {
+    const autonomousSources = [
+      'late_night_rescue',
+      'ambient_relax',
+      'physical_context_relax',
+      'zone_posture_rule',
+      'watching_sleep_guard',
+      'behavioral_predictor',
+      'fusion_can_override',
+      'fusion_auto_apply',
+      'gameday:auto',
+      'gameday:auto:pregame',
+      'internal',
+    ]
+
+    for (const overrideSource of autonomousSources) {
+      const label = automationSourceLabel({
+        ...initialAutomationState,
+        manual_override: true,
+        override_source: overrideSource,
+        override_user_owned: false,
+      })
+      expect(label).toMatch(/^Auto \(/)
+      expect(label).not.toBe('Manual override')
+    }
   })
 
   it('projects stale idle activity to General only while Home', () => {

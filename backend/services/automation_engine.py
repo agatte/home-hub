@@ -792,6 +792,17 @@ class AutomationEngine:
         return self._override_source if self._manual_override else None
 
     @property
+    def override_user_owned(self) -> bool:
+        """Whether the active override represents explicit user intent."""
+        if not self._manual_override:
+            return False
+        source = self._override_source or ""
+        return bool(
+            source not in AUTONOMOUS_PUSH_SOURCES
+            and not source.startswith("gameday:auto")
+        )
+
+    @property
     def last_activity_change(self) -> Optional[datetime]:
         return self._last_activity_change
 
@@ -5979,6 +5990,8 @@ class AutomationEngine:
             "house_state": self.house_state,
             "activity": self.activity,
             "manual_override": self._manual_override,
+            "override_source": self.override_source,
+            "override_user_owned": self.override_user_owned,
             "time_period": self._get_time_period(),
         })
         await self._broadcast_pipeline()

@@ -48,6 +48,8 @@ class TestAutomationAPI:
         assert "house_state" in data
         assert "activity" in data
         assert "manual_override" in data
+        assert "override_source" in data
+        assert "override_user_owned" in data
 
     def test_config_returns_200(self, client):
         resp = client.get("/api/automation/config")

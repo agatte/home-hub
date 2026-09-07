@@ -14,7 +14,7 @@
 
 import { derived } from 'svelte/store'
 import { pipeline } from './pipeline.js'
-import { automation } from './automation.js'
+import { automation, automationSourceLabel } from './automation.js'
 import { sonos } from './sonos.js'
 import { weather } from './weather.js'
 import { debounced } from './_debounce.js'
@@ -95,13 +95,14 @@ function contextNodes({ pipelineCur, automation, sonos, weather }) {
 
   const overrideActive = !!automation?.manual_override
   const overrideMode = automation?.override_mode || automation?.mode || ''
+  const overrideOwnership = automationSourceLabel(automation)
   out.push({
     id: 'context:override',
     type: 'context',
     key: 'override',
     label: 'Override',
     display: overrideActive
-      ? `${titleCase(overrideMode)} (manual)`
+      ? `${titleCase(overrideMode)} - ${overrideOwnership}`
       : 'auto',
     active: overrideActive,
   })
