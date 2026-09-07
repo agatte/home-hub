@@ -92,13 +92,18 @@ class TestGetTimePeriod:
         sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
         assert get_time_period(schedule, now, sunset_ts=sunset) == "day"
 
-    def test_golden_hour_enters_evening_before_sunset(self, schedule):
+    def test_sun_still_out_remains_day(self, schedule):
         now = datetime(2026, 9, 7, 19, 30, tzinfo=TZ)
+        sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
+        assert get_time_period(schedule, now, sunset_ts=sunset) == "day"
+
+    def test_actual_sunset_starts_evening(self, schedule):
+        now = datetime(2026, 9, 7, 20, 8, tzinfo=TZ)
         sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
         assert get_time_period(schedule, now, sunset_ts=sunset) == "evening"
 
     def test_winter_sunset_can_start_evening_before_six(self, schedule):
-        now = datetime(2026, 1, 12, 17, 0, tzinfo=TZ)
+        now = datetime(2026, 1, 12, 17, 40, tzinfo=TZ)
         sunset = datetime(2026, 1, 12, 17, 35, tzinfo=TZ).timestamp()
         assert get_time_period(schedule, now, sunset_ts=sunset) == "evening"
 

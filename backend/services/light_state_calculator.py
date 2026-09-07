@@ -21,7 +21,7 @@ that imported them from there.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from math import isfinite
 from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo
@@ -815,9 +815,6 @@ def get_time_period_static() -> str:
         return "night"
 
 
-SUNSET_EVENING_LEAD = timedelta(minutes=45)
-
-
 def get_time_period(
     schedule,
     now: Optional[datetime] = None,
@@ -867,7 +864,7 @@ def get_time_period(
                 )
                 evening_start = max(
                     ramp_start,
-                    min(sunset_local - SUNSET_EVENING_LEAD, winddown_start),
+                    min(sunset_local, winddown_start),
                 )
         return "day" if now < evening_start else "evening"
     # late_night wraps midnight: [late_night_start_hour, 24) ∪ [0, wake_hour)
