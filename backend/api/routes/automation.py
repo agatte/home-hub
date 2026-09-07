@@ -794,7 +794,9 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
     # both physical sources: close-face desktop observations can resolve Desk,
     # calibrated distant desktop pose can resolve Bed, and weak Latitude face
     # evidence cannot claim Couch. Falls back to the raw camera if fusion isn't
-    # wired (boot / tests). Bed-variant caps still require a posture signal.
+    # wired (boot / tests). During evening/night Watching, any non-Desk result
+    # (including Bed with posture=None or an abstaining zone=None) uses the
+    # projector-safe fail-darker envelope in ScreenSyncService.
     camera = getattr(request.app.state, "camera_service", None)
     if presence is not None:
         zone = presence.latest_zone()

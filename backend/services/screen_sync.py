@@ -161,10 +161,35 @@ MODE_MIN_BRIGHTNESS_PERIOD: dict[tuple[str, str, str], int] = {
 # (mode, zone, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)] → default.
 #
 # Bedroom localization candidate (2026-08-30): the desktop wide-FoV camera may
-# now produce zone="bed" from calibrated distant-pose geometry. These entries
-# remain posture-specific, however: merely being in Bed does not imply
-# reclined/upright, so they activate only when a trustworthy posture is also
-# available. Desk entries continue to use the close-face desktop signal.
+# now produce zone="bed" from calibrated distant-pose geometry. The legacy
+# posture-specific Bed entries remain useful when posture exists, but current
+# Desktop Bed intentionally carries no inferred posture. #154 therefore adds a
+# stronger period-specific non-Desk projector ceiling below. Desk entries
+# continue to use the close-face desktop signal.
+#
+# Provisional projector-safe envelope for Watching when there is no explicit
+# Desk authority. These are the historical #154 calibration starting bounds,
+# not final accepted room tuning. Losing Desk must fail darker; Bed/Couch and
+# unknown-not-Desk therefore share this bounded evening/night envelope until
+# real-room projector validation resolves final values. The cap is applied as a
+# hard ceiling after ambient scaling and again after EMA smoothing.
+WATCHING_PROJECTOR_CAP: dict[tuple[str, str], int] = {
+    ("evening", "2"): 40,
+    ("evening", "5"): 22,
+    ("night", "2"): 30,
+    ("night", "5"): 18,
+    ("late_night", "2"): 25,
+    ("late_night", "5"): 15,
+}
+WATCHING_PROJECTOR_FLOOR: dict[tuple[str, str], int] = {
+    ("evening", "2"): 15,
+    ("evening", "5"): 10,
+    ("night", "2"): 10,
+    ("night", "5"): 8,
+    ("late_night", "2"): 8,
+    ("late_night", "5"): 6,
+}
+
 MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
     ("watching", "desk", "day",        "2"): 180,
     ("watching", "desk", "evening",    "2"): 140,
@@ -343,9 +368,10 @@ class ScreenSyncService:
         (mode, period, light_id) → MODE_MAX_BRIGHTNESS[(mode, light_id)]
         → default.
 
-        Zone/posture overrides take precedence over the time-period table
-        because they reflect specific physical setups (projector-in-bed) that
-        should hard-cap regardless of time of day.
+        Zone/posture overrides retain their normal precedence, but evening/night
+        Watching without explicit Desk authority gets an additional hard
+        projector ceiling. Lower contextual/runtime caps are preserved; no
+        ambient multiplier may lift the result above that ceiling.
 
         Ambient envelope lift: for ``mode`` in ``_AMBIENT_LIFT_MODES``
         (gaming + watching) during day/evening, the resolved cap is scaled by
@@ -355,39 +381,55 @@ class ScreenSyncService:
         housing keeps its static per-period caps); only L2's fabric shade,
         the room-light lever, tracks ambient.
         """
+        projector_cap = (
+            WATCHING_PROJECTOR_CAP.get((period, light_id))
+            if mode == "watching" and zone != "desk" and period is not None
+            else None
+        )
+
+        def bounded(value: int, raw_cap: Optional[int] = None) -> int:
+            if projector_cap is None:
+                return value
+            result = min(value, projector_cap)
+            # Non-Desk projector mode is fail-darker: ambient compensation may
+            # not lift an already-lower contextual/runtime ceiling.
+            if raw_cap is not None:
+                result = min(result, raw_cap)
+            return result
+
         if zone is not None and posture is not None:
             override = self._cap_overrides.get((mode, zone, posture, light_id))
             if override is not None:
-                return self._scale_for_ambient(
+                return bounded(self._scale_for_ambient(
                     override, mode, period, lux_multiplier, weather_condition, light_id,
-                )
+                ), override)
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, posture, light_id))
             if cap is not None:
-                return self._scale_for_ambient(
+                return bounded(self._scale_for_ambient(
                     cap, mode, period, lux_multiplier, weather_condition, light_id,
-                )
+                ), cap)
         if zone is not None and period is not None:
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, period, light_id))
             if cap is not None:
-                return self._scale_for_ambient(
+                return bounded(self._scale_for_ambient(
                     cap, mode, period, lux_multiplier, weather_condition, light_id,
-                )
+                ), cap)
         if zone is not None:
             cap = MODE_ZONE_MAX_BRIGHTNESS.get((mode, zone, light_id))
             if cap is not None:
-                return self._scale_for_ambient(
+                return bounded(self._scale_for_ambient(
                     cap, mode, period, lux_multiplier, weather_condition, light_id,
-                )
+                ), cap)
         if period is not None:
             cap = MODE_MAX_BRIGHTNESS_PERIOD.get((mode, period, light_id))
             if cap is not None:
-                return self._scale_for_ambient(
+                return bounded(self._scale_for_ambient(
                     cap, mode, period, lux_multiplier, weather_condition, light_id,
-                )
+                ), cap)
         base = MODE_MAX_BRIGHTNESS.get((mode, light_id), DEFAULT_MAX_BRIGHTNESS)
-        return self._scale_for_ambient(
+        return bounded(self._scale_for_ambient(
             base, mode, period, lux_multiplier, weather_condition, light_id,
-        )
+        ), base)
 
     def get_floor(
         self,
@@ -409,6 +451,15 @@ class ScreenSyncService:
         payoff: dark content no longer drags L2 down to fabric-shade dimness
         when the bedroom itself is dark.
         """
+        if mode == "watching" and zone != "desk" and period is not None:
+            projector_floor = WATCHING_PROJECTOR_FLOOR.get((period, light_id))
+            if projector_floor is not None:
+                resolved_cap = self.get_cap(
+                    mode, light_id, zone, posture, period,
+                    lux_multiplier, weather_condition,
+                )
+                return min(projector_floor, resolved_cap)
+
         if zone is not None and period is not None:
             floor = MODE_ZONE_MIN_BRIGHTNESS.get((mode, zone, period, light_id))
             if floor is not None:
@@ -832,11 +883,20 @@ class ScreenSyncService:
         sh, ss, sb = self._smooth(
             light_id, h, s, br, alpha=self._smoothing_alpha_for(mode, period),
         )
+        if sb > max_bri:
+            sb = float(max_bri)
+            # The physical write and the EMA state must agree. Otherwise the
+            # next frame can keep easing out of a stale brighter context and
+            # repeatedly challenge the newly-lower projector cap.
+            self._last_bri[light_id] = sb
         ih, isat, ibri = int(sh), int(ss), int(sb)
         last_sent = self._last_sent_state.get(light_id)
         if (
             abs(ibri - int(br)) < 2
             and last_sent is not None
+            # A previous physical write above the newly-resolved cap must be
+            # corrected even when the delta is only one Hue brightness unit.
+            and last_sent.get("bri", ibri) <= max_bri
             and abs(last_sent.get("bri", ibri) - int(br)) < 2
             and self._within_deadband(last_sent, ih, isat, ibri, mode, period)
         ):

@@ -297,9 +297,141 @@ async def test_watching_desk_night_dark_frame_gets_small_floor_lift():
         )
     desk = hue2.last_for("2")["bri"]
 
-    assert 14 <= non_desk <= 16
+    assert 9 <= non_desk <= 11
     assert 28 <= desk <= 31
     assert desk > non_desk
+
+@pytest.mark.parametrize(
+    ("period", "light_id", "cap", "floor"),
+    [
+        ("evening", "2", 40, 15),
+        ("evening", "5", 22, 10),
+        ("night", "2", 30, 10),
+        ("night", "5", 18, 8),
+        ("late_night", "2", 25, 8),
+        ("late_night", "5", 15, 6),
+    ],
+)
+def test_watching_non_desk_projector_envelope(period, light_id, cap, floor):
+    sync = ss.ScreenSyncService(_FakeHue(), target_light_ids=["2", "5"])
+
+    # Unknown-not-Desk and Bed-without-posture must both fail into the same
+    # provisional projector-safe envelope. Desktop Bed intentionally carries no
+    # posture today, so requiring reclined/upright would never activate it.
+    for zone in (None, "bed", "couch"):
+        assert sync.get_cap("watching", light_id, zone, None, period) == cap
+        assert sync.get_floor(
+            "watching", light_id, zone=zone, posture=None, period=period,
+        ) == floor
+
+
+def test_non_desk_lower_runtime_cap_is_not_ambient_lifted():
+    sync = ss.ScreenSyncService(_FakeHue(), target_light_ids=["2"])
+    sync.set_cap_override("watching", "bed", "reclined", 10)
+
+    cap = sync.get_cap(
+        "watching", "2", "bed", "reclined", "evening",
+        lux_multiplier=1.4, weather_condition="rain",
+    )
+    floor = sync.get_floor(
+        "watching", "2", zone="bed", posture="reclined", period="evening",
+        lux_multiplier=1.4, weather_condition="rain",
+    )
+    assert cap == 10
+    assert floor == 10
+
+
+def test_non_desk_static_bed_cap_is_not_ambient_lifted():
+    sync = ss.ScreenSyncService(_FakeHue(), target_light_ids=["2"])
+
+    assert sync.get_cap(
+        "watching", "2", "bed", "reclined", "evening",
+        lux_multiplier=1.4, weather_condition="rain",
+    ) == 25
+
+
+def test_watching_desk_preserves_brighter_monitor_envelope():
+    sync = ss.ScreenSyncService(_FakeHue(), target_light_ids=["2", "5"])
+
+    assert sync.get_cap("watching", "2", "desk", None, "evening") == 140
+    assert sync.get_cap("watching", "2", "desk", None, "night") == 110
+    assert sync.get_cap("watching", "2", "desk", None, "late_night") == 80
+
+
+@pytest.mark.asyncio
+async def test_watching_projector_cap_is_hard_after_ema():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue, target_light_ids=["2"])
+
+    # Simulate a stale bright Desk-context EMA. The old code smoothed from this
+    # value and could send above the newly-lower cap for several frames.
+    sync._last_bri["2"] = 120.0
+    await sync.apply_color(
+        "2", 255, 255, 255, mode="watching", zone=None, period="evening",
+    )
+
+    assert hue.last_for("2")["bri"] <= 40
+    assert sync._last_bri["2"] <= 40
+
+
+@pytest.mark.asyncio
+async def test_projector_cap_plus_one_bypasses_deadband():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue, target_light_ids=["2"])
+
+    # Physical/cache state is one unit above the new night cap. The hard EMA
+    # clamp must still produce a real corrective Hue write instead of letting
+    # the normal +/-1 deadband preserve an out-of-envelope physical state.
+    sync._last_bri["2"] = 31.0
+    sync._last_sent_state["2"] = {"hue": 0, "sat": 0, "bri": 31}
+    await sync.apply_color(
+        "2", 255, 255, 255, mode="watching", zone=None, period="night",
+    )
+
+    assert hue.last_for("2")["bri"] == 30
+    assert sync._last_sent_state["2"]["bri"] == 30
+    assert sync._last_bri["2"] == 30
+
+
+@pytest.mark.asyncio
+async def test_desk_to_non_desk_transition_clamps_first_frame():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue, target_light_ids=["2"])
+
+    for _ in range(20):
+        await sync.apply_color(
+            "2", 255, 255, 255, mode="watching", zone="desk", period="evening",
+        )
+    assert hue.last_for("2")["bri"] > 40
+
+    await sync.apply_color(
+        "2", 255, 255, 255, mode="watching", zone=None, period="evening",
+    )
+    assert hue.last_for("2")["bri"] <= 40
+    assert sync._last_bri["2"] <= 40
+
+
+@pytest.mark.asyncio
+async def test_non_desk_projector_envelope_remains_dynamic():
+    dark_hue = _FakeHue()
+    dark_sync = ss.ScreenSyncService(dark_hue, target_light_ids=["5"])
+    for _ in range(30):
+        await dark_sync.apply_color(
+            "5", 0, 0, 0, mode="watching", zone=None, period="night",
+        )
+
+    bright_hue = _FakeHue()
+    bright_sync = ss.ScreenSyncService(bright_hue, target_light_ids=["5"])
+    for _ in range(30):
+        await bright_sync.apply_color(
+            "5", 0, 0, 255, mode="watching", zone=None, period="night",
+        )
+
+    dark = dark_hue.last_for("5")["bri"]
+    bright = bright_hue.last_for("5")["bri"]
+    assert 7 <= dark <= 9
+    assert dark < bright <= 18
+
 
 @pytest.mark.asyncio
 async def test_late_night_gaming_holds_canonical_l2_base():
@@ -362,8 +494,8 @@ async def test_watching_night_uses_responsive_transition_and_deadband():
 
 
 @pytest.mark.asyncio
-async def test_watching_night_prime_limits_first_bright_frame():
-    """A mode-primed sync frame should not jump straight to the cap."""
+async def test_watching_night_prime_respects_non_desk_projector_cap():
+    """A mode-primed non-Desk frame cannot rise above the projector cap."""
     hue = _FakeHue()
     sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2"])
     sync.prime_from_mode_state(
@@ -375,7 +507,7 @@ async def test_watching_night_prime_limits_first_bright_frame():
     await sync.apply_color("2", 255, 255, 255, mode="watching", period="night")
     state = hue.last_for("2")
 
-    assert 34 <= state["bri"] <= 36
+    assert state["bri"] == 30
     assert state["transitiontime"] == 15
     assert sync._last_bri["2"] == pytest.approx(state["bri"], abs=1.0)
 

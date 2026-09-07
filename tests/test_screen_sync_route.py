@@ -337,6 +337,66 @@ async def test_process_watching_release_closes_screen_color_gate(
 
 
 @pytest.mark.asyncio
+async def test_watching_route_bed_without_posture_uses_projector_envelope():
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=datetime.now(timezone.utc),
+        face_present=False,
+        detection_source="pose",
+        zone="bed",
+        pose_visible_landmarks=17,
+    ))
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "evening"
+    req = _make_request(engine, sync)
+    req.app.state.presence = presence
+
+    for _ in range(30):
+        result = await receive_screen_color(
+            ScreenColorReport(
+                r=255, g=255, b=255, source="desktop", foreground_media=True,
+            ),
+            req,
+        )
+
+    assert result["applied"] is True
+    assert hue.last_for("2")["bri"] <= 40
+    assert hue.last_for("5")["bri"] <= 22
+
+
+@pytest.mark.asyncio
+async def test_watching_route_explicit_desk_keeps_brighter_envelope():
+    presence = PresenceFusion()
+    presence.on_observation(PresenceReading(
+        source="desktop",
+        captured_at=datetime.now(timezone.utc),
+        face_present=True,
+        face_confidence=0.95,
+        detection_source="face",
+        zone="desk",
+    ))
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "evening"
+    req = _make_request(engine, sync)
+    req.app.state.presence = presence
+
+    for _ in range(30):
+        await receive_screen_color(
+            ScreenColorReport(
+                r=255, g=255, b=255, source="desktop", foreground_media=True,
+            ),
+            req,
+        )
+
+    assert hue.last_for("2")["bri"] > 40
+
+
+@pytest.mark.asyncio
 async def test_all_lights_overridden_returns_skip_list():
     """If every target lamp is stamped, applied=False with both in skipped."""
     hue = _FakeHue()

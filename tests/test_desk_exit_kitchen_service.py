@@ -132,13 +132,24 @@ def _make_service(mode="gaming", period="evening", at_desk=False,
     return DeskExitKitchenService(auto, cam), auto, cam
 
 
-async def _drive_absent_window(svc):
-    """Drive the service through the ABSENT_TRIGGER_SECONDS window so it
-    reaches its activate decision (mirrors the transit test helper)."""
-    await svc._check()  # seeds the absent timer
+async def _observe_desk_then_leave(svc):
+    """Give DeskExit the physical edge required by its production contract."""
+    auto = svc._automation
+    if not hasattr(auto, "_at_desk"):
+        raise AssertionError("test automation stub must expose _at_desk")
+    auto._at_desk = True
+    await svc._check()
+    auto._at_desk = False
+
+
+async def _drive_absent_window(svc, *, arm_from_desk: bool = True):
+    """Drive a real Desk -> absent transition through the activation dwell."""
+    if arm_from_desk:
+        await _observe_desk_then_leave(svc)
+    await svc._check()  # seeds the absent timer when edge authority is armed
     if svc._camera_absent_since is not None:
         svc._camera_absent_since -= timedelta(seconds=ABSENT_TRIGGER_SECONDS + 1)
-    await svc._check()  # fires _activate
+    await svc._check()  # fires _activate when all gates remain satisfied
 
 
 class TestActivate:
@@ -150,9 +161,17 @@ class TestActivate:
         # Kitchen pair only.
         assert set(auto.apply_calls[0]["states"].keys()) == {"3", "4"}
 
+    async def test_cold_absence_cannot_manufacture_desk_exit(self):
+        svc, auto, _ = _make_service(mode="watching", period="evening")
+        await _drive_absent_window(svc, arm_from_desk=False)
+        assert svc.active is False
+        assert svc._desk_departure_armed is False
+        assert svc._camera_absent_since is None
+        assert auto.apply_calls == []
+
     async def test_blocks_when_at_desk_fresh(self):
         svc, auto, _ = _make_service(mode="gaming", period="evening", at_desk=True)
-        await _drive_absent_window(svc)
+        await _drive_absent_window(svc, arm_from_desk=False)
         assert svc.active is False
         assert auto.apply_calls == []
 
@@ -160,6 +179,55 @@ class TestActivate:
         svc, auto, _ = _make_service(mode="gaming", period="day")
         await _drive_absent_window(svc)
         assert svc.active is False
+
+
+class TestDepartureArmLifecycle:
+    async def test_camera_disable_clears_departure_arm(self):
+        svc, _, cam = _make_service(mode="gaming", period="evening")
+        await _observe_desk_then_leave(svc)
+        assert svc._desk_departure_armed is True
+
+        cam.enabled = False
+        await svc._check()
+        assert svc._desk_departure_armed is False
+        assert svc._camera_absent_since is None
+
+    async def test_leaving_trigger_mode_clears_departure_arm(self):
+        svc, auto, _ = _make_service(mode="gaming", period="evening")
+        await _observe_desk_then_leave(svc)
+        assert svc._desk_departure_armed is True
+
+        auto._mode = "relax"
+        await svc._check()
+        assert svc._desk_departure_armed is False
+        assert svc._camera_absent_since is None
+
+    async def test_leaving_trigger_period_clears_departure_arm(self):
+        svc, auto, _ = _make_service(mode="gaming", period="evening")
+        await _observe_desk_then_leave(svc)
+        assert svc._desk_departure_armed is True
+
+        auto._period = "day"
+        await svc._check()
+        assert svc._desk_departure_armed is False
+        assert svc._camera_absent_since is None
+
+    async def test_strong_bed_presence_clears_departure_arm(self):
+        fusion = PresenceFusion()
+        auto = _FakeAutomation(mode="watching", period="night", at_desk=False)
+        cam = _FakeCamera(last_detection="absent")
+        svc = DeskExitKitchenService(auto, cam, presence_fusion=fusion)
+        await _observe_desk_then_leave(svc)
+        assert svc._desk_departure_armed is True
+
+        fusion.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, detection_source="pose", zone="bed",
+            pose_visible_landmarks=17,
+        ))
+        await svc._check()
+        assert svc._desk_departure_armed is False
+        assert svc._camera_absent_since is None
 
 
 class TestStickyDeskArming:
@@ -195,7 +263,7 @@ class TestStickyDeskArming:
         svc = DeskExitKitchenService(
             auto, cam, presence_fusion=self._fusion_at_desk(2.0),
         )
-        await _drive_absent_window(svc)
+        await _drive_absent_window(svc, arm_from_desk=False)
         assert svc.active is False
         assert auto.apply_calls == []
 
@@ -289,6 +357,18 @@ class TestRefireCooldown:
         # Re-arm attempt within the cooldown window (frozen ~0s elapsed):
         # blocked, and the dwell can't even seed.
         await _drive_absent_window(svc)
+        assert svc.active is False
+        assert svc._camera_absent_since is None
+        assert len(auto.apply_calls) == 1
+
+    async def test_continuous_absence_cannot_refire_without_new_desk_edge(self):
+        svc, auto, _ = _make_service(mode="gaming", period="evening")
+        await _drive_absent_window(svc)
+        assert svc.active is True
+        await svc._deactivate("test")
+        svc._last_deactivated_at -= timedelta(seconds=REFIRE_COOLDOWN_SECONDS + 1)
+
+        await _drive_absent_window(svc, arm_from_desk=False)
         assert svc.active is False
         assert svc._camera_absent_since is None
         assert len(auto.apply_calls) == 1
@@ -476,6 +556,7 @@ class TestFusedStrongPresence:
         svc = DeskExitKitchenService(
             auto, cam, presence_fusion=_fusion_weak_latitude_couch(),
         )
+        await _observe_desk_then_leave(svc)
         await svc._check()
         assert svc._camera_absent_since is not None
         svc._camera_absent_since -= timedelta(
@@ -489,6 +570,7 @@ class TestFusedStrongPresence:
         auto = _FakeAutomation(mode="watching", period="late_night", at_desk=False)
         cam = _FakeCamera(last_detection="absent")
         svc = DeskExitKitchenService(auto, cam, presence_fusion=fusion)
+        await _observe_desk_then_leave(svc)
         await svc._check()
         svc._camera_absent_since -= timedelta(
             seconds=CORRIDOR_ABSENT_TRIGGER_SECONDS + 1,

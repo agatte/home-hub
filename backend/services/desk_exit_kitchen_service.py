@@ -218,6 +218,10 @@ class DeskExitKitchenService:
         # When the kitchen-only path last deactivated — gates the re-fire
         # cooldown (see REFIRE_COOLDOWN_SECONDS).
         self._last_deactivated_at: Optional[datetime] = None
+        # Edge authority: a DeskExit cue may arm only after this service has
+        # observed a real/recent Desk confirmation. Losing all physical evidence
+        # while Watching must not manufacture a synthetic "left the desk" edge.
+        self._desk_departure_armed: bool = False
         # Only log block-reason transitions, not every silent tick.
         self._last_block_reason: Optional[str] = None
 
@@ -272,6 +276,7 @@ class DeskExitKitchenService:
         cam_status = self._camera.get_status() if self._camera else {}
         if not cam_status.get("enabled"):
             self._camera_absent_since = None
+            self._desk_departure_armed = False
             if self._active:
                 await self._deactivate("camera disabled")
             if self._corridor_active:
@@ -354,9 +359,11 @@ class DeskExitKitchenService:
 
         # ── Not active: check activate conditions ──
         if mode not in TRIGGER_MODES:
+            self._desk_departure_armed = False
             self._record_block(f"mode={mode} (not in trigger set)")
             return
         if period not in TRIGGER_PERIODS:
+            self._desk_departure_armed = False
             self._record_block(f"period={period} (not in trigger set)")
             return
 
@@ -385,6 +392,7 @@ class DeskExitKitchenService:
         # per-frame face_present flicker during desk gaming doesn't restart
         # the dwell timer and fire the kitchen brighten (GH#109).
         if self._at_desk_or_recent():
+            self._desk_departure_armed = True
             self._camera_absent_since = None
             self._record_unblock()
             return
@@ -394,12 +402,18 @@ class DeskExitKitchenService:
         # the Latitude is absent or emitting a weak furniture-like face.
         strong_zone = self._strong_presence_elsewhere(cam_status)
         if strong_zone is not None:
+            self._desk_departure_armed = False
             self._camera_absent_since = None
             self._record_block(f"strong presence elsewhere (zone={strong_zone})")
             return
 
-        # Eligible — desk freshness expired and no strong elsewhere presence.
-        # Start / advance the absent dwell.
+        if not self._desk_departure_armed:
+            self._camera_absent_since = None
+            self._record_block("awaiting fresh desk before exit")
+            return
+
+        # Eligible ? a prior Desk confirmation has now been lost and no strong
+        # elsewhere presence explains the transition. Start the absent dwell.
         self._record_unblock()
         if self._camera_absent_since is None:
             self._camera_absent_since = now
@@ -439,6 +453,7 @@ class DeskExitKitchenService:
         # Sticky gate (see _at_desk_or_recent) so desk-gaming flicker
         # doesn't arm the corridor.
         if self._at_desk_or_recent():
+            self._desk_departure_armed = True
             self._camera_absent_since = None
             self._record_unblock()
             return
@@ -447,8 +462,14 @@ class DeskExitKitchenService:
         # physical zone rather than entering the unseen hallway.
         strong_zone = self._strong_presence_elsewhere(cam_status)
         if strong_zone is not None:
+            self._desk_departure_armed = False
             self._camera_absent_since = None
             self._record_block(f"corridor: strong presence elsewhere (zone={strong_zone})")
+            return
+
+        if not self._desk_departure_armed:
+            self._camera_absent_since = None
+            self._record_block("corridor: awaiting fresh desk before exit")
             return
 
         self._record_unblock()
@@ -519,6 +540,7 @@ class DeskExitKitchenService:
         # here so the L1 ramp AND the kitchen ramp (≈2s later) share one
         # pre-boost lux reading.
         self._sample_lux()
+        self._desk_departure_armed = False
         l1_bri = path_light_brightness(
             self._held_lux, self._held_baseline, "late_night",
             kind="corridor_l1", fallback=CORRIDOR_L1_BRI,
@@ -713,6 +735,7 @@ class DeskExitKitchenService:
         # would let L1/kitchen feed back into the camera and oscillate.
         if not repaint:
             self._sample_lux()
+            self._desk_departure_armed = False
         target_period = "night" if period == "late_night" else period
         states = self._kitchen_states(target_period)
         await self._automation.apply_desk_exit_override(
@@ -743,6 +766,7 @@ class DeskExitKitchenService:
         self._held_lux = None
         self._held_baseline = None
         self._last_deactivated_at = datetime.now(tz=TZ)
+        self._desk_departure_armed = False
         logger.info("DeskExit deactivated (%s)", reason)
 
     async def close(self) -> None:
