@@ -73,11 +73,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-import psutil
 import urllib.request
 import webbrowser
 import websockets
 import websockets.sync.client
+
+from backend.services.pc_agent.windows_singleton import WindowsPidBreadcrumbLock
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -102,6 +103,7 @@ LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "desktop_notifier.log"
 PID_FILE = LOG_DIR / "desktop_notifier.pid"
 SILENCE_FILE = LOG_DIR / "desktop_notifier_silence_until.txt"
+MUTEX_NAME = "HomeHub_DesktopNotifier"
 
 LOG_DIR.mkdir(exist_ok=True)
 
@@ -119,38 +121,25 @@ logger.addHandler(_file_handler)
 
 
 # ---------------------------------------------------------------------------
-# PID lock — single-instance enforcement
+# Single-instance ownership - kernel mutex + diagnostic PID breadcrumb
 # ---------------------------------------------------------------------------
 
+_singleton_lock = WindowsPidBreadcrumbLock(MUTEX_NAME, PID_FILE)
+
+
 def acquire_pid_lock() -> None:
-    """Refuse to launch if another desktop_notifier owns the PID file."""
-    if PID_FILE.exists():
-        try:
-            existing_pid = int(PID_FILE.read_text().strip())
-        except (ValueError, OSError):
-            existing_pid = -1
-        if existing_pid > 0 and psutil.pid_exists(existing_pid):
-            logger.error(
-                "Another desktop_notifier is running (PID %d). Refusing to start.",
-                existing_pid,
-            )
-            sys.exit(1)
-        if existing_pid > 0:
-            logger.info("Stale PID file (PID %d not alive) — cleaning up", existing_pid)
-    PID_FILE.write_text(str(os.getpid()))
-    logger.info("PID lock acquired (PID %d, file: %s)", os.getpid(), PID_FILE)
+    """Acquire singleton ownership and refresh the diagnostic PID file."""
+    if not _singleton_lock.acquire():
+        logger.error(
+            "Another desktop_notifier owns the singleton mutex. Refusing to start."
+        )
+        sys.exit(1)
+    logger.info("Singleton acquired (PID %d, file: %s)", os.getpid(), PID_FILE)
 
 
 def release_pid_lock() -> None:
-    """Best-effort PID file cleanup on exit."""
-    try:
-        if PID_FILE.exists():
-            stored = int(PID_FILE.read_text().strip())
-            if stored == os.getpid():
-                PID_FILE.unlink()
-                logger.info("PID lock released")
-    except Exception:
-        pass
+    """Remove only this process's PID breadcrumb, then release its mutex."""
+    _singleton_lock.release()
 
 
 # ---------------------------------------------------------------------------
