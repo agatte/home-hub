@@ -106,9 +106,9 @@ ATMOSPHERES: dict[str, AtmosphereDefinition] = {
         priority=30,
         palettes=_period_palettes(
             day=(
-                {"on": True, "bri": 110, "hue": 7500, "sat": 200},
-                {"on": True, "bri": 40, "hue": 20000, "sat": 100},
-                {"on": True, "bri": 185, "hue": 44000, "sat": 165},
+                {"on": True, "bri": 190, "hue": 7500, "sat": 175},
+                {"on": True, "bri": 70, "hue": 9000, "sat": 90},
+                {"on": True, "bri": 150, "hue": 20000, "sat": 115},
             ),
             evening=(
                 {"on": True, "bri": 90, "hue": 6000, "sat": 230},

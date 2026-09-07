@@ -162,14 +162,19 @@ def test_merge_owns_l1_l3_l4_l6_with_matched_kitchen_and_one_colorspace() -> Non
             assert not ("ct" in state and ({"hue", "sat"} & state.keys()))
 
 
-def test_moss_raw_calibration_changes_only_day_evening_brightness() -> None:
+def test_moss_day_calibration_uses_warm_anchor_and_botanical_plant_wash() -> None:
     moss = ATMOSPHERES["moss_ember"].palettes
     assert moss["day"] == {
-        "1": {"on": True, "bri": 110, "hue": 7500, "sat": 200},
-        "3": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
-        "4": {"on": True, "bri": 40, "hue": 20000, "sat": 100},
-        "6": {"on": True, "bri": 185, "hue": 44000, "sat": 165},
+        "1": {"on": True, "bri": 190, "hue": 7500, "sat": 175},
+        "3": {"on": True, "bri": 70, "hue": 9000, "sat": 90},
+        "4": {"on": True, "bri": 70, "hue": 9000, "sat": 90},
+        "6": {"on": True, "bri": 150, "hue": 20000, "sat": 115},
     }
+    day = moss["day"]
+    assert day["1"]["bri"] > day["6"]["bri"] > day["3"]["bri"]
+    assert day["3"]["hue"] < 12000
+    assert 16000 <= day["6"]["hue"] <= 24000
+
     assert moss["evening"] == {
         "1": {"on": True, "bri": 90, "hue": 6000, "sat": 230},
         "3": {"on": True, "bri": 30, "hue": 20000, "sat": 100},
