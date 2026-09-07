@@ -2303,14 +2303,15 @@ class CameraService:
                     support_zone = face_zone
                     support_posture = pose_posture if pose_present else None
                 elif pose_present:
-                    anchor_at = self._face_anchor_at.get(pose_zone) if pose_zone else None
-                    anchor_age = (
-                        (datetime.now(timezone.utc) - anchor_at).total_seconds()
-                        if anchor_at is not None else None
-                    )
-                    if anchor_age is not None and anchor_age <= FACE_ANCHOR_TTL_SECONDS:
-                        support_zone = pose_zone
-                        support_posture = pose_posture
+                    # YOLO has already established that this frame contains a
+                    # real person. The face-anchor gate exists to stop an
+                    # empty chair from turning a MediaPipe pose silhouette into
+                    # physical presence; under YOLO-present authority that
+                    # furniture ambiguity is already resolved. MediaPipe pose
+                    # may therefore provide Couch localization, while YOLO
+                    # presence without face/pose support still stays zone=None.
+                    support_zone = pose_zone
+                    support_posture = pose_posture
                 return {
                     "status": "present",
                     "confidence": yolo_confidence or 0.0,

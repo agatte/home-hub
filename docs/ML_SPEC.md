@@ -450,7 +450,7 @@ lifecycle/watchdog, and MediaPipe supporting diagnostics.
 - YOLO decides whether a real person is authoritative: threshold `0.25` with a three-frame positive dwell.
 - Confidence `<=0.01`, model unavailability, or inference failure is **unknown/blinded**, never explicit absence and never silent MediaPipe fallback.
 - YOLO absence blocks furniture-only MediaPipe face/pose from manufacturing physical presence.
-- After YOLO confirms a person, strong/recently anchored MediaPipe evidence may add conservative `couch` localization. If supporting localization is unavailable, the person remains present with `zone=None`; YOLO presence alone never means Couch.
+- After YOLO confirms a person, strong face or valid MediaPipe pose evidence may add conservative `couch` localization; the old recent-face anchor is not required after YOLO establishes person authority. If supporting localization is unavailable, the person remains present with `zone=None`; YOLO presence alone never means Couch.
 - Latitude Couch posture remains suppressed because there is no approved consumer.
 - Desktop is the separate bedroom locator: accepted close face -> Desk; calibrated distant-pose geometry -> Bed after three frames; ambiguity abstains. Bed localization does not infer Bed posture or Sleeping.
 - Strong physical-source conflicts resolve by freshness in `PresenceFusion`.

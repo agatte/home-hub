@@ -182,8 +182,9 @@ silent.
 **SHIPPED/CURRENT — reconciled 2026-08-30.** Physical room authority is
 source-qualified. The Latitude `CameraService` uses YOLO26n-pose/OpenVINO as
 the real-person authority gate. MediaPipe cannot create presence by itself;
-after YOLO confirms a person, a strong face or recently face-anchored pose may
-supply supporting `couch` localization. Latitude Couch posture is currently
+after YOLO confirms a person, a strong face or valid MediaPipe pose may
+supply supporting `couch` localization; the old recent-face anchor is not
+required once YOLO has established real-person authority. Latitude Couch posture is currently
 suppressed upstream because there is no approved Couch-posture consumer. YOLO confidence `<=0.01`, model
 unavailability, or inference failure is **unknown**, not absence. Present
 promotion uses the validated `0.25` threshold with a three-frame positive dwell.

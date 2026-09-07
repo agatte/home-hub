@@ -1920,3 +1920,23 @@ class TestYoloAuthoritySupportingLocalization:
         assert third["source"] == "yolo"
         assert third["zone"] == "couch"
         assert third["authority_reason"] == "yolo_present"
+
+    def test_yolo_person_keeps_pose_couch_support_without_face_anchor(self):
+        service = TestYoloAuthorityPromotion._service([0.80, 0.81, 0.82])
+        service._pose_landmarker = MagicMock()
+        service._pose_landmarker.detect.return_value = _mock_pose_result(
+            shoulder_y=0.30,
+            hip_y=0.55,
+        )
+
+        first = service._process_frame()
+        second = service._process_frame()
+        third = service._process_frame()
+
+        assert first is not None and first["status"] == "unknown"
+        assert second is not None and second["status"] == "unknown"
+        assert third is not None and third["status"] == "present"
+        assert third["source"] == "yolo"
+        assert third["zone"] == "couch"
+        assert third["authority_reason"] == "yolo_present"
+        assert service._face_anchor_at == {}
