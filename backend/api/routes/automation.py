@@ -967,6 +967,9 @@ async def get_screen_sync_status(request: Request) -> dict:
         "laptop_loopback_delivery": (
             loopback.delivery_health if loopback is not None else None
         ),
+        "laptop_loopback_capture": (
+            loopback.capture_health if loopback is not None else None
+        ),
         "source_authority_enforced": source_authority["enforced"],
         "authoritative_source": authoritative_source,
         "authority_reason": source_authority["reason"],

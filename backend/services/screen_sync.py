@@ -25,6 +25,8 @@ goes through the same wire format as the desktop agent. Disabled by default.
 import asyncio
 import colorsys
 import logging
+import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -1223,6 +1225,11 @@ class LaptopLoopbackCapture:
         self._last_delivery_error: Optional[str] = None
         self._consecutive_delivery_failures: int = 0
         self._last_delivery_error_logged_at: Optional[datetime] = None
+        self._last_capture_success_at: Optional[datetime] = None
+        self._last_capture_error_at: Optional[datetime] = None
+        self._last_capture_error: Optional[str] = None
+        self._consecutive_capture_failures: int = 0
+        self._last_capture_error_logged_at: Optional[datetime] = None
 
     @property
     def running(self) -> bool:
@@ -1242,6 +1249,22 @@ class LaptopLoopbackCapture:
             ),
             "last_error": self._last_delivery_error,
             "consecutive_failures": self._consecutive_delivery_failures,
+        }
+
+    @property
+    def capture_health(self) -> dict[str, object]:
+        """Bounded screen-capture health, separate from localhost delivery."""
+        return {
+            "last_success_at": (
+                self._last_capture_success_at.isoformat()
+                if self._last_capture_success_at else None
+            ),
+            "last_error_at": (
+                self._last_capture_error_at.isoformat()
+                if self._last_capture_error_at else None
+            ),
+            "last_error": self._last_capture_error,
+            "consecutive_failures": self._consecutive_capture_failures,
         }
 
     async def start(self) -> None:
@@ -1267,14 +1290,26 @@ class LaptopLoopbackCapture:
     async def _loop(self) -> None:
         while self._running:
             try:
-                rgb = await asyncio.to_thread(_capture_dominant_color)
+                rgb = await self._capture_color()
                 if rgb is not None:
                     await self._deliver_color(rgb)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.debug(f"Laptop loopback error: {e}")
             await asyncio.sleep(self._capture_interval)
+
+    async def _capture_color(self) -> Optional[tuple[int, int, int]]:
+        """Capture one RGB sample while keeping capture health observable."""
+        try:
+            rgb = await asyncio.to_thread(_capture_dominant_color)
+            if rgb is None:
+                raise RuntimeError("screen capture produced no usable RGB sample")
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._record_capture_failure(error)
+            return None
+        self._record_capture_success()
+        return rgb
 
     @staticmethod
     def _report_body(rgb: tuple[int, int, int]) -> dict[str, int | str]:
@@ -1292,6 +1327,34 @@ class LaptopLoopbackCapture:
             self._record_delivery_failure(error)
         else:
             self._record_delivery_success()
+
+    def _record_capture_success(self) -> None:
+        recovered_failures = self._consecutive_capture_failures
+        self._last_capture_success_at = datetime.now(timezone.utc)
+        self._last_capture_error = None
+        self._consecutive_capture_failures = 0
+        if recovered_failures:
+            logger.info(
+                "Laptop loopback capture recovered after %d failed frame(s)",
+                recovered_failures,
+            )
+
+    def _record_capture_failure(self, error: Exception) -> None:
+        now = datetime.now(timezone.utc)
+        self._last_capture_error_at = now
+        self._last_capture_error = str(error)
+        self._consecutive_capture_failures += 1
+        if (
+            self._last_capture_error_logged_at is None
+            or (now - self._last_capture_error_logged_at).total_seconds()
+            >= LOOPBACK_DELIVERY_LOG_INTERVAL_S
+        ):
+            logger.warning(
+                "Laptop loopback capture failed (%d consecutive frame(s)): %s",
+                self._consecutive_capture_failures,
+                error,
+            )
+            self._last_capture_error_logged_at = now
 
     def _record_delivery_success(self) -> None:
         recovered_failures = self._consecutive_delivery_failures
@@ -1420,6 +1483,13 @@ def _pick_dominant(pixels, picker: "_LoopbackPicker") -> Optional[tuple[int, int
     return (int(chosen[0]), int(chosen[1]), int(chosen[2]))
 
 
+def _mss_capture_kwargs() -> dict[str, str]:
+    """Return explicit MSS display selection for the Latitude Linux service."""
+    if sys.platform.startswith("linux"):
+        return {"display": os.environ.get("DISPLAY") or ":0"}
+    return {}
+
+
 def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
     """
     Capture the primary screen and extract one deterministic dominant color.
@@ -1428,16 +1498,19 @@ def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
     this logic in `pc_agent/screen_sync_agent.py` — they're intentionally
     duplicated so the agent has zero backend dependencies.
 
-    Returns one RGB triple, or ``None`` when sampling fails.
+    Returns one RGB triple when sampling succeeds. Capture-backend failures raise;
+    an unusable pixel sample may still return ``None`` for the loop health layer.
     """
     try:
         import mss
-    except ImportError:
-        logger.error("mss not installed — cannot run laptop loopback")
-        return None
+    except ImportError as error:
+        raise RuntimeError("mss not installed — cannot run laptop loopback") from error
 
     try:
-        with mss.mss() as sct:
+        # systemd user services do not necessarily inherit DISPLAY from the
+        # GNOME login session. MSS is X11-backed on Linux, so give it the
+        # Latitude's conventional XWayland display when none was imported.
+        with mss.mss(**_mss_capture_kwargs()) as sct:
             monitor = sct.monitors[1]  # Primary monitor
             screenshot = sct.grab(monitor)
 
@@ -1463,6 +1536,5 @@ def _capture_dominant_color() -> Optional[tuple[int, int, int]]:
                         pixels.append((raw[idx], raw[idx + 1], raw[idx + 2]))
             return _pick_dominant(pixels, _LOOPBACK_PICKER)
 
-    except Exception as e:
-        logger.error(f"Screen capture error: {e}")
-        return None
+    except Exception as error:
+        raise RuntimeError(f"screen capture failed: {error}") from error

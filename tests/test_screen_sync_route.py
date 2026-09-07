@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+import backend.services.screen_sync as screen_sync_module
 from backend.api.routes.automation import (
     get_screen_sync_status,
     receive_screen_color,
@@ -1006,6 +1007,72 @@ async def test_laptop_loopback_rejection_is_throttled_and_exposed_in_status(
     status = await get_screen_sync_status(req)  # type: ignore[arg-type]
 
     assert status["laptop_loopback_delivery"] == health
+
+
+@pytest.mark.asyncio
+async def test_laptop_loopback_capture_failure_is_throttled_and_exposed_in_status(
+    monkeypatch, caplog,
+):
+    def _capture_failure():
+        raise RuntimeError("Unable to open display: :0")
+
+    monkeypatch.setattr(
+        screen_sync_module, "_capture_dominant_color", _capture_failure,
+    )
+    caplog.set_level(logging.WARNING, logger="home_hub.screen_sync")
+    loopback = LaptopLoopbackCapture()
+
+    assert await loopback._capture_color() is None
+    assert await loopback._capture_color() is None
+
+    health = loopback.capture_health
+    assert health["consecutive_failures"] == 2
+    assert "Unable to open display: :0" in health["last_error"]
+    assert len([
+        record for record in caplog.records
+        if "Laptop loopback capture failed" in record.getMessage()
+    ]) == 1
+
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    req = _make_request(_owned_watching_engine("latitude"), sync)
+    req.app.state.laptop_loopback = loopback
+
+    status = await get_screen_sync_status(req)  # type: ignore[arg-type]
+    assert status["laptop_loopback_capture"] == health
+
+
+@pytest.mark.asyncio
+async def test_laptop_loopback_capture_recovery_resets_failure_count(monkeypatch):
+    samples = [RuntimeError("capture unavailable"), (1, 2, 3)]
+
+    def _capture_sample():
+        sample = samples.pop(0)
+        if isinstance(sample, Exception):
+            raise sample
+        return sample
+
+    monkeypatch.setattr(
+        screen_sync_module, "_capture_dominant_color", _capture_sample,
+    )
+    loopback = LaptopLoopbackCapture()
+
+    assert await loopback._capture_color() is None
+    assert await loopback._capture_color() == (1, 2, 3)
+    assert loopback.capture_health["consecutive_failures"] == 0
+    assert loopback.capture_health["last_error"] is None
+    assert loopback.capture_health["last_success_at"] is not None
+
+
+def test_laptop_loopback_linux_mss_defaults_to_latitude_xwayland_display(
+    monkeypatch,
+):
+    monkeypatch.setattr(screen_sync_module.sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    assert screen_sync_module._mss_capture_kwargs() == {"display": ":0"}
+
+    monkeypatch.setenv("DISPLAY", ":7")
+    assert screen_sync_module._mss_capture_kwargs() == {"display": ":7"}
 
 
 @pytest.mark.asyncio
