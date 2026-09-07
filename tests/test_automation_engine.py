@@ -168,6 +168,19 @@ class TestEngineTimePeriodRampWindow:
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         assert engine._get_time_period() == "late_night"
 
+    def test_cached_sunset_extends_backend_day_period(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
+        weather = MagicMock()
+        weather.get_cached.return_value = {"sunset": sunset}
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=weather,
+        )
+        now = datetime(2026, 9, 7, 18, 10, tzinfo=TZ)
+        assert engine._get_time_period(now) == "day"
+
 
 # ---------------------------------------------------------------------------
 # Activity state resolution

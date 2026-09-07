@@ -21,7 +21,7 @@ that imported them from there.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo
@@ -815,8 +815,16 @@ def get_time_period_static() -> str:
         return "night"
 
 
-def get_time_period(schedule, now: Optional[datetime] = None) -> str:
-    """Determine the current time period using the schedule config.
+SUNSET_EVENING_LEAD = timedelta(minutes=45)
+
+
+def get_time_period(
+    schedule,
+    now: Optional[datetime] = None,
+    *,
+    sunset_ts: Optional[float] = None,
+) -> str:
+    """Determine the current time period using schedule + optional sunset.
 
     Returns one of: "day", "evening", "night", "late_night". The
     late_night slot runs from schedule.late_night_start_hour until
@@ -839,10 +847,29 @@ def get_time_period(schedule, now: Optional[datetime] = None) -> str:
     hour = now.hour
     day = schedule.weekday if now.weekday() < 5 else schedule.weekend
 
-    if day.ramp_start_hour <= hour < day.evening_start_hour:
-        return "day"
-    if day.evening_start_hour <= hour < day.winddown_start_hour:
-        return "evening"
+    if day.ramp_start_hour <= hour < day.winddown_start_hour:
+        evening_start = now.replace(
+            hour=day.evening_start_hour, minute=0, second=0, microsecond=0,
+        )
+        if sunset_ts is not None:
+            try:
+                sunset_local = datetime.fromtimestamp(
+                    float(sunset_ts), tz=timezone.utc,
+                ).astimezone(TZ)
+            except (TypeError, ValueError, OSError, OverflowError):
+                sunset_local = None
+            if sunset_local is not None and sunset_local.date() == now.date():
+                ramp_start = now.replace(
+                    hour=day.ramp_start_hour, minute=0, second=0, microsecond=0,
+                )
+                winddown_start = now.replace(
+                    hour=day.winddown_start_hour, minute=0, second=0, microsecond=0,
+                )
+                evening_start = max(
+                    ramp_start,
+                    min(sunset_local - SUNSET_EVENING_LEAD, winddown_start),
+                )
+        return "day" if now < evening_start else "evening"
     # late_night wraps midnight: [late_night_start_hour, 24) ∪ [0, wake_hour)
     if hour >= day.late_night_start_hour or hour < day.wake_hour:
         return "late_night"

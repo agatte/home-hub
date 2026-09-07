@@ -1098,8 +1098,19 @@ class AutomationEngine:
         return datetime.now(tz=TZ)
 
     def _get_time_period(self, now: Optional[datetime] = None) -> str:
-        """Resolve the current time period via the calculator (shim)."""
-        return _calc_get_time_period(self._schedule_config, now or self._now())
+        """Resolve period using today's cached sunset when trustworthy."""
+        resolved_now = now or self._now()
+        sunset_ts = None
+        if self._weather_service is not None:
+            try:
+                weather = self._weather_service.get_cached()
+                if weather:
+                    sunset_ts = weather.get("sunset")
+            except Exception:
+                sunset_ts = None
+        return _calc_get_time_period(
+            self._schedule_config, resolved_now, sunset_ts=sunset_ts,
+        )
 
     def get_time_period(self) -> str:
         """Public accessor for the current time period.

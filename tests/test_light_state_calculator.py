@@ -87,6 +87,35 @@ class TestGetTimePeriod:
         now = datetime(2026, 4, 18, 9, 0, tzinfo=TZ)
         assert get_time_period(schedule, now) == "day"
 
+    def test_summer_sunset_extends_day_past_wallclock_evening(self, schedule):
+        now = datetime(2026, 9, 7, 18, 10, tzinfo=TZ)
+        sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
+        assert get_time_period(schedule, now, sunset_ts=sunset) == "day"
+
+    def test_golden_hour_enters_evening_before_sunset(self, schedule):
+        now = datetime(2026, 9, 7, 19, 30, tzinfo=TZ)
+        sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
+        assert get_time_period(schedule, now, sunset_ts=sunset) == "evening"
+
+    def test_winter_sunset_can_start_evening_before_six(self, schedule):
+        now = datetime(2026, 1, 12, 17, 0, tzinfo=TZ)
+        sunset = datetime(2026, 1, 12, 17, 35, tzinfo=TZ).timestamp()
+        assert get_time_period(schedule, now, sunset_ts=sunset) == "evening"
+
+    def test_wrong_day_sunset_falls_back_to_schedule(self, schedule):
+        now = datetime(2026, 9, 7, 18, 10, tzinfo=TZ)
+        stale = datetime(2026, 9, 6, 20, 9, tzinfo=TZ).timestamp()
+        assert get_time_period(schedule, now, sunset_ts=stale) == "evening"
+
+    def test_sunset_does_not_change_night_or_late_night(self, schedule):
+        sunset = datetime(2026, 9, 7, 20, 7, 56, tzinfo=TZ).timestamp()
+        assert get_time_period(
+            schedule, datetime(2026, 9, 7, 22, 0, tzinfo=TZ), sunset_ts=sunset,
+        ) == "night"
+        assert get_time_period(
+            schedule, datetime(2026, 9, 7, 23, 30, tzinfo=TZ), sunset_ts=sunset,
+        ) == "late_night"
+
 
 # ---------------------------------------------------------------------------
 # resolve_activity_state — lookup + late_night fallback
