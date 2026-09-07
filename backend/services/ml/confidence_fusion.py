@@ -279,29 +279,49 @@ class ConfidenceFusion:
         if active_weight_sum <= 0:
             return None
 
-        normalized_weights: dict[str, float] = {
-            s: effective_weights[s] / active_weight_sum for s in active
+        # Support is effective lane weight × confidence. Keep fused_confidence
+        # on its historical active-capacity scale, while exposing confidence-aware
+        # consensus and evidence coverage separately (#190).
+        support_by_source = {
+            src: effective_weights[src] * sig.confidence
+            for src, sig in active.items()
         }
+        total_support = sum(support_by_source.values())
+        contributor_count = sum(1 for value in support_by_source.values() if value > 0)
+        abstention_count = len(active) - contributor_count
 
-        # Group votes by mode, sum (weight * confidence) per mode
-        mode_scores: dict[str, float] = {}
+        mode_support: dict[str, float] = {}
         for src, sig in active.items():
-            w = normalized_weights[src]
-            score = w * sig.confidence
-            mode_scores[sig.mode] = mode_scores.get(sig.mode, 0.0) + score
+            support = support_by_source[src]
+            if support > 0:
+                mode_support[sig.mode] = mode_support.get(sig.mode, 0.0) + support
 
-        # Winner = mode with highest weighted sum
-        fused_mode = max(mode_scores, key=mode_scores.get)  # type: ignore[arg-type]
-        fused_confidence = mode_scores[fused_mode]
+        if total_support > 0 and mode_support:
+            fused_mode: Optional[str] = max(mode_support, key=mode_support.get)
+            winning_support = mode_support[fused_mode]
+            fused_confidence = winning_support / active_weight_sum
+            consensus = winning_support / total_support
+            coverage = total_support / active_weight_sum
+            evidence_status = "sufficient"
+        else:
+            fused_mode = None
+            winning_support = 0.0
+            fused_confidence = 0.0
+            consensus = 0.0
+            coverage = 0.0
+            evidence_status = "insufficient"
 
-        # Agreement = fraction of active signals voting for the winner
-        agreeing = sum(1 for sig in active.values() if sig.mode == fused_mode)
-        agreement = agreeing / len(active)
+        # ``agreement`` remains as a compatibility alias, but schema v2 makes
+        # clear that it now means support consensus rather than lane headcount.
+        agreement = consensus
 
-        # Action thresholds
-        auto_apply = fused_confidence >= AUTO_APPLY_THRESHOLD
+        # Action flags remain shadow telemetry only (AutomationEngine has no
+        # fusion writer path). All-zero evidence can never qualify.
+        auto_apply = evidence_status == "sufficient" and fused_confidence >= AUTO_APPLY_THRESHOLD
         can_override = (
-            fused_confidence >= OVERRIDE_THRESHOLD and agreement >= 0.80
+            evidence_status == "sufficient"
+            and fused_confidence >= OVERRIDE_THRESHOLD
+            and consensus >= 0.80
         )
 
         # Build per-signal detail dict
@@ -309,19 +329,38 @@ class ConfidenceFusion:
         for src in SIGNAL_SOURCES:
             sig = self._signals.get(src)
             is_untrusted = src in untrusted_sources
-            # An untrusted lane is excluded from the vote and surfaced with
-            # stale=True (it isn't counting) plus an explicit untrusted flag so
-            # the analytics view + the source-trust sweep can explain why a
-            # live lane went mute.
-            is_stale = src in stale_sources or is_untrusted
+            # Staleness and trust are separate reasons a lane can be excluded.
+            # Keep both truthful so older boolean consumers do not mislabel a
+            # fresh-but-untrusted source as stale; vote_status remains the v2
+            # reason code for new consumers.
+            is_stale = src in stale_sources
             if sig:
+                support = support_by_source.get(src, 0.0) if not is_stale else 0.0
+                if is_untrusted:
+                    vote_status = "untrusted"
+                    agrees: Optional[bool] = False
+                elif is_stale:
+                    vote_status = "stale"
+                    agrees = False
+                elif support <= 0:
+                    vote_status = "abstains"
+                    agrees = None
+                elif sig.mode == fused_mode:
+                    vote_status = "agrees"
+                    agrees = True
+                else:
+                    vote_status = "disagrees"
+                    agrees = False
                 signals_detail[src] = {
                     "mode": sig.mode,
                     "confidence": sig.confidence,
                     "weight": self._weights.get(src, 0.0),
+                    "effective_weight": effective_weights.get(src, 0.0),
+                    "support": round(support, 6),
+                    "vote_status": vote_status,
                     "stale": is_stale,
                     "untrusted": is_untrusted,
-                    "agrees": sig.mode == fused_mode and not is_stale,
+                    "agrees": agrees,
                     "last_update": sig.timestamp.isoformat(),
                     "factors": list(sig.factors),
                 }
@@ -330,16 +369,30 @@ class ConfidenceFusion:
                     "mode": None,
                     "confidence": 0,
                     "weight": self._weights.get(src, 0.0),
+                    "effective_weight": 0.0,
+                    "support": 0.0,
+                    "vote_status": "stale",
                     "stale": True,
+                    "untrusted": False,
                     "agrees": False,
                     "last_update": None,
                     "factors": [],
                 }
 
         return {
+            "schema_version": 2,
+            "agreement_semantics": "support_consensus_v2",
+            "evidence_status": evidence_status,
             "fused_mode": fused_mode,
             "fused_confidence": round(fused_confidence, 4),
             "agreement": round(agreement, 4),
+            "consensus": round(consensus, 4),
+            "coverage": round(coverage, 4),
+            "winning_support": round(winning_support, 6),
+            "total_support": round(total_support, 6),
+            "available_weight_capacity": round(active_weight_sum, 6),
+            "contributor_count": contributor_count,
+            "abstention_count": abstention_count,
             "active_signals": len(active),
             "total_signals": len(SIGNAL_SOURCES),
             "auto_apply": auto_apply,

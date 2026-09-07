@@ -1,7 +1,7 @@
 <script>
   /** @type {string} */
   export let source = ''
-  /** @type {{ mode: string|null, confidence: number, weight: number, stale: boolean, agrees: boolean, last_update: string } | null} */
+  /** @type {{ mode: string|null, confidence: number, weight: number, stale: boolean, untrusted?: boolean, agrees: boolean|null, vote_status?: string, last_update: string } | null} */
   export let signal = null
   /** @type {string} */
   export let mColor = '#4a6cf7'
@@ -17,8 +17,10 @@
   $: hasData = signal && signal.mode != null
   $: conf = signal?.confidence ?? 0
   $: confPct = Math.round(conf * 100)
-  $: agrees = signal?.agrees ?? false
   $: stale = signal?.stale ?? false
+  $: agrees = signal?.agrees === true
+  $: voteStatus = signal?.vote_status ?? (stale ? 'stale' : agrees ? 'agrees' : 'disagrees')
+  $: voteColor = voteStatus === 'agrees' ? '#30c060' : voteStatus === 'disagrees' ? '#f0a030' : 'rgba(255,255,255,0.35)'
 </script>
 
 <div
@@ -41,7 +43,7 @@
         <path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" x2="12.01" y1="20" y2="20"/>
       {/if}
     </svg>
-    <span class="agree-dot" style="background: {hasData ? (agrees ? '#30c060' : '#f0a030') : 'rgba(255,255,255,0.1)'}"></span>
+    <span class="agree-dot" style="background: {hasData ? voteColor : 'rgba(255,255,255,0.1)'}"></span>
     <span class="card-label">{meta.label}</span>
   </div>
 
@@ -61,8 +63,12 @@
     <div class="no-data-label">No data</div>
   {/if}
 
-  {#if stale}
-    <span class="stale-tag">STALE</span>
+  {#if voteStatus === 'untrusted'}
+    <span class="status-tag">UNTRUSTED</span>
+  {:else if voteStatus === 'stale'}
+    <span class="status-tag">STALE</span>
+  {:else if voteStatus === 'abstains'}
+    <span class="status-tag neutral">ABSTAIN</span>
   {/if}
 </div>
 
@@ -161,7 +167,7 @@
     padding: 12px 0;
   }
 
-  .stale-tag {
+  .status-tag {
     position: absolute;
     top: 6px;
     right: 6px;
@@ -172,5 +178,9 @@
     background: rgba(240, 160, 48, 0.12);
     padding: 1px 5px;
     border-radius: 4px;
+  }
+  .status-tag.neutral {
+    color: rgba(255,255,255,0.55);
+    background: rgba(255,255,255,0.08);
   }
 </style>

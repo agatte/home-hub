@@ -83,3 +83,27 @@ async def test_failed_pihole_fetch_releases_lock_for_a_later_retry() -> None:
     assert pihole.calls == 2
     assert failed_result["metrics"]["pihole"] == {"status": "error"}
     assert retry_result["metrics"]["pihole"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_fusion_vitals_exposes_schema_and_agreement_semantics() -> None:
+    fusion = {
+        "schema_version": 2,
+        "agreement_semantics": "support_consensus_v2",
+        "evidence_status": "sufficient",
+        "fused_mode": "working",
+        "fused_confidence": 0.72,
+        "agreement": 0.88,
+        "consensus": 0.88,
+        "coverage": 0.61,
+    }
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        automation=SimpleNamespace(_last_fusion_result=fusion),
+    )))
+
+    result = await vitals.get_vitals(request)
+    metric = result["metrics"]["fusion"]
+    assert metric["schema_version"] == 2
+    assert metric["agreement_semantics"] == "support_consensus_v2"
+    assert metric["consensus"] == pytest.approx(0.88)
+    assert metric["coverage"] == pytest.approx(0.61)

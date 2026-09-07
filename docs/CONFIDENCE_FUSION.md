@@ -207,7 +207,9 @@ idle votes:
 
 - **Fused mode** = whichever mode has the highest total. In this case: **working** at 0.667
 - **Fused confidence** = the winner's total. In this case: **66.7%**
-- **Agreement** = (signals voting for winner) / (total active signals). In this case: 2/3 = **67%**
+- **Agreement (legacy v1)** = (signals voting for winner) / (total active signals). In this historical example: 2/3 = **67%**
+
+> **Schema v2 compatibility (2026-09-06):** New live fusion results expose `consensus` (winning nonzero support / total nonzero support), `coverage` (total nonzero support / available trusted active weight capacity), and per-lane `vote_status`. The legacy `agreement` key remains as an alias for support consensus in schema v2 and is tagged with `agreement_semantics=support_consensus_v2`. Historical stored rows are not rewritten; older rows without a schema marker retain lane-headcount agreement semantics. Zero-confidence lanes abstain and do not contribute to consensus, coverage learning, or strategy comparisons.
 
 The 66.7% confidence is below the 95% `auto_apply` diagnostic threshold. The UI would show "working 67% · 2/3 agree" and the existing priority system continues handling the decision. Even above the threshold, fusion remains shadow-only.
 

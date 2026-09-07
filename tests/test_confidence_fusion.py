@@ -87,6 +87,7 @@ class TestStaleness:
         assert result is not None
         proc = result["signals"]["process"]
         assert proc["stale"] is True
+        assert proc["vote_status"] == "stale"
         assert proc["agrees"] is False  # False even though mode would match
         assert proc["last_update"] is not None
         assert proc["mode"] == "working"
@@ -215,8 +216,7 @@ class TestAgreement:
         result = fusion.compute_fusion()
         assert result["agreement"] == 1.0
 
-    def test_three_of_four_agreement(self):
-        """With 4 voting lanes, 3-of-4 = 0.75 (below the 0.80 override gate)."""
+    def test_three_of_four_agreement_uses_weighted_support(self):
         fusion = ConfidenceFusion()
         fusion.report_signal("process", "working", 1.0)
         fusion.report_signal("camera", "working", 1.0)
@@ -224,7 +224,12 @@ class TestAgreement:
         fusion.report_signal("rule_engine", "idle", 1.0)
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"
-        assert result["agreement"] == pytest.approx(0.75, abs=1e-4)
+        expected = DEFAULT_WEIGHTS["process"] + DEFAULT_WEIGHTS["camera"] + DEFAULT_WEIGHTS["audio_ml"]
+        assert result["agreement"] == pytest.approx(expected, abs=1e-4)
+        assert result["consensus"] == pytest.approx(expected, abs=1e-4)
+        assert result["coverage"] == 1.0
+        assert result["schema_version"] == 2
+        assert result["agreement_semantics"] == "support_consensus_v2"
 
     def test_stale_signals_excluded_from_agreement_denominator(self):
         fusion = ConfidenceFusion()
@@ -235,6 +240,55 @@ class TestAgreement:
         result = fusion.compute_fusion()
         # Active: {process, camera} both vote working → 2/2 = 1.0
         assert result["agreement"] == 1.0
+
+
+class TestEvidenceSemantics:
+    def test_zero_confidence_lane_abstains_instead_of_agreeing(self):
+        fusion = ConfidenceFusion()
+        fusion.report_signal("process", "working", 1.0)
+        fusion.report_signal("camera", "working", 0.0)
+        result = fusion.compute_fusion()
+        assert result["fused_mode"] == "working"
+        assert result["consensus"] == 1.0
+        assert result["contributor_count"] == 1
+        assert result["abstention_count"] == 1
+        assert result["signals"]["camera"]["vote_status"] == "abstains"
+        assert result["signals"]["camera"]["agrees"] is None
+        expected_coverage = DEFAULT_WEIGHTS["process"] / (DEFAULT_WEIGHTS["process"] + DEFAULT_WEIGHTS["camera"])
+        assert result["coverage"] == pytest.approx(expected_coverage, abs=1e-4)
+
+    def test_partial_conflicting_support_separates_consensus_from_coverage(self):
+        fusion = ConfidenceFusion()
+        fusion.report_signal("process", "working", 1.0)
+        fusion.report_signal("camera", "working", 0.0)
+        fusion.report_signal("audio_ml", "idle", 0.5)
+        result = fusion.compute_fusion()
+        win = DEFAULT_WEIGHTS["process"]
+        other = DEFAULT_WEIGHTS["audio_ml"] * 0.5
+        capacity = DEFAULT_WEIGHTS["process"] + DEFAULT_WEIGHTS["camera"] + DEFAULT_WEIGHTS["audio_ml"]
+        assert result["consensus"] == pytest.approx(win / (win + other), abs=1e-4)
+        assert result["coverage"] == pytest.approx((win + other) / capacity, abs=1e-4)
+        assert result["signals"]["process"]["vote_status"] == "agrees"
+        assert result["signals"]["audio_ml"]["vote_status"] == "disagrees"
+        assert result["signals"]["camera"]["vote_status"] == "abstains"
+
+    def test_all_zero_active_evidence_is_explicitly_insufficient(self):
+        fusion = ConfidenceFusion()
+        fusion.report_signal("process", "working", 0.0)
+        fusion.report_signal("camera", "idle", 0.0)
+        result = fusion.compute_fusion()
+        assert result is not None
+        assert result["evidence_status"] == "insufficient"
+        assert result["fused_mode"] is None
+        assert result["fused_confidence"] == 0.0
+        assert result["consensus"] == 0.0
+        assert result["coverage"] == 0.0
+        assert result["contributor_count"] == 0
+        assert result["abstention_count"] == 2
+        assert result["auto_apply"] is False
+        assert result["can_override"] is False
+        assert result["signals"]["process"]["vote_status"] == "abstains"
+        assert result["signals"]["camera"]["vote_status"] == "abstains"
 
 
 class TestThresholdGates:
@@ -270,9 +324,7 @@ class TestThresholdGates:
         assert result["can_override"] is True
         assert result["auto_apply"] is False  # 0.92 < 0.95
 
-    def test_can_override_blocked_when_agreement_too_low(self):
-        """Custom weights: fused_confidence=0.92 but only 3 of 4 signals
-        vote for the winner → agreement=0.75 < 0.80 → can_override=False."""
+    def test_can_override_shadow_gate_uses_support_consensus(self):
         fusion = ConfidenceFusion()
         fusion._weights = {
             "process":     0.50,
@@ -287,8 +339,8 @@ class TestThresholdGates:
         result = fusion.compute_fusion()
         assert result["fused_mode"] == "working"
         assert result["fused_confidence"] == pytest.approx(0.92, abs=1e-4)
-        assert result["agreement"] == pytest.approx(0.75, abs=1e-4)
-        assert result["can_override"] is False
+        assert result["agreement"] == pytest.approx(0.92, abs=1e-4)
+        assert result["can_override"] is True
 
 
 class TestWeightLearning:

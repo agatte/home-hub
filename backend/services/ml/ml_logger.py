@@ -379,7 +379,11 @@ class MLDecisionLogger:
                 for src, sig in signal_details.items():
                     if not isinstance(sig, dict):
                         continue
-                    if sig.get("stale"):
+                    vote_status = sig.get("vote_status")
+                    if vote_status is not None:
+                        if vote_status not in {"agrees", "disagrees"}:
+                            continue
+                    elif sig.get("stale") or sig.get("untrusted"):
                         continue
                     mode = sig.get("mode")
                     if not mode:
@@ -579,7 +583,13 @@ class MLDecisionLogger:
 
                 for strat in ("rule_engine", "process"):
                     sig = signal_details.get(strat)
-                    if not isinstance(sig, dict) or sig.get("stale"):
+                    if not isinstance(sig, dict):
+                        continue
+                    vote_status = sig.get("vote_status")
+                    if vote_status is not None:
+                        if vote_status not in {"agrees", "disagrees"}:
+                            continue
+                    elif sig.get("stale") or sig.get("untrusted"):
                         continue
                     mode = sig.get("mode")
                     if not mode:

@@ -13,9 +13,15 @@
   $: mColor = modeColor(fusedMode)
   $: fusedConfidence = fusion?.fused_confidence ?? 0
   $: confPct = Math.round(fusedConfidence * 100)
-  $: agreement = fusion?.agreement ?? 0
+  $: schemaVersion = fusion?.schema_version ?? 1
+  $: consensus = fusion?.consensus ?? fusion?.agreement ?? 0
+  $: consensusPct = Math.round(consensus * 100)
+  $: coverage = fusion?.coverage ?? null
+  $: coveragePct = coverage == null ? null : Math.round(coverage * 100)
   $: activeSignals = fusion?.active_signals ?? 0
   $: totalSignals = fusion?.total_signals ?? 0
+  $: contributorCount = fusion?.contributor_count ?? activeSignals
+  $: abstentionCount = fusion?.abstention_count ?? 0
   $: signals = fusion?.signals || {}
   $: signalKeys = ['process', 'camera', 'audio_ml', 'rule_engine']
 
@@ -104,9 +110,15 @@
         {#if timePeriod}
           <span class="period-tag">{timePeriod}</span>
         {/if}
-        <span class="agreement-text">
-          {agreeCount} of {totalSignals} signals agree
-        </span>
+        {#if schemaVersion >= 2}
+          <span class="agreement-text">
+            Consensus {consensusPct}% · Coverage {coveragePct ?? 0}% · {contributorCount} contribute{#if abstentionCount > 0} · {abstentionCount} abstain{/if}
+          </span>
+        {:else}
+          <span class="agreement-text">
+            {agreeCount} of {totalSignals} signals agree
+          </span>
+        {/if}
       </div>
     </section>
 

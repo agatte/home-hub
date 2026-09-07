@@ -169,7 +169,7 @@
       <div class="threshold-cell">
         <span class="threshold-label">Stale override</span>
         <span class="threshold-value">92%</span>
-        <span class="threshold-note">+ 80% signal agreement</span>
+        <span class="threshold-note">+ 80% support consensus</span>
       </div>
     </div>
   </div>

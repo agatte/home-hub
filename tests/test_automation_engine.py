@@ -3352,19 +3352,25 @@ class _StubFusion:
     """
 
     def __init__(
-        self, fused_mode: str, fused_confidence: float, *, can_override=False,
-        auto_apply=False,
+        self, fused_mode, fused_confidence: float, *, can_override=False,
+        auto_apply=False, evidence_status="sufficient",
     ):
         self._fm = fused_mode
         self._fc = fused_confidence
         self._can_override = can_override
         self._auto_apply = auto_apply
+        self._evidence_status = evidence_status
 
     def compute_fusion(self):
         return {
+            "schema_version": 2,
+            "agreement_semantics": "support_consensus_v2",
+            "evidence_status": self._evidence_status,
             "fused_mode": self._fm,
             "fused_confidence": self._fc,
-            "agreement": 0.9,
+            "agreement": 0.9 if self._evidence_status == "sufficient" else 0.0,
+            "consensus": 0.9 if self._evidence_status == "sufficient" else 0.0,
+            "coverage": 0.8 if self._evidence_status == "sufficient" else 0.0,
             "signals": {},
             "can_override": self._can_override,
             "auto_apply": self._auto_apply,
@@ -4315,6 +4321,19 @@ class TestFusionShadowOnlyAuthority:
 
         assert engine.manual_override is False
         assert engine._override_mode is None
+
+    async def test_insufficient_fusion_stays_observable_but_is_not_db_logged(self, engine):
+        engine._current_mode = "idle"
+        engine._manual_override = False
+        engine._confidence_fusion = _StubFusion(
+            None, 0.0, evidence_status="insufficient",
+        )
+
+        await _drive_one_tick(engine)
+
+        assert engine._last_fusion_result["evidence_status"] == "insufficient"
+        assert engine._last_fusion_result["fused_mode"] is None
+        assert engine._ml_logger.calls == []
 
     async def test_auto_apply_result_cannot_set_manual_override(self, engine):
         engine._current_mode = "idle"

@@ -38,6 +38,13 @@
     if (entry.fusion) {
       const f = entry.fusion
       const confPct = Math.round((f.fused_confidence ?? 0) * 100)
+      if ((f.schema_version ?? 1) >= 2) {
+        const consensusPct = Math.round((f.consensus ?? f.agreement ?? 0) * 100)
+        const coveragePct = Math.round((f.coverage ?? 0) * 100)
+        const contributors = f.contributor_count ?? 0
+        const abstentions = f.abstention_count ?? 0
+        return `${modeLabel(f.fused_mode)} (${confPct}%) \u00b7 consensus ${consensusPct}% \u00b7 coverage ${coveragePct}% \u00b7 ${contributors} contribute${abstentions ? ` \u00b7 ${abstentions} abstain` : ''}`
+      }
       const agreeCount = Object.values(f.signals || {}).filter(/** @param {any} s */ s => s?.agrees).length
       const total = f.total_signals ?? Object.keys(f.signals || {}).length
       return `${modeLabel(f.fused_mode)} (${confPct}%) \u00b7 ${agreeCount}/${total} agree`

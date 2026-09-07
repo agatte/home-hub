@@ -367,6 +367,47 @@ class TestComputePerSourceMetrics:
             "correct": 1,
         }
 
+    async def test_v2_abstentions_and_untrusted_lanes_do_not_train(self, logger, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            session.add(MLDecision(
+                timestamp=now - timedelta(hours=1),
+                predicted_mode="working", actual_mode="working",
+                confidence=0.9, decision_source="fusion", applied=False,
+                factors={"signal_details": {
+                    "process": {"mode": "working", "vote_status": "agrees", "stale": False},
+                    "camera": {"mode": "working", "vote_status": "abstains", "stale": False},
+                    "audio_ml": {"mode": "working", "vote_status": "untrusted", "stale": False, "untrusted": True},
+                    "rule_engine": {"mode": "working", "vote_status": "stale", "stale": True},
+                }},
+            ))
+            await session.commit()
+
+        rich = await logger.compute_per_source_metrics(days=14)
+        assert rich == {
+            "process": {"accuracy": pytest.approx(1.0), "samples": 1, "correct": 1},
+        }
+
+    async def test_compare_strategies_skips_v2_abstentions(self, logger, ml_db):
+        now = datetime.now(timezone.utc)
+        async with ml_db() as session:
+            session.add(MLDecision(
+                timestamp=now - timedelta(hours=1),
+                predicted_mode="working", actual_mode="working",
+                confidence=0.9, decision_source="fusion", applied=False,
+                factors={"signal_details": {
+                    "process": {"mode": "working", "vote_status": "abstains", "stale": False},
+                    "rule_engine": {"mode": "working", "vote_status": "agrees", "stale": False},
+                }},
+            ))
+            await session.commit()
+
+        result = await logger.compare_strategies(days=14)
+        assert result["fusion"] == {"total": 1, "correct": 1, "accuracy": pytest.approx(1.0)}
+        assert result["process"]["total"] == 0
+        assert result["process"]["accuracy"] is None
+        assert result["rule_engine"] == {"total": 1, "correct": 1, "accuracy": pytest.approx(1.0)}
+
     async def test_legacy_wrapper_still_returns_flat_dict(self, logger, ml_db):
         """compute_accuracy_by_source must remain a flat {src: float} dict
         so update_weights_from_accuracy and /retune-weights keep working."""

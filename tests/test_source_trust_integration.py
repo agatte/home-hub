@@ -76,7 +76,8 @@ class TestFusionUntrustedDrop:
         assert result["fused_mode"] == "working"
         cam = result["signals"]["camera"]
         assert cam["untrusted"] is True
-        assert cam["stale"] is True
+        assert cam["stale"] is False
+        assert cam["vote_status"] == "untrusted"
         assert cam["agrees"] is False
 
     def test_trusted_camera_lane_counts(self):

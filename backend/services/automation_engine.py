@@ -5321,9 +5321,13 @@ class AutomationEngine:
                         # compute_accuracy_by_source has per-signal data
                         # to tune weights against. broadcast=False to
                         # avoid flooding the pipeline WebSocket at 1/min.
-                        if ml_logger:
+                        if ml_logger and fusion_result.get("evidence_status") != "insufficient":
                             factors = {
                                 "agreement": fusion_result["agreement"],
+                                "consensus": fusion_result.get("consensus"),
+                                "coverage": fusion_result.get("coverage"),
+                                "schema_version": fusion_result.get("schema_version", 1),
+                                "agreement_semantics": fusion_result.get("agreement_semantics", "lane_headcount_v1"),
                                 "signal_details": fusion_result["signals"],
                                 "current_mode": self._current_mode,
                                 "action": "shadow",

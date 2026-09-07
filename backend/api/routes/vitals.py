@@ -175,6 +175,13 @@ async def get_vitals(request: Request) -> dict[str, Any]:
                 "agreement": round(
                     float(fusion_result.get("agreement", 0.0)), 3,
                 ),
+                "consensus": round(
+                    float(fusion_result.get("consensus", fusion_result.get("agreement", 0.0))), 3,
+                ),
+                "coverage": round(float(fusion_result.get("coverage", 0.0)), 3),
+                "evidence_status": fusion_result.get("evidence_status", "legacy"),
+                "schema_version": fusion_result.get("schema_version", 1),
+                "agreement_semantics": fusion_result.get("agreement_semantics", "lane_headcount_v1"),
                 "status": _classify_low(fc, _FUSION_WARN, _FUSION_ERROR),
             }
         else:
@@ -182,6 +189,11 @@ async def get_vitals(request: Request) -> dict[str, Any]:
                 "confidence": None,
                 "mode": None,
                 "agreement": None,
+                "consensus": None,
+                "coverage": None,
+                "evidence_status": "unavailable",
+                "schema_version": None,
+                "agreement_semantics": None,
                 "status": "warn",
             }
 
