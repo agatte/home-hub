@@ -4416,7 +4416,8 @@ class AutomationEngine:
                 gaming_transition_reason is not None
                 and self._gaming_crossing_light_ids(state, handoff_baseline)
             )
-            if self._effect_manager.needs_reconcile(desired_effect):
+            effect_reconcile_needed = self._effect_manager.needs_reconcile(desired_effect)
+            if effect_reconcile_needed:
                 # One serialized sequence: force safe targets (including
                 # protected held targets), wait the commanded transition,
                 # then release/start the effect.
@@ -4432,6 +4433,30 @@ class AutomationEngine:
                         desired_effect,
                         intended_states=state,
                         transitiontime=tt,
+                    )
+                # Hue can perturb static lamp state while stop_effect_all()
+                # releases a prior effect, after the safety write has already
+                # advanced the normal dedup cache. Atmosphere-owned lights are
+                # intentionally outside the Relax effect scope, so reassert
+                # just L1/L3/L4/L6 after a successful reconcile. The normal
+                # applicator still preserves manual/transit/screen-sync owners.
+                if (
+                    atmosphere_active
+                    and (
+                        applied is True
+                        or isinstance(applied, LightApplyResult) and not applied.failed
+                    )
+                ):
+                    atmosphere_static = {
+                        light_id: state[light_id].copy()
+                        for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS
+                        if light_id in state
+                    }
+                    for light_id in atmosphere_static:
+                        self._forget_dedup_light(light_id)
+                    applied = await self._apply_state(
+                        atmosphere_static,
+                        transitiontime=10,
                     )
             else:
                 # Steady plans ride the normal dedup path. CT↔HSB target

@@ -608,6 +608,51 @@ async def test_engine_uses_existing_dedup_and_preserves_l2_l5(
 
 
 @pytest.mark.asyncio
+async def test_effect_release_reasserts_atmosphere_static_targets(
+    mock_hue, mock_hue_v2, mock_ws,
+) -> None:
+    curator = LivingRoomAtmosphereCurator(enabled=True, now_provider=Clock())
+    engine = AutomationEngine(hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws)
+    engine.set_living_room_decision_gate(FakeGate(_envelope()))
+    engine.set_living_room_atmosphere_curator(curator)
+    engine._manual_override = True
+    engine._override_mode = "relax"
+    engine._override_source = "physical_context_relax"
+    engine._override_time = START
+    engine._get_time_period = lambda now=None: "day"
+
+    original_stop = mock_hue_v2.stop_effect_all
+    original_set = mock_hue.set_light
+    stop_completed = False
+    post_stop_writes: list[str] = []
+
+    async def disturbing_stop() -> bool:
+        nonlocal stop_completed
+        mock_hue._lights["6"].update({"bri": 84, "hue": 20000, "sat": 115})
+        stop_completed = True
+        return await original_stop()
+
+    async def track_post_stop(light_id: str, state: dict) -> bool:
+        if stop_completed:
+            post_stop_writes.append(light_id)
+        return await original_set(light_id, state)
+
+    mock_hue_v2.stop_effect_all = disturbing_stop
+    mock_hue.set_light = track_post_stop
+
+    await engine._apply_mode("relax", force_resend=True)
+
+    assert set(post_stop_writes) == set(LIVING_ROOM_ATMOSPHERE_LIGHT_IDS)
+    expected = ATMOSPHERES["moss_ember"].palettes["day"]
+    for light_id in LIVING_ROOM_ATMOSPHERE_LIGHT_IDS:
+        assert {
+            key: mock_hue._lights[light_id][key]
+            for key in ("bri", "hue", "sat")
+        } == {key: expected[light_id][key] for key in ("bri", "hue", "sat")}
+    assert engine._last_applied_per_light["6"]["bri"] == mock_hue._lights["6"]["bri"]
+
+
+@pytest.mark.asyncio
 async def test_manual_plant_wash_target_is_not_overwritten_by_curator(
     mock_hue, mock_hue_v2, mock_ws,
 ) -> None:
