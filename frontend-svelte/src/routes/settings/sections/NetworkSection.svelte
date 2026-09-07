@@ -8,17 +8,21 @@
   import DnsHostRow from '$lib/components/settings/DnsHostRow.svelte'
   import BlocklistRow from '$lib/components/settings/BlocklistRow.svelte'
 
+  const HAGEZI_TIF = {
+    url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/tif.txt',
+    label: 'Hagezi TIF (opt-in, disabled)',
+  }
   const RECOMMENDED_LISTS = [
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt', label: 'Hagezi Multi' },
     { url: 'https://big.oisd.nl/', label: 'OISD Full' },
     { url: 'https://v.firebog.net/hosts/AdguardDNS.txt', label: 'AdGuard DNS' },
     { url: 'https://v.firebog.net/hosts/Easyprivacy.txt', label: 'EasyPrivacy' },
     { url: 'https://v.firebog.net/hosts/Easylist.txt', label: 'EasyList' },
-    { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.txt', label: 'Hagezi TIF (Threats)' },
     { url: 'https://phishing.army/download/phishing_army_blocklist.txt', label: 'Phishing Army' },
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/fake.txt', label: 'Hagezi Fake/Scam' },
     { url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/native.winoffice.txt', label: 'Windows Telemetry' },
   ]
+  const KNOWN_LISTS = [...RECOMMENDED_LISTS, HAGEZI_TIF]
 
   // Pi-hole local-DNS records are maintenance-only for clients configured to
   // query Pi-hole directly. Google Wifi's default resolver does not forward
@@ -164,7 +168,7 @@
 
   /** @param {string} url */
   function getListLabel(url) {
-    const rec = RECOMMENDED_LISTS.find(l => l.url === url)
+    const rec = KNOWN_LISTS.find(l => l.url === url)
     if (rec) return rec.label
     try {
       const u = new URL(url)
@@ -283,7 +287,7 @@
         <SettingButton variant="ghost" loading={saving === 'gravity'} on:click={refreshGravity}>
           {saving === 'gravity' ? 'Refreshing…' : 'Refresh gravity'}
         </SettingButton>
-        <span class="muted-mini">{RECOMMENDED_LISTS.length} lists · ads, malware, tracking, phishing</span>
+        <span class="muted-mini">{RECOMMENDED_LISTS.length} lists · ads, malware, tracking, phishing | HaGeZi TIF intentionally excluded</span>
       </div>
     </SettingGroup>
 

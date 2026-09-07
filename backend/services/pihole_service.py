@@ -15,13 +15,26 @@ SUMMARY_CACHE_TTL = 60  # 1 minute
 TOP_BLOCKED_CACHE_TTL = 120  # 2 minutes
 
 
-class PiholeUnreachableError(Exception):
+class PiholeServiceError(Exception):
+    """Base class for typed Pi-hole service failures."""
+
+
+class PiholeUnreachableError(PiholeServiceError):
     """Pi-hole is down, re-authentication failed, or the API key is wrong.
 
-    Distinct from "endpoint returned bad data" — callers should map this
-    to a 503 (upstream unavailable) rather than a 500/502. The original
-    exception (network error, HTTP error) is preserved as ``__cause__``.
+    Callers should map this to a 503 (upstream unavailable). The original
+    network/auth cause is preserved as ``__cause__`` when available.
     """
+
+
+class PiholeApiError(PiholeServiceError):
+    """Pi-hole was reachable but rejected or failed an API request."""
+
+    def __init__(self, method: str, path: str, status_code: int) -> None:
+        self.method = method
+        self.path = path
+        self.status_code = status_code
+        super().__init__(f"{method} {path} returned HTTP {status_code}")
 
 
 class PiholeService:
@@ -183,6 +196,13 @@ class PiholeService:
 
         except PiholeUnreachableError:
             raise
+        except httpx.HTTPStatusError as e:
+            # An HTTP response proves Pi-hole is reachable. Keep protocol/
+            # contract failures distinct from connectivity/auth outages so
+            # callers do not misreport a rejected request as resolver downtime.
+            self._reachable = True
+            self._unreachable_logged = False
+            raise PiholeApiError(method, path, e.response.status_code) from e
         except Exception as e:
             self._raise_unreachable(f"{method} {path} failed", e)
             return {}  # unreachable; satisfies type checker
@@ -371,7 +391,9 @@ class PiholeService:
         Returns True on a successful API call.
         """
         encoded = address.replace("/", "%2F").replace(":", "%3A")
-        await self._request("DELETE", f"/api/lists/{encoded}")
+        await self._request(
+            "DELETE", f"/api/lists/{encoded}", params={"type": "block"},
+        )
         logger.info("Pi-hole blocklist removed: %s", address)
         return True
 

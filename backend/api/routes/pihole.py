@@ -9,7 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.api.auth import require_api_key
-from backend.services.pihole_service import PiholeUnreachableError
+from backend.services.pihole_service import (
+    PiholeApiError,
+    PiholeServiceError,
+)
 
 logger = logging.getLogger("home_hub.pihole")
 
@@ -27,8 +30,13 @@ def _get_service(request: Request):
     return service
 
 
-def _unreachable(err: PiholeUnreachableError) -> HTTPException:
-    """Map a service-layer unreachable error to a 503 with cause detail."""
+def _service_error(err: PiholeServiceError) -> HTTPException:
+    """Map Pi-hole transport/auth failures separately from API rejection."""
+    if isinstance(err, PiholeApiError):
+        return HTTPException(
+            status_code=502,
+            detail=f"Pi-hole request failed: {err}",
+        )
     return HTTPException(
         status_code=503,
         detail=f"{UNREACHABLE_DETAIL}: {err}",
@@ -46,8 +54,8 @@ async def get_pihole_stats(request: Request) -> dict:
     service = _get_service(request)
     try:
         data = await service.get_summary()
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     if not data:
         raise HTTPException(status_code=502, detail="Pi-hole data unavailable")
     return {"status": "ok", "pihole": data}
@@ -59,8 +67,8 @@ async def get_top_blocked(request: Request, count: int = 10) -> dict:
     service = _get_service(request)
     try:
         data = await service.get_top_blocked(count=count)
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     if data is None:
         raise HTTPException(status_code=502, detail="Pi-hole data unavailable")
     return {"status": "ok", "top_blocked": data}
@@ -82,8 +90,8 @@ async def get_dns_hosts(request: Request) -> dict:
     service = _get_service(request)
     try:
         data = await service.get_dns_hosts()
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok", "dns_hosts": data}
 
 
@@ -93,8 +101,8 @@ async def add_dns_host(body: DnsHostBody, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.add_dns_host(body.ip, body.hostname)
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
 
 
@@ -104,8 +112,8 @@ async def delete_dns_host(ip: str, hostname: str, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.delete_dns_host(ip, hostname)
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
 
 
@@ -124,8 +132,8 @@ async def get_blocklists(request: Request) -> dict:
     service = _get_service(request)
     try:
         data = await service.get_blocklists()
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok", "lists": data}
 
 
@@ -135,8 +143,8 @@ async def add_blocklist(body: BlocklistBody, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.add_blocklist(body.address)
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
 
 
@@ -146,8 +154,8 @@ async def delete_blocklist(address: str, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.delete_blocklist(unquote(address))
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
 
 
@@ -157,8 +165,8 @@ async def refresh_gravity(request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.refresh_gravity()
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
 
 
@@ -178,8 +186,8 @@ async def get_allow_domains(request: Request) -> dict:
     service = _get_service(request)
     try:
         data = await service.get_allow_domains()
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok", "allow": data}
 
 
@@ -189,8 +197,8 @@ async def add_allow_domain(body: AllowDomainBody, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.add_allow_domain(body.domain, body.comment)
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
 
 
@@ -200,6 +208,6 @@ async def delete_allow_domain(domain: str, request: Request) -> dict:
     service = _get_service(request)
     try:
         await service.delete_allow_domain(unquote(domain))
-    except PiholeUnreachableError as e:
-        raise _unreachable(e) from e
+    except PiholeServiceError as e:
+        raise _service_error(e) from e
     return {"status": "ok"}
