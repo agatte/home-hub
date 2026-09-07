@@ -722,10 +722,12 @@ def test_posture_confidence_surfaces_in_sources() -> None:
     fusion.on_observation(PresenceReading(
         source="desktop", captured_at=_now(),
         face_present=True, posture="slouched", posture_confidence=0.73,
+        pose_visible_landmarks=17,
     ))
     sources = fusion.get_sources()
     assert sources["desktop"]["posture"] == "slouched"
     assert sources["desktop"]["posture_confidence"] == 0.73
+    assert sources["desktop"]["pose_visible_landmarks"] == 17
 
 
 # ---------------------------------------------------------------------------
@@ -966,3 +968,26 @@ def test_desktop_bed_localization_survives_yolo_presence_without_zone() -> None:
     ))
     assert fusion.is_strongly_present_any() is True
     assert fusion.latest_zone() == "bed"
+
+
+def test_desktop_unlocalized_face_is_presence_not_desk() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.12,
+        detection_source="face", zone=None,
+    ))
+    assert fusion.is_strongly_present_any() is True
+    assert fusion.is_at_desk_fresh() is False
+    assert fusion.latest_zone() is None
+
+
+def test_desktop_source_qualified_desk_face_is_at_desk() -> None:
+    fusion = PresenceFusion()
+    fusion.on_observation(PresenceReading(
+        source="desktop", captured_at=_now(),
+        face_present=True, face_confidence=0.45,
+        detection_source="face", zone="desk",
+    ))
+    assert fusion.is_at_desk_fresh() is True
+    assert fusion.latest_zone() == "desk"

@@ -633,6 +633,19 @@ class LivingRoomSnapshotBuilder:
 
         desktop_row = sources.get("desktop") or {}
         desktop_age = desktop_row.get("age_s")
+        desktop_zone = desktop_row.get("zone")
+        if (
+            desktop_row
+            and desktop_zone is None
+            and desktop_row.get("face_present")
+            and desktop_row.get("detection_source") is None
+        ):
+            # Backward compatibility with pre-zone Desktop agents only.
+            desktop_zone = "desk"
+        desktop_present = (
+            bool(desktop_row.get("face_present"))
+            or desktop_zone in {"desk", "bed"}
+        ) if desktop_row else None
         desktop = Evidence(
             source="desktop",
             status=(
@@ -644,9 +657,8 @@ class LivingRoomSnapshotBuilder:
             ),
             observed_at=desktop_row.get("last_at"),
             age_seconds=desktop_age,
-            present=bool(desktop_row.get("face_present"))
-            if desktop_row else None,
-            zone="desk" if desktop_row.get("face_present") else None,
+            present=desktop_present,
+            zone=desktop_zone,
             confidence=desktop_row.get("face_confidence"),
             authoritative=True,
         )

@@ -1192,3 +1192,41 @@ async def test_evaluator_failure_is_visible_and_no_actuation() -> None:
     )
     assert gate.health_summary()["status"] == "degraded"
     assert envelope_to_dict(envelope)["decision"]["actuation_attempted"] is False
+
+
+def test_desktop_unlocalized_face_does_not_invent_desk_context() -> None:
+    builder = _builder(presence_sources=lambda: {
+        "desktop": {
+            "last_at": NOW.isoformat(), "age_s": 1.0,
+            "face_present": True, "face_confidence": 0.1,
+            "detection_source": "face", "zone": None,
+        }
+    })
+    snapshot = builder()
+    assert snapshot.desktop_physical_presence.present is True
+    assert snapshot.desktop_physical_presence.zone is None
+
+
+def test_legacy_desktop_face_keeps_desk_context_fallback() -> None:
+    builder = _builder(presence_sources=lambda: {
+        "desktop": {
+            "last_at": NOW.isoformat(), "age_s": 1.0,
+            "face_present": True, "face_confidence": 0.7,
+            "detection_source": None, "zone": None,
+        }
+    })
+    snapshot = builder()
+    assert snapshot.desktop_physical_presence.present is True
+    assert snapshot.desktop_physical_presence.zone == "desk"
+
+
+def test_desktop_bed_pose_is_present_in_context() -> None:
+    builder = _builder(presence_sources=lambda: {
+        "desktop": {
+            "last_at": NOW.isoformat(), "age_s": 1.0,
+            "face_present": False, "face_confidence": 0.0, "zone": "bed",
+        }
+    })
+    snapshot = builder()
+    assert snapshot.desktop_physical_presence.present is True
+    assert snapshot.desktop_physical_presence.zone == "bed"

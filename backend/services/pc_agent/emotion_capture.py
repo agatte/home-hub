@@ -133,6 +133,16 @@ HEAD_ABOVE_SHOULDER_THRESHOLD_CENTER = 0.40  # for confidence calc
 DESKTOP_BED_MAX_SHOULDER_SPAN = 0.18
 DESKTOP_BED_MAX_CENTER_X = 0.30
 DESKTOP_BED_MIN_VISIBLE_LANDMARKS = 10
+# Preserved labelled Desk captures produce normalized face-mesh widths
+# 0.202-0.275. A smaller accepted face is not close enough to qualify as
+# Desk; Bed/unknown localization remains pose-owned.
+DESKTOP_DESK_MIN_FACE_WIDTH = 0.18
+# 2026-09-07 preserved-frame replay: lowering the PoseLandmarker detection
+# and presence floors from 0.5 to 0.4 strengthened the labelled Bed frame
+# from 15 to 23 visible landmarks, while labelled Desk remained non-Bed and
+# the Kitchen negative remained NO_POSE. Tracking stays at the default 0.5.
+DESKTOP_POSE_DETECTION_CONFIDENCE = 0.40
+DESKTOP_POSE_PRESENCE_CONFIDENCE = 0.40
 DESKTOP_ZONE_HYSTERESIS_FRAMES = 3
 
 HTTP_TIMEOUT_S = 5.0
@@ -181,12 +191,29 @@ def _pose_visible_landmark_count(
     )
 
 
+def _face_mesh_width(face_landmarks: Any) -> Optional[float]:
+    """Return normalized face-mesh width, or ``None`` when unavailable."""
+    if not face_landmarks:
+        return None
+    xs = [float(getattr(landmark, "x", 0.0)) for landmark in face_landmarks]
+    if not xs:
+        return None
+    width = max(xs) - min(xs)
+    return width if width > 0.0 else None
+
+
 def _classify_desktop_zone(
     face_present: bool,
     pose_landmarks: Any,
+    *,
+    face_width: Optional[float] = None,
 ) -> Optional[str]:
     """Return ``desk`` / ``bed`` only when bedroom geometry is trustworthy."""
-    if face_present:
+    if (
+        face_present
+        and face_width is not None
+        and face_width >= DESKTOP_DESK_MIN_FACE_WIDTH
+    ):
         return "desk"
     if not pose_landmarks:
         return None
@@ -495,8 +522,8 @@ def _init_pose_landmarker() -> Optional[Any]:
         options = PoseLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(model_path)),
             num_poses=1,
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5,
+            min_pose_detection_confidence=DESKTOP_POSE_DETECTION_CONFIDENCE,
+            min_pose_presence_confidence=DESKTOP_POSE_PRESENCE_CONFIDENCE,
             min_tracking_confidence=0.5,
         )
         landmarker = PoseLandmarker.create_from_options(options)
@@ -880,11 +907,14 @@ class EmotionCapture:
                 return
 
             face_blendshapes = getattr(result, "face_blendshapes", None) or []
+            face_sets = getattr(result, "face_landmarks", None) or []
+            face_landmarks = face_sets[0] if face_sets else None
+            face_width = _face_mesh_width(face_landmarks)
 
-            # Derive face_present + face_confidence even when no blendshapes
-            # were returned. FaceLandmarker has no top-level detector
-            # score; the max non-neutral blendshape activation is the
-            # established proxy. Empty list → confidence 0 → not present.
+            # Face mesh supplies normalized scale for Desk-vs-background
+            # localization. Keep the existing accepted-face contract below:
+            # the strongest non-neutral blendshape remains the confidence proxy.
+            # Empty list -> confidence 0 -> not present.
             if face_blendshapes:
                 shapes = face_blendshapes[0]
                 blendshape_dict = {
@@ -932,9 +962,13 @@ class EmotionCapture:
             if self.is_presence_enabled():
                 pose_landmarks = self._detect_pose_landmarks(mp_image)
                 pose_visible_landmarks = _pose_visible_landmark_count(pose_landmarks)
-                candidate = _classify_desktop_zone(face_present, pose_landmarks)
+                candidate = _classify_desktop_zone(
+                    face_present,
+                    pose_landmarks,
+                    face_width=face_width,
+                )
                 zone = self._update_zone_candidate(
-                    candidate, immediate=face_present and candidate == "desk",
+                    candidate, immediate=candidate == "desk",
                 )
                 if face_present and pose_landmarks is not None:
                     posture, posture_confidence = self._classify_pose_landmarks(
@@ -942,10 +976,12 @@ class EmotionCapture:
                     )
                 else:
                     self._update_posture_candidate(None, None)
-                if face_present and zone == "desk":
-                    detection_source = "face"
-                elif zone == "bed":
+                if zone == "bed":
                     detection_source = "pose"
+                elif face_present:
+                    # A detected face is real person evidence even when its
+                    # scale is too small to localize as Desk.
+                    detection_source = "face"
 
                 self._post_observation(
                     face_present=face_present,

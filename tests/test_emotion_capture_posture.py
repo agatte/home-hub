@@ -22,6 +22,7 @@ import pytest
 from backend.services.pc_agent.emotion_capture import (
     HEAD_ABOVE_SHOULDER_SLOUCHED_MAX,
     HEAD_ABOVE_SHOULDER_UPRIGHT_MIN,
+    DESKTOP_DESK_MIN_FACE_WIDTH,
     POSE_LEFT_HIP,
     POSE_LEFT_SHOULDER,
     POSE_NOSE,
@@ -31,6 +32,7 @@ from backend.services.pc_agent.emotion_capture import (
     POSTURE_SLOUCHED,
     POSTURE_UPRIGHT,
     _classify_desktop_zone,
+    _face_mesh_width,
     _classify_posture,
     _classify_posture_from_shoulders,
     _compute_head_above_shoulders_ratio,
@@ -350,7 +352,27 @@ def _make_zone_pose(
 
 
 def test_desktop_zone_close_face_is_desk() -> None:
-    assert _classify_desktop_zone(True, None) == "desk"
+    assert _classify_desktop_zone(
+        True, None, face_width=DESKTOP_DESK_MIN_FACE_WIDTH + 0.02,
+    ) == "desk"
+
+
+def test_desktop_zone_distant_face_does_not_invent_desk() -> None:
+    assert _classify_desktop_zone(True, None, face_width=0.08) is None
+
+
+def test_desktop_zone_distant_face_can_still_use_bed_pose() -> None:
+    pose = _make_zone_pose(left_x=0.098, right_x=0.166)
+    assert _classify_desktop_zone(True, pose, face_width=0.08) == "bed"
+
+
+def test_face_mesh_width_uses_normalized_bounds() -> None:
+    face = [
+        _Landmark(x=0.40, y=0.5),
+        _Landmark(x=0.62, y=0.5),
+        _Landmark(x=0.51, y=0.5),
+    ]
+    assert _face_mesh_width(face) == pytest.approx(0.22)
 
 
 def test_desktop_zone_truth_table_bed_geometry() -> None:

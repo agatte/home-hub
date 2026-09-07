@@ -246,11 +246,11 @@ class PresenceFusion:
         chair from committing ``zone=desk`` without a recent face — so a
         fresh Latitude ``zone=desk`` is itself trustworthy.
 
-        Desktop: a fresh ``face_present`` reading implies the user is engaged
-        at the monitor (FaceLandmarker is frontal close-range; profile or
-        no-face frames don't fire). NOT a FoV-bounded claim — the desktop
-        webcam actually has a wide field of view that includes the bed in
-        the background; reliability comes from the model's detection profile.
+        Desktop: current agents emit an explicit source-qualified zone.
+        ``zone='desk'`` is close-face Desk evidence; ``zone='bed'`` is
+        calibrated pose evidence. A detected but unlocalized face remains
+        strong presence without inventing Desk. Legacy pre-zone reports keep
+        their historical face-present fallback only when detection_source is absent.
 
         Cross-source veto: see ``_physical_says_bed`` — when a physical source
         positively localizes the user to Bed, desktop face_present is vetoed.
@@ -297,10 +297,10 @@ class PresenceFusion:
 
         "Strong" excludes the weak-face-only Latitude case (chair-back FPs
         that clear ``MIN_FACE_CONFIDENCE`` but aren't actually Anthony).
-        Desktop face-present already gates client-side on
-        ``FACE_CONFIDENCE_FLOOR=0.30`` - anything that reaches us with
-        ``face_present=True`` is a frontal close-up which is inherently
-        strong. Used by ``transit_lighting`` + ``desk_exit_kitchen`` to
+        Desktop accepted-face evidence remains strong physical presence;
+        explicit zone qualification decides Desk vs Bed vs unknown. An
+        unlocalized accepted face is not Desk authority.
+        Used by ``transit_lighting`` + ``desk_exit_kitchen`` to
         suppress absent-dwell timers when another source confirms someone
         is actually here.
         """
@@ -423,8 +423,12 @@ class PresenceFusion:
                 candidates.append((desktop.captured_at, "bed"))
             elif desktop.zone == "desk" and desktop.face_present:
                 candidates.append((desktop.captured_at, "desk"))
-            elif desktop.zone is None and desktop.face_present:
-                # Backward compatibility with pre-zone desktop agents.
+            elif (
+                desktop.zone is None
+                and desktop.face_present
+                and desktop.detection_source is None
+            ):
+                # Backward compatibility with pre-zone desktop agents only.
                 candidates.append((desktop.captured_at, "desk"))
 
         if candidates:
@@ -527,6 +531,7 @@ class PresenceFusion:
                 "zone": reading.zone,
                 "posture": reading.posture,
                 "posture_confidence": reading.posture_confidence,
+                "pose_visible_landmarks": reading.pose_visible_landmarks,
             }
         return out
 
@@ -588,7 +593,9 @@ class PresenceFusion:
             return False
         if desk.zone == "bed":
             return False
-        return desk.zone == "desk" or bool(desk.face_present)
+        if desk.zone == "desk":
+            return True
+        return desk.detection_source is None and bool(desk.face_present)
 
     @staticmethod
     def _is_at_desk(reading: PresenceReading) -> bool:
@@ -598,7 +605,9 @@ class PresenceFusion:
         if reading.source == "desktop":
             if reading.zone == "bed":
                 return False
-            return reading.zone == "desk" or bool(reading.face_present)
+            if reading.zone == "desk":
+                return True
+            return reading.detection_source is None and bool(reading.face_present)
         # Unknown future source — be conservative; require zone=desk.
         return reading.zone == "desk"
 
