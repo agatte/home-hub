@@ -23,12 +23,15 @@ in-process on the laptop and POSTs to its own localhost endpoint, so it
 goes through the same wire format as the desktop agent. Disabled by default.
 """
 import asyncio
+import base64
 import colorsys
+import json
 import logging
 import os
+from pathlib import Path
 import sys
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -57,6 +60,153 @@ SCREEN_SYNC_LOG_INTERVAL_S = 5.0
 # failures visible without turning a localhost/API outage into a warning every
 # frame.
 LOOPBACK_DELIVERY_LOG_INTERVAL_S = 60.0
+
+PORTAL_HELPER_STATES = {
+    "awaiting_permission",
+    "permission_denied",
+    "portal_unavailable",
+    "helper_failed",
+    "streaming",
+}
+
+
+class PortalCaptureError(RuntimeError):
+    """A bounded, non-content-bearing portal capture failure."""
+
+    def __init__(self, state: str, message: str) -> None:
+        super().__init__(message)
+        self.state = state
+
+
+class _PortalCaptureProcess:
+    """Own the system-Python portal helper and its line-delimited protocol."""
+
+    def __init__(self) -> None:
+        self._process: Optional[asyncio.subprocess.Process] = None
+        self._stderr_task: Optional[asyncio.Task] = None
+        self._stderr_tail = ""
+
+    @staticmethod
+    def _environment() -> dict[str, str]:
+        env = os.environ.copy()
+        uid = os.getuid()
+        runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+        env.setdefault("XDG_RUNTIME_DIR", runtime_dir)
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime_dir}/bus")
+        env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+        env.setdefault("DISPLAY", ":0")
+        return env
+
+    async def start(self) -> None:
+        helper = Path(__file__).with_name("portal_screen_capture_helper.py")
+        try:
+            self._process = await asyncio.create_subprocess_exec(
+                "/usr/bin/python3",
+                "-u",
+                str(helper),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._environment(),
+                start_new_session=True,
+            )
+        except Exception as error:
+            raise PortalCaptureError(
+                "helper_failed", f"portal helper failed to start: {error}",
+            ) from error
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
+
+    async def _drain_stderr(self) -> None:
+        if self._process is None or self._process.stderr is None:
+            return
+        while line := await self._process.stderr.readline():
+            text = line.decode("utf-8", errors="replace").strip()
+            if text:
+                self._stderr_tail = text[-500:]
+
+    async def read_message(self) -> dict[str, object]:
+        if self._process is None or self._process.stdout is None:
+            raise PortalCaptureError("helper_failed", "portal helper is not running")
+        line = await self._process.stdout.readline()
+        if not line:
+            return_code = await self._process.wait()
+            detail = self._stderr_tail or f"exit code {return_code}"
+            raise PortalCaptureError(
+                "helper_failed", f"portal helper exited unexpectedly: {detail}",
+            )
+        return _parse_portal_message(line)
+
+    async def stop(self) -> None:
+        process = self._process
+        if process is not None and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        if self._stderr_task is not None:
+            try:
+                await self._stderr_task
+            except asyncio.CancelledError:
+                pass
+        self._stderr_task = None
+        self._process = None
+
+
+def _parse_portal_message(line: bytes) -> dict[str, object]:
+    """Validate one non-sensitive NDJSON message from the portal helper."""
+    if len(line) > 8192:
+        raise PortalCaptureError("helper_failed", "portal helper message was too large")
+    try:
+        message = json.loads(line)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PortalCaptureError(
+            "helper_failed", "portal helper emitted invalid JSON",
+        ) from error
+    if not isinstance(message, dict):
+        raise PortalCaptureError("helper_failed", "portal helper message was not an object")
+    kind = message.get("type")
+    if kind == "state":
+        state = message.get("state")
+        if state not in PORTAL_HELPER_STATES:
+            raise PortalCaptureError("helper_failed", "portal helper emitted invalid state")
+        error = message.get("error")
+        if error is not None and not isinstance(error, str):
+            raise PortalCaptureError("helper_failed", "portal helper emitted invalid error")
+        return {"type": "state", "state": state, "error": error}
+    if kind == "frame":
+        width = message.get("width")
+        height = message.get("height")
+        stride = message.get("stride")
+        data = message.get("data")
+        if (
+            type(width) is not int
+            or type(height) is not int
+            or type(stride) is not int
+            or not 1 <= width <= 64
+            or not 1 <= height <= 64
+            or not width * 3 <= stride <= width * 3 + 16
+            or not isinstance(data, str)
+        ):
+            raise PortalCaptureError("helper_failed", "portal helper emitted invalid frame")
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise PortalCaptureError(
+                "helper_failed", "portal helper emitted invalid frame data",
+            ) from error
+        if len(raw) != height * stride:
+            raise PortalCaptureError(
+                "helper_failed", "portal helper emitted inconsistent frame data",
+            )
+        pixels = [
+            (raw[offset], raw[offset + 1], raw[offset + 2])
+            for y in range(height)
+            for offset in range(y * stride, y * stride + width * 3, 3)
+        ]
+        return {"type": "frame", "pixels": pixels}
+    raise PortalCaptureError("helper_failed", "portal helper emitted unknown message type")
 
 
 # Per-(mode, light_id) max brightness clamps for the synced lamps.
@@ -1215,7 +1365,11 @@ class LaptopLoopbackCapture:
     `PUT /api/automation/screen-sync/laptop-enabled`.
     """
 
-    def __init__(self, server_port: int = 8000) -> None:
+    def __init__(
+        self,
+        server_port: int = 8000,
+        portal_helper_factory: Optional[Callable[[], _PortalCaptureProcess]] = None,
+    ) -> None:
         self._url = f"http://localhost:{server_port}/api/automation/screen-color"
         self._task: Optional[asyncio.Task] = None
         self._running: bool = False
@@ -1230,10 +1384,19 @@ class LaptopLoopbackCapture:
         self._last_capture_error: Optional[str] = None
         self._consecutive_capture_failures: int = 0
         self._last_capture_error_logged_at: Optional[datetime] = None
+        self._capture_backend = "portal" if sys.platform.startswith("linux") else "mss"
+        self._capture_state = "stopped"
+        self._portal_helper_factory = portal_helper_factory or _PortalCaptureProcess
+        self._portal_helper: Optional[_PortalCaptureProcess] = None
 
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def capture_state(self) -> dict[str, str]:
+        """Non-sensitive capture backend lifecycle state for status surfaces."""
+        return {"backend": self._capture_backend, "state": self._capture_state}
 
     @property
     def delivery_health(self) -> dict[str, object]:
@@ -1255,6 +1418,8 @@ class LaptopLoopbackCapture:
     def capture_health(self) -> dict[str, object]:
         """Bounded screen-capture health, separate from localhost delivery."""
         return {
+            "backend": self._capture_backend,
+            "state": self._capture_state,
             "last_success_at": (
                 self._last_capture_success_at.isoformat()
                 if self._last_capture_success_at else None
@@ -1271,6 +1436,7 @@ class LaptopLoopbackCapture:
         if self._running:
             return
         self._running = True
+        self._capture_state = "starting"
         self._task = asyncio.create_task(self._loop())
         logger.info("Laptop screen sync loopback started")
 
@@ -1285,17 +1451,63 @@ class LaptopLoopbackCapture:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        self._capture_state = "stopped"
         logger.info("Laptop screen sync loopback stopped")
 
     async def _loop(self) -> None:
+        if sys.platform.startswith("linux"):
+            await self._portal_loop()
+            return
         while self._running:
             try:
                 rgb = await self._capture_color()
                 if rgb is not None:
+                    self._capture_state = "streaming"
                     await self._deliver_color(rgb)
             except asyncio.CancelledError:
                 break
             await asyncio.sleep(self._capture_interval)
+
+    async def _portal_loop(self) -> None:
+        helper = self._portal_helper_factory()
+        self._portal_helper = helper
+        try:
+            await helper.start()
+            while self._running:
+                message = await helper.read_message()
+                if message["type"] == "state":
+                    state = str(message["state"])
+                    self._capture_state = state
+                    error = message.get("error")
+                    if state in {
+                        "portal_unavailable", "permission_denied", "helper_failed",
+                    }:
+                        raise PortalCaptureError(
+                            state, str(error or f"portal capture entered {state}"),
+                        )
+                    continue
+                pixels = message["pixels"]
+                if not isinstance(pixels, list):
+                    raise PortalCaptureError("helper_failed", "portal frame was unavailable")
+                rgb = await asyncio.to_thread(_pick_dominant, pixels, _LOOPBACK_PICKER)
+                if rgb is None:
+                    raise PortalCaptureError("helper_failed", "portal frame had no RGB sample")
+                self._capture_state = "streaming"
+                self._record_capture_success()
+                await self._deliver_color(rgb)
+        except asyncio.CancelledError:
+            raise
+        except PortalCaptureError as error:
+            self._capture_state = error.state
+            self._record_capture_failure(error)
+        except Exception as error:
+            self._capture_state = "helper_failed"
+            self._record_capture_failure(
+                PortalCaptureError("helper_failed", f"portal helper failed: {error}"),
+            )
+        finally:
+            await helper.stop()
+            self._portal_helper = None
 
     async def _capture_color(self) -> Optional[tuple[int, int, int]]:
         """Capture one RGB sample while keeping capture health observable."""
