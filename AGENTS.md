@@ -82,6 +82,7 @@ Use the smallest applicable skill:
 - `deploy-home`: publishing/deployment preparation and verified Latitude release.
 - `ui-audit`: rendered dashboard/guest UI verification.
 - `flag-queue`: durable follow-up capture/review when explicitly useful.
+- `homehub-research`: existing-hardware-first future research, experience/design/Game Day discovery, hardware-opportunity scans, and `Future_Development.md` registry refreshes.
 
 Ordinary issue implementation, GitHub CI inspection, and routine code search do
 not need dedicated HomeHub skills.
