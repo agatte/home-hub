@@ -5,6 +5,14 @@ import sys
 from types import SimpleNamespace
 
 
+class _Frame:
+    def __init__(self, mean: float):
+        self._mean = mean
+
+    def mean(self):
+        return self._mean
+
+
 class _Cap:
     def __init__(self, *, reads: list[tuple[bool, object | None]] | None = None):
         self._reads = reads or [(True, object())]
@@ -60,6 +68,7 @@ def _configure_tick_fakes(monkeypatch, agent):
     )
     cv2 = SimpleNamespace(
         COLOR_BGR2RGB=1,
+        COLOR_BGR2GRAY=2,
         cvtColor=lambda frame, _code: frame,
     )
     monkeypatch.setitem(sys.modules, "mediapipe", mp)
@@ -204,5 +213,60 @@ def test_usable_face_resets_semantic_dead_streak(monkeypatch):
             agent.tick()
         assert landmarker.close_calls == 0
         assert agent._face_semantic_dead_streak == 1
+    finally:
+        agent.close()
+
+
+def test_lux_reopen_gate_blocks_dark_actual_frame_then_allows_second_bright(monkeypatch):
+    from backend.services.pc_agent import emotion_capture as ec
+
+    agent = _agent(monkeypatch)
+    agent.set_enabled(presence=True)
+    landmarker = _Landmarker([_empty_result()])
+    monkeypatch.setattr(ec, "_init_face_landmarker", lambda: landmarker)
+    monkeypatch.setattr(agent, "_detect_pose_landmarks", lambda _image: None)
+    posts = []
+    monkeypatch.setattr(agent, "_post_observation", lambda **kwargs: posts.append(kwargs))
+    agent._cap = _Cap(reads=[
+        (True, _Frame(2.0)),
+        (True, _Frame(12.0)),
+        (True, _Frame(13.0)),
+    ])
+    agent._lux_reopen_reference_mean = 24.5
+    try:
+        agent.tick()
+        assert posts == []
+        assert agent._lux_reopen_reference_mean == 24.5
+
+        agent.tick()
+        assert posts == []
+        assert agent._lux_reopen_ready_streak == 1
+
+        agent.tick()
+        assert len(posts) == 1
+        assert posts[0]["face_present"] is False
+        assert posts[0]["zone"] is None
+        assert agent._lux_reopen_reference_mean is None
+    finally:
+        agent.close()
+
+
+def test_capture_inactive_clears_lux_reopen_recovery(monkeypatch):
+    agent = _agent(monkeypatch)
+    agent._cap = _Cap()
+    agent._lux_reopen_reference_mean = 42.0
+    agent._lux_reopen_started_at = 100.0
+    agent._lux_reopen_ready_streak = 1
+    agent._lux_reopen_recycle_count = 1
+    agent._lux_reopen_exhausted = True
+    try:
+        agent.set_enabled(emotion=False, presence=False)
+        agent.tick()
+        assert agent._cap is None
+        assert agent._lux_reopen_reference_mean is None
+        assert agent._lux_reopen_started_at is None
+        assert agent._lux_reopen_ready_streak == 0
+        assert agent._lux_reopen_recycle_count == 0
+        assert agent._lux_reopen_exhausted is False
     finally:
         agent.close()

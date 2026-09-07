@@ -183,3 +183,111 @@ class TestLuxRecoveryDecision:
     def test_very_dark_reference_does_not_churn(self):
         from backend.services.pc_agent.emotion_capture import _lux_auto_recovery_needs_reopen
         assert _lux_auto_recovery_needs_reopen(4.0, 0.2, True) is False
+
+
+class TestPostReopenExposureTrust:
+    class Gray:
+        def __init__(self, value):
+            self.value = value
+
+        def mean(self):
+            return self.value
+
+    class CV2:
+        CAP_PROP_AUTO_EXPOSURE = 1
+        CAP_PROP_EXPOSURE = 2
+        COLOR_BGR2GRAY = 3
+
+        @staticmethod
+        def cvtColor(frame, code):
+            return frame
+
+    class Cap:
+        def __init__(self, means):
+            self.means = list(means)
+            self.released = False
+
+        def isOpened(self):
+            return True
+
+        def read(self):
+            value = self.means.pop(0)
+            return True, TestPostReopenExposureTrust.Gray(value)
+
+        def release(self):
+            self.released = True
+
+    def _agent(self):
+        from backend.services.pc_agent.emotion_capture import EmotionCapture
+        return EmotionCapture("http://test:8000")
+
+    def test_dark_actual_frames_abstain_until_two_bright_frames(self):
+        agent = self._agent()
+        agent._lux_reopen_reference_mean = 24.5
+        try:
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(2.0), 100.0) is False
+            assert agent._lux_reopen_ready_streak == 0
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(12.0), 102.0) is False
+            assert agent._lux_reopen_ready_streak == 1
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(13.0), 104.0) is True
+            assert agent._lux_reopen_reference_mean is None
+            assert agent._lux_reopen_started_at is None
+            assert agent._last_lux_sample_at == 104.0
+        finally:
+            agent.close()
+
+    def test_timeout_recycles_once_then_abstains_on_open_handle(self):
+        agent = self._agent()
+        first = self.Cap([])
+        agent._cap = first
+        agent._lux_reopen_reference_mean = 50.0
+        agent._lux_reopen_started_at = 100.0
+        try:
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(2.0), 106.0) is False
+            assert first.released is True
+            assert agent._cap is None
+            assert agent._lux_reopen_recycle_count == 1
+            assert agent._lux_reopen_reference_mean == 50.0
+
+            second = self.Cap([])
+            agent._cap = second
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(2.0), 107.0) is False
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(2.0), 113.0) is False
+            assert second.released is False
+            assert agent._cap is second
+            assert agent._lux_reopen_exhausted is True
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(2.0), 120.0) is False
+            assert second.released is False
+        finally:
+            agent.close()
+
+    def test_normal_handle_has_no_recovery_gate(self):
+        agent = self._agent()
+        try:
+            assert agent._reopened_frame_ready(self.CV2, self.Gray(0.0), 100.0) is True
+            assert agent._lux_reopen_reference_mean is None
+        finally:
+            agent.close()
+
+    def test_failed_lux_restore_carries_clean_recovery_transaction(self, monkeypatch):
+        from backend.services.pc_agent import emotion_capture as ec
+
+        cap = self.Cap([42.0] * 8)
+        cap.set = lambda prop, value: True
+        monkeypatch.setattr(ec.time, "sleep", lambda _: None)
+        monkeypatch.setattr(ec, "_lux_auto_recovery_needs_reopen", lambda *args: True)
+        agent = self._agent()
+        agent._cap = cap
+        agent._lux_exposure = -6.0
+        monkeypatch.setattr(agent, "_post_lux", lambda value: None)
+        try:
+            agent._sample_lux(self.CV2)
+            assert cap.released is True
+            assert agent._cap is None
+            assert agent._lux_reopen_reference_mean == 42.0
+            assert agent._lux_reopen_started_at is None
+            assert agent._lux_reopen_ready_streak == 0
+            assert agent._lux_reopen_recycle_count == 0
+            assert agent._lux_reopen_exhausted is False
+        finally:
+            agent.close()

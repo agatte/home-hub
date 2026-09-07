@@ -171,6 +171,13 @@ LUX_AUTO_RECOVERY_FRAMES = 3
 LUX_AUTO_RECOVERY_REFERENCE_MIN = 8.0
 LUX_AUTO_RECOVERY_BLACK_FLOOR = 5.0
 LUX_AUTO_RECOVERY_MIN_RATIO = 0.20
+# After a confirmed restore collapse forces a Brio reopen, the new handle
+# must prove auto exposure has recovered before it can publish presence.
+LUX_REOPEN_RECOVERY_READY_FRAMES = 2
+LUX_REOPEN_RECOVERY_MIN_RATIO = 0.40
+LUX_REOPEN_RECOVERY_FLOOR = 8.0
+LUX_REOPEN_RECOVERY_MAX_WAIT_S = 6.0
+LUX_REOPEN_MAX_RECYCLES = 1
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +290,19 @@ def _lux_auto_recovery_needs_reopen(
         after_mean < LUX_AUTO_RECOVERY_BLACK_FLOOR
         and after_mean < before_mean * LUX_AUTO_RECOVERY_MIN_RATIO
     )
+
+
+def _lux_reopen_recovery_ready(
+    reference_mean: float, candidate_mean: Optional[float],
+) -> bool:
+    """Return True once a replacement Brio handle is bright enough to trust."""
+    if candidate_mean is None:
+        return False
+    threshold = max(
+        LUX_REOPEN_RECOVERY_FLOOR,
+        reference_mean * LUX_REOPEN_RECOVERY_MIN_RATIO,
+    )
+    return candidate_mean >= threshold
 
 
 def _compute_head_drop_ratio(
@@ -625,6 +645,14 @@ class EmotionCapture:
         self._lux_exposure: Optional[float] = None
         # Part A: monotonic timestamp of the last lux sample (None = never).
         self._last_lux_sample_at: Optional[float] = None
+        # Set only after a confirmed lux auto-exposure collapse forces a
+        # reopen. While set, replacement frames are dropped until auto
+        # exposure recovers relative to the pre-sample brightness.
+        self._lux_reopen_reference_mean: Optional[float] = None
+        self._lux_reopen_started_at: Optional[float] = None
+        self._lux_reopen_ready_streak: int = 0
+        self._lux_reopen_recycle_count: int = 0
+        self._lux_reopen_exhausted: bool = False
 
         self._client = httpx.Client(timeout=HTTP_TIMEOUT_S)
 
@@ -638,6 +666,7 @@ class EmotionCapture:
             except Exception:
                 pass
             self._cap = None
+        self._clear_lux_reopen_recovery()
         self._dispose_face_landmarker(reason="shutdown")
         if self._pose_landmarker is not None:
             try:
@@ -759,6 +788,59 @@ class EmotionCapture:
                 pass
             self._cap = None
 
+    def _clear_lux_reopen_recovery(self) -> None:
+        self._lux_reopen_reference_mean = None
+        self._lux_reopen_started_at = None
+        self._lux_reopen_ready_streak = 0
+        self._lux_reopen_recycle_count = 0
+        self._lux_reopen_exhausted = False
+
+    def _reopened_frame_ready(
+        self, cv2: Any, frame: Any, now_monotonic: float,
+    ) -> bool:
+        """Trust only an actual inference frame after a lux-triggered reopen."""
+        reference = self._lux_reopen_reference_mean
+        if reference is None:
+            return True
+        if self._lux_reopen_started_at is None:
+            self._lux_reopen_started_at = now_monotonic
+
+        candidate = float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
+        if _lux_reopen_recovery_ready(reference, candidate):
+            self._lux_reopen_ready_streak += 1
+            if self._lux_reopen_ready_streak < LUX_REOPEN_RECOVERY_READY_FRAMES:
+                return False
+            logger.info(
+                "Brio post-reopen auto exposure recovered (reference=%s current=%s)",
+                reference, candidate,
+            )
+            self._last_lux_sample_at = now_monotonic
+            self._clear_lux_reopen_recovery()
+            return True
+
+        self._lux_reopen_ready_streak = 0
+        elapsed = now_monotonic - self._lux_reopen_started_at
+        if elapsed >= LUX_REOPEN_RECOVERY_MAX_WAIT_S:
+            if self._lux_reopen_recycle_count < LUX_REOPEN_MAX_RECYCLES:
+                self._lux_reopen_recycle_count += 1
+                logger.warning(
+                    "Brio post-reopen auto exposure still dark after %.1fs "
+                    "(reference=%s current=%s); recycling handle (%d/%d)",
+                    elapsed, reference, candidate,
+                    self._lux_reopen_recycle_count, LUX_REOPEN_MAX_RECYCLES,
+                )
+                self._release_cap()
+                self._lux_reopen_started_at = None
+                return False
+            if not self._lux_reopen_exhausted:
+                logger.warning(
+                    "Brio post-reopen auto exposure still dark after retry budget; "
+                    "keeping handle open and abstaining (reference=%s current=%s)",
+                    reference, candidate,
+                )
+                self._lux_reopen_exhausted = True
+        return False
+
     def _dispose_face_landmarker(self, *, reason: str) -> bool:
         """Close only FaceLandmarker state so the next active tick recreates it.
 
@@ -837,6 +919,7 @@ class EmotionCapture:
             # a FaceLandmarker that survived a privacy/sleep release must not
             # be reused when capture becomes active again.
             self._dispose_face_landmarker(reason="capture_inactive")
+            self._clear_lux_reopen_recovery()
             self._release_cap()
             return
 
@@ -868,7 +951,7 @@ class EmotionCapture:
         # _cap). A deliberate user-triggered exposure sweep (~15s) — skip the
         # normal presence capture for this tick; _run_lux_calibration always
         # restores auto-exposure so capture resumes next tick.
-        if self._take_calibrate_pending():
+        if self._lux_reopen_reference_mean is None and self._take_calibrate_pending():
             self._run_lux_calibration(cv2)
             return
 
@@ -877,7 +960,10 @@ class EmotionCapture:
         # then restore auto. Skips THIS tick's presence POST so the dark
         # fixed-exposure frames never register as "no face". Gated on a
         # calibrated exposure existing.
-        if self._should_sample_lux(time.monotonic()):
+        if (
+            self._lux_reopen_reference_mean is None
+            and self._should_sample_lux(time.monotonic())
+        ):
             self._sample_lux(cv2)
             return
 
@@ -893,6 +979,12 @@ class EmotionCapture:
                 # a fresh FaceLandmarker rather than retaining stale state.
                 self._dispose_face_landmarker(reason="capture_read_failed")
                 self._release_cap()
+                return
+
+            if (
+                self._lux_reopen_reference_mean is not None
+                and not self._reopened_frame_ready(cv2, frame, time.monotonic())
+            ):
                 return
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -1436,6 +1528,16 @@ class EmotionCapture:
                     "Brio auto-exposure recovery failed (before=%s after=%s); reopening",
                     before_mean, after_mean,
                 )
+                self._lux_reopen_reference_mean = max(
+                    float(before_mean)
+                    if before_mean is not None
+                    else LUX_AUTO_RECOVERY_REFERENCE_MIN,
+                    LUX_AUTO_RECOVERY_REFERENCE_MIN,
+                )
+                self._lux_reopen_started_at = None
+                self._lux_reopen_ready_streak = 0
+                self._lux_reopen_recycle_count = 0
+                self._lux_reopen_exhausted = False
                 self._release_cap()
         if lux is None:
             logger.debug("Lux sample skipped — no frame read")
