@@ -112,8 +112,9 @@ SLEEP_IDLE_THRESHOLD = 900  # 15 minutes
 # Hysteresis — how long a candidate mode must persist before the detector
 # commits to it. Prevents quick alt-tabs (e.g. peeking at Slack mid-video,
 # running a one-line command mid-YouTube) from churning the lights/music.
-DWELL_DEFAULT = 60.0           # All transitions default to 60s of sustained focus
-DWELL_LEAVE_WATCHING_DAY = 10.0    # Returning to work from a video — be responsive
+DWELL_DEFAULT = 60.0           # Ordinary transitions need 60s of sustained evidence
+DWELL_ENTER_WATCHING_PLAYBACK = 10.0  # Strong foreground playback is high-confidence intent
+DWELL_LEAVE_WATCHING_DAY = 90.0   # Loss of playback is weaker evidence; absorb normal pause/tab work
 DWELL_LEAVE_WATCHING_NIGHT = 300.0  # Sticky watching at night (5 min) — no lights flip when running a quick command in bed
 DWELL_LEAVE_WORKING_NIGHT = 300.0   # Symmetric counterpart: once committed working at night, don't flip to watching for 5 min either. Kills the watching↔working alt-tab cycle when Stremio + code are both running.
 # Sticky-watching tolerance — if the candidate was ``watching`` within the
@@ -129,7 +130,7 @@ DWELL_LEAVE_WORKING_NIGHT = 300.0   # Symmetric counterpart: once committed work
 WATCHING_STICKY_SECONDS = 90.0
 # Brief pause/seek during an established browser video session remains intent.
 # A cold Paused session never establishes Watching on its own.
-WATCHING_PAUSE_GRACE_SECONDS = 90.0
+WATCHING_PAUSE_GRACE_SECONDS = 180.0
 NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
 MAX_MATCHED_WORK_PROCESSES = 3
@@ -331,9 +332,11 @@ class ActivityDetector:
         # session (terminal alt-tab) don't reset the dwell timer.
         self._last_watching_candidate_at: Optional[float] = None
         self._media_session_probe = WindowsMediaSessionProbe()
-        # Keep only a process-local fingerprint for pause grace; detector state
-        # never retains the page/media title text or a title history.
-        self._last_browser_playing_fingerprint: Optional[tuple[str, int]] = None
+        # Pause grace is browser-session continuity, not page-title continuity.
+        # Keep only the browser process name + timestamp; never retain page/media
+        # title text or title history. Exact title fingerprints caused ordinary
+        # tab/title changes to destroy an established viewing session.
+        self._last_browser_playing_process: Optional[str] = None
         self._last_browser_playing_at: Optional[float] = None
         # LoL Live Client Data cache — avoids hammering the localhost API
         # every 5s when the champion doesn't change mid-match.
@@ -758,15 +761,15 @@ class ActivityDetector:
         if not browser_title_looks_like_video(fg_proc, fg_title):
             return status
         assert fg_proc is not None
-        fingerprint = (fg_proc.lower(), hash((fg_title or "").lower()))
+        browser_process = fg_proc.lower()
         now = time.monotonic()
         if status == "playing":
-            self._last_browser_playing_fingerprint = fingerprint
+            self._last_browser_playing_process = browser_process
             self._last_browser_playing_at = now
             return status
         if (
             status == "paused"
-            and self._last_browser_playing_fingerprint == fingerprint
+            and self._last_browser_playing_process == browser_process
             and self._last_browser_playing_at is not None
             and now - self._last_browser_playing_at < WATCHING_PAUSE_GRACE_SECONDS
         ):
@@ -818,7 +821,7 @@ class ActivityDetector:
 
         # Explicit foreground intent overrides night stickiness — see docstring.
         if to_mode == "watching" and self._foreground_is_media():
-            return DWELL_DEFAULT
+            return DWELL_ENTER_WATCHING_PLAYBACK
 
         if from_mode == "watching" and to_mode != "watching":
             return DWELL_LEAVE_WATCHING_NIGHT if is_night else DWELL_LEAVE_WATCHING_DAY

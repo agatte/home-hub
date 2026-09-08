@@ -20,10 +20,12 @@ import psutil
 from backend.services.pc_agent.activity_detector import (
     ActivityDetector,
     DWELL_DEFAULT,
+    DWELL_ENTER_WATCHING_PLAYBACK,
     DWELL_LEAVE_WATCHING_DAY,
     DWELL_LEAVE_WATCHING_NIGHT,
     DWELL_LEAVE_WORKING_NIGHT,
     GAMING_IDLE_THRESHOLD,
+    WATCHING_PAUSE_GRACE_SECONDS,
 )
 from backend.services.pc_agent.game_list import (
     GAME_PROCESSES,
@@ -177,30 +179,70 @@ class TestBrowserPlaybackIntent:
                 "A video - YouTube - Mozilla Firefox",
             ) == "pause_grace"
 
-    def test_pause_grace_does_not_transfer_to_a_different_video_title(self):
+    def test_pause_grace_survives_video_title_change_in_same_browser(self):
         d = ActivityDetector()
         status = ["playing"]
         d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
             lambda _proc, _title: status[0]
         )
-
         with patch(
             "backend.services.pc_agent.activity_detector.time.monotonic",
             return_value=100.0,
         ):
             assert d._browser_playback_status(
-                "firefox.exe",
-                "Video A - YouTube - Mozilla Firefox",
+                "firefox.exe", "Video A - YouTube - Mozilla Firefox"
             ) == "playing"
-
         status[0] = "paused"
         with patch(
             "backend.services.pc_agent.activity_detector.time.monotonic",
             return_value=120.0,
         ):
             assert d._browser_playback_status(
-                "firefox.exe",
-                "Video B - YouTube - Mozilla Firefox",
+                "firefox.exe", "Video B - YouTube - Mozilla Firefox"
+            ) == "pause_grace"
+
+    def test_pause_grace_does_not_transfer_between_browsers(self):
+        d = ActivityDetector()
+        status = ["playing"]
+        d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
+            lambda _proc, _title: status[0]
+        )
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=100.0,
+        ):
+            assert d._browser_playback_status(
+                "firefox.exe", "Video A - YouTube - Mozilla Firefox"
+            ) == "playing"
+        status[0] = "paused"
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=120.0,
+        ):
+            assert d._browser_playback_status(
+                "chrome.exe", "Video B - YouTube - Google Chrome"
+            ) == "paused"
+
+    def test_pause_grace_expires_after_bounded_window(self):
+        d = ActivityDetector()
+        status = ["playing"]
+        d._media_session_probe.browser_playback_status = (  # type: ignore[method-assign]
+            lambda _proc, _title: status[0]
+        )
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=100.0,
+        ):
+            d._browser_playback_status(
+                "firefox.exe", "Video - YouTube - Mozilla Firefox"
+            )
+        status[0] = "paused"
+        with patch(
+            "backend.services.pc_agent.activity_detector.time.monotonic",
+            return_value=100.0 + WATCHING_PAUSE_GRACE_SECONDS + 1.0,
+        ):
+            assert d._browser_playback_status(
+                "firefox.exe", "Video - YouTube - Mozilla Firefox"
             ) == "paused"
 
     def test_cold_paused_session_does_not_establish_watching(self):
@@ -667,7 +709,7 @@ class TestDwellThreshold:
             mock_dt.now.return_value = datetime(2026, 4, 26, 15, 0)
             assert detector._dwell_threshold("idle", "working") == DWELL_DEFAULT
 
-    def test_leave_watching_day_responsive(self, detector):
+    def test_leave_watching_day_is_conservative(self, detector):
         with self._at_hour(15) as mock_dt:
             mock_dt.now.return_value = datetime(2026, 4, 26, 15, 0)
             assert (
@@ -716,20 +758,23 @@ class TestDwellThreshold:
         # at YouTube, 50s in a terminal mid-video).
         assert DWELL_DEFAULT == 60.0
 
-    def test_foreground_media_bypasses_night_sticky(self):
-        """An explicit foreground media window (YouTube tab front-most,
-        Stremio focused, …) commits to watching on DWELL_DEFAULT even at
-        night. Background-tab cases still get the 300s gate — see the
-        non-bypass test above that patches _foreground_is_media to False."""
+    def test_foreground_media_uses_fast_verified_playback_entry(self):
+        """Strong foreground playback enters faster than uncertain release."""
         d = ActivityDetector()
         d._foreground_is_media = lambda: True  # type: ignore[method-assign]
         with patch(
             "backend.services.pc_agent.activity_detector.datetime"
         ) as mock_dt:
             mock_dt.now.return_value = datetime(2026, 4, 26, 22, 0)
-            assert d._dwell_threshold("working", "watching") == DWELL_DEFAULT
-            # Idle → watching also fast-paths when media is foregrounded
-            assert d._dwell_threshold("idle", "watching") == DWELL_DEFAULT
+            assert (
+                d._dwell_threshold("working", "watching")
+                == DWELL_ENTER_WATCHING_PLAYBACK
+            )
+            assert (
+                d._dwell_threshold("idle", "watching")
+                == DWELL_ENTER_WATCHING_PLAYBACK
+            )
+            assert DWELL_ENTER_WATCHING_PLAYBACK < DWELL_LEAVE_WATCHING_DAY
 
     def test_foreground_media_does_not_bypass_leaving_watching(self):
         """The bypass only fires for transitions INTO watching. Leaving
@@ -794,6 +839,44 @@ class TestDetectHysteresis:
             f"45s peek should not commit a new mode under 60s default dwell, "
             f"got {committed}"
         )
+
+    def test_daytime_normal_page_interrupt_releases_slowly_and_playback_reacquires_fast(self):
+        d = _make_detector(
+            processes={"firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Video - YouTube - Mozilla Firefox",
+            browser_playback_status="playing",
+        )
+        with patch(
+            "backend.services.pc_agent.activity_detector.datetime"
+        ) as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 8, 15, 0)
+            with self._patch_time(0.0):
+                assert d.detect() == "watching"
+
+            d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+                "firefox.exe", "ChatGPT - Mozilla Firefox",
+            )
+            d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+                "firefox.exe", "ChatGPT - Mozilla Firefox", None,
+            )
+            with self._patch_time(1.0):
+                assert d.detect() == "watching"
+            with self._patch_time(61.0):
+                assert d.detect() == "watching"
+            with self._patch_time(92.0):
+                assert d.detect() == "idle"
+
+            d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+                "firefox.exe", "Video - YouTube - Mozilla Firefox",
+            )
+            d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+                "firefox.exe", "Video - YouTube - Mozilla Firefox", None,
+            )
+            with self._patch_time(93.0):
+                assert d.detect() == "idle"
+            with self._patch_time(104.0):
+                assert d.detect() == "watching"
 
     def test_watching_sticky_hold_stays_intact_for_terminal_alt_tab(self):
         """The existing night watching hold still absorbs a brief terminal peek."""
