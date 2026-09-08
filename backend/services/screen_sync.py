@@ -46,6 +46,7 @@ from backend.services.color_utils import (
 from backend.services.light_state_calculator import (
     get_functional_weather_multiplier,
     lux_to_multiplier,
+    resolve_activity_state,
 )
 
 logger = logging.getLogger("home_hub.screen_sync")
@@ -441,6 +442,10 @@ class ScreenSyncService:
         self._last_sat: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_bri: dict[str, float] = {lid: 0.0 for lid in self._targets}
         self._last_sent_state: dict[str, dict[str, int]] = {}
+        # Daytime desktop Watching is brightness-only: keep a separate CT+bri
+        # deadband so the first evening/night HSB frame is never suppressed by
+        # a stale daytime state.
+        self._last_daylight_state: dict[str, dict[str, int]] = {}
         # AutomationEngine is the sole Gaming composer.  Keep detached target
         # copies so a later screen frame cannot reconstruct an old generic
         # profile after a schedule or game change.
@@ -964,6 +969,83 @@ class ScreenSyncService:
             and abs(sat - previous.get("sat", sat)) < 4
             and abs(bri - previous.get("bri", bri)) < 2
         )
+
+    async def apply_watching_daylight(
+        self,
+        light_id: str,
+        *,
+        source: str = "desktop",
+        zone: Optional[str] = None,
+        posture: Optional[str] = None,
+        lux_multiplier: float = 1.0,
+        weather_condition: Optional[str] = None,
+    ) -> bool:
+        """Apply desktop Watching/day as neutral CT plus room-lux brightness.
+
+        Daytime video should not repaint the desk lamps from screen RGB.  The
+        canonical Watching/day CT remains the visual anchor while bedroom lux
+        and functional weather determine useful brightness.  L2 (fabric shade)
+        may lift in a dim room; L5 (clear housing) may dim in bright daylight
+        but never lifts above its canonical daytime level.
+        """
+        if light_id not in self._targets:
+            return False
+
+        base = resolve_activity_state("watching", "day").get(light_id)
+        if not base or base.get("on") is False:
+            return False
+        ct = int(base.get("ct", 333))
+        base_bri = int(base.get("bri", 70))
+
+        weather_mult = get_functional_weather_multiplier(
+            "watching", "day", weather_condition,
+        )
+        combined = max(0.85, min(
+            self._AMBIENT_LIFT_CEILING,
+            lux_multiplier * weather_mult,
+        ))
+        if light_id in self._AMBIENT_LIFT_EXCLUDE_LIGHTS:
+            combined = min(1.0, combined)
+
+        bri = int(round(base_bri * combined))
+        # Reuse the existing contextual caps/floors as safety bounds, but do
+        # not apply ambient scaling a second time.
+        cap = self.get_cap(
+            "watching", light_id, zone, posture, "day", 1.0, None,
+        )
+        floor = self.get_floor(
+            "watching", light_id, zone=zone, posture=posture, period="day",
+            lux_multiplier=1.0, weather_condition=None,
+        )
+        bri = max(floor, min(cap, bri))
+
+        previous = self._last_daylight_state.get(light_id)
+        if (
+            previous is not None
+            and previous.get("ct") == ct
+            and abs(previous.get("bri", bri) - bri) < 2
+        ):
+            self._record_source_write(source, light_id)
+            return True
+
+        success = await self._set_light_serialized(light_id, {
+            "on": True,
+            "ct": ct,
+            "bri": bri,
+            "transitiontime": self._transitiontime_for("watching", "day"),
+        })
+        if success is not True:
+            return False
+        self._last_daylight_state[light_id] = {"ct": ct, "bri": bri}
+        # The next evening/night HSB frame must make a physical color write.
+        self._last_sent_state.pop(light_id, None)
+        self._last_bri[light_id] = float(bri)
+        self._record_source_write(source, light_id)
+        await self._maybe_log_adjustment(
+            light_id, None, None, bri, "watching",
+            trigger="screen_sync_daylight", ct=ct,
+        )
+        return True
 
     async def apply_color(
         self,

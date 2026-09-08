@@ -200,7 +200,9 @@ async def test_manual_override_on_one_light_skips_only_that_one():
 async def test_desktop_watching_holds_last_media_color_on_non_media_foreground():
     hue = _FakeHue()
     sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
-    req = _make_request(_owned_watching_engine("desktop"), sync)
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "evening"
+    req = _make_request(engine, sync)
 
     applied = await receive_screen_color(
         ScreenColorReport(
@@ -460,6 +462,69 @@ async def test_uncalibrated_bedroom_lux_is_neutral():
     req.app.state.bedroom_lux = LuxChannel("bedroom")  # uncalibrated
     result = await receive_screen_color(ScreenColorReport(r=0, g=0, b=0), req)
     assert result["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_desktop_watching_day_is_neutral_and_ignores_screen_rgb():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "day"
+    req = _make_request(engine, sync)
+    req.app.state.bedroom_lux = _calibrated_bedroom_lux(127.0)
+
+    first = await receive_screen_color(
+        ScreenColorReport(r=0, g=40, b=255, foreground_media=True), req
+    )
+    second = await receive_screen_color(
+        ScreenColorReport(r=255, g=20, b=0, foreground_media=True), req
+    )
+
+    assert first["profile"] == second["profile"] == "daylight_neutral"
+    for light_id in ("2", "5"):
+        state = hue.last_for(light_id)
+        assert state["ct"] == 333
+        assert "hue" not in state and "sat" not in state
+
+
+@pytest.mark.asyncio
+async def test_desktop_watching_day_brightness_tracks_room_lux_not_video():
+    async def run(ema_lux: float):
+        hue = _FakeHue()
+        sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+        engine = _owned_watching_engine("desktop")
+        engine._get_time_period = lambda: "day"
+        req = _make_request(engine, sync)
+        req.app.state.bedroom_lux = _calibrated_bedroom_lux(ema_lux)
+        await receive_screen_color(
+            ScreenColorReport(r=255, g=0, b=255, foreground_media=True), req
+        )
+        return hue.last_for("2")["bri"], hue.last_for("5")["bri"]
+
+    dark_l2, dark_l5 = await run(40.0)
+    bright_l2, bright_l5 = await run(180.0)
+    assert dark_l2 > bright_l2
+    assert dark_l5 >= bright_l5
+    assert dark_l5 <= 70  # clear fixture may dim, never daylight-lift
+
+
+@pytest.mark.asyncio
+async def test_desktop_watching_evening_keeps_dynamic_screen_rgb():
+    hue = _FakeHue()
+    sync = ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+    engine = _owned_watching_engine("desktop")
+    engine._get_time_period = lambda: "evening"
+    req = _make_request(engine, sync)
+
+    result = await receive_screen_color(
+        ScreenColorReport(r=20, g=80, b=240, foreground_media=True), req
+    )
+
+    assert result.get("profile") != "daylight_neutral"
+    for light_id in ("2", "5"):
+        state = hue.last_for(light_id)
+        assert "hue" in state and "sat" in state
+        assert "ct" not in state
 
 
 @pytest.mark.asyncio

@@ -890,19 +890,33 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
             skipped.append(light_id)
             skip_reasons[light_id] = "lol_champion"
             continue
-        accepted = await sync.apply_color(
-            light_id,
-            report.r,
-            report.g,
-            report.b,
-            mode=engine.current_mode,
-            source=report.source,
-            zone=zone,
-            posture=posture,
-            period=period,
-            lux_multiplier=lux_mult,
-            weather_condition=weather_condition,
-        )
+        if (
+            engine.current_mode == "watching"
+            and report.source == "desktop"
+            and period == "day"
+        ):
+            accepted = await sync.apply_watching_daylight(
+                light_id,
+                source=report.source,
+                zone=zone,
+                posture=posture,
+                lux_multiplier=lux_mult,
+                weather_condition=weather_condition,
+            )
+        else:
+            accepted = await sync.apply_color(
+                light_id,
+                report.r,
+                report.g,
+                report.b,
+                mode=engine.current_mode,
+                source=report.source,
+                zone=zone,
+                posture=posture,
+                period=period,
+                lux_multiplier=lux_mult,
+                weather_condition=weather_condition,
+            )
         if accepted is not False:
             applied.append(light_id)
 
@@ -911,6 +925,12 @@ async def receive_screen_color(report: ScreenColorReport, request: Request) -> d
         "applied": bool(applied),
         "lights": applied,
     }
+    if (
+        engine.current_mode == "watching"
+        and report.source == "desktop"
+        and period == "day"
+    ):
+        response["profile"] = "daylight_neutral"
     if source_authority["enforced"]:
         response["authoritative_source"] = authoritative_source
         response["authority_reason"] = source_authority["reason"]

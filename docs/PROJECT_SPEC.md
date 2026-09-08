@@ -77,6 +77,13 @@ and warmth should be driven primarily by time, ambient/viewing conditions, and
 physical desk context, with Activity making only bounded adjustments.
 ScreenSync remains subordinate to these comfort boundaries and should represent
 the perceived screen composition rather than amplify tiny saturated accents.
+Desktop Watching is deliberately brightness-first during `day`: retain the
+canonical neutral Watching/day color temperature and let bedroom ambient
+lux/weather set useful brightness. L2 is the diffuse room-light lever;
+glare-prone L5 may dim in bright daylight but must not lift above its canonical
+daytime level. During `evening`, `night`, and `late_night`, representative
+ScreenSync color may drive L2/L5 because color bias becomes useful once ambient
+daylight is no longer doing the visual work.
 [#244](https://github.com/agatte/home-hub/issues/244) is the acceptance tracker;
 #143, #136, #242, and #243 own the bounded implementation lanes.
 
