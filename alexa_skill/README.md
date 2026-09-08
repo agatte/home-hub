@@ -220,11 +220,17 @@ Impact: when behavioral mining starts pulling from `light_adjustments`, Alexa-in
 
 Not a Phase 3.5 regression — neither pathway has ever logged. Worth a one-line `_log_light_change(trigger="rest")` call in the bulk handler if/when it matters.
 
-### `/health` reports `fauxmo: false`
+### Fauxmo retired after current-state audit (2026-09-08)
 
-The Phase-1/2 voice-control story (CLAUDE.md, `docs/PROJECT_SPEC.md` §"Voice Control") describes Fauxmo + Custom Skill running side by side — 7 virtual WeMos for simple on/off intents plus the skill for everything else. Audit shows Fauxmo isn't running on the Latitude.
+Fauxmo is intentionally retired under GH #53. Production already had
+`FAUXMO_ENABLED=false`, no Fauxmo listeners, and no current voice behavior
+depended on the seven emulated WeMo switches. The authenticated Custom Skill
+above is the current HomeHub Alexa path.
 
-Either Fauxmo was intentionally retired now that the Custom Skill covers all 15 intents, or it's stalled and nobody noticed. Skill alone is sufficient for current voice surface, so this isn't a functional gap. Decision pending: either revive Fauxmo (`FAUXMO_ENABLED=true` + restart) or strike Fauxmo from the spec.
+The old Fauxmo-only `all lights` virtual switch was also dormant because Fauxmo
+was disabled. If that exact HomeHub voice action becomes useful again, add a
+bounded Custom Skill intent rather than restoring unauthenticated LAN WeMo
+emulation.
 
 ### `ml_metrics` still emits retired-lane rows
 

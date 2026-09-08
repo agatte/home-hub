@@ -585,7 +585,7 @@ appropriate—not to maximize automation for its own sake.
 - **Observable trust** — Record source freshness, room authority, reasons,
   feedback, graduation state, and reversals so autonomy can be audited
 - **Bold, living UI** — Animated backgrounds that change with mode and time of day. Not a generic dashboard — a visual experience that reflects what's happening in the apartment
-- **Voice control** — Fauxmo, custom Alexa Skill, and iOS Shortcuts for hands-free mode switching, music control, arrival geofences, and natural-language vibe requests
+- **Voice control** — the authenticated custom Alexa Skill and iOS Shortcuts provide hands-free mode switching, music control, arrival geofences, and natural-language vibe requests
 - **Game day magic** — Colts games become a synchronized experience: lights, sound, TTS celebrations, live scoreboard, pixel art field
 - **Hub for everything** — Widget cards for plant app, future bar app, and other projects. The dashboard is the home screen for your digital life
 - **Personal, not generic** — Every rule, mode, animation, and routine is tuned for one person's actual apartment and habits
@@ -816,7 +816,6 @@ Browser / Phone (PWA)
    │   ├── FeatureBuilder ─────────> temporal + behavioral feature extraction (training + runtime)
    │   └── ModelManager ───────────> model persistence + nightly retraining (4 AM)
    ├── EmotionService ─────────────> MediaPipe FaceLandmarker blendshapes → mood vector (Phase A shadow, opt-in). See docs/PERSONALITY_LAYER.md.
-   ├── FauxmoService ──────────────> Alexa voice control (7 WeMo virtual devices)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
@@ -917,7 +916,6 @@ and `CLAUDE.md` for operational details.
 │  │  ├── MusicMapper (vibe-based, multi-playlist)                 │  │
 │  │  ├── Scheduler (routines)                                     │  │
 │  │  ├── EventLogger → writes all events to DB                    │  │
-│  │  ├── Fauxmo (Alexa virtual devices, UPnP)                    │  │
 │  │  ├── WebSocketManager                                         │  │
 │  │  └── Serves SvelteKit static build                            │  │
 │  └──────────────┬────────────────────────────────────────────────┘  │
@@ -946,7 +944,7 @@ and `CLAUDE.md` for operational details.
           │
    ┌──────▼──────┐         ┌───────────────────┐
    │ Phone (PWA) │         │ Alexa Echo         │
-   │ Mobile view │         │ ← Fauxmo (UPnP)   │
+   │ Mobile view │         │                    │
    └─────────────┘         │ ← Custom Skill     │
                            └───────────────────┘
 
@@ -968,7 +966,7 @@ External APIs (cloud):
 - **Database migration path:** SQLite now → cloud PostgreSQL (Supabase free tier) if event volume ever forces it. **Deprioritized 2026-06-09:** the nightly per-table retention sweep (90-day rolling; `ml_decisions` capped at 21 days, ~1.1–1.2 GB plateau) removed the forcing function — no migration is planned absent a new driver. SQLAlchemy abstraction keeps the switch straightforward if revisited; `models.py` ↔ raw-migration schema drift (GH#29) is the prerequisite either way.
 - **Frontend rewrite (complete):** React 18 → SvelteKit + Threlte (Three.js). Parity-pass rewrite landed in commit `b96d062` as part of Phase 2a; the React tree was deleted after a clean burn-in cycle. Subsequently redesigned as "Living Ink" — generative canvas background, glassmorphic cards, floating nav, Bebas Neue + Source Sans 3 typography. Backend serves the static build via the `FRONTEND_BUILD` env var (default `frontend-svelte/build`).
 - **PC Agent over network:** Gaming PC (WiFi via TP-Link USB adapter since the 2026-06 Google Wifi migration — formerly wired ethernet) POSTs to laptop (WiFi). Same router, same subnet. Static IP or mDNS for discovery. NB: the desktop's MAC (and thus its `192.168.86.30` DHCP reservation) travels with the USB adapter, not the motherboard.
-- **Voice/tunnel control:** Fauxmo (local UPnP, free) for immediate voice control. Custom Alexa Skill + Cloudflare Tunnel are live for structured voice control; the iOS Shortcut `home hub vibe` also uses the tunnel for natural-language vibe requests and staged arrival moods.
+- **Voice/tunnel control:** The authenticated Custom Alexa Skill + Cloudflare Tunnel are live for structured voice control; the iOS Shortcut `home hub vibe` also uses the tunnel for natural-language vibe requests and staged arrival moods. Fauxmo/WeMo emulation was retired on 2026-09-08 after #53 confirmed it was disabled and redundant.
 
 ### Tech Stack
 
@@ -994,7 +992,7 @@ External APIs (cloud):
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Database | PostgreSQL (Supabase) | Deprioritized 2026-06-09 — retention sweep removed the volume driver; see "Database migration path" above |
-| Voice Control | Fauxmo, Custom Alexa Skill + Lambda, iOS Shortcuts | Local UPnP plus tunneled structured commands and Siri text capture |
+| Voice Control | Custom Alexa Skill + Lambda, iOS Shortcuts | Authenticated tunneled structured commands and Siri text capture |
 | Tunnel | Cloudflare Tunnel (free) | For Alexa Skill and authenticated iOS Shortcut webhooks → local API |
 | Learning | Separate Python process, scikit-learn or rule-based | Reads events, writes predictions |
 | External Widgets | HTTP polling or WebSocket to plant app / bar app | Status data for dashboard cards |
@@ -1344,7 +1342,7 @@ All messages are JSON with `type` + `data` fields.
 | Type | Trigger | Data |
 |------|---------|------|
 | ~~`learning_nudge`~~ | Shipped as `mode_suggestion` above | — |
-| `alexa_command` | Voice command received | `{command, source: "fauxmo"\|"skill", result}` |
+| `alexa_command` | Voice command received | `{command, source: "alexa:<intent>", result}` |
 | `game_update` | ESPN poll detects change | `{score_home, score_away, quarter, clock, possession, down, distance}` |
 | `celebration` | Scoring play detected | `{play_type: "touchdown"\|"field_goal"\|"big_play"\|"turnover", description}` |
 | `game_status` | Game state change | `{status: "upcoming"\|"active"\|"halftime"\|"final", opponent, kickoff_time}` |
@@ -1424,7 +1422,7 @@ contributes degradation.
 |--------|------|---------|
 | GET | `/api/sonos/status` | Current playback state |
 | POST | `/api/sonos/play` | Resume playback |
-| POST | `/api/sonos/smart-play` | Resume if track loaded, else play first favorite (used by Fauxmo) |
+| POST | `/api/sonos/smart-play` | Resume if track loaded, else play first favorite (used by Alexa `PlayMusicIntent`) |
 | POST | `/api/sonos/pause` | Pause playback |
 | POST | `/api/sonos/next` | Next track |
 | POST | `/api/sonos/previous` | Previous track |
@@ -1727,17 +1725,8 @@ The table below is the **target separate-process design** — still aspirational
 - `GET /patterns` → detected patterns for dashboard display
 - `GET /status` → engine health, last analysis time, data freshness
 
-#### FauxmoService (live)
-Manages Alexa virtual device registration and command handling. 7 virtual WeMo devices, deterministic port allocation for stable Alexa discovery across restarts. Enabled via `FAUXMO_ENABLED=true` in `.env`.
-
-| Method | Signature | Purpose |
-|--------|-----------|---------|
-| `start` | `() → None` | Register virtual devices, start UPnP listener |
-| `stop` | `() → None` | Deregister devices, stop listener |
-| `register_device` | `(name, on_callback, off_callback) → None` | Add virtual device |
-| `_handle_command` | `(device, state) → None` | Route command to API |
-
-**Virtual devices:** "gaming mode", "relax mode", "cooking mode", "bedtime", "music play", "music pause"
+#### FauxmoService (retired 2026-09-08)
+The local WeMo-emulation voice path was removed under #53 after a current-state audit confirmed production had it disabled, no current voice behavior depended on it, and the authenticated Custom Alexa Skill already covered the active voice surface. Do not restore unauthenticated LAN write emulation merely for lower latency; add bounded intents to the Custom Skill when a missing voice action is actually needed.
 
 #### EmotionService (Phase A live 2026-05-18)
 Subscribes to MediaPipe FaceLandmarker blendshape callbacks from `camera_service` when `emotion_enabled` is true (the FaceLandmarker pass is a parallel conditional detector — does **not** replace the YOLO real-person authority gate). Projects 52 ARKit blendshapes (`mouthSmileLeft/Right`, `browDownLeft/Right`, `cheekSquintLeft/Right`, `eyeBlinkLeft/Right`, `eyeSquintLeft/Right`, `eyeLookInLeft/Right`, `browInnerUp`, `browOuterUpLeft/Right`, `jawOpen`, `mouthPressLeft/Right`, `mouthFrownLeft/Right`, `noseSneerLeft/Right`) to a continuous `(valence, arousal, focus)` triple via the hand-tuned `_BLENDSHAPE_COEFFS` table — interpretable, not a black box. Smooths the result with α=0.3 EMA (matches `LightingPreferenceLearner`). Persists every 10s to `mood_samples`.
@@ -1802,7 +1791,7 @@ Standalone systemd user service on the Latitude (`home-hub-latitude-streaming.se
 
 ### Pattern 1: Adding a Mode-Change Listener
 
-The `AutomationEngine` exposes a callback system for reacting to mode changes. MusicMapper uses this for auto-play. GameDayEngine and FauxmoService will register the same way.
+The `AutomationEngine` exposes a callback system for reacting to mode changes. MusicMapper uses this for auto-play; other lifecycle-aware services register through the same callback pattern.
 
 ```python
 # 1. Define an async callback in your service
@@ -2213,12 +2202,10 @@ The dashboard has been redesigned as a living, data-reactive interface:
 
 ### Voice Control (Alexa)
 
-**Phase 1 — Fauxmo (free, local, immediate):**
-- Python library emulating WeMo devices on LAN
-- Alexa discovers virtual devices: "gaming mode", "relax mode", "cooking mode"
-- Each device calls the corresponding API endpoint (override, play favorite, activate scene)
-- Sub-second latency, $0 cost, runs alongside the server
-- Limitation: simple on/off per device, no parameters
+**Phase 1 — Fauxmo (retired 2026-09-08):**
+- Historical local WeMo emulation for simple Alexa on/off commands.
+- #53 confirmed production already had it disabled with no active listeners or current behavior dependency.
+- Retired rather than revived because the authenticated Custom Skill covers the active voice surface without maintaining a second unauthenticated LAN write path.
 
 **Phase 2 — Custom Alexa Skill + Cloudflare Tunnel (✓ shipped):**
 - Invocation: `home hub` (since 2026-05-16). Originally `command center` from 2026-05-05 launch because `home hub` appeared to collide with Alexa's smart-home category — confirmed 2026-05-16 that this was an Alexa+ side-effect, not the literal phrase. Fallback if voice routing ever regresses: `the home hub` → `home hub apartment` → `command home` → revert to `command center`. See `alexa_skill/README.md` §"Invocation name history"
@@ -2525,7 +2512,7 @@ cleanup landed:
 - ✓ **Nudge Notification System** (Phase 3c) — `mode_suggestion` WebSocket message when idle and a rule matches. `ModeSuggestionToast.svelte` with accept/dismiss buttons.
 - ✓ **Persistent Suggestion Surface + History** (Phase 3c.2, May 2026) — `rule_suggestions` table records every fire (`pending`/`accepted`/`dismissed`/`expired`/`superseded`); `ModeSuggestionCard.svelte` renders an inline banner on the Home dashboard above the widget grid until resolved (toast suppresses on `/` to avoid duplication, stays for cross-page coverage). 60-minute server-side auto-expiry on the 60s automation tick; boot-time `restore_pending_on_boot()` re-broadcasts so deploys don't drop the active card. Settings page surfaces a `RuleSuggestionHistoryCard` showing the last 50 fires with status pills.
 - ✓ **Analytics Dashboard Page** (Phase 3d) — `/analytics` route. Originally mode distribution donut, quick stats, hourly patterns, learned rules, recent activity, top Sonos/scenes. Redesigned April 15 as a live decision pipeline dashboard: SVG confidence ring at top showing fused confidence (0-100%), 5 signal cards (process, camera, audio ML, behavioral predictor, rule engine) with animated confidence bars and agreement indicators, output card showing effective mode + lights, decision history. Historical analytics moved to a collapsible section below.
-- ✓ Fauxmo Alexa integration — 7 virtual WeMo devices (cooking mode, relax mode, arcade mode, party mode, bedtime, music, all lights). Deterministic port allocation for stable Alexa discovery across restarts. Smart-play endpoint (`/api/sonos/smart-play`) for music command: resumes if track loaded, else plays first favorite. Fauxmo status exposed in `/health` endpoint. Enabled via `FAUXMO_ENABLED=true` in `.env`
+- ~~Fauxmo Alexa integration~~ — **Retired 2026-09-08 under #53.** Production already had the feature disabled with no listeners; the authenticated Custom Alexa Skill covers the current voice surface. The old emulated WeMo service, dependency, health/config plumbing, and dormant LAN write path were removed rather than revived.
 - ~~**WiFi Presence Detection**~~ (Phase 3e) — **Retired 2026-04-28** (`b8fdbfe`). iOS Shortcut webhooks flapped despite three rounds of mitigation; ARP probing alone wasn't worth the plumbing. Home/away as a concept is gone — Hue native geofencing handles arrivals/departures outside Home Hub. See git history for the original implementation.
 - Override pattern analysis tracked via `override_rate` in patterns API. v1 was nudge-only; auto-apply shipped April 15 via confidence fusion (Phase 4.5 ML Phase 3)
 
@@ -2574,7 +2561,6 @@ this document.
 - **Hue bridge self-signed SSL** — httpx calls require `verify=False`. Cannot be changed.
 - **Sonos UPnP** — No authentication, but also no encryption. LAN-only by design.
 - **SoCo Apple Music support** — Can play individual tracks and queue cloud favorites via `add_to_queue` (v0.26.0+). Apple Music *shortcut* favorites (artist/station containers) have no static URI and cannot be queued via SoCo — those are flagged in the mode→playlist mapper UI. Cannot browse the Apple Music catalog; that requires the $99/year Apple Music API. Now Playing metadata for plain HTTP streams (iTunes previews, TTS MP3s) is populated via DIDL-Lite envelope (shipped Phase A, 2026-05-12).
-- **Fauxmo device limits** — Each virtual device is simple on/off. Complex commands (set brightness to 50%) require the custom Alexa skill.
 - **SQLite concurrency** — Single-writer. Fine for one user, but event logging at high frequency (every light poll) may need batching or a write queue.
 - **Screen capture for ScreenSync requires `mss` on the Windows desktop agent.** The central backend may remain headless Linux (as it already is); the desktop capture agent posts color/luma to the backend over HTTP. A future central-host move would therefore need endpoint/reconnect compatibility, not Windows screen capture on the new server.
 - **Edge-tts requires internet** — TTS falls back to gTTS (also internet). No offline TTS option currently.
@@ -2589,6 +2575,6 @@ this document.
 - **Not a multi-user platform** — No user accounts or multi-tenant identity model. Write endpoints still use API-key gating with trusted-LAN bypass.
 - **Not a generic smart home hub** — No support for arbitrary device types, protocols, or brands beyond Hue and Sonos
 - **Not a full smart home OS** — Not replacing Home Assistant, HomeKit, or SmartThings. This is a personal dashboard and automation layer.
-- **Not an Alexa replacement** — Alexa handles general voice commands. Home Hub extends it for custom automation via Fauxmo/custom skill.
+- **Not an Alexa replacement** — Alexa handles general voice commands. Home Hub extends it through the authenticated Custom Skill.
 - **Not a sports app** — Game Day is for the Colts experience, not a general sports tracker
 - **Not a music streaming service** — Sonos and Apple Music handle playback. Home Hub orchestrates what plays and when.

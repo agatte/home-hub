@@ -92,9 +92,6 @@ class Settings(BaseSettings):
     PIHOLE_API_URL: Optional[str] = None
     PIHOLE_API_KEY: Optional[str] = None
 
-    # Fauxmo Alexa integration (Phase 3 voice control)
-    FAUXMO_ENABLED: bool = False
-
     # API-key auth on write endpoints. External/non-bypassed callers need a
     # matching X-API-Key; localhost, configured TRUSTED_LAN_IPS, and private
     # addresses use require_api_key()'s ordinary bypass. See backend/api/auth.py.

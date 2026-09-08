@@ -58,8 +58,8 @@ async def sonos_smart_play(request: Request) -> dict:
     """Resume playback, or start a favorite if nothing is queued.
 
     Tries resume first. If Sonos is stopped with no track loaded,
-    plays the first available favorite with a valid URI. Used by
-    Fauxmo so "Alexa, turn on music" always does something.
+    plays the first available favorite with a valid URI. The Alexa
+    Custom Skill uses this path for PlayMusicIntent.
     """
     sonos = request.app.state.sonos
     _check_sonos_available(sonos)

@@ -27,7 +27,6 @@ from backend.config import PROJECT_ROOT, STATIC_DIR, TTS_DIR, settings
 from backend.database import init_db
 from backend.services.automation_engine import AutomationEngine
 from backend.services.event_logger import EventLogger
-from backend.services.fauxmo_service import FauxmoService
 from backend.services.hue_service import HueService
 from backend.services.hue_v2_service import HueV2Service
 from backend.services.library_import_service import LibraryImportService
@@ -620,15 +619,6 @@ async def lifespan(app: FastAPI):
         )
         app.state.pihole_service = pihole_service
         logger.info("Pi-hole service initialized")
-
-    # Fauxmo Alexa integration (Phase 3 voice control)
-    fauxmo = FauxmoService(
-        local_ip=settings.LOCAL_IP,
-        api_port=8000,
-        enabled=settings.FAUXMO_ENABLED,
-    )
-    await fauxmo.start()
-    app.state.fauxmo = fauxmo
 
     # Morning routine — load persisted config from DB, fall back to .env defaults
     from backend.api.routes.routines import load_morning_config
@@ -1406,7 +1396,6 @@ async def lifespan(app: FastAPI):
     # 1. Stop producers that feed the background loops. If any one raises, the
     #    others still run because _safe_shutdown swallows per-step errors.
     await _safe_shutdown("laptop_loopback", laptop_loopback.stop)
-    await _safe_shutdown("fauxmo", fauxmo.stop)
     ambient_sound = getattr(app.state, "ambient_sound", None)
     if ambient_sound is not None:
         await _safe_shutdown("ambient_sound", ambient_sound.stop)

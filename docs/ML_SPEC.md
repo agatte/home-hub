@@ -88,7 +88,7 @@ rare.
 - Gesture control (hand wave, swipe) — deferred until camera basics are validated
 - Cloud ML / external inference APIs — everything stays local
 - Multi-user / collaborative filtering — single-user system by design
-- Real-time voice commands — Alexa/Fauxmo handles voice; ML handles sensing
+- Real-time voice commands — the authenticated Alexa Custom Skill handles voice; ML handles sensing
 
 ---
 
