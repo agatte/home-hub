@@ -33,7 +33,7 @@ on the wall clock without a mode flip, and (b) lux drift.
 CLI:
     --detect        Enumerate monitors and try a brightness round-trip
     --apply N       Force-set brightness to N (smoke test, no backend)
-    --color-temp warm|neutral|cool   Smoke test the color preset path
+    --color-temp warm|neutral|cool   Smoke test the monitor-native color path
     --server URL    Home Hub base URL (default http://192.168.86.210:8000)
 """
 from __future__ import annotations
@@ -42,6 +42,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -116,6 +117,14 @@ LATE_NIGHT_HOUR = 23
 # changes. Skip a write unless the delta exceeds this.
 HYSTERESIS = 4
 
+# HomeHub brightness is normalized 0..100, but some monitors expose a
+# different native VCP luminance range (the Samsung G50F reports 0..50).
+PRIMARY_DISPLAY_INDEX = 0
+BRIGHTNESS_VERIFY_TOLERANCE_PERCENT = 2
+BRIGHTNESS_VERIFY_ATTEMPTS = 3
+BRIGHTNESS_VERIFY_DELAY_S = 0.15
+COLOR_PRESET_MAX_FALLBACK_K = 1000
+
 # Manual-override sentinel — if the user nudges their hardware brightness
 # buttons (or anything else moves the backlight away from what we last set
 # by more than this), back off so we don't fight them.
@@ -128,20 +137,26 @@ MANUAL_OVERRIDE_BACKOFF_S = 30 * 60   # 30 min
 # wasn't around to set it. Resync silently instead of arming the backoff.
 SUSPEND_GAP_THRESHOLD_S = RECONCILE_INTERVAL_S * 2
 
-# Mode × time_period brightness curve. Defaults match the apartment
-# lighting cadence — bright daytime, gentle wind-down at night.
-BASE_BRIGHTNESS: dict[str, dict[str, int]] = {
-    "working":  {"day": 100, "evening": 75, "night": 50, "late_night": 30},
-    "gaming":   {"day":  90, "evening": 70, "night": 50, "late_night": 30},
-    "watching": {"day":  60, "evening": 40, "night": 25, "late_night": 20},
-    "relax":    {"day":  70, "evening": 40, "night": 25, "late_night": 20},
-    "cooking":  {"day": 100, "evening": 80, "night": 60, "late_night": 50},
-    "social":   {"day":  80, "evening": 55, "night": 35, "late_night": 25},
-    "sleeping": {"day":  20, "evening": 15, "night": 10, "late_night":  5},
-    "idle":     {"day":  80, "evening": 55, "night": 35, "late_night": 25},
+# Desk visual-comfort envelope. Time period owns the primary brightness
+# target; Activity may only make a small bounded nudge inside that envelope.
+# This prevents semantic flips from causing large contrast jumps.
+TIME_PERIOD_BRIGHTNESS: dict[str, int] = {
+    "day": 60,
+    "evening": 45,
+    "night": 30,
+    "late_night": 20,
 }
-# Modes not in the table fall back to the working curve.
-DEFAULT_CURVE_MODE = "working"
+ACTIVITY_BRIGHTNESS_NUDGE: dict[str, int] = {
+    "working": 5,
+    "gaming": 5,
+    "watching": -5,
+    "relax": -5,
+    "cooking": 5,
+    "social": 0,
+    "idle": 0,
+    "general": 0,
+}
+SLEEPING_BRIGHTNESS = 5
 
 # Color temperature target per time_period — independent of mode, since
 # blue-light reduction is fundamentally about wall-clock time, not
@@ -154,6 +169,19 @@ COLOR_TEMP_PERIOD_PRESET: dict[str, str] = {
     "night":      "COLOR_TEMP_5000K",   # warm (often the warmest preset available)
     "late_night": "COLOR_TEMP_5000K",   # warm
 }
+
+# Preferred monitor-native warmth path on the Samsung G50F. The monitor
+# advertises and read-backs standard RGB video-gain VCPs 0x16/0x18/0x1A
+# at 50/100 neutral. Keep red fixed and progressively reduce green/blue.
+# Values are normalized percentages of each VCP's advertised maximum.
+RGB_GAIN_VCP_CODES: dict[str, int] = {"red": 0x16, "green": 0x18, "blue": 0x1A}
+RGB_GAIN_PERIOD_PERCENT: dict[str, dict[str, int]] = {
+    "day": {"red": 50, "green": 50, "blue": 50},
+    "evening": {"red": 50, "green": 47, "blue": 43},
+    "night": {"red": 50, "green": 44, "blue": 36},
+    "late_night": {"red": 50, "green": 42, "blue": 32},
+}
+RGB_GAIN_VERIFY_TOLERANCE_PERCENT = 2
 
 # Lux modulation: brighter room → brighter screen, capped ±10%.
 LUX_MOD_FRACTION = 0.10
@@ -184,7 +212,7 @@ if not logger.handlers:
 
 
 # ---------------------------------------------------------------------------
-# DDC/CI + Night Light wrappers
+# DDC/CI display-control wrappers
 # ---------------------------------------------------------------------------
 
 def detect_monitors() -> list[dict[str, Any]]:
@@ -215,35 +243,195 @@ def detect_monitors() -> list[dict[str, Any]]:
     return out
 
 
-def get_current_brightness() -> Optional[int]:
-    """Read brightness from the first display that answers. None if none do."""
+def _raw_to_percent(value: int, maximum: int) -> int:
+    """Normalize a monitor-native luminance value to HomeHub's 0..100 scale."""
+    if maximum <= 0:
+        raise ValueError("luminance maximum must be positive")
+    return max(0, min(100, round(int(value) * 100 / int(maximum))))
+
+
+def _percent_to_raw(percent: int, maximum: int) -> int:
+    """Scale a HomeHub 0..100 target into the monitor's native VCP range."""
+    if maximum <= 0:
+        raise ValueError("luminance maximum must be positive")
+    percent = max(0, min(100, int(percent)))
+    return max(0, min(int(maximum), round(percent * int(maximum) / 100)))
+
+
+_PRIMARY_LUMINANCE_MAX: Optional[int] = None
+
+
+def _primary_luminance_max() -> int:
+    """Return the primary display's VCP 0x10 maximum, falling back to 100."""
+    global _PRIMARY_LUMINANCE_MAX
+    if _PRIMARY_LUMINANCE_MAX is not None:
+        return _PRIMARY_LUMINANCE_MAX
+    maximum = 100
+    if _HAS_MC:
+        try:
+            mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+            if mons:
+                with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+                    _current, raw_max = monitor.vcp.get_vcp_feature(0x10)
+                raw_max = int(raw_max)
+                if raw_max > 0:
+                    maximum = raw_max
+        except Exception as e:
+            logger.debug("luminance max probe failed; assuming 100: %s", e)
+    _PRIMARY_LUMINANCE_MAX = maximum
+    return maximum
+
+
+def _read_primary_brightness_raw() -> Optional[int]:
+    """Read the primary display's raw VCP luminance through SBC."""
     if not _HAS_SBC:
         return None
     try:
-        vals = sbc.get_brightness()  # type: ignore[union-attr]
+        vals = sbc.get_brightness(  # type: ignore[union-attr]
+            display=PRIMARY_DISPLAY_INDEX,
+        )
     except Exception as e:
         logger.debug("get_brightness failed: %s", e)
         return None
     if not vals:
         return None
-    # vals is a list (one entry per display) — return the primary.
     try:
         return int(vals[0])
     except (TypeError, ValueError, IndexError):
         return None
 
 
+def get_current_brightness() -> Optional[int]:
+    """Read primary-display brightness normalized to HomeHub's 0..100 scale."""
+    raw = _read_primary_brightness_raw()
+    if raw is None:
+        return None
+    return _raw_to_percent(raw, _primary_luminance_max())
+
+
 def set_brightness(target: int) -> bool:
-    """Apply ``target`` (0–100) to all DDC/CI-reachable displays. Returns success."""
+    """Apply and verify a normalized 0..100 target on the primary display."""
     if not _HAS_SBC:
-        logger.warning("set_brightness skipped — screen-brightness-control missing")
+        logger.warning("set_brightness skipped - screen-brightness-control missing")
         return False
     target = max(0, min(100, int(target)))
+    maximum = _primary_luminance_max()
+    raw_target = _percent_to_raw(target, maximum)
     try:
-        sbc.set_brightness(target)  # type: ignore[union-attr]
-        return True
+        sbc.set_brightness(  # type: ignore[union-attr]
+            raw_target, display=PRIMARY_DISPLAY_INDEX,
+        )
     except Exception as e:
         logger.warning("set_brightness(%d) failed: %s", target, e)
+        return False
+
+    raw: Optional[int] = None
+    for attempt in range(BRIGHTNESS_VERIFY_ATTEMPTS):
+        raw = _read_primary_brightness_raw()
+        if raw is not None:
+            actual = _raw_to_percent(raw, maximum)
+            if abs(actual - target) <= BRIGHTNESS_VERIFY_TOLERANCE_PERCENT:
+                return True
+        if attempt + 1 < BRIGHTNESS_VERIFY_ATTEMPTS:
+            time.sleep(BRIGHTNESS_VERIFY_DELAY_S)
+
+    actual_text = "unreadable" if raw is None else str(_raw_to_percent(raw, maximum))
+    logger.warning(
+        "Brightness write did not verify (target=%d%% raw_target=%d/%d actual=%s%%)",
+        target, raw_target, maximum, actual_text,
+    )
+    return False
+
+
+def _parse_color_presets_from_raw_capabilities(raw: str) -> list[Any]:
+    """Extract VCP 0x14 ColorPreset values from a raw MCCS capability string.
+
+    Some Samsung capability strings include vendor tokens (for example
+    ``mswhql(1)``) that older ``monitorcontrol`` parsers treat as hex and reject.
+    This parses only the bounded 0x14 value list HomeHub needs.
+    """
+    if not raw or ColorPreset is None:
+        return []
+    match = re.search(r"(?:^|\s)14\(([^)]*)\)", raw)
+    if match is None:
+        return []
+    presets: list[Any] = []
+    for token in match.group(1).split():
+        try:
+            preset = ColorPreset(int(token, 16))
+        except (ValueError, TypeError):
+            continue
+        if preset not in presets:
+            presets.append(preset)
+    return presets
+
+
+def _read_primary_rgb_gains() -> Optional[dict[str, tuple[int, int]]]:
+    """Read current/max standard RGB video gains from the primary display."""
+    if not _HAS_MC:
+        return None
+    try:
+        mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+        if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+            return None
+        values: dict[str, tuple[int, int]] = {}
+        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+            for channel, code in RGB_GAIN_VCP_CODES.items():
+                current, maximum = monitor.vcp.get_vcp_feature(code)
+                current = int(current)
+                maximum = int(maximum)
+                if maximum <= 0:
+                    return None
+                values[channel] = (current, maximum)
+        return values
+    except Exception as e:
+        logger.debug("RGB gain probe failed: %s", e)
+        return None
+
+
+def set_rgb_gain_warmth(period: str) -> bool:
+    """Apply and verify the period's standard RGB-gain warmth target.
+
+    Any partial failure rolls all three channels back to their pre-write values.
+    """
+    target = RGB_GAIN_PERIOD_PERCENT.get(period)
+    if target is None or not _HAS_MC:
+        return False
+    try:
+        mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+        if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+            return False
+        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+            original: dict[str, int] = {}
+            raw_targets: dict[str, int] = {}
+            for channel, code in RGB_GAIN_VCP_CODES.items():
+                current, maximum = monitor.vcp.get_vcp_feature(code)
+                current = int(current)
+                maximum = int(maximum)
+                if maximum <= 0:
+                    return False
+                original[channel] = current
+                raw_targets[channel] = _percent_to_raw(target[channel], maximum)
+            try:
+                for channel, code in RGB_GAIN_VCP_CODES.items():
+                    monitor.vcp.set_vcp_feature(code, raw_targets[channel])
+                for channel, code in RGB_GAIN_VCP_CODES.items():
+                    actual, maximum = monitor.vcp.get_vcp_feature(code)
+                    actual_percent = _raw_to_percent(int(actual), int(maximum))
+                    if abs(actual_percent - target[channel]) > RGB_GAIN_VERIFY_TOLERANCE_PERCENT:
+                        raise RuntimeError(
+                            f"{channel} gain did not verify: target={target[channel]} actual={actual_percent}"
+                        )
+            except Exception:
+                for channel, code in RGB_GAIN_VCP_CODES.items():
+                    try:
+                        monitor.vcp.set_vcp_feature(code, original[channel])
+                    except Exception:
+                        logger.exception("RGB gain rollback failed for %s", channel)
+                raise
+        return True
+    except Exception as e:
+        logger.warning("RGB gain warmth failed for period=%s: %s", period, e)
         return False
 
 
@@ -254,7 +442,11 @@ _SUPPORTED_COLOR_PRESETS: Optional[list[Any]] = None
 
 
 def _supported_color_presets() -> list[Any]:
-    """Return the list of ColorPreset values the primary monitor supports."""
+    """Return ColorPreset values supported by the primary monitor.
+
+    Prefer ``monitorcontrol``'s structured parser, but fall back to the raw
+    capability string when vendor extensions make the generic parser fail.
+    """
     global _SUPPORTED_COLOR_PRESETS
     if _SUPPORTED_COLOR_PRESETS is not None:
         return _SUPPORTED_COLOR_PRESETS
@@ -266,10 +458,16 @@ def _supported_color_presets() -> list[Any]:
         if not mons:
             _SUPPORTED_COLOR_PRESETS = []
             return _SUPPORTED_COLOR_PRESETS
-        with mons[0] as m:
-            caps = m.get_vcp_capabilities()
-        presets = caps.get("color_presets") or []
-        _SUPPORTED_COLOR_PRESETS = [p for p in presets if isinstance(p, ColorPreset)]
+        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+            try:
+                caps = monitor.get_vcp_capabilities()
+                presets = caps.get("color_presets") or []
+                parsed = [p for p in presets if isinstance(p, ColorPreset)]
+            except Exception as e:
+                logger.debug("structured color preset probe failed: %s", e)
+                raw = monitor.vcp.get_vcp_capabilities()
+                parsed = _parse_color_presets_from_raw_capabilities(raw)
+        _SUPPORTED_COLOR_PRESETS = parsed
     except Exception as e:
         logger.debug("color preset probe failed: %s", e)
         _SUPPORTED_COLOR_PRESETS = []
@@ -305,7 +503,12 @@ def _resolve_preset(name: str) -> Optional[Any]:
         (p for p in supported if _kelvin(p) > 0),
         key=lambda p: abs(_kelvin(p) - want_k),
     )
-    return by_distance[0] if by_distance else None
+    if not by_distance:
+        return None
+    closest = by_distance[0]
+    if abs(_kelvin(closest) - want_k) > COLOR_PRESET_MAX_FALLBACK_K:
+        return None
+    return closest
 
 
 def set_color_preset(period: str) -> bool:
@@ -325,17 +528,23 @@ def set_color_preset(period: str) -> bool:
     except Exception as e:
         logger.warning("get_monitors failed: %s", e)
         return False
-    if not mons:
+    if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
         return False
-    ok = False
-    for m in mons:
-        try:
-            with m:
-                m.set_color_preset(target)
-            ok = True
-        except Exception as e:
-            logger.debug("set_color_preset(%s) failed on a monitor: %s", target, e)
-    return ok
+    monitor = mons[PRIMARY_DISPLAY_INDEX]
+    try:
+        with monitor:
+            monitor.set_color_preset(target)
+        return True
+    except Exception as e:
+        logger.debug("set_color_preset(%s) failed on primary monitor: %s", target, e)
+        return False
+
+
+def set_color_temperature(period: str) -> bool:
+    """Apply monitor-native warmth, preferring verified standard RGB gains."""
+    if _read_primary_rgb_gains() is not None:
+        return set_rgb_gain_warmth(period)
+    return set_color_preset(period)
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +558,11 @@ def resolve_target(
     baseline_lux: Optional[float],
 ) -> int:
     """Compute the target brightness (0–100) for the given inputs."""
-    curve = BASE_BRIGHTNESS.get(mode) or BASE_BRIGHTNESS[DEFAULT_CURVE_MODE]
-    base = curve.get(period, curve["day"])
+    if mode == "sleeping":
+        return SLEEPING_BRIGHTNESS
+
+    base = TIME_PERIOD_BRIGHTNESS.get(period, TIME_PERIOD_BRIGHTNESS["day"])
+    base += ACTIVITY_BRIGHTNESS_NUDGE.get(mode, 0)
 
     factor = 0.0
     if ema_lux is not None and baseline_lux:
@@ -366,7 +578,7 @@ def resolve_target(
 # ---------------------------------------------------------------------------
 
 class Reconciler:
-    """Owns the last-applied brightness + Night Light state.
+    """Owns the last-applied brightness + monitor-native warmth state.
 
     Thread-safe: a lock guards each apply() call so the WS listener thread
     and the main reconcile loop can't race on a DDC/CI write.
@@ -376,6 +588,7 @@ class Reconciler:
         self._lock = threading.Lock()
         self._last_applied_brightness: Optional[int] = None
         self._last_applied_period_for_color: Optional[str] = None
+        self._last_attempted_period_for_color: Optional[str] = None
         self._manual_override_until: float = 0.0
         self._last_reconcile_at: float = 0.0
 
@@ -426,7 +639,7 @@ class Reconciler:
             if now < self._manual_override_until:
                 # Still in cooldown — only re-engage the color preset, not
                 # the brightness write.
-                self._maybe_apply_color_preset(period)
+                self._maybe_apply_color_temperature(period)
                 return
 
             target = resolve_target(mode, period, ema_lux, baseline_lux)
@@ -443,24 +656,28 @@ class Reconciler:
                     )
                     self._last_applied_brightness = target
 
-            self._maybe_apply_color_preset(period)
+            self._maybe_apply_color_temperature(period)
 
-    def _maybe_apply_color_preset(self, period: str) -> None:
-        """Apply the period's DDC/CI color preset when the period changes.
+    def _maybe_apply_color_temperature(self, period: str) -> None:
+        """Apply the period's monitor-native color target once per period attempt.
 
-        Only re-attempts on period transitions — DDC writes are slow and
-        most monitors give a visible flicker when the preset switches.
+        Failed/unsupported warmth remains observable and does not masquerade as
+        an applied period. The same process will try again when the period changes.
         """
-        if period == self._last_applied_period_for_color:
+        if period == self._last_attempted_period_for_color:
             return
-        if set_color_preset(period):
+        self._last_attempted_period_for_color = period
+        if set_color_temperature(period):
             logger.info(
-                "Color preset period %s -> %s",
+                "Monitor color period %s -> %s",
                 self._last_applied_period_for_color, period,
             )
-        # Stamp the attempt either way so we don't hammer a monitor that
-        # rejects the VCP write. The next period transition tries again.
-        self._last_applied_period_for_color = period
+            self._last_applied_period_for_color = period
+            return
+        logger.warning(
+            "Monitor warmth unavailable for period=%s target=%s; leaving monitor color unchanged",
+            period, COLOR_TEMP_PERIOD_PRESET.get(period),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -826,8 +1043,8 @@ def run_agent(
     reachable = [m for m in monitors if m.get("supported")]
     if not reachable:
         logger.warning(
-            "No DDC/CI-reachable monitors detected. Brightness writes will "
-            "no-op; Night Light still active. monitors=%s", monitors,
+            "No DDC/CI-reachable monitors detected; display comfort writes "
+            "will no-op. monitors=%s", monitors,
         )
     else:
         logger.info(
@@ -901,8 +1118,8 @@ def _cli() -> int:
     )
     parser.add_argument(
         "--color-temp", choices=("warm", "neutral", "cool"), default=None,
-        help="Apply a color preset (warm=5000K, neutral=6500K, cool=7500K). "
-        "Smoke test the DDC/CI color path.",
+        help="Apply monitor-native color (warm=night target, neutral=day target; "
+        "cool probes the optional 7500K preset fallback).",
     )
     args = parser.parse_args()
 
@@ -910,6 +1127,7 @@ def _cli() -> int:
         monitors = detect_monitors()
         print(json.dumps(monitors, indent=2, default=str))
         if _HAS_MC:
+            print("RGB gains:", _read_primary_rgb_gains())
             presets = _supported_color_presets()
             print("Supported color presets:", [p.name for p in presets])
         return 0
@@ -920,8 +1138,8 @@ def _cli() -> int:
         return 0 if ok else 1
 
     if args.color_temp is not None:
-        # Map CLI shortcuts to the same time_period table for consistency.
-        period = {"warm": "late_night", "neutral": "day", "cool": "day"}[args.color_temp]
+        # Map CLI shortcuts to the same period targets the agent uses.
+        period = {"warm": "night", "neutral": "day", "cool": "day"}[args.color_temp]
         # cool just reuses neutral's preset on this monitor — we don't
         # explicitly run cooler than 6500K via the period table, but the
         # CLI keeps the option for testing cooler presets directly.
@@ -932,16 +1150,18 @@ def _cli() -> int:
                 return 1
             try:
                 mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-                for m in mons:
-                    with m:
-                        m.set_color_preset(target)
+                if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+                    print("primary monitor unavailable")
+                    return 1
+                with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+                    monitor.set_color_preset(target)
                 print(f"set_color_preset({target.name}) -> ok")
                 return 0
             except Exception as e:
                 print(f"set_color_preset(cool) -> failed: {e}")
                 return 1
-        ok = set_color_preset(period)
-        print(f"set_color_preset(period={period}) -> {'ok' if ok else 'failed'}")
+        ok = set_color_temperature(period)
+        print(f"set_color_temperature(period={period}) -> {'ok' if ok else 'failed'}")
         return 0 if ok else 1
 
     run_agent(args.server)
