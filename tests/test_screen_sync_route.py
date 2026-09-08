@@ -566,7 +566,7 @@ class _FakeActivityEngine:
             "current_activity_fresh": True,
         }
 
-    async def report_activity(self, mode: str, source: str, factors=None) -> dict:
+    async def report_activity(self, mode: str, source: str, factors=None, detected_at=None) -> dict:
         self.reports.append((mode, source, factors))
         return self.result
 
@@ -577,7 +577,7 @@ class _FakeActivityEngine:
 class _DispositionActivityEngine:
     current_mode = "working"
 
-    async def report_activity(self, mode: str, source: str, factors=None) -> dict:
+    async def report_activity(self, mode: str, source: str, factors=None, detected_at=None) -> dict:
         return {
             "reported_mode": mode,
             "observed_source": "process:desktop",
