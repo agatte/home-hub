@@ -51,6 +51,20 @@ if [[ -f "$RETURNING_HOME_MARKER" ]]; then
     exit 3
 fi
 
+# Pull before reading deployment state so any updated deploy implementation can
+# take over before installs, rebuilds, or service restarts begin. Comparing the
+# checkout we started from to the post-pull HEAD makes this a one-shot handoff:
+# the re-executed script starts at NEW_HEAD, pulls no further script change, and
+# then proceeds normally from the original .last-deployed-sha baseline.
+START_HEAD=$(git rev-parse HEAD)
+git pull --ff-only
+NEW_HEAD=$(git rev-parse HEAD)
+if [[ "$START_HEAD" != "$NEW_HEAD" ]] \
+        && ! git diff --quiet "$START_HEAD" "$NEW_HEAD" -- scripts/deploy.sh; then
+    echo "deploy.sh changed during pull; re-executing updated script..."
+    exec bash ./scripts/deploy.sh "$@"
+fi
+
 MARKER=".last-deployed-sha"
 
 # Read the last-deployed SHA from the marker file. Empty if missing or
@@ -64,9 +78,6 @@ if [[ -f "$MARKER" ]]; then
         echo "Warning: $MARKER points at $candidate which isn't in git history; treating as full rebuild."
     fi
 fi
-
-git pull --ff-only
-NEW_HEAD=$(git rev-parse HEAD)
 
 if [[ -n "$LAST_DEPLOYED" && "$LAST_DEPLOYED" == "$NEW_HEAD" ]]; then
     echo "Already deployed at ${NEW_HEAD:0:7}. Nothing to do."
