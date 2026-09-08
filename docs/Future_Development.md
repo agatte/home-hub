@@ -70,6 +70,8 @@ Research starts read-only. Separate fact from hypothesis, classify immature idea
 
 A research finding may be retained here without becoming backlog. Do not create a GitHub issue or change `PROJECT_SPEC.md` merely because an idea is interesting; promotion still follows the selection flow above.
 
+AI/LLM/multimodal candidates also use [`AI_SEMANTIC_LAYER.md`](AI_SEMANTIC_LAYER.md) as the non-authoritative architecture brief. Its core boundary is AI as a semantic/analytical layer around deterministic HomeHub authority, not a new whole-home decision owner.
+
 ### Candidate entry shape
 
 When a research run retains or materially refreshes an idea, keep enough structure that a later session can evaluate it without repeating the whole discovery pass:
@@ -89,11 +91,13 @@ Do not force every speculative thought into a full record. Apply this shape to i
 |---|---|---|
 | Portfolio / current sprint | [#142](https://github.com/agatte/home-hub/issues/142), [#239](https://github.com/agatte/home-hub/issues/239) | #142 is the product-roadmap index. #239 coordinates the September stabilization + corrected broad future-research pass. |
 | Replay / forensics | [#240](https://github.com/agatte/home-hub/issues/240) | First selected future-intelligence item: deterministic, non-actuating evidence replay and counterfactual decision comparison. |
+| AI semantic / analysis layer | [#240](https://github.com/agatte/home-hub/issues/240), [#130](https://github.com/agatte/home-hub/issues/130), [#131](https://github.com/agatte/home-hub/issues/131), [#132](https://github.com/agatte/home-hub/issues/132), [#107](https://github.com/agatte/home-hub/issues/107) | `AI_SEMANTIC_LAYER.md` holds the provider-neutral research architecture. AI may explain, interpret, discover, or emit bounded shadow evidence; existing owners retain lifecycle/device authority. |
 | Everyday living room / Scene Curator | [#129](https://github.com/agatte/home-hub/issues/129), [#130](https://github.com/agatte/home-hub/issues/130), [#131](https://github.com/agatte/home-hub/issues/131), [#134](https://github.com/agatte/home-hub/issues/134), [#135](https://github.com/agatte/home-hub/issues/135) | #129 is the lived vertical slice; #130 scene selection/evolution; #131 per-action autonomy; #134 weather support; #135 Music Curator. |
 | Intelligence evidence / diagnostics | [#116](https://github.com/agatte/home-hub/issues/116), [#117](https://github.com/agatte/home-hub/issues/117), [#131](https://github.com/agatte/home-hub/issues/131) | #116/#117 remain focused evidence/measurement work; #131 owns any consequence-specific autonomy. Re-read current issue bodies before using older predictor/camera assumptions. |
 | Music / ambience support | [#39](https://github.com/agatte/home-hub/issues/39), [#40](https://github.com/agatte/home-hub/issues/40), [#79](https://github.com/agatte/home-hub/issues/79), [#135](https://github.com/agatte/home-hub/issues/135) | #39 contextual-bandit diagnosis, #40 dependable long-form ambience research, #79 stream-health recovery, #135 Music Curator. |
 | Mood Context | [#133](https://github.com/agatte/home-hub/issues/133) | Explicit/temporary Mood Context owner; do not revive retired multi-day mood/personality drift under another name. |
 | Winding Down / Morning | [#138](https://github.com/agatte/home-hub/issues/138), [#139](https://github.com/agatte/home-hub/issues/139), [#25](https://github.com/agatte/home-hub/issues/25), [#80](https://github.com/agatte/home-hub/issues/80) | Winding Down, confirmed Morning, lifecycle/session observability, and dormant legacy posture cleanup remain separate. |
+| Sleeping wake authority | [#235](https://github.com/agatte/home-hub/issues/235) | Reopened on fresh September 7 regression evidence. Trusted intentional desk-input qualification is deployed; keep open through one lived overnight acceptance before treating the regression as closed again. |
 | Social / guests / events | [#35](https://github.com/agatte/home-hub/issues/35), [#107](https://github.com/agatte/home-hub/issues/107), [#140](https://github.com/agatte/home-hub/issues/140), [#141](https://github.com/agatte/home-hub/issues/141) | Social/privacy, arrival, event orchestration, and per-event guest experience have distinct owners. |
 | Kitchen / blind-space awareness | [#137](https://github.com/agatte/home-hub/issues/137), [#13](https://github.com/agatte/home-hub/issues/13) | Use bounded inference first; dedicated motion/occupancy hardware is a fallback only after evidence says inference is inadequate. |
 | Watching / nighttime acceptance | [#143](https://github.com/agatte/home-hub/issues/143), [#154](https://github.com/agatte/home-hub/issues/154), [#200](https://github.com/agatte/home-hub/issues/200), [#202](https://github.com/agatte/home-hub/issues/202) | These are current reliability/calibration gates, not a reason to redesign future architecture around Watching. |
@@ -102,9 +106,10 @@ Do not force every speculative thought into a full record. Apply this shape to i
 | Game Day | [#5](https://github.com/agatte/home-hub/issues/5), [#7](https://github.com/agatte/home-hub/issues/7), [#10](https://github.com/agatte/home-hub/issues/10), [#153](https://github.com/agatte/home-hub/issues/153) | Celebration palette, live-game volume/TTS, observation-driven 3D field tuning, and provider health remain separate from new experiential ideas below. |
 | Physical lighting | [#147](https://github.com/agatte/home-hub/issues/147), [#148](https://github.com/agatte/home-hub/issues/148) | L6 / Plant Wash is complete. #148 remains the next audited cabinet-cove hardware addition, not an automatic software priority. |
 
-Completed stabilization items such as #144, #146, #198, #199, #201, #235,
-#237, and #238 should not be reopened as “future work” without fresh regression
+Completed stabilization items such as #144, #146, #198, #199, #201, #237, and #238 should not be reopened as “future work” without fresh regression
 evidence.
+
+#235 is intentionally excluded from that completed list because fresh September 7 regression evidence reopened it for lived overnight acceptance.
 
 # Job 1 — Make HomeHub smarter with what we already own
 
@@ -118,6 +123,21 @@ against the exact same evidence before another physical-room test when possible.
 This also absorbs the older retained idea of a compact presence-conflict diagnostic.
 A separate scene-rehearsal/preview surface may later reuse the harness, but should
 not turn #240 into a whole-home simulator before the first useful replay exists.
+
+## CANDIDATE — HomeHub Analyst / grounded incident explainer
+
+Use generative AI as a read-only explanation layer over bounded HomeHub evidence:
+ordered event history, source freshness, override provenance, ownership/suppression,
+requested light/media actions, and build/config identity. The result should answer
+"why is HomeHub in this state?", "why did this change happen?", and "what conflicted
+during this window?" with explicit evidence references, conflicts, and unknowns.
+
+**Owner if promoted:** #240 owns the deterministic evidence/replay substrate; the
+Analyst consumes that trace rather than replacing it. **Cost class:** zero-purchase
+for the first prototype, with local/cloud model choice benchmarked separately.
+**Smallest gate:** use the September 7 Sleeping-vs-Watching incident as a fixed gold
+fixture and require zero unsupported critical causal claims plus a proven no-write
+path. See `AI_SEMANTIC_LAYER.md`.
 
 ## CANDIDATE — Cross-camera transition/topology learning
 
@@ -171,6 +191,10 @@ Deduplication/ownership:
 - #137 may consume useful kitchen/path corroboration, but audio alone must not
   manufacture physical occupancy.
 
+AI/audio embeddings may help label or cluster these narrow events, but the output is
+shadow evidence, not room truth. Prefer a small confusion matrix over a grand generic
+"understand the apartment" audio model.
+
 ## CANDIDATE — Routine mining, not another generic mode predictor
 
 Mine recurring sequences already present in HomeHub history: arrival → kitchen →
@@ -178,9 +202,12 @@ Relax, playback end → movement → Sleeping, repeated weather/time lighting
 corrections, common music/scene sequences, and other habits we did not explicitly
 program.
 
-Use discovered routines first to explain or suggest, not silently actuate. Any
-autonomy graduates action-by-action through #131; uncertain suggestions use #132.
-This is explicitly different from resurrecting the old collapsed generic predictor.
+Use AI only to label/summarize candidate sequences where that adds semantic value;
+frequency/support still comes from real HomeHub event data. Candidate routines should
+first be tested against #240 replay/counterfactual evidence, then explain or suggest
+rather than silently actuate. Any consequence graduates action-by-action through
+#131; uncertain suggestions use #132. This is explicitly different from resurrecting
+the old collapsed generic predictor.
 
 ## FOLDS INTO #132 — Interruption Budget
 
@@ -192,6 +219,19 @@ urgency.
 Do not create a second notification/suggestion system. #132 owns the interaction;
 [#51](https://github.com/agatte/home-hub/issues/51) remains operational warnings.
 
+## CANDIDATE — Conversational HomeHub concierge
+
+Provide a HomeHub-native natural-language interface for read questions ("why are
+these lights on?", "what happened while I was gone?") and explicit bounded commands
+("make this a little warmer"). Read paths should consume task-specific evidence,
+not expose unrestricted developer SQL/MCP access. Write requests must map to existing
+allowlisted action/mode/scene contracts and pass normal authority/ownership gates.
+
+**Fold where possible:** `VibeRouter` is the shipped bounded-command precedent; #132
+owns uncertain suggestion interaction and #107 owns arrival use cases. A dedicated
+issue is only justified if the broader conversational surface is selected after the
+Analyst proves the shared task runtime useful.
+
 ## CANDIDATE — Media Director / content-phase understanding
 
 Use transient screen/media features already available to HomeHub to understand
@@ -199,6 +239,9 @@ phases rather than only average RGB: fullscreen vs windowed, playing vs paused,
 scene-cut rate, static menu/UI, dark cinematic content, credits/end patterns,
 loading/static screens, and broadcast game/commercial/studio phases.
 
+A multimodal model may emit a deliberately small structured phase such as
+`content`, `pause/menu`, `credits/end`, `commercial`, `studio/halftime`, or `unknown`;
+start shadow-only and benchmark against cheaper deterministic visual/media features.
 Possible consequences include smarter ScreenSync envelopes, gentle pause/credits
 lighting, and the Game Day Broadcast Director below. Do not retain screenshots or
 make content-phase evidence a physical-presence source.
@@ -238,6 +281,18 @@ architectural depth, useful task contribution, and asymmetric response.
 Goal: scene design should reason about how fixtures actually affect the room,
 not assume equal Hue `bri` values produce equal perceived light. Calibration is
 explicit/test-only and must preserve camera privacy expectations.
+
+## FOLDS INTO #130/#131 — AI lighting feedback interpreter / Scene Critic
+
+Translate subjective feedback such as "the kitchen is competing," "L1 feels too
+dim," or "a little moodier, not darker" into a validated preference delta: fixture
+role, relative hierarchy, warmth/saturation direction, contrast, and uncertainty.
+The model does **not** generate/apply arbitrary Hue payloads; #130's Scene Curator
+turns accepted intent into legal targets and existing ownership remains authoritative.
+
+A later explicit calibration session may add a room snapshot plus requested/actual
+light states for multimodal critique. #131 owns any learning/autonomy from repeated
+feedback. The first useful gate is post-#129 daylight acceptance when #130 resumes.
 
 ## CANDIDATE — Unified HomeHub visual language
 
@@ -299,8 +354,10 @@ wellness scores: a storm night, a memorable game, a guest night, or a monthly
 “house signature” showing dominant atmosphere/time/music/weather patterns and a
 generative visual derived from them.
 
-Avoid physiological/psychological claims. This is creative reflection on HomeHub
-state and activity history.
+AI may generate the prose/visual treatment, but factual inputs must remain grounded
+in HomeHub history and the output should distinguish remembered events from creative
+styling. Avoid physiological/psychological claims. This is creative reflection on
+HomeHub state and activity history.
 
 ## CANDIDATE — HomeHub Easter eggs
 

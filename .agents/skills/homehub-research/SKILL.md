@@ -6,6 +6,8 @@ description: Research future HomeHub capabilities, design ideas, Game Day experi
 # HomeHub Research
 
 Use `docs/Future_Development.md` as the durable research brief and idea registry.
+For generative/LLM/multimodal AI research, also read `docs/AI_SEMANTIC_LAYER.md`
+before proposing provider calls, tool access, or automation authority.
 `docs/PROJECT_SPEC.md` remains accepted product truth, and current GitHub issue
 contracts own bounded tracked work. This skill discovers, evaluates, deduplicates,
 and retains possibilities; it does not silently promote them into product direction.

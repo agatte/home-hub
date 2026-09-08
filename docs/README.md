@@ -26,6 +26,9 @@ Use this page as the entry point for repository documentation.
 - [`Future_Development.md`](Future_Development.md) is a concise,
   non-authoritative idea and GitHub-issue index. Its entries and issue labels
   do not set roadmap priority.
+- [`AI_SEMANTIC_LAYER.md`](AI_SEMANTIC_LAYER.md) is the non-authoritative
+  research architecture for future generative/multimodal AI tasks. It does not
+  grant model output lifecycle, room, or device authority.
 - Dated incidents, audits, investigations, and cleanup plans are historical
   evidence. Preserve their original conclusions; add a current-status note or
   canonical cross-reference instead of rewriting history.
@@ -35,6 +38,7 @@ Use this page as the entry point for repository documentation.
 - [`DASHBOARD_REDESIGN_VISION.md`](DASHBOARD_REDESIGN_VISION.md) — active Dashboard redesign vision: living apartment canvas, contextual hierarchy, semantic motion, Analytics/inference-machine language, mobile/desktop composition, and explicit rejected precedents
 - [`GAMING_EXPERIENCE_SPEC.md`](GAMING_EXPERIENCE_SPEC.md) — schedule-aware, game-specific Gaming presentation, fixture roles, bounded telemetry effects, and calibration policy
 - [`CONFIDENCE_FUSION.md`](CONFIDENCE_FUSION.md) — multi-source confidence and activity fusion
+- [`AI_SEMANTIC_LAYER.md`](AI_SEMANTIC_LAYER.md) - provider-neutral research architecture for grounded analysis, structured interpretation, shadow semantic tasks, and bounded natural-language actions
 - [`PRESENCE_LIGHTING_SCENARIOS.md`](PRESENCE_LIGHTING_SCENARIOS.md) —
   historical presence/lighting decisions and subsystem implementation detail
 - [`LIGHTING_EXPANSION.md`](LIGHTING_EXPANSION.md) — current expansion plan and installed L6/Plant Wash record; later hardware remains planned
