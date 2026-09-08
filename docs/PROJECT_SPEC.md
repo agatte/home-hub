@@ -64,6 +64,22 @@ user-facing state is `Home` with `General` activity and a deliberate
 general-home response. Initial, stale, or otherwise untrusted `idle` evidence
 must retain conservative behavior and must not relight the apartment overnight.
 
+**DECIDED TARGET - 2026-09-08 (desk visual comfort).** Visual comfort is a
+cross-Activity product invariant, not a separate semantic mode. While Home and
+awake at the desk, internal detector `idle` still projects to `General` and must
+not select a legacy uniform high-output lighting personality merely because no
+stronger software semantic is recognized. Activity may shape atmosphere, but
+L2/L5 glare balance, monitor/room contrast, and other eye-comfort boundaries
+must remain comfortable across General, Watching, Working, Gaming, and other
+eligible activities. The clear-housing L5 remains fixture-specifically
+subordinate rather than brightness-mirrored to shaded L2. Display brightness
+and warmth should be driven primarily by time, ambient/viewing conditions, and
+physical desk context, with Activity making only bounded adjustments.
+ScreenSync remains subordinate to these comfort boundaries and should represent
+the perceived screen composition rather than amplify tiny saturated accents.
+[#244](https://github.com/agatte/home-hub/issues/244) is the acceptance tracker;
+#143, #136, #242, and #243 own the bounded implementation lanes.
+
 ### Portable host lifecycle
 
 **SHIPPED/CURRENT — hardened 2026-09-02.** Latitude portability is a host
@@ -853,12 +869,14 @@ PC Agent (supervised on the dev machine only, 2026-04-19+)
    ├── screen_sync_agent.py     ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/automation/screen-color
    ├── monitor_brightness.py    ON dev machine (192.168.86.30) ──> WS sub ws://192.168.86.210:8000/ws + GET /api/camera/status
    │                            (Windows-only, 2026-05-28+. Subscribes to `mode_update` for instant reaction, polls
-   │                             lux every 30s. Drops monitor backlight via DDC/CI (screen-brightness-control) and
-   │                             warms color temperature via VCP code 0x14 (monitorcontrol) on a mode×time_period
-   │                             curve, with ±10% lux modulation. Replaces an earlier Windows-Night-Light attempt
-   │                             — the registry-edit path was abandoned because Windows caches Night Light state
-   │                             in-memory and only reloads on session events, so writes never actually flipped
-   │                             the screen. Hardware-level DDC color preset is the working path.)
+   │                             lux every 30s. Drops monitor backlight via DDC/CI (screen-brightness-control) on
+   │                             a mode x time_period curve with +/-10% lux modulation. The former Nixeus also accepted
+   │                             hardware color-temperature presets through VCP 0x14; after the move to a Samsung
+   │                             Odyssey G50F, the current monitor reports no usable `monitorcontrol` color presets,
+   │                             so automatic warmth is presently unavailable rather than silently assumed working.
+   │                             The older Windows-Night-Light registry path remains abandoned because Windows caches
+   │                             that state in-memory. #242 owns current-G50F capability discovery, read-after-write
+   │                             brightness verification, monitor-native warming where supported, and comfort retuning.)
    ├── emotion_capture.py       ON dev machine (192.168.86.30) ──> POST http://192.168.86.210:8000/api/personality/blendshape
    ├── latitude_streaming_detector.py ON Latitude ──> POST http://localhost:8000/api/automation/activity
    │                            (Stremio/media playback-active detector via MPRIS/PipeWire; emits device=latitude; active watching asserts couch presence + starts laptop loopback)
