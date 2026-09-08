@@ -4930,19 +4930,24 @@ class AutomationEngine:
             return
 
         rules = self._build_time_rules(schedule)
+        ramp_end_hour = schedule.ramp_start_hour + max(
+            1, schedule.ramp_duration_minutes // 60
+        )
+        ramp_end = min(ramp_end_hour, schedule.evening_start_hour)
 
-        # Evening → wind-down fade: interpolate over the 30 min before winddown_start_hour
+        # General uses fixture-aware authored states once the morning ramp is
+        # complete. Blend its evening -> night composition across the existing
+        # wind-down ramp instead of fading one uniform legacy state on L1-L5.
         winddown_total_minute = schedule.winddown_start_hour * 60
         current_total_minute = hour * 60 + minute
         minutes_until_winddown = winddown_total_minute - current_total_minute
 
         if 0 < minutes_until_winddown <= WINDDOWN_RAMP_MINUTES:
             progress = (WINDDOWN_RAMP_MINUTES - minutes_until_winddown) / WINDDOWN_RAMP_MINUTES
-            evening_state: dict[str, Any] = {"on": True, "bri": 180, "hue": 8000, "sat": 160}
-            winddown_state: dict[str, Any] = {"on": True, "bri": 60, "hue": 5500, "sat": 220}
-            state = _lerp_light_state(evening_state, winddown_state, progress)
-            state = self._weather_adjust(state)
-            await self._apply_legacy_time_based_state(state)
+            evening_state = _resolve_activity_state("general", "evening")
+            night_state = _resolve_activity_state("general", "night")
+            state = _lerp_light_state(evening_state, night_state, progress)
+            await self._apply_state(state)
             return
 
         for start, end, rule in rules:
@@ -4971,6 +4976,16 @@ class AutomationEngine:
                         minutes_since_start = (hour - ramp_start_hour) * 60 + minute
                         state = _morning_ramp(minutes_since_start, ramp_duration)
                 elif isinstance(rule, dict):
+                    # Keep only the conservative pre-ramp/off rules on the
+                    # legacy uniform path. Once the morning ramp is complete,
+                    # internal idle projects to user-facing General and gets
+                    # fixture-specific targets instead of cloning one state.
+                    if start >= ramp_end:
+                        state = _resolve_activity_state(
+                            "general", self._get_time_period(now),
+                        )
+                        await self._apply_state(state)
+                        return
                     state = rule
                 else:
                     logger.warning("Unknown rule shape in time-based rules: %r", rule)

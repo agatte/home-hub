@@ -314,6 +314,46 @@ ACTIVITY_LIGHT_STATES: dict[str, dict[str, Any]] = {
     # warm-whites more "candle-y." Modes where L5 still mirrors L2 (working,
     # cooking, gameday, social, watching-day) are either curator-approved
     # mirror (matched task pair) or out-of-scope for Phase C.
+    # -- General / internal idle projection -----------------------------
+    # General is the deliberate Home+awake fallback when no stronger semantic
+    # Activity is established. It is not human inactivity. Keep a useful
+    # surround while preserving fixture physics: shaded L2 carries the desk
+    # load; clear-housing L5 stays a subordinate, warmer accent. Values are
+    # conservative #136 calibration candidates and intentionally leave L6 off.
+    "general": {
+        "day": {
+            "1": {"on": True, "bri": 140, "ct": 286},
+            "2": {"on": True, "bri": 190, "ct": 250},
+            "3": {"on": True, "bri": 90,  "ct": 286},
+            "4": {"on": True, "bri": 90,  "ct": 286},
+            "5": {"on": True, "bri": 90,  "ct": 286},
+            "6": _LIGHT_OFF,
+        },
+        "evening": {
+            "1": {"on": True, "bri": 80,  "ct": 400},
+            "2": {"on": True, "bri": 130, "ct": 370},
+            "3": {"on": True, "bri": 45,  "ct": 400},
+            "4": {"on": True, "bri": 45,  "ct": 400},
+            "5": {"on": True, "bri": 55,  "ct": 420},
+            "6": _LIGHT_OFF,
+        },
+        "night": {
+            "1": {"on": True, "bri": 45,  "ct": 454},
+            "2": {"on": True, "bri": 90,  "ct": 400},
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+            "5": {"on": True, "bri": 35,  "ct": 470},
+            "6": _LIGHT_OFF,
+        },
+        "late_night": {
+            "1": {"on": True, "bri": 35,  "ct": 470},
+            "2": {"on": True, "bri": 70,  "ct": 420},
+            "3": _LIGHT_OFF,
+            "4": _LIGHT_OFF,
+            "5": {"on": True, "bri": 25,  "ct": 500},
+            "6": _LIGHT_OFF,
+        },
+    },
     # ── Gaming ────────────────────────────────────────────────────────
     # Retuned 2026-05-05: blue palette (hue 46920–50000) is intentional and
     # maps onto the room's existing teal accents, but saturation 220–240

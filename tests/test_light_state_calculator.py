@@ -57,6 +57,30 @@ def schedule():
     return ScheduleConfig()
 
 
+class TestGeneralVisualComfortState:
+    def test_general_is_fixture_specific_across_all_periods(self):
+        for period in ("day", "evening", "night", "late_night"):
+            state = ACTIVITY_LIGHT_STATES["general"][period]
+            assert state["2"]["bri"] > state["5"]["bri"]
+            assert state["3"] == state["4"]
+            assert state["6"] == {"on": False}
+
+    def test_general_day_removes_legacy_l5_glare_level(self):
+        state = ACTIVITY_LIGHT_STATES["general"]["day"]
+        assert state["5"]["bri"] == 90
+        assert state["5"]["bri"] < 220
+        assert state["2"]["bri"] == 190
+
+    def test_general_after_dark_is_warm_and_steps_l5_down(self):
+        evening = ACTIVITY_LIGHT_STATES["general"]["evening"]
+        night = ACTIVITY_LIGHT_STATES["general"]["night"]
+        late = ACTIVITY_LIGHT_STATES["general"]["late_night"]
+        for state in (evening, night, late):
+            assert state["2"]["ct"] >= 333
+            assert state["5"]["ct"] >= state["2"]["ct"]
+        assert evening["5"]["bri"] > night["5"]["bri"] > late["5"]["bri"]
+
+
 class TestGetTimePeriod:
     """``get_time_period`` honors weekday vs weekend boundaries."""
 

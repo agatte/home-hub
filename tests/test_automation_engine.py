@@ -683,7 +683,7 @@ class TestAutomationEngine:
         assert target["6"] == {"on": False}
 
     @patch("backend.services.automation_engine.datetime")
-    async def test_daytime_idle_preserves_l1_to_l5_ct_target_and_leaves_plant_wash_off(
+    async def test_daytime_idle_renders_fixture_specific_general_composition(
         self, mock_dt, engine,
     ):
         now = datetime(2026, 8, 18, 10, 0, tzinfo=TZ)
@@ -695,11 +695,11 @@ class TestAutomationEngine:
         await engine._apply_time_based()
 
         target = engine._apply_state.await_args.args[0]
-        legacy = {"on": True, "bri": 220, "ct": 250}
-        assert {light_id: target[light_id] for light_id in "12345"} == {
-            light_id: legacy for light_id in "12345"
-        }
+        assert target == ACTIVITY_LIGHT_STATES["general"]["day"]
+        assert target["2"]["bri"] > target["5"]["bri"]
+        assert target["3"] == target["4"]
         assert target["6"] == {"on": False}
+        engine._weather_adjust.assert_not_called()
 
     @patch("backend.services.automation_engine.datetime")
     async def test_explicit_sleeping_auto_overnight_renders_awake_general(
