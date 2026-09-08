@@ -85,16 +85,32 @@ _STICKY_DISTANCE: float = 60.0       # Euclidean RGB distance — centers within
 _STICKY_SCORE_MARGIN: float = 0.08   # new best must beat prior by this delta to switch
 _STICKY_STALENESS_SEC: float = 10.0  # treat as fresh start after this long idle
 
+# Representative-color tuning. Saturation alone must not let a tiny UI accent
+# repaint the room. Chromatic clusters compete against the prevalence of the
+# frame's neutral/dark composition; prevalence leads the chromatic score and a
+# small ownership margin prevents borderline accents from winning on noise.
+_COLOR_SATURATION_GATE: float = 0.15
+_COLOR_VALUE_MIN: float = 0.12
+_MIN_COLOR_CLUSTER_PREVALENCE: float = 0.03
+_COLOR_SUPPORT_DISTANCE: float = 50.0
+_COLOR_PREVALENCE_WEIGHT: float = 0.65
+_COLOR_SATURATION_WEIGHT: float = 0.25
+_COLOR_LUMA_BALANCE_WEIGHT: float = 0.10
+_NEUTRAL_SATURATION_GATE: float = 0.20
+_NEUTRAL_PREVALENCE_WEIGHT: float = 0.55
+_COLOR_OWNERSHIP_MARGIN: float = 0.03
+_COLOR_RELEASE_MARGIN: float = 0.03
+
 
 class StickyClusterPicker:
-    """Sticky-cluster dominant-color picker, vibrancy-biased.
+    """Sticky representative-color picker with prevalence-aware chroma gating.
 
-    K-means clusters the sampled pixels into 8 groups (8 instead of 5 so a
-    small saturated minority — game UI accent, status-bar pip, particle
-    effect — gets its own centroid instead of being absorbed into a gray
-    centroid by the dominant background). The most-saturated cluster that
-    passes the saturation/brightness gate wins, with sticky bias holding
-    the prior winner through near-tied scenes.
+    K-means still uses 8 groups so meaningful scene colors remain separable,
+    but color ownership now depends on how much of the sampled frame actually
+    carries chroma. Tiny saturated UI/video accents cannot beat a predominantly
+    neutral or dark composition merely by being vivid. Once the frame is
+    meaningfully chromatic, cluster prevalence leads the score and sticky bias
+    preserves stability across near-tied frames.
     """
 
     def __init__(self) -> None:
@@ -103,71 +119,120 @@ class StickyClusterPicker:
         self.last_picked_at: float = 0.0
 
     def pick(self, pixels: "np.ndarray") -> tuple[int, int, int]:
-        """Pick the most visually dominant color via K-means with sticky bias.
+        """Pick a representative color via prevalence-aware K-means.
 
-        Scores clusters by saturation (0.7) + luminance balance (0.3). Biases
-        toward the previous frame's winner when a current cluster is close
-        to it; only switches when a new candidate beats the prior by more
-        than ``_STICKY_SCORE_MARGIN``. Dark-scene fallback prefers the cluster
-        nearest the prior pick so a momentary dark frame doesn't snap the
-        lamp to near-black.
+        Chromatic clusters are scored with prevalence as the dominant term,
+        then saturation and luminance balance, and must beat the competing
+        neutral/dark prevalence by a small ownership margin. Sticky bias only
+        operates after chromatic ownership is earned. Otherwise the picker
+        returns a population-weighted neutral center and releases prior vivid
+        color.
         """
         now = time.time()
         prior = self.last_center
         if prior is not None and now - self.last_picked_at > _STICKY_STALENESS_SEC:
             prior = None
 
-        # 8 clusters preserves small saturated regions inside a mostly-gray
-        # frame — at 5 clusters a small accent gets merged into the dominant
-        # gray centroid and the picker has no saturated candidate to score.
-        # Deterministic initialization is part of the stability contract: the same
-        # captured frame must not select a different color merely because k-means
-        # started from different random centroids on the next 2.5s sample.
+        # Keep enough clusters to separate meaningful scene colors, but seed
+        # deterministically so identical frames cannot change merely because
+        # k-means started from different centroids on the next 2.5s sample.
         kmeans = MiniBatchKMeans(
             n_clusters=8, batch_size=100, n_init=1, random_state=0
         )  # type: ignore[arg-type]
         kmeans.fit(pixels)
 
-        scored: list[tuple[float, Any]] = []
-        for center in kmeans.cluster_centers_:
+        centers = kmeans.cluster_centers_
+        counts = np.bincount(kmeans.labels_, minlength=len(centers)).astype(np.float64)
+        total = float(counts.sum())
+        prevalence = counts / total if total else np.zeros(len(centers), dtype=float)
+
+        cluster_rows: list[tuple[Any, float, float, float, bool]] = []
+        neutral: list[tuple[float, Any]] = []
+        neutral_share = 0.0
+        for center, share in zip(centers, prevalence):
             r, g, b = center / 255.0
             _h, s, v = colorsys.rgb_to_hsv(r, g, b)
-            # Permissive gate (0.15 sat, 0.12-0.88 v) lets muted-but-still-
-            # colored clusters into scoring. Pure-gray (s≈0) and black/white
-            # extremes still get filtered out.
-            if s > 0.15 and 0.12 < v < 0.88:
-                score = s * 0.7 + (1.0 - abs(v - 0.5)) * 0.3
-                scored.append((score, center))
+            chromatic = s > _COLOR_SATURATION_GATE and v > _COLOR_VALUE_MIN
+            cluster_rows.append((center, float(share), s, v, chromatic))
+
+            # Black/dark pixels are conservative even when sensor noise gives
+            # them artificial HSV saturation. Low-saturation clusters preserve
+            # genuine white/gray/soft-neutral page composition.
+            if s <= _NEUTRAL_SATURATION_GATE or v <= _COLOR_VALUE_MIN:
+                weight = float(share)
+                neutral.append((weight, center))
+                neutral_share += weight
+
+        # K-means can split one broad scene color into several nearby centroids.
+        # Score each candidate by the combined prevalence of chromatic centers
+        # in its local RGB neighborhood so representative support does not
+        # depend on arbitrary centroid fragmentation.
+        scored: list[tuple[float, Any]] = []
+        for center, _share, s, v, chromatic in cluster_rows:
+            if not chromatic:
+                continue
+            support_share = sum(
+                other_share
+                for other_center, other_share, _os, _ov, other_chromatic in cluster_rows
+                if other_chromatic
+                and float(np.linalg.norm(other_center - center)) <= _COLOR_SUPPORT_DISTANCE
+            )
+            if support_share < _MIN_COLOR_CLUSTER_PREVALENCE:
+                continue
+            score = (
+                support_share * _COLOR_PREVALENCE_WEIGHT
+                + s * _COLOR_SATURATION_WEIGHT
+                + (1.0 - abs(v - 0.5)) * _COLOR_LUMA_BALANCE_WEIGHT
+            )
+            scored.append((score, center))
 
         chosen: Any = None
+        scored.sort(key=lambda t: t[0], reverse=True)
         if scored:
-            scored.sort(key=lambda t: t[0], reverse=True)
             best_score, best_center = scored[0]
-
+            neutral_score = neutral_share * _NEUTRAL_PREVALENCE_WEIGHT
+            prior_score: Optional[float] = None
+            prior_center: Any = None
+            prior_is_supported = False
             if prior is not None:
                 prior_score, prior_center = min(
                     scored, key=lambda t: float(np.linalg.norm(t[1] - prior))
                 )
-                if (
+                prior_is_supported = (
                     float(np.linalg.norm(prior_center - prior)) < _STICKY_DISTANCE
+                )
+
+            dominance = best_score - neutral_score
+            color_owns = (
+                not neutral
+                or dominance > _COLOR_OWNERSHIP_MARGIN
+                or (
+                    prior_is_supported
+                    and dominance > -_COLOR_RELEASE_MARGIN
+                )
+            )
+            if color_owns:
+                if (
+                    prior_is_supported
+                    and prior_score is not None
                     and best_score - prior_score < _STICKY_SCORE_MARGIN
                 ):
                     chosen = prior_center
 
-            if chosen is None:
-                chosen = best_center
+                if chosen is None:
+                    chosen = best_center
 
-        if chosen is None and prior is not None:
-            distances = [float(np.linalg.norm(c - prior)) for c in kmeans.cluster_centers_]
-            nearest_idx = int(np.argmin(distances))
-            # Tightened from `* 2` (120 RGB units) to bare distance (60) — wider
-            # window held stale warm colors when scenes dropped to gray.
-            if distances[nearest_idx] < _STICKY_DISTANCE:
-                chosen = kmeans.cluster_centers_[nearest_idx]
+        if chosen is None and neutral:
+            neutral_weight = sum(weight for weight, _center in neutral)
+            if neutral_weight > 0.0:
+                chosen = sum(
+                    (weight * center for weight, center in neutral),
+                    start=np.zeros(3, dtype=np.float64),
+                ) / neutral_weight
 
         if chosen is None:
-            largest = int(np.argmax(np.bincount(kmeans.labels_)))
-            chosen = kmeans.cluster_centers_[largest]
+            largest = int(np.argmax(counts))
+            chosen = centers[largest]
 
         self.last_center = chosen
         self.last_picked_at = now

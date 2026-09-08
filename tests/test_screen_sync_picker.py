@@ -1,19 +1,9 @@
-"""
-Tests for the sticky-cluster dominant-color picker.
+"""Tests for prevalence-aware sticky ScreenSync color selection.
 
-The k-means picker in ``screen_sync_agent`` used to re-choose the "best"
-cluster each frame from scratch. When two clusters scored near-ties, the
-chosen color cycled on every capture (reported as "L2 cycling through
-colors during League"). These tests verify the sticky behavior that
-replaced it (``StickyClusterPicker`` class) plus the vibrancy bias
-(n_clusters=8, sat gate 0.15) that makes a small saturated minority
-inside a mostly-gray frame win over the gray majority:
-
-  - a stable scene with two near-tied saturated clusters doesn't flip.
-  - a genuine color change still breaks through when the new best beats
-    the prior winner by more than ``_STICKY_SCORE_MARGIN``.
-  - a dark scene holds the prior color instead of snapping to near-black.
-  - a small saturated region wins over a gray majority background.
+The picker must preserve stable representative color for genuinely chromatic
+content without letting tiny saturated UI/video accents repaint the room.
+Neutral/dark compositions deliberately release an old vivid pick, while broad
+colored scenes still produce a corresponding bias color.
 """
 
 import numpy as np
@@ -36,6 +26,20 @@ def _pixels_mixing(rgb_a: tuple[int, int, int], rgb_b: tuple[int, int, int],
     b = np.tile(np.array(rgb_b, dtype=np.float32), (n_each, 1))
     noise = rng.normal(0, 3, size=(n_each * 2, 3)).astype(np.float32)
     return np.clip(np.vstack([a, b]) + noise, 0, 255)
+
+
+def _pixels_regions(
+    regions: list[tuple[tuple[int, int, int], int]], seed: int = 0,
+) -> np.ndarray:
+    """Build a jittered frame from ``(rgb, pixel_count)`` regions."""
+    rng = np.random.default_rng(seed)
+    blocks = [
+        np.tile(np.array(rgb, dtype=np.float32), (count, 1))
+        for rgb, count in regions
+    ]
+    pixels = np.vstack(blocks)
+    noise = rng.normal(0, 2.5, size=pixels.shape).astype(np.float32)
+    return np.clip(pixels + noise, 0, 255)
 
 
 class TestStickyClusterPicker:
@@ -73,29 +77,17 @@ class TestStickyClusterPicker:
         dist_to_red = np.linalg.norm(np.array(pick) - np.array(red))
         assert dist_to_blue < dist_to_red, f"stuck on prior: pick={pick}"
 
-    def test_dark_scene_holds_prior_instead_of_black(self) -> None:
-        """When no saturated cluster exists, prefer prior over the darkest cluster."""
+    def test_dark_scene_releases_prior_vivid_color(self) -> None:
+        """A neutral/dark composition must not inherit the last vivid scene."""
         orange = (230, 120, 40)
         picker = agent.StickyClusterPicker()
-        prior_pick = picker.pick(_pixels_mixing(orange, orange, n_each=200))
+        picker.pick(_pixels_mixing(orange, orange, n_each=200))
 
-        # Dark scene: all near-black, no cluster passes saturation gate.
-        rng = np.random.default_rng(1)
-        dark = rng.integers(0, 25, size=(400, 3)).astype(np.float32)
+        dark = _pixels_regions([((10, 10, 10), 850), ((30, 30, 30), 150)], seed=1)
         pick = picker.pick(dark)
 
-        # Pick should stay near the prior orange, not collapse to near-black.
-        # (Dark fallback only applies when no saturated candidate exists AND
-        # the prior-nearest cluster is within ``_STICKY_DISTANCE * 2``. A pure
-        # near-black scene will exceed that and fall through to "largest" —
-        # the test documents *that* behavior too.)
-        nearest_to_prior = np.linalg.norm(np.array(pick) - np.array(prior_pick))
-        if nearest_to_prior >= agent._STICKY_DISTANCE * 2:
-            # Genuine scene change far from prior — expect near-black fallback.
-            assert sum(pick) < 90
-        else:
-            # Held prior — should still be orange-ish.
-            assert pick[0] > pick[2]
+        assert max(pick) < 40
+        assert max(pick) - min(pick) < 8
 
     def test_staleness_resets_prior(self) -> None:
         """After the staleness window, the picker should treat state as fresh."""
@@ -113,28 +105,119 @@ class TestStickyClusterPicker:
         # With staleness triggered, should pick blue freely (no prior bias).
         assert pick[2] > pick[0], f"stuck on stale prior: pick={pick}"
 
-    def test_small_saturated_region_wins_over_gray_majority(self) -> None:
-        """A small saturated minority (~20% of pixels) should win over a
-        large gray majority. Verifies n_clusters=8 + sat gate 0.15 lets the
-        small cluster get its own centroid instead of being absorbed into
-        the dominant gray centroid by k-means."""
-        rng = np.random.default_rng(7)
+    def test_twenty_percent_saturated_accent_does_not_beat_gray_page(self) -> None:
         gray = (80, 80, 80)
         red = (220, 40, 40)
+        pixels = _pixels_regions([(gray, 800), (red, 200)], seed=7)
 
-        # 800 gray pixels, 200 red pixels — gray is 4× the size.
-        gray_pixels = np.tile(np.array(gray, dtype=np.float32), (800, 1))
-        red_pixels = np.tile(np.array(red, dtype=np.float32), (200, 1))
-        noise = rng.normal(0, 3, size=(1000, 3)).astype(np.float32)
-        pixels = np.clip(np.vstack([gray_pixels, red_pixels]) + noise, 0, 255)
+        pick = agent.StickyClusterPicker().pick(pixels)
 
-        picker = agent.StickyClusterPicker()
-        pick = picker.pick(pixels)
-
-        # Pick must be the saturated red, not the gray majority.
         dist_to_red = np.linalg.norm(np.array(pick) - np.array(red))
         dist_to_gray = np.linalg.norm(np.array(pick) - np.array(gray))
-        assert dist_to_red < dist_to_gray, (
-            f"vibrancy bias failed: pick={pick} closer to gray ({dist_to_gray:.0f}) "
-            f"than to red ({dist_to_red:.0f})"
+        assert dist_to_gray < dist_to_red, f"minority accent dominated: pick={pick}"
+
+    def test_known_dark_frame_tiny_blue_failure_stays_neutral(self) -> None:
+        """~91% black + ~1.8% blue releases even a prior blue scene."""
+        picker = agent.StickyClusterPicker()
+        picker.pick(_pixels_mixing((25, 80, 220), (25, 80, 220), n_each=200))
+        pixels = _pixels_regions([
+            ((5, 5, 5), 910),
+            ((35, 35, 35), 72),
+            ((25, 80, 220), 18),
+        ], seed=11)
+
+        pick = picker.pick(pixels)
+
+        assert max(pick) < 45
+        assert max(pick) - min(pick) < 10
+
+    def test_white_page_with_small_red_icon_stays_neutral(self) -> None:
+        pixels = _pixels_regions([
+            ((235, 235, 235), 900),
+            ((190, 190, 190), 70),
+            ((220, 35, 35), 30),
+        ], seed=13)
+
+        pick = agent.StickyClusterPicker().pick(pixels)
+
+        assert min(pick) > 175
+        assert max(pick) - min(pick) < 12
+
+    @pytest.mark.parametrize(
+        ("scene_color", "assert_channel"),
+        [
+            ((205, 110, 45), 0),
+            ((45, 180, 75), 1),
+        ],
+    )
+    def test_dominant_colored_scene_keeps_corresponding_bias(
+        self, scene_color: tuple[int, int, int], assert_channel: int,
+    ) -> None:
+        pixels = _pixels_regions([
+            (scene_color, 700),
+            ((35, 35, 35), 300),
+        ], seed=17 + assert_channel)
+
+        pick = agent.StickyClusterPicker().pick(pixels)
+
+        assert pick[assert_channel] == max(pick)
+        assert max(pick) - min(pick) > 60
+
+    def test_mixed_cinematic_frame_prefers_broad_scene_color(self) -> None:
+        teal = (35, 125, 175)
+        orange = (185, 95, 45)
+        pixels = _pixels_regions([
+            (teal, 520),
+            ((55, 55, 55), 280),
+            (orange, 200),
+        ], seed=23)
+
+        pick = agent.StickyClusterPicker().pick(pixels)
+
+        assert np.linalg.norm(np.array(pick) - np.array(teal)) < np.linalg.norm(
+            np.array(pick) - np.array(orange)
         )
+
+    def test_identical_frame_is_deterministic_across_fresh_pickers(self) -> None:
+        pixels = _pixels_regions([
+            ((35, 125, 175), 520),
+            ((55, 55, 55), 280),
+            ((185, 95, 45), 200),
+        ], seed=23)
+
+        first = agent.StickyClusterPicker().pick(pixels)
+        second = agent.StickyClusterPicker().pick(pixels.copy())
+
+        assert first == second
+
+    def test_near_identical_cinematic_frames_stay_on_same_color_family(self) -> None:
+        picker = agent.StickyClusterPicker()
+        first = picker.pick(_pixels_regions([
+            ((35, 125, 175), 520),
+            ((55, 55, 55), 280),
+            ((185, 95, 45), 200),
+        ], seed=29))
+        second = picker.pick(_pixels_regions([
+            ((35, 125, 175), 500),
+            ((55, 55, 55), 300),
+            ((185, 95, 45), 200),
+        ], seed=30))
+
+        assert np.linalg.norm(np.array(second) - np.array(first)) < agent._STICKY_DISTANCE
+
+    def test_color_ownership_has_entry_release_hysteresis(self) -> None:
+        red = (220, 40, 40)
+        gray = (80, 80, 80)
+        picker = agent.StickyClusterPicker()
+
+        established = picker.pick(_pixels_regions([(gray, 700), (red, 300)], seed=41))
+        borderline = picker.pick(_pixels_regions([(gray, 750), (red, 250)], seed=42))
+        released = picker.pick(_pixels_regions([(gray, 800), (red, 200)], seed=43))
+        fresh_borderline = agent.StickyClusterPicker().pick(
+            _pixels_regions([(gray, 750), (red, 250)], seed=42)
+        )
+
+        assert established[0] > established[1] + 100
+        assert borderline[0] > borderline[1] + 100
+        assert max(fresh_borderline) - min(fresh_borderline) < 8
+        assert max(released) - min(released) < 8
