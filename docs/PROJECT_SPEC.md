@@ -402,11 +402,16 @@ intentional Good Morning action) establishes Home immediately. Fresh Apple
 Watch / Apple Health evidence that strongly indicates wake may establish Home
 immediately once its real-world freshness/reliability is validated. Fresh
 trustworthy semantic activity may also establish Home immediately only when its
-evidence implies contemporaneous human interaction, such as active desktop
-Working/Gaming or genuinely interactive Watching. Passive Latitude playback,
-PC/device wake, network/device heartbeats, stale semantics, and similar residue
-abstain. The resulting awake baseline is Home + General unless a stronger fresh
-activity has already earned authority.
+evidence implies contemporaneous human interaction. For Desktop
+Working/Gaming/Watching, that proof is device-qualified intentional Raw Input
+from the wired desk devices (Keychron K10 `05AC:024F` key-down, or wired gaming
+mouse `258A:0036` button/scroll action) after Sleeping began. Mouse movement,
+Windows' aggregate last-input clock, and the
+Logitech Unifying wireless receiver (`046D:C52B`) are weak context only and
+cannot wake Sleeping. Passive Latitude playback, PC/device wake, network/device
+heartbeats, stale semantics, and similar residue abstain. The resulting awake
+baseline is Home + General unless a stronger fresh activity has already earned
+authority.
 
 **DECIDED TARGET - 2026-09-05.** Manual Sleeping remains the normal/primary
 entry path. Apple Watch / Apple Health is the intended overnight physiological
@@ -1660,7 +1665,7 @@ Core brain — combines time rules with activity detection.
 
 **Rescue priority floor** (added 2026-05-16) — `RESCUE_OVERRIDE_SOURCES = {"late_night_rescue", "zone_posture_rule", "watching_sleep_guard"}`. These sources push manual-only target modes (`relax`, `sleeping`) whose default `MODE_PRIORITY` is 0. The displacement guard in `report_activity` computes the override's effective priority as `max(MODE_PRIORITY.get(target, 0), MODE_PRIORITY["idle"])` when the source is in this set — so an `idle (p=1)` sensor report can't silently undo the rescue (`1 > 1` is False), while real activity (`working` p=2, `watching` p=3, `gaming` p=5) still displaces. Bug fixed by this floor: 2026-05-15 night, a rogue `source=ambient` idle POST every 60s displaced the `late_night_rescue → relax` override 47 times across 47 minutes (4-h apartment-stuck-in-idle). The ambient-monitor mode-POST path was the trigger and is gone (see PC Agent section); the floor exists for defense-in-depth against any future source that might post idle/sleeping.
 
-**Sleeping floor** (added 2026-06-03; authority hardened 2026-09-05) - `MODE_PRIORITY["sleeping"] = 0`, so Sleeping needs an explicit protection above ordinary priority comparison. Non-override Sleeping now wakes automatically only from source-qualified interactive Desktop evidence: `source=process`, `device=desktop`, activity in Working/Gaming/Watching, a successful Desktop input-idle probe, and less than 15 seconds since real keyboard/mouse input. Passive Latitude playback, missing/stale Desktop input evidence, idle/sleeping reports, and non-process sources abstain. The same accepted interactive Desktop wake may release an explicit Sleeping override; DND and hard Away/RETURNING_HOME holds still win. This floor is deliberately **not** subject to `SOURCE_STALE_SECONDS`, so Sleeping persists when the owning sleep detector goes quiet.
+**Sleeping floor** (added 2026-06-03; authority hardened 2026-09-05 and device-qualified after the 2026-09-07 overnight regression) - `MODE_PRIORITY["sleeping"] = 0`, so Sleeping needs an explicit protection above ordinary priority comparison. Non-override Sleeping wakes automatically only from source-qualified interactive Desktop evidence: `source=process`, `device=desktop`, activity in Working/Gaming/Watching, a fresh client detection timestamp, and less than 15 seconds since intentional Raw Input from an approved wired desk device. The current trusted actions are a Keychron K10 (`VID_05AC&PID_024F`) key-down or a wired gaming mouse (`VID_258A&PID_0036`) button/scroll action; mouse movement is never wake evidence. Windows `GetLastInputInfo` remains useful for ordinary activity classification but is not Sleeping wake authority because it aggregates every keyboard/mouse; in particular, the Logitech Unifying receiver (`VID_046D&PID_C52B`) used by wireless bed peripherals must never earn wake authority. The inferred trusted input must be demonstrably newer than the Sleeping transition, with a one-second quantization margin. Passive Latitude playback, missing/stale/skewed detection time, missing/invalid trusted Raw Input, wireless/global input alone, idle/sleeping reports, and non-process sources abstain. The same accepted interactive Desktop wake may release an explicit Sleeping override; DND and hard Away/RETURNING_HOME holds still win. If trusted-input tracking is unavailable, automatic process wake fails closed; explicit Auto/Good Morning remains authoritative. Cameras remain off during established Sleeping and are not required for this wake path. This floor is deliberately **not** subject to `SOURCE_STALE_SECONDS`, so Sleeping persists when the owning sleep detector goes quiet.
 
 **Override persistence** - `_manual_override` / `_override_mode` / `_override_time`, the restart-durable `_home_awake_confirmed` latch, and autonomous-rule refractory stamps are written to `app_settings["override_state"]` and restored at boot. Explicit Sleeping -> Auto and accepted interactive Desktop wake persist `_home_awake_confirmed=true`; authoritative Sleeping/Away clears it; before AwayManager is allowed to persist Home, the cleared latch is durably written while Away/RETURNING_HOME suppression still holds so an old wake cannot resurrect after a crash or later restart. Older saved payloads without the field safely default to false. Existing override timeout rules remain unchanged (Sleeping exempt; expired autonomous overrides drop, expired user overrides wait for a fresh replacement).
 

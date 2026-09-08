@@ -29,6 +29,7 @@ from backend.services.pc_agent.game_list import (
     GAME_PROCESSES,
     _steam_game_processes_from_library,
 )
+from backend.services.pc_agent.trusted_input import TrustedInputSnapshot
 
 
 # ---------------------------------------------------------------------------
@@ -836,12 +837,23 @@ def test_input_idle_validity_tracks_win32_probe_success(monkeypatch):
     assert d._input_idle_valid is True
 
 
+class _FakeTrustedInputTracker:
+    def __init__(self, snapshot: TrustedInputSnapshot) -> None:
+        self._snapshot = snapshot
+
+    def snapshot(self) -> TrustedInputSnapshot:
+        return self._snapshot
+
+
 def test_build_factors_includes_configured_device_role(monkeypatch):
     monkeypatch.setenv("HOME_HUB_AGENT_DEVICE", "latitude")
     d = _make_detector(
         processes={"stremio.exe"},
         fg_proc="stremio.exe",
         idle_seconds=0,
+    )
+    d._trusted_input_tracker = _FakeTrustedInputTracker(
+        TrustedInputSnapshot(2.5, True, "keychron_k10"),
     )
 
     factors = d.build_factors()
@@ -850,6 +862,8 @@ def test_build_factors_includes_configured_device_role(monkeypatch):
     assert factors[0]["value"] == "latitude"
     factor_values = {factor["key"]: factor["value"] for factor in factors}
     assert factor_values["input_idle_valid"] is False
+    assert factor_values["trusted_input_idle"] == 2.5
+    assert factor_values["trusted_input_valid"] is True
     assert len(factors) <= 15
     assert "foreground_title" not in {factor["key"] for factor in factors}
 

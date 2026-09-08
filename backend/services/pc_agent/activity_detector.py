@@ -39,6 +39,10 @@ from backend.services.pc_agent.game_list import (
     MEDIA_PROCESSES,
     WORK_PROCESSES,
 )
+from backend.services.pc_agent.trusted_input import (
+    TrustedInputSnapshot,
+    TrustedWakeInputTracker,
+)
 from backend.services.pc_agent.windows_media_session import (
     WindowsMediaSessionProbe,
     browser_title_looks_like_video,
@@ -293,7 +297,10 @@ class ActivityDetector:
         idle    — PC in use but nothing notable running, or input idle >10 min
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        trusted_input_tracker: Optional[TrustedWakeInputTracker] = None,
+    ) -> None:
         self._last_mode: Optional[str] = None              # Committed mode after dwell
         self._last_reported_mode: Optional[str] = None      # Last mode the loop POSTed
         self._last_classification: Optional[_Classification] = None
@@ -313,6 +320,9 @@ class ActivityDetector:
         # otherwise ambiguous with an unavailable probe and must never prove
         # contemporaneous human interaction to the backend.
         self._input_idle_valid: bool = False
+        # Sleeping wake authority uses a separate Raw Input lane so movement
+        # from the wireless bed keyboard/mouse cannot masquerade as desk use.
+        self._trusted_input_tracker = trusted_input_tracker
         # Hysteresis state — the candidate mode we'd report once the dwell expires.
         self._pending_mode: Optional[str] = None
         self._pending_since: Optional[float] = None
@@ -1033,6 +1043,19 @@ class ActivityDetector:
             idle_impact = 0.3
 
         device = _device_role()
+        trusted = (
+            self._trusted_input_tracker.snapshot()
+            if self._trusted_input_tracker is not None
+            else TrustedInputSnapshot(None, False, None)
+        )
+        if trusted.idle_seconds is None:
+            trusted_display = (
+                "no trusted input yet" if trusted.valid else "unavailable"
+            )
+        else:
+            trusted_display = f"{trusted.idle_seconds:.1f}s idle"
+            if trusted.device:
+                trusted_display += f" ({trusted.device})"
         factors: list[dict] = [
             {
                 "key": "device",
@@ -1065,6 +1088,20 @@ class ActivityDetector:
                 "value": self._input_idle_valid,
                 "display": "valid" if self._input_idle_valid else "unavailable",
                 "impact": 1.0 if self._input_idle_valid else 0.0,
+            },
+            {
+                "key": "trusted_input_idle",
+                "label": "Trusted desk input",
+                "value": trusted.idle_seconds,
+                "display": trusted_display,
+                "impact": 1.0 if trusted.idle_seconds is not None else 0.0,
+            },
+            {
+                "key": "trusted_input_valid",
+                "label": "Trusted input telemetry",
+                "value": trusted.valid,
+                "display": "valid" if trusted.valid else "unavailable",
+                "impact": 1.0 if trusted.valid else 0.0,
             },
             {
                 "key": "foreground_kind",
@@ -1305,7 +1342,9 @@ def run_agent(
             iteration so a hung-but-alive thread can be distinguished from a
             healthy one.
     """
-    detector = ActivityDetector()
+    trusted_input_tracker = TrustedWakeInputTracker()
+    trusted_input_tracker.start()
+    detector = ActivityDetector(trusted_input_tracker=trusted_input_tracker)
     endpoint = f"{server_url.rstrip('/')}/api/automation/activity"
     backoff = 1
     last_report_time: float = 0
@@ -1363,6 +1402,7 @@ def run_agent(
     finally:
         client.close()
         detector.close()
+        trusted_input_tracker.close()
 
 
 if __name__ == "__main__":

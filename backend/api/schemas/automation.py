@@ -21,7 +21,7 @@ class ActivityReport(BaseModel):
     )
     detected_at: Optional[str] = Field(
         default=None,
-        description="ISO timestamp of when the activity was detected",
+        description="ISO client timestamp of detection; fresh values participate in Sleeping wake authority",
     )
     factors: Optional[list[dict]] = Field(
         default=None,

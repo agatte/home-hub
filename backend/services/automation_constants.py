@@ -125,6 +125,13 @@ PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT = 8
 # the trusted Desktop lane also shows very recent real keyboard/mouse input.
 # Keep this aligned with the existing 15s recent-desktop-interaction boundary.
 SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS = 15
+# GetLastInputInfo idle is whole-second precision. Require this much extra age
+# beyond the reported idle before treating the input as post-Sleeping.
+SLEEPING_WAKE_INPUT_QUANTIZATION_SECONDS = 1.0
+# Desktop reports use client detection time so HTTP transit cannot manufacture
+# apparent post-Sleep input. Reports outside this clock/transport envelope abstain.
+SLEEPING_WAKE_DETECTED_AT_MAX_AGE_SECONDS = 8.0
+SLEEPING_WAKE_DETECTED_AT_FUTURE_SKEW_SECONDS = 2.0
 SLEEPING_WAKE_INTERACTIVE_MODES = frozenset({"working", "gaming", "watching"})
 
 # Source labels that get blocked by the cooldown above. These are the

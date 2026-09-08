@@ -415,6 +415,7 @@ async def report_activity(report: ActivityReport, request: Request) -> dict:
 
     engine_result = await engine.report_activity(
         report.mode, report.source, factors=report.factors,
+        detected_at=report.detected_at,
     )
     # Third-party/legacy activity adapters returned None before #189. Keep the
     # route tolerant while the real engine now provides the richer contract.

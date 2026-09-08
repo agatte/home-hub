@@ -1090,13 +1090,35 @@ class TestSleepingFloor:
 
     @staticmethod
     def _interactive_factors(
-        *, device: str = "desktop", idle_seconds: float = 0.0,
+        *,
+        device: str = "desktop",
+        idle_seconds: float = 0.0,
+        trusted_idle_seconds: float | None = None,
+        trusted_input_valid: bool = True,
     ) -> list[dict]:
+        trusted_idle = (
+            idle_seconds if trusted_idle_seconds is None else trusted_idle_seconds
+        )
         return [
             {"key": "device", "value": device},
             {"key": "idle", "value": idle_seconds},
             {"key": "input_idle_valid", "value": True},
+            {"key": "trusted_input_idle", "value": trusted_idle},
+            {"key": "trusted_input_valid", "value": trusted_input_valid},
         ]
+
+    @staticmethod
+    def _age_sleeping(engine, seconds: float = 30.0) -> None:
+        """Move the Sleeping boundary back so later input is truly post-Sleep."""
+        delta = timedelta(seconds=seconds)
+        if engine._override_time is not None:
+            engine._override_time -= delta
+        if engine._last_activity_change is not None:
+            engine._last_activity_change -= delta
+
+    @staticmethod
+    def _detected_now() -> str:
+        return datetime.now(tz=TZ).isoformat()
 
     async def test_audio_ml_idle_does_not_break_detected_sleeping(self, engine):
         # The exact 2026-06-03 repro: audio_ml idle@1 vs non-override sleeping.
@@ -1124,8 +1146,10 @@ class TestSleepingFloor:
 
     async def test_process_working_wakes_detected_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine)
         await engine.report_activity(
             "working", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
         assert engine.current_mode == "working"
         assert engine._home_awake_confirmed is True
@@ -1142,8 +1166,10 @@ class TestSleepingFloor:
             "backend.api.routes.routines.save_setting", fake_save_setting,
         )
         await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine)
         await engine.report_activity(
             "working", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
 
         assert saved_payloads[-1]["home_awake_confirmed"] is True
@@ -1151,16 +1177,20 @@ class TestSleepingFloor:
 
     async def test_process_gaming_wakes_detected_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine)
         await engine.report_activity(
             "gaming", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
         assert engine.current_mode == "gaming"
         assert engine._home_awake_confirmed is True
 
     async def test_process_watching_wakes_detected_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine)
         await engine.report_activity(
             "watching", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
         assert engine.current_mode == "watching"
         assert engine._home_awake_confirmed is True
@@ -1170,6 +1200,7 @@ class TestSleepingFloor:
         result = await engine.report_activity(
             "watching", source="process",
             factors=self._interactive_factors(device="latitude"),
+            detected_at=self._detected_now(),
         )
         assert result["reason"] == "sleeping_floor"
         assert engine.current_mode == "sleeping"
@@ -1180,19 +1211,22 @@ class TestSleepingFloor:
         result = await engine.report_activity(
             "working", source="process",
             factors=[{"key": "device", "value": "desktop"}],
+            detected_at=self._detected_now(),
         )
         assert result["reason"] == "sleeping_floor"
         assert engine.current_mode == "sleeping"
 
-    async def test_desktop_invalid_input_probe_cannot_wake_sleeping(self, engine):
+    async def test_desktop_invalid_trusted_input_cannot_wake_sleeping(self, engine):
         await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine)
         result = await engine.report_activity(
             "watching", source="process",
-            factors=[
-                {"key": "device", "value": "desktop"},
-                {"key": "idle", "value": 0.0},
-                {"key": "input_idle_valid", "value": False},
-            ],
+            factors=self._interactive_factors(
+                idle_seconds=0.0,
+                trusted_idle_seconds=0.0,
+                trusted_input_valid=False,
+            ),
+            detected_at=self._detected_now(),
         )
         assert result["reason"] == "sleeping_floor"
         assert engine.current_mode == "sleeping"
@@ -1203,6 +1237,7 @@ class TestSleepingFloor:
         result = await engine.report_activity(
             "gaming", source="process",
             factors=self._interactive_factors(idle_seconds=15.0),
+            detected_at=self._detected_now(),
         )
         assert result["reason"] == "sleeping_floor"
         assert engine.current_mode == "sleeping"
@@ -1226,15 +1261,37 @@ class TestSleepingFloor:
         assert engine.manual_override is True
         assert engine.override_mode == "sleeping"
 
+    async def test_missing_detected_at_cannot_wake_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine)
+        result = await engine.report_activity(
+            "working", source="process", factors=self._interactive_factors(),
+        )
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+
+    async def test_stale_detected_at_cannot_wake_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine, seconds=60.0)
+        stale = (datetime.now(tz=TZ) - timedelta(seconds=20)).isoformat()
+        result = await engine.report_activity(
+            "working", source="process", factors=self._interactive_factors(),
+            detected_at=stale,
+        )
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+
     async def test_interactive_desktop_wake_releases_manual_sleeping(self, engine):
         engine._apply_mode = AsyncMock()
         engine._fire_mode_change_callbacks = AsyncMock()
         await engine.set_manual_override("sleeping", source="api:test")
+        self._age_sleeping(engine)
         engine._apply_mode.reset_mock()
         engine._fire_mode_change_callbacks.reset_mock()
 
         result = await engine.report_activity(
             "working", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
 
         assert result["semantic_disposition"] == "accepted"
@@ -1245,6 +1302,68 @@ class TestSleepingFloor:
         engine._apply_mode.assert_awaited_once_with("working", force_resend=True)
         engine._fire_mode_change_callbacks.assert_awaited_once_with("working")
 
+    async def test_wireless_bed_input_cannot_release_manual_sleeping(self, engine):
+        """Global recent input is weak when no trusted desk device moved."""
+        engine._apply_mode = AsyncMock()
+        await engine.set_manual_override("sleeping", source="api:test")
+        self._age_sleeping(engine, seconds=300.0)
+        engine._apply_mode.reset_mock()
+        engine._external_off_detected = True
+
+        result = await engine.report_activity(
+            "watching", source="process",
+            factors=self._interactive_factors(
+                idle_seconds=0.0,
+                trusted_idle_seconds=360.0,
+            ),
+            detected_at=self._detected_now(),
+        )
+
+        assert result["reason"] == "manual_override_held"
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
+        assert engine._external_off_detected is True
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_pre_sleep_input_cannot_release_manual_sleeping(self, engine):
+        """The input used to select Sleeping cannot immediately wake it again."""
+        engine._apply_mode = AsyncMock()
+        await engine.set_manual_override("sleeping", source="api:test")
+        engine._apply_mode.reset_mock()
+        engine._external_off_detected = True
+
+        # Incident shape: ~12s after Sleeping, Desktop reports ~12s input idle.
+        # The last real input therefore predates the Sleeping transition.
+        engine._override_time -= timedelta(seconds=12)
+        engine._last_activity_change = engine._override_time
+        result = await engine.report_activity(
+            "watching", source="process",
+            factors=self._interactive_factors(idle_seconds=12.0),
+            detected_at=self._detected_now(),
+        )
+
+        assert result["reason"] == "manual_override_held"
+        assert engine.manual_override is True
+        assert engine.override_mode == "sleeping"
+        assert engine.current_mode == "sleeping"
+        assert engine._home_awake_confirmed is False
+        assert engine._external_off_detected is True
+        engine._apply_mode.assert_not_awaited()
+
+    async def test_pre_sleep_input_cannot_wake_detected_sleeping(self, engine):
+        await self._enter_detected_sleeping(engine)
+        self._age_sleeping(engine, seconds=12.0)
+
+        result = await engine.report_activity(
+            "working", source="process",
+            factors=self._interactive_factors(idle_seconds=12.0),
+            detected_at=self._detected_now(),
+        )
+
+        assert result["reason"] == "sleeping_floor"
+        assert engine.current_mode == "sleeping"
+        assert engine._home_awake_confirmed is False
+
     async def test_latitude_watching_does_not_release_manual_sleeping(self, engine):
         engine._apply_mode = AsyncMock()
         await engine.set_manual_override("sleeping", source="api:test")
@@ -1252,6 +1371,7 @@ class TestSleepingFloor:
         await engine.report_activity(
             "watching", source="process",
             factors=self._interactive_factors(device="latitude"),
+            detected_at=self._detected_now(),
         )
 
         assert engine.manual_override is True
@@ -1265,6 +1385,7 @@ class TestSleepingFloor:
 
         result = await engine.report_activity(
             "gaming", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
 
         assert result["reason"] == "dnd_active"
@@ -1277,6 +1398,7 @@ class TestSleepingFloor:
 
         await engine.report_activity(
             "working", source="process", factors=self._interactive_factors(),
+            detected_at=self._detected_now(),
         )
 
         assert engine.house_state == "away"

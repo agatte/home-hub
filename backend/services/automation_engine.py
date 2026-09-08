@@ -36,6 +36,9 @@ from backend.services.automation_constants import (
     PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS as PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS,
     PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT as PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT,
     SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS as SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS,
+    SLEEPING_WAKE_DETECTED_AT_FUTURE_SKEW_SECONDS as SLEEPING_WAKE_DETECTED_AT_FUTURE_SKEW_SECONDS,
+    SLEEPING_WAKE_DETECTED_AT_MAX_AGE_SECONDS as SLEEPING_WAKE_DETECTED_AT_MAX_AGE_SECONDS,
+    SLEEPING_WAKE_INPUT_QUANTIZATION_SECONDS as SLEEPING_WAKE_INPUT_QUANTIZATION_SECONDS,
     SLEEPING_WAKE_INTERACTIVE_MODES as SLEEPING_WAKE_INTERACTIVE_MODES,
     PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS as PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS,
     PRESERVE_PER_LIGHT_OVERRIDE_SOURCES as PRESERVE_PER_LIGHT_OVERRIDE_SOURCES,
@@ -270,6 +273,9 @@ class ProcessObservation:
     candidate_reason: Optional[str]
     idle_seconds: Optional[float]
     input_idle_valid: Optional[bool]
+    trusted_input_idle_seconds: Optional[float]
+    trusted_input_valid: Optional[bool]
+    detected_at: Optional[datetime]
     pending_mode: Optional[str]
     pending_dwell_age: Optional[float]
     gaming_qualification: Optional[str]
@@ -289,6 +295,9 @@ class ProcessObservation:
             "candidate_reason": self.candidate_reason,
             "idle_seconds": self.idle_seconds,
             "input_idle_valid": self.input_idle_valid,
+            "trusted_input_idle_seconds": self.trusted_input_idle_seconds,
+            "trusted_input_valid": self.trusted_input_valid,
+            "detected_at": self.detected_at.isoformat() if self.detected_at else None,
             "pending_mode": self.pending_mode,
             "pending_dwell_age": self.pending_dwell_age,
             "gaming_qualification": self.gaming_qualification,
@@ -1857,23 +1866,39 @@ class AutomationEngine:
     @staticmethod
     def _qualifies_interactive_sleep_wake(
         observation: Optional[ProcessObservation],
+        *,
+        sleeping_started_at: Optional[datetime],
     ) -> bool:
-        """Whether a process report proves contemporaneous human wake.
+        """Whether a process report proves contemporaneous post-Sleep human wake.
 
         Only the Desktop lane may earn this authority, and only when the
-        activity semantic is awake/interactively meaningful *and* the raw
-        input-idle evidence is inside the established 15-second boundary.
-        Latitude playback and reports with missing/stale input evidence abstain.
+        activity semantic is awake/interactively meaningful *and* the trusted
+        desk-device Raw Input evidence is inside the established 15-second
+        boundary. Global keyboard/mouse idle is intentionally insufficient.
+        The inferred trusted input must also be demonstrably newer than the
+        Sleeping transition; otherwise the click/key used to enter Sleeping
+        could immediately be recycled as wake evidence.
         """
         if observation is None or observation.device != "desktop":
             return False
         if observation.observed_mode not in SLEEPING_WAKE_INTERACTIVE_MODES:
             return False
-        if observation.idle_seconds is None or observation.input_idle_valid is not True:
+        if (
+            observation.trusted_input_idle_seconds is None
+            or observation.trusted_input_valid is not True
+        ):
             return False
+        if observation.detected_at is None or sleeping_started_at is None:
+            return False
+        sleeping_age_seconds = (
+            observation.detected_at - sleeping_started_at
+        ).total_seconds()
         return bool(
-            0.0 <= observation.idle_seconds
+            0.0 <= observation.trusted_input_idle_seconds
             < SLEEPING_WAKE_DESKTOP_MAX_IDLE_SECONDS
+            and sleeping_age_seconds
+            > observation.trusted_input_idle_seconds
+            + SLEEPING_WAKE_INPUT_QUANTIZATION_SECONDS
         )
 
     def _record_process_observation(
@@ -1881,15 +1906,36 @@ class AutomationEngine:
         mode: str,
         factors: Optional[list[dict]],
         now: datetime,
+        *,
+        detected_at: Optional[str] = None,
     ) -> ProcessObservation:
         """Store the latest raw process/classifier observation for one device."""
         device = _activity_device(factors) or "unknown"
+        parsed_detected_at: Optional[datetime] = None
+        if detected_at:
+            try:
+                candidate = datetime.fromisoformat(detected_at)
+                if candidate.tzinfo is None:
+                    candidate = candidate.replace(tzinfo=TZ)
+                else:
+                    candidate = candidate.astimezone(TZ)
+                age = (now - candidate).total_seconds()
+                if (
+                    -SLEEPING_WAKE_DETECTED_AT_FUTURE_SKEW_SECONDS
+                    <= age <= SLEEPING_WAKE_DETECTED_AT_MAX_AGE_SECONDS
+                ):
+                    parsed_detected_at = candidate
+            except (TypeError, ValueError):
+                parsed_detected_at = None
         observation = ProcessObservation(
             observed_mode=mode,
             candidate_mode=_string_factor(factors, "candidate_mode"),
             candidate_reason=_string_factor(factors, "candidate_reason"),
             idle_seconds=_number_factor(factors, "idle"),
             input_idle_valid=_bool_factor(factors, "input_idle_valid"),
+            trusted_input_idle_seconds=_number_factor(factors, "trusted_input_idle"),
+            trusted_input_valid=_bool_factor(factors, "trusted_input_valid"),
+            detected_at=parsed_detected_at,
             pending_mode=_string_factor(factors, "pending_mode"),
             pending_dwell_age=_number_factor(factors, "pending_dwell_age"),
             gaming_qualification=_string_factor(
@@ -2695,6 +2741,7 @@ class AutomationEngine:
         mode: str,
         source: str,
         factors: Optional[list[dict]] = None,
+        detected_at: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Process an activity report from the PC agent, ambient monitor, or camera.
@@ -2706,13 +2753,15 @@ class AutomationEngine:
                 constellation (foreground app / idle bucket / YAMNet classes /
                 etc). Process factors remain attached to the raw observation;
                 only accepted process semantics are eligible for fusion.
+            detected_at: Optional client observation timestamp. Sleeping wake
+                authority uses only fresh, plausibly synchronized values.
         """
         source_key = _activity_source_key(source, factors)
         report_now = datetime.now(tz=TZ)
         observation: Optional[ProcessObservation] = None
         if source == "process":
             observation = self._record_process_observation(
-                mode, factors, report_now,
+                mode, factors, report_now, detected_at=detected_at,
             )
 
         # Raw process diagnostics intentionally remain observable while
@@ -2783,11 +2832,18 @@ class AutomationEngine:
             }
 
         wake_previous_mode: Optional[str] = None
+        sleeping_started_at = (
+            self._override_time
+            if self._manual_override and self._override_mode == "sleeping"
+            else self._last_activity_change
+        )
         interactive_sleep_wake = bool(
             self.current_mode == "sleeping"
             and not self._away_hold
             and not self._host_return_hold
-            and self._qualifies_interactive_sleep_wake(observation)
+            and self._qualifies_interactive_sleep_wake(
+                observation, sleeping_started_at=sleeping_started_at,
+            )
         )
         if interactive_sleep_wake:
             wake_previous_mode = "sleeping"
