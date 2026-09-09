@@ -4,8 +4,8 @@ Covers the two flap-suppression layers that previously let
 ``watching ↔ working`` cycle the kitchen lights at night and let an
 abandoned ``leagueclient.exe`` launcher lock mode to ``gaming``:
 
-1. ``_classify`` gaming gate — game process running is *necessary* but
-   not *sufficient*; foreground OR recent input is also required.
+1. ``_classify`` gaming gate — a game process is context only; foreground
+   game evidence is required and ordinary dwell preserves brief alt-tabs.
 2. ``_dwell_threshold`` — symmetric 5-min stickiness at night for the
    ``watching ↔ working`` pair so quick alt-tabs can't churn modes.
 """
@@ -24,7 +24,6 @@ from backend.services.pc_agent.activity_detector import (
     DWELL_LEAVE_WATCHING_DAY,
     DWELL_LEAVE_WATCHING_NIGHT,
     DWELL_LEAVE_WORKING_NIGHT,
-    GAMING_IDLE_THRESHOLD,
     WATCHING_PAUSE_GRACE_SECONDS,
 )
 from backend.services.pc_agent.game_list import (
@@ -416,15 +415,39 @@ class TestGamingGate:
         )
         assert d._classify() == "gaming"
 
-    def test_active_input_with_game_running_commits_gaming(self):
-        # Alt-tab to wiki: foreground is the browser, but input is active
-        # (scrolling). Stay in gaming.
+    def test_background_game_browser_input_does_not_renew_gaming(self):
         d = _make_detector(
             processes={"leagueclient.exe", "firefox.exe"},
             fg_proc="firefox.exe",
-            idle_seconds=GAMING_IDLE_THRESHOLD - 30,
+            idle_seconds=0,
         )
-        assert d._classify() == "gaming"
+        assert d._classify() != "gaming"
+        assert d._last_classification is not None
+        assert d._last_classification.gaming_qualification == "background_game_not_foreground"
+
+
+    def test_background_game_cannot_block_foreground_browser_playback(self):
+        d = _make_detector(
+            processes={"rustclient.exe", "firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Video - YouTube - Mozilla Firefox",
+            idle_seconds=0,
+            browser_playback_status="playing",
+        )
+        assert d._classify() == "watching"
+        assert d._last_classification is not None
+        assert d._last_classification.candidate_reason == "foreground_browser_playing"
+        assert d._last_classification.gaming_qualification == "background_game_not_foreground"
+
+    def test_detector_dwell_preserves_brief_alt_tab_from_gaming(self):
+        d = _make_detector(
+            processes={"leagueclient.exe"},
+            fg_proc="leagueclient.exe",
+            idle_seconds=0,
+        )
+        assert d.detect() == "gaming"
+        assert d._dwell_threshold("gaming", "idle") == DWELL_DEFAULT
+
 
 
     def test_planet_zoo_foreground_commits_gaming(self):
@@ -463,11 +486,11 @@ class TestGamingGate:
         d = _make_detector(
             processes={"leagueclient.exe"},
             fg_proc=None,
-            idle_seconds=GAMING_IDLE_THRESHOLD + 60,
+            idle_seconds=240,
         )
         assert d._classify() != "gaming"
         assert d._last_classification is not None
-        assert d._last_classification.gaming_qualification == "background_game_idle"
+        assert d._last_classification.gaming_qualification == "background_game_not_foreground"
 
     def test_unfocused_idle_launcher_with_browser_falls_to_working_at_night(self):
         # 9pm+, browser running, launcher in tray, walked away → not gaming.
@@ -475,7 +498,7 @@ class TestGamingGate:
         d = _make_detector(
             processes={"leagueclient.exe", "firefox.exe"},
             fg_proc=None,
-            idle_seconds=GAMING_IDLE_THRESHOLD + 60,
+            idle_seconds=240,
         )
         with patch(
             "backend.services.pc_agent.activity_detector.datetime"
@@ -569,39 +592,32 @@ class TestForegroundRuneLiteJava:
             process.return_value.cmdline.side_effect = psutil.AccessDenied(pid=1376)
             assert detector._classify() == "idle"
 
-    def test_background_runelite_java_with_recent_input_preserves_gaming(self):
+    def test_background_runelite_java_does_not_renew_gaming_from_browser_input(self):
         detector = _make_detector(
             processes={"java.exe", "firefox.exe"},
             fg_proc="firefox.exe",
             fg_title="Old School RuneScape Wiki - Mozilla Firefox",
-            idle_seconds=GAMING_IDLE_THRESHOLD - 30,
-        )
-        detector._find_running_runelite_java_pid = lambda: 1376  # type: ignore[method-assign]
-
-        assert detector._classify() == "gaming"
-        assert detector._last_classification is not None
-        assert detector._last_classification.candidate_reason == "recent_input_game_hold"
-        assert detector._last_classification.matched_game_process == "runelite-java"
-        assert (
-            detector._last_classification.gaming_qualification
-            == "recent_input_runelite_java_hold"
-        )
-
-    def test_background_runelite_java_releases_after_input_hold_expires(self):
-        detector = _make_detector(
-            processes={"java.exe", "firefox.exe"},
-            fg_proc="firefox.exe",
-            fg_title="Old School RuneScape Wiki - Mozilla Firefox",
-            idle_seconds=GAMING_IDLE_THRESHOLD,
+            idle_seconds=0,
         )
         detector._find_running_runelite_java_pid = lambda: 1376  # type: ignore[method-assign]
 
         assert detector._classify() != "gaming"
         assert detector._last_classification is not None
-        assert (
-            detector._last_classification.gaming_qualification
-            == "background_runelite_java_idle"
+        assert detector._last_classification.matched_game_process == "runelite-java"
+        assert detector._last_classification.gaming_qualification == "background_runelite_java_not_foreground"
+
+    def test_background_runelite_java_reason_is_stable_when_idle(self):
+        detector = _make_detector(
+            processes={"java.exe", "firefox.exe"},
+            fg_proc="firefox.exe",
+            fg_title="Old School RuneScape Wiki - Mozilla Firefox",
+            idle_seconds=240,
         )
+        detector._find_running_runelite_java_pid = lambda: 1376  # type: ignore[method-assign]
+
+        assert detector._classify() != "gaming"
+        assert detector._last_classification is not None
+        assert detector._last_classification.gaming_qualification == "background_runelite_java_not_foreground"
 
     def test_background_unverified_java_does_not_promote_gaming(self):
         detector = _make_detector(
@@ -1087,3 +1103,36 @@ def test_steam_library_manifest_skips_redistributable_apps(tmp_path):
     )
 
     assert _steam_game_processes_from_library(tmp_path) == set()
+
+
+def test_gaming_alt_tab_grace_is_bounded_but_foreground_playback_wins_fast():
+    d = _make_detector(
+        processes={"rustclient.exe", "firefox.exe"},
+        fg_proc="rustclient.exe",
+        idle_seconds=0,
+    )
+    with patch("backend.services.pc_agent.activity_detector.time.time", return_value=0.0):
+        assert d.detect() == "gaming"
+
+    d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+        "firefox.exe", "GitHub - Mozilla Firefox", None,
+    )
+    d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+        "firefox.exe", "GitHub - Mozilla Firefox",
+    )
+    with patch("backend.services.pc_agent.activity_detector.time.time", return_value=1.0):
+        assert d.detect() == "gaming"
+    with patch("backend.services.pc_agent.activity_detector.time.time", return_value=46.0):
+        assert d.detect() == "gaming"
+
+    d._get_foreground_process_identity = lambda: (  # type: ignore[method-assign]
+        "firefox.exe", "Video - YouTube - Mozilla Firefox", None,
+    )
+    d._get_foreground_window = lambda: (  # type: ignore[method-assign]
+        "firefox.exe", "Video - YouTube - Mozilla Firefox",
+    )
+    d._browser_playback_status = lambda _proc, _title: "playing"  # type: ignore[method-assign]
+    with patch("backend.services.pc_agent.activity_detector.time.time", return_value=47.0):
+        assert d.detect() == "gaming"
+    with patch("backend.services.pc_agent.activity_detector.time.time", return_value=58.0):
+        assert d.detect() == "watching"

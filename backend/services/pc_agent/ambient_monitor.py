@@ -29,6 +29,7 @@ Usage:
 """
 
 import argparse
+import gc
 import logging
 import sys
 import threading
@@ -36,6 +37,8 @@ import time
 from collections import deque
 from datetime import datetime
 from typing import Callable, Optional
+
+from backend.services.pc_agent.classifier_gate import ClassifierGate
 
 import httpx
 import numpy as np
@@ -70,6 +73,7 @@ YAMNET_SAMPLES = 15600
 
 # Shadow logging throttle — log on class change or every N seconds
 SHADOW_LOG_INTERVAL = 30
+CLASSIFIER_RETRY_SECONDS = 60.0
 
 # HEARTBEAT_INTERVAL retired 2026-05-16. Was the cadence for re-posting
 # `mode=idle, source=ambient` to /activity to keep the audio_ml fusion
@@ -152,6 +156,7 @@ class AmbientMonitor:
         threshold: int = DEFAULT_THRESHOLD,
         classifier_enabled: bool = False,
         shadow_mode: bool = True,
+        classifier_gate: Optional[ClassifierGate] = None,
     ) -> None:
         self._threshold = threshold
         self._rms_history: deque[float] = deque(maxlen=WINDOW_SECONDS)
@@ -166,12 +171,14 @@ class AmbientMonitor:
         # YAMNet classifier
         self._classifier_enabled = classifier_enabled
         self._shadow_mode = shadow_mode
+        self._classifier_gate = classifier_gate
         self._classifier = None
         self._scene_state = None
         self._audio_buffer: deque = deque(maxlen=YAMNET_SAMPLES)
+        self._classifier_retry_after = 0.0
 
         if classifier_enabled:
-            self._init_classifier()
+            self._reconcile_classifier_gate(force=True)
 
     @property
     def threshold(self) -> int:
@@ -184,34 +191,72 @@ class AmbientMonitor:
         self._threshold = max(100, value)
         logger.info(f"Ambient threshold updated to {self._threshold}")
 
-    def _init_classifier(self) -> None:
-        """Initialize the YAMNet audio scene classifier."""
+    def _init_classifier(self) -> bool:
+        """Initialize YAMNet on demand. Returns whether it is usable."""
         try:
             from backend.services.ml.audio_classifier import (
                 AudioSceneClassifier,
                 SceneState,
             )
 
-            self._classifier = AudioSceneClassifier()
-            if self._classifier.load_model():
+            classifier = AudioSceneClassifier()
+            if classifier.load_model():
+                self._classifier = classifier
                 self._scene_state = SceneState()
+                self._classifier_retry_after = 0.0
+                if self._classifier_gate is not None:
+                    self._classifier_gate.set_actual(True, "loaded")
                 logger.info(
-                    "YAMNet classifier loaded — mode: %s",
+                    "YAMNet classifier loaded - mode: %s",
                     "shadow" if self._shadow_mode else "active",
                 )
-            else:
-                logger.warning(
-                    "YAMNet classifier failed to load — "
-                    "falling back to RMS-only detection"
-                )
-                self._classifier = None
+                return True
+            logger.warning(
+                "YAMNet classifier failed to load - falling back to RMS-only detection"
+            )
         except ImportError as exc:
             logger.warning(
-                "Cannot import audio classifier: %s — "
-                "falling back to RMS-only detection",
+                "Cannot import audio classifier: %s - falling back to RMS-only detection",
                 exc,
             )
-            self._classifier = None
+        self._classifier = None
+        self._scene_state = None
+        self._classifier_retry_after = time.monotonic() + CLASSIFIER_RETRY_SECONDS
+        if self._classifier_gate is not None:
+            self._classifier_gate.set_actual(False, "load_failed")
+        return False
+
+    def _disable_classifier(self, detail: str = "disabled_by_authority") -> None:
+        """Release YAMNet once without disturbing the microphone/RMS lane."""
+        had_classifier = self._classifier is not None or self._scene_state is not None
+        self._classifier = None
+        self._scene_state = None
+        self._audio_buffer.clear()
+        self._classifier_retry_after = 0.0
+        if had_classifier:
+            logger.info("YAMNet classifier disabled (%s)", detail)
+            gc.collect()
+        if self._classifier_gate is not None:
+            snapshot = self._classifier_gate.snapshot()
+            if snapshot["actual_enabled"] or snapshot["detail"] != detail:
+                self._classifier_gate.set_actual(False, detail)
+
+    def _reconcile_classifier_gate(self, *, force: bool = False) -> None:
+        if not self._classifier_enabled:
+            return
+        desired = (
+            self._classifier_gate.desired_enabled()
+            if self._classifier_gate is not None
+            else True
+        )
+        if not desired:
+            self._disable_classifier()
+            return
+        if self._classifier is not None:
+            return
+        now = time.monotonic()
+        if force or now >= self._classifier_retry_after:
+            self._init_classifier()
 
     def _init_audio(self) -> bool:
         """
@@ -425,6 +470,7 @@ def run_monitor(
     server_url: str,
     classifier_enabled: bool = False,
     shadow_mode: bool = True,
+    classifier_gate: Optional[ClassifierGate] = None,
     stop_event: Optional[threading.Event] = None,
     heartbeat: Optional[Callable[[], None]] = None,
 ) -> None:
@@ -435,6 +481,7 @@ def run_monitor(
         server_url: Base URL of the Home Hub backend.
         classifier_enabled: Whether to run YAMNet classifier.
         shadow_mode: If True, log ML results but don't act on them.
+        classifier_gate: Shared authority-controlled desired/actual classifier state.
         stop_event: Optional threading event for clean shutdown (set by supervisor).
         heartbeat: Optional supervisor liveness pulse, called once per loop
             iteration so a hung-but-alive thread (e.g. wedged on a mic read) is
@@ -443,6 +490,7 @@ def run_monitor(
     monitor = AmbientMonitor(
         classifier_enabled=classifier_enabled,
         shadow_mode=shadow_mode,
+        classifier_gate=classifier_gate,
     )
     base_url = server_url.rstrip("/")
     activity_endpoint = f"{base_url}/api/automation/activity"
@@ -482,6 +530,7 @@ def run_monitor(
         while not _stop.is_set():
             if heartbeat is not None:
                 heartbeat()
+            monitor._reconcile_classifier_gate()
             # ── RMS-based detection (always runs) ──────────────
             # Historical: RMS quiet edges (and a heartbeat fallback) used to
             # POST `mode=idle, source=ambient` to /api/automation/activity to

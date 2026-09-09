@@ -135,16 +135,9 @@ NIGHT_START_HOUR = 21
 NIGHT_END_HOUR = 6
 MAX_MATCHED_WORK_PROCESSES = 3
 
-# Gaming gate — a game process being merely *running* is not enough.
-# leagueclient.exe and similar launchers persist long after the actual game
-# closes; without this gate, mode would lock to "gaming" until Anthony quit
-# the launcher. Either of two conditions promotes a running game process to
-# committed gaming: (a) the game is the foreground window (you're playing
-# right now), or (b) input has been active in the last GAMING_IDLE_THRESHOLD
-# seconds (you're at the PC with the game running — covers alt-tab-to-wiki
-# scrolling). Walking away from the PC = idle climbs past the threshold and
-# the gaming hold releases, allowing late-night rescue / fusion to take over.
-GAMING_IDLE_THRESHOLD = 180  # seconds
+# Gaming authority requires a foreground game window. A merely-running game
+# is context only; normal detector dwell already provides bounded alt-tab grace.
+# This prevents unrelated browser input from indefinitely refreshing Gaming.
 
 RUNELITE_JAVA_WINDOW_TITLE_RE = re.compile(
     r"^runelite(?:\s*[-–—]\s*.+)?$", re.IGNORECASE
@@ -690,12 +683,9 @@ class ActivityDetector:
             self._synthetic_last_input_tick = None
             logger.info("User active again — media pause flag reset")
 
-        # Gaming takes highest priority — but only when the player is
-        # actually playing. A merely-running game process (e.g. leagueclient.exe
-        # launcher persisting after match close) must NOT lock mode to gaming.
-        # Promote to gaming only when the game is foregrounded OR input has
-        # been active recently with a game running. See GAMING_IDLE_THRESHOLD
-        # docstring above.
+        # Foreground game evidence is authoritative. Background game processes
+        # are context only; committed-mode dwell preserves a brief alt-tab
+        # without letting unrelated browser input renew Gaming indefinitely.
         if self._is_foreground_runelite_java(fg_proc, fg_title, fg_pid):
             return classified("gaming", "foreground_game", "foreground_runelite_java")
 
@@ -705,20 +695,10 @@ class ActivityDetector:
         has_regular_game = bool(processes & game_processes)
         has_background_runelite_java = running_runelite_java_pid is not None
         if has_regular_game or has_background_runelite_java:
-            if idle_seconds < GAMING_IDLE_THRESHOLD:
-                qualification = (
-                    "recent_input_runelite_java_hold"
-                    if has_background_runelite_java and not has_regular_game
-                    else "recent_input_game_hold"
-                )
-                return classified("gaming", "recent_input_game_hold", qualification)
-            # A verified background game exists, but recent real input has
-            # expired. Release Gaming normally instead of inventing a sticky
-            # RuneLite/browser exception.
             gaming_qualification_reason = (
-                "background_runelite_java_idle"
+                "background_runelite_java_not_foreground"
                 if has_background_runelite_java and not has_regular_game
-                else "background_game_idle"
+                else "background_game_not_foreground"
             )
 
         # Media / work / browser disambiguation via foreground window.
@@ -1331,7 +1311,7 @@ def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
     heartbeat: Optional[Callable[[], None]] = None,
-    mode_change_callback: Optional[Callable[[str], None]] = None,
+    activity_report_callback: Optional[Callable[[str, dict], None]] = None,
 ) -> None:
     """
     Main loop — poll processes, report mode changes to the Home Hub server.
@@ -1345,8 +1325,8 @@ def run_agent(
         heartbeat: Optional supervisor liveness pulse, called once per loop
             iteration so a hung-but-alive thread can be distinguished from a
             healthy one.
-        mode_change_callback: Optional local callback invoked only when the
-            detector's committed (post-dwell) mode changes.
+        activity_report_callback: Called after each successful Latitude
+            activity POST with the committed mode and authoritative response.
     """
     trusted_input_tracker = TrustedWakeInputTracker()
     trusted_input_tracker.start()
@@ -1371,12 +1351,6 @@ def run_agent(
                 mode_changed = detector.has_changed(mode)
                 heartbeat_due = (now - last_report_time) >= heartbeat_interval
 
-                if mode_changed and mode_change_callback is not None:
-                    try:
-                        mode_change_callback(mode)
-                    except Exception:
-                        logger.exception("Committed-mode callback failed for '%s'", mode)
-
                 if mode_changed or heartbeat_due:
                     if mode_changed:
                         logger.info(f"Activity changed: {mode}")
@@ -1395,6 +1369,15 @@ def run_agent(
                         )
                         resp.raise_for_status()
                         last_report_time = now
+                        if activity_report_callback is not None:
+                            try:
+                                result = resp.json()
+                                if isinstance(result, dict):
+                                    activity_report_callback(mode, result)
+                            except (ValueError, AttributeError, TypeError):
+                                logger.warning("Activity response was not valid JSON authority")
+                            except Exception:
+                                logger.exception("Activity report callback failed for '%s'", mode)
                         if mode_changed:
                             logger.info(f"Reported '{mode}' to server (HTTP {resp.status_code})")
                         backoff = 1
