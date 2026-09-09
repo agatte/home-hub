@@ -419,3 +419,9 @@ def test_backend_start_failure_rolls_back_before_reconciliation(tmp_path: Path):
     assert not (state_dir / "returning-home").exists()
     assert "curl POST" not in events
     assert "disable --now home-hub.service" in events
+
+
+def test_deploy_preserves_inactive_ambient_service_state():
+    script = (host.PROJECT_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    assert script.count("systemctl --user try-restart home-hub-ambient.service") == 2
+    assert "systemctl --user restart home-hub-ambient.service" not in script

@@ -266,7 +266,7 @@ rollback() {
         # here doesn't fail the rollback (no health check on ambient).
         if [[ "$RESTART_AMBIENT" == "1" ]]; then
             echo "→ Restarting home-hub-ambient.service (rollback)..."
-            systemctl --user restart home-hub-ambient.service || \
+            systemctl --user try-restart home-hub-ambient.service || \
                 echo "  (ambient restart failed; main service is still healthy)"
         fi
         if [[ "$RESTART_LATITUDE_STREAMING" == "1" ]]; then
@@ -405,7 +405,7 @@ fi
 
 if [[ "$RESTART_AMBIENT" == "1" ]]; then
     echo "→ Restarting home-hub-ambient.service..."
-    systemctl --user restart home-hub-ambient.service
+    systemctl --user try-restart home-hub-ambient.service
 fi
 
 if [[ "$RESTART_LATITUDE_STREAMING" == "1" ]]; then
