@@ -39,6 +39,7 @@ from backend.services.pc_agent.supervisor_recovery import (
     ProcessIdentity,
     current_process_identity,
     launch_detached_recovery,
+    launch_detached_transition,
 )
 
 # ---------------------------------------------------------------------------
@@ -110,6 +111,28 @@ RESPAWN_TASK_NAME = "Home Hub Agent Supervisor"
 RESUME_DETECTION_GAP = 30.0
 RESUME_HEARTBEAT_GRACE = 15.0
 RECOVERY_BREADCRUMB_FILE = LOG_DIR / "supervisor-recovery.log"
+CLASSIFIER_TRANSITION_FILE = LOG_DIR / "classifier-gaming-transitions.log"
+
+SUPERVISOR_MODE_CANONICAL = "canonical"
+SUPERVISOR_MODE_AUTOMATIC = "automatic"
+SUPERVISOR_MODE_MANUAL = "manual"
+
+
+def classifier_transition_target(
+    committed_mode: str,
+    supervisor_mode: str,
+    classifier_enabled: bool,
+) -> tuple[str, str] | None:
+    """Return the required replacement target/reason for a committed edge."""
+    if supervisor_mode == SUPERVISOR_MODE_MANUAL:
+        return None
+    if committed_mode == "gaming":
+        if supervisor_mode == SUPERVISOR_MODE_CANONICAL and classifier_enabled:
+            return SUPERVISOR_MODE_AUTOMATIC, "automatic_gaming_start"
+        return None
+    if supervisor_mode == SUPERVISOR_MODE_AUTOMATIC:
+        return SUPERVISOR_MODE_CANONICAL, "automatic_gaming_exit"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +317,8 @@ class AgentSupervisor:
         runtime_clock: SuspendAwareRuntimeClock | None = None,
         recovery_launcher: Callable[[ProcessIdentity, Path], None] = launch_detached_recovery,
         exit_fn: Callable[[int], None] = os._exit,
+        supervisor_mode: str = SUPERVISOR_MODE_CANONICAL,
+        transition_launcher: Callable[[ProcessIdentity, Path, str, str], None] = launch_detached_transition,
     ) -> None:
         self._server_url = server_url
         self._stop = threading.Event()
@@ -306,6 +331,11 @@ class AgentSupervisor:
         self._recovery_launcher = recovery_launcher
         self._exit_fn = exit_fn
         self._recovery_started = False
+        self._classifier_enabled = classifier
+        self._supervisor_mode = supervisor_mode
+        self._transition_launcher = transition_launcher
+        self._transition_lock = threading.Lock()
+        self._pending_transition: tuple[str, str] | None = None
         self._register_activity_detector()
         self._register_ambient_monitor(classifier, shadow)
         self._register_screen_sync()
@@ -322,12 +352,70 @@ class AgentSupervisor:
             self._agents["activity_detector"] = AgentState(
                 name="activity_detector",
                 target=run_agent,
-                kwargs={"server_url": self._server_url},
+                kwargs={
+                    "server_url": self._server_url,
+                    "mode_change_callback": self._on_committed_mode_change,
+                },
                 heartbeat_timeout=HEARTBEAT_TIMEOUTS["activity_detector"],
             )
             logger.info("Registered: activity_detector")
         except ImportError as e:
             logger.warning("Cannot register activity_detector: %s", e)
+
+    def _write_classifier_transition(self, reason: str, detail: str) -> None:
+        FileBreadcrumbs(CLASSIFIER_TRANSITION_FILE).write(
+            str(os.getpid()), reason, detail,
+        )
+
+    def _on_committed_mode_change(self, committed_mode: str) -> None:
+        transition = classifier_transition_target(
+            committed_mode, self._supervisor_mode, self._classifier_enabled,
+        )
+        if transition is None:
+            if self._supervisor_mode == SUPERVISOR_MODE_MANUAL:
+                logger.info(
+                    "Classifier transition suppressed by manual gaming state "
+                    "(committed mode: %s)", committed_mode,
+                )
+            return
+        with self._transition_lock:
+            if self._pending_transition is not None:
+                return
+            self._pending_transition = transition
+        target, reason = transition
+        logger.info(
+            "Classifier transition requested: %s -> %s (committed mode: %s)",
+            reason, target, committed_mode,
+        )
+        self._write_classifier_transition(
+            reason, f"requested target={target} committed_mode={committed_mode}",
+        )
+
+    def _perform_pending_transition(self) -> None:
+        with self._transition_lock:
+            transition = self._pending_transition
+            self._pending_transition = None
+        if transition is None or self._recovery_started:
+            return
+        target, reason = transition
+        identity = self._process_identity
+        if sys.platform != "win32" or identity is None:
+            logger.error("Cannot perform classifier transition without process identity")
+            return
+        self._recovery_started = True
+        self._write_classifier_transition(reason, f"detached target={target}")
+        try:
+            self._transition_launcher(
+                identity, CLASSIFIER_TRANSITION_FILE, target, self._server_url,
+            )
+        except Exception:
+            logger.exception("Failed to launch classifier transition worker")
+            self._write_classifier_transition(reason, "detached launch failed")
+            with self._transition_lock:
+                self._pending_transition = transition
+            self._recovery_started = False
+            return
+        self._exit_fn(0)
 
     def _register_ambient_monitor(
         self, classifier: bool, shadow: bool,
@@ -573,9 +661,15 @@ class AgentSupervisor:
             sys.exit(0)
 
         logger.info(
-            "Supervisor started (PID %d) — managing %d agents, server: %s",
+            "Supervisor started (PID %d) — managing %d agents, server: %s, "
+            "classifier_mode: %s, classifier: %s",
             os.getpid(), len(self._agents), self._server_url,
+            self._supervisor_mode, self._classifier_enabled,
         )
+        if self._supervisor_mode == SUPERVISOR_MODE_MANUAL:
+            self._write_classifier_transition(
+                "manual_gaming_state", "supervisor active classifier=false",
+            )
 
         # Start all registered agents
         for state in self._agents.values():
@@ -588,6 +682,7 @@ class AgentSupervisor:
 
         try:
             while not self._stop.is_set():
+                self._perform_pending_transition()
                 now = self._active_now()
 
                 for state in self._agents.values():
@@ -670,6 +765,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Run YAMNet in active mode (drives mode changes)",
     )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--automatic-classifier-gaming",
+        action="store_true",
+        help="Mark this classifier-reduced supervisor as automatically game-triggered",
+    )
+    mode_group.add_argument(
+        "--manual-gaming-state",
+        action="store_true",
+        help="Mark this classifier-reduced supervisor as manual gaming state",
+    )
     args = parser.parse_args()
 
     # Clean shutdown on SIGTERM (e.g., from Task Scheduler stop)
@@ -685,9 +791,18 @@ if __name__ == "__main__":
         logger.debug("Another supervisor already running — exiting")
         sys.exit(0)
 
+    supervisor_mode = (
+        SUPERVISOR_MODE_MANUAL if args.manual_gaming_state
+        else SUPERVISOR_MODE_AUTOMATIC if args.automatic_classifier_gaming
+        else SUPERVISOR_MODE_CANONICAL
+    )
+    if supervisor_mode != SUPERVISOR_MODE_CANONICAL and args.classifier:
+        parser.error("classifier-reduced supervisor modes cannot use --classifier")
+
     supervisor = AgentSupervisor(
         server_url=args.server,
         classifier=args.classifier,
         shadow=not args.active,
+        supervisor_mode=supervisor_mode,
     )
     supervisor.run()

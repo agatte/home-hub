@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 
 PROCESS_TERMINATE = 0x0001
@@ -63,6 +63,8 @@ class RecoveryOperations(Protocol):
     def terminate_exact(self, identity: ProcessIdentity) -> TerminationResult: ...
 
     def kick_canonical_launcher(self) -> None: ...
+
+    def kick_classifier_reduced(self, server_url: str) -> None: ...
 
 
 class FileBreadcrumbs:
@@ -222,16 +224,40 @@ class WindowsRecoveryOperations:
             close_fds=True,
         )
 
+    def kick_classifier_reduced(self, server_url: str) -> None:
+        project_root = Path(__file__).resolve().parents[3]
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "backend.services.pc_agent.supervisor",
+                "--server",
+                server_url,
+                "--active",
+                "--automatic-classifier-gaming",
+            ],
+            cwd=project_root,
+            creationflags=CREATE_NO_WINDOW,
+            close_fds=True,
+        )
+
 
 def _launch_replacement(
     operations: RecoveryOperations,
     breadcrumbs: FileBreadcrumbs,
     recovery_id: str,
     reason: str,
+    replacement_target: Literal["canonical", "automatic"] = "canonical",
+    server_url: str | None = None,
 ) -> bool:
     breadcrumbs.write(recovery_id, "replacement-launch-attempted", reason)
     try:
-        operations.kick_canonical_launcher()
+        if replacement_target == "automatic":
+            if not server_url:
+                raise ValueError("server_url is required for automatic replacement")
+            operations.kick_classifier_reduced(server_url)
+        else:
+            operations.kick_canonical_launcher()
     except Exception as exc:
         breadcrumbs.write(
             recovery_id, "replacement-launch-failed", f"{type(exc).__name__}: {exc}",
@@ -251,6 +277,8 @@ def recover_supervisor(
     verify_seconds: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    replacement_target: Literal["canonical", "automatic"] = "canonical",
+    server_url: str | None = None,
 ) -> bool:
     """Wait briefly, hard-kill the exact old owner, then launch its replacement."""
     recovery_id = recovery_id or uuid.uuid4().hex
@@ -262,7 +290,10 @@ def recover_supervisor(
         if inspection is IdentityInspection.ABSENT_OR_DIFFERENT:
             breadcrumbs.write(recovery_id, "graceful-wait-outcome", "old identity gone")
             breadcrumbs.write(recovery_id, "old-identity-confirmed-gone", "graceful")
-            return _launch_replacement(operations, breadcrumbs, recovery_id, "graceful")
+            return _launch_replacement(
+                operations, breadcrumbs, recovery_id, "graceful",
+                replacement_target, server_url,
+            )
         if inspection is IdentityInspection.EXACT:
             breadcrumbs.write(recovery_id, "exact-old-identity-observed", identity.value)
         sleep(0.1)
@@ -271,7 +302,10 @@ def recover_supervisor(
     breadcrumbs.write(recovery_id, "graceful-wait-outcome", inspection.name.lower())
     if inspection is IdentityInspection.ABSENT_OR_DIFFERENT:
         breadcrumbs.write(recovery_id, "old-identity-confirmed-gone", "graceful-deadline")
-        return _launch_replacement(operations, breadcrumbs, recovery_id, "graceful-deadline")
+        return _launch_replacement(
+            operations, breadcrumbs, recovery_id, "graceful-deadline",
+            replacement_target, server_url,
+        )
     if inspection is IdentityInspection.INDETERMINATE:
         breadcrumbs.write(recovery_id, "recovery-failed", "pre-terminate inspection indeterminate")
         return False
@@ -285,13 +319,19 @@ def recover_supervisor(
         inspection = operations.inspect_identity(identity)
         if inspection is IdentityInspection.ABSENT_OR_DIFFERENT:
             breadcrumbs.write(recovery_id, "old-identity-confirmed-gone", "forced")
-            return _launch_replacement(operations, breadcrumbs, recovery_id, "forced")
+            return _launch_replacement(
+                operations, breadcrumbs, recovery_id, "forced",
+                replacement_target, server_url,
+            )
         sleep(0.1)
 
     inspection = operations.inspect_identity(identity)
     if inspection is IdentityInspection.ABSENT_OR_DIFFERENT:
         breadcrumbs.write(recovery_id, "old-identity-confirmed-gone", "forced-deadline")
-        return _launch_replacement(operations, breadcrumbs, recovery_id, "forced-deadline")
+        return _launch_replacement(
+            operations, breadcrumbs, recovery_id, "forced-deadline",
+            replacement_target, server_url,
+        )
     breadcrumbs.write(recovery_id, "recovery-failed", f"post-terminate {inspection.name.lower()}")
     return False
 
@@ -318,17 +358,55 @@ def launch_detached_recovery(identity: ProcessIdentity, breadcrumb_path: Path) -
     )
 
 
+def launch_detached_transition(
+    identity: ProcessIdentity,
+    breadcrumb_path: Path,
+    replacement_target: Literal["canonical", "automatic"],
+    server_url: str,
+) -> None:
+    """Replace the current healthy supervisor after its exact process exits."""
+    if sys.platform != "win32":
+        return
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "backend.services.pc_agent.supervisor_recovery",
+            "--pid",
+            str(identity.pid),
+            "--creation-filetime",
+            str(identity.creation_filetime),
+            "--breadcrumb-path",
+            str(breadcrumb_path),
+            "--replacement-target",
+            replacement_target,
+            "--server-url",
+            server_url,
+        ],
+        cwd=Path(__file__).resolve().parents[3],
+        creationflags=CREATE_NO_WINDOW | 0x00000008 | 0x00000200,
+        close_fds=True,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Recover a poisoned Home Hub supervisor")
     parser.add_argument("--pid", required=True, type=int)
     parser.add_argument("--creation-filetime", required=True, type=int)
     parser.add_argument("--breadcrumb-path", required=True, type=Path)
+    parser.add_argument(
+        "--replacement-target", choices=("canonical", "automatic"),
+        default="canonical",
+    )
+    parser.add_argument("--server-url")
     args = parser.parse_args()
     identity = ProcessIdentity(args.pid, args.creation_filetime)
     return 0 if recover_supervisor(
         identity,
         WindowsRecoveryOperations(),
         FileBreadcrumbs(args.breadcrumb_path),
+        replacement_target=args.replacement_target,
+        server_url=args.server_url,
     ) else 1
 
 

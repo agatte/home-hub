@@ -1331,6 +1331,7 @@ def run_agent(
     server_url: str,
     stop_event: Optional[threading.Event] = None,
     heartbeat: Optional[Callable[[], None]] = None,
+    mode_change_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     """
     Main loop — poll processes, report mode changes to the Home Hub server.
@@ -1344,6 +1345,8 @@ def run_agent(
         heartbeat: Optional supervisor liveness pulse, called once per loop
             iteration so a hung-but-alive thread can be distinguished from a
             healthy one.
+        mode_change_callback: Optional local callback invoked only when the
+            detector's committed (post-dwell) mode changes.
     """
     trusted_input_tracker = TrustedWakeInputTracker()
     trusted_input_tracker.start()
@@ -1367,6 +1370,12 @@ def run_agent(
                 now = time.time()
                 mode_changed = detector.has_changed(mode)
                 heartbeat_due = (now - last_report_time) >= heartbeat_interval
+
+                if mode_changed and mode_change_callback is not None:
+                    try:
+                        mode_change_callback(mode)
+                    except Exception:
+                        logger.exception("Committed-mode callback failed for '%s'", mode)
 
                 if mode_changed or heartbeat_due:
                     if mode_changed:

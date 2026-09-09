@@ -106,6 +106,7 @@ class _Ops:
         self.termination_requests = []
         self.killed_identities = []
         self.kicks = 0
+        self.automatic_kicks = []
 
     def inspect_identity(self, identity):
         if self.inspections:
@@ -120,6 +121,11 @@ class _Ops:
 
     def kick_canonical_launcher(self):
         self.kicks += 1
+        if self.launch_error:
+            raise self.launch_error
+
+    def kick_classifier_reduced(self, server_url):
+        self.automatic_kicks.append(server_url)
         if self.launch_error:
             raise self.launch_error
 
@@ -198,6 +204,25 @@ def test_launcher_exception_is_breadcrumbed_and_fails_recovery():
     assert not _recover(old, ops, crumbs)
     assert "replacement-launch-attempted" in crumbs.stages
     assert "replacement-launch-failed" in crumbs.stages
+
+
+def test_mode_transition_launches_classifier_reduced_target():
+    old = ProcessIdentity(17452, 123)
+    ops = _Ops([IdentityInspection.ABSENT_OR_DIFFERENT])
+    ticks = iter(range(100))
+
+    assert recover_supervisor(
+        old,
+        ops,
+        _Breadcrumbs(),
+        grace_seconds=0,
+        sleep=lambda _: None,
+        monotonic=lambda: next(ticks),
+        replacement_target="automatic",
+        server_url="http://192.168.86.210:8000",
+    )
+    assert ops.kicks == 0
+    assert ops.automatic_kicks == ["http://192.168.86.210:8000"]
 
 
 def test_breadcrumb_file_rotates_at_small_bound(tmp_path):
