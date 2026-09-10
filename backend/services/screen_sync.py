@@ -355,6 +355,12 @@ MODE_ZONE_MAX_BRIGHTNESS: dict[tuple[str, ...], int] = {
     ("watching", "bed", "upright",  "5"):  50,
 }
 
+# Desktop daytime Watching needs a useful diffuse room-light anchor before
+# lux/weather adaptation. The generic Watching/day L2 baseline (70) is tuned
+# for projector/general use and is too dim at the monitor even after a normal
+# dark-room lift. L5 deliberately keeps its separate glare-limited baseline.
+WATCHING_DAYLIGHT_DESK_L2_BASE = 120
+
 
 # ---------------------------------------------------------------------------
 # Rust profile — luma-driven brightness on a fixed ember color
@@ -998,6 +1004,8 @@ class ScreenSyncService:
             return False
         ct = int(base.get("ct", 333))
         base_bri = int(base.get("bri", 70))
+        if light_id == "2" and zone == "desk":
+            base_bri = max(base_bri, WATCHING_DAYLIGHT_DESK_L2_BASE)
 
         weather_mult = get_functional_weather_multiplier(
             "watching", "day", weather_condition,

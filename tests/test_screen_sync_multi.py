@@ -145,6 +145,40 @@ async def test_watching_daylight_reconciles_after_automation_invalidation():
 
 
 @pytest.mark.asyncio
+async def test_watching_daylight_desk_uses_useful_l2_base_only():
+    """Desk Watching lifts diffuse L2 without re-lifting glare-prone L5."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    assert await sync.apply_watching_daylight("2", zone="desk") is True
+    assert await sync.apply_watching_daylight("5", zone="desk") is True
+    assert hue.last_for("2")["bri"] == 120
+    assert hue.last_for("5")["bri"] == 50
+
+    # Today's lived case: bedroom lux 92.1 vs 127.3 baseline gives 1.1408x;
+    # cloudy weather adds 1.04x. L2 should land near useful room-light level
+    # while L5 remains on its existing ScreenSync glare ceiling.
+    sync.invalidate_sent_state(["2", "5"])
+    assert await sync.apply_watching_daylight(
+        "2", zone="desk", lux_multiplier=1.1408, weather_condition="clouds",
+    ) is True
+    assert await sync.apply_watching_daylight(
+        "5", zone="desk", lux_multiplier=1.1408, weather_condition="clouds",
+    ) is True
+    assert hue.last_for("2")["bri"] == 142
+    assert hue.last_for("5")["bri"] == 50
+
+
+@pytest.mark.asyncio
+async def test_watching_daylight_non_desk_keeps_generic_l2_base():
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    assert await sync.apply_watching_daylight("2", zone=None) is True
+    assert hue.last_for("2")["bri"] == 70
+
+
+@pytest.mark.asyncio
 async def test_unknown_light_id_is_noop():
     """Typo'd light ids must not silently apply to a real light."""
     hue = _FakeHue()
