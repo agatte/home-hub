@@ -35,6 +35,7 @@ from backend.services.light_state_calculator import (
     apply_weather_adjust,
     apply_zone_overlay,
     classify_weather,
+    enforce_watching_day_l5_comfort,
     get_time_period,
     interpolate_gaming_light_state,
     interpolate_gaming_state,
@@ -558,20 +559,34 @@ class TestApplyLuxMultiplier:
 
 class TestApplyZoneOverlay:
 
-    def _state(self, l1_bri: int = 80, l2_bri: int = 30) -> dict:
+    def _state(
+        self, l1_bri: int = 80, l2_bri: int = 30, l5_bri: int = 15,
+    ) -> dict:
         return {
             "1": {"on": True, "bri": l1_bri, "ct": 400},
             "2": {"on": True, "bri": l2_bri, "ct": 400},
             "3": {"on": False},
             "4": {"on": False},
+            "5": {"on": True, "bri": l5_bri, "ct": 454},
         }
 
     def test_desk_watching_lifts_l2(self):
         state = self._state(l2_bri=20)  # Below the day target of 160.
         out = apply_zone_overlay(state, "watching", "day", "desk", None)
         assert out["2"]["bri"] == 160
-        # L1 untouched.
+        # L1 and glare-prone L5 stay on their fixture-specific baselines.
         assert out["1"]["bri"] == 80
+        assert out["5"]["bri"] == 15
+
+    @pytest.mark.parametrize(
+        ("period", "l2_target"),
+        (("day", 160), ("evening", 110), ("night", 70), ("late_night", 50)),
+    )
+    def test_desk_watching_never_lifts_l5(self, period, l2_target):
+        state = self._state(l2_bri=10, l5_bri=12)
+        out = apply_zone_overlay(state, "watching", period, "desk", None)
+        assert out["2"]["bri"] == l2_target
+        assert out["5"]["bri"] == 12
 
     def test_desk_only_lifts_for_watching(self):
         # Working at desk: no lift (rule is watching-specific).
@@ -799,6 +814,25 @@ class TestZonePostureFreshness:
 # ---------------------------------------------------------------------------
 # Weather adjustment — classify + apply
 # ---------------------------------------------------------------------------
+
+
+class TestWatchingDayL5Comfort:
+    @pytest.mark.parametrize("condition", ("clouds", "rain", "snow"))
+    def test_environmental_layers_cannot_raise_l5_above_canonical(self, condition):
+        state = resolve_activity_state("watching", "day")
+        state = apply_functional_weather_brightness(state, "watching", "day", condition)
+        state = apply_zone_overlay(state, "watching", "day", "desk", None)
+        state = apply_weather_adjust(state, condition)
+
+        out = enforce_watching_day_l5_comfort(state, "watching", "day")
+        canonical = ACTIVITY_LIGHT_STATES["watching"]["day"]["5"]["bri"]
+        assert out["5"]["bri"] <= canonical
+        assert out["2"]["bri"] > out["5"]["bri"]
+
+    def test_non_day_watching_is_unchanged(self):
+        state = resolve_activity_state("watching", "night")
+        out = enforce_watching_day_l5_comfort(state, "watching", "night")
+        assert out is state
 
 
 class TestWeatherAdjust:

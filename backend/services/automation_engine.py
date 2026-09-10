@@ -111,6 +111,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
     classify_weather as _classify_weather_pure,
+    enforce_watching_day_l5_comfort as _enforce_watching_day_l5_comfort,
     get_mode_state_table as _get_mode_state_table,
     get_time_period as _calc_get_time_period,
     interpolate_gaming_state,
@@ -4441,6 +4442,7 @@ class AutomationEngine:
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
+            state = _enforce_watching_day_l5_comfort(state, mode, period)
             if atmosphere_brightness_basis is not None:
                 state = bound_living_room_atmosphere_brightness(
                     state,

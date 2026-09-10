@@ -125,6 +125,26 @@ async def test_generic_gaming_reconciles_invalidated_targets_once_per_light():
 
 
 @pytest.mark.asyncio
+async def test_watching_daylight_reconciles_after_automation_invalidation():
+    """A normal automation write must invalidate the daylight dedup cache too."""
+    hue = _FakeHue()
+    sync = ss.ScreenSyncService(hue_service=hue, target_light_ids=["2", "5"])
+
+    assert await sync.apply_watching_daylight("5", zone="desk") is True
+    assert hue.last_for("5")["bri"] == 50
+    calls_after_first = len(hue.calls)
+
+    assert await sync.apply_watching_daylight("5", zone="desk") is True
+    assert len(hue.calls) == calls_after_first
+
+    sync.invalidate_sent_state(["5"])
+    assert "5" not in sync._last_daylight_state
+    assert await sync.apply_watching_daylight("5", zone="desk") is True
+    assert len(hue.calls) == calls_after_first + 1
+    assert hue.last_for("5")["bri"] == 50
+
+
+@pytest.mark.asyncio
 async def test_unknown_light_id_is_noop():
     """Typo'd light ids must not silently apply to a real light."""
     hue = _FakeHue()
@@ -556,11 +576,13 @@ async def test_direct_writer_supersession_clears_cache_freshness_and_all_holds()
     )
     sync.refresh_watching_hold("desktop", ["2"])
     sync.refresh_watching_hold("laptop", ["2"])
+    sync._last_daylight_state["2"] = {"ct": 333, "bri": 50}
     assert sync.fresh_authoritative_state("2") is not None
 
     sync.supersede_light("2")
 
     assert "2" not in sync._last_sent_state
+    assert "2" not in sync._last_daylight_state
     assert "2" not in sync.last_color_at_by_light
     assert all(light_id != "2" for _source, light_id in sync._hold_refreshed_at)
     assert "2" not in sync.fresh_owned_light_ids()

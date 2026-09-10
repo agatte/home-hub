@@ -1667,11 +1667,10 @@ def apply_zone_overlay(
     if not is_per_light:
         return state
 
-    # Branch 1 — watching at desk: lift L2 (and L5 if present).
-    # L5 ("Bedroom Lamp Right", desk-side clear housing) joins the lift
-    # so both desk lamps brighten when watching is happening at the
-    # monitor instead of the projector. Lift-only — preserves any
-    # learned override that already lifted them.
+    # Branch 1 — watching at desk: lift only L2. The diffuse-shade L2 is
+    # the room-light lever for monitor Watching. L5's clear housing is a
+    # glare-prone point source and stays on its fixture-specific baseline;
+    # lifting it with L2 contradicts the accepted visual-comfort contract.
     if zone == "desk" and mode == "watching":
         zone_bri_by_period = {
             "day": 160,
@@ -1684,7 +1683,7 @@ def apply_zone_overlay(
             return state
         new_state = {lid: dict(ls) for lid, ls in state.items()}
         changed = False
-        for light_id in ("2", "5"):
+        for light_id in ("2",):
             if light_id not in new_state:
                 continue
             current = int(new_state[light_id].get("bri", 0))
@@ -1760,6 +1759,34 @@ def apply_zone_overlay(
         return new_state
 
     return state
+
+
+def enforce_watching_day_l5_comfort(
+    state: dict[str, Any], mode: str, period: str,
+) -> dict[str, Any]:
+    """Keep glare-prone L5 at or below its canonical Watching/day level.
+
+    This runs after weather/context transforms so no heuristic can re-lift the
+    clear-housing lamp above the accepted daytime comfort ceiling. Manual and
+    external ownership are still enforced later at the applicator boundary.
+    """
+    if mode != "watching" or period != "day":
+        return state
+    light = state.get("5")
+    if not isinstance(light, dict) or light.get("on") is False:
+        return state
+    bri = light.get("bri")
+    if not isinstance(bri, (int, float)):
+        return state
+    canonical = ACTIVITY_LIGHT_STATES["watching"]["day"]["5"].get("bri")
+    if not isinstance(canonical, (int, float)) or bri <= canonical:
+        return state
+    result = {
+        light_id: value.copy() if isinstance(value, dict) else value
+        for light_id, value in state.items()
+    }
+    result["5"]["bri"] = int(canonical)
+    return result
 
 
 def is_zone_posture_freshness_ok(

@@ -807,6 +807,7 @@ class ScreenSyncService:
         for light_id in light_ids:
             if light_id in self._targets:
                 self._last_sent_state.pop(light_id, None)
+                self._last_daylight_state.pop(light_id, None)
 
     def supersede_light(self, light_id: str) -> None:
         """Forget every physical-authority claim after another writer succeeds.
@@ -820,6 +821,7 @@ class ScreenSyncService:
         if light_id not in self._targets:
             return
         self._last_sent_state.pop(light_id, None)
+        self._last_daylight_state.pop(light_id, None)
         self._last_color_at_by_light.pop(light_id, None)
         for key in list(self._hold_refreshed_at):
             if key[1] == light_id:
