@@ -131,6 +131,13 @@ class TestCaching:
             result = await svc.get_current()
         assert result is None
 
+    async def test_nws_http_client_follows_redirects(self):
+        svc = _make_service()
+        client = _mock_client(Exception("stop after client construction"))
+        with patch("backend.services.weather_service.httpx.AsyncClient", return_value=client) as ctor:
+            await svc.get_current()
+        assert ctor.call_args.kwargs["follow_redirects"] is True
+
     def test_get_cached_returns_none_initially(self):
         svc = _make_service()
         assert svc.get_cached() is None

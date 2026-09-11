@@ -243,7 +243,7 @@ class WeatherService:
     async def _poll_metadata(self) -> None:
         while True:
             try:
-                async with httpx.AsyncClient(timeout=10.0, headers=NWS_HEADERS) as client:
+                async with httpx.AsyncClient(timeout=10.0, headers=NWS_HEADERS, follow_redirects=True) as client:
                     await self._ensure_point_metadata(client, force=True)
                     await self._fetch_sky_cover(client)
                     await self._fetch_sunrise_sunset(client)
@@ -381,7 +381,7 @@ class WeatherService:
 
         try:
             async with httpx.AsyncClient(
-                timeout=10.0, headers=NWS_HEADERS,
+                timeout=10.0, headers=NWS_HEADERS, follow_redirects=True,
             ) as client:
                 obs = await self._fetch_observations(client)
                 if not obs:
@@ -431,7 +431,7 @@ class WeatherService:
 
         try:
             async with httpx.AsyncClient(
-                timeout=10.0, headers=NWS_HEADERS,
+                timeout=10.0, headers=NWS_HEADERS, follow_redirects=True,
             ) as client:
                 await self._fetch_alerts(client)
         except Exception as e:
