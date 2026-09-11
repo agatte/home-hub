@@ -6,27 +6,20 @@ daily forecasts, and active severe weather alerts. No API key required.
 Replaces the previous OpenWeatherMap integration for better real-time
 storm detection and free severe weather alerts.
 """
+import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
 
 logger = logging.getLogger("home_hub.weather")
 
-# Indianapolis coordinates
-LAT, LON = 39.7684, -86.1581
-# NWS grid info (static — never changes for a location)
-NWS_OFFICE = "IND"
-NWS_GRID_X, NWS_GRID_Y = 58, 69
-# Nearest observation station (Indianapolis International Airport)
-NWS_STATION = "KIND"
-
 NWS_BASE = "https://api.weather.gov"
-NWS_OBSERVATIONS_URL = f"{NWS_BASE}/stations/{NWS_STATION}/observations/latest"
-NWS_FORECAST_URL = f"{NWS_BASE}/gridpoints/{NWS_OFFICE}/{NWS_GRID_X},{NWS_GRID_Y}/forecast"
 NWS_ALERTS_URL = f"{NWS_BASE}/alerts/active"
 SUNRISE_SUNSET_URL = "https://api.sunrise-sunset.org/json"
 NWS_HEADERS = {
@@ -36,7 +29,13 @@ NWS_HEADERS = {
 
 CACHE_TTL = 300  # 5 minutes (down from 10 — NWS is free, no rate concern)
 ALERT_CACHE_TTL = 120  # 2 minutes for alerts (storms move fast)
-ASTRO_CACHE_TTL = 86400  # 24 hours — sunrise/sunset shift <1 min per day
+POINT_METADATA_TTL = 86400  # 24 hours — re-resolve NWS point metadata daily
+ASTRO_CACHE_TTL = 86400  # retained for legacy callers; sun refresh is date-keyed
+OBSERVATION_FRESHNESS_MAX_SECONDS = 75 * 60
+OBSERVATION_FUTURE_SKEW_SECONDS = 5 * 60
+ALERT_MAX_AUTHORITY_SECONDS = 6 * 60 * 60
+ALERT_ACTUATOR_GRACE_SECONDS = 10 * 60
+_STATION_ID_RE = re.compile(r"^[A-Z0-9]{3,8}$")
 
 TZ = ZoneInfo("America/Indiana/Indianapolis")
 
@@ -139,10 +138,38 @@ def _nws_icon_code(description: str, is_daytime: bool) -> str:
     return "03d" if is_daytime else "03n"
 
 
+def _condition_family(description: str | None) -> str | None:
+    """Return the canonical coarse provider family without lighting policy."""
+    if not description:
+        return None
+    desc = description.lower()
+    if any(token in desc for token in ("thunder", "tornado", "hurricane")):
+        return "thunderstorm"
+    if any(token in desc for token in ("snow", "sleet", "ice", "freezing rain")):
+        return "snow"
+    if any(token in desc for token in ("rain", "drizzle", "shower", "flood")):
+        return "rain"
+    if any(token in desc for token in ("wind", "breezy", "gust")):
+        return "wind"
+    if any(token in desc for token in ("cloud", "overcast")):
+        return "clouds"
+    if any(token in desc for token in ("clear", "fair", "sunny")):
+        return "clear"
+    return "other"
+
+
 class WeatherService:
     """Cached NWS weather data provider with severe weather alerts."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        location_label: str = "Indianapolis",
+        preferred_stations: str | list[str] = "",
+    ) -> None:
+        if (latitude is None) != (longitude is None):
+            raise ValueError("Weather latitude and longitude must be configured together")
         self._cache: Optional[dict[str, Any]] = None
         self._cache_time: float = 0
         self._cache_is_stale_fallback: bool = False
@@ -155,35 +182,189 @@ class WeatherService:
         self._sunrise: Optional[int] = None
         self._sunset: Optional[int] = None
         self._astro_cache_time: float = 0
+        self._astro_cache_date: str | None = None
+        self._latitude = latitude
+        self._longitude = longitude
+        self._configured = latitude is not None and longitude is not None
+        self._location_label = location_label
+        values = preferred_stations.split(",") if isinstance(preferred_stations, str) else preferred_stations
+        self._preferred_stations = [
+            value.strip().upper()
+            for value in values
+            if _STATION_ID_RE.fullmatch(value.strip().upper())
+        ]
+        self._forecast_url: str | None = None
+        self._grid_url: str | None = None
+        self._stations_url: str | None = None
+        self._point_stations: list[str] = []
+        self._point_metadata_time: float = 0
+        self._grid_id: str | None = None
+        self._grid_x: int | None = None
+        self._grid_y: int | None = None
+        self._station_id: str | None = None
+        self._source_observation_at: datetime | None = None
+        self._last_fetch_at: datetime | None = None
+        self._sky_cover: dict[str, Any] | None = None
+        self._background_tasks: list[asyncio.Task] = []
+        self._point_lock = asyncio.Lock()
+
+    @property
+    def configured(self) -> bool:
+        """Whether an explicit home point is configured for weather authority."""
+        return self._configured
+
+    async def start(self) -> None:
+        """Start non-blocking backend-owned weather refresh loops."""
+        if not self._configured or self._background_tasks:
+            return
+        self._background_tasks = [
+            asyncio.create_task(self._poll_current()),
+            asyncio.create_task(self._poll_alerts()),
+            asyncio.create_task(self._poll_metadata()),
+        ]
+
+    async def close(self) -> None:
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks = []
+
+    async def _poll_current(self) -> None:
+        while True:
+            await self.get_current()
+            await asyncio.sleep(CACHE_TTL)
+
+    async def _poll_alerts(self) -> None:
+        while True:
+            await self.refresh_alerts()
+            await asyncio.sleep(ALERT_CACHE_TTL)
+
+    async def _poll_metadata(self) -> None:
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=10.0, headers=NWS_HEADERS) as client:
+                    await self._ensure_point_metadata(client, force=True)
+                    await self._fetch_sky_cover(client)
+                    await self._fetch_sunrise_sunset(client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Weather metadata refresh failed: %s", exc)
+            await asyncio.sleep(POINT_METADATA_TTL)
 
     def get_cached(self) -> Optional[dict[str, Any]]:
-        """Return the most recent cached weather data (sync, no fetch)."""
-        return self._cache
+        """Return last-known display weather with any live severe override."""
+        if self._cache is None:
+            return None
+        weather = self._cache.copy()
+        alert_description = self._get_alert_description()
+        if alert_description:
+            weather["description"] = alert_description
+            now = datetime.now(tz=TZ)
+            weather["icon"] = _nws_icon_code(alert_description, 6 <= now.hour < 20)
+        return weather
 
     def get_cache_snapshot(self) -> dict[str, Any]:
-        """Return cache health without performing a network fetch."""
-        if self._cache is None or self._cache_time <= 0:
-            return {
-                "condition": None,
-                "observed_at": None,
-                "age_seconds": None,
-                "fresh": False,
-                "stale_fallback": False,
-            }
-        age_seconds = max(0.0, time.time() - self._cache_time)
+        """Return canonical display/diagnostic weather context without I/O."""
+        display_weather = self.get_cached()
+        provider_description = self._cache.get("description") if self._cache else None
+        display_severe_override = self._get_alert_description()
+        severe_override = self._get_authoritative_alert_description()
+        effective_description = severe_override or provider_description
+        raw_source_age = (
+            (datetime.now(timezone.utc) - self._source_observation_at).total_seconds()
+            if self._source_observation_at is not None
+            else None
+        )
+        source_age = max(0.0, raw_source_age) if raw_source_age is not None else None
+        cache_age = max(0.0, time.time() - self._cache_time) if self._cache_time > 0 else None
+        source_fresh = bool(
+            raw_source_age is not None
+            and -OBSERVATION_FUTURE_SKEW_SECONDS <= raw_source_age <= OBSERVATION_FRESHNESS_MAX_SECONDS
+            and not self._cache_is_stale_fallback
+        )
+        alert_fresh = severe_override is not None
+        alert_feed_age = self._alert_feed_age_seconds()
+        legacy_age = source_age if source_age is not None else cache_age
+        provenance = (
+            "home_point_alert" if alert_fresh else
+            "station_observation" if source_fresh else
+            "stale_display" if display_weather is not None else "missing"
+        )
         return {
-            "condition": self._cache.get("description"),
-            "observed_at": datetime.fromtimestamp(
-                self._cache_time, tz=timezone.utc
-            ).isoformat(),
-            "age_seconds": round(age_seconds, 3),
-            "fresh": age_seconds <= CACHE_TTL,
+            "condition": effective_description,
+            "condition_family": _condition_family(effective_description),
+            "provider_description": provider_description,
+            "severe_alert_override": severe_override,
+            "display_severe_alert_override": display_severe_override,
+            "severe_alert_count": len(self._locally_active_alerts()),
+            "alert_feed_age_seconds": round(alert_feed_age, 3) if alert_feed_age is not None else None,
+            "alert_actuator_usable": alert_fresh,
+            "provenance": provenance,
+            "observed_at": self._source_observation_at.isoformat() if self._source_observation_at else None,
+            "fetched_at": self._last_fetch_at.isoformat() if self._last_fetch_at else None,
+            "age_seconds": round(legacy_age, 3) if legacy_age is not None else None,
+            "cache_age_seconds": round(cache_age, 3) if cache_age is not None else None,
+            "fresh": alert_fresh or source_fresh,
+            "actuator_usable": alert_fresh or source_fresh,
             "stale_fallback": self._cache_is_stale_fallback,
+            "configured": self._configured,
+            "location_label": self._location_label,
+            "station_id": self._station_id,
+            "grid_id": self._grid_id,
+            "grid_x": self._grid_x,
+            "grid_y": self._grid_y,
+            "gridpoint": (
+                f"{self._grid_id} {self._grid_x},{self._grid_y}"
+                if self._grid_id is not None and self._grid_x is not None and self._grid_y is not None
+                else None
+            ),
+            "sky_cover": self._sky_cover,
+            "sunrise": self._sunrise,
+            "sunset": self._sunset,
+            "polling_active": bool(self._background_tasks),
         }
 
     def get_cached_alerts(self) -> list[dict[str, Any]]:
         """Return cached active weather alerts."""
-        return self._alert_cache or []
+        return self._locally_active_alerts()
+
+    def _alert_feed_age_seconds(self) -> float | None:
+        if self._alert_cache_time <= 0:
+            return None
+        return max(0.0, time.time() - self._alert_cache_time)
+
+    def _get_authoritative_alert_description(self) -> Optional[str]:
+        """Return severe override only while the alert feed is recently verified."""
+        age = self._alert_feed_age_seconds()
+        if age is None or age > ALERT_ACTUATOR_GRACE_SECONDS:
+            return None
+        return self._get_alert_description()
+
+    def get_actuator_context(self) -> Optional[dict[str, Any]]:
+        """Return weather safe for actuation; stale ordinary weather is neutral."""
+        alert_description = self._get_authoritative_alert_description()
+        if alert_description:
+            return {
+                "weather": {"description": alert_description},
+                "alerts": self.get_cached_alerts(),
+                "provenance": "home_point_alert",
+            }
+        if not self._cache or not self._source_observation_at or self._cache_is_stale_fallback:
+            return None
+        age = (datetime.now(timezone.utc) - self._source_observation_at).total_seconds()
+        if age < -OBSERVATION_FUTURE_SKEW_SECONDS or age > OBSERVATION_FRESHNESS_MAX_SECONDS:
+            return None
+        return {
+            "weather": self._cache.copy(),
+            "station_id": self._station_id,
+            "source_observation_at": self._source_observation_at.isoformat(),
+            "source_observation_age_seconds": round(max(0.0, age), 3),
+            "fetched_at": self._last_fetch_at.isoformat() if self._last_fetch_at else None,
+            "sky_cover": self._sky_cover,
+            "provenance": "station_observation",
+        }
 
     async def get_current(self) -> Optional[dict[str, Any]]:
         """Get current weather conditions.
@@ -192,9 +373,11 @@ class WeatherService:
         from the NWS API. Returns the same dict shape as the old OWM
         service for backward compatibility.
         """
+        if not self._configured:
+            return None
         now = time.time()
         if self._cache and (now - self._cache_time) < CACHE_TTL:
-            return self._cache
+            return self.get_cached()
 
         try:
             async with httpx.AsyncClient(
@@ -203,10 +386,15 @@ class WeatherService:
                 obs = await self._fetch_observations(client)
                 if not obs:
                     self._cache_is_stale_fallback = self._cache is not None
-                    return self._cache  # Return stale on failure
+                    return self.get_cached()  # Return stale display data on failure
 
                 # Fetch forecast for high/low (less frequent, piggyback)
                 day_high, day_low = await self._fetch_daily_range(client)
+
+                # Grid sky cover is retained as source provenance only. Its
+                # interpretation belongs to a later lighting policy change.
+                if self._grid_url:
+                    await self._fetch_sky_cover(client)
 
                 # Fetch alerts on a faster cadence
                 await self._fetch_alerts(client)
@@ -218,6 +406,7 @@ class WeatherService:
             self._cache = weather
             self._cache_time = now
             self._cache_is_stale_fallback = False
+            self._last_fetch_at = datetime.now(timezone.utc)
             logger.info(
                 "Weather updated: %d°F, %s (H:%s° L:%s°)",
                 weather["temp"],
@@ -225,20 +414,20 @@ class WeatherService:
                 weather.get("temp_max", "?"),
                 weather.get("temp_min", "?"),
             )
-            return weather
+            return self.get_cached()
 
         except Exception as e:
             logger.error("Weather fetch failed: %s", e, exc_info=True)
             if self._cache:
                 self._cache_is_stale_fallback = True
-                return self._cache
+                return self.get_cached()
             return None
 
     async def refresh_alerts(self) -> list[dict[str, Any]]:
         """Fetch alerts independently (for faster polling in automation loop)."""
         now = time.time()
         if self._alert_cache is not None and (now - self._alert_cache_time) < ALERT_CACHE_TTL:
-            return self._alert_cache
+            return self._locally_active_alerts()
 
         try:
             async with httpx.AsyncClient(
@@ -248,7 +437,7 @@ class WeatherService:
         except Exception as e:
             logger.error("Alert fetch failed: %s", e, exc_info=True)
 
-        return self._alert_cache or []
+        return self._locally_active_alerts()
 
     def _build_weather_dict(
         self,
@@ -284,13 +473,6 @@ class WeatherService:
 
         description = props.get("textDescription", "")
 
-        # If there are active severe weather alerts, override the description
-        # so the automation engine's _classify_weather picks up storms that
-        # the observation station hasn't reported yet
-        alert_desc = self._get_alert_description()
-        if alert_desc:
-            description = alert_desc
-
         now = datetime.now(tz=TZ)
         is_daytime = 6 <= now.hour < 20  # Rough estimate
         icon = _nws_icon_code(description, is_daytime)
@@ -306,7 +488,7 @@ class WeatherService:
             "wind_speed": wind_mph or 0,
             "sunrise": self._sunrise,
             "sunset": self._sunset,
-            "city": "Indianapolis",
+            "city": self._location_label,
         }
 
     def _get_alert_description(self) -> Optional[str]:
@@ -322,9 +504,9 @@ class WeatherService:
         # Find the most severe active alert
         severity_order = {"Extreme": 4, "Severe": 3, "Moderate": 2, "Minor": 1}
         best_alert = None
-        best_severity = 0
+        best_severity = -1
 
-        for alert in self._alert_cache:
+        for alert in self._locally_active_alerts():
             event = alert.get("event", "")
             if event in _ALERT_WEATHER_MAP:
                 sev = severity_order.get(alert.get("severity", ""), 0)
@@ -345,24 +527,134 @@ class WeatherService:
     async def _fetch_observations(
         self, client: httpx.AsyncClient,
     ) -> Optional[dict[str, Any]]:
-        """Fetch latest observation from NWS station."""
+        """Fetch a fresh usable observation, preferring configured stations."""
+        if not await self._ensure_point_metadata(client):
+            return None
+        candidates = list(dict.fromkeys(self._preferred_stations + self._point_stations))
+        for station_id in candidates:
+            if not _STATION_ID_RE.fullmatch(station_id):
+                continue
+            try:
+                resp = await client.get(f"{NWS_BASE}/stations/{station_id}/observations/latest")
+                resp.raise_for_status()
+                observation = resp.json()
+                observed_at = self._observation_timestamp(observation)
+                if not self._observation_is_usable(observation, observed_at):
+                    logger.info("NWS station %s has no fresh usable observation", station_id)
+                    continue
+                self._station_id = station_id
+                self._source_observation_at = observed_at
+                return observation
+            except httpx.HTTPStatusError as exc:
+                logger.warning("NWS observation request failed for %s: %s", station_id, exc)
+            except Exception as exc:
+                logger.warning("NWS observation fetch error for %s: %s", station_id, exc)
+        return None
+
+    async def _ensure_point_metadata(
+        self, client: httpx.AsyncClient, *, force: bool = False,
+    ) -> bool:
+        """Resolve/cache NWS point URLs and its ranked station collection."""
+        if not self._configured:
+            return False
+        if (
+            not force
+            and self._stations_url
+            and time.time() - self._point_metadata_time < POINT_METADATA_TTL
+        ):
+            return True
+        async with self._point_lock:
+            if (
+                not force
+                and self._stations_url
+                and time.time() - self._point_metadata_time < POINT_METADATA_TTL
+            ):
+                return True
+            try:
+                resp = await client.get(f"{NWS_BASE}/points/{self._latitude},{self._longitude}")
+                resp.raise_for_status()
+                props = resp.json().get("properties", {})
+                forecast_url = self._validated_nws_url(props.get("forecast"), "/gridpoints/")
+                grid_url = self._validated_nws_url(props.get("forecastGridData"), "/gridpoints/")
+                stations_url = self._validated_nws_url(props.get("observationStations"), "/gridpoints/")
+                if not all((forecast_url, grid_url, stations_url)):
+                    logger.warning("NWS point response included an invalid endpoint")
+                    return False
+                stations_response = await client.get(stations_url)
+                stations_response.raise_for_status()
+                point_stations = [
+                    station_id
+                    for station_id in (
+                        self._station_id_from_feature(feature)
+                        for feature in stations_response.json().get("features", [])
+                    )
+                    if station_id
+                ][:8]
+                self._forecast_url = forecast_url
+                self._grid_url = grid_url
+                self._stations_url = stations_url
+                self._grid_id = props.get("gridId") if isinstance(props.get("gridId"), str) else None
+                self._grid_x = props.get("gridX") if isinstance(props.get("gridX"), int) else None
+                self._grid_y = props.get("gridY") if isinstance(props.get("gridY"), int) else None
+                self._point_stations = point_stations
+                self._point_metadata_time = time.time()
+                return True
+            except Exception as exc:
+                logger.warning("NWS point discovery failed: %s", exc)
+                return bool(self._stations_url and self._forecast_url)
+
+    @staticmethod
+    def _validated_nws_url(value: Any, path_prefix: str) -> str | None:
+        if not isinstance(value, str):
+            return None
+        parsed = urlparse(value)
+        if (
+            parsed.scheme == "https"
+            and parsed.netloc.lower() == "api.weather.gov"
+            and parsed.path.startswith(path_prefix)
+        ):
+            return value
+        return None
+
+    @staticmethod
+    def _station_id_from_feature(feature: dict[str, Any]) -> str | None:
+        feature_id = feature.get("id", "")
+        station_id = feature.get("properties", {}).get("stationIdentifier")
+        candidate = station_id or feature_id.rsplit("/", 1)[-1]
+        if not isinstance(candidate, str):
+            return None
+        candidate = candidate.strip().upper()
+        return candidate if _STATION_ID_RE.fullmatch(candidate) else None
+
+    @staticmethod
+    def _observation_timestamp(observation: dict[str, Any]) -> datetime | None:
+        value = observation.get("properties", {}).get("timestamp")
+        if not isinstance(value, str):
+            return None
         try:
-            resp = await client.get(NWS_OBSERVATIONS_URL)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            logger.error("NWS observation request failed: %s", e)
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
             return None
-        except Exception as e:
-            logger.error("NWS observation fetch error: %s", e, exc_info=True)
-            return None
+
+    @staticmethod
+    def _observation_is_usable(
+        observation: dict[str, Any], observed_at: datetime | None,
+    ) -> bool:
+        props = observation.get("properties", {})
+        temperature = props.get("temperature", {}).get("value")
+        description = props.get("textDescription")
+        if observed_at is None or temperature is None or not isinstance(description, str) or not description.strip():
+            return False
+        age = (datetime.now(timezone.utc) - observed_at).total_seconds()
+        return -OBSERVATION_FUTURE_SKEW_SECONDS <= age <= OBSERVATION_FRESHNESS_MAX_SECONDS
 
     async def _fetch_daily_range(
         self, client: httpx.AsyncClient,
     ) -> tuple[Optional[int], Optional[int]]:
         """Get today's high/low from the NWS 7-day forecast."""
         try:
-            resp = await client.get(NWS_FORECAST_URL)
+            resp = await client.get(self._forecast_url)
             resp.raise_for_status()
             data = resp.json()
 
@@ -399,6 +691,49 @@ class WeatherService:
             logger.warning("NWS forecast fetch failed: %s", e)
             return None, None
 
+    async def _fetch_sky_cover(self, client: httpx.AsyncClient) -> None:
+        """Cache the raw skyCover interval covering now with provenance."""
+        if not self._grid_url:
+            return
+        try:
+            resp = await client.get(self._grid_url)
+            resp.raise_for_status()
+            props = resp.json().get("properties", {})
+            values = props.get("skyCover", {}).get("values", [])
+            selected = self._select_grid_value(values, datetime.now(timezone.utc))
+            self._sky_cover = {
+                "value": selected.get("value") if selected else None,
+                "valid_time": selected.get("validTime") if selected else None,
+                "grid_id": self._grid_id,
+                "updated_at": props.get("updateTime"),
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            logger.warning("NWS sky cover fetch failed: %s", exc)
+
+    @staticmethod
+    def _select_grid_value(
+        values: list[dict[str, Any]], now: datetime,
+    ) -> dict[str, Any] | None:
+        for item in values:
+            if item.get("value") is None:
+                continue
+            valid_time = item.get("validTime")
+            if not isinstance(valid_time, str) or "/" not in valid_time:
+                continue
+            start_text, duration_text = valid_time.split("/", 1)
+            try:
+                start = datetime.fromisoformat(start_text.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except ValueError:
+                continue
+            match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?", duration_text)
+            if not match:
+                continue
+            duration_seconds = int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60
+            if start <= now < datetime.fromtimestamp(start.timestamp() + duration_seconds, timezone.utc):
+                return item
+        return None
+
     @staticmethod
     def _alert_id(alert: dict[str, Any]) -> str:
         """Stable identity for an alert: the NWS feature id, else a composite of
@@ -416,19 +751,52 @@ class WeatherService:
         self._seen_alert_ids = {self._alert_id(a) for a in alerts}
         return novel
 
-    async def _fetch_alerts(self, client: httpx.AsyncClient) -> None:
-        """Fetch active weather alerts for Indianapolis."""
+    def _locally_active_alerts(self) -> list[dict[str, Any]]:
+        """Return alerts that are locally credible as active right now."""
+        now = datetime.now(timezone.utc)
+        active: list[dict[str, Any]] = []
+        for alert in self._alert_cache or []:
+            begins = alert.get("onset") or alert.get("effective") or alert.get("sent")
+            ends = alert.get("ends") or alert.get("expires")
+            begin_dt = self._parse_alert_time(begins)
+            end_dt = self._parse_alert_time(ends)
+            if begin_dt is not None and begin_dt > now:
+                continue
+            if end_dt is not None:
+                if end_dt <= now:
+                    continue
+            elif begin_dt is None or (now - begin_dt).total_seconds() > ALERT_MAX_AUTHORITY_SECONDS:
+                continue
+            active.append(alert)
+        return active
+
+    @staticmethod
+    def _parse_alert_time(value: Any) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    async def _fetch_alerts(self, client: httpx.AsyncClient) -> bool:
+        """Fetch active weather alerts for the configured home point."""
         now = time.time()
         if (
             self._alert_cache is not None
             and (now - self._alert_cache_time) < ALERT_CACHE_TTL
         ):
-            return
+            return True
 
         try:
+            if self._latitude is None or self._longitude is None:
+                return False
             resp = await client.get(
                 NWS_ALERTS_URL,
-                params={"point": f"{LAT},{LON}", "status": "actual"},
+                params={
+                    "point": f"{self._latitude},{self._longitude}",
+                    "status": "actual",
+                },
             )
             resp.raise_for_status()
             data = resp.json()
@@ -447,8 +815,11 @@ class WeatherService:
                     "certainty": props.get("certainty", ""),
                     "headline": props.get("headline", ""),
                     "description": props.get("description", ""),
+                    "sent": props.get("sent"),
+                    "effective": props.get("effective"),
                     "onset": props.get("onset"),
                     "expires": props.get("expires"),
+                    "ends": props.get("ends"),
                     "sender": props.get("senderName", ""),
                 })
 
@@ -463,6 +834,7 @@ class WeatherService:
             if novel:
                 events = [a["event"] for a in novel]
                 logger.info("New weather alert(s): %s", ", ".join(events))
+            return True
 
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
             # NWS API is slow/flaky at off-peak hours — transient network
@@ -472,17 +844,20 @@ class WeatherService:
             logger.warning("NWS alert fetch transient (%s): %s", type(e).__name__, e)
         except Exception as e:
             logger.error("NWS alert fetch failed: %s", e, exc_info=True)
+        return False
 
     async def _fetch_sunrise_sunset(self, client: httpx.AsyncClient) -> None:
-        """Fetch sunrise/sunset from sunrise-sunset.org (cached 24h)."""
-        now = time.time()
-        if self._sunrise and (now - self._astro_cache_time) < ASTRO_CACHE_TTL:
+        """Fetch sunrise/sunset for the configured point once per local date."""
+        if not self._configured:
+            return
+        today = datetime.now(TZ).date().isoformat()
+        if self._sunrise and self._astro_cache_date == today:
             return
 
         try:
             resp = await client.get(
                 SUNRISE_SUNSET_URL,
-                params={"lat": LAT, "lng": LON, "formatted": 0},
+                params={"lat": self._latitude, "lng": self._longitude, "formatted": 0},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -500,12 +875,13 @@ class WeatherService:
                 sunset_dt = datetime.fromisoformat(sunset_iso)
                 self._sunrise = int(sunrise_dt.timestamp())
                 self._sunset = int(sunset_dt.timestamp())
-                self._astro_cache_time = now
+                self._astro_cache_time = time.time()
+                self._astro_cache_date = today
                 logger.info(
                     "Sunrise/sunset updated: rise=%s, set=%s",
                     sunrise_dt.astimezone(TZ).strftime("%I:%M %p"),
                     sunset_dt.astimezone(TZ).strftime("%I:%M %p"),
                 )
 
-        except Exception as e:
-            logger.warning("Sunrise-sunset fetch failed: %s", e)
+        except Exception as exc:
+            logger.warning("Sunrise-sunset fetch failed: %s", exc)

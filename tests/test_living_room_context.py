@@ -789,6 +789,18 @@ def _builder(**overrides) -> LivingRoomSnapshotBuilder:
     return LivingRoomSnapshotBuilder(**defaults)
 
 
+def test_weather_snapshot_fresh_flag_outranks_legacy_five_minute_age() -> None:
+    builder = _builder(weather_status=lambda: {
+        "condition": "Cloudy",
+        "observed_at": NOW.isoformat(),
+        "age_seconds": 1200.0,
+        "fresh": True,
+        "stale_fallback": False,
+    })
+    snapshot = builder()
+    assert snapshot.weather.freshness == FreshnessStatus.FRESH
+
+
 def test_snapshot_projects_engine_arbitration_without_recreating_policy() -> None:
     activity = {
         "current_activity": "working",

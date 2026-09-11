@@ -6,6 +6,7 @@ All secrets and environment-specific values live in .env (never committed).
 from pathlib import Path
 from typing import Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +59,14 @@ class Settings(BaseSettings):
     MORNING_ROUTINE_MINUTE: int = 40
     MORNING_VOLUME: int = 10
     TIMEZONE: str = "America/Indiana/Indianapolis"
+
+    # Weather location is deliberately deployment configuration, not source
+    # code. Set latitude and longitude together to enable NWS point discovery.
+    WEATHER_LATITUDE: Optional[float] = None
+    WEATHER_LONGITUDE: Optional[float] = None
+    WEATHER_LOCATION_LABEL: str = "Home"
+    # Comma-separated station IDs, tried before the NWS point station list.
+    WEATHER_PREFERRED_STATIONS: str = ""
 
     # Music Discovery
     LASTFM_API_KEY: Optional[str] = None
@@ -183,6 +192,18 @@ class Settings(BaseSettings):
         return frozenset(
             ip.strip() for ip in self.TRUSTED_LAN_IPS.split(",") if ip.strip()
         )
+
+    @model_validator(mode="after")
+    def weather_coordinates_are_paired(self) -> "Settings":
+        if (self.WEATHER_LATITUDE is None) != (self.WEATHER_LONGITUDE is None):
+            raise ValueError(
+                "WEATHER_LATITUDE and WEATHER_LONGITUDE must be configured together"
+            )
+        if self.WEATHER_LATITUDE is not None and not -90 <= self.WEATHER_LATITUDE <= 90:
+            raise ValueError("WEATHER_LATITUDE must be between -90 and 90")
+        if self.WEATHER_LONGITUDE is not None and not -180 <= self.WEATHER_LONGITUDE <= 180:
+            raise ValueError("WEATHER_LONGITUDE must be between -180 and 180")
+        return self
 
 
 settings = Settings()

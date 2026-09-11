@@ -213,6 +213,15 @@ async def health_check(request: Request) -> dict:
             "last_lux_multiplier": round(_automation.last_lux_multiplier, 4),
         }
 
+    weather_block: dict = {}
+    weather_service = getattr(app.state, "weather_service", None)
+    if weather_service is not None and hasattr(weather_service, "get_cache_snapshot"):
+        try:
+            weather_block = weather_service.get_cache_snapshot()
+        except Exception as exc:
+            weather_block = {"error": repr(exc)[:200]}
+            details["weather_probe_error"] = repr(exc)[:200]
+
     # Living-room gate summary. Normal shadow decisions (absence, stale
     # evidence, away, DND, sleeping, or ownership vetoes) are operational
     # outcomes and do not degrade backend health. Only evaluator/recorder
@@ -262,6 +271,7 @@ async def health_check(request: Request) -> dict:
         "circuit_breakers": circuit_breakers,
         "ml": ml,
         "automation": automation_block,
+        "weather": weather_block,
         "living_room_decision_gate": living_room_gate_summary,
         "gameday_provider": gameday_provider,
         "sources": sources,

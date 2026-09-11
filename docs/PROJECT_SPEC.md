@@ -723,7 +723,7 @@ production freshness requires live verification):
 - **Glass cards** — all widgets use `backdrop-filter: blur(12px)` with staggered entrance animations
 - **Single-primary-action cards** — across HomeHub, when a card has one clear deeper action, the entire card surface is the mouse/touch target and supports Enter/Space. The shared `ActionableWidget` wrapper owns this behavior and ignores nested interactive controls. Home dashboard Bar, Guest WiFi, Plants, and Network use it; cards with multiple independent controls (Sonos, Ambient, Routines, recommendations, scene controls, etc.) keep those controls explicit instead of making the whole card fire one action.
 - **Auto-hide on idle** — after 60s of no interaction, cards fade out leaving just the background scene + mode name. Tap anywhere to wake.
-- **Weather widget** — NWS API current conditions with 5-minute cache + active severe weather alerts
+- **Weather widget** - NWS current conditions remain display-compatible with a 5-minute cache, but weather authority is anchored to configured home coordinates. NWS `/points` derives forecast/grid/station metadata; configured trusted stations such as nearby KUMP are preferred only while their source observation is fresh and usable, with point-associated stations as fallbacks. Raw grid `skyCover` is provenance/context rather than a direct lighting command. Active severe alerts are queried for the home point and can independently override ordinary conditions. Stale ordinary weather remains displayable but is neutral for actuation. Indoor room lux remains the higher-authority brightness signal.
 - **Vital Signs Strip** — always-visible 22px strip at the kiosk bottom. `VitalStrip.svelte` polls `GET /api/vitals` every 30s, which re-projects already-shipped surfaces (Hue / Sonos circuit-breaker state, fusion `_last_fusion_result`, Pi-hole `get_summary`, `psutil` mem/disk/CPU-temp, WS client count) into per-metric `{value, status: ok|warn|error}` chips with a roll-up status. Collapsed → overall dot only; expanded → all chips with mode-aware tinting (orange = warn, red = error). `FloatingNav` shifted up to `bottom: 36px` (mobile `28px`) to clear the strip
 - Four pages: Home (controls + weather + scenes), Music (discovery + mapping), Analytics (live decision pipeline with fusion ring + per-signal gauge cards + collapsible historical analytics), Settings (configuration). Plus a hidden `/journal` route (Apartment Logbook — date rail + Markdown render of the nightly summaries; excluded from `FloatingNav`). Guest WiFi credentials surface via the `GuestWifiWidget` tile on Home, which opens a fullscreen modal with the WiFi `WIFI:` URI QR plus a smaller URL QR pointing at `/guest` (two-scan flow — join then info)
 - **Guest mini-app** at `/guest/*` ? a separate visitor surface with its own bottom-tab nav (`GuestBottomNav`: Home / WiFi / Bar / Plants / Vibe), independent of the kiosk. The isolated public path is a separate loopback guest-gateway process rather than Google Shared Devices or the main LAN trust bypass. The kiosk first shows the standard Wi-Fi QR for the configured guest SSID, then mints a short-lived one-use HTTPS invite QR; the gateway converts that invite into a revocable HttpOnly/Secure guest session. Its proxy surface is restricted to guest UI assets and an explicit `/api/guest/*` allowlist. Guest frontend pages no longer initialize the normal HomeHub WebSocket/stores or call generic `/api/sonos/*`, `/api/lights/*`, `/api/bar/*`, or `/api/plants/*`; bounded guest wrappers provide live room state, current album art, Bar/Plants summaries, safelisted scenes/vibes, brightness, kitchen L3/L4, Sonos play/pause/next and bounded volume, toast, effects, and guest-owned handback.
@@ -844,7 +844,7 @@ Browser / Phone (PWA)
    ├── MusicMapper ────────────────> mode change → smart Sonos auto-play
    ├── EventQueryService ──────────> aggregation over event tables (patterns, timeline)
    ├── RuleEngineService ──────────> learns time-based mode patterns → nudge suggestions
-   ├── WeatherService ─────────────> NWS API (5-min cache) + severe weather alerts (2-min cache)
+   ├── WeatherService ------------> configured-home NWS point/station/grid authority + source freshness + independent severe alerts
    ├── ScreenSyncService (mss) ────> dominant screen color → bedroom pair or living/kitchen targets
    ├── LoLChampionService ─────────> League of Legends champion → bedroom lamp color (gaming mode only)
    ├── TransitLightingService ─────> camera absent → brief L1 navigation brightness (kitchen pair ceded to DeskExitKitchen in productive evening/night)
@@ -1479,7 +1479,7 @@ contributes degradation.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/weather` | Current weather conditions (cached 5 min from NWS API) |
-| GET | `/api/weather/alerts` | Active NWS severe weather alerts for Indianapolis |
+| GET | `/api/weather/alerts` | Active NWS severe weather alerts for the configured home point |
 
 #### Routines — `/api/routines/`
 

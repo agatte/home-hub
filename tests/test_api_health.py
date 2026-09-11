@@ -74,6 +74,28 @@ class TestHealthEndpoint:
         assert response["gameday_provider"]["status"] == "unhealthy"
         assert response["details"]["gameday_provider"] == "ESPN provider feed is unhealthy"
 
+    @pytest.mark.asyncio
+    async def test_weather_context_is_exposed_on_health(self):
+        from backend.api.routes.health import health_check
+
+        weather = SimpleNamespace(get_cache_snapshot=lambda: {
+            "configured": True,
+            "condition": "Rain",
+            "condition_family": "rain",
+            "station_id": "KUMP",
+            "fresh": True,
+            "age_seconds": 900.0,
+            "severe_alert_override": None,
+        })
+        request = SimpleNamespace(app=SimpleNamespace(
+            state=SimpleNamespace(weather_service=weather),
+        ))
+        response = await health_check(request)
+        assert response["weather"]["station_id"] == "KUMP"
+        assert response["weather"]["condition_family"] == "rain"
+        assert response["weather"]["fresh"] is True
+
+
 
 class TestApiPing:
     """Verify the minimal public-facing liveness probe."""

@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services.weather_service import WeatherService
 
 
 @pytest.fixture(scope="module")
@@ -30,6 +31,17 @@ class TestWeatherAPI:
         # 200 if NWS fetch succeeded, 502 if upstream failed (CI network),
         # 503 if the service is not initialized at all.
         assert resp.status_code in (200, 502, 503)
+
+    def test_unconfigured_weather_routes_return_503(self, client):
+        previous = app.state.weather_service
+        app.state.weather_service = WeatherService()
+        try:
+            for path in ("/api/weather", "/api/weather/alerts"):
+                resp = client.get(path)
+                assert resp.status_code == 503
+                assert resp.json()["detail"] == "Weather service not configured"
+        finally:
+            app.state.weather_service = previous
 
 
 # ---------------------------------------------------------------------------

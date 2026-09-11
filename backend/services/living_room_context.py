@@ -767,17 +767,28 @@ class LivingRoomSnapshotBuilder:
 
         weather = self._optional(self._weather_status)
         weather_age = weather.get("age_seconds")
+        weather_condition = weather.get("condition")
+        if "fresh" in weather:
+            weather_freshness = (
+                FreshnessStatus.MISSING
+                if weather_condition is None
+                else FreshnessStatus.FRESH
+                if weather.get("fresh")
+                else FreshnessStatus.STALE
+            )
+        else:
+            weather_freshness = _freshness(weather_age, WEATHER_FRESHNESS_SECONDS)
         weather_evidence = Evidence(
             source="weather_cache",
             status=(
                 CapabilityStatus.HEALTHY
-                if weather.get("condition") is not None
+                if weather_condition is not None
                 else CapabilityStatus.UNKNOWN
             ),
-            freshness=_freshness(weather_age, WEATHER_FRESHNESS_SECONDS),
+            freshness=weather_freshness,
             observed_at=weather.get("observed_at"),
             age_seconds=weather_age,
-            state=weather.get("condition"),
+            state=weather_condition,
             stale_fallback=bool(weather.get("stale_fallback")),
             authoritative=False,
         )

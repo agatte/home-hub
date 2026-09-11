@@ -18,7 +18,7 @@ async def get_weather(request: Request) -> dict:
     Returns cached data (5-minute TTL) from the NWS API.
     """
     service = getattr(request.app.state, "weather_service", None)
-    if not service:
+    if not service or not service.configured:
         raise HTTPException(
             status_code=503,
             detail="Weather service not configured",
@@ -33,9 +33,9 @@ async def get_weather(request: Request) -> dict:
 
 @router.get("/alerts")
 async def get_weather_alerts(request: Request) -> dict:
-    """Get active NWS weather alerts for Indianapolis."""
+    """Get active NWS weather alerts for the configured home point."""
     service = getattr(request.app.state, "weather_service", None)
-    if not service:
+    if not service or not service.configured:
         raise HTTPException(
             status_code=503,
             detail="Weather service not configured",

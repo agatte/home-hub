@@ -234,8 +234,16 @@ async def lifespan(app: FastAPI):
     # this lived after automation and was back-filled, which is the
     # late-binding pattern this section now avoids.
     from backend.services.weather_service import WeatherService
-    weather_service = WeatherService()
+    weather_service = WeatherService(
+        latitude=settings.WEATHER_LATITUDE,
+        longitude=settings.WEATHER_LONGITUDE,
+        location_label=settings.WEATHER_LOCATION_LABEL,
+        preferred_stations=settings.WEATHER_PREFERRED_STATIONS,
+    )
     app.state.weather_service = weather_service
+    # Own weather freshness in the backend rather than dashboard polling.
+    # start() schedules background work and never waits for NWS at boot.
+    await weather_service.start()
     # Wire weather into the event logger so log_light_adjustment captures
     # weather_class for the LightingLearner weather-aware retrain (Layer 3).
     event_logger.set_weather_service(weather_service)
@@ -1422,6 +1430,7 @@ async def lifespan(app: FastAPI):
 
     # 3. Close long-lived HTTP clients last — poll loops that used them are
     #    already cancelled, so there's no race.
+    await _safe_shutdown("weather_service", weather_service.close)
     await _safe_shutdown("hue_v2", hue_v2.close)
     await _safe_shutdown("rec_service", rec_service.close)
     await _safe_shutdown("gameday", gameday.close)
