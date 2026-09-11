@@ -2602,8 +2602,8 @@ class TestApplyModeDedup:
         assert learner.overlay_calls == [("working", "day", "clouds", None)]
         assert learner.weather_pref_calls == [("working", "day", "clouds")]
         assert mock_hue._lights["1"]["bri"] == 150
-        assert mock_hue._lights["3"]["bri"] == 151
-        assert mock_hue._lights["4"]["bri"] == 151
+        assert mock_hue._lights["3"]["bri"] == 140
+        assert mock_hue._lights["4"]["bri"] == 140
 
 
 # ---------------------------------------------------------------------------
@@ -7014,3 +7014,106 @@ async def test_physical_context_relax_holds_when_latitude_authority_unknown(
     assert engine.current_mode == "relax"
     assert engine.override_source == "physical_context_relax"
     assert engine._physical_context_presence_lost_at is None
+
+
+class TestWeatherActuatorContext249:
+    def test_stale_cached_weather_is_neutral_for_lighting(self, mock_hue, mock_hue_v2, mock_ws):
+        weather = MagicMock()
+        weather.get_cached.return_value = {"description": "Heavy thunderstorm"}
+        weather.get_actuator_context.return_value = None
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=weather,
+        )
+        assert engine._get_current_weather_condition() is None
+
+    def test_fresh_actuator_weather_drives_lighting_classification(self, mock_hue, mock_hue_v2, mock_ws):
+        weather = MagicMock()
+        weather.get_cached.return_value = {"description": "Clear"}
+        weather.get_actuator_context.return_value = {
+            "weather": {"description": "Heavy rain"},
+            "provenance": "station_observation",
+        }
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=weather,
+        )
+        assert engine._get_current_weather_condition() == "rain"
+
+
+class TestWeatherPipelineObservability249:
+    @staticmethod
+    def _engine(mock_hue, mock_hue_v2, mock_ws, description, mode, period):
+        weather = MagicMock()
+        payload = {"description": description}
+        weather.get_cached.return_value = payload
+        weather.get_actuator_context.return_value = {"weather": payload}
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=weather,
+        )
+        engine._current_mode = mode
+        engine._mode_source = "process"
+        engine._get_time_period = lambda now=None: period
+        return engine
+
+    def test_functional_pipeline_reports_policy_multiplier_and_fixture(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = self._engine(mock_hue, mock_hue_v2, mock_ws, "Heavy rain", "working", "evening")
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["applies"] is True
+        assert weather["policies"] == ["functional_brightness"]
+        assert weather["functional_multiplier"] == 1.05
+        assert weather["functional_light_ids"] == ["2"]
+        assert weather["aesthetic_transform"] is False
+        assert weather["effect_override"] is None
+
+    def test_watching_reports_only_functional_weather_policy(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = self._engine(mock_hue, mock_hue_v2, mock_ws, "Thunderstorm", "watching", "day")
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["policies"] == ["functional_brightness"]
+        assert weather["functional_multiplier"] == 1.10
+        assert weather["aesthetic_transform"] is False
+
+    def test_relax_reports_aesthetic_policy(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = self._engine(mock_hue, mock_hue_v2, mock_ws, "Light rain", "relax", "evening")
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["policies"] == ["aesthetic_transform"]
+        assert weather["functional_multiplier"] == 1.0
+        assert weather["functional_light_ids"] == []
+        assert weather["aesthetic_transform"] is True
+
+    def test_clear_focused_mode_reports_no_active_weather_policy(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = self._engine(mock_hue, mock_hue_v2, mock_ws, "Clear", "working", "day")
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["applies"] is False
+        assert weather["policies"] == []
+        assert weather["functional_multiplier"] == 1.0
+        assert weather["functional_light_ids"] == []
+
+    def test_relax_storm_never_advertises_dynamic_effect(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = self._engine(
+            mock_hue, mock_hue_v2, mock_ws,
+            "Heavy thunderstorm", "relax", "evening",
+        )
+        weather = engine._build_pipeline_state()["inputs"]["weather"]
+        assert weather["policies"] == ["aesthetic_transform"]
+        assert weather["eligible_policies"] == ["aesthetic_transform"]
+        assert weather["effect_override"] is None
+
+    def test_successful_scene_suppresses_weather_but_keeps_eligibility(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = self._engine(
+            mock_hue, mock_hue_v2, mock_ws,
+            "Heavy rain", "working", "evening",
+        )
+        engine._scene_overrides = {"working": {"evening": "focus_scene"}}
+        engine._scene_override_sources = {"working": {"evening": "bridge"}}
+        engine._active_scene_override_key = (
+            "working", "evening", "focus_scene", "bridge",
+        )
+        inputs = engine._build_pipeline_state()["inputs"]
+        assert inputs["scene_override"]["active"] is True
+        assert inputs["scene_override"]["applied"] is True
+        assert inputs["weather"]["eligible_policies"] == ["functional_brightness"]
+        assert inputs["weather"]["policies"] == []
+        assert inputs["weather"]["applies"] is False
+        assert inputs["weather"]["suppressed_by"] == "scene_override"

@@ -35,6 +35,7 @@ from backend.services.light_state_calculator import (
     apply_weather_adjust,
     apply_zone_overlay,
     classify_weather,
+    enforce_post_sunset_ct_warmth,
     enforce_watching_day_l5_comfort,
     get_time_period,
     interpolate_gaming_light_state,
@@ -45,6 +46,7 @@ from backend.services.light_state_calculator import (
     resolve_activity_state,
 )
 from backend.services.automation_engine import DaySchedule, ScheduleConfig
+from backend.services.effect_manager import WEATHER_SKIP_MODES
 
 
 # ---------------------------------------------------------------------------
@@ -822,7 +824,6 @@ class TestWatchingDayL5Comfort:
         state = resolve_activity_state("watching", "day")
         state = apply_functional_weather_brightness(state, "watching", "day", condition)
         state = apply_zone_overlay(state, "watching", "day", "desk", None)
-        state = apply_weather_adjust(state, condition)
 
         out = enforce_watching_day_l5_comfort(state, "watching", "day")
         canonical = ACTIVITY_LIGHT_STATES["watching"]["day"]["5"]["bri"]
@@ -863,6 +864,17 @@ class TestWeatherAdjust:
         out = apply_weather_adjust(state, "rain")
         assert out["1"] == {"on": False}
         assert out["2"]["bri"] == 85
+
+    @pytest.mark.parametrize("condition", ["rain", "thunderstorm", "clouds"])
+    def test_aesthetic_weather_cannot_erase_low_authored_accents(self, condition):
+        state = {"3": {"on": True, "bri": 30, "ct": 400}}
+        out = apply_weather_adjust(state, condition)
+        assert out["3"]["bri"] >= 21
+
+    def test_snow_cannot_multiply_low_authored_accents(self):
+        state = {"3": {"on": True, "bri": 8, "ct": 400}}
+        out = apply_weather_adjust(state, "snow")
+        assert out["3"]["bri"] == 10
 
     def test_classify_thunderstorm(self):
         assert classify_weather("thunderstorm with rain", {}) == "thunderstorm"
@@ -939,46 +951,46 @@ class TestFunctionalWeatherBrightness:
         assert out is state
 
     def test_rain_brightens_gaming_day_by_fifteen_percent(self):
-        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        state = {"2": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
         out = apply_functional_weather_brightness(state, "gaming", "day", "rain")
-        assert out["1"]["bri"] == 114  # int(100 * 1.15) = int(114.999…) = 114
+        assert out["2"]["bri"] == 114  # int(100 * 1.15) = int(114.999…) = 114
 
     def test_clouds_thunderstorm_snow_multipliers(self):
-        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        state = {"2": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
         assert apply_functional_weather_brightness(
             state, "gaming", "day", "clouds",
-        )["1"]["bri"] == 110
+        )["2"]["bri"] == 110
         assert apply_functional_weather_brightness(
             state, "gaming", "day", "thunderstorm",
-        )["1"]["bri"] == 120
+        )["2"]["bri"] == 120
         assert apply_functional_weather_brightness(
             state, "gaming", "day", "snow",
-        )["1"]["bri"] == 105
+        )["2"]["bri"] == 105
 
     def test_working_day_thunderstorm_applies(self):
         """Working mode now gets a weather boost (Layer 1 extension)."""
-        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        state = {"2": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
         out = apply_functional_weather_brightness(
             state, "working", "day", "thunderstorm",
         )
-        assert out["1"]["bri"] == 118  # int(100 * 1.18)
+        assert out["2"]["bri"] == 118  # int(100 * 1.18)
 
     def test_gaming_evening_thunderstorm_applies(self):
         """Gaming evening now gets a smaller boost during severe weather."""
-        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        state = {"2": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
         out = apply_functional_weather_brightness(
             state, "gaming", "evening", "thunderstorm",
         )
-        assert out["1"]["bri"] == 110  # int(100 * 1.10)
+        assert out["2"]["bri"] == 110  # int(100 * 1.10)
 
     def test_watching_day_rain_applies_smaller(self):
         """Watching's projector mode gets a smaller daytime lift to preserve
         cinematic dim intent."""
-        state = {"1": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
+        state = {"2": {"on": True, "bri": 100, "hue": 8000, "sat": 100}}
         out = apply_functional_weather_brightness(
             state, "watching", "day", "rain",
         )
-        assert out["1"]["bri"] == 106  # int(100 * 1.06)
+        assert out["2"]["bri"] == 106  # int(100 * 1.06)
 
     def test_learner_has_learned_skips_specific_lights(self):
         """The Layer-5 fade-out: lights with a learned preference bypass the
@@ -1000,7 +1012,7 @@ class TestFunctionalWeatherBrightness:
         assert out["1"]["hue"] == 8000
         assert out["1"]["sat"] == 100
 
-    def test_per_light_dict_all_brightened(self):
+    def test_per_light_dict_uses_l2_as_functional_weather_lever(self):
         state = {
             "1": {"on": True, "bri": 130, "hue": 47000, "sat": 180},
             "2": {"on": True, "bri": 240, "hue": 46920, "sat": 180},
@@ -1009,18 +1021,18 @@ class TestFunctionalWeatherBrightness:
             "5": {"on": True, "bri": 180, "hue": 48500, "sat": 160},
         }
         out = apply_functional_weather_brightness(state, "gaming", "day", "rain")
-        assert out["1"]["bri"] == int(130 * 1.15)
-        assert out["2"]["bri"] == 254  # int(240 * 1.15) = 276 → clamped
-        assert out["3"]["bri"] == int(30 * 1.15)
-        assert out["4"]["bri"] == int(30 * 1.15)
-        assert out["5"]["bri"] == int(180 * 1.15)
+        assert out["1"]["bri"] == 130
+        assert out["2"]["bri"] == 254
+        assert out["3"]["bri"] == 30
+        assert out["4"]["bri"] == 30
+        assert out["5"]["bri"] == 180
 
     def test_clamps_to_254(self):
-        state = {"1": {"on": True, "bri": 240, "hue": 46920, "sat": 180}}
+        state = {"2": {"on": True, "bri": 240, "hue": 46920, "sat": 180}}
         out = apply_functional_weather_brightness(
             state, "gaming", "day", "thunderstorm",
         )
-        assert out["1"]["bri"] == 254  # 240 * 1.20 = 288 → clamped
+        assert out["2"]["bri"] == 254  # 240 * 1.20 = 288 → clamped
 
     def test_off_lights_pass_through(self):
         state = {
@@ -1036,7 +1048,7 @@ class TestFunctionalWeatherBrightness:
         # relax (the couch/living-room mode the camera sees), while functional
         # weather brightness fires for gaming/working/watching. The two layers
         # no longer overlap on any single mode, so neither double-applies.
-        state = {"1": {"on": True, "bri": 180, "hue": 48500, "sat": 160}}
+        state = {"2": {"on": True, "bri": 180, "hue": 48500, "sat": 160}}
         # Gaming: lux is a no-op (dropped from LUX_MODES); weather still lifts.
         after_lux_gaming, _, _ = apply_lux_multiplier(
             state, "gaming", lux_reading=60.0, last_multiplier=1.0, baseline_lux=90.0,
@@ -1045,17 +1057,17 @@ class TestFunctionalWeatherBrightness:
         weather_gaming = apply_functional_weather_brightness(
             state, "gaming", "day", "rain",
         )
-        assert weather_gaming["1"]["bri"] > 180  # weather layer applies to gaming
+        assert weather_gaming["2"]["bri"] > 180  # weather layer applies to gaming
         # Relax: lux lifts (lux=60, baseline=90 → mult 1.12); weather is a no-op.
         after_lux_relax, _, _ = apply_lux_multiplier(
             state, "relax", lux_reading=60.0, last_multiplier=1.0, baseline_lux=90.0,
         )
-        assert after_lux_relax["1"]["bri"] == int(180 * 1.12)
+        assert after_lux_relax["2"]["bri"] == int(180 * 1.12)
         weather_relax = apply_functional_weather_brightness(
             after_lux_relax, "relax", "day", "rain",
         )
         # relax isn't a functional-weather mode → bri unchanged by that layer.
-        assert weather_relax["1"]["bri"] == after_lux_relax["1"]["bri"]
+        assert weather_relax["2"]["bri"] == after_lux_relax["2"]["bri"]
 
 
 class TestGamingDaySurroundBrightness:
@@ -1594,3 +1606,67 @@ def test_morning_ramp_uses_ct_and_never_hsb_green_path() -> None:
     assert end["ct"] == 250
     assert start["bri"] == 80
     assert end["bri"] == 254
+
+
+class TestWeatherCorrectness249:
+    @pytest.mark.parametrize("mode", ["gaming", "working", "watching"])
+    @pytest.mark.parametrize("condition", ["clouds", "rain", "thunderstorm", "snow"])
+    def test_functional_weather_does_not_boost_l5_or_l6(self, mode, condition):
+        state = {
+            "2": {"on": True, "bri": 100, "ct": 333},
+            "5": {"on": True, "bri": 80, "ct": 333},
+            "6": {"on": True, "bri": 70, "ct": 333},
+        }
+        out = apply_functional_weather_brightness(state, mode, "day", condition)
+        assert out["5"]["bri"] == 80
+        assert out["6"]["bri"] == 70
+
+    @pytest.mark.parametrize("period", ["evening", "night", "late_night"])
+    @pytest.mark.parametrize("condition", ["clouds", "rain", "thunderstorm", "snow", "golden_hour"])
+    def test_final_post_sunset_ct_never_below_333(self, period, condition):
+        state = {"2": {"on": True, "bri": 80, "ct": 350}}
+        weathered = apply_weather_adjust(state, condition)
+        out = enforce_post_sunset_ct_warmth(weathered, period)
+        assert out["2"]["ct"] >= 333
+
+    def test_daytime_ct_is_not_forced_warm(self):
+        state = {"2": {"on": True, "bri": 80, "ct": 250}}
+        assert enforce_post_sunset_ct_warmth(state, "day") is state
+
+    @pytest.mark.parametrize("condition", ["clouds", "rain", "thunderstorm", "snow"])
+    def test_watching_functional_path_never_collapses_surround(self, condition):
+        state = resolve_activity_state("watching", "day")
+        out = apply_functional_weather_brightness(state, "watching", "day", condition)
+        assert out["1"]["bri"] == state["1"]["bri"]
+        assert out["3"]["bri"] == out["4"]["bri"] == state["3"]["bri"]
+        assert out["5"]["bri"] == state["5"]["bri"]
+        assert out["2"]["bri"] >= state["2"]["bri"]
+
+
+class TestWeatherMatrix249:
+    @pytest.mark.parametrize("mode", ["gaming", "working", "watching", "relax"])
+    @pytest.mark.parametrize("period", ["day", "evening", "night", "late_night"])
+    @pytest.mark.parametrize("condition", ["clear", "clouds", "rain", "thunderstorm", "snow", "golden_hour"])
+    def test_weather_matrix_preserves_core_fixture_invariants(self, mode, period, condition):
+        state = resolve_activity_state(mode, period)
+        if not state:
+            return
+        base = {lid: light.copy() for lid, light in state.items()}
+        state = apply_functional_weather_brightness(state, mode, period, condition)
+        state = apply_gaming_day_surround_brightness(state, mode, period, condition)
+        if mode not in WEATHER_SKIP_MODES:
+            state = apply_weather_adjust(state, condition)
+        state = enforce_watching_day_l5_comfort(state, mode, period)
+        state = enforce_post_sunset_ct_warmth(state, period)
+
+        if "3" in state and "4" in state:
+            assert state["3"].get("on") == state["4"].get("on")
+            if state["3"].get("on", True):
+                assert state["3"].get("bri") == state["4"].get("bri")
+        if mode in ("gaming", "working", "watching"):
+            assert state["5"].get("bri") == base["5"].get("bri")
+            assert state["6"].get("bri") == base["6"].get("bri")
+        if period != "day":
+            for light in state.values():
+                if light.get("on", True) and "ct" in light:
+                    assert light["ct"] >= 333

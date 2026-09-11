@@ -1853,9 +1853,12 @@ def adjust_single_light(
     """
     adj = {**light}
     uses_ct = "ct" in adj
+    authored_bri = int(adj.get("bri", 200))
+    aesthetic_dim_floor = max(1, int(round(authored_bri * 0.70)))
+    aesthetic_bright_ceiling = max(1, int(round(authored_bri * 1.30)))
 
     if condition == "thunderstorm":
-        adj["bri"] = max(1, adj.get("bri", 200) - 30)
+        adj["bri"] = max(aesthetic_dim_floor, authored_bri - 30)
         if uses_ct:
             adj["ct"] = max(153, adj["ct"] - 80)
         else:
@@ -1863,7 +1866,7 @@ def adjust_single_light(
             adj["sat"] = min(254, adj.get("sat", 100) + 60)
 
     elif condition == "rain":
-        adj["bri"] = max(1, adj.get("bri", 200) - 15)
+        adj["bri"] = max(aesthetic_dim_floor, authored_bri - 15)
         if uses_ct:
             adj["ct"] = max(153, adj["ct"] - 50)
         else:
@@ -1871,12 +1874,12 @@ def adjust_single_light(
             adj["sat"] = min(254, adj.get("sat", 100) + 30)
 
     elif condition == "snow":
-        adj["bri"] = min(254, adj.get("bri", 200) + 25)
+        adj["bri"] = min(254, aesthetic_bright_ceiling, authored_bri + 25)
         if uses_ct:
             adj["ct"] = max(153, adj["ct"] - 60)
 
     elif condition == "clouds":
-        adj["bri"] = max(1, int(adj.get("bri", 200) * 0.85))
+        adj["bri"] = max(aesthetic_dim_floor, int(authored_bri * 0.85))
         if uses_ct:
             adj["ct"] = min(500, adj["ct"] + 25)
 
@@ -1934,6 +1937,16 @@ def apply_weather_adjust(
 # gaming/working/watching across day/evening/night).
 
 FUNCTIONAL_WEATHER_BRIGHTNESS_MODES = frozenset(("gaming", "working", "watching"))
+FUNCTIONAL_WEATHER_LIGHT_IDS = {
+    "gaming": frozenset({"2"}),
+    "working": frozenset({"2"}),
+    "watching": frozenset({"2"}),
+}
+
+def get_functional_weather_light_ids(mode: str) -> frozenset[str]:
+    """Return fixture ids eligible for functional weather brightness."""
+    return FUNCTIONAL_WEATHER_LIGHT_IDS.get(mode, frozenset())
+
 
 FUNCTIONAL_WEATHER_BRIGHTNESS: dict[tuple[str, str, str], float] = {
     # gaming — peripheral accents + screen sync; biggest day boost
@@ -2005,9 +2018,10 @@ def apply_functional_weather_brightness(
 
     if _is_per_light_dict(state):
         result: dict[str, Any] = {}
+        eligible = FUNCTIONAL_WEATHER_LIGHT_IDS.get(mode, frozenset())
         for lid, ls in state.items():
             ls_copy = ls.copy()
-            if lid in skip:
+            if lid in skip or lid not in eligible:
                 result[lid] = ls_copy
                 continue
             if ls_copy.get("on", True) and "bri" in ls_copy:
@@ -2018,6 +2032,24 @@ def apply_functional_weather_brightness(
     result = state.copy()
     if result.get("on", True) and "bri" in result:
         result["bri"] = max(1, min(254, int(result["bri"] * mult)))
+    return result
+
+
+def enforce_post_sunset_ct_warmth(
+    state: dict[str, Any], period: str, minimum_ct: int = 333,
+) -> dict[str, Any]:
+    """Enforce the global post-sunset CT warmth floor after all transforms."""
+    if period not in ("evening", "night", "late_night"):
+        return state
+    if _is_per_light_dict(state):
+        result = {lid: light.copy() for lid, light in state.items()}
+        for light in result.values():
+            if light.get("on", True) and "ct" in light and light["ct"] < minimum_ct:
+                light["ct"] = minimum_ct
+        return result
+    result = state.copy()
+    if result.get("on", True) and "ct" in result and result["ct"] < minimum_ct:
+        result["ct"] = minimum_ct
     return result
 
 

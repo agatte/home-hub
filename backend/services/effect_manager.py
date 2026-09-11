@@ -35,8 +35,9 @@ WEATHER_EFFECT_MAP: dict[str, str] = {
 }
 
 WEATHER_SKIP_MODES = frozenset(
-    ("social", "sleeping", "working", "cooking", "gaming")
+    ("social", "sleeping", "working", "cooking", "gaming", "watching")
 )
+WEATHER_EFFECT_SKIP_MODES = WEATHER_SKIP_MODES | frozenset(("relax",))
 
 
 class EffectManager:
@@ -309,6 +310,8 @@ class EffectManager:
             auto_effect = effect_map.get("night")
         if auto_effect:
             return auto_effect
+        if mode in WEATHER_EFFECT_SKIP_MODES:
+            return None
         weather_effect = self.get_weather_effect()
         if weather_effect and (
             period in ("evening", "night", "late_night")
@@ -325,8 +328,13 @@ class EffectManager:
         if not self._weather_service:
             return None
         try:
-            weather = self._weather_service.get_cached()
-            if not weather:
+            actuator_getter = getattr(self._weather_service, "get_actuator_context", None)
+            if callable(actuator_getter):
+                context = actuator_getter()
+                weather = context.get("weather") if isinstance(context, dict) else None
+            else:
+                weather = self._weather_service.get_cached()
+            if not isinstance(weather, dict):
                 return None
         except Exception:
             return None

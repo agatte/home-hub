@@ -41,10 +41,12 @@ async def _reconcile(mgr: EffectManager, desired):
 
 
 def _make_weather(description: str | None):
-    """Build a weather_service stub. None → get_cached returns None."""
+    """Build a weather stub using the actuator-safe #248 contract."""
     svc = MagicMock()
-    svc.get_cached.return_value = (
-        {"description": description} if description is not None else None
+    weather = {"description": description} if description is not None else None
+    svc.get_cached.return_value = weather
+    svc.get_actuator_context.return_value = (
+        {"weather": weather} if weather is not None else None
     )
     return svc
 
@@ -270,19 +272,12 @@ class TestGetDesiredEffect:
         manager.reconcile.assert_awaited_once()
         assert manager.reconcile.await_args.args[0] == "glisten"
 
-    def test_weather_fallback_only_when_mode_has_no_auto_effect(self):
-        # working has no auto-effect; snow in evening should overlay opal.
-        # (rain→candle was retired 2026-05-09 alongside the candle
-        # EFFECT_AUTO_MAP cleanup; snow→opal is the kept eve/night mapping)
+    def test_focused_working_rejects_snow_weather_effect(self):
         mgr = EffectManager(
             hue_v2=_make_hue_v2(),
             weather_service=_make_weather("Light snow"),
         )
-        result = mgr.get_desired_effect("working", "evening")
-        assert result == {
-            "effect": "opal",
-            "lights": ["1", "2", "3", "4", "5"],
-        }
+        assert mgr.get_desired_effect("working", "evening") is None
 
     def test_weather_fallback_skipped_during_day(self):
         # snow → opal is evening/night only — day returns None
@@ -292,16 +287,14 @@ class TestGetDesiredEffect:
         )
         assert mgr.get_desired_effect("working", "day") is None
 
-    def test_sparkle_fires_any_time(self):
-        # thunderstorm → sparkle runs at any time of day
+    @pytest.mark.parametrize("mode", ["working", "gaming", "cooking"])
+    @pytest.mark.parametrize("description", ["Thunderstorm with rain", "Light snow"])
+    def test_focused_modes_reject_weather_effects(self, mode, description):
         mgr = EffectManager(
             hue_v2=_make_hue_v2(),
-            weather_service=_make_weather("Thunderstorm with rain"),
+            weather_service=_make_weather(description),
         )
-        assert mgr.get_desired_effect("working", "day") == {
-            "effect": "sparkle",
-            "lights": ["1", "2", "3", "4", "5"],
-        }
+        assert mgr.get_desired_effect(mode, "evening") is None
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +341,14 @@ class TestGetWeatherEffect:
 
     def test_weather_service_exception_returns_none(self):
         svc = MagicMock()
-        svc.get_cached.side_effect = RuntimeError("network down")
+        svc.get_actuator_context.side_effect = RuntimeError("network down")
+        mgr = EffectManager(hue_v2=_make_hue_v2(), weather_service=svc)
+        assert mgr.get_weather_effect() is None
+
+    def test_stale_cached_storm_is_neutral_for_effects(self):
+        svc = MagicMock()
+        svc.get_cached.return_value = {"description": "Heavy thunderstorm"}
+        svc.get_actuator_context.return_value = None
         mgr = EffectManager(hue_v2=_make_hue_v2(), weather_service=svc)
         assert mgr.get_weather_effect() is None
 
@@ -362,11 +362,9 @@ class TestModuleConstants:
         # rain removed 2026-05-09 alongside the candle EFFECT_AUTO_MAP cleanup
         assert set(WEATHER_EFFECT_MAP.keys()) == {"thunderstorm", "snow"}
 
-    def test_weather_skip_modes_excludes_relax_and_watching(self):
-        # relax and watching are the two modes whose lighting reads weather;
-        # they must NOT be in the skip set
+    def test_weather_skip_modes_keeps_relax_aesthetic_only(self):
         assert "relax" not in WEATHER_SKIP_MODES
-        assert "watching" not in WEATHER_SKIP_MODES
+        assert "watching" in WEATHER_SKIP_MODES
 
     def test_weather_skip_modes_contains_focused_modes(self):
         assert "social" in WEATHER_SKIP_MODES

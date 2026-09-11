@@ -111,7 +111,10 @@ from backend.services.light_state_calculator import (  # noqa: E402
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
     classify_weather as _classify_weather_pure,
+    enforce_post_sunset_ct_warmth as _enforce_post_sunset_ct_warmth,
     enforce_watching_day_l5_comfort as _enforce_watching_day_l5_comfort,
+    get_functional_weather_light_ids as _get_functional_weather_light_ids,
+    get_functional_weather_multiplier as _get_functional_weather_multiplier,
     get_mode_state_table as _get_mode_state_table,
     get_time_period as _calc_get_time_period,
     interpolate_gaming_state,
@@ -123,6 +126,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
 )
 from backend.services.effect_manager import (  # noqa: E402
     EffectManager,
+    WEATHER_EFFECT_SKIP_MODES,
     WEATHER_SKIP_MODES,
 )
 
@@ -599,6 +603,7 @@ class AutomationEngine:
         # Mode → scene overrides cache (loaded from DB)
         self._scene_overrides: dict[str, dict[str, str]] = {}  # {mode: {period: scene_id}}
         self._scene_override_sources: dict[str, dict[str, str]] = {}  # {mode: {period: source}}
+        self._active_scene_override_key: tuple[str, str, str, str] | None = None
 
         # Confidence fusion — passed via constructor; ensemble of process
         # / camera / audio / behavioral / rule_engine + presence voter.
@@ -4116,6 +4121,7 @@ class AutomationEngine:
             )
             period = "night"
         override_scene = self._scene_overrides.get(mode, {}).get(period)
+        self._active_scene_override_key = None
         atmosphere_plan = (
             await self._plan_living_room_atmosphere(
                 period=period,
@@ -4218,6 +4224,7 @@ class AutomationEngine:
                 self._gaming_scene_transition_pending = False
 
             if override_applied:
+                self._active_scene_override_key = (mode, period, override_scene, source)
                 if mode == "gaming":
                     if self._screen_sync is not None:
                         supersede = getattr(
@@ -4449,6 +4456,7 @@ class AutomationEngine:
                     atmosphere_brightness_basis,
                     period,
                 )
+            state = _enforce_post_sunset_ct_warmth(state, period)
             if self._screen_sync is not None:
                 prime = getattr(self._screen_sync, "prime_from_mode_state", None)
                 if prime is not None:
@@ -4807,6 +4815,7 @@ class AutomationEngine:
         drifted = self._functional_weather_brightness(drifted, mode, period)
         if mode not in WEATHER_SKIP_MODES:
             drifted = self._weather_adjust(drifted)
+        drifted = _enforce_post_sunset_ct_warmth(drifted, period)
         self._invalidate_dedup_cache()  # Force apply
         await self._apply_state(drifted, transitiontime=100)  # 10s imperceptible
         logger.info("Scene drift applied for mode '%s'", mode)
@@ -4889,8 +4898,13 @@ class AutomationEngine:
         if not self._weather_service:
             return None
         try:
-            weather = self._weather_service.get_cached()
-            if not weather:
+            actuator_getter = getattr(self._weather_service, "get_actuator_context", None)
+            if callable(actuator_getter):
+                context = actuator_getter()
+                weather = context.get("weather") if isinstance(context, dict) else None
+            else:
+                weather = self._weather_service.get_cached()
+            if not isinstance(weather, dict):
                 return None
         except Exception:
             return None
@@ -5984,29 +5998,67 @@ class AutomationEngine:
             and not self._manual_override,
         }
 
+        override_scene = self._scene_overrides.get(mode, {}).get(period)
+        override_source = self._scene_override_sources.get(mode, {}).get(period)
+        scene_key = (
+            (mode, period, override_scene, override_source or "bridge")
+            if override_scene is not None else None
+        )
+        scene_override_applied = (
+            scene_key is not None and self._active_scene_override_key == scene_key
+        )
+        scene_input = {
+            "active": override_scene is not None,
+            "applied": scene_override_applied,
+            "scene_id": override_scene,
+            "source": override_source,
+        }
+
         weather_condition = self._get_current_weather_condition()
         weather_effect = self._get_weather_effect()
+        functional_weather_multiplier = _get_functional_weather_multiplier(
+            mode, period, weather_condition,
+        )
+        functional_weather_applies = (
+            weather_condition is not None and functional_weather_multiplier != 1.0
+        )
+        functional_weather_light_ids = (
+            sorted(_get_functional_weather_light_ids(mode))
+            if functional_weather_applies else []
+        )
+        aesthetic_weather_applies = (
+            weather_condition is not None and mode not in WEATHER_SKIP_MODES
+        )
+        effect_override_eligible = weather_effect if (
+            weather_effect
+            and mode not in WEATHER_EFFECT_SKIP_MODES
+            and not EFFECT_AUTO_MAP.get(mode, {}).get(period)
+        ) else None
+        eligible_policies = []
+        if functional_weather_applies:
+            eligible_policies.append("functional_brightness")
+        if aesthetic_weather_applies:
+            eligible_policies.append("aesthetic_transform")
+        if effect_override_eligible:
+            eligible_policies.append("dynamic_effect")
+        policies = [] if scene_override_applied else eligible_policies
+        effect_override = None if scene_override_applied else effect_override_eligible
         weather_input = {
             "condition": weather_condition,
-            "effect_override": weather_effect if (
-                weather_effect and not EFFECT_AUTO_MAP.get(mode, {}).get(period)
-            ) else None,
-            "applies": mode not in WEATHER_SKIP_MODES,
+            "effect_override": effect_override,
+            "applies": bool(policies),
+            "policies": policies,
+            "eligible_policies": eligible_policies,
+            "suppressed_by": "scene_override" if scene_override_applied and eligible_policies else None,
+            "functional_multiplier": functional_weather_multiplier,
+            "functional_light_ids": functional_weather_light_ids,
+            "aesthetic_transform": aesthetic_weather_applies,
         }
 
         brightness_mult = self._mode_brightness.get(mode, 1.0)
         brightness_input = {
             "multiplier": brightness_mult,
             "applies": brightness_mult != 1.0,
-        }
-
-        override_scene = self._scene_overrides.get(mode, {}).get(period)
-        scene_input = {
-            "active": override_scene is not None,
-            "scene_id": override_scene,
-            "source": self._scene_override_sources.get(
-                mode, {},
-            ).get(period),
         }
 
         inputs = {
