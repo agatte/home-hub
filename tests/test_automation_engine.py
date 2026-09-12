@@ -2533,6 +2533,12 @@ class TestApplyModeDedup:
             def get_cached(self):
                 return {"description": "clouds"}
 
+            def get_actuator_context(self):
+                return {
+                    "weather": {"description": "clouds"},
+                    "provenance": "station_observation",
+                }
+
         sync = ScreenSyncService(
             hue_service=mock_hue, target_light_ids=["2", "5"],
         )
@@ -2585,6 +2591,12 @@ class TestApplyModeDedup:
         class _Weather:
             def get_cached(self):
                 return {"description": "clouds"}
+
+            def get_actuator_context(self):
+                return {
+                    "weather": {"description": "clouds"},
+                    "provenance": "station_observation",
+                }
 
         learner = _Learner()
         engine = AutomationEngine(
@@ -6448,6 +6460,69 @@ class TestPhysicalContextRelax:
 
 
 # ---------------------------------------------------------------------------
+class TestDeskFixtureComfortIntegration:
+    @pytest.fixture
+    def engine(self, mock_hue, mock_hue_v2, mock_ws):
+        return AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+        )
+
+    @staticmethod
+    def _desk_presence():
+        presence = MagicMock()
+        presence.latest_zone.return_value = "desk"
+        presence.latest_posture.return_value = None
+        return presence
+
+    async def test_working_learner_clear_overlay_cannot_relift_l5(
+        self, engine, mock_hue,
+    ):
+        weather = MagicMock()
+        weather.get_actuator_context.return_value = {
+            "weather": {"description": "Clear"},
+            "provenance": "station_observation",
+        }
+        learner = MagicMock()
+        learner.get_overlay.return_value = {"5": {"bri": 113}}
+        engine._weather_service = weather
+        engine._lighting_learner = learner
+        engine._presence_fusion = self._desk_presence()
+        engine._current_mode = "working"
+        engine._get_time_period = lambda now=None: "night"
+
+        await engine._apply_mode("working")
+
+        assert mock_hue._lights["5"]["bri"] == 60
+        call = learner.get_overlay.call_args
+        assert call.args[:3] == ("working", "night", "clear")
+        assert call.kwargs["zone"] == "desk"
+
+    async def test_social_direct_path_respects_desk_l5_ceiling(
+        self, engine, mock_hue,
+    ):
+        engine._presence_fusion = self._desk_presence()
+        engine._get_time_period = lambda now=None: "day"
+
+        await engine._apply_social_style()
+
+        assert mock_hue._lights["5"]["bri"] == 90
+
+    async def test_legacy_uniform_path_differentiates_l5_at_desk(
+        self, engine,
+    ):
+        engine._presence_fusion = self._desk_presence()
+        engine._get_time_period = lambda now=None: "day"
+        engine._apply_state = AsyncMock()
+
+        await engine._apply_legacy_time_based_state(
+            {"on": True, "bri": 180, "ct": 286},
+        )
+
+        target = engine._apply_state.await_args.args[0]
+        assert target["2"]["bri"] == 180
+        assert target["5"]["bri"] == 90
+
+
 # Gaming resolver integration — GH#203 commit 2
 # ---------------------------------------------------------------------------
 
@@ -6490,6 +6565,23 @@ class TestGamingResolutionIntegration:
         assert gaming["transition_reason"] == "activity_entry"
         assert mock_hue._lights["3"]["bri"] >= 160
         assert engine._last_applied_per_light["3"] == engine._last_applied_per_light["4"]
+
+    async def test_generic_weekday_gaming_respects_desk_l5_comfort(
+        self, engine, mock_hue,
+    ):
+        presence = MagicMock()
+        presence.latest_zone.return_value = "desk"
+        presence.latest_posture.return_value = None
+        engine._presence_fusion = presence
+        engine._now = MagicMock(
+            return_value=datetime(2026, 4, 13, 13, 0, tzinfo=TZ),
+        )
+
+        await engine.report_activity("gaming", source="pc_agent")
+
+        assert engine.get_gaming_diagnostics()["period"] == "day"
+        assert mock_hue._lights["5"]["bri"] == 90
+        assert mock_hue._lights["2"]["bri"] == 230
 
     async def test_weekend_daytime_resolves_separately(self, engine):
         engine._now = MagicMock(

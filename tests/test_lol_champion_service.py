@@ -40,9 +40,12 @@ class _FakeHue:
 
 
 class _FakeEngine:
-    def __init__(self, mode: str = "gaming", period: str = "night") -> None:
+    def __init__(
+        self, mode: str = "gaming", period: str = "night", zone: Optional[str] = None,
+    ) -> None:
         self.current_mode = mode
         self._period = period
+        self._zone = zone
         self.released: list[set[str]] = []
         self._last_applied_per_light: dict[str, dict] = {}
         self.reapplied = 0
@@ -52,6 +55,9 @@ class _FakeEngine:
 
     def _get_time_period(self) -> str:
         return self._period
+
+    def _current_zone_posture(self):
+        return self._zone, None
 
     async def reclaim_external_light_release(
         self, owner, light_ids: set[str],
@@ -152,6 +158,26 @@ async def test_brightness_scales_by_period(monkeypatch):
 
     # L2 day bri should be higher than L2 late_night bri.
     assert hue_day.last_for("2")["bri"] > hue_night.last_for("2")["bri"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("period", "ceiling"),
+    [("day", 90), ("evening", 75), ("night", 60), ("late_night", 40)],
+)
+async def test_desk_l5_uses_shared_fixture_ceiling_even_for_low_luma_color(
+    monkeypatch, period, ceiling,
+):
+    hue = _FakeHue()
+    engine = _FakeEngine(mode="gaming", period=period, zone="desk")
+    svc = LoLChampionService(hue_service=hue, automation_engine=engine)
+    _patch_setting(monkeypatch, {"Blue": {"r": 0, "g": 0, "b": 255}})
+
+    await svc.apply("Blue")
+
+    assert hue.last_for("5")["bri"] == ceiling
+    if period != "late_night":
+        assert hue.last_for("2")["bri"] >= ceiling
 
 
 @pytest.mark.asyncio

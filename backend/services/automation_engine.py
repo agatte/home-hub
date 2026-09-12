@@ -111,8 +111,8 @@ from backend.services.light_state_calculator import (  # noqa: E402
     apply_weather_adjust as _calc_apply_weather_adjust,
     apply_zone_overlay as _calc_apply_zone_overlay,
     classify_weather as _classify_weather_pure,
+    enforce_fixture_comfort_invariants as _enforce_fixture_comfort_invariants,
     enforce_post_sunset_ct_warmth as _enforce_post_sunset_ct_warmth,
-    enforce_watching_day_l5_comfort as _enforce_watching_day_l5_comfort,
     get_functional_weather_light_ids as _get_functional_weather_light_ids,
     get_functional_weather_multiplier as _get_functional_weather_multiplier,
     get_mode_state_table as _get_mode_state_table,
@@ -4414,9 +4414,10 @@ class AutomationEngine:
             # to the "any" baseline.
             lighting_learner = getattr(self, "_lighting_learner", None)
             if lighting_learner and mode != "gaming":
-                weather_for_overlay = (
-                    self._get_current_weather_condition() or "any"
-                )
+                # Lighting preferences are learned with the concrete learner
+                # weather taxonomy (including neutral ``clear``), not the
+                # lighting-effects classifier where ordinary clear is None.
+                weather_for_overlay = self.current_weather_class or "any"
                 zone_for_overlay, _ = self._current_zone_posture()
                 overlay = lighting_learner.get_overlay(
                     mode, period, weather_for_overlay, zone=zone_for_overlay,
@@ -4474,7 +4475,10 @@ class AutomationEngine:
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
-            state = _enforce_watching_day_l5_comfort(state, mode, period)
+            comfort_zone, _ = self._current_zone_posture()
+            state = _enforce_fixture_comfort_invariants(
+                state, mode, period, comfort_zone,
+            )
             if atmosphere_brightness_basis is not None:
                 state = bound_living_room_atmosphere_brightness(
                     state,
@@ -4613,6 +4617,11 @@ class AutomationEngine:
         skin and drinks without cycling that reads as "RGB gamer strip".
         """
         state = ACTIVITY_LIGHT_STATES["social"]
+        period = self._get_time_period()
+        comfort_zone, _ = self._current_zone_posture()
+        state = _enforce_fixture_comfort_invariants(
+            state, "social", period, comfort_zone,
+        )
         transitiontime = MODE_TRANSITION_TIME["social"]
         if self._effect_manager.needs_reconcile(None):
             await self._reconcile_effect(
@@ -4840,6 +4849,10 @@ class AutomationEngine:
         drifted = self._functional_weather_brightness(drifted, mode, period)
         if mode not in WEATHER_SKIP_MODES:
             drifted = self._weather_adjust(drifted)
+        comfort_zone, _ = self._current_zone_posture()
+        drifted = _enforce_fixture_comfort_invariants(
+            drifted, mode, period, comfort_zone,
+        )
         drifted = _enforce_post_sunset_ct_warmth(drifted, period)
         self._invalidate_dedup_cache()  # Force apply
         await self._apply_state(drifted, transitiontime=100)  # 10s imperceptible
@@ -5046,6 +5059,11 @@ class AutomationEngine:
         # The old uniform schedule has no reviewed Plant Wash calibration.
         # Keep this legacy path conservative without changing global fan-out.
         targets["6"] = {"on": False}
+        period = self._get_time_period()
+        comfort_zone, _ = self._current_zone_posture()
+        targets = _enforce_fixture_comfort_invariants(
+            targets, "general", period, comfort_zone,
+        )
         return await self._apply_state(targets)
 
     # ------------------------------------------------------------------

@@ -404,6 +404,13 @@ def test_non_desk_static_bed_cap_is_not_ambient_lifted():
     ) == 25
 
 
+def test_gaming_desk_l5_cap_uses_shared_fixture_comfort_ceiling():
+    sync = ss.ScreenSyncService(_FakeHue(), target_light_ids=["2", "5"])
+
+    assert sync.get_cap("gaming", "5", "desk", None, "evening") == 75
+
+
+
 def test_watching_desk_preserves_brighter_monitor_envelope():
     sync = ss.ScreenSyncService(_FakeHue(), target_light_ids=["2", "5"])
 

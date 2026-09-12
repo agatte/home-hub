@@ -1761,32 +1761,79 @@ def apply_zone_overlay(
     return state
 
 
-def enforce_watching_day_l5_comfort(
-    state: dict[str, Any], mode: str, period: str,
-) -> dict[str, Any]:
-    """Keep glare-prone L5 at or below its canonical Watching/day level.
+# Cross-Activity desk comfort ceiling for L5 (clear seeded-glass housing).
+# These are ceilings, never targets: each Activity remains free to author a
+# dimmer L5.  The values preserve the already-curated functional maxima while
+# preventing high-output modes/learned overlays from treating L5 like shaded L2.
+DESK_L5_COMFORT_CEILING: dict[str, int] = {
+    "day": 90,
+    "evening": 75,
+    "night": 60,
+    "late_night": 40,
+}
 
-    This runs after weather/context transforms so no heuristic can re-lift the
-    clear-housing lamp above the accepted daytime comfort ceiling. Manual and
-    external ownership are still enforced later at the applicator boundary.
+
+def get_fixture_comfort_brightness_ceiling(
+    light_id: str, mode: str, period: Optional[str], zone: Optional[str],
+) -> Optional[int]:
+    """Return the strongest autonomous brightness ceiling for one fixture.
+
+    Desk comfort is a physical-context invariant, not an Activity personality:
+    while fresh physical evidence places the user at the desk, L5 is bounded
+    across every semantic mode.  Watching/day retains its previously accepted
+    stronger canonical ceiling even if Desk authority is temporarily unknown.
+
+    Explicit manual/scene ownership is intentionally outside this pure policy;
+    those stronger authorities are resolved by their owning boundary.
     """
-    if mode != "watching" or period != "day":
-        return state
+    if light_id != "5":
+        return None
+
+    ceilings: list[int] = []
+    if zone == "desk" and period is not None:
+        desk_cap = DESK_L5_COMFORT_CEILING.get(period)
+        if desk_cap is not None:
+            ceilings.append(desk_cap)
+
+    if mode == "watching" and period == "day":
+        canonical = ACTIVITY_LIGHT_STATES["watching"]["day"]["5"].get("bri")
+        if isinstance(canonical, (int, float)):
+            ceilings.append(int(canonical))
+
+    return min(ceilings) if ceilings else None
+
+
+def enforce_fixture_comfort_invariants(
+    state: dict[str, Any], mode: str, period: Optional[str], zone: Optional[str],
+) -> dict[str, Any]:
+    """Apply final autonomous fixture-comfort limits to a per-light state.
+
+    Run this after Activity, learner, brightness, lux, weather, and physical
+    overlays so no weaker composition layer can re-lift glare-prone fixtures.
+    Manual/transit/external ownership is still enforced later by its owner.
+    """
     light = state.get("5")
     if not isinstance(light, dict) or light.get("on") is False:
         return state
     bri = light.get("bri")
     if not isinstance(bri, (int, float)):
         return state
-    canonical = ACTIVITY_LIGHT_STATES["watching"]["day"]["5"].get("bri")
-    if not isinstance(canonical, (int, float)) or bri <= canonical:
+    ceiling = get_fixture_comfort_brightness_ceiling("5", mode, period, zone)
+    if ceiling is None or bri <= ceiling:
         return state
     result = {
         light_id: value.copy() if isinstance(value, dict) else value
         for light_id, value in state.items()
     }
-    result["5"]["bri"] = int(canonical)
+    result["5"]["bri"] = ceiling
     return result
+
+
+def enforce_watching_day_l5_comfort(
+    state: dict[str, Any], mode: str, period: str,
+) -> dict[str, Any]:
+    """Compatibility wrapper for the pre-#244 Watching/day-only guard."""
+    return enforce_fixture_comfort_invariants(state, mode, period, zone=None)
 
 
 def is_zone_posture_freshness_ok(

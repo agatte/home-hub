@@ -39,6 +39,9 @@ from backend.services.color_utils import (
     PER_LIGHT_SAT_BOOST,
     rgb_to_hue_hsb,
 )
+from backend.services.light_state_calculator import (
+    get_fixture_comfort_brightness_ceiling,
+)
 
 if TYPE_CHECKING:
     from backend.api.schemas.automation import ActivityReport
@@ -207,6 +210,10 @@ class LoLChampionService:
         rgb, seeded = await self._resolve_color(champion_name)
         period = self._resolve_period()
         max_bri = LOL_BRIGHTNESS_CAPS.get(period, LOL_BRIGHTNESS_CAPS["night"])
+        try:
+            comfort_zone, _ = self._engine._current_zone_posture()
+        except (AttributeError, TypeError):
+            comfort_zone = None
 
         targets: dict[str, dict] = {}
         for light_id in TARGET_LIGHT_IDS:
@@ -214,10 +221,21 @@ class LoLChampionService:
                 continue
             sat_boost = PER_LIGHT_SAT_BOOST.get(light_id, DEFAULT_SAT_BOOST)
             luma_comp = PER_LIGHT_LUMA_COMP.get(light_id, DEFAULT_LUMA_COMP)
+            light_max_bri = max_bri
+            comfort_cap = get_fixture_comfort_brightness_ceiling(
+                light_id, "gaming", period, comfort_zone,
+            )
+            if comfort_cap is not None:
+                light_max_bri = min(light_max_bri, comfort_cap)
+            # A physical comfort ceiling is stronger than League's historical
+            # visibility floor. If the ceiling drops below LOL_MIN_BRIGHTNESS
+            # (late-night Desk L5), clamp the floor too so conversion cannot
+            # mathematically re-lift the fixture above the accepted boundary.
+            light_min_bri = min(LOL_MIN_BRIGHTNESS, light_max_bri)
             h, s, br = rgb_to_hue_hsb(
                 rgb,
-                max_brightness=max_bri,
-                min_brightness=LOL_MIN_BRIGHTNESS,
+                max_brightness=light_max_bri,
+                min_brightness=light_min_bri,
                 sat_boost=sat_boost,
                 luma_comp=luma_comp,
             )

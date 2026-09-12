@@ -18,6 +18,7 @@ from backend.services.light_state_calculator import (
     AUTOMATIC_EFFECT_LIGHT_IDS,
     BED_RECLINED_L1_NIGHT_DEFAULT,
     DEFAULT_MODE_BRIGHTNESS,
+    DESK_L5_COMFORT_CEILING,
     EFFECT_AUTO_MAP,
     GAME_LIGHT_PROFILES,
     GAMING_DAYTIME_FUNCTIONAL_ENVELOPES,
@@ -35,8 +36,10 @@ from backend.services.light_state_calculator import (
     apply_weather_adjust,
     apply_zone_overlay,
     classify_weather,
+    enforce_fixture_comfort_invariants,
     enforce_post_sunset_ct_warmth,
     enforce_watching_day_l5_comfort,
+    get_fixture_comfort_brightness_ceiling,
     get_time_period,
     interpolate_gaming_light_state,
     interpolate_gaming_state,
@@ -82,6 +85,60 @@ class TestGeneralVisualComfortState:
             assert state["2"]["ct"] >= 333
             assert state["5"]["ct"] >= state["2"]["ct"]
         assert evening["5"]["bri"] > night["5"]["bri"] > late["5"]["bri"]
+
+
+class TestDeskFixtureComfortInvariant:
+    @pytest.mark.parametrize(
+        ("period", "incoming", "expected"),
+        [
+            ("day", 220, 90),
+            ("evening", 140, 75),
+            ("night", 113, 60),
+            ("late_night", 75, 40),
+        ],
+    )
+    def test_desk_l5_uses_cross_activity_ceiling(self, period, incoming, expected):
+        state = {
+            "2": {"on": True, "bri": 254},
+            "5": {"on": True, "bri": incoming},
+        }
+
+        out = enforce_fixture_comfort_invariants(
+            state, "working", period, "desk",
+        )
+
+        assert out["5"]["bri"] == expected
+        assert out["2"]["bri"] == 254
+        assert state["5"]["bri"] == incoming
+        assert expected == DESK_L5_COMFORT_CEILING[period]
+
+    def test_non_desk_does_not_invent_a_comfort_context(self):
+        state = {"5": {"on": True, "bri": 220}}
+        assert enforce_fixture_comfort_invariants(
+            state, "working", "day", "couch",
+        ) is state
+        assert get_fixture_comfort_brightness_ceiling(
+            "5", "working", "day", None,
+        ) is None
+
+    def test_watching_day_retains_stronger_existing_guard_without_zone(self):
+        state = {"5": {"on": True, "bri": 109}}
+        out = enforce_fixture_comfort_invariants(
+            state, "watching", "day", None,
+        )
+        assert out["5"]["bri"] == ACTIVITY_LIGHT_STATES["watching"]["day"]["5"]["bri"]
+
+    def test_gaming_director_daytime_state_is_bounded_at_desk(self):
+        resolved = resolve_gaming_lighting(
+            GamingContext(game_slug=None, schedule_type="weekday", period="day"),
+        )
+        assert resolved.state["5"]["bri"] == 180
+
+        out = enforce_fixture_comfort_invariants(
+            resolved.state, "gaming", "day", "desk",
+        )
+        assert out["5"]["bri"] == 90
+        assert out["2"]["bri"] == resolved.state["2"]["bri"]
 
 
 class TestGetTimePeriod:

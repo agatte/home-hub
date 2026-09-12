@@ -44,6 +44,7 @@ from backend.services.color_utils import (
     rgb_to_hue_hsb,
 )
 from backend.services.light_state_calculator import (
+    get_fixture_comfort_brightness_ceiling,
     get_functional_weather_multiplier,
     lux_to_multiplier,
     resolve_activity_state,
@@ -551,13 +552,18 @@ class ScreenSyncService:
         )
 
         def bounded(value: int, raw_cap: Optional[int] = None) -> int:
-            if projector_cap is None:
-                return value
-            result = min(value, projector_cap)
-            # Non-Desk projector mode is fail-darker: ambient compensation may
-            # not lift an already-lower contextual/runtime ceiling.
-            if raw_cap is not None:
-                result = min(result, raw_cap)
+            result = value
+            if projector_cap is not None:
+                result = min(result, projector_cap)
+                # Non-Desk projector mode is fail-darker: ambient compensation
+                # may not lift an already-lower contextual/runtime ceiling.
+                if raw_cap is not None:
+                    result = min(result, raw_cap)
+            comfort_cap = get_fixture_comfort_brightness_ceiling(
+                light_id, mode, period, zone,
+            )
+            if comfort_cap is not None:
+                result = min(result, comfort_cap)
             return result
 
         if zone is not None and posture is not None:
