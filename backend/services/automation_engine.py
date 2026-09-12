@@ -769,9 +769,25 @@ class AutomationEngine:
         """Fresh authoritative weather class for behavior decisions.
 
         This is distinct from ``last_weather_class``, which is lux-hysteresis
-        bookkeeping and may legitimately lag the live weather context.
+        bookkeeping and may legitimately lag the live weather context. Rules
+        use the learner weather taxonomy, where ordinary/unclassified observed
+        weather is the concrete ``clear`` bucket rather than ``None``.
         """
-        return self._get_current_weather_condition()
+        if not self._weather_service:
+            return None
+        try:
+            actuator_getter = getattr(self._weather_service, "get_actuator_context", None)
+            if not callable(actuator_getter):
+                return None
+            context = actuator_getter()
+            weather = context.get("weather") if isinstance(context, dict) else None
+            if not isinstance(weather, dict):
+                return None
+            from backend.services.weather_class import WEATHER_ANY, classify_for_bandit
+            weather_class = classify_for_bandit(weather)
+            return None if weather_class == WEATHER_ANY else weather_class
+        except Exception:
+            return None
 
     @property
     def last_weather_class(self) -> Optional[str]:

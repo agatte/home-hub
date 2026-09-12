@@ -7042,6 +7042,49 @@ class TestWeatherActuatorContext249:
         assert engine._get_current_weather_condition() == "rain"
         assert engine.current_weather_class == "rain"
 
+    def test_fresh_clear_weather_is_concrete_rules_class(self, mock_hue, mock_hue_v2, mock_ws):
+        weather = MagicMock()
+        weather.get_actuator_context.return_value = {
+            "weather": {"description": "Clear"},
+            "provenance": "station_observation",
+        }
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=weather,
+        )
+        # The lighting-effects classifier intentionally treats ordinary clear
+        # as neutral, while Rules must match the learner's concrete class.
+        assert engine._get_current_weather_condition() is None
+        assert engine.current_weather_class == "clear"
+
+    def test_rules_weather_class_fails_closed_without_actuator_authority(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        class CachedOnlyWeather:
+            @staticmethod
+            def get_cached():
+                return {"description": "Heavy rain"}
+
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=CachedOnlyWeather(),
+        )
+        assert engine.current_weather_class is None
+
+    def test_unclassified_observed_weather_uses_learner_clear_bucket(
+        self, mock_hue, mock_hue_v2, mock_ws,
+    ):
+        weather = MagicMock()
+        weather.get_actuator_context.return_value = {
+            "weather": {"description": "Haze"},
+            "provenance": "station_observation",
+        }
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            weather_service=weather,
+        )
+        assert engine.current_weather_class == "clear"
+
 
 class TestWeatherPipelineObservability249:
     @staticmethod
