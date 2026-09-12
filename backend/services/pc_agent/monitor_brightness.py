@@ -123,6 +123,7 @@ PRIMARY_DISPLAY_INDEX = 0
 BRIGHTNESS_VERIFY_TOLERANCE_PERCENT = 2
 BRIGHTNESS_VERIFY_ATTEMPTS = 3
 BRIGHTNESS_VERIFY_DELAY_S = 0.15
+COLOR_REVERIFY_INTERVAL_S = 60.0
 COLOR_PRESET_MAX_FALLBACK_K = 1000
 
 # Manual-override sentinel — if the user nudges their hardware brightness
@@ -261,25 +262,38 @@ def _percent_to_raw(percent: int, maximum: int) -> int:
 _PRIMARY_LUMINANCE_MAX: Optional[int] = None
 
 
-def _primary_luminance_max() -> int:
-    """Return the primary display's VCP 0x10 maximum, falling back to 100."""
+def _primary_luminance_max() -> Optional[int]:
+    """Return the verified primary-display VCP 0x10 maximum.
+
+    A transient DDC failure must not become a cached synthetic 0..100 range:
+    that can turn a requested 20% into raw 20 on a 0..50 panel (40% actual).
+    Leave the range unknown and retry on the next reconcile instead.
+    """
     global _PRIMARY_LUMINANCE_MAX
     if _PRIMARY_LUMINANCE_MAX is not None:
         return _PRIMARY_LUMINANCE_MAX
-    maximum = 100
-    if _HAS_MC:
-        try:
-            mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
-            if mons:
-                with mons[PRIMARY_DISPLAY_INDEX] as monitor:
-                    _current, raw_max = monitor.vcp.get_vcp_feature(0x10)
-                raw_max = int(raw_max)
-                if raw_max > 0:
-                    maximum = raw_max
-        except Exception as e:
-            logger.debug("luminance max probe failed; assuming 100: %s", e)
-    _PRIMARY_LUMINANCE_MAX = maximum
-    return maximum
+    if not _HAS_MC:
+        return None
+    try:
+        mons = list(monitorcontrol.get_monitors())  # type: ignore[union-attr]
+        if not mons or PRIMARY_DISPLAY_INDEX >= len(mons):
+            return None
+        with mons[PRIMARY_DISPLAY_INDEX] as monitor:
+            _current, raw_max = monitor.vcp.get_vcp_feature(0x10)
+        raw_max = int(raw_max)
+        if raw_max <= 0:
+            return None
+    except Exception as e:
+        logger.debug("luminance max probe failed; will retry: %s", e)
+        return None
+    _PRIMARY_LUMINANCE_MAX = raw_max
+    return raw_max
+
+
+def _invalidate_primary_luminance_max() -> None:
+    """Force a fresh native-range probe after a DDC read/write failure."""
+    global _PRIMARY_LUMINANCE_MAX
+    _PRIMARY_LUMINANCE_MAX = None
 
 
 def _read_primary_brightness_raw() -> Optional[int]:
@@ -303,10 +317,14 @@ def _read_primary_brightness_raw() -> Optional[int]:
 
 def get_current_brightness() -> Optional[int]:
     """Read primary-display brightness normalized to HomeHub's 0..100 scale."""
+    maximum = _primary_luminance_max()
+    if maximum is None:
+        return None
     raw = _read_primary_brightness_raw()
     if raw is None:
+        _invalidate_primary_luminance_max()
         return None
-    return _raw_to_percent(raw, _primary_luminance_max())
+    return _raw_to_percent(raw, maximum)
 
 
 def set_brightness(target: int) -> bool:
@@ -316,12 +334,16 @@ def set_brightness(target: int) -> bool:
         return False
     target = max(0, min(100, int(target)))
     maximum = _primary_luminance_max()
+    if maximum is None:
+        logger.warning("Brightness write deferred: native luminance range unavailable")
+        return False
     raw_target = _percent_to_raw(target, maximum)
     try:
         sbc.set_brightness(  # type: ignore[union-attr]
             raw_target, display=PRIMARY_DISPLAY_INDEX,
         )
     except Exception as e:
+        _invalidate_primary_luminance_max()
         logger.warning("set_brightness(%d) failed: %s", target, e)
         return False
 
@@ -336,6 +358,7 @@ def set_brightness(target: int) -> bool:
             time.sleep(BRIGHTNESS_VERIFY_DELAY_S)
 
     actual_text = "unreadable" if raw is None else str(_raw_to_percent(raw, maximum))
+    _invalidate_primary_luminance_max()
     logger.warning(
         "Brightness write did not verify (target=%d%% raw_target=%d/%d actual=%s%%)",
         target, raw_target, maximum, actual_text,
@@ -387,6 +410,20 @@ def _read_primary_rgb_gains() -> Optional[dict[str, tuple[int, int]]]:
     except Exception as e:
         logger.debug("RGB gain probe failed: %s", e)
         return None
+
+
+def _rgb_gain_matches_period(period: str) -> Optional[bool]:
+    """Return whether current RGB gains match the period target, if readable."""
+    target = RGB_GAIN_PERIOD_PERCENT.get(period)
+    current = _read_primary_rgb_gains()
+    if target is None or current is None:
+        return None
+    for channel, target_percent in target.items():
+        raw, maximum = current[channel]
+        actual_percent = _raw_to_percent(raw, maximum)
+        if abs(actual_percent - target_percent) > RGB_GAIN_VERIFY_TOLERANCE_PERCENT:
+            return False
+    return True
 
 
 def set_rgb_gain_warmth(period: str) -> bool:
@@ -589,6 +626,7 @@ class Reconciler:
         self._last_applied_brightness: Optional[int] = None
         self._last_applied_period_for_color: Optional[str] = None
         self._last_attempted_period_for_color: Optional[str] = None
+        self._last_color_verify_at: float = 0.0
         self._manual_override_until: float = 0.0
         self._last_reconcile_at: float = 0.0
 
@@ -659,13 +697,29 @@ class Reconciler:
             self._maybe_apply_color_temperature(period)
 
     def _maybe_apply_color_temperature(self, period: str) -> None:
-        """Apply the period's monitor-native color target once per period attempt.
+        """Apply and periodically verify the period's monitor-native color target.
 
-        Failed/unsupported warmth remains observable and does not masquerade as
-        an applied period. The same process will try again when the period changes.
+        Periodic readback repairs display sleep/reconnect resets without hammering
+        DDC. Failed attempts remain unapplied and are retried on the next verify
+        interval instead of being suppressed until the time period changes.
         """
-        if period == self._last_attempted_period_for_color:
+        now = time.time()
+        period_changed = period != self._last_attempted_period_for_color
+        verify_due = now - self._last_color_verify_at >= COLOR_REVERIFY_INTERVAL_S
+        if not period_changed and not verify_due:
             return
+        self._last_color_verify_at = now
+
+        if not period_changed:
+            matches = _rgb_gain_matches_period(period)
+            if matches is True:
+                return
+            if matches is None:
+                # Preserve once-per-period behavior for displays without
+                # readable RGB gains; Samsung recovery is gain-based.
+                return
+            logger.info("Monitor color drift detected for period=%s; reconciling", period)
+
         self._last_attempted_period_for_color = period
         if set_color_temperature(period):
             logger.info(

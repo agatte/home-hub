@@ -107,6 +107,33 @@ def test_primary_luminance_max_reads_and_caches_monitor_vcp(monkeypatch):
     assert mb._primary_luminance_max() == 50
 
 
+def test_transient_luminance_probe_failure_is_not_cached_and_write_is_deferred(monkeypatch):
+    calls = 0
+    monitor = _FakeMonitor(vcp=_FakeVCP(current=29, maximum=50))
+
+    def get_monitors():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient DDC probe failure")
+        return [monitor]
+
+    fake_sbc = _FakeSBC(raw=29)
+    _reset_caches(monkeypatch)
+    monkeypatch.setattr(mb, "_HAS_MC", True)
+    monkeypatch.setattr(mb, "_HAS_SBC", True)
+    monkeypatch.setattr(mb, "monitorcontrol", SimpleNamespace(get_monitors=get_monitors))
+    monkeypatch.setattr(mb, "sbc", fake_sbc)
+
+    assert mb.set_brightness(20) is False
+    assert fake_sbc.set_calls == []
+    assert mb._PRIMARY_LUMINANCE_MAX is None
+
+    assert mb.set_brightness(20) is True
+    assert fake_sbc.set_calls == [(10, mb.PRIMARY_DISPLAY_INDEX)]
+    assert mb._PRIMARY_LUMINANCE_MAX == 50
+
+
 def test_get_current_brightness_returns_normalized_percent(monkeypatch):
     fake_sbc = _FakeSBC(raw=29)
     monkeypatch.setattr(mb, "_HAS_SBC", True)
@@ -227,19 +254,49 @@ def test_set_color_preset_targets_primary_monitor_only(monkeypatch):
     assert secondary.set_presets == []
 
 
-def test_failed_color_attempt_stays_unapplied_and_does_not_hammer(monkeypatch):
+def test_failed_color_attempt_stays_unapplied_and_retries_after_verify_interval(monkeypatch):
     calls: list[str] = []
+    now = [100.0]
     reconciler = mb.Reconciler()
+    monkeypatch.setattr(mb.time, "time", lambda: now[0])
+    monkeypatch.setattr(mb, "_rgb_gain_matches_period", lambda _period: False)
     monkeypatch.setattr(
         mb, "set_color_temperature", lambda period: calls.append(period) or False
     )
 
     reconciler._maybe_apply_color_temperature("night")
     reconciler._maybe_apply_color_temperature("night")
+    now[0] += mb.COLOR_REVERIFY_INTERVAL_S
+    reconciler._maybe_apply_color_temperature("night")
 
-    assert calls == ["night"]
+    assert calls == ["night", "night"]
     assert reconciler._last_attempted_period_for_color == "night"
     assert reconciler._last_applied_period_for_color is None
+
+
+def test_color_reverify_repairs_gain_drift_without_period_change(monkeypatch):
+    calls: list[str] = []
+    matches = [True, False]
+    now = [100.0]
+    reconciler = mb.Reconciler()
+    monkeypatch.setattr(mb.time, "time", lambda: now[0])
+    monkeypatch.setattr(
+        mb, "_rgb_gain_matches_period", lambda _period: matches.pop(0)
+    )
+    monkeypatch.setattr(
+        mb, "set_color_temperature", lambda period: calls.append(period) or True
+    )
+
+    reconciler._maybe_apply_color_temperature("late_night")
+    assert calls == ["late_night"]
+
+    now[0] += mb.COLOR_REVERIFY_INTERVAL_S
+    reconciler._maybe_apply_color_temperature("late_night")
+    assert calls == ["late_night"]
+
+    now[0] += mb.COLOR_REVERIFY_INTERVAL_S
+    reconciler._maybe_apply_color_temperature("late_night")
+    assert calls == ["late_night", "late_night"]
 
 
 def test_successful_color_attempt_marks_applied(monkeypatch):
