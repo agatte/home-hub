@@ -871,8 +871,11 @@ class TestKickoffTeamFormReader:
         orch = await self._make_orch()
 
         async def _stub_load_setting(key):
+            if key == "gameday_playoff_state":
+                return {"record": [7, 3, 0], "season_year": 2026, "is_preseason": False}
             assert key == "gameday_team_form"
             return {
+                "season_year": 2026,
                 "last4_record": [3, 1],
                 "win_streak": 2,
                 "season_record": [7, 3, 0],
@@ -886,11 +889,35 @@ class TestKickoffTeamFormReader:
         assert "Danny Dimes" in line
         assert "Daniel Jones" not in line
 
+    async def test_stale_prior_season_form_falls_back_to_jones(self, monkeypatch):
+        orch = await self._make_orch()
+
+        async def _stub_load_setting(key):
+            if key == "gameday_playoff_state":
+                return {"record": [7, 3, 0], "season_year": 2026, "is_preseason": False}
+            return {
+                "season_year": 2025,
+                "last4_record": [3, 1],
+                "win_streak": 2,
+                "season_record": [7, 3, 0],
+            }
+
+        monkeypatch.setattr(
+            "backend.api.routes.routines.load_setting", _stub_load_setting,
+        )
+
+        line = await orch._pick_kickoff_template()
+        assert "Daniel Jones" in line
+        assert "Danny Dimes" not in line
+
     async def test_struggling_form_returns_jones_line(self, monkeypatch):
         orch = await self._make_orch()
 
         async def _stub_load_setting(key):
+            if key == "gameday_playoff_state":
+                return {"record": [2, 5, 0], "season_year": 2026, "is_preseason": False}
             return {
+                "season_year": 2026,
                 "last4_record": [1, 3],
                 "win_streak": 0,
                 "season_record": [2, 5, 0],

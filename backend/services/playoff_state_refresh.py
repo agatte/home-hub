@@ -50,6 +50,8 @@ REFRESH_WEEKDAY = 1  # Tuesday (Mon=0..Sun=6)
 # app_settings key written by this module — read by the pregameday audio
 # dispatch handler in bootstrap.
 PLAYOFF_STATE_KEY = "gameday_playoff_state"
+TEAM_FORM_KEY = "gameday_team_form"
+TEAM_FORM_HISTORY_KEY = "gameday_team_form_history"
 
 
 def compute_playoff_state(
@@ -135,9 +137,73 @@ def compute_playoff_state(
         "division_gap_games": None,
         "is_eliminated": False,
         "record": [wins, losses, ties],
+        "season_year": nfl_season_year(today),
         "refreshed_at": today.replace(microsecond=0).isoformat(),
         "season_week": season_week,
         "is_preseason": is_preseason,
+    }
+
+
+def compute_team_form(
+    schedule_events: list[dict[str, Any]],
+    *,
+    today: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Derive season-scoped Colts form from final regular-season games.
+
+    The active form is intentionally tagged with the NFL season year so a
+    persisted row from a prior season can never be mistaken for current form.
+    Historical seasons are retained separately by ``refresh_playoff_state``.
+    """
+    today = today or datetime.now(timezone.utc)
+    outcomes: list[str] = []
+    wins = losses = ties = 0
+
+    for event in schedule_events:
+        comps = event.get("competitions") or []
+        if not comps or (event.get("season") or {}).get("type") != 2:
+            continue
+        comp = comps[0]
+        if comp.get("status", {}).get("type", {}).get("name") != "STATUS_FINAL":
+            continue
+
+        colts_score = opp_score = None
+        for team in comp.get("competitors") or []:
+            try:
+                score = int(team.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            if (team.get("team") or {}).get("id") == "11":
+                colts_score = score
+            else:
+                opp_score = score
+        if colts_score is None or opp_score is None:
+            continue
+
+        if colts_score > opp_score:
+            wins += 1
+            outcomes.append("W")
+        elif colts_score < opp_score:
+            losses += 1
+            outcomes.append("L")
+        else:
+            ties += 1
+            outcomes.append("T")
+
+    recent = outcomes[-4:]
+    win_streak = 0
+    for outcome in reversed(outcomes):
+        if outcome != "W":
+            break
+        win_streak += 1
+
+    return {
+        "season_year": nfl_season_year(today),
+        "last4_record": [recent.count("W"), recent.count("L")],
+        "win_streak": win_streak,
+        "season_record": [wins, losses, ties],
+        "games_played": len(outcomes),
+        "refreshed_at": today.replace(microsecond=0).isoformat(),
     }
 
 
@@ -236,7 +302,7 @@ def parse_colts_division_standings(
 
 
 async def refresh_playoff_state(
-    save_setting_fn, *, today: Optional[datetime] = None,
+    save_setting_fn, *, load_setting_fn=None, today: Optional[datetime] = None,
 ) -> dict[str, Any]:
     """Fetch ESPN, compute the state dict, persist to app_settings.
 
@@ -263,6 +329,7 @@ async def refresh_playoff_state(
         return {}
 
     state = compute_playoff_state(events, today=today)
+    team_form = compute_team_form(events, today=today)
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(
@@ -296,4 +363,22 @@ async def refresh_playoff_state(
         )
     except Exception:
         logger.exception("playoff_state_refresh: app_settings write failed")
+
+    try:
+        await save_setting_fn(TEAM_FORM_KEY, team_form)
+        if load_setting_fn is not None:
+            history = await load_setting_fn(TEAM_FORM_HISTORY_KEY) or {}
+            if not isinstance(history, dict):
+                history = {}
+            history[str(team_form["season_year"])] = team_form
+            await save_setting_fn(TEAM_FORM_HISTORY_KEY, history)
+        logger.info(
+            "playoff_state_refresh: team form season=%s record=%s last4=%s streak=%s",
+            team_form["season_year"], team_form["season_record"],
+            team_form["last4_record"], team_form["win_streak"],
+        )
+    except Exception:
+        # Team-form history enriches kickoff wording only. Never block the
+        # authoritative stakes snapshot when its persistence fails.
+        logger.exception("playoff_state_refresh: team-form write failed")
     return state

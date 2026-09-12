@@ -15,10 +15,13 @@ from backend.services.playoff_state_refresh import (
     _SCHEDULE_URL,
     _STANDINGS_URL,
     PLAYOFF_STATE_KEY,
+    TEAM_FORM_HISTORY_KEY,
+    TEAM_FORM_KEY,
     REFRESH_HOUR_ET,
     REFRESH_MINUTE_ET,
     REFRESH_WEEKDAY,
     compute_playoff_state,
+    compute_team_form,
     nfl_season_year,
     parse_colts_division_standings,
     refresh_playoff_state,
@@ -338,6 +341,47 @@ class TestComputePlayoffStateContinued:
 # refresh_playoff_state — I/O wrapper
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# compute_team_form ? season-scoped kickoff context
+# ---------------------------------------------------------------------------
+
+class TestComputeTeamForm:
+
+    def test_week_one_starts_clean_and_is_season_tagged(self):
+        form = compute_team_form(
+            [_scheduled_game()],
+            today=datetime(2026, 9, 8, tzinfo=timezone.utc),
+        )
+        assert form["season_year"] == 2026
+        assert form["season_record"] == [0, 0, 0]
+        assert form["last4_record"] == [0, 0]
+        assert form["win_streak"] == 0
+        assert form["games_played"] == 0
+
+    def test_recent_form_and_streak_use_regular_season_finals_only(self):
+        form = compute_team_form(
+            [
+                _final_game(colts_score=24, opp_score=17),
+                _final_game(colts_score=28, opp_score=20),
+                _final_game(colts_score=14, opp_score=21),
+                _final_game(colts_score=31, opp_score=10),
+                _final_game(colts_score=27, opp_score=17),
+                _final_game(colts_score=30, opp_score=27, season_type=1),
+            ],
+            today=datetime(2026, 10, 15, tzinfo=timezone.utc),
+        )
+        assert form["season_record"] == [4, 1, 0]
+        assert form["last4_record"] == [3, 1]
+        assert form["win_streak"] == 2
+        assert form["games_played"] == 5
+
+    def test_january_belongs_to_prior_nfl_season(self):
+        form = compute_team_form(
+            [], today=datetime(2027, 1, 15, tzinfo=timezone.utc),
+        )
+        assert form["season_year"] == 2026
+
+
 class TestRefreshPlayoffState:
 
     @pytest.mark.asyncio
@@ -370,18 +414,19 @@ class TestRefreshPlayoffState:
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
-        captured: dict = {}
+        captured: dict[str, dict] = {}
         async def fake_save(key: str, value: dict) -> None:
-            captured["key"] = key
-            captured["value"] = value
+            captured[key] = value
 
         result = await refresh_playoff_state(
             fake_save, today=datetime(2027, 1, 15, tzinfo=timezone.utc),
         )
 
-        assert captured["key"] == PLAYOFF_STATE_KEY
-        assert captured["value"]["record"] == [1, 0, 0]
-        assert captured["value"]["division_gap_games"] == 0
+        assert captured[PLAYOFF_STATE_KEY]["record"] == [1, 0, 0]
+        assert captured[PLAYOFF_STATE_KEY]["division_gap_games"] == 0
+        assert captured[PLAYOFF_STATE_KEY]["season_year"] == 2026
+        assert captured[TEAM_FORM_KEY]["season_year"] == 2026
+        assert captured[TEAM_FORM_KEY]["season_record"] == [1, 0, 0]
         assert result["record"] == [1, 0, 0]
         assert "headers" not in _FakeClient.init_kwargs
         assert _FakeClient.get_calls == [
@@ -422,12 +467,12 @@ class TestRefreshPlayoffState:
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
         captured = {}
-        async def fake_save(key, value): captured["value"] = value
+        async def fake_save(key, value): captured[key] = value
 
         result = await refresh_playoff_state(fake_save)
         assert result["record"] == [1, 0, 0]
         assert result["division_gap_games"] is None
-        assert captured["value"] == result
+        assert captured[PLAYOFF_STATE_KEY] == result
 
     @pytest.mark.asyncio
     async def test_standings_failure_persists_schedule_fallback(self, monkeypatch):
@@ -448,12 +493,12 @@ class TestRefreshPlayoffState:
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
         captured = {}
-        async def fake_save(key, value): captured["value"] = value
+        async def fake_save(key, value): captured[key] = value
 
         result = await refresh_playoff_state(fake_save)
         assert result["record"] == [1, 0, 0]
         assert result["division_gap_games"] is None
-        assert captured["value"] == result
+        assert captured[PLAYOFF_STATE_KEY] == result
 
     @pytest.mark.asyncio
     async def test_malformed_standings_persists_schedule_fallback(self, monkeypatch):
@@ -475,12 +520,48 @@ class TestRefreshPlayoffState:
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
         captured = {}
-        async def fake_save(key, value): captured["value"] = value
+        async def fake_save(key, value): captured[key] = value
 
         result = await refresh_playoff_state(fake_save)
         assert result["record"] == [1, 0, 0]
         assert result["division_gap_games"] is None
-        assert captured["value"] == result
+        assert captured[PLAYOFF_STATE_KEY] == result
+
+    @pytest.mark.asyncio
+    async def test_team_form_history_is_keyed_by_season(self, monkeypatch):
+        import httpx
+
+        class _FakeResponse:
+            def __init__(self, payload): self.payload = payload
+            def raise_for_status(self): pass
+            def json(self): return self.payload
+
+        class _FakeClient:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url, **kwargs):
+                if url == _STANDINGS_URL:
+                    return _FakeResponse(_standings_payload_colts_lead_1_0())
+                return _FakeResponse({"events": [_final_game(colts_score=24, opp_score=10)]})
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        captured = {}
+        async def fake_save(key, value): captured[key] = value
+        async def fake_load(key):
+            assert key == TEAM_FORM_HISTORY_KEY
+            return {"2025": {"season_year": 2025, "season_record": [9, 8, 0]}}
+
+        await refresh_playoff_state(
+            fake_save,
+            load_setting_fn=fake_load,
+            today=datetime(2026, 9, 15, tzinfo=timezone.utc),
+        )
+
+        history = captured[TEAM_FORM_HISTORY_KEY]
+        assert history["2025"]["season_record"] == [9, 8, 0]
+        assert history["2026"]["season_year"] == 2026
+        assert history["2026"]["season_record"] == [1, 0, 0]
 
     @pytest.mark.asyncio
     async def test_http_failure_returns_empty_no_write(self, monkeypatch):

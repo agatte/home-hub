@@ -957,27 +957,20 @@ class CelebrationOrchestrator:
         return pick_fg_tts(yards=yards)
 
     async def _pick_kickoff_template(self) -> str:
-        """Dispatch to `kickoff_tts_picker.pick_kickoff_tts` with context
-        gathered from gameday_service + `app_settings['gameday_team_form']`.
+        """Pick kickoff TTS from current-season team form when trustworthy.
 
-        team_form storage shape (JSON in app_settings):
-          {
-            "last4_record": [wins, losses],
-            "win_streak": int,
-            "season_record": [wins, losses, ties]
-          }
-        Absent / malformed → picker falls back to the "jones" (measured)
-        pool. The ESPN-driven refresh task that populates this row is a
-        separate follow-up; users can manually seed via SQL for testing
-        the dimes/jones swap.
+        ``gameday_team_form`` is optional and may outlive the season that wrote
+        it. Only accept it when its season tag and season record match the
+        trusted current ``gameday_playoff_state`` and kickoff season; otherwise
+        fail conservative to the
+        measured Daniel Jones pool.
         """
-        # Local imports keep the kickoff-specific deps out of the cold-
-        # load path for non-kickoff sequences.
         from backend.api.routes.routines import load_setting
         from backend.services.kickoff_tts_picker import (
             TeamForm,
             pick_kickoff_tts,
         )
+        from backend.services.playoff_state_refresh import nfl_season_year
 
         state = self._safe_current_state()
         kickoff_at = (
@@ -988,25 +981,46 @@ class CelebrationOrchestrator:
         team_form: Optional[TeamForm] = None
         try:
             raw = await load_setting("gameday_team_form")
-            if raw:
+            season_state = await load_setting("gameday_playoff_state")
+            if raw and isinstance(season_state, dict) and season_state.get("is_preseason") is False:
                 last4 = raw.get("last4_record")
                 streak = raw.get("win_streak")
                 season = raw.get("season_record")
-                if (isinstance(last4, list) and len(last4) == 2
-                        and isinstance(streak, int)
-                        and isinstance(season, list) and len(season) == 3):
-                    team_form = TeamForm(
-                        last4_record=(int(last4[0]), int(last4[1])),
-                        win_streak=int(streak),
-                        season_record=(
-                            int(season[0]), int(season[1]), int(season[2]),
-                        ),
+                trusted_record = season_state.get("record")
+                form_season_year = raw.get("season_year")
+                trusted_season_year = season_state.get("season_year")
+                kickoff_season_year = nfl_season_year(kickoff_at)
+                if (
+                    isinstance(last4, list) and len(last4) == 2
+                    and isinstance(streak, int)
+                    and isinstance(season, list) and len(season) == 3
+                    and isinstance(trusted_record, list) and len(trusted_record) == 3
+                    and isinstance(form_season_year, int)
+                    and isinstance(trusted_season_year, int)
+                    and form_season_year == trusted_season_year == kickoff_season_year
+                ):
+                    last4_wins, last4_losses = (int(last4[0]), int(last4[1]))
+                    season_record = tuple(int(value) for value in season)
+                    trusted = tuple(int(value) for value in trusted_record)
+                    games_played = sum(season_record)
+                    internally_consistent = (
+                        min(last4_wins, last4_losses, streak, *season_record) >= 0
+                        and last4_wins <= season_record[0]
+                        and last4_losses <= season_record[1]
+                        and last4_wins + last4_losses <= min(4, games_played)
+                        and streak <= season_record[0]
                     )
+                    if season_record == trusted and internally_consistent:
+                        team_form = TeamForm(
+                            last4_record=(last4_wins, last4_losses),
+                            win_streak=streak,
+                            season_record=season_record,
+                        )
         except Exception:
-            # Best-effort — bad app_settings shape must never block a
-            # kickoff TTS line. Falls through to team_form=None.
+            # Missing, malformed, stale, or unreadable form must never block a
+            # kickoff.  Conservative fallback is the measured Jones pool.
             logger.debug(
-                "celebration: team_form load failed, defaulting to None",
+                "celebration: team_form unavailable/untrusted, defaulting to None",
                 exc_info=True,
             )
 

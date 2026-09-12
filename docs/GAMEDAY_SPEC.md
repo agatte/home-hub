@@ -538,6 +538,8 @@ Stakes enrichment must fail closed. Core Game Day schedule/live operation never 
 
 The weekly `playoff_state_refresh` task runs Tuesday at 06:00 ET and writes the accepted snapshot to `app_settings["gameday_playoff_state"]`. January/February refreshes query the preceding NFL season year. A standings fetch failure, malformed payload, wrong group, incomplete/duplicate division table, impossible gap, cross-row inconsistency, or record mismatch preserves the schedule-derived state with `division_gap_games=None`.
 
+The same refresh also owns season-scoped kickoff team form. `gameday_team_form` carries `season_year`, recent four-game W/L form, win streak, season record, games played, and refresh time; `gameday_team_form_history` retains the latest snapshot for each NFL season. Kickoff TTS may use the active form only when its season tag matches both the trusted playoff-state season and the kickoff season, and its season record matches the trusted regular-season record. A stale/missing/malformed snapshot therefore falls back to the measured kickoff line pool instead of leaking prior-year form into a new season. Historical rows remain available for future longitudinal learning but have no automatic live-game authority.
+
 This means the current automatic stakes behavior is intentionally conservative: early/mid-season games normally use the standard tier; the late-season `clutch` tier may activate only from a validated AFC South gap; probability-based tiers remain dormant until a separately verified source is added.
 
 ### 10.6 Verification

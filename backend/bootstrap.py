@@ -831,8 +831,11 @@ async def lifespan(app: FastAPI):
     async def playoff_state_refresh() -> None:
         # routines.save_setting handles the DB write — passed as a callable
         # so playoff_state_refresh stays DB-layer-agnostic for testing.
-        from backend.api.routes.routines import save_setting
-        await refresh_playoff_state(save_setting)
+        from backend.api.routes.routines import load_setting, save_setting
+        await refresh_playoff_state(
+            save_setting,
+            load_setting_fn=load_setting,
+        )
 
     scheduler.add_task(ScheduledTask(
         name="playoff_state_refresh",
