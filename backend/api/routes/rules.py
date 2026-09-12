@@ -2,14 +2,12 @@
 Rule engine endpoints — view, manage, and interact with learned rules.
 """
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.api.auth import require_api_key
-from backend.services.ml.feature_builder import get_time_period
 
 logger = logging.getLogger("home_hub.rules")
 
@@ -40,20 +38,6 @@ def _brightness_targets(payload: dict) -> dict[str, int]:
         return {str(payload["light_id"]): int(payload["suggested_bri"])}
     return {}
 
-
-def _brightness_context_matches(payload: dict, request: Request) -> bool:
-    automation = getattr(request.app.state, "automation", None)
-    if automation is None:
-        return False
-    if payload.get("mode") and automation.current_mode != payload.get("mode"):
-        return False
-    if payload.get("period") != get_time_period(datetime.now(timezone.utc)):
-        return False
-    expected_weather = payload.get("weather_class")
-    current_weather = getattr(automation, "last_weather_class", None)
-    if expected_weather and current_weather and expected_weather != current_weather:
-        return False
-    return True
 
 
 async def _apply_brightness_targets_now(

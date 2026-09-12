@@ -209,6 +209,11 @@ async def health_check(request: Request) -> dict:
     if _automation is not None:
         automation_block = {
             "current_mode": _automation.current_mode,
+            "current_weather_class": getattr(
+                _automation, "current_weather_class", None,
+            ),
+            "lux_weather_class": _automation.last_weather_class,
+            # Backward-compatible alias for GH #67 / Check K consumers.
             "last_weather_class": _automation.last_weather_class,
             "last_lux_multiplier": round(_automation.last_lux_multiplier, 4),
         }

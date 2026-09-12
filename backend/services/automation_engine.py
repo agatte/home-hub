@@ -765,6 +765,15 @@ class AutomationEngine:
         return self.mode_source
 
     @property
+    def current_weather_class(self) -> Optional[str]:
+        """Fresh authoritative weather class for behavior decisions.
+
+        This is distinct from ``last_weather_class``, which is lux-hysteresis
+        bookkeeping and may legitimately lag the live weather context.
+        """
+        return self._get_current_weather_condition()
+
+    @property
     def last_weather_class(self) -> Optional[str]:
         """Most recent weather class applied to the lux-multiplier curve.
 

@@ -7026,6 +7026,7 @@ class TestWeatherActuatorContext249:
             weather_service=weather,
         )
         assert engine._get_current_weather_condition() is None
+        assert engine.current_weather_class is None
 
     def test_fresh_actuator_weather_drives_lighting_classification(self, mock_hue, mock_hue_v2, mock_ws):
         weather = MagicMock()
@@ -7039,6 +7040,7 @@ class TestWeatherActuatorContext249:
             weather_service=weather,
         )
         assert engine._get_current_weather_condition() == "rain"
+        assert engine.current_weather_class == "rain"
 
 
 class TestWeatherPipelineObservability249:

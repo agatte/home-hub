@@ -336,7 +336,7 @@ class TestHealthAutomationBlock:
         if getattr(app.state, "automation", None) is None:
             pytest.skip("automation engine not initialized — partial lifespan")
         block = data["automation"]
-        for key in ("current_mode", "last_weather_class", "last_lux_multiplier"):
+        for key in ("current_mode", "current_weather_class", "lux_weather_class", "last_weather_class", "last_lux_multiplier"):
             assert key in block, f"automation block missing {key}"
 
     def test_reflects_engine_state(self, client):
@@ -351,7 +351,9 @@ class TestHealthAutomationBlock:
             automation._last_weather_class = "rain"
             automation._last_lux_multiplier = 1.25
             block = client.get("/health").json()["automation"]
+            assert block["lux_weather_class"] == "rain"
             assert block["last_weather_class"] == "rain"
+            assert block["current_weather_class"] == automation.current_weather_class
             assert block["last_lux_multiplier"] == 1.25
             assert block["current_mode"] == automation.current_mode
         finally:

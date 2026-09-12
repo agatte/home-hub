@@ -882,9 +882,12 @@ class TestMLLoggerIntegration:
 
 
 class FakeAutomation:
-    def __init__(self, mode="working", period="day", weather="rain"):
+    def __init__(
+        self, mode="working", period="day", weather="rain", lux_weather=None,
+    ):
         self.current_mode = mode
-        self.last_weather_class = weather
+        self.current_weather_class = weather
+        self.last_weather_class = weather if lux_weather is None else lux_weather
         self._period = period
 
     def get_time_period(self):
@@ -1060,6 +1063,58 @@ class TestBrightnessSuggestion:
         assert await service.emit_brightness_suggestion(candidate) is None
 
         service.set_brightness_suggestion_deps(presence=FakePresence(zone="desk"))
+        assert await service.emit_brightness_suggestion(candidate) is not None
+
+    @pytest.mark.asyncio
+    async def test_emit_uses_authoritative_weather_not_lux_hysteresis(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(weather="rain", lux_weather="clouds"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
+        assert await service.emit_brightness_suggestion(candidate) is not None
+
+    @pytest.mark.asyncio
+    async def test_emit_rejects_missing_authoritative_weather(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(weather=None, lux_weather="rain"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
+        assert await service.emit_brightness_suggestion(candidate) is None
+
+    @pytest.mark.asyncio
+    async def test_emit_rejects_weather_mismatch_even_if_lux_matches(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(weather="clear", lux_weather="rain"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "rain", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
+        assert await service.emit_brightness_suggestion(candidate) is None
+
+    @pytest.mark.asyncio
+    async def test_weather_any_candidate_is_weather_agnostic(self, db_and_service):
+        _, service, _, _ = db_and_service
+        service.set_brightness_suggestion_deps(
+            automation=FakeAutomation(weather=None, lux_weather="rain"),
+        )
+        candidate = {
+            "light_id": "1", "mode": "working", "period": "day",
+            "weather_class": "any", "suggested_bri": 180,
+            "sample_count": 5, "distinct_days": 3,
+        }
         assert await service.emit_brightness_suggestion(candidate) is not None
 
     @pytest.mark.asyncio

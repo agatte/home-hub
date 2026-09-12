@@ -20,6 +20,7 @@ from sqlalchemy import delete, select, update
 from backend.database import async_session
 from backend.models import ActivityEvent, LearnedRule, RuleSuggestion
 from backend.services.ml.confidence_fusion import VALID_MODES
+from backend.services.weather_class import WEATHER_ANY
 
 # Pending rows older than this are auto-expired by `expire_stale_pending`,
 # and `restore_pending_on_boot` will expire (not re-broadcast) anything
@@ -1011,9 +1012,10 @@ class RuleEngineService:
         if payload.get("period") != current_period:
             return False
         expected_weather = payload.get("weather_class")
-        current_weather = getattr(automation, "last_weather_class", None)
-        if expected_weather and expected_weather != current_weather:
-            return False
+        if expected_weather and expected_weather != WEATHER_ANY:
+            current_weather = getattr(automation, "current_weather_class", None)
+            if expected_weather != current_weather:
+                return False
         expected_zone = payload.get("zone_at_time")
         if expected_zone:
             latest_zone = getattr(self._presence, "latest_zone", None)
