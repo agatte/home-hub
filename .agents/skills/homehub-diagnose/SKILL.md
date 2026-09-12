@@ -1,24 +1,21 @@
 ---
 name: homehub-diagnose
-description: Diagnose HomeHub runtime health, API behavior, house/activity mode selection, presence/camera evidence, ML lanes, override pressure, or recent service errors. Use for read-only investigation and post-change verification; do not use for unrelated implementation work.
+description: Diagnose live HomeHub behavior. Use for runtime/API, mode/presence/camera/ML/override, or recent service/log problems.
 ---
 
 # HomeHub Diagnose
 
-Start read-only and inspect only the lane needed for the symptom.
+Start read-only and load only the reference for the implicated lane:
 
-- Health, API/device state, deploy regression, or connectivity: read
-  `references/runtime.md`.
-- Wrong house/activity mode, presence conflict, camera authority, ML/fusion, or
-  override behavior: read `references/automation.md`.
-- Recent warnings, tracebacks, service restarts, or a named log pattern: read
+- Runtime/API/device/deploy/connectivity: `references/runtime.md`.
+- House/activity mode, presence/camera, ML/fusion, overrides:
+  `references/automation.md`.
+- Recent warnings, tracebacks, restarts, or named log patterns:
   `references/logs.md`.
 
-Use current production evidence when the question is about live behavior; do not
-infer runtime truth from code alone. Prefer bounded endpoints, journal windows,
-and SELECT-only queries.
+Use current production evidence for live questions; do not infer runtime truth
+from code alone. Prefer bounded endpoints, journal windows, and SELECT-only data.
 
-Explain the causal chain and uncertainty, classify the finding when possible,
-and recommend the smallest next action. Do not restart services, change modes,
-write devices, modify production data, or deploy unless the user separately
-asks for that action.
+Explain the causal chain and uncertainty, classify the finding when useful, and
+recommend the smallest next action. Live writes, restarts, or deploys remain
+separate actions unless already authorized.
