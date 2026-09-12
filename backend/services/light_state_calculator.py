@@ -189,6 +189,38 @@ def lux_to_multiplier(lux: float, baseline: float = 90.0) -> float:
     return 1.0  # Unreachable
 
 
+# General/Idle at a physically established Desk uses the bedroom camera's
+# calibrated lux as a comfort envelope, not as authority over other rooms.
+# At the calibrated baseline, desk fixtures sit at 80% of their authored
+# maxima; a genuinely dark bedroom may recover the authored values, while a
+# bright bedroom can dim them to 70%. L2 remains the functional source and L5
+# remains subordinate; #251's final L5 ceiling still applies afterward.
+GENERAL_DESK_LUX_NEUTRAL_SCALE = 0.80
+GENERAL_DESK_LUX_MIN_SCALE = 0.70
+GENERAL_DESK_LUX_MAX_SCALE = 1.00
+GENERAL_DESK_LUX_LIGHT_IDS = frozenset({"2", "5"})
+
+
+def apply_general_desk_lux_balance(
+    state: dict[str, Any], lux: Optional[float], baseline: Optional[float],
+) -> dict[str, Any]:
+    """Bound General desk fixtures using room-correct calibrated bedroom lux."""
+    if lux is None or baseline is None or baseline <= 0 or not _is_per_light_dict(state):
+        return state
+    raw = lux_to_multiplier(float(lux), float(baseline))
+    scale = max(
+        GENERAL_DESK_LUX_MIN_SCALE,
+        min(GENERAL_DESK_LUX_MAX_SCALE, raw * GENERAL_DESK_LUX_NEUTRAL_SCALE),
+    )
+    result = {lid: dict(light) for lid, light in state.items()}
+    for light_id in GENERAL_DESK_LUX_LIGHT_IDS:
+        light = result.get(light_id)
+        if not light or light.get("on", True) is False or "bri" not in light:
+            continue
+        light["bri"] = max(1, min(254, int(round(int(light["bri"]) * scale))))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Baseline-relative path-light brightness (D1)
 # ---------------------------------------------------------------------------

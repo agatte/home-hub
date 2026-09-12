@@ -76,6 +76,7 @@ from backend.services.living_room_atmosphere import (
     preserve_atmosphere_effect_scope,
 )
 from backend.services.pipeline_broadcaster import PipelineBroadcaster
+from backend.services.lux_channel import LUX_EMA_STALE_RESET_SECONDS
 
 logger = logging.getLogger("home_hub.automation")
 
@@ -105,6 +106,7 @@ from backend.services.light_state_calculator import (  # noqa: E402
     ZONE_POSTURE_FRESHNESS_SECONDS,
     adjust_single_light as _adjust_single_light_pure,
     apply_brightness_multiplier as _calc_apply_brightness_multiplier,
+    apply_general_desk_lux_balance as _apply_general_desk_lux_balance,
     apply_functional_weather_brightness as _calc_apply_functional_weather_brightness,
     apply_gaming_day_surround_brightness as _calc_apply_gaming_day_surround_brightness,
     apply_lux_multiplier as _calc_apply_lux_multiplier,
@@ -398,6 +400,7 @@ class AutomationEngine:
         confidence_fusion=None,
         effect_manager=None,
         presence_fusion=None,
+        bedroom_lux=None,
     ) -> None:
         self._hue = hue
         self._hue_v2 = hue_v2
@@ -411,6 +414,7 @@ class AutomationEngine:
         self._ml_logger = ml_logger
         self._behavioral_predictor = behavioral_predictor
         self._presence_fusion = presence_fusion
+        self._bedroom_lux = bedroom_lux
         if effect_manager is None:
             transition_boundary = LightingTransitionBoundary(hue)
             self._effect_manager = EffectManager(
@@ -1549,6 +1553,28 @@ class AutomationEngine:
         the /api/camera/enable route when the camera is toggled on.
         """
         self._camera_service = camera
+
+    def _read_fresh_bedroom_lux(self) -> tuple[Optional[float], Optional[float]]:
+        """Return calibrated bedroom lux while the desktop channel is fresh."""
+        channel = self._bedroom_lux
+        if channel is None:
+            return None, None
+        ema = getattr(channel, "ema_lux", None)
+        baseline = getattr(channel, "baseline_lux", None)
+        if ema is None or baseline is None or float(baseline) <= 0:
+            return None, None
+        is_fresh = getattr(channel, "is_fresh", None)
+        if not callable(is_fresh) or not is_fresh(float(LUX_EMA_STALE_RESET_SECONDS)):
+            return None, None
+        return float(ema), float(baseline)
+
+    def _compose_general_state(self, state: dict[str, Any], period: str) -> dict[str, Any]:
+        """Apply Desk-only bedroom-lux comfort, then shared fixture ceilings."""
+        zone, _ = self._current_zone_posture()
+        if zone == "desk":
+            ema, baseline = self._read_fresh_bedroom_lux()
+            state = _apply_general_desk_lux_balance(state, ema, baseline)
+        return _enforce_fixture_comfort_invariants(state, "general", period, zone)
 
     # Backwards-compat for tests / callers referencing the classmethod form
     _lux_to_multiplier = staticmethod(lux_to_multiplier)
@@ -5001,6 +5027,7 @@ class AutomationEngine:
             evening_state = _resolve_activity_state("general", "evening")
             night_state = _resolve_activity_state("general", "night")
             state = _lerp_light_state(evening_state, night_state, progress)
+            state = self._compose_general_state(state, "evening")
             await self._apply_state(state)
             return
 
@@ -5035,9 +5062,9 @@ class AutomationEngine:
                     # internal idle projects to user-facing General and gets
                     # fixture-specific targets instead of cloning one state.
                     if start >= ramp_end:
-                        state = _resolve_activity_state(
-                            "general", self._get_time_period(now),
-                        )
+                        period = self._get_time_period(now)
+                        state = _resolve_activity_state("general", period)
+                        state = self._compose_general_state(state, period)
                         await self._apply_state(state)
                         return
                     state = rule

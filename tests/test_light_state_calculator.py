@@ -31,6 +31,7 @@ from backend.services.light_state_calculator import (
     TZ,
     apply_brightness_multiplier,
     apply_functional_weather_brightness,
+    apply_general_desk_lux_balance,
     apply_gaming_day_surround_brightness,
     apply_lux_multiplier,
     apply_weather_adjust,
@@ -85,6 +86,28 @@ class TestGeneralVisualComfortState:
             assert state["2"]["ct"] >= 333
             assert state["5"]["ct"] >= state["2"]["ct"]
         assert evening["5"]["bri"] > night["5"]["bri"] > late["5"]["bri"]
+
+
+class TestGeneralDeskLuxBalance:
+    def test_calibrated_baseline_reduces_only_desk_pair(self):
+        state = ACTIVITY_LIGHT_STATES["general"]["day"]
+        out = apply_general_desk_lux_balance(state, 127.0, 127.0)
+        assert out["2"]["bri"] == 152
+        assert out["5"]["bri"] == 72
+        assert out["1"] == state["1"]
+        assert out["3"] == state["3"]
+        assert out["4"] == state["4"]
+        assert state["2"]["bri"] == 190
+
+    def test_dark_bedroom_can_recover_authored_maxima(self):
+        state = ACTIVITY_LIGHT_STATES["general"]["day"]
+        out = apply_general_desk_lux_balance(state, 20.0, 127.0)
+        assert out["2"]["bri"] == 190
+        assert out["5"]["bri"] == 90
+
+    def test_uncalibrated_lux_abstains(self):
+        state = ACTIVITY_LIGHT_STATES["general"]["day"]
+        assert apply_general_desk_lux_balance(state, 80.0, None) is state
 
 
 class TestDeskFixtureComfortInvariant:

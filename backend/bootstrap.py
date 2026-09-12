@@ -317,7 +317,8 @@ async def lifespan(app: FastAPI):
     # bedroom modes (gaming/working/watching) can adapt against a room-correct
     # baseline. Seeded from the saved calibration; None baseline until the
     # desktop cam is calibrated, in which case the channel returns no usable
-    # reading (store-only in Part C — no consumer yet).
+    # reading. #136 consumes it only when fresh physical Desk authority is
+    # established; other rooms never inherit bedroom-camera brightness.
     from backend.services.lux_channel import LuxChannel
     _lux_cal = await load_setting("desktop_lux_calibration_config") or {}
     app.state.bedroom_lux = LuxChannel(
@@ -406,6 +407,7 @@ async def lifespan(app: FastAPI):
         confidence_fusion=confidence_fusion,
         effect_manager=effect_manager,
         presence_fusion=presence,
+        bedroom_lux=app.state.bedroom_lux,
     )
     app.state.automation = automation
     # Off-dashboard skip emitter — wire after both event_logger and

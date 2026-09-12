@@ -7254,3 +7254,46 @@ class TestWeatherPipelineObservability249:
         assert inputs["weather"]["policies"] == []
         assert inputs["weather"]["applies"] is False
         assert inputs["weather"]["suppressed_by"] == "scene_override"
+
+
+class TestGeneralBedroomLux136:
+    @staticmethod
+    def _channel(*, ema=127.0, baseline=127.0, fresh=True):
+        return SimpleNamespace(
+            ema_lux=ema,
+            baseline_lux=baseline,
+            is_fresh=lambda _max_age: fresh,
+        )
+
+    def test_desk_general_uses_fresh_bedroom_lux(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            bedroom_lux=self._channel(),
+        )
+        engine._current_zone_posture = lambda: ("desk", None)
+        state = resolve_activity_state("general", "day")
+        out = engine._compose_general_state(state, "day")
+        assert out["2"]["bri"] == 152
+        assert out["5"]["bri"] == 72
+        assert out["3"] == state["3"]
+
+    def test_non_desk_general_does_not_use_bedroom_lux(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            bedroom_lux=self._channel(ema=20.0),
+        )
+        engine._current_zone_posture = lambda: ("couch", None)
+        state = resolve_activity_state("general", "day")
+        out = engine._compose_general_state(state, "day")
+        assert out["2"]["bri"] == 190
+        assert out["5"]["bri"] == 90
+    def test_stale_bedroom_lux_abstains(self, mock_hue, mock_hue_v2, mock_ws):
+        engine = AutomationEngine(
+            hue=mock_hue, hue_v2=mock_hue_v2, ws_manager=mock_ws,
+            bedroom_lux=self._channel(ema=20.0, fresh=False),
+        )
+        engine._current_zone_posture = lambda: ("desk", None)
+        state = resolve_activity_state("general", "day")
+        out = engine._compose_general_state(state, "day")
+        assert out["2"]["bri"] == 190
+        assert out["5"]["bri"] == 90
