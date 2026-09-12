@@ -172,10 +172,30 @@ async def post_observation(
         posture_confidence=payload.posture_confidence,
         pose_visible_landmarks=payload.pose_visible_landmarks,
     )
+    # Capture the fused context before ingest so an off-host source can
+    # trigger the same lighting recomposition boundary as an in-process
+    # Latitude camera commit.  Without this edge, a mode that settled while
+    # zone was unknown could remain above Desk fixture-comfort ceilings even
+    # after fresh desktop evidence committed ``zone=desk``.
+    zone_before = presence.latest_zone()
+    posture_before = presence.latest_posture()
     presence.on_observation(reading)
+    zone_after = presence.latest_zone()
+    posture_after = presence.latest_posture()
+
     automation = getattr(request.app.state, "automation", None)
     if automation is not None:
         await automation.notify_presence_observation(reading)
+        context_committed = (
+            (zone_after is not None and zone_after != zone_before)
+            or (posture_after is not None and posture_after != posture_before)
+        )
+        notify_commit = getattr(automation, "notify_camera_commit", None)
+        if context_committed and callable(notify_commit):
+            # Celebration direct writes and ordinary mode recomposition share
+            # the same lighting transition boundary. If a pulse owns it, this
+            # waits until the transient writer finishes rather than racing it.
+            await notify_commit()
     away_manager = getattr(request.app.state, "away_manager", None)
     if away_manager is not None:
         await away_manager.handle_presence_observation(reading)

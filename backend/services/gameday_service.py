@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -142,6 +143,9 @@ class GameDayState:
     last_play: Optional[PlayEvent]
 
 
+_SYNTHETIC_STATE_OVERRIDE: ContextVar[Optional[GameDayState]] = ContextVar(
+    "gameday_synthetic_state_override", default=None,
+)
 
 
 def _play_event_payload(play: PlayEvent) -> dict[str, Any]:
@@ -281,8 +285,9 @@ class GameDayService:
     # ------------------------------------------------------------------ Public API
 
     def current_state(self) -> Optional[GameDayState]:
-        """Synchronous snapshot — returns None if no game scheduled today."""
-        return self._current_state
+        """Return the task-local synthetic snapshot, else the live game state."""
+        synthetic = _SYNTHETIC_STATE_OVERRIDE.get()
+        return synthetic if synthetic is not None else self._current_state
 
     def register_on_play_event(self, cb: PlayCallback) -> None:
         """Subscribe to scoring plays. Slice B's CelebrationOrchestrator
@@ -350,6 +355,54 @@ class GameDayService:
             "opponent": opponent,
             "stakes_tier": stakes_tier,
             "hold_seconds": hold_seconds,
+        }
+
+    async def trigger_synthetic_final(self, *, won: bool) -> dict[str, Any]:
+        """Fire the real final-state subscriber path with deterministic test state.
+
+        End-of-game choreography is owned by ``GameDayStateTransition`` rather
+        than a PlayEvent. Keep the synthetic final state installed only while
+        subscribers run so their normal ``current_state()`` lookup sees the
+        test score/opponent, then restore the service snapshot unchanged.
+        """
+        previous = self._current_state
+        opponent = previous.opponent if previous and previous.opponent else None
+        kickoff_utc = previous.kickoff_utc if previous else None
+        if opponent is None:
+            upcoming = next((
+                game for game in self._schedule_cache
+                if game.get("status") in (STATUS_SCHEDULED, STATUS_IN_PROGRESS)
+            ), None)
+            if upcoming is not None:
+                opponent = upcoming.get("opponent")
+                kickoff_utc = kickoff_utc or upcoming.get("kickoff_utc")
+        opponent = opponent or "Test Opponent"
+
+        score_colts, score_opp = ((27, 20) if won else (20, 27))
+        synthetic = GameDayState(
+            status="final", opponent=opponent, kickoff_utc=kickoff_utc,
+            score_colts=score_colts, score_opp=score_opp, quarter=4,
+            clock="0:00", possession=None, last_play=None,
+        )
+        transition = GameDayStateTransition(
+            from_status="in-progress", to_status="final",
+            timestamp=self._now_utc(),
+        )
+        token = _SYNTHETIC_STATE_OVERRIDE.set(synthetic)
+        try:
+            await self._fire_state_transition(transition)
+        finally:
+            _SYNTHETIC_STATE_OVERRIDE.reset(token)
+
+        return {
+            "transition": {
+                "from_status": transition.from_status,
+                "to_status": transition.to_status,
+            },
+            "opponent": opponent,
+            "score_colts": score_colts,
+            "score_opp": score_opp,
+            "outcome": "win" if won else "loss",
         }
 
     async def trigger_synthetic_play(self, play_type: PlayType) -> PlayEvent:

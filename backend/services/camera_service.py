@@ -2777,6 +2777,7 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
             ``"watchdog_stale_heartbeat"``, ``"watchdog_dead_service"``).
     """
     automation = app.state.automation
+    presence = getattr(app.state, "presence", None)
 
     stale = getattr(app.state, "camera_service", None)
     if stale is not None:
@@ -2796,6 +2797,9 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
             await stale.close()
         except Exception:
             logger.exception("Previous camera close() raised — continuing")
+        if presence is not None:
+            presence.invalidate_source("latitude")
+            automation.notify_presence_source_invalidated("latitude")
         app.state.camera_service = None
 
     ws_manager = app.state.ws_manager
@@ -2831,11 +2835,13 @@ async def spawn_camera_service(app: "FastAPI", *, reason: str) -> dict:
         subscriber = getattr(app.state, attr, None)
         if subscriber is not None and hasattr(subscriber, "set_camera_service"):
             subscriber.set_camera_service(camera)
-    presence = getattr(app.state, "presence", None)
     if presence is not None:
         camera.register_observation_callback(presence.on_observation)
         camera.register_observation_invalidation_callback(
             presence.invalidate_source
+        )
+        camera.register_observation_invalidation_callback(
+            automation.notify_presence_source_invalidated
         )
     away_manager = getattr(app.state, "away_manager", None)
     if away_manager is not None:

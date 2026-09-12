@@ -13,6 +13,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,6 +37,7 @@ from backend.services.gameday_service import (
     _play_event_payload,
 )
 from backend.services.websocket_manager import WebSocketManager
+from backend.api.routes.gameday import test_event as route_test_event
 
 
 FIXTURE_PATH = (
@@ -732,6 +734,95 @@ class TestPlayDiffing:
         await svc.trigger_synthetic_play("touchdown")
         assert len(received) == 1
         assert received[0].description.startswith("[TEST]")
+
+
+    @pytest.mark.parametrize(
+        ("won", "expected_colts", "expected_opp"),
+        [(True, 27, 20), (False, 20, 27)],
+    )
+    async def test_synthetic_final_uses_transition_path_and_restores_state(
+        self, won, expected_colts, expected_opp,
+    ):
+        svc = _make_service()
+        original = GameDayState(
+            status="in-progress", opponent="Baltimore Ravens", kickoff_utc=None,
+            score_colts=10, score_opp=7, quarter=2, clock="8:00",
+            possession="colts", last_play=None,
+        )
+        svc._current_state = original
+        observed: list[tuple[GameDayStateTransition, GameDayState | None]] = []
+
+        async def cb(transition):
+            observed.append((transition, svc.current_state()))
+
+        svc.register_on_state_transition(cb)
+        result = await svc.trigger_synthetic_final(won=won)
+
+        assert len(observed) == 1
+        transition, during = observed[0]
+        assert transition.from_status == "in-progress"
+        assert transition.to_status == "final"
+        assert during is not None and during.status == "final"
+        assert during.opponent == "Baltimore Ravens"
+        assert (during.score_colts, during.score_opp) == (expected_colts, expected_opp)
+        assert result["outcome"] == ("win" if won else "loss")
+        assert svc.current_state() is original
+
+    async def test_synthetic_final_is_task_local_and_cannot_clobber_live_state(self):
+        svc = _make_service()
+        original = GameDayState(
+            status="in-progress", opponent="Baltimore Ravens", kickoff_utc=None,
+            score_colts=10, score_opp=7, quarter=2, clock="8:00",
+            possession="colts", last_play=None,
+        )
+        live_update = GameDayState(
+            status="in-progress", opponent="Baltimore Ravens", kickoff_utc=None,
+            score_colts=17, score_opp=14, quarter=3, clock="4:12",
+            possession="opp", last_play=None,
+        )
+        svc._current_state = original
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def cb(_transition):
+            during = svc.current_state()
+            assert during is not None and during.status == "final"
+            entered.set()
+            await release.wait()
+
+        svc.register_on_state_transition(cb)
+        task = asyncio.create_task(svc.trigger_synthetic_final(won=True))
+        await entered.wait()
+
+        # The caller/poller task never sees synthetic state.
+        assert svc.current_state() is original
+        svc._current_state = live_update
+        assert svc.current_state() is live_update
+
+        release.set()
+        await task
+
+        assert svc.current_state() is live_update
+
+    @pytest.mark.parametrize(
+        ("event", "won"),
+        [("end_of_game_win", True), ("end_of_game_loss", False)],
+    )
+    async def test_end_game_route_calls_synthetic_final_not_other_play(self, event, won):
+        svc = MagicMock()
+        svc.trigger_synthetic_final = AsyncMock(
+            return_value={"outcome": "win" if won else "loss"}
+        )
+        svc.trigger_synthetic_play = AsyncMock()
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(gameday=svc))
+        )
+
+        result = await route_test_event(event, request)
+
+        assert result["event"] == event
+        svc.trigger_synthetic_final.assert_awaited_once_with(won=won)
+        svc.trigger_synthetic_play.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

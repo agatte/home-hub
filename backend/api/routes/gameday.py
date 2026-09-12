@@ -39,9 +39,9 @@ _VALID_TEST_EVENTS = {
     "momentum",
 }
 
-# Map test event names to the PlayType enum values that GameDayService accepts.
-# `end_of_game_win` / `end_of_game_loss` aren't real PlayTypes; they synthesize
-# as "other" and Slice B's orchestrator will key off the description.
+# Map play-style test names to the PlayType enum values GameDayService accepts.
+# End-of-game tests are handled separately because real final choreography is
+# driven by a GameDayStateTransition, not a PlayEvent.
 _TEST_EVENT_TO_PLAY_TYPE: dict[
     str,
     Literal[
@@ -53,8 +53,6 @@ _TEST_EVENT_TO_PLAY_TYPE: dict[
     "touchdown": "touchdown",
     "field_goal": "field_goal",
     "kickoff": "kickoff",
-    "end_of_game_win": "other",
-    "end_of_game_loss": "other",
     "safety": "safety",
     "extra_point_good": "extra_point_good",
     "two_point_conv": "two_point_conv",
@@ -152,6 +150,10 @@ async def test_event(event: str, request: Request) -> dict[str, Any]:
             f"Unknown event: {event}. Valid: {sorted(_VALID_TEST_EVENTS)}",
         )
     svc = _service(request)
+    if event in {"end_of_game_win", "end_of_game_loss"}:
+        fired = await svc.trigger_synthetic_final(won=event == "end_of_game_win")
+        return {"status": "ok", "event": event, "fired": fired}
+
     play_type = _TEST_EVENT_TO_PLAY_TYPE[event]
     play = await svc.trigger_synthetic_play(play_type)
     return {

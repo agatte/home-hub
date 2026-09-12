@@ -538,6 +538,7 @@ class CelebrationOrchestrator:
         automation_engine: Any = None,
         camera_service: Any = None,
         event_logger: Any = None,
+        transition_boundary: Any = None,
     ) -> None:
         self._hue = hue_service
         self._tts = tts_service
@@ -559,7 +560,13 @@ class CelebrationOrchestrator:
         # DB analytics. Bypass-fire-and-forget by contract: a logging
         # exception must never bubble into _run_light_steps.
         self._event_logger = event_logger
+        self._transition_boundary = transition_boundary
         self._last_celebration_at: float = 0.0
+        self._sequence_active: bool = False
+
+    def is_active(self) -> bool:
+        """True while transient celebration lighting owns the room."""
+        return self._sequence_active
 
     def set_automation_engine(self, automation_engine: Any) -> None:
         """Late-bind the automation engine. Bootstrap may construct the
@@ -677,35 +684,77 @@ class CelebrationOrchestrator:
 
         # Stamp at start so simultaneous calls all see the same window.
         self._last_celebration_at = now
-
-        logger.info("celebration: firing %s sequence", key)
-
-        # Volume policy runs before TTS dispatch so we can log a clean
-        # "suppressed: <reason>" line and skip the speak() call if it
-        # returns None. Lights still fire either way.
-        target_volume = self._compute_target_volume(sequence, play)
-
-        # 1. WS broadcast first so the frontend can flair before the bridge
-        #    write storm starts. Failure is non-fatal.
+        self._sequence_active = True
+        successful_lights: set[str] = set()
         try:
-            await self._ws.broadcast(
-                "gameday_celebration",
-                {"sequence_key": key, "started_at": now},
-            )
-        except Exception:
-            logger.exception("celebration: ws broadcast failed for %s", key)
+            logger.info("celebration: firing %s sequence", key)
 
-        # 2. Run lights + TTS in parallel. asyncio.gather catches per-task
-        #    exceptions so a bridge hiccup doesn't kill the TTS line.
-        await asyncio.gather(
-            self._run_light_steps(sequence.light_steps, key),
-            self._run_tts(sequence, context, target_volume, key),
-            return_exceptions=True,
-        )
+            # Volume policy runs before TTS dispatch so we can log a clean
+            # "suppressed: <reason>" line and skip the speak() call if it
+            # returns None. Lights still fire either way.
+            target_volume = self._compute_target_volume(sequence, play)
+
+            # 1. WS broadcast first so the frontend can flair before the bridge
+            #    write storm starts. Failure is non-fatal.
+            try:
+                await self._ws.broadcast(
+                    "gameday_celebration",
+                    {"sequence_key": key, "started_at": now},
+                )
+            except Exception:
+                logger.exception("celebration: ws broadcast failed for %s", key)
+
+            # 2. Run lights + TTS in parallel. asyncio.gather catches per-task
+            #    exceptions so a bridge hiccup doesn't kill the TTS line.
+            results = await asyncio.gather(
+                self._run_light_steps_serialized(sequence.light_steps, key),
+                self._run_tts(sequence, context, target_volume, key),
+                return_exceptions=True,
+            )
+            if isinstance(results[0], set):
+                successful_lights = results[0]
+        finally:
+            self._sequence_active = False
+
+        # Celebration writes bypass AutomationEngine by design so pulses may
+        # exceed ordinary steady-state fixture ceilings. Once the transient
+        # writer is finished, hand authority back to the normal compositor.
+        # force_resend is required because direct Hue writes do not update the
+        # engine's dedup cache.
+        await self._reconcile_steady_state(key, successful_lights)
+
+    async def _run_light_steps_serialized(
+        self, steps: list[LightStep], sequence_key: str,
+    ) -> set[str]:
+        """Run direct celebration Hue writes under the shared lighting boundary."""
+        boundary = self._transition_boundary
+        if boundary is None or getattr(boundary, "held_by_current_task", False):
+            return await self._run_light_steps(steps, sequence_key)
+        async with boundary.serialized():
+            return await self._run_light_steps(steps, sequence_key)
+
+    async def _reconcile_steady_state(
+        self, sequence_key: str, successful_lights: set[str],
+    ) -> None:
+        automation = self._automation
+        supersede = getattr(automation, "supersede_screen_sync_lights", None)
+        if callable(supersede) and successful_lights:
+            supersede(successful_lights)
+        reapply = getattr(automation, "reapply_current_mode", None)
+        if not callable(reapply):
+            return
+        try:
+            await reapply(force_resend=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "celebration: steady-state reconcile failed for %s", sequence_key,
+            )
 
     async def _run_light_steps(
         self, steps: list[LightStep], sequence_key: str,
-    ) -> None:
+    ) -> set[str]:
         """Walk an ordered list of LightSteps, sleeping cumulatively from
         the sequence start. Each step's `delay_ms` is anchored to t=0.
 
@@ -718,7 +767,8 @@ class CelebrationOrchestrator:
         sit behind EventLogger middleware.
         """
         if not steps:
-            return
+            return set()
+        successful_lights: set[str] = set()
         # Sort defensively; authored sequences should already be in order
         # but this protects against future hand-edits.
         steps_sorted = sorted(steps, key=lambda s: s.delay_ms)
@@ -746,7 +796,7 @@ class CelebrationOrchestrator:
                 prev = last_states.get(step.light_id) or {}
 
             try:
-                await self._hue.set_light(step.light_id, step.state)
+                succeeded = await self._hue.set_light(step.light_id, step.state)
             except Exception:
                 logger.exception(
                     "celebration: set_light failed light=%s step_delay=%dms",
@@ -755,6 +805,13 @@ class CelebrationOrchestrator:
                 # Skip the log call on failure — there's no confirmed
                 # bridge write to mirror.
                 continue
+            if succeeded is not True:
+                logger.warning(
+                    "celebration: set_light not acknowledged light=%s step_delay=%dms",
+                    step.light_id, step.delay_ms,
+                )
+                continue
+            successful_lights.add(str(step.light_id))
 
             # Emit the EventLogger row. Wrapped defensively even though
             # log_light_adjustment is fire-and-forget by contract; a
@@ -779,6 +836,7 @@ class CelebrationOrchestrator:
                         "failed light=%s sequence=%s",
                         step.light_id, sequence_key,
                     )
+        return successful_lights
 
     async def _run_tts(
         self,

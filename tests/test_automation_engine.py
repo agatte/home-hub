@@ -6124,6 +6124,13 @@ class TestPhysicalContextRelax:
         )
         stale_camera = CameraService(mock_ws, engine)
         engine.register_on_mode_change(stale_camera.on_mode_change)
+        prior_latitude = PresenceReading(
+            source="latitude", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        )
+        presence.on_observation(prior_latitude)
+        assert presence.get_source_reading("latitude") is prior_latitude
         app = SimpleNamespace(
             state=SimpleNamespace(
                 automation=engine,
@@ -6145,11 +6152,19 @@ class TestPhysicalContextRelax:
             await asyncio.sleep(0)
 
         assert result["status"] == "ok"
+        pending_recompose = engine._fixture_comfort_expiry_task
+        if pending_recompose is not None:
+            await pending_recompose
+        assert presence.get_source_reading("latitude") is None
         camera = app.state.camera_service
         assert camera is not stale_camera
         assert presence.on_observation in camera._observation_callbacks
         assert (
             presence.invalidate_source
+            in camera._observation_invalidation_callbacks
+        )
+        assert (
+            engine.notify_presence_source_invalidated
             in camera._observation_invalidation_callbacks
         )
         assert engine._presence_fusion is presence
@@ -6496,6 +6511,340 @@ class TestDeskFixtureComfortIntegration:
         call = learner.get_overlay.call_args
         assert call.args[:3] == ("working", "night", "clear")
         assert call.kwargs["zone"] == "desk"
+
+    async def test_gameday_late_desktop_desk_commit_reapplies_l5_comfort(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        engine._get_time_period = lambda now=None: "day"
+        engine._manual_override = True
+        engine._override_mode = "gameday"
+        engine._override_source = "gameday:auto"
+
+        # Game Day can legitimately settle before a physical zone is known.
+        await engine._apply_mode("gameday")
+        assert mock_hue._lights["5"]["bri"] == 200
+
+        reading = PresenceReading(
+            source="desktop",
+            captured_at=datetime.now(timezone.utc),
+            face_present=True,
+            face_confidence=0.9,
+            detection_source="face",
+            zone="desk",
+            posture="upright",
+        )
+        presence.on_observation(reading)
+        await engine.notify_presence_observation(reading)
+        await engine.notify_camera_commit()
+
+        assert mock_hue._lights["5"]["bri"] == 90
+        assert mock_hue._lights["2"]["bri"] == 200
+
+    @pytest.mark.parametrize("mode", ["gameday", "pregameday"])
+    async def test_game_day_brief_desk_dropout_keeps_l5_capped(
+        self, engine, mock_hue, mode,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        engine._get_time_period = lambda now=None: "day"
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        await engine._apply_mode(mode)
+        assert mock_hue._lights["5"]["bri"] == 90
+
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        ))
+        assert presence.latest_zone() is None
+
+        await engine._apply_mode(mode, force_resend=True)
+        assert mock_hue._lights["5"]["bri"] == 90
+
+    async def test_gaming_brief_desk_dropout_keeps_screen_sync_l5_capped(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        sync = ScreenSyncService(
+            mock_hue, target_light_ids=["2", "5"],
+            transition_boundary=engine.lighting_transition_boundary,
+        )
+        engine._presence_fusion = presence
+        engine._screen_sync = sync
+        engine._current_mode = "gaming"
+        engine._get_time_period = lambda now=None: "day"
+
+        confirmed = PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        )
+        presence.on_observation(confirmed)
+        await engine._apply_mode("gaming")
+        assert sync._accepted_gaming_targets["5"]["bri"] == 90
+
+        # One raw no-face frame removes instantaneous latest_zone(), but the
+        # recent physical Desk high-water must keep the comfort target stable.
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        ))
+        assert presence.latest_zone() is None
+
+        await engine._apply_mode("gaming", force_resend=True)
+        assert sync._accepted_gaming_targets["5"]["bri"] == 90
+        await sync.apply_color(
+            "5", 220, 40, 40, mode="gaming", period="day",
+        )
+        assert mock_hue._lights["5"]["bri"] == 90
+
+    async def test_sticky_desk_only_applies_fixture_ceiling_not_general_lux_balance(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        ))
+
+        assert presence.latest_zone() is None
+        assert engine._fixture_comfort_zone() == "desk"
+        with patch(
+            "backend.services.automation_engine._apply_general_desk_lux_balance",
+        ) as desk_lux:
+            engine._compose_general_state(
+                resolve_activity_state("general", "day"), "day",
+            )
+        desk_lux.assert_not_called()
+
+    async def test_sticky_desk_expiry_recomposes_gaming_screen_sync_target(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        sync = ScreenSyncService(
+            mock_hue, target_light_ids=["2", "5"],
+            transition_boundary=engine.lighting_transition_boundary,
+        )
+        engine._presence_fusion = presence
+        engine._screen_sync = sync
+        engine._current_mode = "gaming"
+        engine._get_time_period = lambda now=None: "day"
+
+        confirmed = PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        )
+        presence.on_observation(confirmed)
+        await engine._apply_mode("gaming")
+        assert sync._accepted_gaming_targets["5"]["bri"] == 90
+
+        unknown = PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        )
+        presence.on_observation(unknown)
+        with patch(
+            "backend.services.automation_engine.FIXTURE_COMFORT_DESK_STICKY_SECONDS",
+            0.01,
+        ):
+            await engine.notify_presence_observation(unknown)
+            await asyncio.sleep(0.04)
+
+        assert engine._fixture_comfort_expiry_task is None
+        assert sync._accepted_gaming_targets["5"]["bri"] > 90
+
+    async def test_superseding_screen_sync_allows_steady_state_reconcile(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        sync = ScreenSyncService(
+            mock_hue, target_light_ids=["2", "5"],
+            transition_boundary=engine.lighting_transition_boundary,
+        )
+        engine._presence_fusion = presence
+        engine._screen_sync = sync
+        engine._current_mode = "gaming"
+        engine._get_time_period = lambda now=None: "day"
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+
+        await engine._apply_mode("gaming")
+        await sync.apply_color("5", 200, 20, 20, mode="gaming", period="day")
+        assert "5" in engine._applicator.protected_light_ids()
+
+        # Model a direct celebration pulse that bypasses AutomationEngine.
+        await mock_hue.set_light("5", {"on": True, "bri": 254, "hue": 1000, "sat": 254})
+        assert mock_hue._lights["5"]["bri"] == 254
+
+        engine.supersede_screen_sync_lights({"5"})
+        assert "5" not in engine._applicator.protected_light_ids()
+        await engine.reapply_current_mode(force_resend=True)
+        assert mock_hue._lights["5"]["bri"] == 90
+
+    async def test_unrelated_source_invalidation_rearms_recent_desk_expiry(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        engine._get_time_period = lambda now=None: "day"
+        engine._manual_override = True
+        engine._override_mode = "gaming"
+        engine._override_source = "api:test"
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        await engine._apply_mode("gaming")
+        assert mock_hue._lights["5"]["bri"] == 90
+
+        unknown = PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        )
+        presence.on_observation(unknown)
+        latitude_unknown = PresenceReading(
+            source="latitude", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        )
+        presence.on_observation(latitude_unknown)
+        with patch(
+            "backend.services.automation_engine.FIXTURE_COMFORT_DESK_STICKY_SECONDS",
+            0.2,
+        ):
+            await engine.notify_presence_observation(unknown)
+            original_expiry = engine._fixture_comfort_expiry_task
+            assert original_expiry is not None
+
+            presence.invalidate_source("latitude")
+            engine.notify_presence_source_invalidated("latitude")
+            invalidation = engine._fixture_comfort_expiry_task
+            assert invalidation is not None and invalidation is not original_expiry
+            await invalidation
+
+            rearmed = engine._fixture_comfort_expiry_task
+            assert rearmed is not None and rearmed is not invalidation
+            await rearmed
+
+        assert engine._fixture_comfort_expiry_task is None
+        assert mock_hue._lights["5"]["bri"] > 90
+
+    async def test_presence_source_invalidation_recomposes_manual_gaming(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        engine._get_time_period = lambda now=None: "day"
+        engine._manual_override = True
+        engine._override_mode = "gaming"
+        engine._override_source = "api:test"
+        presence.on_observation(PresenceReading(
+            source="latitude", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        await engine._apply_mode("gaming")
+        assert mock_hue._lights["5"]["bri"] == 90
+
+        presence.invalidate_source("latitude")
+        engine.notify_presence_source_invalidated("latitude")
+        task = engine._fixture_comfort_expiry_task
+        assert task is not None
+        await task
+
+        assert engine._fixture_comfort_expiry_task is None
+        assert mock_hue._lights["5"]["bri"] > 90
+
+    async def test_close_cancels_pending_fixture_comfort_expiry(
+        self, engine,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        unknown = PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        )
+        presence.on_observation(unknown)
+        engine.reapply_current_mode = AsyncMock()
+        engine._refresh_fixture_comfort_expiry_task()
+        assert engine._fixture_comfort_expiry_task is not None
+
+        await engine.close()
+        await asyncio.sleep(0)
+
+        assert engine._fixture_comfort_expiry_task is None
+        engine.reapply_current_mode.assert_not_awaited()
+
+    async def test_recent_desk_comfort_yields_to_current_physical_couch(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        engine._get_time_period = lambda now=None: "day"
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        presence.on_observation(PresenceReading(
+            source="latitude", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="couch", posture="upright",
+        ))
+
+        assert presence.seconds_since_at_desk() is not None
+        assert engine._fixture_comfort_zone() == "couch"
+
+    async def test_recent_desk_comfort_expires_before_reauthoring_gaming(
+        self, engine, mock_hue,
+    ):
+        presence = PresenceFusion()
+        engine._presence_fusion = presence
+        engine._get_time_period = lambda now=None: "day"
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=True, face_confidence=0.9, detection_source="face",
+            zone="desk", posture="upright",
+        ))
+        presence.on_observation(PresenceReading(
+            source="desktop", captured_at=datetime.now(timezone.utc),
+            face_present=False, face_confidence=0.0, detection_source="face",
+            zone=None, posture=None,
+        ))
+        presence._last_at_desk_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=31)
+        )
+
+        assert engine._fixture_comfort_zone() is None
+        await engine._apply_mode("gaming", force_resend=True)
+        assert mock_hue._lights["5"]["bri"] > 90
 
     async def test_social_direct_path_respects_desk_l5_ceiling(
         self, engine, mock_hue,

@@ -98,6 +98,10 @@ async def enter_travel(request: Request) -> dict:
     # this closes the acknowledgement window too.
     presence = getattr(request.app.state, "presence", None)
     if presence is not None:
+        # Travel is a darkening/departure lifecycle. Revoke the live Latitude
+        # reading, but do not schedule an ordinary-mode relight while Away is
+        # still being armed below. The in-memory fusion state is discarded on
+        # the subsequent host stop anyway.
         presence.invalidate_source("latitude")
 
     away_manager = getattr(request.app.state, "away_manager", None)

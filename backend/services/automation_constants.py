@@ -118,6 +118,10 @@ IDLE_AMBIENT_RELAX_DWELL_SECONDS = 10 * 60  # 10 minutes
 PHYSICAL_CONTEXT_OBSERVATION_FRESH_SECONDS = 8
 PHYSICAL_CONTEXT_PROCESS_VETO_SECONDS = 30
 PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS = 30
+# Fixture-comfort may retain a recently confirmed physical Desk location
+# across the same short no-face dropout window. Current non-null physical
+# zones still win immediately; this is not software/process room inference.
+FIXTURE_COMFORT_DESK_STICKY_SECONDS = PHYSICAL_CONTEXT_DESK_ABSENCE_SECONDS
 PHYSICAL_CONTEXT_PRESENCE_LOSS_SECONDS = 30
 PHYSICAL_CONTEXT_PROCESS_DEVICE_LIMIT = 8
 

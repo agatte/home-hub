@@ -13,6 +13,7 @@ the test suite runs at night.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -25,6 +26,7 @@ from backend.services.celebration_orchestrator import (
     CelebrationSequence,
     LightStep,
 )
+from backend.services.lighting_transition_boundary import LightingTransitionBoundary
 from backend.services.gameday_service import (
     GameDayState,
     GameDayStateTransition,
@@ -103,6 +105,8 @@ def _make_orchestrator(
         automation.current_mode = automation_mode
         automation.house_state = house_state
         automation.is_dnd_active = MagicMock(return_value=dnd_active)
+        automation.supersede_screen_sync_lights = MagicMock()
+        automation.reapply_current_mode = AsyncMock()
 
         camera = MagicMock()
         camera.is_present_within_seconds = MagicMock(return_value=camera_present)
@@ -189,6 +193,79 @@ def _final_transition() -> GameDayStateTransition:
         to_status="final",
         timestamp=datetime.now(timezone.utc),
     )
+
+
+@pytest.mark.asyncio
+async def test_transient_sequence_defers_then_reconciles_authoritative_mode(monkeypatch):
+    orch, _, _, _, _ = _make_orchestrator()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_lights(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(orch, "_run_light_steps", blocking_lights)
+    task = asyncio.create_task(orch._run_sequence("big_play", {}, play=None))
+    await entered.wait()
+
+    assert orch.is_active() is True
+    release.set()
+    await task
+
+    assert orch.is_active() is False
+    orch._automation.reapply_current_mode.assert_awaited_once_with(
+        force_resend=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_transient_sequence_relinquishes_screen_sync_before_reconcile():
+    orch, _, _, _, _ = _make_orchestrator()
+    await orch._run_sequence("big_play", {}, play=None)
+
+    expected = {
+        str(step.light_id)
+        for step in CelebrationOrchestrator.SEQUENCES["big_play"].light_steps
+    }
+    orch._automation.supersede_screen_sync_lights.assert_called_once_with(expected)
+    orch._automation.reapply_current_mode.assert_awaited_once_with(
+        force_resend=True,
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_transient_sequence_holds_shared_lighting_boundary(monkeypatch):
+    orch, hue, _, _, _ = _make_orchestrator()
+    boundary = LightingTransitionBoundary(hue)
+    orch._transition_boundary = boundary
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    contender_entered = asyncio.Event()
+
+    async def blocking_lights(*_args, **_kwargs):
+        assert boundary.held_by_current_task is True
+        entered.set()
+        await release.wait()
+
+    async def competing_writer():
+        async with boundary.serialized():
+            contender_entered.set()
+
+    monkeypatch.setattr(orch, "_run_light_steps", blocking_lights)
+    celebration = asyncio.create_task(
+        orch._run_sequence("big_play", {}, play=None)
+    )
+    await entered.wait()
+    contender = asyncio.create_task(competing_writer())
+    await asyncio.sleep(0)
+    assert contender_entered.is_set() is False
+
+    release.set()
+    await celebration
+    await contender
+    assert contender_entered.is_set() is True
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from backend.services.automation_constants import (
     ASLEEP_STAMP_FAILSAFE_HOURS as ASLEEP_STAMP_FAILSAFE_HOURS,
     AUTONOMOUS_PUSH_SOURCES as AUTONOMOUS_PUSH_SOURCES,
     DND_STATE_KEY as DND_STATE_KEY,
+    FIXTURE_COMFORT_DESK_STICKY_SECONDS as FIXTURE_COMFORT_DESK_STICKY_SECONDS,
     IDLE_AMBIENT_RELAX_DWELL_SECONDS as IDLE_AMBIENT_RELAX_DWELL_SECONDS,
     RECENT_DESK_ATTENDANCE_SECONDS as RECENT_DESK_ATTENDANCE_SECONDS,
     MODE_PRIORITY as MODE_PRIORITY,
@@ -583,6 +584,9 @@ class AutomationEngine:
 
         # Sleep fade task (gradual dim → off)
         self._sleep_fade_task: Optional[asyncio.Task] = None
+        # One bounded timer releases the flicker-resistant Desk fixture ceiling
+        # when physical localization stays unknown past its debounce window.
+        self._fixture_comfort_expiry_task: Optional[asyncio.Task] = None
 
         # Mode change callbacks (e.g., music mapper auto-play)
         self._on_mode_change_callbacks: list = []
@@ -1569,12 +1573,15 @@ class AutomationEngine:
         return float(ema), float(baseline)
 
     def _compose_general_state(self, state: dict[str, Any], period: str) -> dict[str, Any]:
-        """Apply Desk-only bedroom-lux comfort, then shared fixture ceilings."""
-        zone, _ = self._current_zone_posture()
-        if zone == "desk":
+        """Apply fresh Desk lux balance, then shared fixture comfort ceilings."""
+        fresh_zone, _ = self._current_zone_posture()
+        if fresh_zone == "desk":
             ema, baseline = self._read_fresh_bedroom_lux()
             state = _apply_general_desk_lux_balance(state, ema, baseline)
-        return _enforce_fixture_comfort_invariants(state, "general", period, zone)
+        comfort_zone = self._fixture_comfort_zone()
+        return _enforce_fixture_comfort_invariants(
+            state, "general", period, comfort_zone,
+        )
 
     # Backwards-compat for tests / callers referencing the classmethod form
     _lux_to_multiplier = staticmethod(lux_to_multiplier)
@@ -1865,6 +1872,20 @@ class AutomationEngine:
                 "Away suppression upgraded to hard hold by %s",
                 source,
             )
+
+    @property
+    def lighting_transition_boundary(self) -> LightingTransitionBoundary:
+        """Shared serialization boundary for autonomous Hue writers."""
+        return self._transition_boundary
+
+    def supersede_screen_sync_lights(self, light_ids: set[str]) -> None:
+        """Relinquish stale ScreenSync ownership after another writer succeeds."""
+        sync = self._screen_sync
+        supersede = getattr(sync, "supersede_light", None)
+        if not callable(supersede):
+            return
+        for light_id in light_ids:
+            supersede(str(light_id))
 
     async def reapply_current_mode(self, *, force_resend: bool = True) -> None:
         """Re-apply the current effective mode's lighting on demand.
@@ -2443,11 +2464,143 @@ class AutomationEngine:
         )
 
     async def notify_presence_observation(self, reading: Any) -> None:
-        """Evaluate source-qualified physical context after an observation edge."""
+        """Evaluate physical context and maintain fixture-comfort expiry."""
         source = getattr(reading, "source", "unknown")
         await self._evaluate_physical_context_relax(
             trigger=f"presence:{source}",
         )
+        self._refresh_fixture_comfort_expiry_task()
+
+    def _cancel_fixture_comfort_expiry_task(self) -> None:
+        task = self._fixture_comfort_expiry_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._fixture_comfort_expiry_task = None
+
+    def notify_presence_source_invalidated(self, source: str) -> None:
+        """Reconcile fixture comfort after source-qualified physical authority is revoked."""
+        self._cancel_fixture_comfort_expiry_task()
+        presence = self._presence_fusion
+        if presence is None:
+            return
+        try:
+            if presence.latest_zone() is not None:
+                return
+        except Exception:
+            logger.debug(
+                "PresenceFusion invalidation recompose check failed",
+                exc_info=True,
+            )
+            return
+        self._fixture_comfort_expiry_task = asyncio.create_task(
+            self._recompose_after_presence_invalidation(source)
+        )
+
+    async def _recompose_after_presence_invalidation(self, source: str) -> None:
+        """Re-render steady state once revoked physical evidence is no longer usable."""
+        this_task = asyncio.current_task()
+        try:
+            if self._override_source == "physical_context_relax":
+                return
+            logger.debug(
+                "Presence source %s invalidated; re-applying mode=%s",
+                source,
+                self.current_mode,
+            )
+            await self.reapply_current_mode(force_resend=True)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception(
+                "Fixture-comfort invalidation recompose failed for source=%s", source
+            )
+        finally:
+            if self._fixture_comfort_expiry_task is this_task:
+                self._fixture_comfort_expiry_task = None
+                # Another physical source may still have recent Desk evidence
+                # even though its instantaneous localization is unknown. Keep
+                # the original bounded expiry contract after this recompose.
+                self._refresh_fixture_comfort_expiry_task()
+
+    async def close(self) -> None:
+        """Cancel bounded auxiliary automation tasks before service shutdown."""
+        task = self._fixture_comfort_expiry_task
+        self._fixture_comfort_expiry_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    def _refresh_fixture_comfort_expiry_task(self) -> None:
+        """Arm one recompose when a recent physical Desk lock becomes unknown."""
+        presence = self._presence_fusion
+        if presence is None:
+            self._cancel_fixture_comfort_expiry_task()
+            return
+        try:
+            zone = presence.latest_zone()
+            seconds_since = presence.seconds_since_at_desk()
+        except Exception:
+            logger.debug(
+                "PresenceFusion fixture-comfort expiry check failed",
+                exc_info=True,
+            )
+            return
+
+        if zone is not None:
+            self._cancel_fixture_comfort_expiry_task()
+            return
+        if (
+            seconds_since is None
+            or seconds_since < -2.0
+            or seconds_since > FIXTURE_COMFORT_DESK_STICKY_SECONDS
+        ):
+            return
+        task = self._fixture_comfort_expiry_task
+        if task is not None and not task.done():
+            return
+        delay = max(
+            0.0,
+            FIXTURE_COMFORT_DESK_STICKY_SECONDS - max(0.0, seconds_since),
+        )
+        self._fixture_comfort_expiry_task = asyncio.create_task(
+            self._expire_fixture_comfort_desk_after(delay)
+        )
+
+    async def _expire_fixture_comfort_desk_after(self, delay: float) -> None:
+        """Release the sticky Desk ceiling once its physical evidence ages out."""
+        this_task = asyncio.current_task()
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            presence = self._presence_fusion
+            if presence is None:
+                return
+            while True:
+                zone = presence.latest_zone()
+                if zone is not None:
+                    return
+                seconds_since = presence.seconds_since_at_desk()
+                if seconds_since is None:
+                    break
+                remaining = FIXTURE_COMFORT_DESK_STICKY_SECONDS - seconds_since
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(remaining)
+            if self._override_source == "physical_context_relax":
+                return
+            logger.debug(
+                "Fixture-comfort Desk debounce expired; re-applying mode=%s",
+                self.current_mode,
+            )
+            await self.reapply_current_mode(force_resend=True)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Fixture-comfort expiry recompose failed")
+        finally:
+            if self._fixture_comfort_expiry_task is this_task:
+                self._fixture_comfort_expiry_task = None
 
     async def _evaluate_physical_context_relax(
         self,
@@ -2686,6 +2839,36 @@ class AutomationEngine:
         return zone, posture
 
 
+    def _fixture_comfort_zone(self) -> Optional[str]:
+        """Physical zone for fixture ceilings, resilient to brief Desk dropouts.
+
+        Current fused physical localization always wins. Only when that zone is
+        unknown may the recent physical Desk high-water mark hold the Desk
+        ceiling for a short debounce window. Process/software activity never
+        creates room authority here.
+        """
+        zone, _ = self._current_zone_posture()
+        if zone is not None:
+            return zone
+        presence = self._presence_fusion
+        if presence is None:
+            return None
+        try:
+            seconds_since = presence.seconds_since_at_desk()
+        except Exception:
+            logger.debug(
+                "PresenceFusion fixture-comfort desk recency failed",
+                exc_info=True,
+            )
+            return None
+        if (
+            seconds_since is not None
+            and -2.0 <= seconds_since <= FIXTURE_COMFORT_DESK_STICKY_SECONDS
+        ):
+            return "desk"
+        return None
+
+
     def _apply_zone_overlay(
         self, state: dict[str, Any], mode: str, period: str,
     ) -> dict[str, Any]:
@@ -2741,9 +2924,13 @@ class AutomationEngine:
             pass
 
     async def notify_camera_commit(self) -> None:
-        """Re-apply lighting after the camera commits a new zone or posture.
+        """Re-apply lighting after a source-qualified zone/posture commit.
 
-        Called by ``camera_service.poll_loop`` on actual transitions
+        Called by the Latitude ``camera_service.poll_loop`` and by the
+        off-host camera observation route when fused desktop context actually
+        transitions.  Both paths use the same final physical-context boundary.
+
+        The Latitude path calls this on actual transitions
         (zone or posture committing to a new non-None value), not on
         steady-state refreshes. Forces a fresh light apply with
         ``force_resend=True`` so the overlay's now-fresh zone/posture
@@ -4501,7 +4688,7 @@ class AutomationEngine:
             state = self._apply_zone_overlay(state, mode, period)
             if mode not in WEATHER_SKIP_MODES:
                 state = self._weather_adjust(state)
-            comfort_zone, _ = self._current_zone_posture()
+            comfort_zone = self._fixture_comfort_zone()
             state = _enforce_fixture_comfort_invariants(
                 state, mode, period, comfort_zone,
             )
@@ -4644,7 +4831,7 @@ class AutomationEngine:
         """
         state = ACTIVITY_LIGHT_STATES["social"]
         period = self._get_time_period()
-        comfort_zone, _ = self._current_zone_posture()
+        comfort_zone = self._fixture_comfort_zone()
         state = _enforce_fixture_comfort_invariants(
             state, "social", period, comfort_zone,
         )
@@ -4875,7 +5062,7 @@ class AutomationEngine:
         drifted = self._functional_weather_brightness(drifted, mode, period)
         if mode not in WEATHER_SKIP_MODES:
             drifted = self._weather_adjust(drifted)
-        comfort_zone, _ = self._current_zone_posture()
+        comfort_zone = self._fixture_comfort_zone()
         drifted = _enforce_fixture_comfort_invariants(
             drifted, mode, period, comfort_zone,
         )
@@ -5087,7 +5274,7 @@ class AutomationEngine:
         # Keep this legacy path conservative without changing global fan-out.
         targets["6"] = {"on": False}
         period = self._get_time_period()
-        comfort_zone, _ = self._current_zone_posture()
+        comfort_zone = self._fixture_comfort_zone()
         targets = _enforce_fixture_comfort_invariants(
             targets, "general", period, comfort_zone,
         )

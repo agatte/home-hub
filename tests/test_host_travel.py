@@ -220,13 +220,19 @@ def test_enter_travel_acknowledges_before_detached_shutdown(monkeypatch, tmp_pat
     monkeypatch.setattr(host, "_schedule_travel", lambda delay_seconds=1.5: "travel-test.service")
 
     invalidated = []
+    relights = []
     fake_presence = SimpleNamespace(invalidate_source=lambda source: invalidated.append(source))
+    fake_automation = SimpleNamespace(
+        notify_presence_source_invalidated=lambda source: relights.append(source)
+    )
     with TestClient(app) as client:
         app.state.presence = fake_presence
+        app.state.automation = fake_automation
         app.state.away_manager = None
         response = client.post("/api/host/travel")
     assert response.status_code == 200
     assert invalidated == ["latitude"]
+    assert relights == []
     payload = response.json()
     assert payload["status"] == "arming"
     assert payload["mode"] == "TRAVEL"

@@ -916,6 +916,7 @@ async def lifespan(app: FastAPI):
         # nightly journal / DB analytics. Without this, those writes only
         # land in journalctl.
         event_logger=event_logger,
+        transition_boundary=automation.lighting_transition_boundary,
     )
     gameday.register_on_play_event(celebration.on_play_event)
     gameday.register_on_state_transition(celebration.on_state_transition)
@@ -1168,6 +1169,9 @@ async def lifespan(app: FastAPI):
                 camera_service.register_observation_invalidation_callback(
                     presence.invalidate_source
                 )
+                camera_service.register_observation_invalidation_callback(
+                    automation.notify_presence_source_invalidated
+                )
                 camera_service.register_occupancy_observation_callback(
                     away_manager.handle_presence_observation
                 )
@@ -1417,6 +1421,9 @@ async def lifespan(app: FastAPI):
     #    task can't block shutdown forever.
     for task in tasks:
         task.cancel()
+    # Cancel AutomationEngine-owned delayed fixture-comfort work in the same
+    # lifecycle phase so it cannot outlive managed background writers.
+    await _safe_shutdown("automation", automation.close)
     try:
         await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
