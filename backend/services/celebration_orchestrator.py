@@ -108,6 +108,7 @@ _WHITE_SAT = 0
 _BASELINE_L1 = {"on": True, "bri": 150, "hue": _COLTS_BLUE_HUE, "sat": 185}
 _BASELINE_FILL = {"on": True, "bri": 200, "hue": 8000, "sat": 130}  # L2 + L5 warm amber
 _BASELINE_KITCHEN = {"on": True, "bri": 140, "hue": 8000, "sat": 130}  # L3 + L4 kitchen pair
+_BASELINE_PLANT = {"on": True, "bri": 150, "hue": _COLTS_BLUE_HUE, "sat": 170}  # L6 accent wash
 
 
 def _pulse(light_id: str, delay_ms: int, *, blue: bool = True, bri: int = 254,
@@ -126,6 +127,11 @@ def _pulse(light_id: str, delay_ms: int, *, blue: bool = True, bri: int = 254,
     )
 
 
+def _plant_pulse(delay_ms: int, *, bri: int = 225, transition: int = 1) -> LightStep:
+    """Plant Wash (L6): keep a Colts-blue anchor while brightness pulses."""
+    return _pulse("6", delay_ms, blue=True, bri=bri, transition=transition)
+
+
 def _baseline_step(light_id: str, delay_ms: int, base: dict,
                    transition: int = 10) -> LightStep:
     state = dict(base)
@@ -135,44 +141,52 @@ def _baseline_step(light_id: str, delay_ms: int, base: dict,
 
 # ----- Touchdown: ~6s. Rotation L1→L2/L5→L3+L4 (kitchen pair fires together,
 #       L5 mirrors L2 on the same beat) at 350ms each, then 3s sustained
-#       alternating blue/white across all five lights, fade home.
+#       alternating blue/white across the primary fixtures while L6 holds a
+#       Colts-blue accent pulse, then fade home.
 # L5 mirrors L2 on every beat — Phase A placeholder; Phase C curator pass.
 _TD_STEPS: list[LightStep] = [
     # Rotation phase: 350ms beats. L3 + L4 fire on the same beat (kitchen pair).
     _pulse("1", 0, blue=True),
+    _plant_pulse(0, bri=225),
     _pulse("2", 350, blue=False),
     _pulse("5", 350, blue=False),  # L5 mirrors L2 placeholder
     _pulse("3", 700, blue=True),
     _pulse("4", 700, blue=True),  # kitchen pair beat
-    # Sustained multi-pulse: alternate blue ↔ white across all five lights
-    # every 400ms for 2.4s.
+    # Sustained multi-pulse: alternate blue ↔ white across the full room
+    # stays Colts-blue and pulses brightness every 400ms for 2.4s.
     _pulse("1", 1200, blue=False),
+    _plant_pulse(1200, bri=240),
     _pulse("2", 1200, blue=True),
     _pulse("5", 1200, blue=True),
     _pulse("3", 1200, blue=False),
     _pulse("4", 1200, blue=False),  # kitchen pair
     _pulse("1", 1600, blue=True),
+    _plant_pulse(1600, bri=205),
     _pulse("2", 1600, blue=False),
     _pulse("5", 1600, blue=False),
     _pulse("3", 1600, blue=True),
     _pulse("4", 1600, blue=True),
     _pulse("1", 2000, blue=False),
+    _plant_pulse(2000, bri=240),
     _pulse("2", 2000, blue=True),
     _pulse("5", 2000, blue=True),
     _pulse("3", 2000, blue=False),
     _pulse("4", 2000, blue=False),
     _pulse("1", 2400, blue=True),
+    _plant_pulse(2400, bri=205),
     _pulse("2", 2400, blue=False),
     _pulse("5", 2400, blue=False),
     _pulse("3", 2400, blue=True),
     _pulse("4", 2400, blue=True),
     _pulse("1", 2800, blue=False),
+    _plant_pulse(2800, bri=240),
     _pulse("2", 2800, blue=True),
     _pulse("5", 2800, blue=True),
     _pulse("3", 2800, blue=False),
     _pulse("4", 2800, blue=False),
     # Fade home to gameday baseline. transitiontime=20 (=2.0s).
     _baseline_step("1", 3500, _BASELINE_L1, transition=20),
+    _baseline_step("6", 3500, _BASELINE_PLANT, transition=20),
     _baseline_step("2", 3500, _BASELINE_FILL, transition=20),
     _baseline_step("5", 3500, _BASELINE_FILL, transition=20),
     _baseline_step("3", 3500, _BASELINE_KITCHEN, transition=20),
@@ -182,16 +196,19 @@ _TD_STEPS: list[LightStep] = [
 # ----- Field goal: ~2.5s. Single blue pulse → white flash → fade home.
 _FG_STEPS: list[LightStep] = [
     _pulse("1", 0, blue=True),
+    _plant_pulse(0, bri=225),
     _pulse("2", 0, blue=True),
     _pulse("5", 0, blue=True),  # L5 mirrors L2 placeholder
     _pulse("3", 0, blue=True),
     _pulse("4", 0, blue=True),
     _pulse("1", 500, blue=False),
+    _plant_pulse(500, bri=180),
     _pulse("2", 500, blue=False),
     _pulse("5", 500, blue=False),
     _pulse("3", 500, blue=False),
     _pulse("4", 500, blue=False),
     _baseline_step("1", 1500, _BASELINE_L1, transition=10),
+    _baseline_step("6", 1500, _BASELINE_PLANT, transition=10),
     _baseline_step("2", 1500, _BASELINE_FILL, transition=10),
     _baseline_step("5", 1500, _BASELINE_FILL, transition=10),
     _baseline_step("3", 1500, _BASELINE_KITCHEN, transition=10),
@@ -206,12 +223,14 @@ _FG_STEPS: list[LightStep] = [
 _KICKOFF_STEPS: list[LightStep] = [
     # Wave: each pulse fades in over ~100ms (transition=1).
     _pulse("1", 0, blue=True),
+    _plant_pulse(0, bri=225),
     _pulse("2", 150, blue=True),
     _pulse("5", 150, blue=True),  # L5 mirrors L2 placeholder
     _pulse("3", 300, blue=True),
     _pulse("4", 300, blue=True),  # kitchen pair beat
     # Settle to gameday baseline. transitiontime=10 (=1.0s).
     _baseline_step("1", 700, _BASELINE_L1, transition=10),
+    _baseline_step("6", 700, _BASELINE_PLANT, transition=10),
     _baseline_step("2", 700, _BASELINE_FILL, transition=10),
     _baseline_step("5", 700, _BASELINE_FILL, transition=10),
     _baseline_step("3", 700, _BASELINE_KITCHEN, transition=10),
@@ -221,31 +240,37 @@ _KICKOFF_STEPS: list[LightStep] = [
 # ----- End of game (win): 6s — sustained blue/white celebration → baseline.
 _EOG_WIN_STEPS: list[LightStep] = [
     _pulse("1", 0, blue=True, bri=254),
+    _plant_pulse(0, bri=254),
     _pulse("2", 0, blue=False, bri=254),
     _pulse("5", 0, blue=False, bri=254),  # L5 mirrors L2 placeholder
     _pulse("3", 0, blue=True, bri=254),
     _pulse("4", 0, blue=True, bri=254),
     _pulse("1", 600, blue=False, bri=254),
+    _plant_pulse(600, bri=210),
     _pulse("2", 600, blue=True, bri=254),
     _pulse("5", 600, blue=True, bri=254),
     _pulse("3", 600, blue=False, bri=254),
     _pulse("4", 600, blue=False, bri=254),
     _pulse("1", 1200, blue=True, bri=254),
+    _plant_pulse(1200, bri=254),
     _pulse("2", 1200, blue=False, bri=254),
     _pulse("5", 1200, blue=False, bri=254),
     _pulse("3", 1200, blue=True, bri=254),
     _pulse("4", 1200, blue=True, bri=254),
     _pulse("1", 1800, blue=False, bri=254),
+    _plant_pulse(1800, bri=210),
     _pulse("2", 1800, blue=True, bri=254),
     _pulse("5", 1800, blue=True, bri=254),
     _pulse("3", 1800, blue=False, bri=254),
     _pulse("4", 1800, blue=False, bri=254),
     _pulse("1", 2400, blue=True, bri=254),
+    _plant_pulse(2400, bri=254),
     _pulse("2", 2400, blue=False, bri=254),
     _pulse("5", 2400, blue=False, bri=254),
     _pulse("3", 2400, blue=True, bri=254),
     _pulse("4", 2400, blue=True, bri=254),
     _baseline_step("1", 4000, _BASELINE_L1, transition=30),
+    _baseline_step("6", 4000, _BASELINE_PLANT, transition=30),
     _baseline_step("2", 4000, _BASELINE_FILL, transition=30),
     _baseline_step("5", 4000, _BASELINE_FILL, transition=30),
     _baseline_step("3", 4000, _BASELINE_KITCHEN, transition=30),
@@ -259,6 +284,9 @@ _EOG_LOSS_STEPS: list[LightStep] = [
     LightStep(light_id="1", delay_ms=0,
               state={"on": True, "bri": 100, "hue": _COLTS_BLUE_HUE,
                      "sat": 180, "transitiontime": 30}),
+    LightStep(light_id="6", delay_ms=0,
+              state={"on": True, "bri": 60, "hue": _COLTS_BLUE_HUE,
+                     "sat": 160, "transitiontime": 30}),
     LightStep(light_id="2", delay_ms=0,
               state={"on": True, "bri": 80, "hue": 8000,
                      "sat": 120, "transitiontime": 30}),
@@ -272,34 +300,44 @@ _EOG_LOSS_STEPS: list[LightStep] = [
     LightStep(light_id="4", delay_ms=0,
               state={"on": True, "bri": 80, "hue": 8000,
                      "sat": 120, "transitiontime": 30}),
+    # Timing sentinel: keep the serialized celebration owner through the
+    # intended six-second muted-loss window before steady-state reconcile.
+    LightStep(light_id="6", delay_ms=6000,
+              state={"on": True, "bri": 60, "hue": _COLTS_BLUE_HUE,
+                     "sat": 160, "transitiontime": 1}),
 ]
 
-# ----- Safety: ~3s. 4-beat alternating-color flash across all 5 lights.
+# ----- Safety: ~3s. 4-beat alternating-color flash across all 6 lights.
 # Rare scoring event (defense-driven 2 points + ball back); deserves a
 # distinctive cadence — sharp short pulses (vs TD's longer rotation) so
 # the apartment reads it as a *defensive* moment, not an offensive one.
 _SAFETY_STEPS: list[LightStep] = [
     _pulse("1", 0, blue=False, bri=254),
+    _plant_pulse(0, bri=190),
     _pulse("2", 0, blue=False, bri=254),
     _pulse("5", 0, blue=False, bri=254),
     _pulse("3", 0, blue=False, bri=254),
     _pulse("4", 0, blue=False, bri=254),
     _pulse("1", 400, blue=True, bri=254),
+    _plant_pulse(400, bri=240),
     _pulse("2", 400, blue=True, bri=254),
     _pulse("5", 400, blue=True, bri=254),
     _pulse("3", 400, blue=True, bri=254),
     _pulse("4", 400, blue=True, bri=254),
     _pulse("1", 800, blue=False, bri=254),
+    _plant_pulse(800, bri=190),
     _pulse("2", 800, blue=False, bri=254),
     _pulse("5", 800, blue=False, bri=254),
     _pulse("3", 800, blue=False, bri=254),
     _pulse("4", 800, blue=False, bri=254),
     _pulse("1", 1200, blue=True, bri=254),
+    _plant_pulse(1200, bri=240),
     _pulse("2", 1200, blue=True, bri=254),
     _pulse("5", 1200, blue=True, bri=254),
     _pulse("3", 1200, blue=True, bri=254),
     _pulse("4", 1200, blue=True, bri=254),
     _baseline_step("1", 2000, _BASELINE_L1, transition=20),
+    _baseline_step("6", 2000, _BASELINE_PLANT, transition=20),
     _baseline_step("2", 2000, _BASELINE_FILL, transition=20),
     _baseline_step("5", 2000, _BASELINE_FILL, transition=20),
     _baseline_step("3", 2000, _BASELINE_KITCHEN, transition=20),
@@ -319,18 +357,21 @@ _PAT_STEPS: list[LightStep] = [
 _2PT_STEPS: list[LightStep] = [
     # Beat 1: alternating blue/white across the room.
     _pulse("1", 0, blue=True, bri=254),
+    _plant_pulse(0, bri=240),
     _pulse("2", 0, blue=False, bri=254),
     _pulse("5", 0, blue=False, bri=254),
     _pulse("3", 0, blue=True, bri=254),
     _pulse("4", 0, blue=True, bri=254),
     # Beat 2: flip the alternation.
     _pulse("1", 600, blue=False, bri=254),
+    _plant_pulse(600, bri=200),
     _pulse("2", 600, blue=True, bri=254),
     _pulse("5", 600, blue=True, bri=254),
     _pulse("3", 600, blue=False, bri=254),
     _pulse("4", 600, blue=False, bri=254),
     # Fade home.
     _baseline_step("1", 1500, _BASELINE_L1, transition=10),
+    _baseline_step("6", 1500, _BASELINE_PLANT, transition=10),
     _baseline_step("2", 1500, _BASELINE_FILL, transition=10),
     _baseline_step("5", 1500, _BASELINE_FILL, transition=10),
     _baseline_step("3", 1500, _BASELINE_KITCHEN, transition=10),
@@ -344,28 +385,33 @@ _2PT_STEPS: list[LightStep] = [
 _DEFENSIVE_TD_STEPS: list[LightStep] = [
     # Phase 1: all blue, sustained ~1.5s.
     _pulse("1", 0, blue=True, bri=254),
+    _plant_pulse(0, bri=254),
     _pulse("2", 0, blue=True, bri=254),
     _pulse("5", 0, blue=True, bri=254),
     _pulse("3", 0, blue=True, bri=254),
     _pulse("4", 0, blue=True, bri=254),
     # Phase 2: rotate to signal the score.
     _pulse("1", 1500, blue=False, bri=254),
+    _plant_pulse(1500, bri=230),
     _pulse("2", 1500, blue=True, bri=254),
     _pulse("5", 1500, blue=True, bri=254),
     _pulse("3", 1500, blue=False, bri=254),
     _pulse("4", 1500, blue=False, bri=254),
     _pulse("1", 2000, blue=True, bri=254),
+    _plant_pulse(2000, bri=200),
     _pulse("2", 2000, blue=False, bri=254),
     _pulse("5", 2000, blue=False, bri=254),
     _pulse("3", 2000, blue=True, bri=254),
     _pulse("4", 2000, blue=True, bri=254),
     _pulse("1", 2500, blue=False, bri=254),
+    _plant_pulse(2500, bri=230),
     _pulse("2", 2500, blue=True, bri=254),
     _pulse("5", 2500, blue=True, bri=254),
     _pulse("3", 2500, blue=False, bri=254),
     _pulse("4", 2500, blue=False, bri=254),
     # Fade home.
     _baseline_step("1", 3500, _BASELINE_L1, transition=20),
+    _baseline_step("6", 3500, _BASELINE_PLANT, transition=20),
     _baseline_step("2", 3500, _BASELINE_FILL, transition=20),
     _baseline_step("5", 3500, _BASELINE_FILL, transition=20),
     _baseline_step("3", 3500, _BASELINE_KITCHEN, transition=20),
@@ -378,8 +424,9 @@ _DEFENSIVE_TD_STEPS: list[LightStep] = [
 # than the score celebrations so it can fire mid-drive without feeling
 # like a strobe. The 8s orchestrator cooldown caps real density.
 _BIG_PLAY_STEPS: list[LightStep] = [
-    # Single unified blue flash on all 5 lights.
+    # Single unified blue flash on all 6 lights.
     _pulse("1", 0, blue=True, bri=254),
+    _plant_pulse(0, bri=235, transition=1),
     _pulse("2", 0, blue=True, bri=254),
     _pulse("5", 0, blue=True, bri=254),
     _pulse("3", 0, blue=True, bri=254),
@@ -388,12 +435,14 @@ _BIG_PLAY_STEPS: list[LightStep] = [
     # mid-flash so back-to-back momentum fires (8s cooldown gap) read as
     # punctuation rather than strobe. Curator advisory 2026-05-15.
     _pulse("1", 500, blue=False, bri=200, transition=3),
+    _plant_pulse(500, bri=185, transition=3),
     _pulse("2", 500, blue=False, bri=200, transition=3),
     _pulse("5", 500, blue=False, bri=200, transition=3),
     _pulse("3", 500, blue=False, bri=200, transition=3),
     _pulse("4", 500, blue=False, bri=200, transition=3),
     # Fade home in 1.5s — back to gameday baseline before next play.
     _baseline_step("1", 1200, _BASELINE_L1, transition=10),
+    _baseline_step("6", 1200, _BASELINE_PLANT, transition=10),
     _baseline_step("2", 1200, _BASELINE_FILL, transition=10),
     _baseline_step("5", 1200, _BASELINE_FILL, transition=10),
     _baseline_step("3", 1200, _BASELINE_KITCHEN, transition=10),

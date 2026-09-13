@@ -1070,3 +1070,52 @@ class TestKitchenPairRule:
                         f"{key} @ {delay_ms}ms: kitchen pair diverges on {k!r} "
                         f"(L3={l3_state.get(k)} L4={l4_state.get(k)})"
                     )
+
+
+class TestPlantWashCelebrationRule:
+    """L6 Plant Wash is a Colts-blue accent in full-room celebrations."""
+
+    FULL_ROOM_KEYS = (
+        "touchdown",
+        "field_goal",
+        "kickoff",
+        "end_of_game_win",
+        "end_of_game_loss",
+        "safety",
+        "two_point_conv",
+        "defensive_td",
+        "big_play",
+    )
+
+    @pytest.mark.parametrize("key", FULL_ROOM_KEYS)
+    def test_full_room_sequences_include_plant_wash(self, key):
+        seq = CelebrationOrchestrator.SEQUENCES[key]
+        assert any(step.light_id == "6" for step in seq.light_steps), key
+
+    @pytest.mark.parametrize("key", FULL_ROOM_KEYS)
+    def test_plant_wash_remains_colts_blue_anchor(self, key):
+        seq = CelebrationOrchestrator.SEQUENCES[key]
+        plant_steps = [step for step in seq.light_steps if step.light_id == "6"]
+        assert plant_steps
+        assert all(step.state.get("hue") == 47000 for step in plant_steps)
+        assert all(int(step.state.get("sat", 0)) > 0 for step in plant_steps)
+
+    def test_touchdown_visibly_pulses_plant_wash(self):
+        seq = CelebrationOrchestrator.SEQUENCES["touchdown"]
+        plant_brightness = [
+            int(step.state["bri"])
+            for step in seq.light_steps
+            if step.light_id == "6" and "bri" in step.state
+        ]
+        assert max(plant_brightness) >= 225
+        assert len(set(plant_brightness)) >= 3
+
+    def test_pat_remains_deliberately_l1_only(self):
+        seq = CelebrationOrchestrator.SEQUENCES["extra_point_good"]
+        assert {step.light_id for step in seq.light_steps} == {"1"}
+
+    def test_end_game_loss_holds_muted_state_before_reconcile(self):
+        seq = CelebrationOrchestrator.SEQUENCES["end_of_game_loss"]
+        assert max(step.delay_ms for step in seq.light_steps) >= int(
+            seq.duration_seconds * 1000
+        )
