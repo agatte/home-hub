@@ -30,6 +30,8 @@
   // ErrorToast. The guest section owns its own background, padding, and
   // bottom-tab nav via /guest/+layout@.svelte + GuestBottomNav.
   $: isGuestRoute = $page.url.pathname.startsWith('/guest')
+  $: isGamedayPrototypeRoute = $page.url.pathname.startsWith('/gameday/prototype')
+  $: isIsolatedRoute = isGuestRoute || isGamedayPrototypeRoute
 
   // /gameday goes edge-to-edge — the football field is the visual, so the
   // generative ModeBackground is suppressed and the .app container loses
@@ -40,7 +42,7 @@
   onMount(() => {
     // Guest pages run behind the isolated guest gateway. Do not open the
     // normal HomeHub websocket or initialize kiosk-only activity/ambient code.
-    if (window.location.pathname.startsWith('/guest')) return () => {}
+    if (window.location.pathname.startsWith('/guest') || window.location.pathname.startsWith('/gameday/prototype')) return () => {}
     const cleanupStores = initStores()
     const cleanupActivity = initActivityTracking()
     const cleanupAmbient = initAmbientAudio()
@@ -48,27 +50,27 @@
   })
 </script>
 
-{#if !isGuestRoute && !isGamedayRoute}
+{#if !isIsolatedRoute && !isGamedayRoute}
   <ModeBackground />
 {/if}
-{#if !isGuestRoute}
+{#if !isIsolatedRoute}
   <ModeOverlay />
   <NowPlayingIdle />
 {/if}
 
 <div class="app-shell" class:user-idle={$userIdle}>
-  <div class:app={!isGamedayRoute} class:app-bleed={isGamedayRoute}>
+  <div class:app={!isGamedayRoute && !isGamedayPrototypeRoute} class:app-bleed={isGamedayRoute || isGamedayPrototypeRoute}>
     <slot />
-    {#if $connectionLost && !isGuestRoute}
+    {#if $connectionLost && !isIsolatedRoute}
       <div class="reconnect-banner">Reconnecting to server...</div>
     {/if}
   </div>
-  {#if !isGuestRoute}
+  {#if !isIsolatedRoute}
     <div class="idle-hint">Tap anywhere to wake</div>
   {/if}
 </div>
 
-{#if !isGuestRoute}
+{#if !isIsolatedRoute}
   <FloatingNav />
   <NowPlayingChip />
   <MusicPlayerOverlay />
@@ -77,4 +79,6 @@
        on / where ModeSuggestionCard owns the banner spot. -->
   <ModeSuggestionToast />
 {/if}
-<ErrorToast />
+{#if !isGamedayPrototypeRoute}
+  <ErrorToast />
+{/if}

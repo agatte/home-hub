@@ -5,6 +5,7 @@
 
 import { writable } from 'svelte/store'
 import { apiGet } from '$lib/api.js'
+import { HubSocket } from '$lib/ws.js'
 
 /**
  * @typedef {Object} GamedayStoreState
@@ -50,8 +51,31 @@ export function dispatchGamedayMessage(type, data) {
 }
 
 /**
- * Best-effort REST priming. Called from gameday/+page.svelte onMount.
- * Failures are swallowed — the WS feed will fill in once available.
+ * Start a Game-Day-only live feed for isolated presentation surfaces.
+ * Avoids bootstrapping unrelated kiosk stores while preserving live WS state.
+ */
+export function initGamedayFeed() {
+  // Prime from REST immediately, then keep only Game Day state live over WS.
+  // This intentionally avoids the full kiosk store bootstrap on the isolated
+  // prototype route (lights/Sonos/camera/weather/activity are unrelated here).
+  fetchGamedayInitial()
+
+  const socket = new HubSocket(
+    (msg) => {
+      const { type, data } = /** @type {{ type: string, data: any }} */ (msg)
+      if (type === 'gameday_state' || type === 'gameday_play' || type === 'gameday_celebration') {
+        dispatchGamedayMessage(type, data)
+      }
+    },
+    () => {},
+  )
+  socket.connect()
+  return () => socket.close()
+}
+
+/**
+ * Best-effort REST priming. Failures are swallowed because the WebSocket
+ * feed may still provide state once the backend is available.
  */
 export async function fetchGamedayInitial() {
   try {
