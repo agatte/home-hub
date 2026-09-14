@@ -29,6 +29,7 @@ from backend.services.gameday_service import (
     SCHEDULE_CACHE_TTL,
     SCHEDULE_RETRY_BACKOFFS,
     SUMMARY_RETRY_BACKOFFS,
+    CurrentDrive,
     GameDayService,
     GameDayState,
     GameDayStateTransition,
@@ -37,7 +38,10 @@ from backend.services.gameday_service import (
     _play_event_payload,
 )
 from backend.services.websocket_manager import WebSocketManager
-from backend.api.routes.gameday import test_event as route_test_event
+from backend.api.routes.gameday import (
+    get_state as route_get_state,
+    test_event as route_test_event,
+)
 
 
 FIXTURE_PATH = (
@@ -1065,6 +1069,133 @@ class TestModeFlips:
 
 
 # ---------------------------------------------------------------------------
+# Current drive aggregates
+# ---------------------------------------------------------------------------
+
+class TestCurrentDrive:
+
+    def test_real_fixture_drive_uses_provider_aggregates_not_raw_play_count(self):
+        with open(FIXTURE_PATH, encoding="utf-8") as f:
+            summary = json.load(f)
+
+        # The final fixture has no drives.current, so promote a completed drive
+        # only to exercise the exact ESPN drive-object shape. That drive has 10
+        # raw events but ESPN says 7 offensive plays — the latter is authoritative.
+        drive = summary["drives"]["previous"][-2]
+        summary["drives"]["current"] = drive
+        current = _make_service()._extract_current_drive(summary)
+
+        assert current == CurrentDrive(
+            team="colts", plays=7, yards=21, elapsed="3:58"
+        )
+        assert current.plays != len(drive["plays"])
+
+    def test_previous_drive_is_never_reused_as_current(self):
+        with open(FIXTURE_PATH, encoding="utf-8") as f:
+            summary = json.load(f)
+
+        assert summary["drives"].get("current") is None
+        assert summary["drives"].get("previous")
+        assert _make_service()._extract_current_drive(summary) is None
+
+    @pytest.mark.parametrize(
+        ("current", "expected"),
+        [
+            (
+                {
+                    "team": {"id": "15"},
+                    "offensivePlays": "6",
+                    "yards": "-3",
+                    "timeElapsed": {"displayValue": " 1:42 "},
+                },
+                CurrentDrive(team="opp", plays=6, yards=-3, elapsed="1:42"),
+            ),
+            (
+                {
+                    "team": {"id": COLTS_TEAM_ID},
+                    "offensivePlays": 0,
+                    "yards": 0,
+                    "timeElapsed": {"displayValue": "0:00"},
+                },
+                CurrentDrive(team="colts", plays=0, yards=0, elapsed="0:00"),
+            ),
+        ],
+    )
+    def test_current_drive_normalizes_truthful_provider_values(self, current, expected):
+        summary = {"drives": {"current": current}}
+        assert _make_service()._extract_current_drive(summary) == expected
+
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            {},
+            {"drives": None},
+            {"drives": {"current": None}},
+            {"drives": {"current": []}},
+            {"drives": {"current": {"team": {"id": COLTS_TEAM_ID}}}},
+            {"drives": {"current": {"offensivePlays": "bad", "yards": None}}},
+        ],
+    )
+    def test_current_drive_missing_or_unusable_fails_neutral(self, summary):
+        assert _make_service()._extract_current_drive(summary) is None
+
+    def test_build_state_replaces_drive_with_none_when_provider_current_disappears(self):
+        svc = _make_service()
+        meta = {"opponent": "Miami Dolphins", "kickoff_utc": None}
+        first = _summary_payload()
+        first["drives"]["current"] = {
+            "team": {"id": COLTS_TEAM_ID},
+            "offensivePlays": 6,
+            "yards": 48,
+            "timeElapsed": {"displayValue": "2:11"},
+            "plays": [],
+        }
+        with_drive = svc._build_state(first, meta)
+        assert with_drive.current_drive == CurrentDrive(
+            team="colts", plays=6, yards=48, elapsed="2:11"
+        )
+
+        second = _summary_payload()
+        without_drive = svc._build_state(second, meta)
+        assert without_drive.current_drive is None
+
+    def test_final_state_never_exposes_provider_current_drive(self):
+        svc = _make_service()
+        summary = _summary_payload(status_name="STATUS_FINAL")
+        summary["drives"]["current"] = {
+            "team": {"id": COLTS_TEAM_ID},
+            "offensivePlays": 9,
+            "yards": 75,
+            "timeElapsed": {"displayValue": "4:20"},
+        }
+
+        state = svc._build_state(
+            summary, {"opponent": "Miami Dolphins", "kickoff_utc": None}
+        )
+
+        assert state.status == "final"
+        assert state.current_drive is None
+
+    async def test_state_route_exposes_nested_current_drive_contract(self):
+        svc = _make_service()
+        svc._current_state = GameDayState(
+            status="in-progress", opponent="Dolphins", kickoff_utc=None,
+            score_colts=14, score_opp=7, quarter=2, clock="5:32",
+            possession="colts", last_play=None,
+            current_drive=CurrentDrive(
+                team="colts", plays=6, yards=48, elapsed="2:11"
+            ),
+        )
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gameday=svc)))
+
+        payload = await route_get_state(request)
+
+        assert payload["current_drive"] == {
+            "team": "colts", "plays": 6, "yards": 48, "elapsed": "2:11"
+        }
+
+
+# ---------------------------------------------------------------------------
 # State transitions + WS broadcasts
 # ---------------------------------------------------------------------------
 
@@ -1126,6 +1257,9 @@ class TestStateTransitions:
             kickoff_utc=datetime(2026, 9, 13, 17, 0, tzinfo=timezone.utc),
             score_colts=7, score_opp=0, quarter=1, clock="12:34",
             possession="colts", last_play=play,
+            current_drive=CurrentDrive(
+                team="colts", plays=4, yards=31, elapsed="1:54"
+            ),
         )
 
         await svc._update_state(state)
@@ -1135,6 +1269,9 @@ class TestStateTransitions:
         play_payload = json.loads(socket.sent[1])
         assert state_payload["data"]["kickoff_utc"] == "2026-09-13T17:00:00+00:00"
         assert state_payload["data"]["last_play"]["timestamp"] == "2026-09-13T17:05:00+00:00"
+        assert state_payload["data"]["current_drive"] == {
+            "team": "colts", "plays": 4, "yards": 31, "elapsed": "1:54"
+        }
         assert play_payload["data"]["timestamp"] == "2026-09-13T17:05:00+00:00"
 
 

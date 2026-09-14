@@ -609,7 +609,7 @@ appropriate—not to maximize automation for its own sake.
   feedback, graduation state, and reversals so autonomy can be audited
 - **Bold, living UI** — Animated backgrounds that change with mode and time of day. Not a generic dashboard — a visual experience that reflects what's happening in the apartment
 - **Voice control** — the authenticated custom Alexa Skill and iOS Shortcuts provide hands-free mode switching, music control, arrival geofences, and natural-language vibe requests
-- **Game day magic** — Colts games become a synchronized experience: lights, sound, TTS celebrations, live scoreboard, pixel art field
+- **Game day magic** — Colts games become a synchronized experience: lights, sound, TTS celebrations, and a premium live stadium/field scoreboard presentation
 - **Hub for everything** — Widget cards for plant app, future bar app, and other projects. The dashboard is the home screen for your digital life
 - **Personal, not generic** — Every rule, mode, animation, and routine is tuned for one person's actual apartment and habits
 
@@ -2255,8 +2255,8 @@ See `docs/GAMEDAY_SPEC.md` for the full spec; this section is the architecture s
 - ✓ **ESPN API integration** — `GameDayService` polls `site.api.espn.com/apis/site/v2/sports/football/nfl/...` (no auth, no key) for the Colts schedule (15-min cache) and live play-by-play (10s during in-progress, 60s during pregame/final).
 - ✓ **Play detection** — Diffs `summary.scoringPlays[]` per tick; emits `PlayEvent` for new TDs/FGs/kickoffs through `register_on_play_event` subscribers. Best-effort regex parse of player/kicker/yards from ESPN play text (validated against real 2025 Colts game data — handles both canonical and abbreviated formats).
 - ✓ **Celebration orchestration** — `CelebrationOrchestrator` subscribes; runs custom light sequences (Colts blue/white pulse rotation for TD, single-pulse-flash for FG, baseline activation for kickoff, win/loss split for end-of-game) with 8s cooldown. Lighting-curator-reviewed palette.
-- ✓ **GameDay page** — Edge-to-edge field-bleed layout, scoreboard + last-play HUDs floating over the field via existing glass-card chrome. Subscribes to `gameday_state`/`gameday_play`/`gameday_celebration` WS broadcasts via the new `gameday` Svelte store.
-- ✓ **3D Threlte field** — Pure prop-driven `FootballField` component: top-down low-poly mesh, vertical yard lines, Colts-blue + neutral endzone tints, ball marker easing toward possession-derived position.
+- ✓ **GameDay page** — Accepted 2026-09-14 presentation authority is `/gameday/prototype`: a reference-derived stadium/field hero with live score, clock, possession, and current-drive typography rendered transparently onto the physical front fascia. It subscribes to the existing `gameday_state`/`gameday_play`/`gameday_celebration` feed through the `gameday` Svelte store.
+- ✓ **Legacy 3D renderer** — The earlier Threlte `FootballField` remains historical implementation context; it is not the current visual-design authority. See `docs/GAMEDAY_SPEC.md` for the accepted presentation baseline and renderer history.
 - ✓ **Mode auto-flip** — T-30 pre-kickoff sets gameday override (`source="gameday:auto"`); T+30 post-game conditionally clears only if user didn't override mid-game (verified via `automation.override_source`, a property added in Slice A).
 - ✓ **Dynamic celebration TTS volume** — `celebration_volume_policy.py` reads game state (WPA primary, margin+time fallback) × apartment context (sleeping/DND/late-night/camera-absent) to scale Sonos volume `5-50` or suppress entirely. See GAMEDAY_SPEC.md §9.
 - **Pre-game ambient mode** — deferred to v2 (continuous Colts-tinted lighting before kickoff).

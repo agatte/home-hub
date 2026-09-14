@@ -2,9 +2,11 @@
 
 > **Phase A complete 2026-05-06; Phase B Slices A/B/C/D shipped 2026-05-07** with full worktree-fleet experiment + a follow-up dynamic-volume refinement (§9). **Phase C shipped 2026-05-07** — `gameday` exposed in FloatingNav, MODE_CONFIG theme entry, Alexa `HOMEHUB_MODE` slot + lambda `VALID_MODES`. Voice-end-to-end verified.
 >
-> **Current checkpoint — 2026-08-30:** the original preseason calibration window has passed. #6 is completed. #5 still owns real-room celebration-palette acceptance; #7 is evidence-driven volume/TTS calibration at the next suitable live game; #10 is parked until current kiosk observations justify 3D-field tuning; #45 is regular-season stakes enrichment and must degrade safely when upstream context is unreliable. The ESPN request-header defects fixed by `c2e60a4` and `1700447` remain solved; #153 owns current provider health, retry/backoff, stale-cache behavior, and observability.
+> **Current checkpoint — 2026-09-14:** #5 and #10 are completed. The accepted Latitude Game Day visual baseline is `0d39d6c`: a reference-derived stadium/field hero with a cleaned physical fascia and transparent live Svelte score/clock/drive typography. #252 owns the remaining truthful current-drive backend contract; #7 remains evidence-driven volume/TTS calibration at the next suitable live game. ESPN provider-health/backoff work in #153 is completed; #45 remains a separate stakes-enrichment concern.
+>
+> **Presentation authority:** `/gameday/prototype` is the accepted current presentation surface. The older renderer history in §11 remains useful engineering context, but it is not the current visual-design authority.
 
-Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; a 3D Threlte football field on the SvelteKit page mirrors live game state. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
+Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; the accepted Latitude presentation uses the premium `/gameday/prototype` field hero with live score/clock/drive data integrated into its physical fascia. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 
 ---
 
@@ -19,7 +21,7 @@ Game Day is a season-bounded mode that turns the apartment into a Colts viewing 
 | 1.4a | TTS line authoring | 3–5 hand-written variations per event, randomized; ESPN play data (player, kicker, yards) threaded in where available. |
 | 1.4b | TTS volume behavior | Duck-and-resume (existing pattern from `winddown_routine.py`). |
 | 1.4c | Win/loss split | Win-only TTS at end-of-game. Loss is silent — lights handle the wind-down. |
-| 1.5 | GameDay page visual | 3D pixel-art Threlte field with team logos, ball position synced to play state, floating scoreboard. |
+| 1.5 | GameDay page visual | Accepted 2026-09-14: reference-derived premium stadium/field hero on `/gameday/prototype`, with the physical front fascia cleaned of baked data and live Svelte score/clock/possession/current-drive typography rendered transparently onto it. |
 | 1.6 | Mode integration | First-class automation mode, priority `6` (top auto-detected slot). Sleeping override still wins (persistent). |
 | 1.7 | Phase B fleet commitment | Commit to 4-worktree parallel fleet now. Phase A spec is written for parallelism. |
 | 1.8 | TTS volume model | Dynamic, "reads the room." WPA-driven (ESPN winprobability) primary signal with margin+time fallback; apartment-context modifiers (sleeping/DND/late-night/camera-absent); silent on losing blowouts. See §9. |
@@ -110,7 +112,7 @@ ESPN API ─────► GameDayService ────► WebSocketManager ─�
 2. **Pre-game flip**: 30 min before kickoff, GameDayService calls `automation.set_manual_override("gameday", source="gameday:auto")`. AutomationEngine fires mode-change callbacks.
 3. **In-game polling**: every 10s during `in-progress`, GameDayService polls ESPN play-by-play. Diffs against last known state; emits `play_event` for new plays.
 4. **Celebration dispatch**: CelebrationOrchestrator subscribes to `play_event`. On TD/FG/kickoff, runs the sequence. Cooldown enforced inside the orchestrator.
-5. **Frontend sync**: WebSocketManager broadcasts `gameday_state` (score, clock, possession) on every poll cycle and `gameday_play` (description, type) on each new play. Datetime fields cross this public JSON boundary as ISO-8601 strings.
+5. **Frontend sync**: WebSocketManager broadcasts `gameday_state` (score, clock, possession, optional `current_drive`) on every poll cycle and `gameday_play` (description, type) on each new play. `current_drive` comes only from ESPN `drives.current` aggregates (`offensivePlays`, `yards`, `timeElapsed.displayValue`); HomeHub never substitutes `drives.previous` or parses the display description to manufacture values. It is `null` outside `in-progress` or when the provider data is absent/unusable. Datetime fields cross this public JSON boundary as ISO-8601 strings.
 6. **Game end**: GameDayService observes `final` state; emits `state_transition` event; CelebrationOrchestrator runs end-of-game sequence; 30 min later, GameDayService clears the override (unless `source!="gameday:auto"` — i.e. user manually overrode).
 
 ---
@@ -146,6 +148,13 @@ class GameDayService:
 
 ```python
 @dataclass
+class CurrentDrive:
+    team: Literal["colts", "opp"] | None
+    plays: int | None       # ESPN drives.current.offensivePlays
+    yards: int | None       # ESPN drives.current.yards
+    elapsed: str | None     # ESPN drives.current.timeElapsed.displayValue
+
+@dataclass
 class GameDayState:
     status: Literal["pregame", "in-progress", "final", "no-game"]
     opponent: str | None
@@ -156,6 +165,7 @@ class GameDayState:
     clock: str    # "MM:SS"
     possession: Literal["colts", "opp", None]
     last_play: PlayEvent | None
+    current_drive: CurrentDrive | None
 
 @dataclass
 class PlayEvent:

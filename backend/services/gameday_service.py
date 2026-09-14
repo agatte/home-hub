@@ -129,6 +129,15 @@ class PlayEvent:
 
 
 @dataclass
+class CurrentDrive:
+    """Truthful provider-owned aggregates for the drive in progress."""
+    team: Optional[Literal["colts", "opp"]]
+    plays: Optional[int]
+    yards: Optional[int]
+    elapsed: Optional[str]
+
+
+@dataclass
 class GameDayState:
     """Snapshot of current Colts game state. Returned by current_state() and
     broadcast as `gameday_state` on each poll cycle."""
@@ -141,6 +150,7 @@ class GameDayState:
     clock: str
     possession: Optional[Literal["colts", "opp"]]
     last_play: Optional[PlayEvent]
+    current_drive: Optional[CurrentDrive] = None
 
 
 _SYNTHETIC_STATE_OVERRIDE: ContextVar[Optional[GameDayState]] = ContextVar(
@@ -783,11 +793,16 @@ class GameDayService:
         else:
             clock = str(clock_obj or "")
 
-        # Last play — pluck from drives (most recent first).
+        # Last play + current-drive aggregates come from ESPN's drive data.
         last_play = self._extract_last_play(summary)
+        status = _STATUS_MAP.get(espn_status, "no-game")
+        current_drive = (
+            self._extract_current_drive(summary)
+            if status == "in-progress" else None
+        )
 
         return GameDayState(
-            status=_STATUS_MAP.get(espn_status, "no-game"),
+            status=status,
             opponent=schedule_meta.get("opponent"),
             kickoff_utc=schedule_meta.get("kickoff_utc"),
             score_colts=score_colts,
@@ -796,7 +811,56 @@ class GameDayService:
             clock=clock,
             possession=possession,
             last_play=last_play,
+            current_drive=current_drive,
         )
+
+    @staticmethod
+    def _extract_current_drive(summary: dict) -> Optional[CurrentDrive]:
+        """Return ESPN's current-drive aggregates without inference.
+
+        ``drives.previous`` is intentionally ignored: once a drive ends it is
+        historical, not the current drive. Missing or malformed provider data
+        therefore degrades to ``None`` rather than a stale-looking scoreboard.
+        """
+        drives = summary.get("drives") or {}
+        if not isinstance(drives, dict):
+            return None
+        current = drives.get("current")
+        if not isinstance(current, dict) or not current:
+            return None
+
+        team_obj = current.get("team") or {}
+        team_id = str(team_obj.get("id") or "") if isinstance(team_obj, dict) else ""
+        team: Optional[Literal["colts", "opp"]]
+        if team_id == COLTS_TEAM_ID:
+            team = "colts"
+        elif team_id:
+            team = "opp"
+        else:
+            team = None
+
+        def _optional_int(value: Any) -> Optional[int]:
+            if value is None or value == "":
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        plays = _optional_int(current.get("offensivePlays"))
+        yards = _optional_int(current.get("yards"))
+        elapsed_obj = current.get("timeElapsed")
+        if isinstance(elapsed_obj, dict):
+            elapsed_value = elapsed_obj.get("displayValue")
+        elif isinstance(elapsed_obj, str):
+            elapsed_value = elapsed_obj
+        else:
+            elapsed_value = None
+        elapsed = str(elapsed_value).strip() if elapsed_value else None
+
+        if plays is None and yards is None and elapsed is None:
+            return None
+        return CurrentDrive(team=team, plays=plays, yards=yards, elapsed=elapsed)
 
     def _extract_last_play(self, summary: dict) -> Optional[PlayEvent]:
         drives = summary.get("drives") or {}
