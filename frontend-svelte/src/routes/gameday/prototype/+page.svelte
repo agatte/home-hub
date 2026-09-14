@@ -98,10 +98,10 @@
 
   .fascia-mask {
     position: absolute;
-    left: 27.45%;
-    top: 62.95%;
-    width: 49.5%;
-    height: 13.35%;
+    left: 18.8%;
+    top: 63.55%;
+    width: 65.0%;
+    height: 12.25%;
     z-index: 1;
     clip-path: polygon(1.2% 0, 98.8% 0, 100% 100%, 0 100%);
     background:
@@ -120,15 +120,15 @@
     text-shadow: 0 2px 11px rgba(0, 0, 0, .92);
   }
   .team {
-    top: 64.9%;
+    top: 65.15%;
     width: 8.5%;
     display: grid;
     justify-items: center;
     gap: 2px;
   }
 
-  .team.home { left: 28.6%; }
-  .team.away { left: 53.7%; }
+  .team.home { left: 24.1%; }
+  .team.away { left: 55.3%; }
 
   .team span, .clock span, .drive-overlay span {
     color: #d9e0e8;
@@ -147,8 +147,8 @@
   }
 
   .clock {
-    left: 41.2%;
-    top: 64.8%;
+    left: 40.1%;
+    top: 65.05%;
     width: 10.6%;
     display: grid;
     justify-items: center;
@@ -172,8 +172,8 @@
   }
 
   .drive-overlay {
-    left: 64.9%;
-    top: 64.55%;
+    left: 70.8%;
+    top: 64.9%;
     width: 12.3%;
     display: grid;
     gap: 3px;
