@@ -98,9 +98,10 @@
     position: absolute;
     z-index: 2;
     text-shadow: 0 2px 11px rgba(0, 0, 0, .92);
+    top: 70.5%;
+    transform: translateY(-50%);
   }
   .team {
-    top: 65.15%;
     width: 8.5%;
     display: grid;
     justify-items: center;
@@ -128,7 +129,6 @@
 
   .clock {
     left: 40.1%;
-    top: 65.05%;
     width: 10.6%;
     display: grid;
     justify-items: center;
@@ -153,7 +153,6 @@
 
   .drive-overlay {
     left: 70.8%;
-    top: 64.9%;
     width: 12.3%;
     display: grid;
     gap: 3px;
@@ -161,8 +160,6 @@
   }
 
   .drive-overlay.placeholder {
-    top: 70.5%;
-    transform: translateY(-50%);
     justify-items: center;
     text-align: center;
   }
