@@ -56,17 +56,16 @@
     <strong>{view.score_opp ?? 0}</strong>
   </section>
 
-  <aside class="drive-overlay" aria-label="Current drive context">
+  <aside class:placeholder={!drive} class="drive-overlay" aria-label="Current drive context">
     {#if drive}
       <span>CURRENT DRIVE</span>
       <strong>{drive.plays ?? '--'} PLAYS</strong>
       <strong>{drive.yards ?? '--'} YARDS</strong>
       <strong>{drive.elapsed ?? drive.time ?? '--'}</strong>
     {:else}
-      <span>LIVE CONTEXT</span>
-      <strong>{possession}</strong>
-      <strong>DRIVE DATA</strong>
-      <strong>PENDING</strong>
+      <span>CURRENT DRIVE</span>
+      <strong>{live?.possession ? possession : 'AWAITING DRIVE'}</strong>
+      <strong>DRIVE DATA PENDING</strong>
     {/if}
   </aside>
 </main>
@@ -159,6 +158,16 @@
     display: grid;
     gap: 3px;
     justify-items: start;
+  }
+
+  .drive-overlay.placeholder {
+    top: 65.35%;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .drive-overlay.placeholder strong {
+    width: 100%;
   }
 
   .drive-overlay span {
