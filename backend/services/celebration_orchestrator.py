@@ -661,12 +661,27 @@ class CelebrationOrchestrator:
             return
 
         context = self._build_context(evt)
+        allowed, reason = self._authority_allows(play=evt)
+        if not allowed:
+            logger.info(
+                "celebration: skipping %s — authority gate: %s",
+                key, reason,
+            )
+            return
         await self._run_sequence(key, context, play=evt)
 
     async def on_state_transition(self, transition: GameDayStateTransition) -> None:
         """Subscriber for GameDayService state transitions. We only celebrate
         the *→final transition; everything else is informational."""
         if transition.to_status != "final":
+            return
+
+        allowed, reason = self._authority_allows(transition=transition)
+        if not allowed:
+            logger.info(
+                "celebration: skipping final transition — authority gate: %s",
+                reason,
+            )
             return
 
         state = self._safe_current_state()
@@ -697,7 +712,7 @@ class CelebrationOrchestrator:
             scoring_team="colts" if won else "opp",
             wpa=None,
         )
-        await self._run_sequence(key, context, play=synthetic)
+        await self._run_sequence(key, context, play=synthetic, transition=transition)
 
     # ------------------------------------------------------------------ Core
 
@@ -707,6 +722,7 @@ class CelebrationOrchestrator:
         context: dict,
         *,
         play: Optional[PlayEvent] = None,
+        transition: Optional[GameDayStateTransition] = None,
     ) -> None:
         """Broadcast WS flair, then run light steps + TTS in parallel.
 
@@ -720,6 +736,13 @@ class CelebrationOrchestrator:
         sequence = self.SEQUENCES.get(key)
         if sequence is None:
             logger.warning("celebration: unknown sequence key=%s", key)
+            return
+
+        allowed, reason = self._authority_allows(play=play, transition=transition)
+        if not allowed:
+            logger.info(
+                "celebration: skipping %s — authority changed: %s", key, reason,
+            )
             return
 
         now = time.time()
@@ -756,8 +779,20 @@ class CelebrationOrchestrator:
             # 2. Run lights + TTS in parallel. asyncio.gather catches per-task
             #    exceptions so a bridge hiccup doesn't kill the TTS line.
             results = await asyncio.gather(
-                self._run_light_steps_serialized(sequence.light_steps, key),
-                self._run_tts(sequence, context, target_volume, key),
+                self._run_light_steps_serialized(
+                    sequence.light_steps,
+                    key,
+                    play=play,
+                    transition=transition,
+                ),
+                self._run_tts(
+                    sequence,
+                    context,
+                    target_volume,
+                    key,
+                    play=play,
+                    transition=transition,
+                ),
                 return_exceptions=True,
             )
             if isinstance(results[0], set):
@@ -773,14 +808,23 @@ class CelebrationOrchestrator:
         await self._reconcile_steady_state(key, successful_lights)
 
     async def _run_light_steps_serialized(
-        self, steps: list[LightStep], sequence_key: str,
+        self,
+        steps: list[LightStep],
+        sequence_key: str,
+        *,
+        play: Optional[PlayEvent] = None,
+        transition: Optional[GameDayStateTransition] = None,
     ) -> set[str]:
         """Run direct celebration Hue writes under the shared lighting boundary."""
         boundary = self._transition_boundary
         if boundary is None or getattr(boundary, "held_by_current_task", False):
-            return await self._run_light_steps(steps, sequence_key)
+            return await self._run_light_steps(
+                steps, sequence_key, play=play, transition=transition,
+            )
         async with boundary.serialized():
-            return await self._run_light_steps(steps, sequence_key)
+            return await self._run_light_steps(
+                steps, sequence_key, play=play, transition=transition,
+            )
 
     async def _reconcile_steady_state(
         self, sequence_key: str, successful_lights: set[str],
@@ -802,7 +846,12 @@ class CelebrationOrchestrator:
             )
 
     async def _run_light_steps(
-        self, steps: list[LightStep], sequence_key: str,
+        self,
+        steps: list[LightStep],
+        sequence_key: str,
+        *,
+        play: Optional[PlayEvent] = None,
+        transition: Optional[GameDayStateTransition] = None,
     ) -> set[str]:
         """Walk an ordered list of LightSteps, sleeping cumulatively from
         the sequence start. Each step's `delay_ms` is anchored to t=0.
@@ -834,6 +883,16 @@ class CelebrationOrchestrator:
                     await asyncio.sleep(wait)
                 except asyncio.CancelledError:
                     raise
+
+            allowed, reason = self._authority_allows(
+                play=play, transition=transition,
+            )
+            if not allowed:
+                logger.info(
+                    "celebration: aborting %s light steps — %s",
+                    sequence_key, reason,
+                )
+                break
 
             # Snapshot prev BEFORE the write so log_light_adjustment gets
             # accurate before/after pairs. We re-read on each step rather
@@ -893,6 +952,9 @@ class CelebrationOrchestrator:
         context: dict,
         target_volume: Optional[int],
         sequence_key: str,
+        *,
+        play: Optional[PlayEvent] = None,
+        transition: Optional[GameDayStateTransition] = None,
     ) -> None:
         """Pick a random line from the sequence pool, substitute context
         variables, hand off to TTSService.speak (duck-and-resume on Sonos).
@@ -930,6 +992,16 @@ class CelebrationOrchestrator:
             # template introduces a non-key placeholder, fall back to raw.
             logger.exception("celebration: tts template format failed")
             text = template
+
+        allowed, reason = self._authority_allows(
+            play=play, transition=transition,
+        )
+        if not allowed:
+            logger.info(
+                "celebration: suppressing %s TTS — authority changed: %s",
+                sequence_key, reason,
+            )
+            return
 
         try:
             await self._tts.speak(text, volume=target_volume)
@@ -1169,6 +1241,52 @@ class CelebrationOrchestrator:
             "opp_score": score_opp,
             "wpa": evt.wpa,
         }
+
+    def _authority_allows(
+        self,
+        *,
+        play: Optional[PlayEvent] = None,
+        transition: Optional[GameDayStateTransition] = None,
+    ) -> tuple[bool, str]:
+        """Recheck Game Day authority immediately before side effects."""
+        # A final transition also carries a synthetic PlayEvent for TTS
+        # context. Prefer the transition's authority when both are present so
+        # a real final sequence cannot bypass the final/manual-exit gate via
+        # that unscoped context object.
+        if transition is not None:
+            if transition.synthetic:
+                return True, "synthetic transition"
+            if transition.game_id is None:
+                return False, "unscoped provider transition"
+            game_id = transition.game_id
+            allow_final = True
+        elif play is not None:
+            if play.synthetic:
+                return True, "synthetic play"
+            if play.game_id is None:
+                return False, "unscoped provider play"
+            game_id = play.game_id
+            allow_final = False
+        else:
+            # Internal/direct callers without provider authority retain the
+            # existing behavior. Production provider callbacks are scoped.
+            return True, "internal unscoped sequence"
+
+        checker = getattr(self._gameday, "celebration_eligibility", None)
+        if not callable(checker):
+            return False, "Game Day authority checker unavailable"
+        try:
+            result = checker(game_id=game_id, allow_final=allow_final)
+        except Exception:
+            logger.exception("celebration: authority check failed")
+            return False, "Game Day authority check failed"
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], bool)
+        ):
+            return result
+        return False, "invalid Game Day authority response"
 
     def _safe_current_state(self) -> Optional[GameDayState]:
         try:

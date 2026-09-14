@@ -829,6 +829,351 @@ class TestPlayDiffing:
         svc.trigger_synthetic_play.assert_not_awaited()
 
 
+
+# ---------------------------------------------------------------------------
+# Event authority / restart hardening (#253)
+# ---------------------------------------------------------------------------
+
+class TestEventAuthorityHardening:
+
+    async def test_restart_midgame_hydrates_history_before_any_callback(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        received: list[PlayEvent] = []
+
+        async def cb(play):
+            received.append(play)
+
+        svc.register_on_play_event(cb)
+        kickoff = (
+            datetime.now(timezone.utc) - timedelta(hours=1)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        schedule = {
+            "events": [
+                _schedule_event(
+                    "restart-live",
+                    kickoff,
+                    status="STATUS_IN_PROGRESS",
+                )
+            ]
+        }
+        historical = _summary_payload(plays=[_fg_play("p1"), _td_play("p2")])
+        next_poll = _summary_payload(
+            plays=[
+                _fg_play("p1"),
+                _td_play("p2"),
+                _td_play("p3", text="M.Pittman 12 yard pass, TOUCHDOWN."),
+            ]
+        )
+        client = _mock_client([schedule, historical, next_poll])
+
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=client,
+        ):
+            await svc.connect()
+            assert svc._history_hydration_pending_game_id == "restart-live"
+
+            await svc._tick()
+            assert received == []
+            assert {"p1", "p2"} <= svc._known_play_ids
+            assert svc._history_hydration_pending_game_id is None
+
+            await svc._tick()
+
+        assert [play.event_id for play in received] == ["p3"]
+        assert [play.game_id for play in received] == ["restart-live"]
+
+    async def test_restart_after_final_never_replays_historical_score(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        svc._schedule_post_game_clear = MagicMock()
+        received: list[PlayEvent] = []
+
+        async def cb(play):
+            received.append(play)
+
+        svc.register_on_play_event(cb)
+        kickoff = (
+            datetime.now(timezone.utc) - timedelta(hours=3)
+        ).strftime("%Y-%m-%dT%H:%MZ")
+        schedule = {
+            "events": [
+                _schedule_event(
+                    "restart-final",
+                    kickoff,
+                    status="STATUS_FINAL",
+                )
+            ]
+        }
+        final_summary = _summary_payload(
+            status_name="STATUS_FINAL",
+            period=4,
+            clock="0:00",
+            score_colts=24,
+            score_opp=31,
+            plays=[_td_play("historical-td")],
+        )
+        final_summary["header"]["competitions"][0]["status"]["type"].update(
+            {"state": "post", "completed": True}
+        )
+        client = _mock_client([schedule, final_summary])
+
+        with patch(
+            "backend.services.gameday_service.httpx.AsyncClient",
+            return_value=client,
+        ):
+            await svc.connect()
+            await svc._tick()
+
+        assert received == []
+        assert "historical-td" in svc._known_play_ids
+        assert svc.current_state() is not None
+        assert svc.current_state().status == "final"
+        assert "restart-final" in svc._finalized_game_ids
+
+    @pytest.mark.parametrize(
+        ("status_name", "provider_state"),
+        [
+            ("STATUS_HALFTIME", None),
+            ("STATUS_END_PERIOD", None),
+            ("STATUS_END_QUARTER", "in"),
+            ("STATUS_IN_PROGRESS", "in"),
+        ],
+    )
+    def test_live_break_statuses_never_collapse_to_no_game(
+        self,
+        status_name,
+        provider_state,
+    ):
+        svc = _make_service()
+        kickoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        meta = {
+            "id": "live-break",
+            "kickoff_utc": kickoff,
+            "opponent": "Baltimore Ravens",
+            "colts_are_home": True,
+            "status": "STATUS_IN_PROGRESS",
+        }
+        svc._current_game_id = "live-break"
+        svc._current_state = GameDayState(
+            status="in-progress",
+            opponent="Baltimore Ravens",
+            kickoff_utc=kickoff,
+            score_colts=7,
+            score_opp=7,
+            quarter=2,
+            clock="0:00",
+            possession=None,
+            last_play=None,
+        )
+        summary = _summary_payload(
+            status_name=status_name,
+            period=2,
+            clock="0:00",
+        )
+        if provider_state is not None:
+            summary["header"]["competitions"][0]["status"]["type"]["state"] = (
+                provider_state
+            )
+
+        state = svc._build_state(summary, meta)
+
+        assert state.status == "in-progress"
+
+    async def test_halftime_tick_emits_no_false_lifecycle_transition(self):
+        svc = _make_service()
+        kickoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        raw = _schedule_event(
+            "halftime-live",
+            kickoff.strftime("%Y-%m-%dT%H:%MZ"),
+            status="STATUS_IN_PROGRESS",
+        )
+        game = svc._normalize_schedule_event(raw)
+        assert game is not None
+        svc._schedule_cache = [game]
+        svc._schedule_cache_time = time.time()
+        svc._current_game_id = "halftime-live"
+        svc._current_state = GameDayState(
+            status="in-progress",
+            opponent=game["opponent"],
+            kickoff_utc=game["kickoff_utc"],
+            score_colts=10,
+            score_opp=10,
+            quarter=2,
+            clock="0:00",
+            possession=None,
+            last_play=None,
+        )
+        summary = _summary_payload(
+            status_name="STATUS_HALFTIME",
+            period=2,
+            clock="0:00",
+        )
+        transitions: list[GameDayStateTransition] = []
+
+        async def on_transition(transition):
+            transitions.append(transition)
+
+        svc.register_on_state_transition(on_transition)
+        svc._fetch_summary = AsyncMock(return_value=summary)
+
+        await svc._tick()
+
+        assert svc.current_state() is not None
+        assert svc.current_state().status == "in-progress"
+        assert transitions == []
+
+    async def test_unseen_score_in_final_summary_is_history_not_fresh_event(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        svc._schedule_post_game_clear = MagicMock()
+        kickoff = datetime.now(timezone.utc) - timedelta(hours=3)
+        raw = _schedule_event(
+            "live-to-final",
+            kickoff.strftime("%Y-%m-%dT%H:%MZ"),
+            status="STATUS_IN_PROGRESS",
+        )
+        game = svc._normalize_schedule_event(raw)
+        assert game is not None
+        svc._schedule_cache = [game]
+        svc._schedule_cache_time = time.time()
+        svc._current_game_id = "live-to-final"
+        svc._current_state = GameDayState(
+            status="in-progress",
+            opponent=game["opponent"],
+            kickoff_utc=game["kickoff_utc"],
+            score_colts=17,
+            score_opp=24,
+            quarter=4,
+            clock="0:20",
+            possession="colts",
+            last_play=None,
+        )
+        final_summary = _summary_payload(
+            status_name="STATUS_FINAL",
+            period=4,
+            clock="0:00",
+            score_colts=24,
+            score_opp=31,
+            plays=[_td_play("unseen-at-final")],
+        )
+        final_summary["header"]["competitions"][0]["status"]["type"].update(
+            {"state": "post", "completed": True}
+        )
+        svc._fetch_summary = AsyncMock(return_value=final_summary)
+        plays: list[PlayEvent] = []
+        transitions: list[tuple[GameDayStateTransition, str | None]] = []
+
+        async def on_play(play):
+            plays.append(play)
+
+        async def on_transition(transition):
+            state = svc.current_state()
+            transitions.append((transition, state.status if state else None))
+
+        svc.register_on_play_event(on_play)
+        svc.register_on_state_transition(on_transition)
+
+        await svc._tick()
+
+        assert plays == []
+        assert "unseen-at-final" in svc._known_play_ids
+        assert len(transitions) == 1
+        assert transitions[0][0].to_status == "final"
+        assert transitions[0][0].game_id == "live-to-final"
+        assert transitions[0][1] == "final"
+
+    def test_final_latch_is_monotonic_across_stale_provider_rows(self):
+        svc = _make_service()
+        svc._finalized_game_ids.add("latched-final")
+        game = {
+            "id": "latched-final",
+            "kickoff_utc": datetime.now(timezone.utc) - timedelta(hours=3),
+            "opponent": "Baltimore Ravens",
+            "colts_are_home": True,
+            "status": "STATUS_IN_PROGRESS",
+            "status_state": "in",
+            "status_completed": False,
+        }
+
+        assert svc._schedule_game_phase(game) == "final"
+
+        summary = _summary_payload(status_name="STATUS_IN_PROGRESS", period=4)
+        summary["header"]["competitions"][0]["status"]["type"]["state"] = "in"
+        assert svc._build_state(summary, game).status == "final"
+
+    def test_celebration_eligibility_requires_current_game_mode_and_phase(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        svc._current_game_id = "authority-game"
+        svc._current_state = GameDayState(
+            status="in-progress",
+            opponent="Baltimore Ravens",
+            kickoff_utc=datetime.now(timezone.utc),
+            score_colts=14,
+            score_opp=10,
+            quarter=2,
+            clock="12:07",
+            possession="colts",
+            last_play=None,
+        )
+
+        assert svc.celebration_eligibility(
+            game_id="authority-game",
+        ) == (True, "current Game Day authority")
+        allowed, reason = svc.celebration_eligibility(game_id="old-game")
+        assert allowed is False
+        assert "stale game id" in reason
+
+        automation.current_mode = "watching"
+        allowed, reason = svc.celebration_eligibility(game_id="authority-game")
+        assert allowed is False
+        assert reason == "automation mode=watching"
+
+        automation.current_mode = "gameday"
+        svc._current_state.status = "final"
+        svc._finalized_game_ids.add("authority-game")
+        assert svc.celebration_eligibility(
+            game_id="authority-game",
+        )[0] is False
+        assert svc.celebration_eligibility(
+            game_id="authority-game",
+            allow_final=True,
+        )[0] is True
+
+    async def test_pregame_owned_game_does_not_suppress_first_live_score(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        now = datetime.now(timezone.utc)
+        svc._now_override = now
+        kickoff = now + timedelta(minutes=20)
+        raw = _schedule_event(
+            "pregame-owned",
+            kickoff.strftime("%Y-%m-%dT%H:%MZ"),
+            status="STATUS_SCHEDULED",
+        )
+        game = svc._normalize_schedule_event(raw)
+        assert game is not None
+        svc._schedule_cache = [game]
+        svc._schedule_cache_time = time.time()
+        assert svc._ensure_event_game(game) == "pregame-owned"
+        assert svc._history_hydration_pending_game_id is None
+
+        svc._now_override = kickoff + timedelta(minutes=1)
+        live_summary = _summary_payload(plays=[_td_play("first-live-score")])
+        svc._fetch_summary = AsyncMock(return_value=live_summary)
+        received: list[PlayEvent] = []
+
+        async def on_play(play):
+            received.append(play)
+
+        svc.register_on_play_event(on_play)
+        await svc._tick()
+
+        assert [play.event_id for play in received] == ["first-live-score"]
+
+
 # ---------------------------------------------------------------------------
 # Mode flips
 # ---------------------------------------------------------------------------
@@ -1178,10 +1523,15 @@ class TestCurrentDrive:
 
     async def test_state_route_exposes_nested_current_drive_contract(self):
         svc = _make_service()
+        route_play = PlayEvent(
+            timestamp=datetime.now(timezone.utc), play_type="touchdown",
+            description="test", player="J.Taylor", kicker=None, yards=5,
+            scoring_team="colts", event_id="evt", game_id="game",
+        )
         svc._current_state = GameDayState(
             status="in-progress", opponent="Dolphins", kickoff_utc=None,
             score_colts=14, score_opp=7, quarter=2, clock="5:32",
-            possession="colts", last_play=None,
+            possession="colts", last_play=route_play,
             current_drive=CurrentDrive(
                 team="colts", plays=6, yards=48, elapsed="2:11"
             ),
@@ -1193,6 +1543,9 @@ class TestCurrentDrive:
         assert payload["current_drive"] == {
             "team": "colts", "plays": 6, "yards": 48, "elapsed": "2:11"
         }
+        assert {"event_id", "game_id", "synthetic"}.isdisjoint(
+            payload["last_play"] or {}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1273,6 +1626,9 @@ class TestStateTransitions:
             "team": "colts", "plays": 4, "yards": 31, "elapsed": "1:54"
         }
         assert play_payload["data"]["timestamp"] == "2026-09-13T17:05:00+00:00"
+        internal_keys = {"event_id", "game_id", "synthetic"}
+        assert internal_keys.isdisjoint(play_payload["data"])
+        assert internal_keys.isdisjoint(state_payload["data"]["last_play"])
 
 
 # ---------------------------------------------------------------------------

@@ -143,6 +143,7 @@ def _td_event(
         yards=None,
         scoring_team="colts",
         wpa=wpa,
+        synthetic=True,
     )
 
 
@@ -160,6 +161,7 @@ def _fg_event(
         yards=yards,
         scoring_team="colts",
         wpa=wpa,
+        synthetic=True,
     )
 
 
@@ -172,6 +174,7 @@ def _kickoff_event() -> PlayEvent:
         kicker=None,
         yards=None,
         scoring_team=None,
+        synthetic=True,
     )
 
 
@@ -184,6 +187,7 @@ def _other_event() -> PlayEvent:
         kicker=None,
         yards=None,
         scoring_team="colts",
+        synthetic=True,
     )
 
 
@@ -192,7 +196,147 @@ def _final_transition() -> GameDayStateTransition:
         from_status="in-progress",
         to_status="final",
         timestamp=datetime.now(timezone.utc),
+        synthetic=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_provider_play_is_rejected_before_sequence_when_authority_is_gone():
+    orch, hue, tts, ws, gameday = _make_orchestrator()
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(False, "automation mode=watching")
+    )
+    evt = _td_event()
+    evt.game_id = "game-1"
+    evt.event_id = "play-1"
+    evt.synthetic = False
+
+    await orch.on_play_event(evt)
+
+    gameday.celebration_eligibility.assert_called_once_with(
+        game_id="game-1", allow_final=False,
+    )
+    hue.set_light.assert_not_awaited()
+    tts.speak.assert_not_awaited()
+    ws.broadcast.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unscoped_non_synthetic_provider_event_fails_closed():
+    orch, hue, tts, ws, _ = _make_orchestrator()
+    evt = _td_event()
+    evt.synthetic = False
+
+    await orch.on_play_event(evt)
+
+    hue.set_light.assert_not_awaited()
+    tts.speak.assert_not_awaited()
+    ws.broadcast.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queued_light_steps_abort_when_authority_changes():
+    orch, hue, _, _, gameday = _make_orchestrator()
+    gameday.celebration_eligibility = MagicMock(
+        side_effect=[
+            (True, "current Game Day authority"),
+            (False, "automation mode=watching"),
+        ]
+    )
+    evt = _td_event()
+    evt.game_id = "game-1"
+    evt.event_id = "play-1"
+    evt.synthetic = False
+    steps = [
+        LightStep(light_id="1", delay_ms=0, state={"on": True}),
+        LightStep(light_id="2", delay_ms=0, state={"on": True}),
+    ]
+
+    written = await orch._run_light_steps(
+        steps, "touchdown", play=evt,
+    )
+
+    assert written == {"1"}
+    hue.set_light.assert_awaited_once_with("1", {"on": True})
+    assert gameday.celebration_eligibility.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tts_rechecks_authority_immediately_before_speak():
+    orch, _, tts, _, gameday = _make_orchestrator()
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(False, "automation mode=watching")
+    )
+    evt = _td_event()
+    evt.game_id = "game-1"
+    evt.event_id = "play-1"
+    evt.synthetic = False
+    sequence = CelebrationSequence(
+        light_steps=[],
+        tts_lines=["Touchdown Colts!"],
+        duration_seconds=1.0,
+        base_volume=30,
+    )
+
+    await orch._run_tts(
+        sequence, {}, 30, "touchdown", play=evt,
+    )
+
+    tts.speak.assert_not_awaited()
+    gameday.celebration_eligibility.assert_called_once_with(
+        game_id="game-1", allow_final=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_final_transition_uses_transition_authority_even_with_context_play():
+    orch, _, _, _, gameday = _make_orchestrator()
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(False, "automation mode=watching")
+    )
+    context_play = PlayEvent(
+        timestamp=datetime.now(timezone.utc),
+        play_type="other",
+        description="end_of_game",
+        player=None, kicker=None, yards=None,
+        scoring_team="colts",
+    )
+    transition = _final_transition()
+    transition.game_id = "game-1"
+    transition.synthetic = False
+
+    allowed, reason = orch._authority_allows(
+        play=context_play, transition=transition,
+    )
+
+    assert allowed is False
+    assert reason == "automation mode=watching"
+    gameday.celebration_eligibility.assert_called_once_with(
+        game_id="game-1", allow_final=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_final_transition_is_suppressed_after_manual_exit():
+    orch, hue, tts, ws, gameday = _make_orchestrator(
+        score_colts=24, score_opp=21,
+    )
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(False, "automation mode=watching")
+    )
+    transition = _final_transition()
+    transition.game_id = "game-1"
+    transition.synthetic = False
+
+    await orch.on_state_transition(transition)
+
+    hue.set_light.assert_not_awaited()
+    tts.speak.assert_not_awaited()
+    ws.broadcast.assert_not_awaited()
+    gameday.celebration_eligibility.assert_called_once_with(
+        game_id="game-1", allow_final=True,
+    )
+
 
 
 @pytest.mark.asyncio
@@ -311,6 +455,7 @@ class TestTouchdown:
             kicker=None,
             yards=None,
             scoring_team="colts",
+            synthetic=True,
         )
         await orch.on_play_event(synthetic)
 
@@ -380,6 +525,7 @@ def _event_with_type(play_type: str, scoring_team: str | None = "colts") -> Play
         kicker=None,
         yards=None,
         scoring_team=scoring_team,  # type: ignore[arg-type]
+        synthetic=True,
     )
 
 
@@ -478,6 +624,7 @@ class TestMomentumDispatch:
             player=None, kicker=None, yards=None,
             scoring_team=None,
             wpa=0.22,  # comfortably above threshold
+            synthetic=True,
         )
         await orch.on_play_event(evt)
 
@@ -616,6 +763,7 @@ class TestTemplateSubstitution:
             kicker=None,
             yards=None,
             scoring_team="colts",
+            synthetic=True,
         )
         await orch.on_play_event(evt)
         text = tts.speak.await_args.args[0]
@@ -709,6 +857,7 @@ class TestVolumePolicy:
             from_status="in-progress",
             to_status="final",
             timestamp=datetime.now(timezone.utc),
+            synthetic=True,
         ))
         tts.speak.assert_awaited_once()
         assert tts.speak.await_args.kwargs.get("volume") == 35

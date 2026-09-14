@@ -10,14 +10,13 @@ endpoint does (auth bypass for localhost / RFC1918 / trusted-LAN).
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.api.auth import require_api_key
-from backend.services.gameday_service import GameDayService
+from backend.services.gameday_service import GameDayService, gameday_state_payload
 from backend.services.pregame_audio_policy import VALID_TIERS
 
 
@@ -75,7 +74,7 @@ async def get_state(request: Request) -> dict[str, Any]:
     state = svc.current_state()
     if state is None:
         return {"status": "no-game"}
-    return asdict(state)
+    return gameday_state_payload(state)
 
 
 @router.get("/schedule")

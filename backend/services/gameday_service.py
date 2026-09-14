@@ -61,12 +61,27 @@ STATUS_SCHEDULED = "STATUS_SCHEDULED"
 STATUS_IN_PROGRESS = "STATUS_IN_PROGRESS"
 STATUS_FINAL = "STATUS_FINAL"
 
-# Map ESPN status → our status string in GameDayState.
-_STATUS_MAP = {
-    STATUS_SCHEDULED: "pregame",
-    STATUS_IN_PROGRESS: "in-progress",
-    STATUS_FINAL: "final",
+_LIVE_BREAK_STATUS_NAMES = {
+    "STATUS_HALFTIME",
+    "STATUS_END_PERIOD",
+    "STATUS_END_QUARTER",
 }
+
+
+def _provider_phase(status_type: dict[str, Any]) -> Optional[str]:
+    """Normalize ESPN status metadata into HomeHub's coarse game phases."""
+    name = str(status_type.get("name") or "").upper()
+    state = str(status_type.get("state") or "").lower()
+    completed = status_type.get("completed")
+
+    if completed is True or state == "post" or name.startswith("STATUS_FINAL"):
+        return "final"
+    if state == "in" or name == STATUS_IN_PROGRESS or name in _LIVE_BREAK_STATUS_NAMES:
+        return "in-progress"
+    if state == "pre" or name == STATUS_SCHEDULED:
+        return "pregame"
+    return None
+
 
 # Play text regexes. ESPN serves two formats depending on which array we're
 # walking:
@@ -126,6 +141,9 @@ class PlayEvent:
     yards: Optional[int]
     scoring_team: Optional[Literal["colts", "opp"]]
     wpa: Optional[float] = None
+    event_id: Optional[str] = None
+    game_id: Optional[str] = None
+    synthetic: bool = False
 
 
 @dataclass
@@ -159,13 +177,19 @@ _SYNTHETIC_STATE_OVERRIDE: ContextVar[Optional[GameDayState]] = ContextVar(
 
 
 def _play_event_payload(play: PlayEvent) -> dict[str, Any]:
-    """Return the public WebSocket shape with JSON-safe timestamps."""
+    """Return the stable public WebSocket shape with JSON-safe timestamps."""
     payload = asdict(play)
+    # Event/game identity is internal actuation authority, not presentation data.
+    # Keep the existing WebSocket contract stable instead of leaking lifecycle
+    # tokens to the dashboard or future clients.
+    payload.pop("event_id", None)
+    payload.pop("game_id", None)
+    payload.pop("synthetic", None)
     payload["timestamp"] = play.timestamp.isoformat()
     return payload
 
 
-def _gameday_state_payload(state: GameDayState) -> dict[str, Any]:
+def gameday_state_payload(state: GameDayState) -> dict[str, Any]:
     """Return the public WebSocket shape with JSON-safe datetimes."""
     payload = asdict(state)
     payload["kickoff_utc"] = (
@@ -181,6 +205,8 @@ class GameDayStateTransition:
     from_status: str
     to_status: str
     timestamp: datetime
+    game_id: Optional[str] = None
+    synthetic: bool = False
 
 
 @dataclass
@@ -219,7 +245,10 @@ class GameDayService:
 
         # Current game tracking.
         self._current_state: Optional[GameDayState] = None
+        self._current_game_id: Optional[str] = None
         self._known_play_ids: set[str] = set()
+        self._history_hydration_pending_game_id: Optional[str] = None
+        self._finalized_game_ids: set[str] = set()
         self._post_game_clear_task: Optional[asyncio.Task] = None
 
         # Subscribers.
@@ -276,6 +305,7 @@ class GameDayService:
         and the polling loop will retry on its own cadence."""
         try:
             await self._refresh_schedule()
+            self._prepare_startup_event_authority()
             self._connected = True
             logger.info(
                 "GameDayService connected — %d games cached",
@@ -308,13 +338,47 @@ class GameDayService:
         """Subscribe to status transitions (pregame→in-progress→final)."""
         self._transition_callbacks.append(cb)
 
+    def celebration_eligibility(
+        self,
+        *,
+        game_id: Optional[str],
+        allow_final: bool = False,
+    ) -> tuple[bool, str]:
+        """Fail-closed authority check used immediately before actuation.
+
+        Provider events carry a game id. Synthetic test events intentionally
+        bypass this method in the orchestrator so test endpoints remain useful.
+        """
+        if not game_id:
+            return False, "missing game id"
+        if game_id != self._current_game_id:
+            return False, f"stale game id {game_id}"
+
+        state = self._current_state
+        if state is None:
+            return False, "no current game state"
+
+        expected_status = "final" if allow_final else "in-progress"
+        if state.status != expected_status:
+            return False, f"game status={state.status}"
+        if not allow_final and game_id in self._finalized_game_ids:
+            return False, "game already finalized"
+
+        try:
+            current_mode = self._automation.current_mode
+        except Exception:
+            return False, "automation mode unavailable"
+        if current_mode != "gameday":
+            return False, f"automation mode={current_mode}"
+        return True, "current Game Day authority"
+
     async def get_upcoming_schedule(self, limit: int = 5) -> list[dict[str, Any]]:
         """Return the next `limit` scheduled / in-progress games. Refreshes
         cache if stale."""
         await self._refresh_schedule_if_stale()
         upcoming = [
             g for g in self._schedule_cache
-            if g["status"] in (STATUS_SCHEDULED, STATUS_IN_PROGRESS)
+            if self._schedule_game_phase(g) in ("pregame", "in-progress")
         ]
         upcoming.sort(key=lambda g: g["kickoff_utc"])
         return upcoming[:limit]
@@ -397,6 +461,7 @@ class GameDayService:
         transition = GameDayStateTransition(
             from_status="in-progress", to_status="final",
             timestamp=self._now_utc(),
+            synthetic=True,
         )
         token = _SYNTHETIC_STATE_OVERRIDE.set(synthetic)
         try:
@@ -427,6 +492,7 @@ class GameDayService:
             kicker="Test Kicker" if play_type == "field_goal" else None,
             yards=42 if play_type == "field_goal" else None,
             scoring_team="colts",
+            synthetic=True,
         )
         await self._fire_play_event(synthetic)
         return synthetic
@@ -456,6 +522,7 @@ class GameDayService:
             await self._update_state(None)
             return
 
+        game_id = self._ensure_event_game(active)
         now_utc = self._now_utc()
 
         # Pre-kickoff flips — only if game is still scheduled. Two windows:
@@ -464,7 +531,10 @@ class GameDayService:
         # _maybe_flip_gameday() takes priority — checked second so its
         # set_manual_override displaces the pregameday override within the
         # narrower window. Both are idempotent.
-        if active["status"] == STATUS_SCHEDULED and active["kickoff_utc"] > now_utc:
+        if (
+            self._schedule_game_phase(active) == "pregame"
+            and active["kickoff_utc"] > now_utc
+        ):
             minutes_to_kickoff = (
                 active["kickoff_utc"] - now_utc
             ).total_seconds() / 60.0
@@ -486,21 +556,39 @@ class GameDayService:
             return
 
         new_state = self._build_state(summary, active)
-        # IMPORTANT: scoring plays first — they call `self._known_play_ids.add(play_id)`
-        # which makes the momentum walk below skip the same play_id (a TD with WPA=0.30
-        # is already firing its full TD sequence; no generic momentum celebration on top).
-        new_plays = self._extract_new_plays(summary)
-        new_momentum_plays = self._extract_new_momentum_plays(summary)
-
-        # Status transitions.
         old_status = (
             self._current_state.status if self._current_state else "no-game"
         )
+
+        if new_state.status == "final" and game_id:
+            self._finalized_game_ids.add(game_id)
+
+        # Publish current authority internally before callbacks run. This lets
+        # the orchestrator recheck against the exact state that produced the
+        # event rather than the previous polling snapshot.
+        self._current_state = new_state
+
+        hydrated_history = self._hydrate_event_history_if_pending(summary, game_id)
+        if new_state.status == "in-progress" and not hydrated_history:
+            # IMPORTANT: scoring plays first — they add play ids, which makes
+            # the momentum walk skip the same score.
+            new_plays = self._extract_new_plays(summary)
+            new_momentum_plays = self._extract_new_momentum_plays(summary)
+        else:
+            # Final/historical provider rows are evidence, never fresh events.
+            # Remember them so later provider corrections cannot become newly
+            # eligible if the same game is polled again.
+            self._remember_provider_play_ids(summary)
+            new_plays = []
+            new_momentum_plays = []
+
+        # Status transitions.
         if new_state.status != old_status and old_status != "no-game":
             transition = GameDayStateTransition(
                 from_status=old_status,
                 to_status=new_state.status,
                 timestamp=now_utc,
+                game_id=game_id,
             )
             await self._fire_state_transition(transition)
 
@@ -533,7 +621,7 @@ class GameDayService:
         if new_state is None:
             return
         try:
-            await self._ws_manager.broadcast("gameday_state", _gameday_state_payload(new_state))
+            await self._ws_manager.broadcast("gameday_state", gameday_state_payload(new_state))
         except Exception:
             logger.exception("ws broadcast gameday_state failed")
 
@@ -587,11 +675,10 @@ class GameDayService:
             kickoff_utc = _parse_espn_datetime(date_str)
             comps = evt.get("competitions") or []
             comp = comps[0] if comps else {}
-            status = (
-                comp.get("status", {}).get("type", {}).get("name")
-                or evt.get("status", {}).get("type", {}).get("name")
-                or STATUS_SCHEDULED
-            )
+            comp_status_type = (comp.get("status") or {}).get("type") or {}
+            evt_status_type = (evt.get("status") or {}).get("type") or {}
+            status_type = comp_status_type or evt_status_type
+            status = status_type.get("name") or STATUS_SCHEDULED
 
             opponent = None
             colts_are_home = False
@@ -610,12 +697,108 @@ class GameDayService:
                 "opponent": opponent,
                 "colts_are_home": colts_are_home,
                 "status": status,
+                "status_state": status_type.get("state"),
+                "status_completed": status_type.get("completed"),
                 "name": evt.get("name"),
                 "short_name": evt.get("shortName"),
             }
         except Exception:
             logger.exception("failed to normalize schedule event")
             return None
+
+    def _schedule_game_phase(self, game: dict[str, Any]) -> Optional[str]:
+        game_id = str(game.get("id") or "")
+        if game_id and game_id in self._finalized_game_ids:
+            return "final"
+
+        phase = _provider_phase({
+            "name": game.get("status"),
+            "state": game.get("status_state"),
+            "completed": game.get("status_completed"),
+        })
+        if phase is not None:
+            return phase
+        if (
+            self._current_game_id == str(game.get("id") or "")
+            and self._current_state is not None
+            and self._current_state.status in ("pregame", "in-progress", "final")
+        ):
+            return self._current_state.status
+        return None
+
+    def _game_may_have_history(self, game: dict[str, Any]) -> bool:
+        phase = self._schedule_game_phase(game)
+        if phase in ("in-progress", "final"):
+            return True
+        kickoff = game.get("kickoff_utc")
+        return isinstance(kickoff, datetime) and kickoff <= self._now_utc()
+
+    def _prepare_startup_event_authority(self) -> None:
+        active = self._find_active_game()
+        if active is not None:
+            self._ensure_event_game(active)
+
+    def _ensure_event_game(self, game: dict[str, Any]) -> Optional[str]:
+        game_id = str(game.get("id") or "")
+        if not game_id:
+            return None
+        if game_id == self._current_game_id:
+            return game_id
+
+        hydrate = self._game_may_have_history(game)
+        self._current_game_id = game_id
+        self._known_play_ids.clear()
+        self._history_hydration_pending_game_id = game_id if hydrate else None
+        logger.info(
+            "Game Day event authority switched game=%s startup_hydration=%s",
+            game_id, hydrate,
+        )
+        return game_id
+
+    @staticmethod
+    def _provider_play_ids(summary: dict[str, Any]) -> set[str]:
+        ids: set[str] = set()
+        for raw in summary.get("scoringPlays") or []:
+            play_id = str(raw.get("id") or "")
+            if play_id:
+                ids.add(play_id)
+
+        drives = summary.get("drives") or {}
+        if not isinstance(drives, dict):
+            return ids
+        all_drives: list[dict[str, Any]] = []
+        previous = drives.get("previous") or []
+        if isinstance(previous, list):
+            all_drives.extend(d for d in previous if isinstance(d, dict))
+        current = drives.get("current")
+        if isinstance(current, dict):
+            all_drives.append(current)
+        for drive in all_drives:
+            for raw in drive.get("plays") or []:
+                play_id = str(raw.get("id") or "")
+                if play_id:
+                    ids.add(play_id)
+        return ids
+
+    def _remember_provider_play_ids(self, summary: dict[str, Any]) -> int:
+        before = len(self._known_play_ids)
+        self._known_play_ids.update(self._provider_play_ids(summary))
+        return len(self._known_play_ids) - before
+
+    def _hydrate_event_history_if_pending(
+        self,
+        summary: dict[str, Any],
+        game_id: Optional[str],
+    ) -> bool:
+        if not game_id or self._history_hydration_pending_game_id != game_id:
+            return False
+        added = self._remember_provider_play_ids(summary)
+        self._history_hydration_pending_game_id = None
+        logger.info(
+            "Game Day event history hydrated game=%s known_plays=%d added=%d",
+            game_id, len(self._known_play_ids), added,
+        )
+        return True
 
     def _find_active_game(self) -> Optional[dict[str, Any]]:
         """Return the most relevant Colts game right now: a live game if one
@@ -624,13 +807,13 @@ class GameDayService:
 
         # In-progress wins.
         for game in self._schedule_cache:
-            if game["status"] == STATUS_IN_PROGRESS:
+            if self._schedule_game_phase(game) == "in-progress":
                 return game
 
         # Next scheduled within 24h.
         upcoming = [
             g for g in self._schedule_cache
-            if g["status"] == STATUS_SCHEDULED
+            if self._schedule_game_phase(g) == "pregame"
             and -4 * 3600 <= (g["kickoff_utc"] - now_utc).total_seconds() <= 86400
         ]
         if upcoming:
@@ -640,7 +823,7 @@ class GameDayService:
         # Recent final (within last 30 min) — still relevant for the post-game
         # clear scheduler to pick up.
         for game in self._schedule_cache:
-            if game["status"] == STATUS_FINAL:
+            if self._schedule_game_phase(game) == "final":
                 age = (now_utc - game["kickoff_utc"]).total_seconds()
                 if 0 <= age <= 4 * 3600:  # heuristic: games last <4h
                     return game
@@ -670,9 +853,10 @@ class GameDayService:
         active = self._find_active_game()
         if active is None:
             return False
-        if active["status"] == STATUS_IN_PROGRESS:
+        phase = self._schedule_game_phase(active)
+        if phase == "in-progress":
             return True
-        if active["status"] == STATUS_SCHEDULED:
+        if phase == "pregame":
             if self._is_known_final_for_game(active):
                 return False
             age = (self._now_utc() - active["kickoff_utc"]).total_seconds()
@@ -754,8 +938,6 @@ class GameDayService:
         comps = header.get("competitions") or []
         comp = comps[0] if comps else {}
         status_type = (comp.get("status") or {}).get("type") or {}
-        espn_status = status_type.get("name") or STATUS_IN_PROGRESS
-
         score_colts, score_opp = 0, 0
         possession: Optional[Literal["colts", "opp"]] = None
         for competitor in comp.get("competitors", []) or []:
@@ -795,7 +977,7 @@ class GameDayService:
 
         # Last play + current-drive aggregates come from ESPN's drive data.
         last_play = self._extract_last_play(summary)
-        status = _STATUS_MAP.get(espn_status, "no-game")
+        status = self._normalize_summary_status(status_type, quarter, schedule_meta)
         current_drive = (
             self._extract_current_drive(summary)
             if status == "in-progress" else None
@@ -813,6 +995,38 @@ class GameDayService:
             last_play=last_play,
             current_drive=current_drive,
         )
+
+    def _normalize_summary_status(
+        self,
+        status_type: dict[str, Any],
+        period: int,
+        schedule_meta: dict[str, Any],
+    ) -> str:
+        game_id = str(schedule_meta.get("id") or "")
+        if game_id and game_id in self._finalized_game_ids:
+            return "final"
+
+        phase = _provider_phase(status_type)
+        if phase is not None:
+            return phase
+
+        # ESPN sometimes reports intermediary names around quarter/halftime
+        # without the normal coarse state. Preserve the same live game's
+        # established phase rather than manufacturing a no-game gap.
+        if (
+            game_id
+            and game_id == self._current_game_id
+            and self._current_state is not None
+            and self._current_state.status in ("in-progress", "final")
+        ):
+            return self._current_state.status
+        if period > 0:
+            return "in-progress"
+
+        kickoff = schedule_meta.get("kickoff_utc")
+        if isinstance(kickoff, datetime) and kickoff > self._now_utc():
+            return "pregame"
+        return "no-game"
 
     @staticmethod
     def _extract_current_drive(summary: dict) -> Optional[CurrentDrive]:
@@ -906,6 +1120,8 @@ class GameDayService:
                 "extra_point_good", "two_point_conv", "defensive_td",
             ):
                 play.wpa = self._compute_wpa(play_id, summary, colts_are_home)
+                play.event_id = play_id
+                play.game_id = self._current_game_id
                 out.append(play)
                 self._known_play_ids.add(play_id)
 
@@ -973,6 +1189,8 @@ class GameDayService:
                     yards=None,
                     scoring_team=None,
                     wpa=wpa,
+                    event_id=play_id,
+                    game_id=self._current_game_id,
                 ))
                 self._known_play_ids.add(play_id)
 
