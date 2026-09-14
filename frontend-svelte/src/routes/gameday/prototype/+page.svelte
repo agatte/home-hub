@@ -35,11 +35,10 @@
 <main class="prototype-page" aria-label="Game Day sculptural field prototype">
   <img
     class="hero-render"
-    src="/gameday/futuristic-colts-scoreboard.webp"
+    src="/gameday/futuristic-colts-clean-fascia.webp"
     alt="Futuristic Indianapolis Colts stadium scoreboard"
   />
 
-  <div class="fascia-mask" aria-hidden="true"></div>
 
   <section class="team home" aria-label="Colts score">
     <span>COLTS</span>
@@ -94,24 +93,6 @@
     height: 100%;
     object-fit: cover;
     display: block;
-  }
-
-  .fascia-mask {
-    position: absolute;
-    left: 18.8%;
-    top: 63.55%;
-    width: 65.0%;
-    height: 12.25%;
-    z-index: 1;
-    clip-path: polygon(1.2% 0, 98.8% 0, 100% 100%, 0 100%);
-    background:
-      linear-gradient(90deg,
-        transparent 19.4%, rgba(165, 192, 220, .24) 19.55%, transparent 19.7%,
-        transparent 72.8%, rgba(165, 192, 220, .24) 72.95%, transparent 73.1%),
-      linear-gradient(180deg, #06101b, #02070d);
-    border-top: 1px solid rgba(183, 207, 232, .13);
-    border-bottom: 1px solid rgba(183, 207, 232, .13);
-    box-shadow: inset 0 10px 24px rgba(0, 0, 0, .15);
   }
 
   .team, .clock, .drive-overlay {
