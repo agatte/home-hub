@@ -98,9 +98,9 @@
 
   .fascia-mask {
     position: absolute;
-    left: 28.45%;
+    left: 27.45%;
     top: 62.95%;
-    width: 47.5%;
+    width: 49.5%;
     height: 13.35%;
     z-index: 1;
     clip-path: polygon(1.2% 0, 98.8% 0, 100% 100%, 0 100%);
@@ -172,23 +172,25 @@
   }
 
   .drive-overlay {
-    left: 65.9%;
-    top: 64.75%;
-    width: 10.7%;
+    left: 64.9%;
+    top: 64.55%;
+    width: 12.3%;
     display: grid;
     gap: 3px;
     justify-items: start;
   }
 
   .drive-overlay span {
-    color: #b9c6d4;
-    margin-bottom: 1px;
+    color: #d4dde7;
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 2px;
   }
 
   .drive-overlay strong {
     color: #f1f5f9;
-    font-size: 11px;
-    line-height: 1.05;
+    font-size: 13px;
+    line-height: 1.08;
     font-weight: 600;
     letter-spacing: .08em;
   }
