@@ -161,7 +161,8 @@
   }
 
   .drive-overlay.placeholder {
-    top: 65.35%;
+    top: 70.5%;
+    transform: translateY(-50%);
     justify-items: center;
     text-align: center;
   }
