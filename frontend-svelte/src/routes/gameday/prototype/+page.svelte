@@ -113,14 +113,14 @@
 
   .team span, .clock span, .drive-overlay span {
     color: #d9e0e8;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 650;
     letter-spacing: .14em;
     line-height: 1;
   }
 
   .team strong {
-    font-size: 41px;
+    font-size: 46px;
     line-height: .9;
     font-weight: 600;
     font-stretch: condensed;
@@ -135,7 +135,7 @@
     gap: 2px;
   }
   .clock strong {
-    font-size: 34px;
+    font-size: 38px;
     line-height: .94;
     font-weight: 600;
     font-stretch: condensed;
@@ -144,7 +144,7 @@
 
   .clock small {
     color: #e5eaf0;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: .11em;
     line-height: 1;
@@ -170,14 +170,14 @@
 
   .drive-overlay span {
     color: #d4dde7;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     margin-bottom: 2px;
   }
 
   .drive-overlay strong {
     color: #f1f5f9;
-    font-size: 13px;
+    font-size: 16px;
     line-height: 1.08;
     font-weight: 600;
     letter-spacing: .08em;
