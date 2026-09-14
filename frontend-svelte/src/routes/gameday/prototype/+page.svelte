@@ -33,22 +33,28 @@
 </svelte:head>
 
 <main class="prototype-page" aria-label="Game Day sculptural field prototype">
-  <img class="hero-render" src="/gameday/blender/sculptural-field-v38.webp" alt="Premium Colts sculptural field scoreboard" />
+  <img
+    class="hero-render"
+    src="/gameday/futuristic-colts-scoreboard.webp"
+    alt="Futuristic Indianapolis Colts stadium scoreboard"
+  />
 
-  <section class="score-overlay" aria-label={isPreview ? 'Synthetic preview game score' : 'Live game score'}>
-    <div class="team home">
-      <span>COLTS</span>
-      <strong>{view.score_colts ?? 0}</strong>
-    </div>
-    <div class="clock">
-      <span>{quarterLabel}</span>
-      <strong>{view.clock || '--'}</strong>
-      <small>{view.possession === 'colts' ? 'COLTS POSSESSION' : view.possession === 'opp' ? `${opponent} POSSESSION` : 'GAME DAY'}</small>
-    </div>
-    <div class="team away">
-      <span>{opponent}</span>
-      <strong>{view.score_opp ?? 0}</strong>
-    </div>
+  <div class="fascia-mask" aria-hidden="true"></div>
+
+  <section class="team home" aria-label="Colts score">
+    <span>COLTS</span>
+    <strong>{view.score_colts ?? 0}</strong>
+  </section>
+
+  <section class="clock" aria-label={isPreview ? 'Synthetic preview game clock' : 'Live game clock'}>
+    <span>{quarterLabel}</span>
+    <strong>{view.clock || '--'}</strong>
+    <small>{view.possession === 'colts' ? 'COLTS POSSESSION' : view.possession === 'opp' ? `${opponent} POSSESSION` : 'GAME DAY'}</small>
+  </section>
+
+  <section class="team away" aria-label={`${opponent} score`}>
+    <span>{opponent}</span>
+    <strong>{view.score_opp ?? 0}</strong>
   </section>
 
   <aside class="drive-overlay" aria-label="Current drive context">
@@ -64,22 +70,22 @@
       <strong>PENDING</strong>
     {/if}
   </aside>
-
-  {#if isPreview}
-    <div class="preview-chip">DESIGN PREVIEW</div>
-  {/if}
 </main>
 
 <style>
-  :global(html), :global(body) { margin: 0; background: #020711; }
+  :global(html), :global(body) {
+    margin: 0;
+    background: #020711;
+  }
+
   .prototype-page {
     position: relative;
     width: 100vw;
     height: 100dvh;
     overflow: hidden;
     background: #020711;
-    color: #f5f8fc;
-    font-family: Inter, system-ui, sans-serif;
+    color: #f7f9fc;
+    font-family: "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
   }
   .hero-render {
     position: absolute;
@@ -89,90 +95,109 @@
     object-fit: cover;
     display: block;
   }
-  .score-overlay {
+
+  .fascia-mask {
     position: absolute;
-    left: 28.2%;
-    top: 68.2%;
-    width: 43.8%;
-    display: grid;
-    grid-template-columns: 1fr .82fr 1fr;
-    align-items: end;
-    gap: 1.35vw;
-    text-shadow: 0 2px 12px #000;
+    left: 29.35%;
+    top: 63.55%;
+    width: 45.7%;
+    height: 11.35%;
+    z-index: 1;
+    clip-path: polygon(1.2% 0, 98.8% 0, 100% 100%, 0 100%);
+    background:
+      linear-gradient(90deg,
+        transparent 19.4%, rgba(165, 192, 220, .24) 19.55%, transparent 19.7%,
+        transparent 72.8%, rgba(165, 192, 220, .24) 72.95%, transparent 73.1%),
+      linear-gradient(180deg, #06101b, #02070d);
+    border-top: 1px solid rgba(183, 207, 232, .13);
+    border-bottom: 1px solid rgba(183, 207, 232, .13);
+    box-shadow: inset 0 10px 24px rgba(0, 0, 0, .15);
   }
-  .team { display: grid; gap: 2px; }
-  .team.home { justify-items: end; }
-  .team.away { justify-items: start; }
-  .team span, .clock span {
-    color: #dfe7f0;
-    font-size: 10px;
-    font-weight: 650;
-    letter-spacing: .13em;
+
+  .team, .clock, .drive-overlay {
+    position: absolute;
+    z-index: 2;
+    text-shadow: 0 2px 11px rgba(0, 0, 0, .92);
   }
-  .team strong {
-    font-size: 46px;
-    line-height: .86;
-    font-weight: 560;
-    font-variant-numeric: tabular-nums;
-  }
-  .clock {
+  .team {
+    top: 65.25%;
+    width: 8.1%;
     display: grid;
     justify-items: center;
     gap: 2px;
-    padding-bottom: 1px;
+  }
+
+  .team.home { left: 28.6%; }
+  .team.away { left: 53.7%; }
+
+  .team span, .clock span, .drive-overlay span {
+    color: #d9e0e8;
+    font-size: 9px;
+    font-weight: 650;
+    letter-spacing: .14em;
+    line-height: 1;
+  }
+
+  .team strong {
+    font-size: 37px;
+    line-height: .9;
+    font-weight: 600;
+    font-stretch: condensed;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .clock {
+    left: 41.35%;
+    top: 65.1%;
+    width: 10.2%;
+    display: grid;
+    justify-items: center;
+    gap: 2px;
   }
   .clock strong {
     font-size: 31px;
-    line-height: .92;
-    font-weight: 560;
+    line-height: .94;
+    font-weight: 600;
+    font-stretch: condensed;
     font-variant-numeric: tabular-nums;
   }
+
   .clock small {
-    color: #e1e8f0;
-    font-size: 9px;
-    font-weight: 650;
-    letter-spacing: .08em;
+    color: #e5eaf0;
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: .11em;
+    line-height: 1;
     white-space: nowrap;
   }
+
   .drive-overlay {
-    position: absolute;
-    right: 16.0%;
-    top: 68.3%;
+    left: 65.85%;
+    top: 65.0%;
+    width: 10.2%;
     display: grid;
-    gap: 2px;
-    min-width: 104px;
-    text-shadow: 0 2px 12px #000;
+    gap: 3px;
+    justify-items: start;
   }
+
   .drive-overlay span {
-    color: #89a0ba;
-    font-size: 9px;
-    font-weight: 750;
-    letter-spacing: .18em;
+    color: #b9c6d4;
     margin-bottom: 1px;
   }
+
   .drive-overlay strong {
-    font-size: 12px;
+    color: #f1f5f9;
+    font-size: 10px;
+    line-height: 1.05;
     font-weight: 600;
-    letter-spacing: .07em;
-  }
-  .preview-chip {
-    position: absolute;
-    right: 14px;
-    bottom: 12px;
-    color: rgba(190, 207, 227, .55);
-    font-size: 8px;
-    font-weight: 650;
-    letter-spacing: .18em;
+    letter-spacing: .08em;
   }
 
   @media (max-width: 1100px) {
-    .score-overlay { left: 28%; width: 44.2%; top: 68.4%; }
-    .team strong { font-size: 38px; }
-    .clock strong { font-size: 26px; }
-    .team span, .clock span { font-size: 8px; }
-    .clock small { font-size: 7px; }
-    .drive-overlay { right: 10.2%; top: 68.4%; min-width: 88px; }
-    .drive-overlay span { font-size: 7px; }
-    .drive-overlay strong { font-size: 10px; }
+    .team span, .clock span, .drive-overlay span { font-size: 7px; }
+    .team strong { font-size: 36px; }
+    .clock strong { font-size: 28px; }
+    .clock small { font-size: 6px; }
+    .drive-overlay strong { font-size: 8px; }
   }
 </style>
