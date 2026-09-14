@@ -98,10 +98,10 @@
 
   .fascia-mask {
     position: absolute;
-    left: 29.35%;
-    top: 63.55%;
-    width: 45.7%;
-    height: 11.35%;
+    left: 28.45%;
+    top: 62.95%;
+    width: 47.5%;
+    height: 13.35%;
     z-index: 1;
     clip-path: polygon(1.2% 0, 98.8% 0, 100% 100%, 0 100%);
     background:
@@ -120,8 +120,8 @@
     text-shadow: 0 2px 11px rgba(0, 0, 0, .92);
   }
   .team {
-    top: 65.25%;
-    width: 8.1%;
+    top: 64.9%;
+    width: 8.5%;
     display: grid;
     justify-items: center;
     gap: 2px;
@@ -132,14 +132,14 @@
 
   .team span, .clock span, .drive-overlay span {
     color: #d9e0e8;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 650;
     letter-spacing: .14em;
     line-height: 1;
   }
 
   .team strong {
-    font-size: 37px;
+    font-size: 41px;
     line-height: .9;
     font-weight: 600;
     font-stretch: condensed;
@@ -147,15 +147,15 @@
   }
 
   .clock {
-    left: 41.35%;
-    top: 65.1%;
-    width: 10.2%;
+    left: 41.2%;
+    top: 64.8%;
+    width: 10.6%;
     display: grid;
     justify-items: center;
     gap: 2px;
   }
   .clock strong {
-    font-size: 31px;
+    font-size: 34px;
     line-height: .94;
     font-weight: 600;
     font-stretch: condensed;
@@ -164,7 +164,7 @@
 
   .clock small {
     color: #e5eaf0;
-    font-size: 8px;
+    font-size: 9px;
     font-weight: 600;
     letter-spacing: .11em;
     line-height: 1;
@@ -172,9 +172,9 @@
   }
 
   .drive-overlay {
-    left: 65.85%;
-    top: 65.0%;
-    width: 10.2%;
+    left: 65.9%;
+    top: 64.75%;
+    width: 10.7%;
     display: grid;
     gap: 3px;
     justify-items: start;
@@ -187,7 +187,7 @@
 
   .drive-overlay strong {
     color: #f1f5f9;
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.05;
     font-weight: 600;
     letter-spacing: .08em;
