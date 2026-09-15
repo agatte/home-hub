@@ -667,3 +667,9 @@ ideas, not a prescribed effects backlog:
 
 - `@threlte/core@^7.3.0`, `@threlte/extras@^8.11.0`, `three@^0.163.0` — installed from prior phases.
 - `postprocessing@^6.35.4` — pinned to this minor because the latest (`6.39.x`) requires `three >= 0.168.0`. Upgrading three is a separate scope decision.
+
+## Viewer synchronization contract (#253)
+
+Canonical Game Day provider state remains real-time and must never be delayed to match a viewer stream. Latitude playback telemetry records the detected streaming service separately from browser/player identity, and scoring events preserve ESPN drive-play `wallclock` time when the matching scoring row omits it so provider-to-HomeHub latency is measurable.
+
+Viewer alignment is presentation/celebration-only. Prefer an adaptive offset derived from the active player's current live-edge position or another trustworthy live synchronization signal; a fixed per-service offset is only a bounded fallback when adaptive evidence is unavailable. MPRIS position/length telemetry is diagnostic only until a live Hulu session proves what those fields mean for Hulu's dynamic stream; do not assume `length - position` is the live-edge gap without that validation. The active source and applied offset must remain observable and easy to disable.

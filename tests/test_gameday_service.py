@@ -2250,6 +2250,29 @@ class TestRealScoringShapes253:
         assert play.player == player
         assert play.yards == yards
 
+    def test_scoring_event_uses_matching_drive_wallclock(self):
+        svc = _make_service()
+        svc._current_game_id = "wallclock-game"
+        scoring = {
+            "id": "401872659257",
+            "text": "Jonathan Taylor 1 Yd Rush (Spencer Shrader PAT Failed)",
+            "scoringPlay": True,
+            "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Rushing Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        }
+        drive_play = dict(scoring, wallclock="2026-09-13T17:11:36Z")
+        summary = {
+            "scoringPlays": [scoring],
+            "drives": {"previous": [{"plays": [drive_play]}]},
+        }
+
+        plays = svc._extract_new_plays(summary)
+
+        assert len(plays) == 1
+        assert plays[0].event_id == "401872659257"
+        assert plays[0].timestamp == datetime(2026, 9, 13, 17, 11, 36, tzinfo=timezone.utc)
+
     def test_special_teams_return_touchdowns_are_not_defensive_tds(self):
         svc = _make_service()
         examples = [

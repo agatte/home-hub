@@ -97,6 +97,18 @@ async def _handle_latitude_streaming_side_effects(
 
     engine = getattr(request.app.state, "automation", None)
     streaming_present = _latitude_owns_watching_context(report, result, engine)
+    playback_active = bool(_factor_value(report.factors, "playback_active"))
+    request.app.state.latitude_streaming_context = {
+        "active": playback_active,
+        "service": (
+            _factor_value(report.factors, "streaming_service")
+            if playback_active else None
+        ),
+        "player": _factor_value(report.factors, "foreground"),
+        "detection_method": _factor_value(report.factors, "detection_method"),
+        "detected_at": report.detected_at,
+        "authoritative_watching": streaming_present,
+    }
 
     loopback = getattr(request.app.state, "laptop_loopback", None)
     if loopback is None:

@@ -76,8 +76,19 @@ class PlaybackSnapshot:
     active: bool
     method: str = "none"
     player: str = "none"
+    service: str = "unknown"
+    position_seconds: Optional[float] = None
+    length_seconds: Optional[float] = None
     processes: list[str] = field(default_factory=list)
     detail: str = ""
+
+    @property
+    def length_minus_position_seconds(self) -> Optional[float]:
+        if self.position_seconds is None or self.length_seconds is None:
+            return None
+        if self.length_seconds < self.position_seconds:
+            return None
+        return self.length_seconds - self.position_seconds
 
 
 class LatitudeStreamingDetector:
@@ -159,6 +170,13 @@ class LatitudeStreamingDetector:
                 "impact": 1.0 if snapshot.active else 0.1,
             },
             {
+                "key": "streaming_service",
+                "label": "Streaming service",
+                "value": snapshot.service if snapshot.active else None,
+                "display": snapshot.service if snapshot.active else "none",
+                "impact": 0.7 if snapshot.active else 0.1,
+            },
+            {
                 "key": "detection_method",
                 "label": "Method",
                 "value": snapshot.method,
@@ -191,10 +209,15 @@ class LatitudeStreamingDetector:
             metadata = self._mpris_metadata(name)
             if self._browser_hint(name) and not self._looks_like_streaming_page(metadata):
                 continue
+            position_us = self._mpris_position_us(name)
+            length_us = self._mpris_length_us(metadata)
             return PlaybackSnapshot(
                 active=True,
                 method="mpris",
                 player=player,
+                service=self._streaming_service(metadata or name),
+                position_seconds=(position_us / 1_000_000 if position_us is not None else None),
+                length_seconds=(length_us / 1_000_000 if length_us is not None else None),
                 processes=processes,
                 detail=metadata or name,
             )
@@ -261,6 +284,34 @@ class LatitudeStreamingDetector:
             return ""
         return result.stdout
 
+    def _mpris_position_us(self, bus_name: str) -> Optional[int]:
+        result = self._run(
+            [
+                "gdbus", "call", "--session", "--dest", bus_name,
+                "--object-path", "/org/mpris/MediaPlayer2",
+                "--method", "org.freedesktop.DBus.Properties.Get",
+                "org.mpris.MediaPlayer2.Player", "Position",
+            ]
+        )
+        if result.returncode != 0:
+            return None
+        return self._dbus_int(result.stdout)
+
+    @staticmethod
+    def _mpris_length_us(metadata: str) -> Optional[int]:
+        marker = re.search(r"mpris:length", metadata, re.IGNORECASE)
+        if marker is None:
+            return None
+        return LatitudeStreamingDetector._dbus_int(metadata[marker.end():marker.end() + 120])
+
+    @staticmethod
+    def _dbus_int(value: str) -> Optional[int]:
+        typed = re.search(r"(?:uint64|int64)\s+(-?\d+)", value, re.IGNORECASE)
+        if typed:
+            return int(typed.group(1))
+        plain = re.search(r"<\s*(-?\d+)\s*>", value)
+        return int(plain.group(1)) if plain else None
+
     def _pipewire_snapshot(self, processes: list[str]) -> PlaybackSnapshot:
         result = self._run(["wpctl", "status"])
         if result.returncode != 0:
@@ -276,6 +327,7 @@ class LatitudeStreamingDetector:
                 active=True,
                 method="pipewire",
                 player=hint,
+                service=self._streaming_service(active_title or hint),
                 processes=processes,
                 detail=active_title or hint,
             )
@@ -294,6 +346,26 @@ class LatitudeStreamingDetector:
             if hint in lowered:
                 return hint
         return bus_name.rsplit(".", 1)[-1].lower()
+
+    @staticmethod
+    def _streaming_service(value: str) -> str:
+        lowered = value.lower()
+        markers = (
+            ("hulu", "hulu"),
+            ("youtube", "youtube"),
+            ("twitch", "twitch"),
+            ("netflix", "netflix"),
+            ("disney+", "disney_plus"),
+            ("disney plus", "disney_plus"),
+            ("hbo max", "max"),
+            ("max.com", "max"),
+            ("stream on max", "max"),
+            ("plex", "plex"),
+        )
+        for marker, service in markers:
+            if marker in lowered:
+                return service
+        return "unknown"
 
     @staticmethod
     def _browser_hint(value: str) -> bool:
@@ -405,11 +477,13 @@ def run_agent(
                     resp.raise_for_status()
                     detector.mark_sent(mode)
                     logger.info(
-                        "Reported latitude streaming mode=%s active=%s method=%s player=%s",
-                        mode,
-                        snapshot.active,
-                        snapshot.method,
-                        snapshot.player,
+                        "Reported latitude streaming mode=%s active=%s method=%s "
+                        "player=%s service=%s position_s=%s length_s=%s length_minus_position_s=%s",
+                        mode, snapshot.active, snapshot.method, snapshot.player,
+                        snapshot.service if snapshot.active else None,
+                        snapshot.position_seconds if snapshot.active else None,
+                        snapshot.length_seconds if snapshot.active else None,
+                        snapshot.length_minus_position_seconds if snapshot.active else None,
                     )
                 last_error = None
             except Exception as exc:

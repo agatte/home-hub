@@ -143,12 +143,18 @@ def test_stop_dwell_delays_idle_report():
 def test_build_factors_include_latitude_device_and_playback_state():
     detector = LatitudeStreamingDetector()
     factors = detector.build_factors(
-        PlaybackSnapshot(active=True, method="mpris", player="stremio"),
+        PlaybackSnapshot(
+            active=True, method="mpris", player="firefox", service="hulu",
+            position_seconds=123.0, length_seconds=987.0,
+        ),
     )
 
     assert factors[0]["key"] == "device"
     assert factors[0]["value"] == "latitude"
-    assert {f["key"] for f in factors} >= {"playback_active", "detection_method"}
+    by_key = {factor["key"]: factor["value"] for factor in factors}
+    assert by_key["playback_active"] is True
+    assert by_key["detection_method"] == "mpris"
+    assert by_key["streaming_service"] == "hulu"
 
 
 def test_mpris_browser_streaming_page_reports_watching():
@@ -189,11 +195,19 @@ def test_mpris_browser_streaming_page_reports_watching():
         "org.mpris.MediaPlayer2.Player",
         "Metadata",
     )
+    position_cmd = (
+        "gdbus", "call", "--session", "--dest",
+        "org.mpris.MediaPlayer2.firefox.instance42",
+        "--object-path", "/org/mpris/MediaPlayer2",
+        "--method", "org.freedesktop.DBus.Properties.Get",
+        "org.mpris.MediaPlayer2.Player", "Position",
+    )
     detector = FakeDetector(
         outputs={
             list_cmd: "(['org.mpris.MediaPlayer2.firefox.instance42'],)",
             status_cmd: "(<('Playing',)>,)",
-            metadata_cmd: "{'xesam:url': <'https://www.hulu.com/watch/abc'>, 'xesam:title': <'Hulu'>}",
+            metadata_cmd: "{'xesam:url': <'https://www.hulu.com/watch/abc'>, 'xesam:title': <'Hulu'>, 'mpris:length': <int64 987000000>}",
+            position_cmd: "(<int64 123000000>,)",
         }
     )
 
@@ -202,6 +216,10 @@ def test_mpris_browser_streaming_page_reports_watching():
     assert snapshot.active is True
     assert snapshot.method == "mpris"
     assert snapshot.player == "firefox"
+    assert snapshot.service == "hulu"
+    assert snapshot.position_seconds == 123.0
+    assert snapshot.length_seconds == 987.0
+    assert snapshot.length_minus_position_seconds == 864.0
 
 
 def test_mpris_browser_non_streaming_page_does_not_report_watching():

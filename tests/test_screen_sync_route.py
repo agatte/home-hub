@@ -687,9 +687,13 @@ async def test_latitude_streaming_activity_owns_loopback_without_physical_presen
     active = ActivityReport(
         mode="watching",
         source="process",
+        detected_at="2026-09-15T13:00:00-04:00",
         factors=[
             {"key": "device", "value": "latitude"},
             {"key": "playback_active", "value": True},
+            {"key": "foreground", "value": "firefox"},
+            {"key": "detection_method", "value": "mpris"},
+            {"key": "streaming_service", "value": "hulu"},
         ],
     )
     await report_activity(active, req)  # type: ignore[arg-type]
@@ -701,6 +705,14 @@ async def test_latitude_streaming_activity_owns_loopback_without_physical_presen
     assert presence.is_present_within_seconds(8) is False
     assert loopback.running is True
     assert loopback.starts == 1
+    assert req.app.state.latitude_streaming_context == {
+        "active": True,
+        "service": "hulu",
+        "player": "firefox",
+        "detection_method": "mpris",
+        "detected_at": "2026-09-15T13:00:00-04:00",
+        "authoritative_watching": True,
+    }
 
     idle = ActivityReport(
         mode="idle",
@@ -729,6 +741,9 @@ async def test_latitude_streaming_activity_owns_loopback_without_physical_presen
     assert presence.latest_zone() is None
     assert loopback.running is False
     assert loopback.stops == 1
+    assert req.app.state.latitude_streaming_context["active"] is False
+    assert req.app.state.latitude_streaming_context["service"] is None
+    assert req.app.state.latitude_streaming_context["authoritative_watching"] is False
 
 
 def test_legacy_media_reading_cannot_establish_physical_presence():

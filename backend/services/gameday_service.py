@@ -828,6 +828,26 @@ class GameDayService:
                     ids.add(play_id)
         return ids
 
+    @staticmethod
+    def _drive_play_index(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Index ESPN drive plays by id for richer timing metadata."""
+        drives = summary.get("drives") or {}
+        if not isinstance(drives, dict):
+            return {}
+        all_drives: list[dict[str, Any]] = []
+        previous = drives.get("previous") or []
+        if isinstance(previous, list):
+            all_drives.extend(d for d in previous if isinstance(d, dict))
+        current = drives.get("current")
+        if isinstance(current, dict):
+            all_drives.append(current)
+        return {
+            str(raw.get("id")): raw
+            for drive in all_drives
+            for raw in (drive.get("plays") or [])
+            if isinstance(raw, dict) and raw.get("id")
+        }
+
     def _remember_provider_play_ids(self, summary: dict[str, Any]) -> int:
         before = len(self._known_play_ids)
         self._known_play_ids.update(self._provider_play_ids(summary))
@@ -1154,6 +1174,7 @@ class GameDayService:
         # touchdown row in-place after the try completes, so primary-score and
         # conversion identity are deduped independently.
         scoring_plays = summary.get("scoringPlays") or []
+        drive_plays = self._drive_play_index(summary)
         score_types = {
             "touchdown", "field_goal", "safety", "extra_point_good",
             "two_point_conv", "defensive_td", "return_td",
@@ -1163,7 +1184,12 @@ class GameDayService:
             play_id = str(raw.get("id") or "")
             if not play_id:
                 continue
-            play = self._parse_play(raw)
+            parse_raw = raw
+            drive_raw = drive_plays.get(play_id)
+            if not raw.get("wallclock") and drive_raw and drive_raw.get("wallclock"):
+                parse_raw = dict(raw)
+                parse_raw["wallclock"] = drive_raw["wallclock"]
+            play = self._parse_play(parse_raw)
             wpa = self._compute_wpa(play_id, summary, colts_are_home)
             if play_id not in self._known_play_ids and play.play_type in score_types:
                 play.wpa = wpa
@@ -1649,9 +1675,12 @@ class GameDayService:
     # ------------------------------------------------------------------ Subscribers
 
     async def _fire_play_event(self, play: PlayEvent) -> None:
+        provider_age_seconds = (self._now_utc() - play.timestamp).total_seconds()
         logger.info(
-            "play_event: %s team=%s player=%s kicker=%s yards=%s",
+            "play_event: %s team=%s player=%s kicker=%s yards=%s "
+            "provider_ts=%s provider_age_s=%.3f",
             play.play_type, play.scoring_team, play.player, play.kicker, play.yards,
+            play.timestamp.isoformat(), provider_age_seconds,
         )
         for cb in list(self._play_callbacks):
             try:
