@@ -103,6 +103,26 @@ _FG_FULL_RE = re.compile(r"^(.+?)\s+(\d+)\s+Yd\s+Field\s+Goal", re.IGNORECASE)
 _FG_ABBREV_RE = re.compile(
     r"^([A-Z]\.[A-Za-z'\-]+)\s+(\d+)\s+yard field goal", re.IGNORECASE
 )
+_PAT_GOOD_RE = re.compile(r"\([^()]*\bKick\)\s*$", re.IGNORECASE)
+_CONVERSION_FAILURE_MARKERS = ("FAILED", "FAILS", "NO GOOD", "BLOCKED")
+
+
+def _conversion_play_type(raw: dict[str, Any]) -> Optional[PlayType]:
+    """Return a successful conversion embedded in an ESPN scoring row."""
+    text = str(raw.get("text") or "")
+    upper = text.upper()
+    if any(marker in upper for marker in _CONVERSION_FAILURE_MARKERS):
+        return None
+    if ("TWO-POINT" in upper or "TWO POINT" in upper) and "CONVERSION" in upper:
+        return "two_point_conv"
+    if (
+        "EXTRA POINT IS GOOD" in upper
+        or "PAT IS GOOD" in upper
+        or "PAT GOOD" in upper
+        or _PAT_GOOD_RE.search(text)
+    ):
+        return "extra_point_good"
+    return None
 
 
 PlayType = Literal[
@@ -115,7 +135,8 @@ PlayType = Literal[
     "safety",
     "extra_point_good",
     "two_point_conv",
-    "defensive_td",  # Covers pick-six and fumble-return TD (turnover-going-for-points).
+    "defensive_td",  # Pick-six / fumble-return TD.
+    "return_td",  # Punt/kick/blocked-kick return TD.
     # Game-sensitive semantic lane — meaningful Colts-favoring football
     # events that should register below the generic 15% WPA threshold.
     "fourth_down_stop",
@@ -786,6 +807,9 @@ class GameDayService:
             play_id = str(raw.get("id") or "")
             if play_id:
                 ids.add(play_id)
+                conversion_type = _conversion_play_type(raw)
+                if conversion_type is not None:
+                    ids.add(f"{play_id}:{conversion_type}")
 
         drives = summary.get("drives") or {}
         if not isinstance(drives, dict):
@@ -1126,28 +1150,47 @@ class GameDayService:
         active = self._find_active_game() or {}
         colts_are_home = bool(active.get("colts_are_home", False))
 
-        # The top-level scoringPlays array is the canonical source of truth
-        # for TDs/FGs. Walk in order; dedup against known ids.
+        # scoringPlays[] is authoritative for points. ESPN commonly mutates a
+        # touchdown row in-place after the try completes, so primary-score and
+        # conversion identity are deduped independently.
         scoring_plays = summary.get("scoringPlays") or []
+        score_types = {
+            "touchdown", "field_goal", "safety", "extra_point_good",
+            "two_point_conv", "defensive_td", "return_td",
+        }
+        touchdown_types = {"touchdown", "defensive_td", "return_td"}
         for raw in scoring_plays:
             play_id = str(raw.get("id") or "")
-            if not play_id or play_id in self._known_play_ids:
+            if not play_id:
                 continue
             play = self._parse_play(raw)
-            # Slice C+: emit every recognized score subtype. Defensive_td
-            # passes through even when scoring_team=="colts" (the Colts'
-            # defense scored, which IS a Colts score). Opponent scores
-            # land here too but are filtered downstream by the
-            # CelebrationOrchestrator's on_play_event Colts-only gate.
-            if play.play_type in (
-                "touchdown", "field_goal", "safety",
-                "extra_point_good", "two_point_conv", "defensive_td",
-            ):
-                play.wpa = self._compute_wpa(play_id, summary, colts_are_home)
+            wpa = self._compute_wpa(play_id, summary, colts_are_home)
+            if play_id not in self._known_play_ids and play.play_type in score_types:
+                play.wpa = wpa
                 play.event_id = play_id
                 play.game_id = self._current_game_id
                 out.append(play)
                 self._known_play_ids.add(play_id)
+
+            conversion_type = _conversion_play_type(raw)
+            if play.play_type not in touchdown_types or conversion_type is None:
+                continue
+            conversion_id = f"{play_id}:{conversion_type}"
+            if conversion_id in self._known_play_ids:
+                continue
+            out.append(PlayEvent(
+                timestamp=play.timestamp,
+                play_type=conversion_type,
+                description=play.description,
+                player=None,
+                kicker=None,
+                yards=None,
+                scoring_team=play.scoring_team,
+                wpa=wpa,
+                event_id=conversion_id,
+                game_id=self._current_game_id,
+            ))
+            self._known_play_ids.add(conversion_id)
 
         return out
 
@@ -1423,6 +1466,12 @@ class GameDayService:
 
         if scoring_upper in ("SF", "SAFETY") or "SAFETY" in play_type_upper:
             play_type: PlayType = "safety"
+        elif is_td and any(marker in play_type_upper for marker in (
+            "PUNT RETURN", "KICKOFF RETURN", "KICK RETURN",
+            "BLOCKED FIELD GOAL", "FIELD GOAL RETURN",
+            "BLOCKED PUNT", "PUNT BLOCKED",
+        )):
+            play_type = "return_td"
         elif is_td and (
             "INTERCEPT" in text_upper
             or "FUMBLE" in text_upper
@@ -1440,7 +1489,7 @@ class GameDayService:
             "EXTRA POINT" in play_type_upper and ("GOOD" in text_upper or "MADE" in text_upper)
         ):
             play_type = "extra_point_good"
-        elif scoring_upper in ("2PT", "2-PT") or (
+        elif scoring_upper in ("2PT", "2-PT", "2PTC") or (
             "TWO-POINT" in text_upper or "TWO POINT" in text_upper
         ) and ("GOOD" in text_upper or "SUCCESSFUL" in text_upper or "CONVERTED" in text_upper):
             play_type = "two_point_conv"

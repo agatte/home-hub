@@ -2228,3 +2228,144 @@ async def test_celebration_authority_rejects_away_even_if_mode_still_gameday():
 
     assert allowed is False
     assert reason == "house state=away"
+
+
+# ---------------------------------------------------------------------------
+# #253 real ESPN scoring-shape hardening
+# ---------------------------------------------------------------------------
+
+class TestRealScoringShapes253:
+    def test_special_teams_return_touchdowns_are_not_defensive_tds(self):
+        svc = _make_service()
+        examples = [
+            ("Punt Return Touchdown", "Malik Washington 74 Yd Punt Return (Riley Patterson Kick)"),
+            ("Kickoff Return Touchdown", "Antonio Gibson 90 Yd Kickoff Return (Andy Borregales Kick)"),
+            ("Blocked Field Goal", "Blocked Kick Recovered by Jordan Davis (PHI) Jordan Davis 61 Yd Touchown Return"),
+        ]
+        for index, (type_text, text) in enumerate(examples):
+            play = svc._parse_play({
+                "id": f"return-{index}", "text": text, "scoringPlay": True,
+                "scoringType": {"abbreviation": "TD"},
+                "type": {"text": type_text}, "team": {"id": COLTS_TEAM_ID},
+            })
+            assert play.play_type == "return_td"
+
+    def test_standalone_defensive_pat_conversion_shape_is_two_points(self):
+        svc = _make_service()
+        play = svc._parse_play({
+            "id": "4017729215125",
+            "text": "Markquese Bell Defensive PAT Conversion",
+            "scoringPlay": True,
+            "scoringType": {"abbreviation": "2PTC"},
+            "type": {}, "team": {"id": COLTS_TEAM_ID},
+        })
+        assert play.play_type == "two_point_conv"
+
+    def test_embedded_pat_can_arrive_after_touchdown_row_was_seen(self):
+        svc = _make_service()
+        svc._current_game_id = "mutation-game"
+        raw = {
+            "id": "4018726591927", "text": "Jonathan Taylor 3 Yd Rush",
+            "scoringPlay": True, "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Rushing Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        }
+        first = svc._extract_new_plays({"scoringPlays": [raw]})
+        assert [p.play_type for p in first] == ["touchdown"]
+
+        raw = dict(raw, text="Jonathan Taylor 3 Yd Rush (Spencer Shrader Kick)")
+        second = svc._extract_new_plays({"scoringPlays": [raw]})
+        assert [p.play_type for p in second] == ["extra_point_good"]
+        assert second[0].event_id == "4018726591927:extra_point_good"
+        assert svc._extract_new_plays({"scoringPlays": [raw]}) == []
+
+    def test_embedded_two_point_conversion_is_derived_once(self):
+        svc = _make_service()
+        svc._current_game_id = "two-point-game"
+        raw = {
+            "id": "4017728103486",
+            "text": "Aaron Jones Sr. 27 Yd pass from J.J. McCarthy (J.J. McCarthy Pass to Adam Thielen for Two-Point Conversion)",
+            "scoringPlay": True, "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Passing Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        }
+        plays = svc._extract_new_plays({"scoringPlays": [raw]})
+        assert [p.play_type for p in plays] == ["touchdown", "two_point_conv"]
+        assert plays[1].event_id == "4017728103486:two_point_conv"
+
+    @pytest.mark.parametrize("text", [
+        "Jonathan Taylor 1 Yd Rush (Spencer Shrader PAT Failed)",
+        "Justin Jefferson 13 Yd pass from J.J. McCarthy (Two-Point Pass Conversion Failed)",
+        "Romeo Doubs 1 Yd pass from Jordan Love (Brandon McManus PAT blocked)",
+    ])
+    def test_failed_or_blocked_try_does_not_create_conversion_event(self, text):
+        svc = _make_service()
+        svc._current_game_id = "failed-try-game"
+        raw = {
+            "id": "failed-try", "text": text, "scoringPlay": True,
+            "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Passing Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        }
+        assert [p.play_type for p in svc._extract_new_plays({"scoringPlays": [raw]})] == ["touchdown"]
+
+    def test_restart_hydration_claims_embedded_conversion_identity(self):
+        svc = _make_service()
+        raw = {
+            "id": "hydrated-td",
+            "text": "Tyler Warren 9 Yd pass from Daniel Jones (Spencer Shrader Kick)",
+            "scoringPlay": True, "scoringType": {"abbreviation": "TD"},
+            "type": {"text": "Passing Touchdown"},
+            "team": {"id": COLTS_TEAM_ID},
+        }
+        ids = svc._provider_play_ids({"scoringPlays": [raw]})
+        assert "hydrated-td" in ids
+        assert "hydrated-td:extra_point_good" in ids
+
+    @pytest.mark.asyncio
+    async def test_live_summary_emits_pregame_to_in_progress_transition_once(self):
+        automation = _make_automation_mock(current_mode="gameday")
+        svc = _make_service(automation=automation)
+        now = datetime(2026, 9, 21, 0, 21, tzinfo=timezone.utc)
+        svc._now_override = now
+        raw = _schedule_event(
+            "kickoff-transition", "2026-09-21T00:20Z",
+            opponent_name="Kansas City Chiefs", status="STATUS_SCHEDULED",
+        )
+        game = svc._normalize_schedule_event(raw)
+        assert game is not None
+        svc._schedule_cache = [game]
+        svc._schedule_cache_time = time.time()
+        svc._current_game_id = "kickoff-transition"
+        svc._current_state = svc._pregame_state(game)
+        svc._fetch_summary = AsyncMock(return_value=_summary_payload())
+        transitions = []
+
+        async def on_transition(transition):
+            transitions.append(transition)
+
+        svc.register_on_state_transition(on_transition)
+        await svc._tick()
+        assert [(t.from_status, t.to_status) for t in transitions] == [
+            ("pregame", "in-progress")
+        ]
+        assert transitions[0].game_id == "kickoff-transition"
+
+    @pytest.mark.asyncio
+    async def test_return_td_is_available_through_synthetic_test_route(self):
+        svc = MagicMock()
+        svc.trigger_synthetic_play = AsyncMock(return_value=PlayEvent(
+            timestamp=datetime.now(timezone.utc), play_type="return_td",
+            description="[TEST] Synthetic return_td", player=None,
+            kicker=None, yards=None, scoring_team="colts", synthetic=True,
+        ))
+        svc.trigger_synthetic_final = AsyncMock()
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(gameday=svc))
+        )
+
+        result = await route_test_event("return_td", request)
+
+        assert result["event"] == "return_td"
+        svc.trigger_synthetic_play.assert_awaited_once_with("return_td")
+        svc.trigger_synthetic_final.assert_not_awaited()

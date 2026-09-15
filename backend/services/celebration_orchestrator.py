@@ -2,8 +2,7 @@
 Celebration orchestrator — Game Day light + TTS choreography.
 
 Subscribes to GameDayService.register_on_play_event /
-register_on_state_transition. On scoring plays (TD, FG, kickoff) and on
-end-of-game state transitions, runs a hand-tuned light sequence in
+register_on_state_transition. On scoring plays and kickoff/end-of-game state transitions, runs a hand-tuned light sequence in
 parallel with a randomized TTS line, broadcasting a `gameday_celebration`
 WebSocket frame so the SvelteKit frontend can flair.
 
@@ -580,6 +579,17 @@ class CelebrationOrchestrator:
             duration_seconds=6.0,
             base_volume=32,  # bigger emotional moment than offensive TD
         ),
+        "return_td": CelebrationSequence(
+            light_steps=_DEFENSIVE_TD_STEPS,
+            tts_lines=[
+                "Return touchdown! Colts take it to the house!",
+                "Special teams scores for Indianapolis!",
+                "Colts return it for six!",
+                "Touchdown Colts - what a return!",
+            ],
+            duration_seconds=6.0,
+            base_volume=32,
+        ),
         # ── Game-sensitive semantic lane ────────────────────────────────
         "semantic_momentum": CelebrationSequence(
             light_steps=_SEMANTIC_MOMENTUM_STEPS,
@@ -664,7 +674,7 @@ class CelebrationOrchestrator:
         # Score subtypes — Colts-only.
         if evt.scoring_team == "opp" and evt.play_type in (
             "touchdown", "field_goal", "safety",
-            "extra_point_good", "two_point_conv", "defensive_td",
+            "extra_point_good", "two_point_conv", "defensive_td", "return_td",
         ):
             return
 
@@ -676,6 +686,7 @@ class CelebrationOrchestrator:
             "extra_point_good": "extra_point_good",
             "two_point_conv": "two_point_conv",
             "defensive_td": "defensive_td",
+            "return_td": "return_td",
             "fourth_down_stop": "semantic_momentum",
             "blocked_punt": "semantic_momentum",
             "blocked_field_goal": "semantic_momentum",
@@ -696,11 +707,42 @@ class CelebrationOrchestrator:
                 key, reason,
             )
             return
-        await self._run_sequence(key, context, play=evt)
+        conversion_followup = bool(
+            evt.event_id
+            and evt.event_id.endswith((":extra_point_good", ":two_point_conv"))
+        )
+        await self._run_sequence(
+            key, context, play=evt, bypass_cooldown=conversion_followup,
+        )
 
     async def on_state_transition(self, transition: GameDayStateTransition) -> None:
-        """Subscriber for GameDayService state transitions. We only celebrate
-        the *→final transition; everything else is informational."""
+        """Celebrate real kickoff and final lifecycle transitions."""
+        if transition.from_status == "pregame" and transition.to_status == "in-progress":
+            allowed, reason = self._authority_allows(transition=transition)
+            if not allowed:
+                logger.info(
+                    "celebration: skipping kickoff transition - authority gate: %s",
+                    reason,
+                )
+                return
+            kickoff = PlayEvent(
+                timestamp=transition.timestamp,
+                play_type="kickoff",
+                description="Game state entered in-progress",
+                player=None,
+                kicker=None,
+                yards=None,
+                scoring_team=None,
+                wpa=None,
+                game_id=transition.game_id,
+                synthetic=transition.synthetic,
+            )
+            await self._run_sequence(
+                "kickoff", self._build_context(kickoff),
+                play=kickoff, transition=transition,
+            )
+            return
+
         if transition.to_status != "final":
             return
 
@@ -751,11 +793,13 @@ class CelebrationOrchestrator:
         *,
         play: Optional[PlayEvent] = None,
         transition: Optional[GameDayStateTransition] = None,
+        bypass_cooldown: bool = False,
     ) -> None:
         """Broadcast WS flair, then run light steps + TTS in parallel.
 
-        Cooldown stamp lands at sequence START so back-to-back plays inside
-        the 8s window all skip — only the first wins.
+        Cooldown stamp lands at sequence START so ordinary back-to-back plays
+        inside the 8s window skip. Derived PAT/2PT follow-ups bypass that
+        play-level cooldown without extending it.
 
         ``play`` feeds celebration_volume_policy: WPA for play events,
         synthetic placeholder for end-of-game transitions, None for any
@@ -775,15 +819,17 @@ class CelebrationOrchestrator:
 
         now = time.time()
         elapsed = now - self._last_celebration_at
-        if elapsed < self.COOLDOWN_SECONDS:
+        if not bypass_cooldown and elapsed < self.COOLDOWN_SECONDS:
             logger.info(
                 "celebration: skipping %s — cooldown (%.1fs since last)",
                 key, elapsed,
             )
             return
 
-        # Stamp at start so simultaneous calls all see the same window.
-        self._last_celebration_at = now
+        # Conversion follow-ups are part of the score that opened the cooldown;
+        # they neither wait on nor extend that global play-level window.
+        if not bypass_cooldown:
+            self._last_celebration_at = now
         self._sequence_active = True
         successful_lights: set[str] = set()
         try:
@@ -1314,7 +1360,7 @@ class CelebrationOrchestrator:
             if transition.game_id is None:
                 return False, "unscoped provider transition"
             game_id = transition.game_id
-            allow_final = True
+            allow_final = transition.to_status == "final"
         elif play is not None:
             if play.synthetic:
                 return True, "synthetic play"

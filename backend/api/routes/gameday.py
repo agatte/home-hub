@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/gameday", tags=["gameday"])
 _VALID_TEST_EVENTS = {
     "touchdown", "field_goal", "kickoff", "end_of_game_win", "end_of_game_loss",
     # Slice C+ score-type coverage (2026-05-15):
-    "safety", "extra_point_good", "two_point_conv", "defensive_td",
+    "safety", "extra_point_good", "two_point_conv", "defensive_td", "return_td",
     # Phase 2 WPA momentum lane:
     "momentum",
 }
@@ -45,7 +45,7 @@ _TEST_EVENT_TO_PLAY_TYPE: dict[
     str,
     Literal[
         "touchdown", "field_goal", "kickoff",
-        "safety", "extra_point_good", "two_point_conv", "defensive_td",
+        "safety", "extra_point_good", "two_point_conv", "defensive_td", "return_td",
         "momentum", "other",
     ],
 ] = {
@@ -56,6 +56,7 @@ _TEST_EVENT_TO_PLAY_TYPE: dict[
     "extra_point_good": "extra_point_good",
     "two_point_conv": "two_point_conv",
     "defensive_td": "defensive_td",
+    "return_td": "return_td",
     "momentum": "momentum",
 }
 

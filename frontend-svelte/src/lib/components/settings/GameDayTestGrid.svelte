@@ -8,13 +8,14 @@
   /** @type {TestEvent[]} */
   const EVENTS = [
     { event: 'pregame',         label: 'Pregame T-60',  icon: '🏟️', hint: 'Pre-kickoff ramp',                    accent: 'rgba(74, 108, 247, 0.22)' },
-    { event: 'kickoff',         label: 'Kickoff',       icon: '🦵', hint: 'Open / quarter starts',               accent: 'rgba(74, 108, 247, 0.22)' },
+    { event: 'kickoff',         label: 'Kickoff',       icon: '🦵', hint: 'Game start transition',               accent: 'rgba(74, 108, 247, 0.22)' },
     { event: 'touchdown',       label: 'Touchdown',     icon: '🏈', hint: '6 points + extra-point setup',        accent: 'rgba(34, 211, 145, 0.28)' },
     { event: 'extra_point_good',label: 'Extra Point',   icon: '✅', hint: 'PAT good',                            accent: 'rgba(34, 211, 145, 0.20)' },
     { event: 'two_point_conv',  label: '2-pt Conv',     icon: '🎯', hint: 'Two-point conversion',                accent: 'rgba(34, 211, 145, 0.20)' },
     { event: 'field_goal',      label: 'Field Goal',    icon: '🥅', hint: '3 points',                            accent: 'rgba(74, 108, 247, 0.22)' },
     { event: 'safety',          label: 'Safety',        icon: '🛡️', hint: '2 points (defense)',                  accent: 'rgba(34, 211, 145, 0.20)' },
     { event: 'defensive_td',    label: 'Defensive TD',  icon: '⚡', hint: 'Pick-six / fumble return',            accent: 'rgba(251, 191, 36, 0.22)' },
+    { event: 'return_td',       label: 'Return TD',     icon: '↩️', hint: 'Punt / kickoff / blocked kick return', accent: 'rgba(251, 191, 36, 0.22)' },
     { event: 'momentum',        label: 'Momentum',      icon: '📈', hint: 'WPA swing on non-scoring play',       accent: 'rgba(140, 100, 200, 0.22)' },
     { event: 'end_of_game_win', label: 'Final · WIN',   icon: '🏆', hint: 'Closing sequence (win)',              accent: 'rgba(34, 211, 145, 0.32)' },
     { event: 'end_of_game_loss',label: 'Final · LOSS',  icon: '💔', hint: 'Closing sequence (loss)',             accent: 'rgba(248, 113, 113, 0.22)' },

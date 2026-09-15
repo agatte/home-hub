@@ -1370,3 +1370,108 @@ async def test_fully_blocked_sequence_does_not_reconcile_or_touch_hue():
 
     hue.set_light.assert_not_awaited()
     orch._automation.reapply_current_mode.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# #253 kickoff + provider score subtype hardening
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_live_pregame_to_in_progress_transition_fires_kickoff_with_live_authority():
+    orch, _, _, _, gameday = _make_orchestrator()
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(True, "current Game Day authority")
+    )
+    orch._run_sequence = AsyncMock()
+    transition = GameDayStateTransition(
+        from_status="pregame", to_status="in-progress",
+        timestamp=datetime.now(timezone.utc), game_id="kickoff-game",
+        synthetic=False,
+    )
+
+    await orch.on_state_transition(transition)
+
+    gameday.celebration_eligibility.assert_called_once_with(
+        game_id="kickoff-game", allow_final=False,
+    )
+    assert orch._run_sequence.await_args.args[0] == "kickoff"
+    assert orch._run_sequence.await_args.kwargs["transition"] is transition
+
+
+@pytest.mark.asyncio
+async def test_kickoff_transition_fails_closed_when_live_authority_is_gone():
+    orch, hue, tts, ws, gameday = _make_orchestrator()
+    gameday.celebration_eligibility = MagicMock(
+        return_value=(False, "automation mode=watching")
+    )
+    transition = GameDayStateTransition(
+        from_status="pregame", to_status="in-progress",
+        timestamp=datetime.now(timezone.utc), game_id="kickoff-game",
+        synthetic=False,
+    )
+    await orch.on_state_transition(transition)
+    hue.set_light.assert_not_awaited()
+    tts.speak.assert_not_awaited()
+    ws.broadcast.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_return_touchdown_uses_special_teams_sequence_not_defense_wording():
+    orch, _, _, _, _ = _make_orchestrator()
+    orch._run_sequence = AsyncMock()
+    evt = PlayEvent(
+        timestamp=datetime.now(timezone.utc), play_type="return_td",
+        description="Antonio Gibson 90 Yd Kickoff Return",
+        player=None, kicker=None, yards=None, scoring_team="colts",
+        synthetic=True,
+    )
+    await orch.on_play_event(evt)
+    assert orch._run_sequence.await_args.args[0] == "return_td"
+    lines = CelebrationOrchestrator.SEQUENCES["return_td"].tts_lines
+    assert lines
+    assert all("defense" not in line.lower() for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_derived_conversion_followup_bypasses_global_play_cooldown():
+    orch, _, _, _, _ = _make_orchestrator()
+    orch._run_sequence = AsyncMock()
+    evt = PlayEvent(
+        timestamp=datetime.now(timezone.utc), play_type="extra_point_good",
+        description="Jonathan Taylor 3 Yd Rush (Spencer Shrader Kick)",
+        player=None, kicker=None, yards=None, scoring_team="colts",
+        event_id="td-1:extra_point_good", synthetic=True,
+    )
+    await orch.on_play_event(evt)
+    assert orch._run_sequence.await_args.args[0] == "extra_point_good"
+    assert orch._run_sequence.await_args.kwargs["bypass_cooldown"] is True
+
+
+@pytest.mark.asyncio
+async def test_standalone_two_point_score_keeps_normal_cooldown():
+    orch, _, _, _, _ = _make_orchestrator()
+    orch._run_sequence = AsyncMock()
+    evt = PlayEvent(
+        timestamp=datetime.now(timezone.utc), play_type="two_point_conv",
+        description="Markquese Bell Defensive PAT Conversion",
+        player=None, kicker=None, yards=None, scoring_team="colts",
+        event_id="standalone-2pt", synthetic=True,
+    )
+    await orch.on_play_event(evt)
+    assert orch._run_sequence.await_args.kwargs["bypass_cooldown"] is False
+
+@pytest.mark.asyncio
+async def test_conversion_cooldown_bypass_does_not_extend_global_window(monkeypatch):
+    orch, _, _, ws, _ = _make_orchestrator()
+    tiny = CelebrationSequence(
+        light_steps=[], tts_lines=[], duration_seconds=0.0, base_volume=0,
+    )
+    monkeypatch.setitem(orch.SEQUENCES, "conversion_probe", tiny)
+    previous = time.time()
+    orch._last_celebration_at = previous
+
+    await orch._run_sequence(
+        "conversion_probe", {}, play=_other_event(), bypass_cooldown=True,
+    )
+
+    ws.broadcast.assert_awaited_once()
+    assert orch._last_celebration_at == previous

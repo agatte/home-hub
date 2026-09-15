@@ -64,7 +64,7 @@ mode on      celebration     (TD/FG)              (wind-down)
 
 #### Kickoff
 
-- **Trigger**: First play of the game (ESPN play type `kickoff` OR game state transition from `pregame` → `in-progress`).
+- **Trigger**: Authoritative game-state transition from `pregame` → `in-progress`. ESPN kickoff rows live in the drive play feed rather than `scoringPlays[]`; startup directly into an already-live game must not synthesize/replay kickoff.
 - **Lights**: One-shot transition. Activate "gameday baseline" curated scene (defined in `routes/scenes.py` SCENE_PRESETS as `gameday_baseline`). Color palette is free choice — likely a Colts-tinted warm baseline that doesn't fight the apartment palette (Rule 5 in `feedback_lighting_design_principles.md`).
 - **TTS**: 3–5 variations. ESPN matchup data threaded ("Colts vs {opponent}, kickoff!").
 
@@ -208,7 +208,8 @@ class CelebrationOrchestrator:
         "safety": CelebrationSequence(...),          # defense scores 2pts + gets ball
         "extra_point_good": CelebrationSequence(...),  # lights-only ack, no TTS
         "two_point_conv": CelebrationSequence(...),  # bigger than PAT, smaller than TD
-        "defensive_td": CelebrationSequence(...),    # pick-six / return for score
+        "defensive_td": CelebrationSequence(...),    # pick-six / fumble-return TD
+        "return_td": CelebrationSequence(...),       # punt/kick/blocked-kick return TD
         "semantic_momentum": CelebrationSequence(...), # competitive semantic event, lower amp
         "big_play": CelebrationSequence(...),        # WPA momentum lane (non-scoring)
     }
@@ -224,6 +225,8 @@ class CelebrationOrchestrator:
 
     async def on_play_event(self, evt: PlayEvent) -> None: ...
     async def on_state_transition(self, transition: GameDayStateTransition) -> None: ...
+
+**ESPN scoring-shape authority (#253 hardening):** `scoringPlays[]` is the points authority, but routine PAT and offensive two-point results are commonly embedded into the touchdown row and may appear by mutating that already-seen row after the try completes. HomeHub therefore dedupes the primary score ID separately from derived `:extra_point_good` / `:two_point_conv` identities so a late provider update fires once without replaying after restart. Failed/blocked tries create no derived success. Standalone `2PTC` rows remain valid two-point scores (including defensive PAT conversions). `SF`/Penalty rows map to safety; interception/fumble-return TDs map to `defensive_td`; punt returns, kickoff returns, and blocked-kick return TDs map to `return_td` so special-teams scores never inherit defense-specific speech.
 
 **Transient lighting ownership (#253 hardening):** provider-driven celebrations
 require `house_state=home` and `current_mode=gameday`. Before every direct Hue
@@ -261,7 +264,7 @@ class LightStep:
 |---|---|---|---|
 | GET | `/api/gameday/state` | `GameDayState` JSON or `{"status": "no-game"}` | Current snapshot |
 | GET | `/api/gameday/schedule` | `[{date, opponent, kickoff_utc, location}]` | Next 5 games |
-| POST | `/api/gameday/test/{event}` | `{"status": "ok"}` | Trigger a sequence locally for tuning. `event` ∈ `touchdown`, `field_goal`, `kickoff`, `end_of_game_win`, `end_of_game_loss`, `safety`, `extra_point_good`, `two_point_conv`, `defensive_td`, `momentum` (extended scoring + WPA momentum subtypes shipped 2026-05-15). Auth required. |
+| POST | `/api/gameday/test/{event}` | `{"status": "ok"}` | Trigger a sequence locally for tuning. `event` ∈ `touchdown`, `field_goal`, `kickoff`, `end_of_game_win`, `end_of_game_loss`, `safety`, `extra_point_good`, `two_point_conv`, `defensive_td`, `return_td`, `momentum` (extended scoring + WPA momentum subtypes shipped 2026-05-15). Auth required. |
 | POST | `/api/gameday/test/pregame` | `{"status": "ok"}` | Synthetic T-60 `pregameday` fire (§10.6). Body `{opponent, stakes_tier}`; flips to pregameday for 30s, dispatches the pregame audio policy, then auto-clears. Registered before `/test/{event}` so the wildcard doesn't swallow it. Auth required. |
 
 All routes registered **before** the `/{path:path}` catch-all in `main.py`.
