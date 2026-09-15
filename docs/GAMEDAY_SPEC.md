@@ -5,6 +5,7 @@
 > **Current checkpoint — 2026-09-14:** #5 and #10 are completed. The accepted Latitude Game Day visual baseline is `0d39d6c`: a reference-derived stadium/field hero with a cleaned physical fascia and transparent live Svelte score/clock/drive typography. #252 owns the remaining truthful current-drive backend contract; #7 remains evidence-driven volume/TTS calibration at the next suitable live game. ESPN provider-health/backoff work in #153 is completed; #45 remains a separate stakes-enrichment concern.
 >
 > **Presentation authority:** `/gameday/prototype` is the accepted current presentation surface. The older renderer history in §11 remains useful engineering context, but it is not the current visual-design authority.
+> **Presentation truthfulness:** when there is no active game, the accepted surface must show only schedule-derived next-game context (or an explicit no-game/loading state) with score dashes and no synthetic opponent/score/drive. Live period labels use `OVERTIME` for quarter 5 and `2OT`, `3OT`, etc. thereafter.
 
 Game Day is a season-bounded mode that turns the apartment into a Colts viewing room. ESPN drives the play feed; the dashboard celebrates scoring plays with custom light + TTS choreography; the accepted Latitude presentation uses the premium `/gameday/prototype` field hero with live score/clock/drive data integrated into its physical fascia. Synthetic test endpoint `POST /api/gameday/test/{event}` fires real celebrations end-to-end (verified live 2026-05-07).
 

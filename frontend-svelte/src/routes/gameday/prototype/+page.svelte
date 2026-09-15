@@ -1,31 +1,16 @@
 <script>
   import { onMount } from 'svelte'
   import { gameday, initGamedayFeed } from '$lib/stores/gameday.js'
-
-  const demo = {
-    opponent: 'RAVENS',
-    score_colts: 24,
-    score_opp: 17,
-    quarter: 3,
-    clock: '4:26',
-    possession: 'colts',
-    current_drive: { plays: 6, yards: 48, elapsed: '2:11' },
-  }
+  import { buildPrototypePresentation } from '$lib/gameday/presentation.js'
 
   onMount(() => initGamedayFeed())
 
   $: live = $gameday.state
-  $: view = live ?? demo
-  $: isPreview = live === null
-  $: opponent = (view?.opponent || 'TBD').toUpperCase()
-  $: quarter = view?.quarter ?? 0
-  $: quarterLabel = quarter > 0 ? `${ordinal(quarter)} QUARTER` : 'PREGAME'
-  $: drive = live?.current_drive ?? (isPreview ? demo.current_drive : null)
-  $: possession = live?.possession === 'colts' ? 'COLTS BALL' : live?.possession === 'opp' ? `${opponent} BALL` : 'POSSESSION --'
-
-  function ordinal(value) {
-    return value === 1 ? '1ST' : value === 2 ? '2ND' : value === 3 ? '3RD' : `${value}TH`
-  }
+  $: schedule = $gameday.schedule
+  $: scheduleLoaded = $gameday.scheduleLoaded
+  $: view = buildPrototypePresentation(live, schedule, scheduleLoaded)
+  $: opponent = view.opponent
+  $: drive = view.drive
 </script>
 <svelte:head>
   <title>Game Day - Sculptural Field</title>
@@ -42,30 +27,30 @@
 
   <section class="team home" aria-label="Colts score">
     <span>COLTS</span>
-    <strong>{view.score_colts ?? 0}</strong>
+    <strong>{view.scoreColts}</strong>
   </section>
 
-  <section class="clock" aria-label={isPreview ? 'Synthetic preview game clock' : 'Live game clock'}>
-    <span>{quarterLabel}</span>
-    <strong>{view.clock || '--'}</strong>
-    <small>{view.possession === 'colts' ? 'COLTS POSSESSION' : view.possession === 'opp' ? `${opponent} POSSESSION` : 'GAME DAY'}</small>
+  <section class="clock" aria-label={view.isLive ? 'Live game clock' : 'Next game information'}>
+    <span>{view.periodLabel}</span>
+    <strong>{view.clock}</strong>
+    <small>{view.subline}</small>
   </section>
 
   <section class="team away" aria-label={`${opponent} score`}>
     <span>{opponent}</span>
-    <strong>{view.score_opp ?? 0}</strong>
+    <strong>{view.scoreOpp}</strong>
   </section>
 
-  <aside class:placeholder={!drive} class="drive-overlay" aria-label="Current drive context">
+  <aside class:placeholder={!drive} class="drive-overlay" aria-label={view.isLive ? 'Current game context' : 'Next game context'}>
     {#if drive}
       <span>CURRENT DRIVE</span>
       <strong>{drive.plays ?? '--'} PLAYS</strong>
       <strong>{drive.yards ?? '--'} YARDS</strong>
       <strong>{drive.elapsed ?? drive.time ?? '--'}</strong>
     {:else}
-      <span>CURRENT DRIVE</span>
-      <strong>{live?.possession ? possession : 'AWAITING DRIVE'}</strong>
-      <strong>DRIVE DATA PENDING</strong>
+      <span>{view.sideLabel}</span>
+      <strong>{view.sidePrimary}</strong>
+      <strong>{view.sideSecondary}</strong>
     {/if}
   </aside>
 </main>
