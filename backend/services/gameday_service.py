@@ -53,6 +53,8 @@ PREGAMEDAY_AUTO_SOURCE = "gameday:auto:pregame"
 # volume by +10. Sourced from Settings (config.py) for consistency with the
 # other Game Day thresholds; override via the MOMENTUM_WPA_THRESHOLD env var.
 MOMENTUM_WPA_THRESHOLD = settings.MOMENTUM_WPA_THRESHOLD
+SEMANTIC_EVENT_MIN_WIN_PROBABILITY = settings.SEMANTIC_EVENT_MIN_WIN_PROBABILITY
+SEMANTIC_EVENT_MAX_WIN_PROBABILITY = settings.SEMANTIC_EVENT_MAX_WIN_PROBABILITY
 
 HTTP_TIMEOUT = 10.0
 
@@ -114,6 +116,13 @@ PlayType = Literal[
     "extra_point_good",
     "two_point_conv",
     "defensive_td",  # Covers pick-six and fumble-return TD (turnover-going-for-points).
+    # Game-sensitive semantic lane — meaningful Colts-favoring football
+    # events that should register below the generic 15% WPA threshold.
+    "fourth_down_stop",
+    "blocked_punt",
+    "blocked_field_goal",
+    "interception",
+    "fumble_recovery",
     # WPA momentum lane — emitted for non-scoring plays with |WPA| >= 0.15.
     "momentum",
     "other",
@@ -570,9 +579,11 @@ class GameDayService:
 
         hydrated_history = self._hydrate_event_history_if_pending(summary, game_id)
         if new_state.status == "in-progress" and not hydrated_history:
-            # IMPORTANT: scoring plays first — they add play ids, which makes
-            # the momentum walk skip the same score.
+            # IMPORTANT: scoring plays first, then semantic football events,
+            # then generic WPA momentum. Earlier lanes claim their play id
+            # so semantic events never escalate into the higher-amp WPA lane.
             new_plays = self._extract_new_plays(summary)
+            new_semantic_plays = self._extract_new_semantic_plays(summary)
             new_momentum_plays = self._extract_new_momentum_plays(summary)
         else:
             # Final/historical provider rows are evidence, never fresh events.
@@ -580,6 +591,7 @@ class GameDayService:
             # eligible if the same game is polled again.
             self._remember_provider_play_ids(summary)
             new_plays = []
+            new_semantic_plays = []
             new_momentum_plays = []
 
         # Status transitions.
@@ -605,7 +617,16 @@ class GameDayService:
             except Exception:
                 logger.exception("ws broadcast gameday_play failed")
 
-        # Momentum plays second. The orchestrator's 8s cooldown coalesces
+        # Lower-amp semantic football events second. These can bypass the
+        # 15% WPA event threshold only while the game remains competitive.
+        for play in new_semantic_plays:
+            await self._fire_play_event(play)
+            try:
+                await self._ws_manager.broadcast("gameday_play", _play_event_payload(play))
+            except Exception:
+                logger.exception("ws broadcast gameday_play failed")
+
+        # Generic high-WPA momentum plays last. The 8s cooldown coalesces
         # bursts (consecutive big plays on a single drive) into one fire.
         for play in new_momentum_plays:
             await self._fire_play_event(play)
@@ -1126,6 +1147,151 @@ class GameDayService:
                 self._known_play_ids.add(play_id)
 
         return out
+
+    def _extract_new_semantic_plays(self, summary: dict) -> list[PlayEvent]:
+        """Surface lower-amp Colts-favoring football events while competitive.
+
+        This lane stays separate from the generic WPA threshold. A fourth-down
+        stop or blocked punt can matter emotionally even when its individual
+        WPA swing is small, but it should not fire in effectively decided games
+        and should never inherit the higher-amp ``big_play`` choreography.
+
+        Competitiveness uses ESPN's play-specific Colts win probability. If
+        that probability has not arrived yet, the play remains unclaimed so a
+        later poll can reconsider it once the provider model catches up.
+        """
+        out: list[PlayEvent] = []
+        active = self._find_active_game() or {}
+        colts_are_home = bool(active.get("colts_are_home", False))
+
+        drives = summary.get("drives") or {}
+        all_drives: list[dict] = []
+        all_drives.extend(drives.get("previous") or [])
+        current = drives.get("current")
+        if isinstance(current, dict):
+            all_drives.append(current)
+
+        for drive in all_drives:
+            for raw in (drive.get("plays") or []):
+                play_id = str(raw.get("id") or "")
+                if not play_id or play_id in self._known_play_ids:
+                    continue
+
+                play_type = self._semantic_play_type(raw)
+                if play_type is None:
+                    continue
+
+                win_probability = self._colts_win_probability_after(
+                    play_id, summary, colts_are_home
+                )
+                if win_probability is None:
+                    # ESPN's WP model can lag the play feed. Do not claim the
+                    # id yet; a later poll can make the competitiveness call.
+                    continue
+
+                # Once provider-owned WP exists, this play has a final semantic
+                # eligibility decision. Claim it whether allowed or suppressed.
+                self._known_play_ids.add(play_id)
+                if not (
+                    SEMANTIC_EVENT_MIN_WIN_PROBABILITY
+                    <= win_probability
+                    <= SEMANTIC_EVENT_MAX_WIN_PROBABILITY
+                ):
+                    logger.info(
+                        "Game Day semantic event suppressed type=%s play=%s "
+                        "colts_wp=%.4f competitive_window=[%.4f, %.4f]",
+                        play_type,
+                        play_id,
+                        win_probability,
+                        SEMANTIC_EVENT_MIN_WIN_PROBABILITY,
+                        SEMANTIC_EVENT_MAX_WIN_PROBABILITY,
+                    )
+                    continue
+
+                text = str(raw.get("text") or "")
+                wallclock_str = raw.get("wallclock")
+                timestamp = (
+                    _parse_espn_datetime(wallclock_str)
+                    if wallclock_str else None
+                ) or datetime.now(timezone.utc)
+                out.append(PlayEvent(
+                    timestamp=timestamp,
+                    play_type=play_type,
+                    description=text,
+                    player=None,
+                    kicker=None,
+                    yards=None,
+                    scoring_team=None,
+                    wpa=self._compute_wpa(play_id, summary, colts_are_home),
+                    event_id=play_id,
+                    game_id=self._current_game_id,
+                ))
+
+        return out
+
+    @staticmethod
+    def _semantic_play_type(raw: dict) -> Optional[PlayType]:
+        """Classify only unambiguous Colts-favoring semantic events."""
+        if raw.get("scoringPlay") is True:
+            return None
+
+        start = raw.get("start") or {}
+        end = raw.get("end") or {}
+        start_team = str((start.get("team") or {}).get("id") or "")
+        end_team = str((end.get("team") or {}).get("id") or "")
+        if start_team == COLTS_TEAM_ID or end_team != COLTS_TEAM_ID:
+            return None
+
+        play_type_text = str((raw.get("type") or {}).get("text") or "")
+        play_type_upper = play_type_text.upper()
+        text_upper = str(raw.get("text") or "").upper()
+
+        # ESPN uses type="Blocked Punt" and text containing "punt is BLOCKED".
+        # Possession must finish with Indianapolis so an opponent block is silent.
+        if "BLOCKED PUNT" in play_type_upper or (
+            "PUNT" in text_upper and "BLOCKED" in text_upper
+        ):
+            return "blocked_punt"
+        if "BLOCKED FIELD GOAL" in play_type_upper or (
+            "FIELD GOAL" in text_upper and "BLOCKED" in text_upper
+        ):
+            return "blocked_field_goal"
+        if "INTERCEPTION" in play_type_upper:
+            return "interception"
+        if "FUMBLE RECOVERY" in play_type_upper:
+            return "fumble_recovery"
+
+        try:
+            start_down = int(start.get("down"))
+        except (TypeError, ValueError):
+            return None
+        if start_down != 4:
+            return None
+
+        # Ordinary punts/field goals and administrative no-play rows are not
+        # defensive fourth-down stops, even though possession may change.
+        if any(token in play_type_upper for token in (
+            "PUNT", "FIELD GOAL", "TIMEOUT", "PENALTY",
+        )) or "NO PLAY" in text_upper:
+            return None
+        return "fourth_down_stop"
+
+    @staticmethod
+    def _colts_win_probability_after(
+        play_id: str, summary: dict, colts_are_home: bool
+    ) -> Optional[float]:
+        """Return ESPN's Colts win probability immediately after ``play_id``."""
+        for entry in summary.get("winprobability") or []:
+            if str(entry.get("playId") or "") != play_id:
+                continue
+            try:
+                home_wp = float(entry.get("homeWinPercentage"))
+                tie_wp = float(entry.get("tiePercentage") or 0.0)
+            except (TypeError, ValueError):
+                return None
+            colts_wp = home_wp if colts_are_home else 1.0 - home_wp - tie_wp
+            return max(0.0, min(1.0, colts_wp))
+        return None
 
     def _extract_new_momentum_plays(self, summary: dict) -> list[PlayEvent]:
         """Phase 2 — surface non-scoring plays with |WPA| >= threshold.

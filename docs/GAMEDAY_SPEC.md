@@ -209,10 +209,18 @@ class CelebrationOrchestrator:
         "extra_point_good": CelebrationSequence(...),  # lights-only ack, no TTS
         "two_point_conv": CelebrationSequence(...),  # bigger than PAT, smaller than TD
         "defensive_td": CelebrationSequence(...),    # pick-six / return for score
+        "semantic_momentum": CelebrationSequence(...), # competitive semantic event, lower amp
         "big_play": CelebrationSequence(...),        # WPA momentum lane (non-scoring)
     }
 
     COOLDOWN_SECONDS: float = 8.0
+
+    # Semantic-event lane (#253): fourth-down stops, blocked punts/field goals,
+    # interceptions, and opponent fumbles recovered by Indianapolis may fire
+    # below the generic 15% WPA threshold only when ESPN's play-specific Colts
+    # win probability is between 5% and 95% inclusive. Outside that competitive
+    # window the game is effectively decided. The lane is lights-only and
+    # intentionally lower amplitude than `big_play`; scoring plays keep their own sequences.
 
     async def on_play_event(self, evt: PlayEvent) -> None: ...
     async def on_state_transition(self, transition: GameDayStateTransition) -> None: ...

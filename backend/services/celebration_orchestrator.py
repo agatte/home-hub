@@ -418,6 +418,22 @@ _DEFENSIVE_TD_STEPS: list[LightStep] = [
     _baseline_step("4", 3500, _BASELINE_KITCHEN, transition=20),
 ]
 
+# ----- Semantic football moment: ~1.2s lower-amp blue lift. This is for
+# meaningful fourth-down stops / blocked punts that bypass the 15% WPA event
+# threshold only while the game is competitive. No TTS, no white flash, and
+# no kitchen pair writes: it should register below the generic big-play lane.
+_SEMANTIC_MOMENTUM_STEPS: list[LightStep] = [
+    _pulse("1", 0, blue=True, bri=215, transition=3),
+    _plant_pulse(0, bri=200, transition=3),
+    _pulse("2", 0, blue=True, bri=200, transition=3),
+    _pulse("5", 0, blue=True, bri=175, transition=3),
+    _baseline_step("1", 550, _BASELINE_L1, transition=6),
+    _baseline_step("6", 550, _BASELINE_PLANT, transition=6),
+    _baseline_step("2", 550, _BASELINE_FILL, transition=6),
+    _baseline_step("5", 550, _BASELINE_FILL, transition=6),
+]
+
+
 # ----- WPA momentum "big play": ~2s lights-only flash. Lights-only by
 # design — see Plan §10. Generic TTS for unknown play context would be
 # bland; announcer TV audio is already carrying the moment. Shorter
@@ -564,6 +580,13 @@ class CelebrationOrchestrator:
             duration_seconds=6.0,
             base_volume=32,  # bigger emotional moment than offensive TD
         ),
+        # ── Game-sensitive semantic lane ────────────────────────────────
+        "semantic_momentum": CelebrationSequence(
+            light_steps=_SEMANTIC_MOMENTUM_STEPS,
+            tts_lines=[],
+            duration_seconds=1.2,
+            base_volume=0,
+        ),
         # ── WPA momentum lane (Phase 2 — non-scoring big plays) ──────────
         # Lights-only. Fires when _extract_new_momentum_plays surfaces a
         # play with |WPA| >= MOMENTUM_WPA_THRESHOLD that isn't already a
@@ -634,9 +657,9 @@ class CelebrationOrchestrator:
 
         Score celebrations fire for Colts side only (offensive TD / FG / 2PT /
         PAT / safety / defensive TD). Opponent scores are silent by design —
-        spec §2.2 ("we don't TTS the other team's points"). Momentum plays
-        (Phase 2 WPA lane) are team-agnostic — a Colts INT is the same kind
-        of moment as a defensive sack, both go through `big_play`.
+        spec §2.2 ("we don't TTS the other team's points"). Semantic
+        defensive/special-teams events are Colts-favoring and lower-amp; the
+        generic WPA momentum lane remains team-agnostic.
         """
         # Score subtypes — Colts-only.
         if evt.scoring_team == "opp" and evt.play_type in (
@@ -653,6 +676,11 @@ class CelebrationOrchestrator:
             "extra_point_good": "extra_point_good",
             "two_point_conv": "two_point_conv",
             "defensive_td": "defensive_td",
+            "fourth_down_stop": "semantic_momentum",
+            "blocked_punt": "semantic_momentum",
+            "blocked_field_goal": "semantic_momentum",
+            "interception": "semantic_momentum",
+            "fumble_recovery": "semantic_momentum",
             "momentum": "big_play",
         }
         key = play_type_to_sequence.get(evt.play_type)

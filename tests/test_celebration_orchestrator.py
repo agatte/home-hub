@@ -1268,3 +1268,54 @@ class TestPlantWashCelebrationRule:
         assert max(step.delay_ms for step in seq.light_steps) >= int(
             seq.duration_seconds * 1000
         )
+
+
+# ---------------------------------------------------------------------------
+# #253 — game-sensitive semantic momentum dispatch
+# ---------------------------------------------------------------------------
+
+class TestSemanticMomentumDispatch:
+    @pytest.mark.parametrize("play_type", ["fourth_down_stop", "blocked_punt", "blocked_field_goal", "interception", "fumble_recovery"])
+    async def test_semantic_events_use_lower_amp_lights_only_sequence(
+        self, play_type
+    ):
+        orch, hue, tts, ws, _ = _make_orchestrator()
+        evt = PlayEvent(
+            timestamp=datetime.now(timezone.utc),
+            play_type=play_type,
+            description="Meaningful defensive/special-teams stop.",
+            player=None,
+            kicker=None,
+            yards=None,
+            scoring_team=None,
+            wpa=0.027,
+            synthetic=True,
+        )
+
+        await orch.on_play_event(evt)
+
+        ws.broadcast.assert_awaited_once()
+        assert ws.broadcast.await_args.args[1]["sequence_key"] == "semantic_momentum"
+        semantic = CelebrationOrchestrator.SEQUENCES["semantic_momentum"]
+        assert hue.set_light.await_count == len(semantic.light_steps)
+        tts.speak.assert_not_awaited()
+
+    def test_semantic_sequence_is_visibly_below_generic_big_play_amp(self):
+        semantic = CelebrationOrchestrator.SEQUENCES["semantic_momentum"]
+        big_play = CelebrationOrchestrator.SEQUENCES["big_play"]
+
+        assert semantic.duration_seconds < big_play.duration_seconds
+        assert len(semantic.light_steps) < len(big_play.light_steps)
+        semantic_ids = {step.light_id for step in semantic.light_steps}
+        assert semantic_ids == {"1", "2", "5", "6"}
+        assert "3" not in semantic_ids and "4" not in semantic_ids
+
+        semantic_peak = max(
+            int(step.state.get("bri", 0)) for step in semantic.light_steps
+        )
+        big_play_peak = max(
+            int(step.state.get("bri", 0)) for step in big_play.light_steps
+        )
+        assert semantic_peak == 215
+        assert semantic_peak < big_play_peak
+        assert semantic.tts_lines == []

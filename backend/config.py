@@ -185,6 +185,8 @@ class Settings(BaseSettings):
     BIG_PLAY_YARD_THRESHOLD: int = 20
     FIELD_GOAL_YARD_THRESHOLD: int = 40
     MOMENTUM_WPA_THRESHOLD: float = 0.15  # |WPA| swing that fires a momentum celebration on non-scoring plays
+    SEMANTIC_EVENT_MIN_WIN_PROBABILITY: float = 0.05  # lower bound for game-sensitive semantic reactions
+    SEMANTIC_EVENT_MAX_WIN_PROBABILITY: float = 0.95  # upper bound; suppress once the game is effectively won
 
     @property
     def trusted_lan_ips_set(self) -> frozenset[str]:

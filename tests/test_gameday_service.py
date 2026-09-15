@@ -1950,3 +1950,256 @@ def test_parse_espn_datetime_handles_offset():
 def test_parse_espn_datetime_returns_none_for_garbage():
     assert _parse_espn_datetime("not a date") is None
     assert _parse_espn_datetime("") is None
+
+
+# ---------------------------------------------------------------------------
+# #253 — game-sensitive semantic football events
+# ---------------------------------------------------------------------------
+
+def _semantic_play(
+    *,
+    play_id: str = "semantic-1",
+    start_team: str = "33",
+    end_team: str = COLTS_TEAM_ID,
+    down: int = 4,
+    play_type: str = "Pass Incompletion",
+    text: str = "Pass incomplete on fourth down.",
+    scoring: bool = False,
+) -> dict:
+    return {
+        "id": play_id,
+        "text": text,
+        "type": {"text": play_type},
+        "scoringPlay": scoring,
+        "start": {"down": down, "team": {"id": start_team}},
+        "end": {"down": 1, "team": {"id": end_team}},
+    }
+
+
+def _semantic_summary(
+    raw: dict, *, home_wp: float | None, prior_wp: float = 0.181
+) -> dict:
+    wp = [
+        {"playId": "prior", "homeWinPercentage": prior_wp, "tiePercentage": 0.0}
+    ]
+    if home_wp is not None:
+        wp.append({
+            "playId": str(raw["id"]),
+            "homeWinPercentage": home_wp,
+            "tiePercentage": 0.0,
+        })
+    return {
+        "drives": {"previous": [{"plays": [raw]}]},
+        "winprobability": wp,
+    }
+
+
+def _home_semantic_service() -> GameDayService:
+    svc = _make_service()
+    svc._find_active_game = MagicMock(return_value={"colts_are_home": True})
+    return svc
+
+
+class TestSemanticEventExtraction:
+    def test_ravens_fourth_down_stop_fires_below_generic_wpa_threshold(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id="4018726591191",
+            text="(Shotgun) L.Jackson pass incomplete short right to J.Lane.",
+        )
+        summary = _semantic_summary(raw, home_wp=0.2087, prior_wp=0.1810)
+
+        out = svc._extract_new_semantic_plays(summary)
+
+        assert len(out) == 1
+        assert out[0].play_type == "fourth_down_stop"
+        assert out[0].event_id == "4018726591191"
+        assert out[0].wpa == pytest.approx(0.0277, abs=1e-9)
+        assert abs(out[0].wpa) < 0.15
+
+    def test_semantic_floor_suppresses_below_five_percent_and_claims_play(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(play_id="garbage-time-stop")
+        summary = _semantic_summary(raw, home_wp=0.049, prior_wp=0.040)
+
+        assert svc._extract_new_semantic_plays(summary) == []
+        assert "garbage-time-stop" in svc._known_play_ids
+        assert svc._extract_new_semantic_plays(summary) == []
+
+    def test_semantic_ceiling_suppresses_once_game_is_effectively_won(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(play_id="garbage-time-winning-stop")
+        summary = _semantic_summary(raw, home_wp=0.951, prior_wp=0.94)
+
+        assert svc._extract_new_semantic_plays(summary) == []
+        assert "garbage-time-winning-stop" in svc._known_play_ids
+
+    def test_semantic_ceiling_exactly_ninety_five_percent_is_still_live(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(play_id="ninety-five-percent-stop")
+        summary = _semantic_summary(raw, home_wp=0.95, prior_wp=0.94)
+
+        out = svc._extract_new_semantic_plays(summary)
+
+        assert len(out) == 1
+        assert out[0].play_type == "fourth_down_stop"
+
+    def test_semantic_floor_exactly_five_percent_is_still_live(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(play_id="five-percent-stop")
+        summary = _semantic_summary(raw, home_wp=0.05, prior_wp=0.04)
+
+        out = svc._extract_new_semantic_plays(summary)
+
+        assert len(out) == 1
+        assert out[0].play_type == "fourth_down_stop"
+
+    def test_missing_play_specific_wp_waits_without_claiming(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(play_id="wp-lagged-stop")
+        summary = _semantic_summary(raw, home_wp=None)
+
+        assert svc._extract_new_semantic_plays(summary) == []
+        assert "wp-lagged-stop" not in svc._known_play_ids
+
+    def test_real_shape_blocked_punt_fires_lower_amp_lane(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id="4017728511134",
+            play_type="Blocked Punt",
+            text=(
+                "A.Cole punt is BLOCKED by S.Olubi, Center-J.Bobenmoyer, "
+                "recovered by LV-I.Thomas at LV 8."
+            ),
+        )
+        summary = _semantic_summary(raw, home_wp=0.7979, prior_wp=0.70)
+
+        out = svc._extract_new_semantic_plays(summary)
+
+        assert len(out) == 1
+        assert out[0].play_type == "blocked_punt"
+
+    def test_ordinary_opponent_punt_is_not_a_semantic_stop(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id="ordinary-punt",
+            play_type="Punt",
+            text="R.Eckley punts 53 yards to IND 18.",
+        )
+        summary = _semantic_summary(raw, home_wp=0.20)
+        assert svc._extract_new_semantic_plays(summary) == []
+
+    def test_colts_fourth_down_failure_is_not_a_positive_semantic_event(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id="colts-failed-fourth",
+            start_team=COLTS_TEAM_ID,
+            end_team="33",
+            play_type="Sack",
+            text="D.Jones sacked on fourth down.",
+        )
+        summary = _semantic_summary(raw, home_wp=0.15)
+        assert svc._extract_new_semantic_plays(summary) == []
+
+    @pytest.mark.parametrize(
+        "play_type,text",
+        [
+            ("Timeout", "Timeout by Baltimore."),
+            ("Penalty", "PENALTY on BLT - No Play."),
+            ("Field Goal Missed", "45 yard field goal is No Good."),
+        ],
+    )
+    def test_admin_or_kicking_fourth_down_rows_do_not_fire(self, play_type, text):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id=f"excluded-{play_type}",
+            play_type=play_type,
+            text=text,
+        )
+        summary = _semantic_summary(raw, home_wp=0.25)
+        assert svc._extract_new_semantic_plays(summary) == []
+
+    def test_blocked_punt_touchdown_stays_in_scoring_lane(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id="blocked-punt-touchdown",
+            play_type="Blocked Punt Touchdown",
+            text="Punt is BLOCKED and returned for a TOUCHDOWN.",
+            scoring=True,
+        )
+        summary = _semantic_summary(raw, home_wp=0.70)
+        assert svc._extract_new_semantic_plays(summary) == []
+
+    def test_opponent_block_of_colts_punt_does_not_fire(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id="opponent-block",
+            start_team=COLTS_TEAM_ID,
+            end_team="33",
+            play_type="Blocked Punt",
+            text="Colts punt is BLOCKED by Baltimore.",
+        )
+        summary = _semantic_summary(raw, home_wp=0.30)
+        assert svc._extract_new_semantic_plays(summary) == []
+
+    def test_semantic_event_claims_play_before_high_wpa_lane(self):
+        svc = _home_semantic_service()
+        raw = _semantic_play(play_id="huge-fourth-down-stop")
+        summary = _semantic_summary(raw, home_wp=0.70, prior_wp=0.40)
+
+        semantic = svc._extract_new_semantic_plays(summary)
+        momentum = svc._extract_new_momentum_plays(summary)
+
+        assert len(semantic) == 1
+        assert semantic[0].play_type == "fourth_down_stop"
+        assert semantic[0].wpa == pytest.approx(0.30)
+        assert momentum == []
+
+    def test_away_win_probability_accounts_for_tie_probability(self):
+        summary = {
+            "winprobability": [{
+                "playId": "p1",
+                "homeWinPercentage": 0.70,
+                "tiePercentage": 0.02,
+            }],
+        }
+        assert GameDayService._colts_win_probability_after(
+            "p1", summary, colts_are_home=False
+        ) == pytest.approx(0.28)
+
+    @pytest.mark.parametrize(
+        "play_type,text,expected",
+        [
+            (
+                "Interception",
+                "Pass intended for Rice INTERCEPTED by L.Latu.",
+                "interception",
+            ),
+            (
+                "Fumble Recovery",
+                "K.Hunt FUMBLES, RECOVERED by IND-C.Ward.",
+                "fumble_recovery",
+            ),
+            (
+                "Blocked Field Goal",
+                "J.Slye 62 yard field goal is BLOCKED by G.Stewart.",
+                "blocked_field_goal",
+            ),
+        ],
+    )
+    def test_other_unambiguous_colts_takeaways_use_semantic_lane(
+        self, play_type, text, expected
+    ):
+        svc = _home_semantic_service()
+        raw = _semantic_play(
+            play_id=f"semantic-{expected}",
+            down=2 if expected != "blocked_field_goal" else 4,
+            play_type=play_type,
+            text=text,
+        )
+        summary = _semantic_summary(raw, home_wp=0.22, prior_wp=0.20)
+
+        out = svc._extract_new_semantic_plays(summary)
+
+        assert len(out) == 1
+        assert out[0].play_type == expected
